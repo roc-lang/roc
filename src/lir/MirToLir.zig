@@ -607,29 +607,23 @@ fn lowerRecordAccess(self: *Self, ra: anytype, mir_expr_id: MIR.ExprId, region: 
     const result_mono = self.mir_store.typeOf(mir_expr_id);
     const field_layout = try self.layoutFromMonotype(result_mono);
 
-    // Find the field index from the monotype's field list
+    // Find the field index from the layout's field list (alignment-sorted order),
+    // not the monotype's field list (alphabetical order), so codegen accesses
+    // the correct physical offset.
     var field_idx: ?u16 = null;
-    const monotype = self.mir_store.monotype_store.getMonotype(record_mono);
-    switch (monotype) {
-        .record => |r| {
-            const fields = self.mir_store.monotype_store.getFields(r.fields);
-            for (fields, 0..) |f, i| {
-                if (@as(u32, @bitCast(f.name)) == @as(u32, @bitCast(ra.field_name))) {
-                    field_idx = @intCast(i);
-                    break;
-                }
+    const record_layout_val = self.layout_store.getLayout(record_layout);
+    if (record_layout_val.tag == .record) {
+        const record_data = self.layout_store.getRecordData(record_layout_val.data.record.idx);
+        const layout_fields = self.layout_store.record_fields.sliceRange(record_data.getFields());
+        for (0..layout_fields.len) |li| {
+            if (@as(u32, @bitCast(layout_fields.get(li).name)) == @as(u32, @bitCast(ra.field_name))) {
+                field_idx = @intCast(li);
+                break;
             }
-        },
-        // Record access is only valid on record types; type checking
-        // guarantees the monotype here is .record.
-        .func,
-        .tag_union,
-        .tuple,
-        .list,
-        .prim,
-        .box,
-        .unit,
-        => unreachable,
+        }
+    } else {
+        // Single-field record optimized to non-record layout; field_idx 0
+        field_idx = 0;
     }
 
     return self.lir_store.addExpr(.{ .field_access = .{
@@ -971,8 +965,10 @@ fn lowerPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Error!LirPatte
                         }
                     }
                     if (!found) {
-                        // Field exists in layout but not in destructure (wildcard)
-                        const lir_pat = try self.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = .zst } }, region);
+                        // Field exists in layout but not in destructure (wildcard) —
+                        // use the actual field layout so codegen skips the right number of bytes.
+                        const field_layout_idx = layout_fields.get(li).layout;
+                        const lir_pat = try self.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = field_layout_idx } }, region);
                         try self.scratch_lir_pattern_ids.append(self.allocator, lir_pat);
                     }
                 }
@@ -2612,4 +2608,123 @@ test "MIR large unsigned int (U64 max) lowers to LIR i128_literal" {
     const lir_expr = env.lir_store.getExpr(lir_id);
 
     try testing.expect(lir_expr == .i128_literal);
+}
+
+test "record access uses layout field order not monotype alphabetical order" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const u8_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.u8)];
+    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+
+    // Field names: age (idx=1), name (idx=2), score (idx=3)
+    const field_age = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
+    const field_name = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 2 };
+    const field_score = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 3 };
+
+    // Monotype fields are alphabetical: { age: U8, name: I64, score: I64 }
+    const record_fields = try env.mir_store.monotype_store.addFields(allocator, &.{
+        .{ .name = field_age, .type_idx = u8_mono },
+        .{ .name = field_name, .type_idx = i64_mono },
+        .{ .name = field_score, .type_idx = i64_mono },
+    });
+    const record_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .record = .{ .fields = record_fields } });
+
+    // Create a record literal
+    const int_1 = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 },
+    } }, u8_mono, Region.zero());
+    const int_2 = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 2)), .kind = .i128 },
+    } }, i64_mono, Region.zero());
+    const int_3 = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 3)), .kind = .i128 },
+    } }, i64_mono, Region.zero());
+    const field_exprs = try env.mir_store.addExprSpan(allocator, &.{ int_1, int_2, int_3 });
+    const field_names_span = try env.mir_store.addFieldNameSpan(allocator, &.{ field_age, field_name, field_score });
+    const record_expr = try env.mir_store.addExpr(allocator, .{ .record = .{
+        .fields = field_exprs,
+        .field_names = field_names_span,
+    } }, record_mono, Region.zero());
+
+    // Access field "age" (U8) — alphabetically first but should be last in layout order
+    // (I64 fields sorted before U8 by alignment)
+    const access_expr = try env.mir_store.addExpr(allocator, .{ .record_access = .{
+        .record = record_expr,
+        .field_name = field_age,
+    } }, u8_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(access_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+
+    try testing.expect(lir_expr == .field_access);
+    // In layout order, I64 fields (name, score) come before U8 (age), so age is at index 2
+    try testing.expectEqual(@as(u16, 2), lir_expr.field_access.field_idx);
+}
+
+test "record destructure wildcard gets actual field layout not zst" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const u8_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.u8)];
+    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+
+    const field_a = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
+    const field_b = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 2 };
+    const field_c = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 3 };
+
+    // Record: { a: U8, b: I64, c: I64 }
+    const record_fields = try env.mir_store.monotype_store.addFields(allocator, &.{
+        .{ .name = field_a, .type_idx = u8_mono },
+        .{ .name = field_b, .type_idx = i64_mono },
+        .{ .name = field_c, .type_idx = i64_mono },
+    });
+    const record_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .record = .{ .fields = record_fields } });
+
+    // Create a destructure pattern that only binds field "a" (U8).
+    // In MIR, field_names are alphabetical: [a].
+    // In layout order: [b, c, a]. So b and c should get wildcard patterns
+    // with I64 layout, NOT .zst.
+    const ident_a = field_a;
+    const sym_a = Symbol{ .module_idx = 0, .ident_idx = ident_a };
+    const bind_pat = try env.mir_store.addPattern(allocator, .{ .bind = sym_a }, u8_mono);
+    const destructs = try env.mir_store.addPatternSpan(allocator, &.{bind_pat});
+    const destruct_field_names = try env.mir_store.addFieldNameSpan(allocator, &.{field_a});
+    const destruct_pat = try env.mir_store.addPattern(allocator, .{ .record_destructure = .{
+        .destructs = destructs,
+        .field_names = destruct_field_names,
+    } }, record_mono);
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const lir_pat_id = try translator.lowerPattern(destruct_pat);
+    const lir_pat = env.lir_store.getPattern(lir_pat_id);
+
+    try testing.expect(lir_pat == .record);
+    const field_pats = env.lir_store.getPatternSpan(lir_pat.record.fields);
+    // Layout order: [b: I64, c: I64, a: U8] → 3 patterns
+    try testing.expectEqual(@as(usize, 3), field_pats.len);
+
+    // First two are wildcards for b and c (I64 layout)
+    const pat0 = env.lir_store.getPattern(field_pats[0]);
+    try testing.expect(pat0 == .wildcard);
+    try testing.expectEqual(layout.Idx.i64, pat0.wildcard.layout_idx);
+
+    const pat1 = env.lir_store.getPattern(field_pats[1]);
+    try testing.expect(pat1 == .wildcard);
+    try testing.expectEqual(layout.Idx.i64, pat1.wildcard.layout_idx);
+
+    // Third is the bind for a (U8 layout)
+    const pat2 = env.lir_store.getPattern(field_pats[2]);
+    try testing.expect(pat2 == .bind);
 }
