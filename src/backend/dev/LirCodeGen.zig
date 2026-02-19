@@ -12727,7 +12727,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Handle i128/Dec arguments (need two registers, even-aligned on aarch64)
                     const is_i128_arg = (arg_loc == .stack_i128 or arg_loc == .immediate_i128) or
                         (arg_loc == .stack and arg_layout != null and
-                        (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128));
+                            (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128));
                     if (is_i128_arg) {
                         if (comptime target.toCpuArch() == .aarch64) {
                             if (reg_idx % 2 != 0) {
