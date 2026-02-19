@@ -213,7 +213,27 @@ fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoEx
         .dec_literal => .dec,
         .str_literal => .str,
         .unary_not => .bool,
-        else => null,
+        // Expressions whose result layout is handled by the fromTypeVar fallback
+        .for_loop,
+        .while_loop,
+        .list,
+        .empty_list,
+        .empty_record,
+        .lambda,
+        .crash,
+        .runtime_error,
+        .str_concat,
+        .int_to_str,
+        .float_to_str,
+        .dec_to_str,
+        .str_escape_and_quote,
+        .discriminant_switch,
+        .tag_payload_access,
+        .hosted_call,
+        .incref,
+        .decref,
+        .free,
+        => null,
     };
 }
 
