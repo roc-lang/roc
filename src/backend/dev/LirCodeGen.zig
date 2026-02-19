@@ -11131,6 +11131,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         (arg_loc == .stack and arg_layout != null and
                             (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128));
                     if (is_i128_arg) {
+                        // On aarch64, 128-bit values must start at even register pairs
+                        // to match the callee's bindProcParams alignment.
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            if (reg_idx % 2 != 0) {
+                                reg_idx += 1;
+                            }
+                        }
                         const low_reg = self.getArgumentRegister(reg_idx);
                         const high_reg = self.getArgumentRegister(reg_idx + 1);
                         switch (arg_loc) {
@@ -13280,6 +13287,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         (arg_loc == .stack and arg_layout != null and
                             (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128));
                     if (is_i128_arg) {
+                        // On aarch64, 128-bit values must start at even register pairs
+                        // to match the callee's bindProcParams alignment.
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            if (reg_idx % 2 != 0) {
+                                reg_idx += 1;
+                            }
+                        }
                         const low_reg = self.getArgumentRegister(reg_idx);
                         const high_reg = self.getArgumentRegister(reg_idx + 1);
                         switch (arg_loc) {
