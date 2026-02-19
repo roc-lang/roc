@@ -421,27 +421,6 @@ pub const RcInsertPass = struct {
             .closure => |clo| self.processClosure(clo, region, expr_id),
             .for_loop => |fl| self.processForLoop(fl, region, expr_id),
             .while_loop => |wl| self.processWhileLoop(wl, region, expr_id),
-            // For all other expressions, return as-is.
-            // RC operations are inserted at block boundaries, not inside
-            // individual expressions.
-            .i64_literal,
-            .i128_literal,
-            .f64_literal,
-            .f32_literal,
-            .dec_literal,
-            .str_literal,
-            .bool_literal,
-            .lookup,
-            .call,
-            .empty_list,
-            .list,
-            .empty_record,
-            .record,
-            .tuple,
-            .field_access,
-            .tuple_access,
-            .zero_arg_tag,
-            .tag,
             .early_return => |ret| {
                 // Process the return expression for RC ops.
                 // TODO: full early_return cleanup (decref live symbols not consumed
@@ -453,6 +432,10 @@ pub const RcInsertPass = struct {
                     .ret_layout = ret.ret_layout,
                 } }, region);
             },
+            // For all other expressions, return as-is.
+            // RC operations are inserted at block boundaries, not inside
+            // individual expressions.
+            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag,
             .binop,
             .unary_minus,
             .unary_not,
