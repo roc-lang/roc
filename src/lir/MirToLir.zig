@@ -471,7 +471,7 @@ fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, region: Region
     const monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
     const ret_layout = switch (monotype) {
         .func => |f| try self.layoutFromMonotype(f.ret),
-        else => try self.layoutFromMonotype(mono_idx),
+        else => unreachable, // Lambda expressions always have .func monotype
     };
 
     const lir_params = try self.lowerPatternSpan(self.mir_store.getPatternSpan(lam.params));
@@ -759,7 +759,7 @@ fn lowerHosted(self: *Self, h: anytype, mono_idx: Monotype.Idx, region: Region) 
     const monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
     const ret_layout = switch (monotype) {
         .func => |f| try self.layoutFromMonotype(f.ret),
-        else => fn_layout,
+        else => unreachable, // Hosted expressions always have .func monotype
     };
 
     // Lower parameter patterns
@@ -769,7 +769,7 @@ fn lowerHosted(self: *Self, h: anytype, mono_idx: Monotype.Idx, region: Region) 
     // Build lookup args from parameters (one lookup per param)
     const func_args = switch (monotype) {
         .func => |f| self.mir_store.monotype_store.getIdxSpan(f.args),
-        else => &[_]Monotype.Idx{},
+        else => unreachable,
     };
 
     const save_len = self.scratch_lir_expr_ids.items.len;
@@ -1807,6 +1807,13 @@ test "MIR lambda with single capture lowers to closure with unwrapped_capture" {
 
     const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
 
+    // Create function type: () -> I64
+    const func_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .func = .{
+        .args = Monotype.Span.empty(),
+        .ret = i64_mono,
+        .effectful = false,
+    } });
+
     // Define captured symbol: x = 42
     const ident_x = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
     const sym_x = Symbol{ .module_idx = 0, .ident_idx = ident_x };
@@ -1825,7 +1832,7 @@ test "MIR lambda with single capture lowers to closure with unwrapped_capture" {
         .params = MIR.PatternSpan.empty(),
         .body = body_lookup,
         .captures = captures,
-    } }, i64_mono, Region.zero());
+    } }, func_mono, Region.zero());
 
     var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
     defer translator.deinit();
@@ -1847,6 +1854,13 @@ test "MIR lambda with multiple captures lowers to closure with struct_captures" 
     defer testDeinit(&env);
 
     const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+
+    // Create function type: () -> I64
+    const func_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .func = .{
+        .args = Monotype.Span.empty(),
+        .ret = i64_mono,
+        .effectful = false,
+    } });
 
     // Define captured symbols: x = 42, y = 99
     const ident_x = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
@@ -1876,7 +1890,7 @@ test "MIR lambda with multiple captures lowers to closure with struct_captures" 
         .params = MIR.PatternSpan.empty(),
         .body = body_lookup,
         .captures = captures,
-    } }, i64_mono, Region.zero());
+    } }, func_mono, Region.zero());
 
     var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
     defer translator.deinit();
@@ -2322,6 +2336,13 @@ test "MIR lambda with heterogeneous captures (I64 + Str) lowers to closure with 
     const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
     const str_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.str)];
 
+    // Create function type: () -> I64
+    const func_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .func = .{
+        .args = Monotype.Span.empty(),
+        .ret = i64_mono,
+        .effectful = false,
+    } });
+
     // Define captured symbols: x = 42 (I64), s = "hello" (Str)
     const ident_x = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
     const sym_x = Symbol{ .module_idx = 0, .ident_idx = ident_x };
@@ -2348,7 +2369,7 @@ test "MIR lambda with heterogeneous captures (I64 + Str) lowers to closure with 
         .params = MIR.PatternSpan.empty(),
         .body = body_lookup,
         .captures = captures,
-    } }, i64_mono, Region.zero());
+    } }, func_mono, Region.zero());
 
     var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
     defer translator.deinit();
