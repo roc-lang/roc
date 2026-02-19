@@ -57,6 +57,11 @@ pub const RcInsertPass = struct {
     /// early_return only cleans up symbols from early_return_scope_base onward.
     early_return_scope_base: usize,
 
+    /// Tracks how many uses of each RC symbol have been consumed so far
+    /// in the current block (by already-processed statements).
+    /// Used by processEarlyReturn to compute remaining refs for cleanup.
+    block_consumed_uses: std.AutoHashMap(u64, u32),
+
     const LiveRcSymbol = struct {
         symbol: Symbol,
         layout_idx: LayoutIdx,
@@ -71,6 +76,7 @@ pub const RcInsertPass = struct {
             .symbol_layouts = std.AutoHashMap(u64, LayoutIdx).init(allocator),
             .live_rc_symbols = std.ArrayList(LiveRcSymbol).empty,
             .early_return_scope_base = 0,
+            .block_consumed_uses = std.AutoHashMap(u64, u32).init(allocator),
         };
     }
 
@@ -78,6 +84,7 @@ pub const RcInsertPass = struct {
         self.symbol_use_counts.deinit();
         self.symbol_layouts.deinit();
         self.live_rc_symbols.deinit(self.allocator);
+        self.block_consumed_uses.deinit();
     }
 
     /// Main entry point: insert RC operations into a LirExpr tree.
@@ -516,6 +523,13 @@ pub const RcInsertPass = struct {
         const saved_live_len = self.live_rc_symbols.items.len;
         defer self.live_rc_symbols.shrinkRetainingCapacity(saved_live_len);
 
+        // Save and reset block_consumed_uses for this block scope.
+        const saved_consumed = self.block_consumed_uses.move();
+        defer {
+            self.block_consumed_uses.deinit();
+            self.block_consumed_uses = saved_consumed;
+        }
+
         // Use a local buffer to avoid reentrancy issues — processExpr may
         // recurse into another processBlock (e.g. lambda/loop bodies).
         var stmt_buf = std.ArrayList(LirStmt).empty;
@@ -529,6 +543,22 @@ pub const RcInsertPass = struct {
             // Recursively process the statement's expression
             const new_expr = try self.processExpr(b.expr);
             if (new_expr != b.expr) changed = true;
+
+            // Track uses consumed by this statement's expression
+            // so processEarlyReturn can compute remaining refs.
+            {
+                var stmt_uses = try self.countUsesLocal(b.expr);
+                defer stmt_uses.deinit();
+                var use_it = stmt_uses.iterator();
+                while (use_it.next()) |entry| {
+                    const gop = try self.block_consumed_uses.getOrPut(entry.key_ptr.*);
+                    if (gop.found_existing) {
+                        gop.value_ptr.* += entry.value_ptr.*;
+                    } else {
+                        gop.value_ptr.* = entry.value_ptr.*;
+                    }
+                }
+            }
 
             // For mutations of refcounted symbols, decref the old value first
             if (stmt == .mutate) {
@@ -949,8 +979,20 @@ pub const RcInsertPass = struct {
         const live_syms = self.live_rc_symbols.items[self.early_return_scope_base..];
         for (live_syms) |live| {
             const key = @as(u64, @bitCast(live.symbol));
-            if (ret_uses.get(key) != null) continue; // consumed by return expr
-            try self.emitDecrefInto(live.symbol, live.layout_idx, region, &cleanup_stmts);
+            const ret_use_count: u32 = ret_uses.get(key) orelse 0;
+            // Total refs from incref at binding = global_use_count.
+            // Uses consumed by prior statements = block_consumed_uses.
+            // Uses consumed by the return expr = ret_use_count.
+            // Remaining = global - consumed_before - ret_uses.
+            const global_count = self.symbol_use_counts.get(key) orelse 1;
+            const consumed_before = self.block_consumed_uses.get(key) orelse 0;
+            const total_consumed = consumed_before + ret_use_count;
+            if (total_consumed >= global_count) continue; // all refs accounted for
+            const remaining = global_count - total_consumed;
+            var i: u32 = 0;
+            while (i < remaining) : (i += 1) {
+                try self.emitDecrefInto(live.symbol, live.layout_idx, region, &cleanup_stmts);
+            }
         }
 
         if (cleanup_stmts.items.len == 0 and new_expr == ret.expr) return expr_id;
@@ -2845,4 +2887,61 @@ test "RC discriminant_switch: symbol used in switch branches gets per-branch RC"
     const rc = countRcOps(&env.lir_store, result);
     try std.testing.expectEqual(@as(u32, 0), rc.increfs);
     try std.testing.expectEqual(@as(u32, 0), rc.decrefs);
+}
+
+test "RC early_return emits correct number of decrefs for multi-use symbol" {
+    // Build: { s = "hello"; _ = s; early_return(42); _ = s; s }
+    // s has global_use_count = 3 → incref(2) at binding.
+    // First use (stmt 2) consumes 1 ref → 2 remaining.
+    // early_return doesn't use s → need 2 decrefs, not 1.
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const str_layout: LayoutIdx = .str;
+    const i64_layout: LayoutIdx = .i64;
+    const sym_s = makeSymbol(1);
+
+    // Create expressions
+    const str_hello = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
+    const lookup_s1 = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const lookup_s2 = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const lookup_s3 = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const int_42 = try env.lir_store.addExpr(.{ .i64_literal = 42 }, Region.zero());
+    const early_ret = try env.lir_store.addExpr(.{ .early_return = .{
+        .expr = int_42,
+        .ret_layout = i64_layout,
+    } }, Region.zero());
+
+    // Build block: { s = "hello"; _ = s; _ = early_return(42); _ = s; s }
+    const pat_s = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const wild1 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = str_layout } }, Region.zero());
+    const wild2 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = i64_layout } }, Region.zero());
+    const wild3 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = str_layout } }, Region.zero());
+    const stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = pat_s, .expr = str_hello } },
+        .{ .decl = .{ .pattern = wild1, .expr = lookup_s1 } },
+        .{ .decl = .{ .pattern = wild2, .expr = early_ret } },
+        .{ .decl = .{ .pattern = wild3, .expr = lookup_s2 } },
+    });
+
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = lookup_s3,
+        .result_layout = str_layout,
+    } }, Region.zero());
+
+    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+
+    // s has global_use_count = 3 → incref(2) at binding.
+    // At early_return: 1 use consumed, 0 in return expr → 2 decrefs needed.
+    const rc = countRcOps(&env.lir_store, result);
+    // Expect: 1 incref (at binding, count=2) + 2 decrefs (at early_return cleanup)
+    try std.testing.expectEqual(@as(u32, 1), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 2), rc.decrefs);
 }
