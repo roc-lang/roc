@@ -13,8 +13,4 @@ pub const computeOffset = context.computeOffset;
 
 pub const CompletionBuilder = builder.CompletionBuilder;
 
-test {
-    _ = context;
-    _ = builtins;
-    _ = builder;
-}
+test {}

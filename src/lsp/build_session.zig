@@ -93,35 +93,15 @@ pub const BuildSession = struct {
 
         // Build
         const build_succeeded = blk: {
-            var timer = std.time.Timer.start() catch null;
-            env.build(absolute_path) catch |err| {
-                if (timer) |*t| {
-                    const build_elapsed = t.read();
-                    std.debug.print("build_session: build FAILED for {s} ({d}ms): {s}\n", .{
-                        absolute_path,
-                        build_elapsed / std.time.ns_per_ms,
-                        @errorName(err),
-                    });
-                } else {
-                    std.debug.print("build_session: build FAILED for {s}: {s}\n", .{ absolute_path, @errorName(err) });
-                }
+            env.build(absolute_path) catch {
                 break :blk false;
             };
-            if (timer) |*t| {
-                const build_elapsed = t.read();
-                std.debug.print("build_session: build SUCCEEDED in {d}ms\n", .{build_elapsed / std.time.ns_per_ms});
-            } else {
-                std.debug.print("build_session: build SUCCEEDED\n", .{});
-            }
             break :blk true;
         };
 
         // Drain reports regardless of build success to capture parse errors
         // Parse errors are emitted to the sink even when build fails
-        const drained_reports = env.drainReports() catch |err| blk: {
-            std.debug.print("build_session: drainReports FAILED: {s}\n", .{@errorName(err)});
-            break :blk null;
-        };
+        const drained_reports = env.drainReports() catch null;
 
         return BuildSession{
             .allocator = allocator,

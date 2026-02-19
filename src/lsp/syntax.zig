@@ -39,6 +39,7 @@ pub const DebugFlags = struct {
     build: bool = false,
     syntax: bool = false,
     server: bool = false,
+    completion: bool = false,
 };
 
 /// Runs BuildEnv-backed syntax/type checks and converts reports to LSP diagnostics.
@@ -213,7 +214,7 @@ pub const SyntaxChecker = struct {
     /// Creates a fresh BuildEnv for a new build.
     /// The previous build_env is moved to previous_build_env for module lookups.
     fn createFreshBuildEnv(self: *SyntaxChecker) !*BuildEnvHandle {
-        std.debug.print("createFreshBuildEnv: prev_build_env={any} build_env={any}\n", .{ self.previous_build_env != null, self.build_env != null });
+        self.logDebug(.build, "createFreshBuildEnv: prev_build_env={any} build_env={any}", .{ self.previous_build_env != null, self.build_env != null });
 
         // Release the previous_build_env owner first.
         if (self.previous_build_env) |old_prev| {
@@ -267,9 +268,9 @@ pub const SyntaxChecker = struct {
     }
 
     fn storeSnapshotEnv(self: *SyntaxChecker, env_handle: *BuildEnvHandle, absolute_path: []const u8) void {
-        std.debug.print("storeSnapshotEnv: path={s}\n", .{absolute_path});
+        self.logDebug(.completion, "storeSnapshotEnv: path={s}", .{absolute_path});
         if (self.snapshot_envs.fetchRemove(absolute_path)) |removed| {
-            std.debug.print("storeSnapshotEnv: replacing existing snapshot\n", .{});
+            self.logDebug(.completion, "storeSnapshotEnv: replacing existing snapshot", .{});
             removed.value.release(owner_snapshot);
             self.allocator.free(removed.key);
         }
@@ -280,7 +281,7 @@ pub const SyntaxChecker = struct {
             return;
         };
         env_handle.retain(owner_snapshot);
-        std.debug.print("storeSnapshotEnv: stored snapshot count={d}\n", .{self.snapshot_envs.count()});
+        self.logDebug(.completion, "storeSnapshotEnv: stored snapshot count={d}", .{self.snapshot_envs.count()});
     }
 
     fn clearSnapshots(self: *SyntaxChecker) void {
@@ -556,10 +557,11 @@ pub const SyntaxChecker = struct {
         return if (value == 0) 0 else value - 1;
     }
 
-    fn logDebug(self: *SyntaxChecker, kind: enum { build, syntax }, comptime fmt: []const u8, args: anytype) void {
+    fn logDebug(self: *SyntaxChecker, kind: enum { build, syntax, completion }, comptime fmt: []const u8, args: anytype) void {
         const enabled = switch (kind) {
             .build => self.debug.build,
             .syntax => self.debug.syntax,
+            .completion => self.debug.completion,
         };
         if (!enabled) return;
         var log_file = self.log_file orelse return;
@@ -2300,8 +2302,8 @@ pub const SyntaxChecker = struct {
         var session = try BuildSession.init(self.allocator, env, uri, override_text);
         defer session.deinit();
 
-        std.debug.print("completion: building {s}\n", .{session.absolute_path});
-        std.debug.print("completion: build_succeeded={}\n", .{session.build_succeeded});
+        self.logDebug(.completion, "completion: building {s}", .{session.absolute_path});
+        self.logDebug(.completion, "completion: build_succeeded={}", .{session.build_succeeded});
 
         var build_has_reports = false;
 
@@ -2375,16 +2377,16 @@ pub const SyntaxChecker = struct {
             break :blk null;
         };
 
-        std.debug.print("completion: context={any}, module_env_opt={any}, build_succeeded={}, used_snapshot={}\n", .{ context, module_env_opt != null, session.build_succeeded, used_snapshot });
+        self.logDebug(.completion, "completion: context={any}, module_env_opt={any}, build_succeeded={}, used_snapshot={}", .{ context, module_env_opt != null, session.build_succeeded, used_snapshot });
 
         // Initialize CompletionBuilder for deduplication and organized completion item building
         // Provide the builtin module env so completion can resolve builtin method data.
-        var builder = completion_builder.CompletionBuilder.init(self.allocator, &items, env.builtin_modules.builtin_module.env);
+        var builder = completion_builder.CompletionBuilder.initWithDebug(self.allocator, &items, env.builtin_modules.builtin_module.env, self.debug, self.log_file);
         defer builder.deinit();
 
         switch (context) {
             .after_module_dot => |module_name| {
-                std.debug.print("completion: after_module_dot for '{s}'", .{module_name});
+                self.logDebug(.completion, "completion: after_module_dot for '{s}'", .{module_name});
                 var resolved_module_name = module_name;
                 if (module_env_opt) |module_env| {
                     resolved_module_name = resolveModuleAlias(module_env, module_name);
@@ -2399,7 +2401,7 @@ pub const SyntaxChecker = struct {
                 }
             },
             .after_value_dot => |record_access| {
-                std.debug.print("completion: after_record_dot for '{s}' at offset {d}\n", .{ record_access.access_chain, record_access.member_start });
+                self.logDebug(.completion, "completion: after_record_dot for '{s}' at offset {d}", .{ record_access.access_chain, record_access.member_start });
                 if (module_env_opt) |module_env| {
                     var chain_resolved = false;
                     if (resolveAccessChainTypeVar(self, &builder, module_env, module_lookup_env, env, record_access.access_chain, record_access.chain_start)) |resolved| {
@@ -2438,20 +2440,20 @@ pub const SyntaxChecker = struct {
                         // When using snapshot, cursor positions don't correspond to snapshot CIR
                         // So we must look up by name instead of analyzing the dot expression
                         if (used_snapshot or resolved_type_var == null) {
-                            std.debug.print("completion: using name-based lookup (snapshot={}, or findDotReceiverTypeVar failed)\n", .{used_snapshot});
+                            self.logDebug(.completion, "completion: using name-based lookup (snapshot={}, or findDotReceiverTypeVar failed)", .{used_snapshot});
                             try builder.addRecordFieldCompletions(module_env, variable_name, variable_start);
-                            std.debug.print("completion: after addRecordFieldCompletions, items={d}\n", .{items.items.len});
+                            self.logDebug(.completion, "completion: after addRecordFieldCompletions, items={d}", .{items.items.len});
                             try builder.addMethodCompletions(module_env, variable_name, variable_start);
-                            std.debug.print("completion: after addMethodCompletions, items={d}\n", .{items.items.len});
+                            self.logDebug(.completion, "completion: after addMethodCompletions, items={d}", .{items.items.len});
                         } else if (resolved_type_var) |type_var| {
-                            std.debug.print("completion: using CIR-based lookup with type_var={}", .{type_var});
+                            self.logDebug(.completion, "completion: using CIR-based lookup with type_var={}", .{type_var});
                             try builder.addFieldsFromTypeVar(module_env, type_var);
                             try builder.addTupleIndexCompletions(module_env, type_var);
                             try builder.addMethodsFromTypeVar(module_env, type_var);
                         }
                     }
                 } else {
-                    std.debug.print("completion: NO module_env for record/method completions", .{});
+                    self.logDebug(.completion, "completion: NO module_env for record/method completions", .{});
                 }
             },
             .after_receiver_dot => |info| {
@@ -2474,7 +2476,7 @@ pub const SyntaxChecker = struct {
                         // CIR-based lookup failed or used snapshot (offsets don't match).
                         // Fall back to resolving the call chain textually.
                         if (info.call_chain) |call_chain| {
-                            std.debug.print("completion: after_receiver_dot fallback using call_chain='{s}'\n", .{call_chain});
+                            self.logDebug(.completion, "completion: after_receiver_dot fallback using call_chain='{s}'", .{call_chain});
                             if (resolveAccessChainTypeVar(self, &builder, module_env, module_lookup_env, env, call_chain, info.chain_start)) |resolved| {
                                 const ret_type = extractReturnType(resolved.module_env, resolved.type_var);
                                 try builder.addFieldsFromTypeVar(resolved.module_env, ret_type);
@@ -2486,16 +2488,16 @@ pub const SyntaxChecker = struct {
                             try builder.addTupleIndexCompletions(module_env, type_var);
                             try builder.addMethodsFromTypeVar(module_env, type_var);
                         } else {
-                            std.debug.print("completion: after_receiver_dot no CIR receiver type found and no call_chain\n", .{});
+                            self.logDebug(.completion, "completion: after_receiver_dot no CIR receiver type found and no call_chain", .{});
                         }
                     } else if (resolved_type_var) |type_var| {
-                        std.debug.print("completion: after_receiver_dot using CIR type_var={}", .{type_var});
+                        self.logDebug(.completion, "completion: after_receiver_dot using CIR type_var={}", .{type_var});
                         try builder.addFieldsFromTypeVar(module_env, type_var);
                         try builder.addTupleIndexCompletions(module_env, type_var);
                         try builder.addMethodsFromTypeVar(module_env, type_var);
                     }
                 } else {
-                    std.debug.print("completion: NO module_env for receiver dot completions", .{});
+                    self.logDebug(.completion, "completion: NO module_env for receiver dot completions", .{});
                 }
             },
             .after_colon => {

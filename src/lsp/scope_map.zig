@@ -51,13 +51,10 @@ pub const ScopeMap = struct {
 
     /// Build scope map by traversing all CIR structures in the module.
     pub fn build(self: *ScopeMap, module_env: *ModuleEnv) !void {
-        std.debug.print("scope_map build: defs={d} statements={d}\n", .{ module_env.all_defs.span.len, module_env.all_statements.span.len });
-
         // Process top-level definitions
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
-            std.debug.print("scope_map build: def_idx={} pattern_idx={} expr_idx={}\n", .{ def_idx, def.pattern, def.expr });
             // Top-level defs are visible from their definition to the end of the module
             try self.extractBindingsFromPattern(module_env, def.pattern, 0, std.math.maxInt(u32), false, 0);
 
@@ -103,14 +100,10 @@ pub const ScopeMap = struct {
 
     /// Process a statement and extract any bindings it introduces.
     fn processStatement(self: *ScopeMap, module_env: *ModuleEnv, stmt_idx: CIR.Statement.Idx, scope_end: u32, depth: usize) Allocator.Error!void {
-        if (depth > 512) {
-            std.debug.print("scope_map processStatement: depth limit at stmt_idx={}\n", .{stmt_idx});
-            return;
-        }
+        if (depth > 512) return;
 
         const stmt = module_env.store.getStatement(stmt_idx);
         const stmt_region = module_env.store.getStatementRegion(stmt_idx);
-        std.debug.print("scope_map processStatement: stmt_idx={} depth={}\n", .{ stmt_idx, depth });
 
         switch (stmt) {
             .s_decl => |decl| {
@@ -160,12 +153,8 @@ pub const ScopeMap = struct {
 
     /// Traverse an expression and extract bindings from nested scopes.
     fn traverseExpr(self: *ScopeMap, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, scope_end: u32, depth: usize) Allocator.Error!void {
-        if (depth > 512) {
-            std.debug.print("scope_map traverseExpr: depth limit at expr_idx={}\n", .{expr_idx});
-            return;
-        }
+        if (depth > 512) return;
 
-        std.debug.print("scope_map traverseExpr: expr_idx={} depth={}\n", .{ expr_idx, depth });
         const expr = module_env.store.getExpr(expr_idx);
 
         switch (expr) {
@@ -344,12 +333,8 @@ pub const ScopeMap = struct {
         is_parameter: bool,
         depth: usize,
     ) Allocator.Error!void {
-        if (depth > 512) {
-            std.debug.print("scope_map extractBindings: depth limit at pattern_idx={}\n", .{pattern_idx});
-            return;
-        }
+        if (depth > 512) return;
 
-        std.debug.print("scope_map extractBindings: pattern_idx={} depth={}\n", .{ pattern_idx, depth });
         const pattern = module_env.store.getPattern(pattern_idx);
 
         switch (pattern) {

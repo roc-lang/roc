@@ -25,6 +25,7 @@ const Allocator = std.mem.Allocator;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 const BuildEnv = compile.BuildEnv;
+const DebugFlags = @import("../syntax.zig").DebugFlags;
 
 const CompletionItem = completion_handler.CompletionItem;
 const CompletionItemKind = completion_handler.CompletionItemKind;
@@ -36,6 +37,8 @@ pub const CompletionBuilder = struct {
     items: *std.ArrayList(CompletionItem),
     seen_labels: std.StringHashMap(void),
     builtin_module_env: ?*ModuleEnv,
+    debug: DebugFlags = .{},
+    log_file: ?std.fs.File = null,
 
     /// Initialize a new CompletionBuilder.
     pub fn init(allocator: Allocator, items: *std.ArrayList(CompletionItem), builtin_module_env: ?*ModuleEnv) CompletionBuilder {
@@ -47,9 +50,31 @@ pub const CompletionBuilder = struct {
         };
     }
 
+    /// Initialize a new CompletionBuilder with debug logging.
+    pub fn initWithDebug(allocator: Allocator, items: *std.ArrayList(CompletionItem), builtin_module_env: ?*ModuleEnv, debug: DebugFlags, log_file: ?std.fs.File) CompletionBuilder {
+        return .{
+            .allocator = allocator,
+            .items = items,
+            .seen_labels = std.StringHashMap(void).init(allocator),
+            .builtin_module_env = builtin_module_env,
+            .debug = debug,
+            .log_file = log_file,
+        };
+    }
+
     /// Clean up resources used by the builder.
     pub fn deinit(self: *CompletionBuilder) void {
         self.seen_labels.deinit();
+    }
+
+    fn logDebug(self: *CompletionBuilder, comptime fmt: []const u8, args: anytype) void {
+        if (!self.debug.completion) return;
+        var log_file = self.log_file orelse return;
+        var buffer: [256]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buffer, fmt, args) catch return;
+        log_file.writeAll(msg) catch return;
+        log_file.writeAll("\n") catch {};
+        log_file.sync() catch {};
     }
 
     /// Add a completion item, returning true if it was added (not a duplicate).
@@ -254,6 +279,7 @@ pub const CompletionBuilder = struct {
                         const def_idx: CIR.Def.Idx = @enumFromInt(node_idx);
                         const def = module_env.store.getDef(def_idx);
                         const type_var = ModuleEnv.varFrom(def.pattern);
+                        // Type formatting is best-effort; missing type info is acceptable
                         tw.write(type_var, .one_line) catch {};
                         const type_str = tw.get();
                         if (type_str.len > 0) {
@@ -402,6 +428,7 @@ pub const CompletionBuilder = struct {
         // Build scope map for local variable completions
         var scope = scope_map.ScopeMap.init(self.allocator);
         defer scope.deinit();
+        // Scope building is best-effort; partial completions are acceptable
         scope.build(module_env) catch {};
 
         // Add local variables in scope at cursor position
@@ -421,6 +448,7 @@ pub const CompletionBuilder = struct {
             var detail: ?[]const u8 = null;
             if (type_writer) |*tw| {
                 const type_var = ModuleEnv.varFrom(binding.pattern_idx);
+                // Type formatting is best-effort; missing type info is acceptable
                 tw.write(type_var, .one_line) catch {};
                 const type_str = tw.get();
                 if (type_str.len > 0) {
@@ -470,6 +498,7 @@ pub const CompletionBuilder = struct {
             var detail: ?[]const u8 = null;
             if (type_writer) |*tw| {
                 const type_var = ModuleEnv.varFrom(def.pattern);
+                // Type formatting is best-effort; missing type info is acceptable
                 tw.write(type_var, .one_line) catch {};
                 const type_str = tw.get();
                 if (type_str.len > 0) {
@@ -526,6 +555,7 @@ pub const CompletionBuilder = struct {
                 var detail: ?[]const u8 = null;
                 if (type_writer) |*tw| {
                     const type_var = ModuleEnv.varFrom(pattern_idx);
+                    // Type formatting is best-effort; missing type info is acceptable
                     tw.write(type_var, .one_line) catch {};
                     const type_str = tw.get();
                     if (type_str.len > 0) {
@@ -561,27 +591,27 @@ pub const CompletionBuilder = struct {
         variable_name: []const u8,
         variable_start: u32,
     ) !void {
-        std.debug.print("addRecordFieldCompletions: looking for '{s}' at offset {d}\n", .{ variable_name, variable_start });
+        self.logDebug("addRecordFieldCompletions: looking for '{s}' at offset {d}", .{ variable_name, variable_start });
 
         // Find the binding for this variable name
         var scope = scope_map.ScopeMap.init(self.allocator);
         defer scope.deinit();
         scope.build(module_env) catch |err| {
-            std.debug.print("addRecordFieldCompletions: scope.build failed: {}\n", .{err});
+            self.logDebug("addRecordFieldCompletions: scope.build failed: {}", .{err});
             return;
         };
 
-        std.debug.print("addRecordFieldCompletions: scope has {d} bindings\n", .{scope.bindings.items.len});
+        self.logDebug("addRecordFieldCompletions: scope has {d} bindings", .{scope.bindings.items.len});
 
         // Find the binding with matching name that's visible at the variable position
         var found_binding: ?scope_map.Binding = null;
         for (scope.bindings.items) |binding| {
             const binding_name = module_env.getIdentText(binding.ident);
             const is_visible = scope_map.ScopeMap.isVisibleAt(binding, variable_start);
-            std.debug.print("addRecordFieldCompletions: binding '{s}' visible_from={d} visible_to={d} is_visible={}\n", .{ binding_name, binding.visible_from, binding.visible_to, is_visible });
+            self.logDebug("addRecordFieldCompletions: binding '{s}' visible_from={d} visible_to={d} is_visible={}", .{ binding_name, binding.visible_from, binding.visible_to, is_visible });
             if (!is_visible) continue;
             if (std.mem.eql(u8, binding_name, variable_name)) {
-                std.debug.print("addRecordFieldCompletions: FOUND binding '{s}'\n", .{binding_name});
+                self.logDebug("addRecordFieldCompletions: FOUND binding '{s}'", .{binding_name});
                 found_binding = binding;
                 break;
             }
@@ -591,14 +621,14 @@ pub const CompletionBuilder = struct {
         // by name in top-level defs/statements, because the binding's pattern_idx may be
         // from incomplete code and not have full type info (especially when using snapshots).
         if (found_binding) |_| {
-            std.debug.print("addRecordFieldCompletions: found binding, but will use def/stmt lookup for better types\n", .{});
+            self.logDebug("addRecordFieldCompletions: found binding, but will use def/stmt lookup for better types", .{});
         } else {
-            std.debug.print("addRecordFieldCompletions: NO binding found for '{s}'\n", .{variable_name});
+            self.logDebug("addRecordFieldCompletions: NO binding found for '{s}'", .{variable_name});
         }
 
         // Check top-level definitions
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
-        std.debug.print("addRecordFieldCompletions: checking {d} top-level defs\n", .{defs_slice.len});
+        self.logDebug("addRecordFieldCompletions: checking {d} top-level defs", .{defs_slice.len});
 
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
@@ -611,13 +641,13 @@ pub const CompletionBuilder = struct {
             };
 
             const name = module_env.getIdentText(ident_idx);
-            std.debug.print("addRecordFieldCompletions: def '{s}' pattern={} has_annotation={}\n", .{ name, def.pattern, def.annotation != null });
+            self.logDebug("addRecordFieldCompletions: def '{s}' pattern={} has_annotation={}", .{ name, def.pattern, def.annotation != null });
             if (std.mem.eql(u8, name, variable_name)) {
-                std.debug.print("addRecordFieldCompletions: FOUND def '{s}' pattern={} annotation={?}\n", .{ name, def.pattern, def.annotation });
+                self.logDebug("addRecordFieldCompletions: FOUND def '{s}' pattern={} annotation={?}", .{ name, def.pattern, def.annotation });
 
                 // Found the definition - get its type and extract record fields
                 const type_var = ModuleEnv.varFrom(def.pattern);
-                std.debug.print("addRecordFieldCompletions: type_var for def={}\n", .{type_var});
+                self.logDebug("addRecordFieldCompletions: type_var for def={}", .{type_var});
                 try self.addFieldsFromTypeVar(module_env, type_var);
                 return;
             }
@@ -625,7 +655,7 @@ pub const CompletionBuilder = struct {
 
         // Check statements (apps use statements for definitions)
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
-        std.debug.print("addRecordFieldCompletions: checking {d} statements\n", .{statements_slice.len});
+        self.logDebug("addRecordFieldCompletions: checking {d} statements", .{statements_slice.len});
         for (statements_slice) |stmt_idx| {
             const stmt = module_env.store.getStatement(stmt_idx);
             const pattern_idx = switch (stmt) {
@@ -641,9 +671,9 @@ pub const CompletionBuilder = struct {
             };
 
             const name = module_env.getIdentText(ident_idx);
-            std.debug.print("addRecordFieldCompletions: stmt '{s}'\n", .{name});
+            self.logDebug("addRecordFieldCompletions: stmt '{s}'", .{name});
             if (std.mem.eql(u8, name, variable_name)) {
-                std.debug.print("addRecordFieldCompletions: FOUND stmt '{s}'\n", .{name});
+                self.logDebug("addRecordFieldCompletions: FOUND stmt '{s}'", .{name});
                 // Found the definition - get its type and extract record fields
                 const type_var = ModuleEnv.varFrom(pattern_idx);
                 try self.addFieldsFromTypeVar(module_env, type_var);
@@ -659,14 +689,14 @@ pub const CompletionBuilder = struct {
         var resolved = type_store.resolveVar(type_var);
         var content = resolved.desc.content;
 
-        std.debug.print("addFieldsFromTypeVar: type_var={}, content tag={s}\n", .{ type_var, @tagName(content) });
+        self.logDebug("addFieldsFromTypeVar: type_var={}, content tag={s}", .{ type_var, @tagName(content) });
 
         var steps: usize = 0;
         while (true) : (steps += 1) {
             if (steps > 8) break;
 
             if (content.unwrapRecord()) |record| {
-                std.debug.print("addFieldsFromTypeVar: found record after resolve\n", .{});
+                self.logDebug("addFieldsFromTypeVar: found record after resolve", .{});
                 try self.addFieldsFromRecord(module_env, record);
                 return;
             }
@@ -721,6 +751,7 @@ pub const CompletionBuilder = struct {
                             for (elem_vars, 0..) |elem_var, i| {
                                 var detail: ?[]const u8 = null;
                                 if (type_writer) |*tw| {
+                                    // Type formatting is best-effort; missing type info is acceptable
                                     tw.write(elem_var, .one_line) catch {};
                                     const type_str = tw.get();
                                     if (type_str.len > 0) {
@@ -785,7 +816,6 @@ pub const CompletionBuilder = struct {
         type_var: types.Var,
         field_name: []const u8,
     ) ?types.Var {
-        _ = self;
         const type_store = &module_env.types;
 
         var resolved = type_store.resolveVar(type_var);
@@ -831,13 +861,13 @@ pub const CompletionBuilder = struct {
     ) !void {
         const type_store = &module_env.types;
 
-        std.debug.print("addFieldsFromContent: content tag={s}\n", .{@tagName(content)});
+        self.logDebug("addFieldsFromContent: content tag={s}", .{@tagName(content)});
 
         if (depth > 16) return;
 
         // Check if this is directly a record
         if (content.unwrapRecord()) |record| {
-            std.debug.print("addFieldsFromContent: found record!\n", .{});
+            self.logDebug("addFieldsFromContent: found record!", .{});
             try self.addFieldsFromRecord(module_env, record);
             return;
         }
@@ -845,17 +875,17 @@ pub const CompletionBuilder = struct {
         // Check if this is an alias (e.g., a type alias wrapping a record)
         switch (content) {
             .alias => |alias| {
-                std.debug.print("addFieldsFromContent: unwrapping alias\n", .{});
+                self.logDebug("addFieldsFromContent: unwrapping alias", .{});
                 // Get the backing type of the alias
                 const backing_var = type_store.getAliasBackingVar(alias);
                 const backing_resolved = type_store.resolveVar(backing_var);
                 try self.addFieldsFromContent(module_env, backing_resolved.desc.content, depth + 1);
             },
             .structure => |flat_type| {
-                std.debug.print("addFieldsFromContent: structure, flat_type tag={s}\n", .{@tagName(flat_type)});
+                self.logDebug("addFieldsFromContent: structure, flat_type tag={s}", .{@tagName(flat_type)});
             },
             else => {
-                std.debug.print("addFieldsFromContent: not a record or alias, tag={s}\n", .{@tagName(content)});
+                self.logDebug("addFieldsFromContent: not a record or alias, tag={s}", .{@tagName(content)});
             },
         }
     }
@@ -869,7 +899,7 @@ pub const CompletionBuilder = struct {
         const field_names = fields_slice.items(.name);
         const field_vars = fields_slice.items(.var_);
 
-        std.debug.print("addFieldsFromRecord: record.fields={}, fields_slice.len={}, field_names.len={d}\n", .{ record.fields, fields_slice.len, field_names.len });
+        self.logDebug("addFieldsFromRecord: record.fields={}, fields_slice.len={}, field_names.len={d}", .{ record.fields, fields_slice.len, field_names.len });
 
         // Initialize type writer for formatting field types
         var type_writer = module_env.initTypeWriter() catch null;
@@ -878,12 +908,13 @@ pub const CompletionBuilder = struct {
         // Iterate over record fields
         for (field_names, field_vars) |field_name_idx, field_var| {
             const field_name = module_env.getIdentText(field_name_idx);
-            std.debug.print("addFieldsFromRecord: field '{s}'\n", .{field_name});
+            self.logDebug("addFieldsFromRecord: field '{s}'", .{field_name});
             if (field_name.len == 0) continue;
 
             // Get field type for detail
             var detail: ?[]const u8 = null;
             if (type_writer) |*tw| {
+                // Type formatting is best-effort; missing type info is acceptable
                 tw.write(field_var, .one_line) catch {};
                 const type_str = tw.get();
                 if (type_str.len > 0) {
@@ -926,16 +957,16 @@ pub const CompletionBuilder = struct {
         variable_name: []const u8,
         variable_start: u32,
     ) !void {
-        std.debug.print("addMethodCompletions: looking for '{s}' at offset {d}\n", .{ variable_name, variable_start });
+        self.logDebug("addMethodCompletions: looking for '{s}' at offset {d}", .{ variable_name, variable_start });
 
         // Find the binding for this variable name (same as record field completion)
         var scope = scope_map.ScopeMap.init(self.allocator);
         defer scope.deinit();
         scope.build(module_env) catch |err| {
-            std.debug.print("addMethodCompletions: scope.build failed: {s}\n", .{@errorName(err)});
+            self.logDebug("addMethodCompletions: scope.build failed: {s}", .{@errorName(err)});
             return;
         };
-        std.debug.print("addMethodCompletions: scope has {d} bindings\n", .{scope.bindings.items.len});
+        self.logDebug("addMethodCompletions: scope has {d} bindings", .{scope.bindings.items.len});
 
         // Find the binding with matching name that's visible at the variable position
         var found_binding: ?scope_map.Binding = null;
@@ -944,7 +975,7 @@ pub const CompletionBuilder = struct {
             const is_visible = scope_map.ScopeMap.isVisibleAt(binding, variable_start);
             if (!is_visible) continue;
             if (std.mem.eql(u8, name, variable_name)) {
-                std.debug.print("addMethodCompletions: FOUND binding '{s}'\n", .{name});
+                self.logDebug("addMethodCompletions: FOUND binding '{s}'", .{name});
                 found_binding = binding;
                 break;
             }
@@ -953,7 +984,7 @@ pub const CompletionBuilder = struct {
         // Also check top-level definitions
         if (found_binding == null) {
             const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
-            std.debug.print("addMethodCompletions: checking {d} top-level defs\n", .{defs_slice.len});
+            self.logDebug("addMethodCompletions: checking {d} top-level defs", .{defs_slice.len});
             for (defs_slice) |def_idx| {
                 const def = module_env.store.getDef(def_idx);
                 const pattern = module_env.store.getPattern(def.pattern);
@@ -966,7 +997,7 @@ pub const CompletionBuilder = struct {
 
                 const name = module_env.getIdentText(ident_idx);
                 if (std.mem.eql(u8, name, variable_name)) {
-                    std.debug.print("addMethodCompletions: FOUND def '{s}'\n", .{name});
+                    self.logDebug("addMethodCompletions: FOUND def '{s}'", .{name});
                     // Found the definition - get its type and find methods
                     const type_var = ModuleEnv.varFrom(def.pattern);
                     try self.addMethodsFromTypeVar(module_env, type_var);
@@ -978,7 +1009,7 @@ pub const CompletionBuilder = struct {
         // Also check statements (apps use statements for definitions)
         if (found_binding == null) {
             const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
-            std.debug.print("addMethodCompletions: checking {d} statements\n", .{statements_slice.len});
+            self.logDebug("addMethodCompletions: checking {d} statements", .{statements_slice.len});
             for (statements_slice) |stmt_idx| {
                 const stmt = module_env.store.getStatement(stmt_idx);
                 const pattern_idx = switch (stmt) {
@@ -995,7 +1026,7 @@ pub const CompletionBuilder = struct {
 
                 const name = module_env.getIdentText(ident_idx);
                 if (std.mem.eql(u8, name, variable_name)) {
-                    std.debug.print("addMethodCompletions: FOUND stmt '{s}'\n", .{name});
+                    self.logDebug("addMethodCompletions: FOUND stmt '{s}'", .{name});
                     // Found the definition - get its type and find methods
                     const type_var = ModuleEnv.varFrom(pattern_idx);
                     try self.addMethodsFromTypeVar(module_env, type_var);
@@ -1005,7 +1036,7 @@ pub const CompletionBuilder = struct {
         }
 
         if (found_binding) |binding| {
-            std.debug.print("addMethodCompletions: using binding pattern_idx={}\n", .{binding.pattern_idx});
+            self.logDebug("addMethodCompletions: using binding pattern_idx={}", .{binding.pattern_idx});
             if (self.findExprTypeForPattern(module_env, binding.pattern_idx)) |type_var| {
                 try self.addMethodsFromTypeVar(module_env, type_var);
                 return;
@@ -1020,14 +1051,14 @@ pub const CompletionBuilder = struct {
     pub fn addMethodsFromTypeVar(self: *CompletionBuilder, module_env: *ModuleEnv, type_var: types.Var) !void {
         const type_store = &module_env.types;
 
-        std.debug.print("addMethodsFromTypeVar: type_var={}\n", .{type_var});
+        self.logDebug("addMethodsFromTypeVar: type_var={}", .{type_var});
         var resolved = type_store.resolveVar(type_var);
         var content = resolved.desc.content;
 
         var steps: usize = 0;
         while (true) : (steps += 1) {
             if (steps > 8) {
-                std.debug.print("addMethodsFromTypeVar: hit step limit\n", .{});
+                self.logDebug("addMethodsFromTypeVar: hit step limit", .{});
                 break;
             }
 
@@ -1042,7 +1073,7 @@ pub const CompletionBuilder = struct {
 
             if (type_ident_opt) |type_ident| {
                 const type_name = module_env.getIdentText(type_ident);
-                std.debug.print("addMethodsFromTypeVar: type_ident={any} name={s}\n", .{ type_ident, type_name });
+                self.logDebug("addMethodsFromTypeVar: type_ident={any} name={s}", .{ type_ident, type_name });
 
                 // Route builtin type methods through the builtin module env to ensure
                 // completions include real Builtin.roc backing data.
@@ -1059,19 +1090,19 @@ pub const CompletionBuilder = struct {
 
             switch (content) {
                 .flex => |flex| {
-                    std.debug.print("addMethodsFromTypeVar: flex constraints\n", .{});
+                    self.logDebug("addMethodsFromTypeVar: flex constraints", .{});
                     // Extract method names from flex constraints
                     try self.addMethodsFromConstraints(module_env, flex.constraints);
                     break;
                 },
                 .rigid => |rigid| {
-                    std.debug.print("addMethodsFromTypeVar: rigid constraints\n", .{});
+                    self.logDebug("addMethodsFromTypeVar: rigid constraints", .{});
                     // Extract method names from rigid constraints
                     try self.addMethodsFromConstraints(module_env, rigid.constraints);
                     break;
                 },
                 .alias => |alias| {
-                    std.debug.print("addMethodsFromTypeVar: alias unwrap\n", .{});
+                    self.logDebug("addMethodsFromTypeVar: alias unwrap", .{});
                     const backing_var = type_store.getAliasBackingVar(alias);
                     resolved = type_store.resolveVar(backing_var);
                     content = resolved.desc.content;
@@ -1089,12 +1120,12 @@ pub const CompletionBuilder = struct {
         constraints: types.StaticDispatchConstraint.SafeList.Range,
     ) !void {
         if (constraints.isEmpty()) {
-            std.debug.print("addMethodsFromConstraints: empty\n", .{});
+            self.logDebug("addMethodsFromConstraints: empty", .{});
             return;
         }
 
         const constraints_slice = module_env.types.sliceStaticDispatchConstraints(constraints);
-        std.debug.print("addMethodsFromConstraints: count={d}\n", .{constraints_slice.len});
+        self.logDebug("addMethodsFromConstraints: count={d}", .{constraints_slice.len});
         for (constraints_slice) |constraint| {
             const method_name = module_env.getIdentText(constraint.fn_name);
 
@@ -1106,6 +1137,7 @@ pub const CompletionBuilder = struct {
             defer if (type_writer) |*tw| tw.deinit();
 
             if (type_writer) |*tw| {
+                // Type formatting is best-effort; missing type info is acceptable
                 tw.write(constraint.fn_var, .one_line) catch {};
                 const type_str = tw.get();
                 if (type_str.len > 0) {
@@ -1124,12 +1156,11 @@ pub const CompletionBuilder = struct {
 
     /// Find the type of an expression for a pattern.
     fn findExprTypeForPattern(self: *CompletionBuilder, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?types.Var {
-        _ = self;
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
             if (def.pattern == pattern_idx) {
-                std.debug.print("findExprTypeForPattern: def expr for pattern_idx={} expr_idx={}\n", .{ pattern_idx, def.expr });
+                self.logDebug("findExprTypeForPattern: def expr for pattern_idx={} expr_idx={}", .{ pattern_idx, def.expr });
                 return ModuleEnv.varFrom(def.expr);
             }
         }
@@ -1141,14 +1172,14 @@ pub const CompletionBuilder = struct {
             if (stmt_parts.pattern) |stmt_pattern_idx| {
                 if (stmt_pattern_idx == pattern_idx) {
                     if (stmt_parts.expr) |expr_idx| {
-                        std.debug.print("findExprTypeForPattern: stmt expr for pattern_idx={} expr_idx={}\n", .{ pattern_idx, expr_idx });
+                        self.logDebug("findExprTypeForPattern: stmt expr for pattern_idx={} expr_idx={}", .{ pattern_idx, expr_idx });
                         return ModuleEnv.varFrom(expr_idx);
                     }
                 }
             }
         }
 
-        std.debug.print("findExprTypeForPattern: no expr for pattern_idx={}\n", .{pattern_idx});
+        self.logDebug("findExprTypeForPattern: no expr for pattern_idx={}", .{pattern_idx});
         return null;
     }
 
@@ -1180,6 +1211,7 @@ pub const CompletionBuilder = struct {
                 // Look up the method definition to get its type
                 if (self.findMethodType(module_env, qualified_ident)) |method_type_var| {
                     if (type_writer) |*tw| {
+                        // Type formatting is best-effort; missing type info is acceptable
                         tw.write(method_type_var, .one_line) catch {};
                         const type_str = tw.get();
                         if (type_str.len > 0) {
@@ -1286,7 +1318,6 @@ pub const CompletionBuilder = struct {
 
     /// Find the type of a method definition by its qualified identifier.
     fn findMethodType(self: *CompletionBuilder, module_env: *ModuleEnv, qualified_ident: base.Ident.Idx) ?types.Var {
-        _ = self;
         // Look through definitions to find the method
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
         for (defs_slice) |def_idx| {
