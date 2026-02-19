@@ -11398,78 +11398,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitAddStackPtr(stack_spill_size);
             }
 
-            // Handle i128/Dec return values (returned in two registers)
-            if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec) {
-                const stack_offset = self.codegen.allocStackSlot(16);
-                try self.codegen.emitStoreStack(.w64, stack_offset, ret_reg_0);
-                try self.codegen.emitStoreStack(.w64, stack_offset + 8, ret_reg_1);
-                return .{ .stack_i128 = stack_offset };
-            }
-
-            // Check if return type is a string (24 bytes)
-            if (ret_layout == .str) {
-                const stack_offset = self.codegen.allocStackSlot(roc_str_size);
-                try self.emitStore(.w64, frame_ptr, stack_offset, ret_reg_0);
-                try self.emitStore(.w64, frame_ptr, stack_offset + 8, ret_reg_1);
-                try self.emitStore(.w64, frame_ptr, stack_offset + 16, ret_reg_2);
-                return .{ .stack_str = stack_offset };
-            }
-
-            // Check if return type is a list (24 bytes)
-            const is_list_return = if (self.layout_store) |ls| blk: {
-                const layout_val = ls.getLayout(ret_layout);
-                break :blk layout_val.tag == .list or layout_val.tag == .list_of_zst;
-            } else false;
-
-            if (is_list_return) {
-                // List return (24 bytes) - save X0/X1/X2 to stack
-                // Use .list_stack so recursive calls properly detect this as a list argument
-                // (the fallback check at arg_loc == .list_stack needs this)
-                const stack_offset = self.codegen.allocStackSlot(roc_str_size);
-                try self.emitStore(.w64, frame_ptr, stack_offset, ret_reg_0);
-                try self.emitStore(.w64, frame_ptr, stack_offset + 8, ret_reg_1);
-                try self.emitStore(.w64, frame_ptr, stack_offset + 16, ret_reg_2);
-                return .{
-                    .list_stack = .{
-                        .struct_offset = stack_offset,
-                        .data_offset = 0, // Data location is stored in the list struct itself
-                        .num_elements = 0, // Unknown at compile time for returned lists
-                    },
-                };
-            }
-
-            // Check if return type is a multi-register struct (record, tag_union, tuple > 8 bytes)
-            if (self.layout_store) |ls| {
-                const layout_val = ls.getLayout(ret_layout);
-                if (layout_val.tag == .record or layout_val.tag == .tag_union or layout_val.tag == .tuple) {
-                    const size_align = ls.layoutSizeAlign(layout_val);
-                    if (size_align.size > 8) {
-                        // Large struct return - save multiple registers to stack
-                        const stack_offset = self.codegen.allocStackSlot(size_align.size);
-                        const num_regs = (size_align.size + 7) / 8;
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            const regs = [_]@TypeOf(GeneralReg.X0){ .X0, .X1, .X2, .X3 };
-                            for (0..@min(num_regs, 4)) |i| {
-                                try self.codegen.emit.strRegMemSoff(.w64, regs[i], .FP, stack_offset + @as(i32, @intCast(i * 8)));
-                            }
-                        } else {
-                            const regs = [_]@TypeOf(GeneralReg.RAX){ .RAX, .RDX, .RCX, .R8 };
-                            for (0..@min(num_regs, 4)) |i| {
-                                try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + @as(i32, @intCast(i * 8)), regs[i]);
-                            }
-                        }
-                        return .{ .stack = .{ .offset = stack_offset } };
-                    }
-                }
-            }
-
-            // Spill scalar return value from the return register (X0/RAX) to the stack.
-            // The return register is caller-saved and will be clobbered by any subsequent
-            // code generation (e.g., setting up arguments for the next function call).
-            const ret_reg = self.getReturnRegister();
-            const stack_offset = self.codegen.allocStackSlot(8);
-            try self.codegen.emitStoreStack(.w64, stack_offset, ret_reg);
-            return .{ .stack = .{ .offset = stack_offset } };
+            return self.saveCallReturnValue(ret_layout, false, 0);
         }
 
         /// Move a value to a specific register
@@ -12759,6 +12688,82 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return false;
         }
 
+        /// Save the return value from a call into a stack-based ValueLocation.
+        /// Shared by generateCallToCompiledProc, generateCallToLambda, and
+        /// generateIndirectCall. Handles i128/str/list/multi-reg struct/scalar returns.
+        fn saveCallReturnValue(self: *Self, ret_layout: layout.Idx, needs_ret_ptr: bool, ret_buffer_offset: i32) Allocator.Error!ValueLocation {
+            // If we used return-by-pointer, the callee has written the result
+            // to our pre-allocated buffer. No register saving needed.
+            if (needs_ret_ptr) {
+                return .{ .stack = .{ .offset = ret_buffer_offset } };
+            }
+
+            // Handle i128/Dec return values (returned in two registers)
+            if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec) {
+                const stack_offset = self.codegen.allocStackSlot(16);
+                try self.codegen.emitStoreStack(.w64, stack_offset, ret_reg_0);
+                try self.codegen.emitStoreStack(.w64, stack_offset + 8, ret_reg_1);
+                return .{ .stack_i128 = stack_offset };
+            }
+
+            // Check if return type is a string (24 bytes)
+            if (ret_layout == .str) {
+                const stack_offset = self.codegen.allocStackSlot(roc_str_size);
+                try self.emitStore(.w64, frame_ptr, stack_offset, ret_reg_0);
+                try self.emitStore(.w64, frame_ptr, stack_offset + 8, ret_reg_1);
+                try self.emitStore(.w64, frame_ptr, stack_offset + 16, ret_reg_2);
+                return .{ .stack_str = stack_offset };
+            }
+
+            // Check if return type is a list (24 bytes)
+            const is_list_return = if (self.layout_store) |ls| blk: {
+                const layout_val = ls.getLayout(ret_layout);
+                break :blk layout_val.tag == .list or layout_val.tag == .list_of_zst;
+            } else false;
+
+            if (is_list_return) {
+                const stack_offset = self.codegen.allocStackSlot(roc_str_size);
+                try self.emitStore(.w64, frame_ptr, stack_offset, ret_reg_0);
+                try self.emitStore(.w64, frame_ptr, stack_offset + 8, ret_reg_1);
+                try self.emitStore(.w64, frame_ptr, stack_offset + 16, ret_reg_2);
+                return .{ .list_stack = .{
+                    .struct_offset = stack_offset,
+                    .data_offset = 0,
+                    .num_elements = 0,
+                } };
+            }
+
+            // Check if return type is a multi-register struct (record, tag_union, tuple > 8 bytes)
+            if (self.layout_store) |ls| {
+                const layout_val = ls.getLayout(ret_layout);
+                if (layout_val.tag == .record or layout_val.tag == .tag_union or layout_val.tag == .tuple) {
+                    const size_align = ls.layoutSizeAlign(layout_val);
+                    if (size_align.size > 8) {
+                        const stack_offset = self.codegen.allocStackSlot(size_align.size);
+                        const num_regs = (size_align.size + 7) / 8;
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            const regs = [_]@TypeOf(GeneralReg.X0){ .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7, .XR, .X9, .X10, .X11, .X12, .X13, .X14, .X15 };
+                            for (0..@min(num_regs, regs.len)) |i| {
+                                try self.codegen.emit.strRegMemSoff(.w64, regs[i], .FP, stack_offset + @as(i32, @intCast(i * 8)));
+                            }
+                        } else {
+                            const regs = [_]@TypeOf(GeneralReg.RAX){ .RAX, .RDX, .RCX, .R8, .R9, .R10, .R11, .RDI, .RSI };
+                            for (0..@min(num_regs, regs.len)) |i| {
+                                try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + @as(i32, @intCast(i * 8)), regs[i]);
+                            }
+                        }
+                        return .{ .stack = .{ .offset = stack_offset } };
+                    }
+                }
+            }
+
+            // Spill scalar return value from the return register (X0/RAX) to the stack.
+            const ret_reg = self.getReturnRegister();
+            const stack_offset = self.codegen.allocStackSlot(8);
+            try self.codegen.emitStoreStack(.w64, stack_offset, ret_reg);
+            return .{ .stack = .{ .offset = stack_offset } };
+        }
+
         /// Bind lambda parameters from argument registers.
         /// Similar to bindProcParams but works with pattern spans.
         /// Handles stack spilling when arguments exceed available registers.
@@ -13609,82 +13614,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitAddStackPtr(stack_spill_size);
             }
 
-            // If we used return-by-pointer, the callee has written the result
-            // to our pre-allocated buffer. No register saving needed.
-            if (needs_ret_ptr) {
-                return .{ .stack = .{ .offset = ret_buffer_offset } };
-            }
-
-            // Handle i128/Dec return values (returned in two registers)
-            if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec) {
-                const stack_offset = self.codegen.allocStackSlot(16);
-                try self.codegen.emitStoreStack(.w64, stack_offset, ret_reg_0);
-                try self.codegen.emitStoreStack(.w64, stack_offset + 8, ret_reg_1);
-                return .{ .stack_i128 = stack_offset };
-            }
-
-            // Check if return type is a string (24 bytes)
-            if (ret_layout == .str) {
-                // String return (24 bytes) - save X0/X1/X2 to stack
-                const stack_offset = self.codegen.allocStackSlot(roc_str_size);
-                try self.emitStore(.w64, frame_ptr, stack_offset, ret_reg_0);
-                try self.emitStore(.w64, frame_ptr, stack_offset + 8, ret_reg_1);
-                try self.emitStore(.w64, frame_ptr, stack_offset + 16, ret_reg_2);
-                return .{ .stack_str = stack_offset };
-            }
-
-            // Check if return type is a list (24 bytes)
-            const is_list_return = if (self.layout_store) |ls| blk: {
-                const layout_val = ls.getLayout(ret_layout);
-                break :blk layout_val.tag == .list or layout_val.tag == .list_of_zst;
-            } else false;
-
-            if (is_list_return) {
-                // List return (24 bytes) - save X0/X1/X2 to stack
-                const stack_offset = self.codegen.allocStackSlot(roc_str_size);
-                try self.emitStore(.w64, frame_ptr, stack_offset, ret_reg_0);
-                try self.emitStore(.w64, frame_ptr, stack_offset + 8, ret_reg_1);
-                try self.emitStore(.w64, frame_ptr, stack_offset + 16, ret_reg_2);
-                return .{ .list_stack = .{
-                    .struct_offset = stack_offset,
-                    .data_offset = 0,
-                    .num_elements = 0,
-                } };
-            }
-
-            // Check if return type is a multi-register struct (record, tag_union, tuple > 8 bytes)
-            if (self.layout_store) |ls| {
-                const layout_val = ls.getLayout(ret_layout);
-                if (layout_val.tag == .record or layout_val.tag == .tag_union or layout_val.tag == .tuple) {
-                    const size_align = ls.layoutSizeAlign(layout_val);
-                    if (size_align.size > 8) {
-                        // Large struct return - save multiple registers to stack
-                        // Uses X0-X7 for first 8 words, then X9-X12 for overflow (aarch64)
-                        const stack_offset = self.codegen.allocStackSlot(size_align.size);
-                        const num_regs = (size_align.size + 7) / 8;
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            const regs = [_]@TypeOf(GeneralReg.X0){ .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7, .XR, .X9, .X10, .X11, .X12, .X13, .X14, .X15 };
-                            for (0..@min(num_regs, regs.len)) |i| {
-                                try self.codegen.emit.strRegMemSoff(.w64, regs[i], .FP, stack_offset + @as(i32, @intCast(i * 8)));
-                            }
-                        } else {
-                            const regs = [_]@TypeOf(GeneralReg.RAX){ .RAX, .RDX, .RCX, .R8, .R9, .R10, .R11, .RDI, .RSI };
-                            for (0..@min(num_regs, regs.len)) |i| {
-                                try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + @as(i32, @intCast(i * 8)), regs[i]);
-                            }
-                        }
-                        return .{ .stack = .{ .offset = stack_offset } };
-                    }
-                }
-            }
-
-            // Spill scalar return value from the return register (X0/RAX) to the stack.
-            // The return register is caller-saved and will be clobbered by any subsequent
-            // code generation (e.g., setting up arguments for the next function call).
-            const ret_reg = self.getReturnRegister();
-            const stack_offset = self.codegen.allocStackSlot(8);
-            try self.codegen.emitStoreStack(.w64, stack_offset, ret_reg);
-            return .{ .stack = .{ .offset = stack_offset } };
+            return self.saveCallReturnValue(ret_layout, needs_ret_ptr, ret_buffer_offset);
         }
 
         /// Generate an indirect call through a function pointer value.
@@ -13923,73 +13853,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitAddStackPtr(stack_spill_size);
             }
 
-            // If we used return-by-pointer, the callee has written the result
-            // to our pre-allocated buffer. No register saving needed.
-            if (needs_ret_ptr) {
-                return .{ .stack = .{ .offset = ret_buffer_offset } };
-            }
-
-            // Handle return values (same logic as generateCallToLambda)
-            if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec) {
-                const stack_offset = self.codegen.allocStackSlot(16);
-                try self.codegen.emitStoreStack(.w64, stack_offset, ret_reg_0);
-                try self.codegen.emitStoreStack(.w64, stack_offset + 8, ret_reg_1);
-                return .{ .stack_i128 = stack_offset };
-            }
-
-            if (ret_layout == .str) {
-                const stack_offset = self.codegen.allocStackSlot(roc_str_size);
-                try self.emitStore(.w64, frame_ptr, stack_offset, ret_reg_0);
-                try self.emitStore(.w64, frame_ptr, stack_offset + 8, ret_reg_1);
-                try self.emitStore(.w64, frame_ptr, stack_offset + 16, ret_reg_2);
-                return .{ .stack_str = stack_offset };
-            }
-
-            const is_list_return = if (self.layout_store) |ls| blk: {
-                const layout_val = ls.getLayout(ret_layout);
-                break :blk layout_val.tag == .list or layout_val.tag == .list_of_zst;
-            } else false;
-
-            if (is_list_return) {
-                const stack_offset = self.codegen.allocStackSlot(roc_str_size);
-                try self.emitStore(.w64, frame_ptr, stack_offset, ret_reg_0);
-                try self.emitStore(.w64, frame_ptr, stack_offset + 8, ret_reg_1);
-                try self.emitStore(.w64, frame_ptr, stack_offset + 16, ret_reg_2);
-                return .{ .list_stack = .{
-                    .struct_offset = stack_offset,
-                    .data_offset = 0,
-                    .num_elements = 0,
-                } };
-            }
-
-            if (self.layout_store) |ls| {
-                const layout_val = ls.getLayout(ret_layout);
-                if (layout_val.tag == .record or layout_val.tag == .tag_union or layout_val.tag == .tuple) {
-                    const size_align = ls.layoutSizeAlign(layout_val);
-                    if (size_align.size > 8) {
-                        // Large struct return - uses X0-X7 + X9-X12 for overflow (aarch64)
-                        const stack_offset = self.codegen.allocStackSlot(size_align.size);
-                        const num_regs = (size_align.size + 7) / 8;
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            const regs = [_]@TypeOf(GeneralReg.X0){ .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7, .XR, .X9, .X10, .X11, .X12, .X13, .X14, .X15 };
-                            for (0..@min(num_regs, regs.len)) |ri| {
-                                try self.codegen.emit.strRegMemSoff(.w64, regs[ri], .FP, stack_offset + @as(i32, @intCast(ri * 8)));
-                            }
-                        } else {
-                            const regs = [_]@TypeOf(GeneralReg.RAX){ .RAX, .RDX, .RCX, .R8, .R9, .R10, .R11, .RDI, .RSI };
-                            for (0..@min(num_regs, regs.len)) |ri| {
-                                try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + @as(i32, @intCast(ri * 8)), regs[ri]);
-                            }
-                        }
-                        return .{ .stack = .{ .offset = stack_offset } };
-                    }
-                }
-            }
-
-            const ret_reg = self.getReturnRegister();
-            const stack_offset = self.codegen.allocStackSlot(8);
-            try self.codegen.emitStoreStack(.w64, stack_offset, ret_reg);
-            return .{ .stack = .{ .offset = stack_offset } };
+            return self.saveCallReturnValue(ret_layout, needs_ret_ptr, ret_buffer_offset);
         }
 
         /// Stack size for main expression locals. Needs to be large enough for builtins
