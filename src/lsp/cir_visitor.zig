@@ -276,12 +276,11 @@ pub fn CirVisitor(comptime Context: type) type {
                     }
                     self.walkExpr(store, hosted.body);
                 },
-                .e_low_level_lambda => |low_level| {
-                    for (store.slicePatterns(low_level.args)) |arg_idx| {
-                        self.walkPattern(store, arg_idx);
+                .e_run_low_level => |run_low_level| {
+                    for (store.sliceExpr(run_low_level.args)) |arg_idx| {
+                        self.walkExpr(store, arg_idx);
                         if (self.stopped) return;
                     }
-                    self.walkExpr(store, low_level.body);
                 },
                 // Leaf nodes - no children to traverse
                 .e_num,

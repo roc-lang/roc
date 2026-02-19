@@ -321,7 +321,7 @@ pub const ScopeMap = struct {
             .e_zero_argument_tag,
             .e_runtime_error,
             .e_hosted_lambda,
-            .e_low_level_lambda,
+            .e_run_low_level,
             .e_crash,
             .e_dbg,
             .e_expect,
