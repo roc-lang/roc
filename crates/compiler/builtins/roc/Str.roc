@@ -2,7 +2,7 @@
 ##
 ## This guide starts at a high level and works down to the in-memory representation of strings and their performance characteristics. For reasons that will be explained later in this guide, some string operations are in the `Str` module while others (notably capitalization, code points, graphemes, and sorting) are in separate packages. There's also a list of recommendations for when to use code points, graphemes, and UTF-8.
 ##
-## ## Syntax
+## ## [Syntax](#syntax) #{syntax}
 ##
 ## The most common way to represent strings is using quotation marks:
 ##
@@ -27,7 +27,7 @@
 ##
 ## In triple-quoted strings, both the opening and closing `"""` must be at the same indentation level. Lines in the string begin at that indentation level; the spaces that indent the multiline string itself are not considered content.
 ##
-## ### Interpolation
+## ### [Interpolation](#interpolation) #{interpolation}
 ##
 ## *String interpolation* is syntax for inserting a string into another string.
 ##
@@ -49,7 +49,7 @@
 ##
 ## Interpolation can be used in multiline strings, but the part inside the parentheses must still be on one line.
 ##
-## ### Import Str from File
+## ### [Import Str from File](#import-str-from-file) #{import-str-from-file}
 ##
 ## To avoid verbose code to read the contents of a file into a Str, you can import it directly:
 ##
@@ -59,7 +59,7 @@
 ##
 ## Note: The file content is included in the Roc app executable, if you publish the executable, you do not need to provide the file alongside it.
 ##
-## ### Escapes
+## ### [Escapes](#escapes) #{escapes}
 ##
 ## There are a few special escape sequences in strings:
 ##
@@ -72,7 +72,7 @@
 ##
 ## These work in both single-line and multiline strings. We'll also discuss another escape later, for inserting Unicode code points into a string.
 ##
-## ### Single quote syntax
+## ### [Single quote syntax](#single-quote-syntax) #{single-quote-syntax}
 ##
 ## Try putting `'👩'` into `roc repl`. You should see this:
 ##
@@ -104,7 +104,7 @@
 ##
 ## Most often this single-quote syntax is used when writing parsers; most Roc programs never use it at all.
 ##
-## ## Unicode
+## ## [Unicode](#unicode) #{unicode}
 ##
 ## Roc strings represent text using [Unicode](https://unicode.org) This guide will provide only a basic overview of Unicode (the [Unicode glossary](http://www.unicode.org/glossary/) has over 500 entries in it), but it will include the most relevant differences between these concepts:
 ##
@@ -115,7 +115,7 @@
 ## It will also explain why some operations are included in Roc's builtin [Str](https://www.roc-lang.org/builtins/Str)
 ## module, and why others are in separate packages like [roc-lang/unicode](https://github.com/roc-lang/unicode).
 ##
-## ### Graphemes
+## ### [Graphemes](#graphemes) #{graphemes}
 ##
 ## Let's start with the following string:
 ##
@@ -133,7 +133,7 @@
 ##
 ## Note that although *grapheme* is less ambiguous than *character*, its definition is still open to interpretation. To address this, Unicode has formally specified [text segmentation rules](https://www.unicode.org/reports/tr29/) which define grapheme boundaries in precise technical terms. We won't get into those rules here, but since they can change with new Unicode releases, functions for working with graphemes are in the [roc-lang/unicode](https://github.com/roc-lang/unicode) package rather than in the builtin [`Str`](https://www.roc-lang.org/builtins/Str) module. This allows them to be updated without being blocked on a new release of the Roc language.
 ##
-## ### Code Points
+## ### [Code Points](#code-points) #{code-points}
 ##
 ## Every Unicode text value can be broken down into [Unicode code points](http://www.unicode.org/glossary/#code_point), which are integers between `0` and `285_212_438` that describe components of the text. In memory, every Roc string is a sequence of these integers stored in a format called UTF-8, which will be discussed later.
 ##
@@ -148,7 +148,7 @@
 ## -   One grapheme can be made up of multiple code points. In fact, there is no upper limit on how many code points can go into a single grapheme! (Some programming languages use the term "character" to refer to individual code points; this can be confusing for graphemes like 👩‍👩‍👦‍👦 because it visually looks like "one character" but no single code point can represent it.)
 ## -   Sometimes code points repeat within an individual grapheme. Here, 128105 repeats twice, as does 128102, and there's an 8205 in between each of the other code points.
 ##
-## ### Combining Code Points
+## ### [Combining Code Points](#combining-code-points) #{combining-code-points}
 ##
 ## The reason every other code point in 👩‍👩‍👦‍👦 is 8205 is that code point 8205 joins together other code points. This emoji, known as ["Family: Woman, Woman, Boy, Boy"](https://emojipedia.org/family-woman-woman-boy-boy), is made by combining several emoji using [zero-width joiners](https://emojipedia.org/zero-width-joiner)—which are represented by code point 8205 in memory, and which have no visual repesentation on their own.
 ##
@@ -178,7 +178,7 @@
 ##
 ## Even though 👩‍👩‍👦‍👦 is visually smaller when rendered, it takes up almost twice as much memory as 👩👩👦👦 does! That's because it has all the same code points, plus the zero-width joiners in between them.
 ##
-## ### String equality and normalization
+## ### [String equality and normalization](#string-equality-and-normalization) #{string-equality-and-normalization}
 ##
 ## Besides emoji like 👩‍👩‍👦‍👦, another classic example of multiple code points being combined to render as one grapheme has to do with accent marks. Try putting these two strings into `roc repl`:
 ##
@@ -215,7 +215,7 @@
 ##
 ## As such, normalization must be performed explicitly when desired. Like graphemes, Unicode normalization rules can change with new releases of Unicode. As such, these functions are in separate packages instead of builtins (normalization is planned to be in [roc-lang/unicode](https://github.com/roc-lang/unicode) in the future, but it has not yet been implemented) so that updates to these functions based on new Unicode releases can happen without waiting on new releases of the Roc language.
 ##
-## ### Capitalization
+## ### [Capitalization](#capitalization) #{capitalization}
 ##
 ## We've already seen two examples of Unicode definitions that can change with new Unicode releases: graphemes and normalization. Another is capitalization; these rules can change with new Unicode releases (most often in the form of additions of new languages, but breaking changes to capitalization rules for existing languages are also possible), and so they are not included in builtin [`Str`](https://www.roc-lang.org/builtins/Str).
 ##
@@ -240,7 +240,7 @@
 ##
 ## For these reasons, capitalization functions are not in [`Str`](https://www.roc-lang.org/builtins/Str). There is a planned `roc-lang` package to handle use cases like capitalization and sorting—sorting can also vary by language as well as by things like country—but implementation work has not yet started on this package.
 ##
-## ### UTF-8
+## ### [UTF-8](#utf-8) #{utf-8}
 ##
 ## Earlier, we discussed how Unicode code points can be described as [`U32`](https://www.roc-lang.org/builtins/Num#U32) integers. However, many common code points are very low integers, and can fit into a `U8` instead of needing an entire `U32` to represent them in memory. UTF-8 takes advantage of this, using a variable-width encoding to represent code points in 1-4 bytes, which saves a lot of memory in the typical case—especially compared to [UTF-16](https://en.wikipedia.org/wiki/UTF-16), which always uses at least 2 bytes to represent each code point, or [UTF-32](https://en.wikipedia.org/wiki/UTF-32), which always uses the maximum 4 bytes.
 ##
@@ -257,7 +257,7 @@
 ##
 ## Since many textual computer encodings—including [CSV](https://en.wikipedia.org/wiki/CSV), [XML](https://en.wikipedia.org/wiki/XML), and [JSON](https://en.wikipedia.org/wiki/JSON)—do not use any code points above 127 for their delimiters, it is often possible to write parsers for these formats using only `Str` functions which present UTF-8 as raw `U8` sequences, such as [`Str.walk_utf8`](https://www.roc-lang.org/builtins/Str#walk_utf8) and [`Str.to_utf8`](https://www.roc-lang.org/builtins/Str#to_utf8). In the typical case where they do not to need to parse out individual Unicode code points, they can get everything they need from `Str` UTF-8 functions without needing to depend on other packages.
 ##
-## ### When to use code points, graphemes, and UTF-8
+## ### [When to use code points, graphemes, and UTF-8](#when-to-use-code-points-graphemes-and-utf-8) #{when-to-use-code-points-graphemes-and-utf-8}
 ##
 ## Deciding when to use code points, graphemes, and UTF-8 can be nonobvious to say the least!
 ##
@@ -270,7 +270,7 @@
 ##
 ## For this reason (among others), grapheme functions live in [roc-lang/unicode](https://github.com/roc-lang/unicode) rather than in [`Str`](https://www.roc-lang.org/builtins/Str). They are more niche than they seem, so they should not be reached for all the time!
 ##
-## ## Performance
+## ## [Performance](#performance) #{performance}
 ##
 ## This section deals with how Roc strings are represented in memory, and their performance characteristics.
 ##
@@ -281,7 +281,7 @@
 ##
 ## Each of these three fields is the same size: 64 bits on a 64-bit system, and 32 bits on a 32-bit system. The actual contents of the string are stored in one contiguous sequence of bytes, encoded as UTF-8, often on the heap but sometimes elsewhere—more on this later. Empty strings do not have heap allocations, so an empty `Str` on a 64-bit system still takes up 24 bytes on the stack (due to its three 64-bit fields).
 ##
-## ### Reference counting and opportunistic mutation
+## ### [Reference counting and opportunistic mutation](#reference-counting-and-opportunistic-mutation) #{reference-counting-and-opportunistic-mutation}
 ##
 ## Like lists, dictionaries, and sets, Roc strings are automatically reference-counted and can benefit from opportunistic in-place mutation. The reference count is stored on the heap immediately before the first byte of the string's contents, and it has the same size as a memory address. This means it can count so high that it's impossible to write a Roc program which overflows a reference count, because having that many simultaneous references (each of which is a memory address) would have exhausted the operating system's address space first.
 ##
@@ -289,7 +289,7 @@
 ##
 ##  The contents of statically-known strings (today that means string literals) are stored in the readonly section of the binary, so they do not need heap allocations or reference counts. They are not eligible for in-place mutation, since mutating the readonly section of the binary would cause an operating system [access violation](https://en.wikipedia.org/wiki/Segmentation_fault).
 ##
-## ### Small String Optimization
+## ### [Small String Optimization](#small-string-optimization) #{small-string-optimization}
 ##
 ## Roc uses a "small string optimization" when representing certain strings in memory.
 ##
@@ -299,7 +299,7 @@
 ##
 ## Note that this optimization is based entirely on how many UTF-8 bytes the string takes up in memory. It doesn't matter how many graphemes, code points or anything else it has; the only factor that determines whether a particular string is eligible for the small string optimization is the number of UTF-8 bytes it takes up in memory!
 ##
-## ### Seamless Slices
+## ### [Seamless Slices](#seamless-slices) #{seamless-slices}
 ##
 ## Try putting this into `roc repl`:
 ##

@@ -85,7 +85,7 @@ import Bool exposing [Bool, Eq]
 import Result exposing [Result]
 import Num exposing [U64, Num, U8]
 
-## ## Types
+## ## [Types](#types) #{types}
 ##
 ## A sequential list of values.
 ## ```roc
@@ -104,12 +104,12 @@ import Num exposing [U64, Num, U8]
 ## > in Roc code will always fail, although in practice it is likely to fail
 ## > at much smaller lengths due to insufficient memory being available.
 ##
-## ## Performance Details
+## ## [Performance Details](#performance-details) #{performance-details}
 ##
 ## Under the hood, a list is a record containing a `len : U64` field, a `capacity : U64`
 ## field, and a pointer to a reference count and a flat array of bytes.
 ##
-## ## Shared Lists
+## ## [Shared Lists](#shared-lists) #{shared-lists}
 ##
 ## Shared lists are [reference counted](https://en.wikipedia.org/wiki/Reference_counting).
 ##
@@ -570,7 +570,7 @@ walk_backwards_help = |list, state, f, index_plus_one|
 
 ## Same as [List.walk], except you can stop walking early.
 ##
-## ## Performance Details
+## ## [Performance Details](#performance-details-walk-until) #{performance-details-walk-until}
 ##
 ## Compared to [List.walk], this can potentially visit fewer elements (which can
 ## improve performance) at the cost of making each step take longer.
@@ -649,7 +649,7 @@ all = |list, predicate|
 ## ```roc
 ## List.keep_if([1, 2, 3, 4], (|num| num > 2))
 ## ```
-## ## Performance Details
+## ## [Performance Details](#performance-details-keep-if) #{performance-details-keep-if}
 ##
 ## [List.keep_if] always returns a list that takes up exactly the same amount
 ## of memory as the original, even if its length decreases. This is because it
@@ -708,7 +708,7 @@ keep_if_try_help! = |list, predicate!, kept, index, length|
 ## ```roc
 ## List.drop_if([1, 2, 3, 4], (|num| num > 2))
 ## ```
-## ## Performance Details
+## ## [Performance Details](#performance-details-drop-if) #{performance-details-drop-if}
 ##
 ## `List.drop_if` has the same performance characteristics as [List.keep_if].
 ## See its documentation for details on those characteristics!
@@ -1457,7 +1457,7 @@ map_try! = |list, to_result_fun!|
 
 ## Same as [List.walk], except you can stop walking early by returning `Err`.
 ##
-## ## Performance Details
+## ## [Performance Details](#performance-details-walk-try) #{performance-details-walk-try}
 ##
 ## Compared to [List.walk], this can potentially visit fewer elements (which can
 ## improve performance) at the cost of making each step take longer.
