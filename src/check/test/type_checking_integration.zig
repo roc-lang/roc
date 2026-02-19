@@ -4533,6 +4533,174 @@ test "check type - mutually recursive static dispatch - polymorphic" {
     );
 }
 
+test "check type - associated items with operators - no mutual recursion regression" {
+    const source =
+        \\MyType := [C].{
+        \\  a = b + c
+        \\  b = 10
+        \\  c = d + 5
+        \\  d = 20
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.MyType.a", .expected = "Dec" },
+            .{ .def = "Test.MyType.b", .expected = "Dec" },
+            .{ .def = "Test.MyType.c", .expected = "Dec" },
+            .{ .def = "Test.MyType.d", .expected = "Dec" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - type mismatch error" {
+    const source =
+        \\f = |n| {
+        \\  if n <= 0.U64 {
+        \\    "hello"
+        \\  } else {
+        \\    g(n - 1.U64)
+        \\  }
+        \\}
+        \\g = |n| {
+        \\  if n <= 0.U64 {
+        \\    42.U64
+        \\  } else {
+        \\    f(n - 1.U64)
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - mutually recursive functions - three-way polymorphic" {
+    const source =
+        \\f = |n, x| {
+        \\  if n <= 0.U64 {
+        \\    x
+        \\  } else {
+        \\    g(n - 1.U64, x)
+        \\  }
+        \\}
+        \\g = |n, x| {
+        \\  if n <= 0.U64 {
+        \\    x
+        \\  } else {
+        \\    h(n - 1.U64, x)
+        \\  }
+        \\}
+        \\h = |n, x| {
+        \\  if n <= 0.U64 {
+        \\    x
+        \\  } else {
+        \\    f(n - 1.U64, x)
+        \\  }
+        \\}
+        \\test = (f(3.U64, "hi"), g(2.U64, 42.U8), h(1.U64, Bool.True))
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "f", .expected = "U64, a -> a" },
+            .{ .def = "g", .expected = "U64, a -> a" },
+            .{ .def = "h", .expected = "U64, a -> a" },
+            .{ .def = "test", .expected = "(Str, U8, Bool)" },
+        },
+    );
+}
+
+test "check type - mutually recursive static dispatch - three-way polymorphic" {
+    const source =
+        \\Relay(a) := [Val(a)].{
+        \\  step_a = |Relay.Val(x), n| {
+        \\    if n == 0.U64 {
+        \\      x
+        \\    } else {
+        \\      Relay.Val(x).step_b(n - 1.U64)
+        \\    }
+        \\  }
+        \\  step_b = |Relay.Val(x), n| {
+        \\    if n == 0.U64 {
+        \\      x
+        \\    } else {
+        \\      Relay.Val(x).step_c(n - 1.U64)
+        \\    }
+        \\  }
+        \\  step_c = |Relay.Val(x), n| {
+        \\    if n == 0.U64 {
+        \\      x
+        \\    } else {
+        \\      Relay.Val(x).step_a(n - 1.U64)
+        \\    }
+        \\  }
+        \\}
+        \\test = (Relay.Val(1.U64).step_a(2.U64), Relay.Val("hi").step_c(1.U64))
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Relay.step_a", .expected = "Relay(a), U64 -> a" },
+            .{ .def = "Test.Relay.step_b", .expected = "Relay(a), U64 -> a" },
+            .{ .def = "Test.Relay.step_c", .expected = "Relay(a), U64 -> a" },
+            .{ .def = "test", .expected = "(U64, Str)" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - annotated" {
+    const source =
+        \\is_even : U64 -> Bool
+        \\is_even = |n| {
+        \\  if n == 0.U64 {
+        \\    Bool.True
+        \\  } else {
+        \\    is_odd(n - 1.U64)
+        \\  }
+        \\}
+        \\is_odd : U64 -> Bool
+        \\is_odd = |n| {
+        \\  if n == 0.U64 {
+        \\    Bool.False
+        \\  } else {
+        \\    is_even(n - 1.U64)
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "is_even", .expected = "U64 -> Bool" },
+            .{ .def = "is_odd", .expected = "U64 -> Bool" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - different arities" {
+    const source =
+        \\f = |a| {
+        \\  if a <= 0.U64 {
+        \\    0.U64
+        \\  } else {
+        \\    g(a - 1.U64, a)
+        \\  }
+        \\}
+        \\g = |a, b| {
+        \\  if a <= 0.U64 {
+        \\    b
+        \\  } else {
+        \\    f(a - 1.U64)
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "f", .expected = "U64 -> U64" },
+            .{ .def = "g", .expected = "U64, U64 -> U64" },
+        },
+    );
+}
+
 // repros //
 
 test "check type - zulip repro" {

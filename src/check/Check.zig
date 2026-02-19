@@ -3071,9 +3071,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     const expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(expr_idx));
     const expr_var_raw = ModuleEnv.varFrom(expr_idx);
 
-    // Check if this is a lambda expression. If so, then we should generalize.
-    const is_closure = expr == .e_closure;
-    const should_generalize = isLambdaExpr(expr);
+    // Value restriction: only generalize at the inner lambda level, not the
+    // outer e_closure wrapper (which delegates to e_lambda's own checkExpr).
+    const should_generalize = isFunctionDef(&self.cir.store, expr) and expr != .e_closure;
 
     // Push/pop ranks based on if we should generalize
     if (should_generalize) try env.var_pool.pushRank();
@@ -3102,13 +3102,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     // If we have an annotation, then we create a fresh one, so if we hit an
     // error we don't poison the variable
     const expr_var: Var, const mb_anno_vars: ?AnnoVars = blk: {
-        if (is_closure) {
-            // If this expr is a closure, then the inner expr MUST be a lambda
-            // If not, then it's a bug in Czer
-            //
-            // In this case, we should forward the `expected` value down to the
-            // lambda, so the type can be generated at the same rank as the lambda
-            std.debug.assert(self.cir.store.getExpr(expr.e_closure.lambda_idx) == .e_lambda);
+        if (expr == .e_closure) {
+            // Closures delegate to their inner lambda's checkExpr, which handles
+            // annotation and generalization. Forward expected so the annotation
+            // type is created at the lambda's rank.
+            // (The e_closure-wraps-e_lambda invariant is asserted by isFunctionDef.)
             break :blk .{ expr_var_raw, null };
         }
 
@@ -3757,12 +3755,20 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
                         // Detect mutual recursion through local lookups.
                         // If the referenced def is different from the current one,
-                        // we have a cycle: current → ... → this_def → ... → current
+                        // we have a cycle: current → ... → this_def → ... → current.
+                        // Only trigger deferred generalization for function defs
+                        // (closures/lambdas), since only they are generalized and
+                        // have the cycle root cleanup code in their checkExpr.
+                        // Non-closure circular refs (e.g. associated item values)
+                        // are handled by the eql constraint above.
                         if (self.current_processing_def) |current_def| {
                             if (current_def != processing_def.def_idx) {
-                                self.defer_generalize = true;
-                                if (self.cycle_root_def == null) {
-                                    self.cycle_root_def = processing_def.def_idx;
+                                const ref_def = self.cir.store.getDef(processing_def.def_idx);
+                                if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(ref_def.expr))) {
+                                    self.defer_generalize = true;
+                                    if (self.cycle_root_def == null) {
+                                        self.cycle_root_def = processing_def.def_idx;
+                                    }
                                 }
                             }
                         }
@@ -4601,16 +4607,18 @@ const AnnoVars = struct { anno_var: Var, anno_var_backup: Var };
 
 /// Check if an expression represents a function definition that should be generalized.
 /// This includes lambdas and function declarations (even those without bodies).
-/// Value restriction: only function definitions should have their types generalized,
-/// not arbitrary value definitions like records, tuples, or numerals.
-fn isLambdaExpr(expr: CIR.Expr) bool {
+/// Returns true if the expression is a function definition: a closure wrapping
+/// a lambda, a bare lambda, an annotation-only signature, or a hosted lambda.
+/// Used for both generalization (value restriction) and cycle detection (deferred
+/// generalization only applies to function defs).
+fn isFunctionDef(store: *const CIR.NodeStore, expr: CIR.Expr) bool {
     return switch (expr) {
-        // Actual lambda expressions
+        .e_closure => |closure| {
+            std.debug.assert(store.getExpr(closure.lambda_idx) == .e_lambda);
+            return true;
+        },
         .e_lambda => true,
-        // Annotation-only function declarations (e.g., `is_empty : List(a) -> Bool`)
-        // These represent polymorphic function signatures and should be generalized
         .e_anno_only => true,
-        // Hosted/low-level lambdas also represent function declarations
         .e_hosted_lambda => true,
         else => false,
     };
@@ -6083,15 +6091,15 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                                 cycle_method_expr_var = try self.fresh(env, region);
 
                                 // Check if this is mutual recursion through dispatch.
-                                // A .processing def that is different from the current def
-                                // means we have a cycle: current → ... → this_def → ... → current
+                                // Only trigger for function defs (closures/lambdas).
                                 if (self.current_processing_def) |current_def| {
                                     if (current_def != processing_def.def_idx) {
-                                        // Mutual recursion detected!
-                                        self.defer_generalize = true;
-                                        if (self.cycle_root_def == null) {
-                                            // The .processing def is the outermost in the chain
-                                            self.cycle_root_def = processing_def.def_idx;
+                                        const ref_def = self.cir.store.getDef(processing_def.def_idx);
+                                        if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(ref_def.expr))) {
+                                            self.defer_generalize = true;
+                                            if (self.cycle_root_def == null) {
+                                                self.cycle_root_def = processing_def.def_idx;
+                                            }
                                         }
                                     }
                                 }
