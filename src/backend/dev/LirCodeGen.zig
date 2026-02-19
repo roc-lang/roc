@@ -10357,10 +10357,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (captures) |capture| {
                 const symbol_key: u64 = @bitCast(capture.symbol);
                 if (self.symbol_locations.get(symbol_key)) |capture_loc| {
-                    // Get size of this capture
+                    // Get size and alignment of this capture
                     const ls = self.layout_store orelse unreachable;
                     const capture_layout = ls.getLayout(capture.layout_idx);
-                    const capture_size = ls.layoutSizeAlign(capture_layout).size;
+                    const cap_sa = ls.layoutSizeAlign(capture_layout);
+                    const capture_size = cap_sa.size;
+                    // Align offset to match layout store's putCaptureStruct
+                    const cap_align = cap_sa.alignment.toByteUnits();
+                    offset = @intCast(std.mem.alignForward(usize, @intCast(offset), cap_align));
                     // Number of 8-byte words to copy (rounded up)
                     const num_words: u32 = (capture_size + 7) / 8;
 
@@ -10485,8 +10489,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // Found via resolveSymbol - copy it to captures
                         const ls = self.layout_store orelse unreachable;
                         const capture_layout = ls.getLayout(capture.layout_idx);
-                        const capture_size = ls.layoutSizeAlign(capture_layout).size;
+                        const cap_sa_r = ls.layoutSizeAlign(capture_layout);
+                        const capture_size = cap_sa_r.size;
                         const num_words_r: u32 = (capture_size + 7) / 8;
+                        // Align offset to match layout store's putCaptureStruct
+                        const cap_align_r = cap_sa_r.alignment.toByteUnits();
+                        offset = @intCast(std.mem.alignForward(usize, @intCast(offset), cap_align_r));
 
                         switch (resolved_loc) {
                             .general_reg => |reg| {
@@ -10718,7 +10726,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const symbol_key: u64 = @bitCast(capture.symbol);
                 const ls = self.layout_store orelse unreachable;
                 const capture_layout = ls.getLayout(capture.layout_idx);
-                const capture_size = ls.layoutSizeAlign(capture_layout).size;
+                const cap_sa = ls.layoutSizeAlign(capture_layout);
+                const capture_size = cap_sa.size;
+                // Align offset to match layout store's putCaptureStruct
+                const cap_align = cap_sa.alignment.toByteUnits();
+                offset = @intCast(std.mem.alignForward(usize, @intCast(offset), cap_align));
                 const capture_offset = cv.stack_offset + offset;
                 // Use the appropriate ValueLocation based on the layout type
                 if (capture.layout_idx == .i128 or capture.layout_idx == .u128 or capture.layout_idx == .dec) {
@@ -10798,7 +10810,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const symbol_key: u64 = @bitCast(capture.symbol);
                 const ls = self.layout_store orelse unreachable;
                 const capture_layout = ls.getLayout(capture.layout_idx);
-                const capture_size = ls.layoutSizeAlign(capture_layout).size;
+                const cap_sa = ls.layoutSizeAlign(capture_layout);
+                const capture_size = cap_sa.size;
+                // Align offset to match layout store's putCaptureStruct
+                const cap_align = cap_sa.alignment.toByteUnits();
+                offset = @intCast(std.mem.alignForward(usize, @intCast(offset), cap_align));
                 try self.symbol_locations.put(symbol_key, .{ .stack = .{ .offset = captures_offset + offset } });
                 offset += @intCast(capture_size);
             }
