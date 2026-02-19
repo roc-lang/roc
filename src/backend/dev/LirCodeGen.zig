@@ -3988,13 +3988,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitAddRegs(.w64, dst_addr, dst_addr, dp_reg);
                 self.codegen.freeGeneral(dp_reg);
 
-                // Copy elem_size bytes from src_addr to dst_addr
+                // Copy elem_size bytes from src_addr to dst_addr.
+                // Use copyChunked which handles non-8-aligned tails correctly,
+                // avoiding over-reads past the last element's allocation boundary.
                 const copy_tmp = try self.allocTempGeneral();
-                var off: u32 = 0;
-                while (off < elem_size_align.size) : (off += 8) {
-                    try self.emitLoad(.w64, copy_tmp, src_addr, @intCast(off));
-                    try self.emitStore(.w64, dst_addr, @intCast(off), copy_tmp);
-                }
+                try self.copyChunked(copy_tmp, src_addr, 0, dst_addr, 0, elem_size_align.size);
                 self.codegen.freeGeneral(copy_tmp);
                 self.codegen.freeGeneral(src_addr);
                 self.codegen.freeGeneral(dst_addr);
