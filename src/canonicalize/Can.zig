@@ -6368,17 +6368,40 @@ pub fn canonicalizeExpr(
                     try self.collectBoundVarsToScratch(branch_pat.pattern);
                 }
 
-                // Save position before canonicalizing body so we can filter pattern-bound vars
+                // Save position before canonicalizing guard/body so we can filter pattern-bound vars
                 const body_free_vars_start = self.scratch_free_vars.top();
 
-                // Reset self-reference tracking for the branch body - variables bound by the
-                // branch pattern are valid to use in the body and aren't self-references
+                // Reset self-reference tracking for the branch guard/body - variables bound by the
+                // branch pattern are valid to use in the guard/body and aren't self-references
                 const saved_defining_patterns_start = self.defining_patterns_start;
                 const saved_defining_pattern = self.defining_pattern;
                 self.defining_patterns_start = null;
                 self.defining_pattern = null;
                 defer self.defining_patterns_start = saved_defining_patterns_start;
                 defer self.defining_pattern = saved_defining_pattern;
+
+                // Canonicalize the guard expression (if present)
+                const can_guard: ?Expr.Idx = if (ast_branch.guard) |guard_expr_idx| blk: {
+                    const can_guard_result = try self.canonicalizeExpr(guard_expr_idx) orelse {
+                        break :blk null;
+                    };
+                    // Filter guard's free vars (pattern-bound vars are not truly free)
+                    if (can_guard_result.free_vars.len > 0) {
+                        const guard_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_guard_result.free_vars);
+                        self.scratch_free_vars.clearFrom(body_free_vars_start);
+                        var bound_vars_view = self.scratch_bound_vars.setViewFrom(branch_bound_vars_top);
+                        defer bound_vars_view.deinit();
+                        for (guard_free_vars_slice) |fv| {
+                            if (!bound_vars_view.contains(fv)) {
+                                try self.scratch_free_vars.append(fv);
+                            }
+                        }
+                    }
+                    break :blk can_guard_result.idx;
+                } else null;
+
+                // Update start for body free vars (after guard's filtered free vars)
+                const body_free_vars_start_after_guard = self.scratch_free_vars.top();
 
                 // Canonicalize the branch's body
                 const can_body = try self.canonicalizeExpr(ast_branch.body) orelse {
@@ -6398,7 +6421,7 @@ pub fn canonicalizeExpr(
                     // Copy the free vars we need to filter
                     const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_body.free_vars);
                     // Clear back to before body canonicalization
-                    self.scratch_free_vars.clearFrom(body_free_vars_start);
+                    self.scratch_free_vars.clearFrom(body_free_vars_start_after_guard);
                     // Re-add only filtered vars (not bound by branch patterns)
                     var bound_vars_view = self.scratch_bound_vars.setViewFrom(branch_bound_vars_top);
                     defer bound_vars_view.deinit();
@@ -6413,7 +6436,7 @@ pub fn canonicalizeExpr(
                     Expr.Match.Branch{
                         .patterns = branch_pat_span,
                         .value = value_idx,
-                        .guard = null,
+                        .guard = can_guard,
                         .redundant = try self.env.types.fresh(),
                     },
                     region,
