@@ -118,8 +118,7 @@ const FindTypeContext = struct {
     }
 
     /// Pre-visit callback for expressions.
-    fn visitExprPre(ctx: *FindTypeContext, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) VisitAction {
-        _ = expr; // We use the index to get region and type var
+    fn visitExprPre(ctx: *FindTypeContext, expr_idx: CIR.Expr.Idx, _: CIR.Expr) VisitAction {
         const region = ctx.store.getExprRegion(expr_idx);
 
         // Early exit if region doesn't contain target
@@ -139,7 +138,7 @@ const FindTypeContext = struct {
     }
 
     /// Pre-visit callback for patterns.
-    fn visitPatternPre(ctx: *FindTypeContext, pattern_idx: CIR.Pattern.Idx, pattern: CIR.Pattern) VisitAction {
+    fn visitPatternPre(ctx: *FindTypeContext, pattern_idx: CIR.Pattern.Idx, _: CIR.Pattern) VisitAction {
         const region = ctx.store.getPatternRegion(pattern_idx);
 
         // Early exit if region doesn't contain target
@@ -159,7 +158,7 @@ const FindTypeContext = struct {
     }
 
     /// Pre-visit callback for statements (to check annotations).
-    fn visitStmtPre(ctx: *FindTypeContext, stmt_idx: CIR.Statement.Idx, stmt: CIR.Statement) VisitAction {
+    fn visitStmtPre(ctx: *FindTypeContext, _: CIR.Statement.Idx, stmt: CIR.Statement) VisitAction {
         // Check if cursor is in a type annotation
         const anno_idx: ?CIR.Annotation.Idx = switch (stmt) {
             .s_decl => |d| d.anno,
@@ -283,7 +282,7 @@ const FindPatternContext = struct {
     result: ?CIR.Pattern.Idx = null,
 
     /// Pre-visit callback for patterns.
-    fn visitPatternPre(ctx: *FindPatternContext, pattern_idx: CIR.Pattern.Idx, pattern: CIR.Pattern) VisitAction {
+    fn visitPatternPre(ctx: *FindPatternContext, pattern_idx: CIR.Pattern.Idx, _: CIR.Pattern) VisitAction {
         const region = ctx.store.getPatternRegion(pattern_idx);
 
         // Early exit if region doesn't contain target
@@ -310,7 +309,7 @@ const FindDotReceiverContext = struct {
     result: ?types.Var = null,
 
     /// Pre-visit callback for expressions.
-    fn visitExprPre(ctx: *FindDotReceiverContext, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) VisitAction {
+    fn visitExprPre(ctx: *FindDotReceiverContext, _: CIR.Expr.Idx, expr: CIR.Expr) VisitAction {
         const region = switch (expr) {
             .e_dot_access => |dot| dot.field_name_region,
             else => return .continue_traversal,
@@ -346,7 +345,7 @@ const FindExprEndingAtContext = struct {
     result: ?TypeAtOffsetResult = null,
 
     /// Pre-visit callback for expressions.
-    fn visitExprPre(ctx: *FindExprEndingAtContext, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) VisitAction {
+    fn visitExprPre(ctx: *FindExprEndingAtContext, expr_idx: CIR.Expr.Idx, _: CIR.Expr) VisitAction {
         const region = ctx.store.getExprRegion(expr_idx);
 
         // We only care about expressions whose region ends exactly at the target.

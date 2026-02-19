@@ -811,7 +811,7 @@ pub const CompletionBuilder = struct {
     /// This unwraps aliases to find records and returns the field's type var
     /// for chained access resolution (e.g., myrec.subrec.).
     pub fn getFieldTypeVarFromTypeVar(
-        self: *CompletionBuilder,
+        _: *CompletionBuilder,
         module_env: *ModuleEnv,
         type_var: types.Var,
         field_name: []const u8,
@@ -1317,7 +1317,7 @@ pub const CompletionBuilder = struct {
     }
 
     /// Find the type of a method definition by its qualified identifier.
-    fn findMethodType(self: *CompletionBuilder, module_env: *ModuleEnv, qualified_ident: base.Ident.Idx) ?types.Var {
+    fn findMethodType(_: *CompletionBuilder, module_env: *ModuleEnv, qualified_ident: base.Ident.Idx) ?types.Var {
         // Look through definitions to find the method
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
         for (defs_slice) |def_idx| {
