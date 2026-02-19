@@ -180,14 +180,54 @@ pub const RcInsertPass = struct {
                 }
             },
             .lambda => |lam| {
+                // Lambda bodies are a separate scope. Count uses locally, then
+                // attribute 1 use per captured symbol to the outer scope, and
+                // ensure body-local symbols are in self.symbol_use_counts so
+                // processBlock can emit RC ops for them.
+                var local = std.AutoHashMap(u64, u32).init(self.allocator);
+                defer local.deinit();
+
                 const params = self.store.getPatternSpan(lam.params);
                 for (params) |pat_id| {
-                    try self.registerPatternSymbolInto(pat_id, target);
+                    try self.registerPatternSymbolInto(pat_id, &local);
                 }
-                try self.countUsesInto(lam.body, target);
+                try self.countUsesInto(lam.body, &local);
+
+                var it = local.iterator();
+                while (it.next()) |entry| {
+                    const key = entry.key_ptr.*;
+                    if (target.contains(key)) {
+                        // Symbol exists in outer scope — it's a capture.
+                        // Attribute exactly 1 use to the outer scope.
+                        const gop = try target.getOrPut(key);
+                        if (gop.found_existing) gop.value_ptr.* += 1 else gop.value_ptr.* = 1;
+                    }
+                    // Always ensure body symbols are in self.symbol_use_counts
+                    // so processBlock can emit RC ops for body-local bindings.
+                    const global_gop = try self.symbol_use_counts.getOrPut(key);
+                    if (!global_gop.found_existing) {
+                        global_gop.value_ptr.* = entry.value_ptr.*;
+                    }
+                }
             },
             .closure => |clo| {
                 try self.countUsesInto(clo.lambda, target);
+                // Each capture consumes a reference to the captured symbol.
+                const captures = self.store.getCaptures(clo.captures);
+                for (captures) |cap| {
+                    if (!cap.symbol.isNone()) {
+                        const key = @as(u64, @bitCast(cap.symbol));
+                        const gop = try target.getOrPut(key);
+                        if (gop.found_existing) {
+                            gop.value_ptr.* += 1;
+                        } else {
+                            gop.value_ptr.* = 1;
+                        }
+                        if (!self.symbol_layouts.contains(key)) {
+                            try self.symbol_layouts.put(key, cap.layout_idx);
+                        }
+                    }
+                }
             },
             .list => |list| {
                 const elems = self.store.getExprSpan(list.elems);
