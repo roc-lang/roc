@@ -1299,3 +1299,259 @@ test "RcInsertPass compiles" {
     const T = RcInsertPass;
     std.debug.assert(@sizeOf(T) > 0);
 }
+
+// --- Test helpers ---
+
+fn testInit() !struct { store: MonoExprStore, layout_store: layout_mod.Store, module_env: @import("can").ModuleEnv, module_env_ptrs: [1]*const @import("can").ModuleEnv } {
+    const allocator = std.testing.allocator;
+    var result: @TypeOf(testInit() catch unreachable) = undefined;
+    result.module_env = try @import("can").ModuleEnv.init(allocator, "");
+    result.store = MonoExprStore.init(allocator);
+    return result;
+}
+
+fn testInitLayoutStore(self: *@TypeOf(testInit() catch unreachable)) !void {
+    self.module_env_ptrs[0] = &self.module_env;
+    self.layout_store = try layout_mod.Store.init(&self.module_env_ptrs, null, std.testing.allocator, @import("base").target.TargetUsize.native);
+}
+
+fn testDeinit(self: *@TypeOf(testInit() catch unreachable)) void {
+    self.layout_store.deinit();
+    self.store.deinit();
+    self.module_env.deinit();
+}
+
+fn makeSymbol(idx: u29) Symbol {
+    return .{
+        .module_idx = 0,
+        .ident_idx = base.Ident.Idx{
+            .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
+            .idx = idx,
+        },
+    };
+}
+
+const RcOpCounts = struct { increfs: u32, decrefs: u32 };
+
+fn countRcOps(store: *const MonoExprStore, expr_id: MonoExprId) RcOpCounts {
+    if (expr_id.isNone()) return .{ .increfs = 0, .decrefs = 0 };
+    const expr = store.getExpr(expr_id);
+    var increfs: u32 = 0;
+    var decrefs: u32 = 0;
+    switch (expr) {
+        .incref => increfs += 1,
+        .decref => decrefs += 1,
+        .block => |block| {
+            const stmts = store.getStmts(block.stmts);
+            for (stmts) |stmt| {
+                const sub = countRcOps(store, stmt.expr);
+                increfs += sub.increfs;
+                decrefs += sub.decrefs;
+            }
+            const sub = countRcOps(store, block.final_expr);
+            increfs += sub.increfs;
+            decrefs += sub.decrefs;
+        },
+        .lambda => |lam| {
+            const sub = countRcOps(store, lam.body);
+            increfs += sub.increfs;
+            decrefs += sub.decrefs;
+        },
+        .closure => |clo| {
+            const sub = countRcOps(store, clo.lambda);
+            increfs += sub.increfs;
+            decrefs += sub.decrefs;
+        },
+        .match_expr => |w| {
+            const branches = store.getMatchBranches(w.branches);
+            for (branches) |branch| {
+                const guard_sub = countRcOps(store, branch.guard);
+                increfs += guard_sub.increfs;
+                decrefs += guard_sub.decrefs;
+                const sub = countRcOps(store, branch.body);
+                increfs += sub.increfs;
+                decrefs += sub.decrefs;
+            }
+        },
+        .if_then_else => |ite| {
+            const branches = store.getIfBranches(ite.branches);
+            for (branches) |branch| {
+                const sub = countRcOps(store, branch.body);
+                increfs += sub.increfs;
+                decrefs += sub.decrefs;
+            }
+            const sub = countRcOps(store, ite.final_else);
+            increfs += sub.increfs;
+            decrefs += sub.decrefs;
+        },
+        .for_loop => |fl| {
+            const sub = countRcOps(store, fl.body);
+            increfs += sub.increfs;
+            decrefs += sub.decrefs;
+        },
+        else => {},
+    }
+    return .{ .increfs = increfs, .decrefs = decrefs };
+}
+
+test "RC pass-through: non-refcounted i64 block unchanged" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    // Build: { x = 42; x }
+    const i64_layout: LayoutIdx = .i64;
+
+    const sym_x = makeSymbol(1);
+
+    const int_lit = try env.store.addExpr(.{ .i64_literal = 42 }, Region.zero());
+    const pat_x = try env.store.addPattern(.{ .bind = .{ .symbol = sym_x, .layout_idx = i64_layout } }, Region.zero());
+    const stmts = try env.store.addStmts(&.{.{ .pattern = pat_x, .expr = int_lit }});
+    const lookup_x = try env.store.addExpr(.{ .lookup = .{ .symbol = sym_x, .layout_idx = i64_layout } }, Region.zero());
+
+    const block_expr = try env.store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = lookup_x,
+        .result_layout = i64_layout,
+    } }, Region.zero());
+
+    var pass = RcInsertPass.init(allocator, &env.store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+    const result_expr = env.store.getExpr(result);
+    try std.testing.expect(result_expr == .block);
+
+    // No RC ops should have been added — statement count should be 1
+    const result_stmts = env.store.getStmts(result_expr.block.stmts);
+    try std.testing.expectEqual(@as(usize, 1), result_stmts.len);
+}
+
+test "RC: string binding used twice gets incref" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    // Build: { s = "hello"; _ = s; s }
+    // where s is used twice (the use(s) stmt + final lookup)
+    const str_layout: LayoutIdx = .str;
+
+    const sym_s = makeSymbol(1);
+
+    const str_lit = try env.store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
+    const pat_s = try env.store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+
+    // Two lookups to get use_count = 2
+    const lookup1 = try env.store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const lookup2 = try env.store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+
+    // Statement: s = "hello"
+    // Statement: _ = s (use to bump count)
+    const wildcard = try env.store.addPattern(.{ .wildcard = .{ .layout_idx = str_layout } }, Region.zero());
+    const stmts = try env.store.addStmts(&.{
+        .{ .pattern = pat_s, .expr = str_lit },
+        .{ .pattern = wildcard, .expr = lookup1 },
+    });
+
+    const block_expr = try env.store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = lookup2,
+        .result_layout = str_layout,
+    } }, Region.zero());
+
+    var pass = RcInsertPass.init(allocator, &env.store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+    const rc = countRcOps(&env.store, result);
+
+    // s used twice => incref(1) should be inserted
+    try std.testing.expectEqual(@as(u32, 1), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 0), rc.decrefs);
+}
+
+test "RC lambda: body uses don't inflate outer scope" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    // Build: { s = "hello"; f = |x| { _ = s; _ = s; s }; s }
+    // s is used 3 times inside lambda body, but the lambda only captures
+    // s once. The outer scope should see 2 uses of s (1 capture + 1
+    // final_expr), NOT 4 uses (3 body + 1 final_expr).
+    // Bug #13: without proper scoping, outer scope saw 4 uses and would
+    // emit incref(3) instead of the correct incref(1).
+    const str_layout: LayoutIdx = .str;
+    const i64_layout: LayoutIdx = .i64;
+
+    const sym_s = makeSymbol(1);
+    const sym_x = makeSymbol(2);
+    const sym_f = makeSymbol(3);
+
+    // s = "hello"
+    const str_lit = try env.store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
+    const pat_s = try env.store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+
+    // Lambda body: { _ = s; _ = s; s } — uses s three times
+    const lookup_s_1 = try env.store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const lookup_s_2 = try env.store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const lookup_s_3 = try env.store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const wild1 = try env.store.addPattern(.{ .wildcard = .{ .layout_idx = str_layout } }, Region.zero());
+    const wild2 = try env.store.addPattern(.{ .wildcard = .{ .layout_idx = str_layout } }, Region.zero());
+    const body_stmts = try env.store.addStmts(&.{
+        .{ .pattern = wild1, .expr = lookup_s_1 },
+        .{ .pattern = wild2, .expr = lookup_s_2 },
+    });
+    const lambda_body = try env.store.addExpr(.{ .block = .{
+        .stmts = body_stmts,
+        .final_expr = lookup_s_3,
+        .result_layout = str_layout,
+    } }, Region.zero());
+
+    // Lambda: |x| { _ = s; _ = s; s }
+    const pat_x = try env.store.addPattern(.{ .bind = .{ .symbol = sym_x, .layout_idx = i64_layout } }, Region.zero());
+    const params = try env.store.addPatternSpan(&.{pat_x});
+    const lambda_expr = try env.store.addExpr(.{ .lambda = .{
+        .fn_layout = i64_layout,
+        .params = params,
+        .body = lambda_body,
+        .ret_layout = str_layout,
+    } }, Region.zero());
+
+    // f = |x| { _ = s; _ = s; s }
+    const pat_f = try env.store.addPattern(.{ .bind = .{ .symbol = sym_f, .layout_idx = i64_layout } }, Region.zero());
+
+    // Final expr: s (one use in outer scope)
+    const lookup_s_outer = try env.store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+
+    const stmts = try env.store.addStmts(&.{
+        .{ .pattern = pat_s, .expr = str_lit },
+        .{ .pattern = pat_f, .expr = lambda_expr },
+    });
+
+    const block_expr = try env.store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = lookup_s_outer,
+        .result_layout = str_layout,
+    } }, Region.zero());
+
+    var pass = RcInsertPass.init(allocator, &env.store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+    const rc = countRcOps(&env.store, result);
+
+    // Correct scoping: outer scope sees 2 uses of s (1 capture + 1 final_expr)
+    // => incref(1) at binding site. Lambda body doesn't independently RC the
+    // captured s (it's not locally bound), so total is 1 incref.
+    // Without scoping fix (bug #13): outer scope would see 4 uses (3 body
+    // uses leaked into outer scope + 1 final_expr) and emit incref(3).
+    try std.testing.expectEqual(@as(u32, 1), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 0), rc.decrefs);
+}
