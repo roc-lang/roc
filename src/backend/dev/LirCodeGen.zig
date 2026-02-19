@@ -11253,147 +11253,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate a call to an already-compiled procedure.
         /// This is used for recursive functions that were compiled via compileAllProcs.
         fn generateCallToCompiledProc(self: *Self, proc: CompiledProc, args_span: anytype, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
-            // Evaluate arguments and place them in argument registers or on stack.
-            // When registers are exhausted, spill remaining arguments to the stack.
             const args = self.store.getExprSpan(args_span);
 
-            // First pass: Generate all argument expressions and calculate register needs
+            // Pass 1: Generate all argument expressions and calculate register needs
             const arg_infos_start = self.scratch_arg_infos.top();
             defer self.scratch_arg_infos.clearFrom(arg_infos_start);
-
-            var total_regs_needed: u8 = 0;
 
             for (args) |arg_id| {
                 const arg_loc = try self.generateExpr(arg_id);
                 const arg_layout = self.getExprLayout(arg_id);
-
-                // Calculate how many registers this argument needs
                 const num_regs: u8 = self.calcArgRegCount(arg_loc, arg_layout);
                 try self.scratch_arg_infos.append(.{ .loc = arg_loc, .layout_idx = arg_layout, .num_regs = num_regs });
-                total_regs_needed += num_regs;
             }
             const arg_infos = self.scratch_arg_infos.sliceFromStart(arg_infos_start);
 
-            // Calculate stack spill size (for arguments that don't fit in registers)
-            var stack_spill_size: i32 = 0;
-            {
-                var reg_count: u8 = 0;
-                for (arg_infos) |info| {
-                    if (reg_count + info.num_regs <= max_arg_regs) {
-                        reg_count += info.num_regs;
-                    } else {
-                        // This argument (and all following) go on the stack
-                        stack_spill_size += @as(i32, info.num_regs) * 8;
-                        reg_count = max_arg_regs; // Mark registers as exhausted
-                    }
-                }
-            }
-
-            // Allocate stack space for spilled arguments (before placing any arguments)
-            // On x86_64, stack args are placed at [RSP+0], [RSP+8], etc. before the call
-            if (stack_spill_size > 0) {
-                if (comptime target.toCpuArch() == .x86_64) {
-                    try self.codegen.emit.subRegImm32(.w64, .RSP, stack_spill_size);
-                } else {
-                    // aarch64: also need to allocate stack space
-                    try self.codegen.emit.subRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(stack_spill_size));
-                }
-            }
-
-            // Second pass: Place arguments in registers or on stack
-            var reg_idx: u8 = 0;
-            var stack_arg_offset: i32 = 0; // Offset from RSP for stack arguments
-
-            for (arg_infos) |info| {
-                const arg_loc = info.loc;
-                const arg_layout = info.layout_idx;
-
-                // Check if this argument fits in registers
-                if (reg_idx + info.num_regs <= max_arg_regs) {
-                    // Place in registers (existing logic)
-                    const is_i128_arg = (arg_loc == .stack_i128 or arg_loc == .immediate_i128) or
-                        (arg_loc == .stack and arg_layout != null and
-                            (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128));
-                    if (is_i128_arg) {
-                        // On aarch64, 128-bit values must start at even register pairs
-                        // to match the callee's bindProcParams alignment.
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            if (reg_idx % 2 != 0) {
-                                reg_idx += 1;
-                            }
-                        }
-                        const low_reg = self.getArgumentRegister(reg_idx);
-                        const high_reg = self.getArgumentRegister(reg_idx + 1);
-                        switch (arg_loc) {
-                            .stack_i128 => |offset| {
-                                try self.codegen.emitLoadStack(.w64, low_reg, offset);
-                                try self.codegen.emitLoadStack(.w64, high_reg, offset + 8);
-                            },
-                            .stack => |s| {
-                                const offset = s.offset;
-                                try self.codegen.emitLoadStack(.w64, low_reg, offset);
-                                try self.codegen.emitLoadStack(.w64, high_reg, offset + 8);
-                            },
-                            .immediate_i128 => |val| {
-                                const low: u64 = @truncate(@as(u128, @bitCast(val)));
-                                const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
-                                try self.codegen.emitLoadImm(low_reg, @bitCast(low));
-                                try self.codegen.emitLoadImm(high_reg, @bitCast(high));
-                            },
-                            else => unreachable,
-                        }
-                        reg_idx += 2;
-                    } else if (info.num_regs == 3) {
-                        // List or string (24 bytes)
-                        const offset: i32 = switch (arg_loc) {
-                            .stack => |s| s.offset,
-                            .list_stack => |li| li.struct_offset,
-                            .stack_str => |off| off,
-                            else => unreachable,
-                        };
-                        const reg0 = self.getArgumentRegister(reg_idx);
-                        const reg1 = self.getArgumentRegister(reg_idx + 1);
-                        const reg2 = self.getArgumentRegister(reg_idx + 2);
-                        try self.emitLoad(.w64, reg0, frame_ptr, offset);
-                        try self.emitLoad(.w64, reg1, frame_ptr, offset + 8);
-                        try self.emitLoad(.w64, reg2, frame_ptr, offset + 16);
-                        reg_idx += 3;
-                    } else if (info.num_regs > 1) {
-                        // Multi-register struct (record > 8 bytes)
-                        const offset: i32 = switch (arg_loc) {
-                            .stack => |s| s.offset,
-                            else => {
-                                // Fall back to single register
-                                const arg_reg = self.getArgumentRegister(reg_idx);
-                                try self.moveToReg(arg_loc, arg_reg);
-                                reg_idx += 1;
-                                continue;
-                            },
-                        };
-                        var ri: u8 = 0;
-                        while (ri < info.num_regs) : (ri += 1) {
-                            const r = self.getArgumentRegister(reg_idx + ri);
-                            try self.codegen.emitLoadStack(.w64, r, offset + @as(i32, ri) * 8);
-                        }
-                        reg_idx += info.num_regs;
-                    } else {
-                        // Single register argument
-                        const arg_reg = self.getArgumentRegister(reg_idx);
-                        try self.moveToReg(arg_loc, arg_reg);
-                        reg_idx += 1;
-                    }
-                } else {
-                    // Spill to stack - registers exhausted
-                    try self.spillArgToStack(arg_loc, stack_arg_offset, info.num_regs);
-                    stack_arg_offset += @as(i32, info.num_regs) * 8;
-                    reg_idx = max_arg_regs; // Mark all registers as used
-                }
-            }
-
-            // Emit the call instruction
+            // Pass 2: Place arguments and emit call
+            const stack_spill_size = try self.placeCallArguments(arg_infos, .{});
             try self.emitCallToOffset(proc.code_start);
 
-            // Clean up stack space for spilled arguments (after call returns)
             if (stack_spill_size > 0) {
                 try self.emitAddStackPtr(stack_spill_size);
             }
@@ -12764,6 +12641,214 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .stack = .{ .offset = stack_offset } };
         }
 
+        /// Configuration for placeCallArguments.
+        const CallConfig = struct {
+            /// If true, arg 0 is a hidden pointer to ret_buffer_offset.
+            needs_ret_ptr: bool = false,
+            ret_buffer_offset: i32 = 0,
+            /// Pre-computed per-argument pass-by-pointer flags (null = no pass-by-ptr).
+            pass_by_ptr: ?[]const bool = null,
+            /// If true, append roc_ops as the final argument.
+            emit_roc_ops: bool = false,
+        };
+
+        /// Place arguments in registers and/or stack slots per the calling convention.
+        /// Handles i128 even-alignment on aarch64, 3-reg list/str, multi-reg structs,
+        /// lambda_code addressing, pass-by-pointer conversion, and stack spilling.
+        /// Returns the stack_spill_size allocated (caller must clean up after the call).
+        fn placeCallArguments(self: *Self, arg_infos: []const ArgInfo, config: CallConfig) Allocator.Error!i32 {
+            // Compute stack_spill_size.
+            // When pass_by_ptr is provided, multi-reg args that would overflow are
+            // already converted to pointers — account for that.
+            var stack_spill_size: i32 = 0;
+            {
+                var reg_count: u8 = if (config.needs_ret_ptr) 1 else 0;
+                for (arg_infos, 0..) |ai, i| {
+                    const pbp = if (config.pass_by_ptr) |p| p[i] else false;
+                    const nr: u8 = if (pbp) 1 else ai.num_regs;
+                    if (reg_count + nr <= max_arg_regs) {
+                        reg_count += nr;
+                    } else {
+                        stack_spill_size += @as(i32, nr) * 8;
+                        reg_count = max_arg_regs;
+                    }
+                }
+                // Account for roc_ops needing a slot
+                if (config.emit_roc_ops) {
+                    if (reg_count + 1 > max_arg_regs) {
+                        stack_spill_size += 8;
+                    }
+                }
+            }
+
+            // Allocate stack space for spilled arguments
+            if (stack_spill_size > 0) {
+                try self.emitSubImm(.w64, stack_ptr, stack_ptr, stack_spill_size);
+            }
+
+            // Place arguments in registers or on stack
+            var reg_idx: u8 = 0;
+            var stack_arg_offset: i32 = 0;
+
+            // If return-by-pointer, load the hidden return buffer pointer as arg 0
+            if (config.needs_ret_ptr) {
+                const arg_reg = self.getArgumentRegister(0);
+                try self.emitLeaStack(arg_reg, config.ret_buffer_offset);
+                reg_idx = 1;
+            }
+
+            for (arg_infos, 0..) |info, i| {
+                const arg_loc = info.loc;
+                const arg_layout = info.layout_idx;
+
+                // Check if this argument is passed by pointer
+                if (config.pass_by_ptr) |pbp| {
+                    if (pbp[i]) {
+                        const arg_size: u32 = @as(u32, info.num_regs) * 8;
+                        const arg_offset = try self.ensureOnStack(arg_loc, arg_size);
+                        if (reg_idx < max_arg_regs) {
+                            const arg_reg = self.getArgumentRegister(reg_idx);
+                            try self.emitLeaStack(arg_reg, arg_offset);
+                            reg_idx += 1;
+                        } else {
+                            const temp = try self.allocTempGeneral();
+                            try self.emitLeaStack(temp, arg_offset);
+                            try self.spillArgToStack(.{ .general_reg = temp }, stack_arg_offset, 1);
+                            self.codegen.freeGeneral(temp);
+                            stack_arg_offset += 8;
+                            reg_idx = max_arg_regs;
+                        }
+                        continue;
+                    }
+                }
+
+                // Check if this argument fits in registers
+                if (reg_idx + info.num_regs <= max_arg_regs) {
+                    // Handle i128/Dec arguments (need two registers, even-aligned on aarch64)
+                    const is_i128_arg = (arg_loc == .stack_i128 or arg_loc == .immediate_i128) or
+                        (arg_loc == .stack and arg_layout != null and
+                        (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128));
+                    if (is_i128_arg) {
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            if (reg_idx % 2 != 0) {
+                                reg_idx += 1;
+                            }
+                        }
+                        const low_reg = self.getArgumentRegister(reg_idx);
+                        const high_reg = self.getArgumentRegister(reg_idx + 1);
+                        switch (arg_loc) {
+                            .stack_i128 => |offset| {
+                                try self.codegen.emitLoadStack(.w64, low_reg, offset);
+                                try self.codegen.emitLoadStack(.w64, high_reg, offset + 8);
+                            },
+                            .stack => |s| {
+                                try self.codegen.emitLoadStack(.w64, low_reg, s.offset);
+                                try self.codegen.emitLoadStack(.w64, high_reg, s.offset + 8);
+                            },
+                            .immediate_i128 => |val| {
+                                const low: u64 = @truncate(@as(u128, @bitCast(val)));
+                                const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
+                                try self.codegen.emitLoadImm(low_reg, @bitCast(low));
+                                try self.codegen.emitLoadImm(high_reg, @bitCast(high));
+                            },
+                            else => unreachable,
+                        }
+                        reg_idx += 2;
+                        continue;
+                    }
+
+                    if (info.num_regs == 3) {
+                        // List or string (24 bytes)
+                        const offset: i32 = switch (arg_loc) {
+                            .stack => |s| s.offset,
+                            .list_stack => |li| li.struct_offset,
+                            .stack_str => |off| off,
+                            else => unreachable,
+                        };
+                        const reg0 = self.getArgumentRegister(reg_idx);
+                        const reg1 = self.getArgumentRegister(reg_idx + 1);
+                        const reg2 = self.getArgumentRegister(reg_idx + 2);
+                        try self.emitLoad(.w64, reg0, frame_ptr, offset);
+                        try self.emitLoad(.w64, reg1, frame_ptr, offset + 8);
+                        try self.emitLoad(.w64, reg2, frame_ptr, offset + 16);
+                        reg_idx += 3;
+                    } else if (info.num_regs > 1) {
+                        // Multi-register struct (record > 8 bytes)
+                        const offset: i32 = switch (arg_loc) {
+                            .stack => |s| s.offset,
+                            else => {
+                                const arg_reg = self.getArgumentRegister(reg_idx);
+                                try self.moveToReg(arg_loc, arg_reg);
+                                reg_idx += 1;
+                                continue;
+                            },
+                        };
+                        var ri: u8 = 0;
+                        while (ri < info.num_regs) : (ri += 1) {
+                            const r = self.getArgumentRegister(reg_idx + ri);
+                            try self.codegen.emitLoadStack(.w64, r, offset + @as(i32, ri) * 8);
+                        }
+                        reg_idx += info.num_regs;
+                    } else {
+                        // Single register argument
+                        const arg_reg = self.getArgumentRegister(reg_idx);
+                        switch (arg_loc) {
+                            .general_reg => |reg| {
+                                if (reg != arg_reg) {
+                                    try self.codegen.emit.movRegReg(.w64, arg_reg, reg);
+                                }
+                            },
+                            .stack => |s| {
+                                try self.codegen.emitLoadStack(.w64, arg_reg, s.offset);
+                            },
+                            .immediate_i64 => |val| {
+                                try self.codegen.emitLoadImm(arg_reg, @bitCast(val));
+                            },
+                            .lambda_code => |lc| {
+                                const current = self.codegen.currentOffset();
+                                const rel: i64 = @as(i64, @intCast(lc.code_offset)) - @as(i64, @intCast(current));
+                                try self.internal_addr_patches.append(self.allocator, .{
+                                    .instr_offset = current,
+                                    .target_offset = lc.code_offset,
+                                });
+                                if (comptime target.toCpuArch() == .aarch64) {
+                                    try self.codegen.emit.adr(arg_reg, @intCast(rel));
+                                } else {
+                                    const lea_size: i64 = 7;
+                                    try self.codegen.emit.leaRegRipRel(arg_reg, @intCast(rel - lea_size));
+                                }
+                            },
+                            .closure_value => |cv| {
+                                try self.codegen.emitLoadStack(.w64, arg_reg, cv.stack_offset);
+                            },
+                            else => {
+                                try self.moveToReg(arg_loc, arg_reg);
+                            },
+                        }
+                        reg_idx += 1;
+                    }
+                } else {
+                    // Spill to stack — registers exhausted
+                    try self.spillArgToStack(arg_loc, stack_arg_offset, info.num_regs);
+                    stack_arg_offset += @as(i32, info.num_regs) * 8;
+                    reg_idx = max_arg_regs;
+                }
+            }
+
+            // Append roc_ops as the final argument
+            if (config.emit_roc_ops) {
+                const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+                if (reg_idx < max_arg_regs) {
+                    const arg_reg = self.getArgumentRegister(reg_idx);
+                    try self.codegen.emit.movRegReg(.w64, arg_reg, roc_ops_reg);
+                } else {
+                    try self.spillArgToStack(.{ .general_reg = roc_ops_reg }, stack_arg_offset, 1);
+                }
+            }
+
+            return stack_spill_size;
+        }
+
         /// Bind lambda parameters from argument registers.
         /// Similar to bindProcParams but works with pattern spans.
         /// Handles stack spilling when arguments exceed available registers.
@@ -13394,7 +13479,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (0..args.len) |_| try self.scratch_pass_by_ptr.append(false);
             const pass_by_ptr = self.scratch_pass_by_ptr.sliceFromStart(pbp_start);
 
-            var stack_spill_size: i32 = 0;
             {
                 // If needs_ret_ptr, the hidden pointer consumes one register slot
                 var reg_count: u8 = if (needs_ret_ptr) 1 else 0;
@@ -13408,11 +13492,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         if (reg_count + 1 <= max_arg_regs) {
                             reg_count += 1;
                         } else {
-                            stack_spill_size += 8;
                             reg_count = max_arg_regs;
                         }
                     } else {
-                        stack_spill_size += 8;
                         reg_count = max_arg_regs;
                     }
                 }
@@ -13432,179 +13514,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     pass_by_ptr[best_idx] = true;
                     reg_count -= (best_regs - 1); // Freed regs: was best_regs, now 1
                 }
-                // Final check for roc_ops
-                if (reg_count + 1 > max_arg_regs) {
-                    stack_spill_size += 8;
-                }
             }
 
-            // Allocate stack space for spilled arguments
-            if (stack_spill_size > 0) {
-                try self.emitSubImm(.w64, stack_ptr, stack_ptr, stack_spill_size);
-            }
-
-            // Pass 2: Load all argument values into registers or spill to stack
-            var reg_idx: u8 = 0;
-            var stack_arg_offset: i32 = 0;
-
-            // If return-by-pointer, load the hidden return buffer pointer as arg 0
-            if (needs_ret_ptr) {
-                const arg_reg = self.getArgumentRegister(0);
-                try self.emitLeaStack(arg_reg, ret_buffer_offset);
-                reg_idx = 1;
-            }
-
-            for (arg_infos, pass_by_ptr) |info, pbp| {
-                const arg_loc = info.loc;
-                const arg_layout = info.layout_idx;
-
-                // Check if this argument is passed by pointer (pre-computed above)
-                if (pbp) {
-                    // Multi-register arg: pass by pointer
-                    const arg_size: u32 = @as(u32, info.num_regs) * 8;
-                    const arg_offset = try self.ensureOnStack(arg_loc, arg_size);
-                    const arg_reg = self.getArgumentRegister(reg_idx);
-                    try self.emitLeaStack(arg_reg, arg_offset);
-                    reg_idx += 1;
-                    continue;
-                }
-
-                // Check if this argument fits in registers
-                if (reg_idx + info.num_regs <= max_arg_regs) {
-                    // Handle i128/Dec arguments (need two registers)
-                    const is_i128_arg = (arg_loc == .stack_i128 or arg_loc == .immediate_i128) or
-                        (arg_loc == .stack and arg_layout != null and
-                            (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128));
-                    if (is_i128_arg) {
-                        // On aarch64, 128-bit values must start at even register pairs
-                        // to match the callee's bindProcParams alignment.
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            if (reg_idx % 2 != 0) {
-                                reg_idx += 1;
-                            }
-                        }
-                        const low_reg = self.getArgumentRegister(reg_idx);
-                        const high_reg = self.getArgumentRegister(reg_idx + 1);
-                        switch (arg_loc) {
-                            .stack_i128 => |offset| {
-                                try self.codegen.emitLoadStack(.w64, low_reg, offset);
-                                try self.codegen.emitLoadStack(.w64, high_reg, offset + 8);
-                            },
-                            .stack => |s| {
-                                const offset = s.offset;
-                                try self.codegen.emitLoadStack(.w64, low_reg, offset);
-                                try self.codegen.emitLoadStack(.w64, high_reg, offset + 8);
-                            },
-                            .immediate_i128 => |val| {
-                                const low: u64 = @truncate(@as(u128, @bitCast(val)));
-                                const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
-                                try self.codegen.emitLoadImm(low_reg, @bitCast(low));
-                                try self.codegen.emitLoadImm(high_reg, @bitCast(high));
-                            },
-                            else => unreachable,
-                        }
-                        reg_idx += 2;
-                        continue;
-                    }
-
-                    if (info.num_regs == 3) {
-                        // List or string (24 bytes)
-                        const offset: i32 = switch (arg_loc) {
-                            .stack => |s| s.offset,
-                            .list_stack => |li| li.struct_offset,
-                            .stack_str => |off| off,
-                            else => unreachable,
-                        };
-                        const reg0 = self.getArgumentRegister(reg_idx);
-                        const reg1 = self.getArgumentRegister(reg_idx + 1);
-                        const reg2 = self.getArgumentRegister(reg_idx + 2);
-                        try self.emitLoad(.w64, reg0, frame_ptr, offset);
-                        try self.emitLoad(.w64, reg1, frame_ptr, offset + 8);
-                        try self.emitLoad(.w64, reg2, frame_ptr, offset + 16);
-                        reg_idx += 3;
-                    } else if (info.num_regs > 1) {
-                        // Multi-register struct (record > 8 bytes)
-                        const offset: i32 = switch (arg_loc) {
-                            .stack => |s| s.offset,
-                            else => {
-                                const arg_reg = self.getArgumentRegister(reg_idx);
-                                try self.moveToReg(arg_loc, arg_reg);
-                                reg_idx += 1;
-                                continue;
-                            },
-                        };
-                        var ri: u8 = 0;
-                        while (ri < info.num_regs) : (ri += 1) {
-                            const r = self.getArgumentRegister(reg_idx + ri);
-                            try self.codegen.emitLoadStack(.w64, r, offset + @as(i32, ri) * 8);
-                        }
-                        reg_idx += info.num_regs;
-                    } else {
-                        // Single register argument
-                        const arg_reg = self.getArgumentRegister(reg_idx);
-                        switch (arg_loc) {
-                            .general_reg => |reg| {
-                                if (reg != arg_reg) {
-                                    try self.codegen.emit.movRegReg(.w64, arg_reg, reg);
-                                }
-                            },
-                            .stack => |s| {
-                                const offset = s.offset;
-                                try self.codegen.emitLoadStack(.w64, arg_reg, offset);
-                            },
-                            .immediate_i64 => |val| {
-                                try self.codegen.emitLoadImm(arg_reg, @bitCast(val));
-                            },
-                            .lambda_code => |lc| {
-                                // Compute the absolute runtime address of the lambda proc
-                                // using PC-relative addressing, so the callee can use
-                                // BLR/CALL to invoke it as a function pointer.
-                                const current = self.codegen.currentOffset();
-                                const rel: i64 = @as(i64, @intCast(lc.code_offset)) - @as(i64, @intCast(current));
-                                // Record for re-patching after body shifts
-                                try self.internal_addr_patches.append(self.allocator, .{
-                                    .instr_offset = current,
-                                    .target_offset = lc.code_offset,
-                                });
-                                if (comptime target.toCpuArch() == .aarch64) {
-                                    try self.codegen.emit.adr(arg_reg, @intCast(rel));
-                                } else {
-                                    // x86_64: LEA reg, [RIP + disp32]
-                                    // The displacement is relative to the END of the LEA instruction (7 bytes)
-                                    const lea_size: i64 = 7;
-                                    try self.codegen.emit.leaRegRipRel(arg_reg, @intCast(rel - lea_size));
-                                }
-                            },
-                            .closure_value => |cv| {
-                                try self.codegen.emitLoadStack(.w64, arg_reg, cv.stack_offset);
-                            },
-                            else => {
-                                try self.moveToReg(arg_loc, arg_reg);
-                            },
-                        }
-                        reg_idx += 1;
-                    }
-                } else {
-                    // Single-register spill to stack
-                    try self.spillArgToStack(arg_loc, stack_arg_offset, info.num_regs);
-                    stack_arg_offset += @as(i32, info.num_regs) * 8;
-                    reg_idx = max_arg_regs;
-                }
-            }
-
-            // Pass 3: Add roc_ops as the final argument
-            // Lambdas need roc_ops to call builtins. We pass it explicitly to avoid
-            // relying on callee-saved register semantics across internal calls.
-            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-
-            if (reg_idx < max_arg_regs) {
-                // roc_ops fits in a register
-                const arg_reg = self.getArgumentRegister(reg_idx);
-                try self.codegen.emit.movRegReg(.w64, arg_reg, roc_ops_reg);
-            } else {
-                // roc_ops must go on stack (Windows with many args or already spilling)
-                try self.spillArgToStack(.{ .general_reg = roc_ops_reg }, stack_arg_offset, 1);
-            }
+            // Place arguments using shared helper
+            const stack_spill_size = try self.placeCallArguments(arg_infos, .{
+                .needs_ret_ptr = needs_ret_ptr,
+                .ret_buffer_offset = ret_buffer_offset,
+                .pass_by_ptr = pass_by_ptr,
+                .emit_roc_ops = true,
+            });
 
             // Emit call to the procedure
             try self.emitCallToOffset(code_offset);
@@ -13692,7 +13610,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (0..args.len) |_| try self.scratch_pass_by_ptr.append(false);
             const pass_by_ptr = self.scratch_pass_by_ptr.sliceFromStart(pbp_start);
 
-            var stack_spill_size: i32 = 0;
             {
                 var reg_count: u8 = if (needs_ret_ptr) 1 else 0;
                 for (arg_infos, 0..) |ai, i| {
@@ -13704,11 +13621,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         if (reg_count + 1 <= max_arg_regs) {
                             reg_count += 1;
                         } else {
-                            stack_spill_size += 8;
                             reg_count = max_arg_regs;
                         }
                     } else {
-                        stack_spill_size += 8;
                         reg_count = max_arg_regs;
                     }
                 }
@@ -13727,114 +13642,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     pass_by_ptr[best_idx] = true;
                     reg_count -= (best_regs - 1);
                 }
-                if (reg_count + 1 > max_arg_regs) {
-                    stack_spill_size += 8;
-                }
             }
 
-            if (stack_spill_size > 0) {
-                try self.emitSubImm(.w64, stack_ptr, stack_ptr, stack_spill_size);
-            }
-
-            // Load arguments into registers (same logic as generateCallToLambda)
-            var reg_idx: u8 = 0;
-            var stack_arg_offset: i32 = 0;
-
-            // If return-by-pointer, load the hidden return buffer pointer as arg 0
-            if (needs_ret_ptr) {
-                const arg_reg = self.getArgumentRegister(0);
-                try self.emitLeaStack(arg_reg, ret_buffer_offset);
-                reg_idx = 1;
-            }
-
-            for (arg_infos, pass_by_ptr) |info, pbp| {
-                const arg_loc = info.loc;
-
-                // Check if this argument is passed by pointer (pre-computed above)
-                if (pbp) {
-                    const arg_size: u32 = @as(u32, info.num_regs) * 8;
-                    const arg_offset = try self.ensureOnStack(arg_loc, arg_size);
-                    const arg_reg = self.getArgumentRegister(reg_idx);
-                    try self.emitLeaStack(arg_reg, arg_offset);
-                    reg_idx += 1;
-                    continue;
-                }
-
-                if (reg_idx + info.num_regs <= max_arg_regs) {
-                    if (info.num_regs == 3) {
-                        const offset: i32 = switch (arg_loc) {
-                            .stack => |s| s.offset,
-                            .list_stack => |li| li.struct_offset,
-                            .stack_str => |off| off,
-                            else => unreachable,
-                        };
-                        const reg0 = self.getArgumentRegister(reg_idx);
-                        const reg1 = self.getArgumentRegister(reg_idx + 1);
-                        const reg2 = self.getArgumentRegister(reg_idx + 2);
-                        try self.emitLoad(.w64, reg0, frame_ptr, offset);
-                        try self.emitLoad(.w64, reg1, frame_ptr, offset + 8);
-                        try self.emitLoad(.w64, reg2, frame_ptr, offset + 16);
-                        reg_idx += 3;
-                    } else if (info.num_regs > 1) {
-                        const offset: i32 = switch (arg_loc) {
-                            .stack => |s| s.offset,
-                            .stack_i128 => |off| off,
-                            else => {
-                                const arg_reg = self.getArgumentRegister(reg_idx);
-                                try self.moveToReg(arg_loc, arg_reg);
-                                reg_idx += 1;
-                                continue;
-                            },
-                        };
-                        var ri: u8 = 0;
-                        while (ri < info.num_regs) : (ri += 1) {
-                            const r = self.getArgumentRegister(reg_idx + ri);
-                            try self.codegen.emitLoadStack(.w64, r, offset + @as(i32, ri) * 8);
-                        }
-                        reg_idx += info.num_regs;
-                    } else {
-                        const arg_reg = self.getArgumentRegister(reg_idx);
-                        switch (arg_loc) {
-                            .general_reg => |reg| {
-                                if (reg != arg_reg) try self.codegen.emit.movRegReg(.w64, arg_reg, reg);
-                            },
-                            .stack => |s| try self.codegen.emitLoadStack(.w64, arg_reg, s.offset),
-                            .immediate_i64 => |val| try self.codegen.emitLoadImm(arg_reg, @bitCast(val)),
-                            .lambda_code => |lc| {
-                                // Pass lambda address using PC-relative addressing
-                                const current = self.codegen.currentOffset();
-                                const rel: i64 = @as(i64, @intCast(lc.code_offset)) - @as(i64, @intCast(current));
-                                // Record for re-patching after body shifts
-                                try self.internal_addr_patches.append(self.allocator, .{
-                                    .instr_offset = current,
-                                    .target_offset = lc.code_offset,
-                                });
-                                if (comptime target.toCpuArch() == .aarch64) {
-                                    try self.codegen.emit.adr(arg_reg, @intCast(rel));
-                                } else {
-                                    const lea_size: i64 = 7;
-                                    try self.codegen.emit.leaRegRipRel(arg_reg, @intCast(rel - lea_size));
-                                }
-                            },
-                            else => try self.moveToReg(arg_loc, arg_reg),
-                        }
-                        reg_idx += 1;
-                    }
-                } else {
-                    try self.spillArgToStack(arg_loc, stack_arg_offset, info.num_regs);
-                    stack_arg_offset += @as(i32, info.num_regs) * 8;
-                    reg_idx = max_arg_regs;
-                }
-            }
-
-            // Add roc_ops as final argument
-            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-            if (reg_idx < max_arg_regs) {
-                const arg_reg = self.getArgumentRegister(reg_idx);
-                try self.codegen.emit.movRegReg(.w64, arg_reg, roc_ops_reg);
-            } else {
-                try self.spillArgToStack(.{ .general_reg = roc_ops_reg }, stack_arg_offset, 1);
-            }
+            // Place arguments using shared helper
+            const stack_spill_size = try self.placeCallArguments(arg_infos, .{
+                .needs_ret_ptr = needs_ret_ptr,
+                .ret_buffer_offset = ret_buffer_offset,
+                .pass_by_ptr = pass_by_ptr,
+                .emit_roc_ops = true,
+            });
 
             // Load function pointer from saved stack slot and call indirectly.
             // Use a dedicated scratch register that can never be an argument register,
