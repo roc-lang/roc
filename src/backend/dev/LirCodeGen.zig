@@ -4255,10 +4255,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
             };
 
-            // Determine if this is an integer or float operation
+            // Determine if this is an integer or float operation.
+            // For comparisons, result_layout is .bool, so check operand types.
             const is_float = switch (binop.result_layout) {
                 .f32, .f64 => true,
-                else => false,
+                else => blk: {
+                    const lhs_e = self.store.getExpr(binop.lhs);
+                    break :blk switch (lhs_e) {
+                        .f32_literal => true,
+                        .f64_literal => true,
+                        .lookup => |l| l.layout_idx == .f32 or l.layout_idx == .f64,
+                        .call => |c| c.ret_layout == .f32 or c.ret_layout == .f64,
+                        .block => |b| b.result_layout == .f32 or b.result_layout == .f64,
+                        .low_level => |ll| ll.ret_layout == .f32 or ll.ret_layout == .f64,
+                        .binop => |b| b.result_layout == .f32 or b.result_layout == .f64,
+                        .unary_minus => |u| u.result_layout == .f32 or u.result_layout == .f64,
+                        else => false,
+                    };
+                },
             };
 
             if (is_float) {

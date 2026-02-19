@@ -669,7 +669,7 @@ fn lowerLowLevel(self: *Self, ll: anytype, mono_idx: Monotype.Idx, region: Regio
     // num_is_negative/num_is_positive → comparison with 0
     if (ll.op == .num_is_negative or ll.op == .num_is_positive) {
         const args_slice = self.lir_store.getExprSpan(lir_args);
-        const zero = try self.lir_store.addExpr(.{ .i64_literal = 0 }, region);
+        const zero = try self.emitZeroLiteral(mir_args[0], region);
         const cmp_op: LirExpr.BinOp = if (ll.op == .num_is_negative) .lt else .gt;
         return self.lir_store.addExpr(.{ .binop = .{
             .op = cmp_op,
@@ -691,7 +691,7 @@ fn lowerLowLevel(self: *Self, ll: anytype, mono_idx: Monotype.Idx, region: Regio
     // num_is_zero → comparison with 0
     if (ll.op == .num_is_zero) {
         const args_slice = self.lir_store.getExprSpan(lir_args);
-        const zero = try self.lir_store.addExpr(.{ .i64_literal = 0 }, region);
+        const zero = try self.emitZeroLiteral(mir_args[0], region);
         return self.lir_store.addExpr(.{ .binop = .{
             .op = .eq,
             .lhs = args_slice[0],
@@ -709,6 +709,22 @@ fn lowerLowLevel(self: *Self, ll: anytype, mono_idx: Monotype.Idx, region: Regio
         .args = lir_args,
         .ret_layout = ret_layout,
     } }, region);
+}
+
+/// Emit a zero literal matching the type of the given MIR expression.
+/// For float/dec types, emits the correct float/dec zero instead of i64.
+fn emitZeroLiteral(self: *Self, mir_expr: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
+    const arg_mono_idx = self.mir_store.typeOf(mir_expr);
+    const arg_monotype = self.mir_store.monotype_store.getMonotype(arg_mono_idx);
+    return self.lir_store.addExpr(switch (arg_monotype) {
+        .prim => |p| switch (p) {
+            .f32 => LirExpr{ .f32_literal = 0.0 },
+            .f64 => LirExpr{ .f64_literal = 0.0 },
+            .dec => LirExpr{ .dec_literal = 0 },
+            else => LirExpr{ .i64_literal = 0 },
+        },
+        else => LirExpr{ .i64_literal = 0 },
+    }, region);
 }
 
 fn lowLevelToBinop(op: CIR.Expr.LowLevel) ?LirExpr.BinOp {
@@ -2584,6 +2600,39 @@ test "MIR num_plus low-level lowers to LIR binop add" {
 
     try testing.expect(lir_expr == .binop);
     try testing.expect(lir_expr.binop.op == .add);
+}
+
+test "MIR num_is_zero with f64 operand emits f64 zero literal" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const f64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.f64)];
+    const bool_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.bool)];
+
+    // Build MIR: run_low_level(.num_is_zero, [3.14])
+    const arg0 = try env.mir_store.addExpr(allocator, .{ .frac_f64 = 3.14 }, f64_mono, Region.zero());
+    const args = try env.mir_store.addExprSpan(allocator, &.{arg0});
+    const ll_expr = try env.mir_store.addExpr(allocator, .{ .run_low_level = .{
+        .op = .num_is_zero,
+        .args = args,
+    } }, bool_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(ll_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+
+    // Should be a binop eq comparing the f64 operand with a zero literal
+    try testing.expect(lir_expr == .binop);
+    try testing.expect(lir_expr.binop.op == .eq);
+
+    // The RHS (zero literal) should be an f64_literal, not i64_literal
+    const rhs_expr = env.lir_store.getExpr(lir_expr.binop.rhs);
+    try testing.expect(rhs_expr == .f64_literal);
 }
 
 test "MIR large unsigned int (U64 max) lowers to LIR i128_literal" {
