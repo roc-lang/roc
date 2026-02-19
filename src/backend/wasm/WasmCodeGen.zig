@@ -5625,7 +5625,7 @@ fn generateCFMatchBranches(self: *Self, branches: []const mono.MonoIR.CFMatchBra
 
     switch (pattern) {
         .wildcard => {
-            try self.generateCFStmt(branch.body);
+            try self.generateCFStmtWithGuard(branch, remaining, value_local, value_vt);
         },
         .bind => |bind| {
             const local_idx = self.storage.allocLocal(bind.symbol, value_vt) catch return error.OutOfMemory;
@@ -5633,7 +5633,7 @@ fn generateCFMatchBranches(self: *Self, branches: []const mono.MonoIR.CFMatchBra
             WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
-            try self.generateCFStmt(branch.body);
+            try self.generateCFStmtWithGuard(branch, remaining, value_local, value_vt);
         },
         .int_literal => |int_pat| {
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
@@ -5662,45 +5662,92 @@ fn generateCFMatchBranches(self: *Self, branches: []const mono.MonoIR.CFMatchBra
             self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
             self.body.append(self.allocator, 0x40) catch return error.OutOfMemory; // void
             self.cf_depth += 1;
-            try self.generateCFStmt(branch.body);
+            try self.generateCFStmtWithGuard(branch, remaining, value_local, value_vt);
             self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
             try self.generateCFMatchBranches(remaining, value_local, value_vt);
             self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
             self.cf_depth -= 1;
         },
         .tag => |tag_pat| {
-            // Load discriminant
-            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
+            // For composite tag unions (value_local is a pointer to memory),
+            // load the discriminant from memory before comparing.
+            // For scalar tag unions, value_local holds the discriminant directly.
+            const is_pointer = blk: {
+                if (self.layout_store) |ls| {
+                    const wl = WasmLayout.wasmReprWithStore(tag_pat.union_layout, ls);
+                    break :blk switch (wl) {
+                        .stack_memory => true,
+                        .primitive => false,
+                    };
+                }
+                break :blk false;
+            };
 
-            // Push discriminant value
-            switch (value_vt) {
-                .i32 => {
-                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(tag_pat.discriminant)) catch return error.OutOfMemory;
-                    self.body.append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
-                },
-                .i64 => {
-                    self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteI64(self.allocator, &self.body, @intCast(tag_pat.discriminant)) catch return error.OutOfMemory;
-                    self.body.append(self.allocator, Op.i64_eq) catch return error.OutOfMemory;
-                },
-                .f32, .f64 => unreachable,
+            if (is_pointer) {
+                // Load discriminant from memory at discriminant_offset
+                const ls = self.getLayoutStore();
+                const l = ls.getLayout(tag_pat.union_layout);
+                std.debug.assert(l.tag == .tag_union);
+                const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
+                const disc_offset = tu_data.discriminant_offset;
+                const disc_size: u32 = tu_data.discriminant_size;
+                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
+                try self.emitLoadOpSized(.i32, disc_size, disc_offset);
+            } else {
+                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
             }
+
+            // Compare against the discriminant constant
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(tag_pat.discriminant)) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
 
             self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
             self.body.append(self.allocator, 0x40) catch return error.OutOfMemory; // void
             self.cf_depth += 1;
-            try self.generateCFStmt(branch.body);
+            try self.generateCFStmtWithGuard(branch, remaining, value_local, value_vt);
             self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
             try self.generateCFMatchBranches(remaining, value_local, value_vt);
             self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
             self.cf_depth -= 1;
         },
-        else => {
-            // For other patterns (record, tuple, etc.), just generate the body
-            try self.generateCFStmt(branch.body);
+        .record, .tuple, .list, .as_pattern, .zero_arg_tag => {
+            // These pattern types should not appear in CFStmt match_stmt.
+            // CFStmt match_stmt is used for tail-recursive matches, which only
+            // match on discriminants, integer literals, wildcards, and binds.
+            unreachable;
         },
+        .float_literal, .str_literal => {
+            unreachable;
+        },
+    }
+}
+
+/// Generate a CF statement body, handling optional guard expressions.
+/// If the branch has a guard, wraps the body in an if/else so that
+/// a failing guard falls through to the remaining branches.
+fn generateCFStmtWithGuard(
+    self: *Self,
+    branch: mono.MonoIR.CFMatchBranch,
+    remaining: []const mono.MonoIR.CFMatchBranch,
+    value_local: u32,
+    value_vt: ValType,
+) Allocator.Error!void {
+    if (!branch.guard.isNone()) {
+        // Evaluate the guard expression (pushes i32 0 or 1)
+        try self.generateExpr(branch.guard);
+        self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+        self.body.append(self.allocator, 0x40) catch return error.OutOfMemory; // void
+        self.cf_depth += 1;
+        try self.generateCFStmt(branch.body);
+        self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+        try self.generateCFMatchBranches(remaining, value_local, value_vt);
+        self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
+        self.cf_depth -= 1;
+    } else {
+        try self.generateCFStmt(branch.body);
     }
 }
 
