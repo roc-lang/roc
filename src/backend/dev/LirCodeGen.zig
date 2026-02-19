@@ -6325,15 +6325,182 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate list comparison using layout information
+        /// Generate list comparison using layout information.
+        /// Compares list lengths at runtime, then compares elements one by one.
         fn generateListComparisonByLayout(
-            _: *Self,
-            _: ValueLocation, // lhs_loc
-            _: ValueLocation, // rhs_loc
-            _: layout.Idx, // list_layout_idx
-            _: LirExpr.BinOp, // op
+            self: *Self,
+            lhs_loc: ValueLocation,
+            rhs_loc: ValueLocation,
+            list_layout_idx: layout.Idx,
+            op: LirExpr.BinOp,
         ) Allocator.Error!ValueLocation {
-            // TODO: Implement list comparison by layout
-            unreachable;
+            const ls = self.layout_store orelse unreachable;
+            const list_layout = ls.getLayout(list_layout_idx);
+            const elem_layout_idx: layout.Idx = list_layout.data.list;
+            const elem_layout = ls.getLayout(elem_layout_idx);
+            const elem_sa = ls.layoutSizeAlign(elem_layout);
+            const elem_size: u32 = elem_sa.size;
+
+            // Get list struct offsets (ptr at +0, len at +8)
+            const lhs_base: i32 = switch (lhs_loc) {
+                .stack => |s| s.offset,
+                .list_stack => |li| li.struct_offset,
+                else => unreachable,
+            };
+            const rhs_base: i32 = switch (rhs_loc) {
+                .stack => |s| s.offset,
+                .list_stack => |li| li.struct_offset,
+                else => unreachable,
+            };
+
+            const result_reg = try self.allocTempGeneral();
+
+            // Load lengths
+            const lhs_len = try self.allocTempGeneral();
+            const rhs_len = try self.allocTempGeneral();
+            try self.emitLoad(.w64, lhs_len, frame_ptr, lhs_base + 8);
+            try self.emitLoad(.w64, rhs_len, frame_ptr, rhs_base + 8);
+
+            // Compare lengths: if different, not equal
+            try self.emitCmpReg(lhs_len, rhs_len);
+            self.codegen.freeGeneral(rhs_len);
+
+            // If lengths differ, result = 0 and jump to end
+            try self.codegen.emitLoadImm(result_reg, 0);
+            const len_ne_patch = try self.codegen.emitCondJump(condNotEqual());
+
+            // Lengths are equal — compare elements if len > 0
+            // Start with result = 1 (equal)
+            try self.codegen.emitLoadImm(result_reg, 1);
+
+            // Spill len to stack before checking for empty
+            const len_slot = self.codegen.allocStackSlot(8);
+            try self.codegen.emitStoreStack(.w64, len_slot, lhs_len);
+
+            // If len == 0, skip the loop
+            try self.emitCmpImm(lhs_len, 0);
+            self.codegen.freeGeneral(lhs_len);
+            const empty_patch = try self.codegen.emitCondJump(condEqual());
+
+            const lhs_ptr_slot = self.codegen.allocStackSlot(8);
+            const rhs_ptr_slot = self.codegen.allocStackSlot(8);
+            {
+                const tmp = try self.allocTempGeneral();
+                try self.emitLoad(.w64, tmp, frame_ptr, lhs_base);
+                try self.codegen.emitStoreStack(.w64, lhs_ptr_slot, tmp);
+                try self.emitLoad(.w64, tmp, frame_ptr, rhs_base);
+                try self.codegen.emitStoreStack(.w64, rhs_ptr_slot, tmp);
+                self.codegen.freeGeneral(tmp);
+            }
+
+            // Counter and byte offset on stack
+            const ctr_slot = self.codegen.allocStackSlot(8);
+            const offset_slot = self.codegen.allocStackSlot(8);
+            // Allocate stack slots for element copies (aligned to 8 for copy loop)
+            const aligned_elem = @as(u32, @intCast(std.mem.alignForward(u32, elem_size, 8)));
+            const lhs_elem_slot = self.codegen.allocStackSlot(@intCast(aligned_elem));
+            const rhs_elem_slot = self.codegen.allocStackSlot(@intCast(aligned_elem));
+
+            {
+                const tmp = try self.allocTempGeneral();
+                try self.codegen.emitLoadImm(tmp, 0);
+                try self.codegen.emitStoreStack(.w64, ctr_slot, tmp);
+                try self.codegen.emitStoreStack(.w64, offset_slot, tmp);
+                self.codegen.freeGeneral(tmp);
+            }
+
+            // Loop start
+            const loop_start = self.codegen.currentOffset();
+
+            // if ctr >= len, done (all elements matched)
+            {
+                const ctr_reg = try self.allocTempGeneral();
+                const len_reg = try self.allocTempGeneral();
+                try self.codegen.emitLoadStack(.w64, ctr_reg, ctr_slot);
+                try self.codegen.emitLoadStack(.w64, len_reg, len_slot);
+                try self.codegen.emit.cmpRegReg(.w64, ctr_reg, len_reg);
+                self.codegen.freeGeneral(ctr_reg);
+                self.codegen.freeGeneral(len_reg);
+            }
+            const exit_patch = try self.codegen.emitCondJump(condGreaterOrEqual());
+
+            // Copy lhs element from heap to lhs_elem_slot
+            {
+                const ptr_reg = try self.allocTempGeneral();
+                const off_reg = try self.allocTempGeneral();
+                try self.codegen.emitLoadStack(.w64, ptr_reg, lhs_ptr_slot);
+                try self.codegen.emitLoadStack(.w64, off_reg, offset_slot);
+                try self.emitAddRegs(.w64, ptr_reg, ptr_reg, off_reg);
+                self.codegen.freeGeneral(off_reg);
+                const tmp = try self.allocTempGeneral();
+                try self.copyChunked(tmp, ptr_reg, 0, frame_ptr, lhs_elem_slot, elem_size);
+                self.codegen.freeGeneral(tmp);
+                self.codegen.freeGeneral(ptr_reg);
+            }
+
+            // Copy rhs element from heap to rhs_elem_slot
+            {
+                const ptr_reg = try self.allocTempGeneral();
+                const off_reg = try self.allocTempGeneral();
+                try self.codegen.emitLoadStack(.w64, ptr_reg, rhs_ptr_slot);
+                try self.codegen.emitLoadStack(.w64, off_reg, offset_slot);
+                try self.emitAddRegs(.w64, ptr_reg, ptr_reg, off_reg);
+                self.codegen.freeGeneral(off_reg);
+                const tmp = try self.allocTempGeneral();
+                try self.copyChunked(tmp, ptr_reg, 0, frame_ptr, rhs_elem_slot, elem_size);
+                self.codegen.freeGeneral(tmp);
+                self.codegen.freeGeneral(ptr_reg);
+            }
+
+            // Compare elements using layout-aware comparison
+            const eq_reg = try self.allocTempGeneral();
+            try self.compareFieldByLayout(lhs_elem_slot, rhs_elem_slot, elem_layout_idx, elem_size, eq_reg);
+
+            // If not equal, set result = 0 and jump to end
+            try self.emitCmpImm(eq_reg, 1);
+            self.codegen.freeGeneral(eq_reg);
+            const ne_patch = try self.codegen.emitCondJump(condNotEqual());
+            // not_equal: result = 0, break
+            // (we only get here if elements are equal, so fall through)
+
+            // Increment counter and byte offset
+            {
+                const ctr_reg = try self.allocTempGeneral();
+                try self.codegen.emitLoadStack(.w64, ctr_reg, ctr_slot);
+                try self.emitAddImm(ctr_reg, ctr_reg, 1);
+                try self.codegen.emitStoreStack(.w64, ctr_slot, ctr_reg);
+                self.codegen.freeGeneral(ctr_reg);
+
+                const off_reg = try self.allocTempGeneral();
+                try self.codegen.emitLoadStack(.w64, off_reg, offset_slot);
+                try self.emitAddImm(off_reg, off_reg, @intCast(elem_size));
+                try self.codegen.emitStoreStack(.w64, offset_slot, off_reg);
+                self.codegen.freeGeneral(off_reg);
+            }
+
+            // Jump back to loop start
+            const back_patch = try self.codegen.emitJump();
+            self.codegen.patchJump(back_patch, loop_start);
+
+            // Not equal exit: set result = 0
+            self.codegen.patchJump(ne_patch, self.codegen.currentOffset());
+            try self.codegen.emitLoadImm(result_reg, 0);
+            // Fall through to end (result_reg already set to 0)
+            const ne_done_patch = try self.codegen.emitJump();
+
+            // All-equal exit: result stays 1
+            self.codegen.patchJump(exit_patch, self.codegen.currentOffset());
+
+            // Length-not-equal and empty-list exits
+            self.codegen.patchJump(ne_done_patch, self.codegen.currentOffset());
+            self.codegen.patchJump(len_ne_patch, self.codegen.currentOffset());
+            self.codegen.patchJump(empty_patch, self.codegen.currentOffset());
+
+            if (op == .neq) {
+                try self.emitXorImm(.w64, result_reg, result_reg, 1);
+            }
+
+            return .{ .general_reg = result_reg };
         }
 
         /// Generate floating-point binary operation
