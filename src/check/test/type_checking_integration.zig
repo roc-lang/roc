@@ -4795,6 +4795,59 @@ test "check type - mutually recursive static dispatch - diamond pattern" {
     );
 }
 
+test "check type - mutually recursive functions - partially annotated" {
+    const source =
+        \\f : U64 -> U64
+        \\f = |x| if x <= 0.U64 { 0.U64 } else { g(x - 1.U64) }
+        \\g = |x| if x <= 0.U64 { 0.U64 } else { f(x - 1.U64) }
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "f", .expected = "U64 -> U64" },
+            .{ .def = "g", .expected = "U64 -> U64" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - partially annotated polymorphic" {
+    const source =
+        \\ping : U64, a -> a
+        \\ping = |n, x| if n <= 0.U64 { x } else { pong(n - 1.U64, x) }
+        \\pong = |n, x| if n <= 0.U64 { x } else { ping(n - 1.U64, x) }
+        \\test = (ping(1.U64, "hi"), pong(1.U64, 42.U8))
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "ping", .expected = "U64, a -> a" },
+            .{ .def = "pong", .expected = "U64, a -> a" },
+            .{ .def = "test", .expected = "(Str, U8)" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - inner let-def lambda inside cycle participant is generalized" {
+    // Inner let-def lambda should generalize normally even while
+    // defer_generalize is active for the outer cycle.
+    const source =
+        \\f = |n| {
+        \\    id = |x| x
+        \\    _unused = id("hello")
+        \\    if n <= 0.U64 { 0.U64 } else { id(g(n - 1.U64)) }
+        \\}
+        \\g = |n| if n <= 0.U64 { 0.U64 } else { f(n - 1.U64) }
+    ;
+    // If id weren't generalized, using it at both Str and U64 would fail.
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "f", .expected = "U64 -> U64" },
+            .{ .def = "g", .expected = "U64 -> U64" },
+        },
+    );
+}
+
 // repros //
 
 test "check type - zulip repro" {

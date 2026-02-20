@@ -4031,6 +4031,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             if (lambda_rank != .generalized) {
                 const expr_resolved = self.types.resolveVar(expr_var);
                 if (@intFromEnum(lambda_rank) > @intFromEnum(expr_resolved.desc.rank)) {
+                    // Elevation only fires for intermediate cycle participants
+                    // whose lambda skipped generalization (kept rank 2). In the
+                    // non-cycle case, the lambda is generalized (rank 0) so we
+                    // never enter this branch.
+                    std.debug.assert(self.defer_generalize);
                     self.types.setDescRank(expr_resolved.desc_idx, lambda_rank);
                 }
             }
