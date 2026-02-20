@@ -2,23 +2,7 @@
 
 ## HIGH — Likely to produce wrong code in specific scenarios
 
-### 1. ~~`lowerRecord` silently drops fields if layout/MIR field names diverge~~ FIXED
-
-**File:** `src/lir/MirToLir.zig:372-382`
-
-Added `found` flag and `std.debug.assert(found)` to catch missing layout fields in debug builds.
-
----
-
-### 2. ~~`emitZeroLiteral` outer `else` should be `unreachable`~~ FIXED
-
-**File:** `src/lir/MirToLir.zig:774-783`
-
-Made both inner and outer switches exhaustive — non-prim monotypes are now `unreachable`.
-
----
-
-### 3. TailRecursion.zig is not wired into the LIR pipeline — DEFERRED
+### 1. TailRecursion.zig is not wired into the LIR pipeline
 
 **File:** `src/lir/TailRecursion.zig` (760 lines of dead code)
 
@@ -28,62 +12,9 @@ Neither `MirToLir.zig` nor `LirCodeGen.zig` reference `TailRecursion` anywhere. 
 
 ---
 
-### 4. ~~`processEarlyReturn` reuses `early_ret_id` as both statement and `final_expr`~~ FIXED
-
-**File:** `src/lir/rc_insert.zig:1085-1095`
-
-Replaced reuse of `early_ret_id` with a distinct `runtime_error` dead expression for `final_expr`.
-
----
-
-### 5. ~~`enum_dispatch.tag` is `u8` but `num_functions` is `u16`~~ FALSE POSITIVE
-
-**File:** `src/lir/LIR.zig:136-143`
-
-Investigation showed `tag` was already `u16`. Updated misleading "single byte tag" comment.
-
----
-
-### 6. ~~Tag union comparison `end_patches` uses fixed-size array of 64~~ NO CHANGE NEEDED
-
-**File:** `src/backend/dev/LirCodeGen.zig:5903`
-
-Already has `std.debug.assert(end_patch_count < end_patches.len)` which catches overflow in debug builds. Tag unions with >64 non-ZST variants are extremely unlikely.
-
----
-
-### 7. ~~`generateStmt` ret handler accesses `.stack.offset` without checking ValueLocation variant~~ FALSE POSITIVE
-
-**File:** `src/backend/dev/LirCodeGen.zig:14304-14363`
-
-Investigation showed `.stack.offset` accesses are all inside `else if (value_loc == .stack)` guards. The `.stack_str` and `.list_stack` variants are handled in separate branches above.
-
----
-
-### 8. ~~`generateMatch` potential null unwrap for ZST result types~~ FIXED
-
-**File:** `src/backend/dev/LirCodeGen.zig:7731`
-
-Added defensive null check — returns `immediate_i64(0)` for ZST results instead of unconditional unwrap.
-
----
-
-### 9. ~~Float NaN comparison may be incorrect on x86_64~~ FIXED
-
-**File:** `src/backend/dev/LirCodeGen.zig:6686-6757`
-
-Fixed all four incorrect float comparison conditions on x86_64:
-- **eq**: compound `sete + setnp + and` (true only if equal AND ordered)
-- **neq**: compound `setne + setp + or` (true if not equal OR unordered)
-- **lt**: swap operands + `above` condition (NaN-safe)
-- **lte**: swap operands + `above_or_equal` condition (NaN-safe)
-- **gt/gte**: already correct (kept as-is)
-
----
-
 ## MEDIUM — Brittleness, Error-proneness, Missing Functionality
 
-### 10. `insertRcOps` doesn't clear state between calls
+### 2. `insertRcOps` doesn't clear state between calls
 
 **File:** `src/lir/rc_insert.zig:116-122`
 
@@ -93,7 +24,7 @@ If `insertRcOps` is called multiple times on different expression trees, `symbol
 
 ---
 
-### 11. Seven nearly-identical pattern-recursion functions in `rc_insert.zig`
+### 3. Seven nearly-identical pattern-recursion functions in `rc_insert.zig`
 
 **File:** `src/lir/rc_insert.zig`
 
@@ -105,7 +36,7 @@ All 7 recurse through patterns identically, differing only in leaf behavior. If 
 
 ---
 
-### 12. `layoutFromRecord` accesses `layout_store.all_module_envs` directly
+### 4. `layoutFromRecord` accesses `layout_store.all_module_envs` directly
 
 **File:** `src/lir/MirToLir.zig:157`
 
@@ -117,7 +48,7 @@ Should use the accessor method `layout_store.currentModuleEnv()` instead of raw 
 
 ---
 
-### 13. `addExprSpan` and similar span builders are not atomic on OOM
+### 5. `addExprSpan` and similar span builders are not atomic on OOM
 
 **File:** `src/lir/LirExprStore.zig:211-226`
 
@@ -134,7 +65,7 @@ Apply to `addPatternSpan`, `addFieldNameSpan`, and `addLayoutIdxSpan` as well.
 
 ---
 
-### 14. `list_split_first` and `list_split_last` unimplemented in LirCodeGen
+### 6. `list_split_first` and `list_split_last` unimplemented in LirCodeGen
 
 **File:** `src/backend/dev/LirCodeGen.zig:3046-3055`
 
@@ -142,7 +73,7 @@ Both hit `unreachable`, crashing the compiler if any Roc code uses `List.splitFi
 
 ---
 
-### 15. `lowerHosted` ignores `h.body` and `h.symbol_name`
+### 7. `lowerHosted` ignores `h.body` and `h.symbol_name`
 
 **File:** `src/lir/MirToLir.zig:1133-1187`
 
@@ -152,7 +83,7 @@ The MIR `hosted` expression has `body` and `symbol_name` fields that are complet
 
 ---
 
-### 16. Massive code duplication between `generateMatch` and `generateMatchStmt`
+### 8. Massive code duplication between `generateMatch` and `generateMatchStmt`
 
 **File:** `src/backend/dev/LirCodeGen.zig` — ~1000 lines duplicated
 
@@ -162,7 +93,7 @@ These functions share identical pattern-matching logic. The only difference is e
 
 ---
 
-### 17. `processBlock` always allocates a new block even when nothing changed
+### 9. `processBlock` always allocates a new block even when nothing changed
 
 **File:** `src/lir/rc_insert.zig:654-661`
 
@@ -172,7 +103,7 @@ When `!changed`, the code still calls `self.store.addExpr` to create a new ident
 
 ---
 
-### 18. `generateDiscriminantSwitch` holds `disc_reg` live across all branch bodies
+### 10. `generateDiscriminantSwitch` holds `disc_reg` live across all branch bodies
 
 **File:** `src/backend/dev/LirCodeGen.zig:9824`
 
@@ -182,7 +113,7 @@ If any branch body calls a C function (which clobbers caller-saved registers) an
 
 ---
 
-### 19. `copyChunked` with `size <= 8` does full 8-byte load/store
+### 11. `copyChunked` with `size <= 8` does full 8-byte load/store
 
 **File:** `src/backend/dev/LirCodeGen.zig:8889-8892`
 
@@ -192,7 +123,7 @@ For sizes 1-7, copies a full 8 bytes. For list elements packed at alignment < 8,
 
 ---
 
-### 20. `countUsesInto` for `lambda` uses `target.contains(key)` to detect captures
+### 12. `countUsesInto` for `lambda` uses `target.contains(key)` to detect captures
 
 **File:** `src/lir/rc_insert.zig:244-258`
 
@@ -202,7 +133,7 @@ If a lambda appears as the RHS of the *first* statement in a block and captures 
 
 ---
 
-### 21. `lowerLambda` closure always sets `recursion = .not_recursive`
+### 13. `lowerLambda` closure always sets `recursion = .not_recursive`
 
 **File:** `src/lir/MirToLir.zig:570-573,590-593`
 
@@ -212,7 +143,7 @@ Both single-capture and multi-capture closures are always emitted with `.recursi
 
 ---
 
-### 22. `std.debug.panic` used in `storeResultToSlot` for lambda/closure
+### 14. `std.debug.panic` used in `storeResultToSlot` for lambda/closure
 
 **File:** `src/backend/dev/LirCodeGen.zig:9927`
 
@@ -224,7 +155,7 @@ Both single-capture and multi-capture closures are always emitted with `.recursi
 
 ## LOW — Performance, Robustness, Code Quality
 
-### 23. `countUsesLocal` allocates a fresh HashMap per call
+### 15. `countUsesLocal` allocates a fresh HashMap per call
 
 **File:** `src/lir/rc_insert.zig:132-137`
 
@@ -234,7 +165,7 @@ Called once per statement in `processBlock` and once per branch in match/if_then
 
 ---
 
-### 24. Two-pass use counting: Phase 2 re-counts uses already counted in Phase 1
+### 16. Two-pass use counting: Phase 2 re-counts uses already counted in Phase 1
 
 **File:** `src/lir/rc_insert.zig`
 
@@ -244,7 +175,7 @@ Called once per statement in `processBlock` and once per branch in match/if_then
 
 ---
 
-### 25. TailRecursion uses `@intFromEnum(a) != @intFromEnum(b)` instead of `a != b`
+### 17. TailRecursion uses `@intFromEnum(a) != @intFromEnum(b)` instead of `a != b`
 
 **File:** `src/lir/TailRecursion.zig` — multiple locations
 
@@ -252,7 +183,7 @@ CFStmtId is an enum and supports direct `!=` comparison. The `@intFromEnum` patt
 
 ---
 
-### 26. Wildcard placeholder in TailRecursion has incomplete layout handling
+### 18. Wildcard placeholder in TailRecursion has incomplete layout handling
 
 **File:** `src/lir/TailRecursion.zig:323-326`
 
@@ -260,7 +191,7 @@ The i128/u128/dec check is incomplete (misses f32, f64, str, list). Since the pl
 
 ---
 
-### 27. `@sizeOf(Symbol)` should be asserted equal to `@sizeOf(u64)`
+### 19. `@sizeOf(Symbol)` should be asserted equal to `@sizeOf(u64)`
 
 **File:** `src/lir/rc_insert.zig`
 
@@ -270,7 +201,7 @@ Symbols are bitcast to `u64` for HashMap keys throughout. If `Symbol`'s layout c
 
 ---
 
-### 28. TailRecursion `@import("base").Region.zero()` repeated inline
+### 20. TailRecursion `@import("base").Region.zero()` repeated inline
 
 **File:** `src/lir/TailRecursion.zig:315,324,325`
 
@@ -278,7 +209,7 @@ Should import `Region` at the top of the file.
 
 ---
 
-### 29. `lowerForLoop` and `lowerWhileLoop` don't assert result monotype is unit
+### 21. `lowerForLoop` and `lowerWhileLoop` don't assert result monotype is unit
 
 **File:** `src/lir/MirToLir.zig:1215-1242`
 
@@ -288,7 +219,7 @@ Loops return unit. No assertion validates this.
 
 ---
 
-### 30. `LirExpr` tagged union is ~56 bytes due to `closure` variant
+### 22. `LirExpr` tagged union is ~56 bytes due to `closure` variant
 
 **File:** `src/lir/LIR.zig:304`
 
@@ -332,7 +263,7 @@ Every expression in the store pays the cost of the largest variant. Same tradeof
 
 15. **No tests for `match_stmt` in TailRecursion** — `switch_stmt` is tested but `match_stmt` is not.
 
-16. **No tests for float NaN comparison** — Would reveal the NaN equality bug (#9).
+16. **No tests for float NaN comparison** — NaN equality bug was fixed but no regression test exists yet.
 
 ---
 
