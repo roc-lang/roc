@@ -11233,6 +11233,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             args_span: anytype,
             ret_layout: layout.Idx,
         ) Allocator.Error!ValueLocation {
+            const ls = self.layout_store orelse unreachable;
+            const union_layout_val = ls.getLayout(repr.union_layout);
+            std.debug.assert(union_layout_val.tag == .tag_union);
+            const tu_data = ls.getTagUnionData(union_layout_val.data.tag_union.idx);
+            const disc_offset: i32 = @intCast(tu_data.discriminant_offset);
+
             const members = self.store.getLambdaSetMembers(repr.lambda_set);
 
             if (members.len == 0) {
@@ -11240,15 +11246,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             if (members.len == 1) {
-                // Single function - call with captures from payload
+                // Single function - captures are the payload at offset 0
                 const member = members[0];
-                // Captures start at offset +8 (after tag with padding)
-                return try self.compileLambdaAndCallWithCaptures(member, union_offset + 8, args_span);
+                return try self.compileLambdaAndCallWithCaptures(member, union_offset, args_span);
             }
 
-            // Load tag from stack (stored as 64-bit value, tag is in low bits)
+            // Load discriminant from its correct offset in the tag union
+            // Layout: [payload at offset 0][discriminant at discriminant_offset]
+            const disc_use_w32 = (disc_offset + 8 > @as(i32, @intCast(tu_data.size)));
             const tag_reg = try self.allocTempGeneral();
-            try self.codegen.emitLoadStack(.w64, tag_reg, union_offset);
+            try self.codegen.emitLoadStack(if (disc_use_w32) .w32 else .w64, tag_reg, union_offset + disc_offset);
 
             // Allocate result slot sized to the return layout
             const result_size = self.getLayoutSize(ret_layout);
@@ -11266,8 +11273,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.emitCmpImm(tag_reg, member.tag);
                     const skip_jump = try self.emitJumpIfNotEqual();
 
-                    // Generate code for this branch (captures at +8 after tag with padding)
-                    const result = try self.compileLambdaAndCallWithCaptures(member, union_offset + 8, args_span);
+                    // Captures are the payload at offset 0
+                    const result = try self.compileLambdaAndCallWithCaptures(member, union_offset, args_span);
                     try self.copyToStackSlot(result_slot, result);
 
                     // Jump to end
@@ -11277,7 +11284,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
                 } else {
                     // Last case - no comparison needed (fallthrough)
-                    const result = try self.compileLambdaAndCallWithCaptures(member, union_offset + 8, args_span);
+                    const result = try self.compileLambdaAndCallWithCaptures(member, union_offset, args_span);
                     try self.copyToStackSlot(result_slot, result);
                 }
             }

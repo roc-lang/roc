@@ -213,7 +213,7 @@ pub const RcInsertPass = struct {
                 var local = std.AutoHashMap(u64, u32).init(self.allocator);
                 defer local.deinit();
                 for (branches) |branch| {
-                    try self.registerPatternSymbolInto(branch.pattern, target);
+                    try self.registerPatternSymbolInto(branch.pattern, &local);
                     local.clearRetainingCapacity();
                     try self.countUsesInto(branch.guard, &local);
                     try self.countUsesInto(branch.body, &local);
