@@ -36,6 +36,7 @@ const runExpectF32 = helpers.runExpectF32;
 const runExpectF64 = helpers.runExpectF64;
 const runExpectDec = helpers.runExpectDec;
 const runExpectStr = helpers.runExpectStr;
+const runExpectTypeMismatchAndCrash = helpers.runExpectTypeMismatchAndCrash;
 
 // U8 Tests (Unsigned 8-bit: 0 to 255)
 // Uses values > 127 to prove they're not I8
@@ -2376,47 +2377,40 @@ test "Dec: to_str" {
 }
 
 // Mixed Dec-Int Operations
-// These tests verify that mixing Dec and Int types produces a TYPE MISMATCH error
+// These tests verify that mixing Dec and I64 types produces a TYPE MISMATCH error
 // at compile time, and crashes at runtime. Roc requires explicit type conversions.
+// Literals are explicitly annotated to force different types (e.g., 1.0.Dec + 2.I64).
 
 // Dec + Int: Should be a type mismatch - Dec and I64 are different types
 test "Dec + Int: plus - type mismatch" {
-    // TODO: Re-enable when error-type-to-runtime-crash pass is implemented
-    return error.SkipZigTest;
+    try runExpectTypeMismatchAndCrash("1.0.Dec + 2.I64");
 }
 
 test "Dec + Int: minus - type mismatch" {
-    // TODO: Re-enable when error-type-to-runtime-crash pass is implemented
-    return error.SkipZigTest;
+    try runExpectTypeMismatchAndCrash("1.0.Dec - 2.I64");
 }
 
 test "Dec + Int: times - type mismatch" {
-    // TODO: Re-enable when error-type-to-runtime-crash pass is implemented
-    return error.SkipZigTest;
+    try runExpectTypeMismatchAndCrash("1.0.Dec * 2.I64");
 }
 
 test "Dec + Int: div_by - type mismatch" {
-    // TODO: Re-enable when error-type-to-runtime-crash pass is implemented
-    return error.SkipZigTest;
+    try runExpectTypeMismatchAndCrash("1.0.Dec / 2.I64");
 }
 
 // Int + Dec: Should be a type mismatch - I64 and Dec are different types
 test "Int + Dec: plus - type mismatch" {
-    // TODO: Re-enable when error-type-to-runtime-crash pass is implemented
-    return error.SkipZigTest;
+    try runExpectTypeMismatchAndCrash("1.I64 + 2.0.Dec");
 }
 
 test "Int + Dec: minus - type mismatch" {
-    // TODO: Re-enable when error-type-to-runtime-crash pass is implemented
-    return error.SkipZigTest;
+    try runExpectTypeMismatchAndCrash("1.I64 - 2.0.Dec");
 }
 
 test "Int + Dec: times - type mismatch" {
-    // TODO: Re-enable when error-type-to-runtime-crash pass is implemented
-    return error.SkipZigTest;
+    try runExpectTypeMismatchAndCrash("1.I64 * 2.0.Dec");
 }
 
 test "Int + Dec: div_by - type mismatch" {
-    // TODO: Re-enable when error-type-to-runtime-crash pass is implemented
-    return error.SkipZigTest;
+    try runExpectTypeMismatchAndCrash("1.I64 / 2.0.Dec");
 }

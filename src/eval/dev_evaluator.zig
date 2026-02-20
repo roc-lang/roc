@@ -775,7 +775,7 @@ pub const DevEvaluator = struct {
                     self.allocator,
                     &mono_store,
                     layout_store_ptr,
-                );
+                ) catch continue;
                 defer fn_rc.deinit();
                 entry.value_ptr.* = fn_rc.insertRcOps(entry.value_ptr.*) catch entry.value_ptr.*;
             }

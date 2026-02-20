@@ -11257,6 +11257,26 @@ pub const Interpreter = struct {
 
         const expr = self.env.store.getExpr(expr_idx);
 
+        // If the type checker flagged this expression as a type error (.err content),
+        // crash at runtime. This catches type mismatches that the checker detected
+        // but that weren't converted to e_runtime_error nodes in the CIR.
+        //
+        // We only check specific expression types where .err genuinely means a type
+        // error that the interpreter would otherwise silently ignore. A universal
+        // check is too aggressive because polymorphic function bodies can have .err
+        // on sub-expressions (e.g., e_match, e_if) from unresolved rigid type
+        // variables that get resolved at call sites.
+        switch (expr) {
+            .e_binop, .e_call, .e_unary_minus, .e_unary_not => {
+                const expr_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const expr_ct_resolved = self.env.types.resolveVar(expr_ct_var);
+                if (expr_ct_resolved.desc.content == .err) {
+                    return error.Crash;
+                }
+            },
+            else => {},
+        }
+
         // WASM-compatible tracing for expression evaluation
         traceDbg(roc_ops, "scheduleExprEval: expr_idx={d} tag={s} module=\"{s}\"", .{ @intFromEnum(expr_idx), @tagName(expr), self.env.module_name });
 
