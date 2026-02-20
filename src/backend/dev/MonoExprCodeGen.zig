@@ -1448,14 +1448,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     };
                     const ret_layout = ls.getLayout(ll.ret_layout);
 
-                    const elem_size_align: layout.SizeAlign = switch (ret_layout.tag) {
-                        .list => blk: {
-                            const elem_layout = ls.getLayout(ret_layout.data.list);
-                            break :blk ls.layoutSizeAlign(elem_layout);
-                        },
-                        .list_of_zst => .{ .size = 0, .alignment = .@"1" },
+                    const elem_layout_data: layout.Layout = switch (ret_layout.tag) {
+                        .list => ls.getLayout(ret_layout.data.list),
+                        .list_of_zst => layout.Layout.zst(),
                         else => unreachable, // list_with_capacity must return a list
                     };
+                    const elem_size_align = ls.layoutSizeAlign(elem_layout_data);
+                    const elements_refcounted: bool = ls.layoutContainsRefcounted(elem_layout_data);
 
                     const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_with_capacity);
 
@@ -1468,13 +1467,14 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const cap_reg = try self.ensureInGeneralReg(capacity_loc);
                     const base_reg = frame_ptr;
 
-                    // roc_builtins_list_with_capacity(out, capacity, alignment, element_width, roc_ops)
+                    // roc_builtins_list_with_capacity(out, capacity, alignment, element_width, elements_refcounted, roc_ops)
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                     try builder.addLeaArg(base_reg, result_offset);
                     try builder.addRegArg(cap_reg);
                     self.codegen.freeGeneral(cap_reg);
                     try builder.addImmArg(@intCast(alignment_bytes));
                     try builder.addImmArg(@intCast(elem_size_align.size));
+                    try builder.addImmArg(if (elements_refcounted) 1 else 0);
                     try builder.addRegArg(roc_ops_reg);
                     try self.callBuiltin(&builder, fn_addr, .list_with_capacity);
 
@@ -1513,29 +1513,34 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // layout index refers to a layout in the wrong module context.
                     // When this happens, derive the correct element size from the list
                     // argument's layout.
-                    const elem_size_align: layout.SizeAlign = blk: {
+                    const elem_layout_resolved: struct { sa: layout.SizeAlign, lay: layout.Layout } = blk: {
                         const ret_layout_val = ls.getLayout(ll.ret_layout);
                         if (ret_layout_val.tag == .list) {
-                            const sa = ls.layoutSizeAlign(ls.getLayout(ret_layout_val.data.list));
-                            if (sa.size > 0) break :blk sa;
+                            const el = ls.getLayout(ret_layout_val.data.list);
+                            const sa = ls.layoutSizeAlign(el);
+                            if (sa.size > 0) break :blk .{ .sa = sa, .lay = el };
                         }
                         // ret_layout is list_of_zst or has ZST element — try deriving
                         // the correct element size from the list argument's layout
                         if (self.getExprLayout(args[0])) |list_layout_idx| {
                             const list_layout = ls.getLayout(list_layout_idx);
                             if (list_layout.tag == .list) {
-                                const derived = ls.layoutSizeAlign(ls.getLayout(list_layout.data.list));
-                                if (derived.size > 0) break :blk derived;
+                                const el = ls.getLayout(list_layout.data.list);
+                                const derived = ls.layoutSizeAlign(el);
+                                if (derived.size > 0) break :blk .{ .sa = derived, .lay = el };
                             }
                         }
                         // Also check the element argument's layout
                         if (self.getExprLayout(args[1])) |elem_layout_idx| {
-                            const sa = ls.layoutSizeAlign(ls.getLayout(elem_layout_idx));
-                            if (sa.size > 0) break :blk sa;
+                            const el = ls.getLayout(elem_layout_idx);
+                            const sa = ls.layoutSizeAlign(el);
+                            if (sa.size > 0) break :blk .{ .sa = sa, .lay = el };
                         }
                         // Truly ZST
-                        break :blk .{ .size = 0, .alignment = .@"1" };
+                        break :blk .{ .sa = .{ .size = 0, .alignment = .@"1" }, .lay = layout.Layout.zst() };
                     };
+                    const elem_size_align = elem_layout_resolved.sa;
+                    const elements_refcounted: bool = ls.layoutContainsRefcounted(elem_layout_resolved.lay);
 
                     const is_zst = (elem_size_align.size == 0);
 
@@ -1590,7 +1595,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_append_safe);
                         const alignment_bytes = elem_size_align.alignment.toByteUnits();
 
-                        // roc_builtins_list_append_safe(out, list_bytes, list_len, list_cap, element, alignment, element_width, roc_ops)
+                        // roc_builtins_list_append_safe(out, list_bytes, list_len, list_cap, element, alignment, element_width, elements_refcounted, roc_ops)
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                         try builder.addLeaArg(base_reg, result_offset);
                         try builder.addMemArg(base_reg, list_offset);
@@ -1599,6 +1604,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         try builder.addLeaArg(base_reg, elem_offset);
                         try builder.addImmArg(@intCast(alignment_bytes));
                         try builder.addImmArg(@intCast(elem_size_align.size));
+                        try builder.addImmArg(if (elements_refcounted) 1 else 0);
                         try builder.addRegArg(roc_ops_reg);
                         try self.callBuiltin(&builder, fn_addr, .list_append_safe);
                     }
@@ -2007,6 +2013,17 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // Ensure element is on the stack
                     const elem_off = try self.ensureOnStack(elem_loc, elem_size_align.size);
 
+                    // Determine if elements are refcounted
+                    const elem_layout_for_rc: layout.Layout = blk: {
+                        const ret_layout = ls.getLayout(ll.ret_layout);
+                        break :blk switch (ret_layout.tag) {
+                            .list => ls.getLayout(ret_layout.data.list),
+                            .list_of_zst => layout.Layout.zst(),
+                            else => unreachable,
+                        };
+                    };
+                    const elem_refcounted: bool = ls.layoutContainsRefcounted(elem_layout_for_rc);
+
                     // First: allocate list with capacity
                     const alignment_bytes = elem_size_align.alignment.toByteUnits();
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
@@ -2014,12 +2031,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const base_reg = frame_ptr;
 
                     {
-                        // roc_builtins_list_with_capacity(out, capacity, alignment, element_width, roc_ops)
+                        // roc_builtins_list_with_capacity(out, capacity, alignment, element_width, elements_refcounted, roc_ops)
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                         try builder.addLeaArg(base_reg, result_offset);
                         try builder.addMemArg(base_reg, count_slot);
                         try builder.addImmArg(@intCast(alignment_bytes));
                         try builder.addImmArg(@intCast(elem_size_align.size));
+                        try builder.addImmArg(if (elem_refcounted) 1 else 0);
                         try builder.addRegArg(roc_ops_reg);
                         try self.callBuiltin(&builder, cap_fn_addr, .list_with_capacity);
                     }
@@ -3907,14 +3925,16 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const ls = self.layout_store orelse unreachable;
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
-            const elem_size_align: layout.SizeAlign = blk: {
+            const elem_layout_data: layout.Layout = blk: {
                 const ret_layout = ls.getLayout(ll.ret_layout);
                 break :blk switch (ret_layout.tag) {
-                    .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
-                    .list_of_zst => .{ .size = 0, .alignment = .@"1" },
+                    .list => ls.getLayout(ret_layout.data.list),
+                    .list_of_zst => layout.Layout.zst(),
                     else => unreachable,
                 };
             };
+            const elem_size_align = ls.layoutSizeAlign(elem_layout_data);
+            const elements_refcounted: bool = ls.layoutContainsRefcounted(elem_layout_data);
 
             const list_off = try self.ensureOnStack(list_loc, roc_list_size);
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
@@ -3925,12 +3945,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const base_reg = frame_ptr;
 
             {
-                // roc_builtins_list_with_capacity(out, capacity, alignment, element_width, roc_ops)
+                // roc_builtins_list_with_capacity(out, capacity, alignment, element_width, elements_refcounted, roc_ops)
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 try builder.addLeaArg(base_reg, result_offset);
                 try builder.addMemArg(base_reg, list_off + 8); // capacity = input length
                 try builder.addImmArg(@intCast(alignment_bytes));
                 try builder.addImmArg(@intCast(elem_size_align.size));
+                try builder.addImmArg(if (elements_refcounted) 1 else 0);
                 try builder.addRegArg(roc_ops_reg);
                 try self.callBuiltin(&builder, cap_fn_addr, .list_with_capacity);
             }
