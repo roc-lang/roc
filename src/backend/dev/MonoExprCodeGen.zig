@@ -11914,6 +11914,47 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                     self.codegen.freeGeneral(temp_reg);
                 },
+                .stack_i128 => |offset| {
+                    // stack_i128 is a stack offset just like .stack — copy size bytes
+                    const temp_reg = try self.allocTempGeneral();
+                    var remaining = size;
+                    var src_offset: i32 = offset;
+                    var dst_offset: i32 = 0;
+
+                    while (remaining >= 8) {
+                        try self.codegen.emitLoadStack(.w64, temp_reg, src_offset);
+                        try self.emitStoreToPtr(.w64, temp_reg, ptr_reg, dst_offset);
+                        src_offset += 8;
+                        dst_offset += 8;
+                        remaining -= 8;
+                    }
+                    if (remaining >= 4) {
+                        try self.codegen.emitLoadStack(.w32, temp_reg, src_offset);
+                        try self.emitStoreToPtr(.w32, temp_reg, ptr_reg, dst_offset);
+                        src_offset += 4;
+                        dst_offset += 4;
+                        remaining -= 4;
+                    }
+
+                    self.codegen.freeGeneral(temp_reg);
+                },
+                .stack_str => |offset| {
+                    // stack_str is a stack offset — copy size bytes
+                    const temp_reg = try self.allocTempGeneral();
+                    var remaining = size;
+                    var src_offset: i32 = offset;
+                    var dst_offset: i32 = 0;
+
+                    while (remaining >= 8) {
+                        try self.codegen.emitLoadStack(.w64, temp_reg, src_offset);
+                        try self.emitStoreToPtr(.w64, temp_reg, ptr_reg, dst_offset);
+                        src_offset += 8;
+                        dst_offset += 8;
+                        remaining -= 8;
+                    }
+
+                    self.codegen.freeGeneral(temp_reg);
+                },
                 else => {
                     // Not a stack location - try to store as single value
                     const reg = try self.ensureInGeneralReg(loc);

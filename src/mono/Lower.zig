@@ -2522,8 +2522,22 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
         },
 
         .e_record => |rec| blk: {
-            const result = try self.lowerRecordFields(module_env, rec.fields);
             const record_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
+
+            // Handle record update syntax: {..base, field1: val1, ...}
+            // When ext is set, fields not explicitly listed must be copied from the base.
+            if (rec.ext) |ext_expr_idx| {
+                const result = try self.lowerRecordWithSpread(module_env, rec.fields, ext_expr_idx, record_layout, expr_idx);
+                break :blk .{
+                    .record = .{
+                        .record_layout = record_layout,
+                        .fields = result.fields,
+                        .field_names = result.field_names,
+                    },
+                };
+            }
+
+            const result = try self.lowerRecordFields(module_env, rec.fields);
             break :blk .{
                 .record = .{
                     .record_layout = record_layout,
@@ -3569,6 +3583,85 @@ fn lowerRecordFields(self: *Self, module_env: *ModuleEnv, fields: CIR.RecordFiel
         const id = try self.lowerExprFromIdx(module_env, pair.value);
         try lowered.append(self.allocator, id);
         try names.append(self.allocator, pair.name);
+    }
+
+    return .{
+        .fields = self.store.addExprSpan(lowered.items) catch return error.OutOfMemory,
+        .field_names = self.store.addFieldNameSpan(names.items) catch return error.OutOfMemory,
+    };
+}
+
+/// Lower a record expression with spread syntax: {..base, field1: val1, ...}
+/// Expands the spread by generating field_access expressions for fields
+/// not explicitly listed, then merges with the explicit fields.
+fn lowerRecordWithSpread(
+    self: *Self,
+    module_env: *ModuleEnv,
+    explicit_fields: CIR.RecordField.Span,
+    ext_expr_idx: CIR.Expr.Idx,
+    record_layout: LayoutIdx,
+    record_expr_idx: CIR.Expr.Idx,
+) Allocator.Error!LowerRecordFieldsResult {
+    const ls = self.layout_store orelse return self.lowerRecordFields(module_env, explicit_fields);
+    const layout_val = ls.getLayout(record_layout);
+    if (layout_val.tag != .record) return self.lowerRecordFields(module_env, explicit_fields);
+
+    // Get all fields from the record layout (sorted by alignment desc, then alphabetically)
+    const record_data = ls.getRecordData(layout_val.data.record.idx);
+    const layout_fields = ls.record_fields.sliceRange(record_data.getFields());
+
+    // Collect explicit field names
+    const explicit_indices = module_env.store.sliceRecordFields(explicit_fields);
+    var explicit_names = std.ArrayList([]const u8).empty;
+    defer explicit_names.deinit(self.allocator);
+    for (explicit_indices) |field_idx| {
+        const field = module_env.store.getRecordField(field_idx);
+        try explicit_names.append(self.allocator, module_env.getIdent(field.name));
+    }
+
+    // Lower the base/ext expression
+    const ext_mono = try self.lowerExprFromIdx(module_env, ext_expr_idx);
+    const ext_layout = self.getExprLayoutFromIdx(module_env, ext_expr_idx);
+    const region = module_env.store.getExprRegion(record_expr_idx);
+
+    // Build complete field list: for each field in the layout, use explicit value
+    // if provided, otherwise create a field_access on the base record.
+    var lowered = std.ArrayList(MonoExprId).empty;
+    defer lowered.deinit(self.allocator);
+    var names = std.ArrayList(base.Ident.Idx).empty;
+    defer names.deinit(self.allocator);
+
+    var field_idx: u16 = 0;
+    while (field_idx < layout_fields.len) : (field_idx += 1) {
+        const layout_field = layout_fields.get(field_idx);
+        const layout_field_name = ls.getFieldName(layout_field.name);
+
+        // Check if this field is explicitly set
+        var found_explicit = false;
+        for (explicit_indices) |ei| {
+            const ef = module_env.store.getRecordField(ei);
+            if (std.mem.eql(u8, module_env.getIdent(ef.name), layout_field_name)) {
+                // Explicitly set — lower the value expression
+                const id = try self.lowerExprFromIdx(module_env, ef.value);
+                try lowered.append(self.allocator, id);
+                try names.append(self.allocator, ef.name);
+                found_explicit = true;
+                break;
+            }
+        }
+
+        if (!found_explicit) {
+            // Not explicitly set — create field_access(ext, field_idx)
+            const field_access_expr = try self.store.addExpr(.{ .field_access = .{
+                .record_expr = ext_mono,
+                .record_layout = ext_layout,
+                .field_layout = layout_field.layout,
+                .field_idx = field_idx,
+                .field_name = layout_field.name,
+            } }, region);
+            try lowered.append(self.allocator, field_access_expr);
+            try names.append(self.allocator, layout_field.name);
+        }
     }
 
     return .{
