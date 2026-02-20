@@ -1805,6 +1805,9 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     _ = try self.checkExpr(def.expr, env, expectation);
 
     if (self.defer_generalize) {
+        // defer_generalize is only set when a cycle root has been identified.
+        std.debug.assert(self.cycle_root_def != null);
+
         // Defer unifications until after generalization.
         // If we unify now, def_var(R1) with expr_var(R2) lowers expr_var
         // to R1 in the type store, and generalize at R2 would skip it.
