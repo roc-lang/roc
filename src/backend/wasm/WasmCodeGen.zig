@@ -141,6 +141,10 @@ const ClosureValue = struct {
     captures: mono.MonoIR.MonoCaptureSpan,
     /// Pre-compiled function index (set for procs)
     func_idx: ?u32 = null,
+    /// For factory-produced closures: the symbol this closure was bound to.
+    /// Used during dispatch to find the correct capture local, since multiple
+    /// factory instances share the same capture symbols but need independent values.
+    bound_symbol: ?Symbol = null,
 };
 
 /// Info about a closure returned by a call, for chained call dispatch.
@@ -952,7 +956,7 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
                 if (local_info.val_type != expected_vt) {
                     try self.emitConversion(local_info.val_type, expected_vt);
                 }
-            } else if (self.closure_values.get(key)) |_| {
+            } else if (self.closure_values.get(key)) |cv| {
                 // Symbol is a closure bound via tryBindFunction — generate its
                 // runtime closure value (used when passing closures as arguments
                 // to higher-order functions like List.fold).
@@ -975,6 +979,12 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
                             },
                             else => unreachable,
                         }
+                    },
+                    .call => {
+                        // Symbol is bound to a call result (e.g., add5 = make_adder(5)).
+                        // The captures were extracted into locals by tryBindFunction(.call).
+                        // Generate the closure value from the stored closure_values entry.
+                        try self.generateClosureValue(cv);
                     },
                     else => unreachable,
                 }
@@ -2776,19 +2786,52 @@ fn emitLoadBySize(self: *Self, disc_size: u8, offset: u16) Allocator.Error!void 
     }
 }
 
+/// Copy a composite return value to a caller-owned buffer.
+/// Takes an i32 pointer from the wasm stack, copies `size` bytes to a new
+/// buffer in the current function's stack frame, and returns the local
+/// holding the buffer pointer. This prevents stack use-after-free when
+/// a subsequent function call reuses the callee's stack frame.
+fn stabilizeCompositeResult(self: *Self, size: u32) Allocator.Error!u32 {
+    // Store the source pointer from the wasm stack
+    const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(src_local);
+
+    // Allocate a stable buffer in the caller's stack frame
+    const buf_offset = try self.allocStackMemory(size, 8);
+    const buf_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitFpOffset(buf_offset);
+    try self.emitLocalSet(buf_local);
+
+    // Copy using i64 load/store pairs (16 bytes = 2 × i64)
+    var offset: u32 = 0;
+    while (offset < size) : (offset += 8) {
+        try self.emitLocalGet(buf_local);
+        try self.emitLocalGet(src_local);
+        self.body.append(self.allocator, Op.i64_load) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, 3) catch return error.OutOfMemory; // align=8
+        WasmModule.leb128WriteU32(self.allocator, &self.body, offset) catch return error.OutOfMemory;
+        self.body.append(self.allocator, Op.i64_store) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, 3) catch return error.OutOfMemory; // align=8
+        WasmModule.leb128WriteU32(self.allocator, &self.body, offset) catch return error.OutOfMemory;
+    }
+
+    return buf_local;
+}
+
 /// Generate i128/Dec binary operations (add, sub, comparisons).
 /// Both operands are i32 pointers to 16-byte values in linear memory.
 fn generateCompositeI128BinOp(self: *Self, lhs: MonoExprId, rhs: MonoExprId, op: anytype, result_layout: layout.Idx) Allocator.Error!void {
-    // Generate operand pointers
+    // Generate operand pointers.
+    // After generating each operand, copy the 16-byte value to a caller-owned
+    // buffer. This prevents stack use-after-free when operands are function
+    // calls: the first call's result lives in the callee's stack frame, which
+    // is overwritten when the second call allocates its own stack frame at the
+    // same address.
     try self.generateExpr(lhs);
-    const lhs_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, lhs_local) catch return error.OutOfMemory;
+    const lhs_local = try self.stabilizeCompositeResult(16);
 
     try self.generateExpr(rhs);
-    const rhs_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, rhs_local) catch return error.OutOfMemory;
+    const rhs_local = try self.stabilizeCompositeResult(16);
 
     switch (op) {
         .add => try self.emitI128Add(lhs_local, rhs_local),
@@ -4886,6 +4929,28 @@ fn compileClosure(self: *Self, expr_id: MonoExprId, closure: anytype) Allocator.
         _ = self.storage.allocLocal(cap.symbol, vt) catch return error.OutOfMemory;
     }
 
+    // Alias inner capture symbols for captured closures.
+    // When a capture is an unwrapped_capture closure, the capture local
+    // IS the inner closure's capture value. Create aliases so that
+    // dispatchClosureCall can find the inner capture symbols.
+    for (captures) |cap| {
+        const cap_key: u64 = @bitCast(cap.symbol);
+        if (self.closure_values.get(cap_key)) |cap_cv| {
+            if (cap_cv.representation == .unwrapped_capture) {
+                const inner_caps = self.store.getCaptures(cap_cv.captures);
+                if (inner_caps.len > 0) {
+                    if (self.storage.getLocal(cap.symbol)) |cap_local| {
+                        const inner_cap_key: u64 = @bitCast(inner_caps[0].symbol);
+                        if (!self.storage.locals.contains(inner_cap_key)) {
+                            const inner_cap_vt = self.resolveValType(inner_caps[0].layout_idx);
+                            self.storage.locals.put(inner_cap_key, .{ .idx = cap_local, .val_type = inner_cap_vt }) catch {};
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Bind regular parameters
     for (params) |param_id| {
         const pat = self.store.getPattern(param_id);
@@ -5115,7 +5180,6 @@ fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: Sym
             return true;
         },
         .closure => |closure| {
-            // Store closure_value for all representations
             const fid = try self.compileClosure(expr_id, closure);
 
             // Determine stack_offset based on whether we need to materialize captures
@@ -5153,6 +5217,24 @@ fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: Sym
                 .captures = closure.captures,
                 .func_idx = fid,
             }) catch return error.OutOfMemory;
+
+            // For unwrapped_capture closures, if the symbol is already a local
+            // (e.g., it's a capture parameter of the current compiled function),
+            // alias the inner capture symbol to that local. This enables
+            // dispatchClosureCall to find the capture value when calling the
+            // closure inside the compiled function body.
+            if (closure.representation == .unwrapped_capture) {
+                if (self.storage.getLocal(symbol)) |local_idx| {
+                    const caps = self.store.getCaptures(closure.captures);
+                    if (caps.len > 0) {
+                        const cap_key: u64 = @bitCast(caps[0].symbol);
+                        if (!self.storage.locals.contains(cap_key)) {
+                            const cap_vt = self.resolveValType(caps[0].layout_idx);
+                            self.storage.locals.put(cap_key, .{ .idx = local_idx, .val_type = cap_vt }) catch {};
+                        }
+                    }
+                }
+            }
             return true;
         },
         .nominal => |nom| {
@@ -5181,7 +5263,9 @@ fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: Sym
             // Call result bound to a symbol: e.g., add_ten = make_adder(10)
             // The call returns a closure value at runtime. We generate the call,
             // store captures into locals, and register the result for later dispatch.
-            const closure_info = self.getReturnedClosureInfo(call_expr.fn_expr) orelse return false;
+            const closure_info = self.getReturnedClosureInfo(call_expr.fn_expr) orelse {
+                return false;
+            };
             // Compile the returned closure's function
 
             // Compile the returned closure's function (may already be compiled)
@@ -5195,26 +5279,31 @@ fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: Sym
             // Generate the call — leaves closure value on the wasm stack
             try self.generateCall(call_expr);
 
-            // Store the returned closure value (captures) into locals
+            // Store the returned closure value (captures) into locals.
+            // Bind to the BOUND VARIABLE's symbol (e.g., `add3`, `add7`) instead
+            // of the capture symbol (e.g., `n`) to avoid collisions when the same
+            // factory produces multiple closures.
             switch (closure_info.representation) {
                 .direct_call => {
                     // No captures — drop the dummy return value
                     try self.body.append(self.allocator, Op.drop);
                 },
                 .unwrapped_capture => {
-                    // Single capture value is the return value on the stack
+                    // Single capture value is the return value on the stack.
+                    // Store in a local bound to the target symbol (not the capture symbol).
                     const captures = self.store.getCaptures(closure_info.captures);
                     if (captures.len > 0) {
                         const cap = captures[0];
                         const cap_vt = self.resolveValType(cap.layout_idx);
-                        const local_idx = self.storage.allocLocal(cap.symbol, cap_vt) catch return error.OutOfMemory;
+                        const local_idx = self.storage.allocLocal(symbol, cap_vt) catch return error.OutOfMemory;
                         try self.emitLocalSet(local_idx);
                     } else {
                         try self.body.append(self.allocator, Op.drop);
                     }
                 },
                 .struct_captures => {
-                    // Pointer to captures struct — extract each capture into its own local
+                    // Pointer to captures struct — extract each capture into its own local.
+                    // Use capture symbols here (struct_captures factories are rare).
                     const captures = self.store.getCaptures(closure_info.captures);
                     const ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                     try self.emitLocalSet(ptr_local);
@@ -5240,6 +5329,60 @@ fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: Sym
                 .lambda_expr = closure_info.lambda_expr,
                 .captures = closure_info.captures,
                 .func_idx = func_idx,
+                .bound_symbol = symbol,
+            }) catch return error.OutOfMemory;
+
+            return true;
+        },
+        .if_then_else => |ite| {
+            // If-else producing closures (lambda set dispatch).
+            // e.g., f = if (True) |x| x + a else |x| x + b
+            const branches = self.store.getIfBranches(ite.branches);
+            if (branches.len == 0) return false;
+
+            // Find the closure representation from one of the branches
+            const repr = self.findClosureReprInExpr(branches[0].body) orelse
+                self.findClosureReprInExpr(ite.final_else) orelse {
+                return false;
+            };
+
+            // Allocate a fixed slot for the closure value
+            const slot_size: u32 = switch (repr) {
+                .enum_dispatch => 8,
+                .union_repr => |r| blk: {
+                    const s = self.layoutByteSize(r.union_layout);
+                    break :blk if (s < 16) 16 else s;
+                },
+                else => return false,
+            };
+            const slot = try self.allocStackMemory(slot_size, 8);
+
+            // Generate the if-then-else (leaves closure value pointer on stack)
+            try self.generateExpr(expr_id);
+
+            // Copy the closure value from the branch-local buffer to our fixed slot.
+            // This is necessary because each branch allocates its own stack memory,
+            // and we need a single known offset for dispatch.
+            const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(src_local);
+            var copy_offset: u32 = 0;
+            while (copy_offset < slot_size) : (copy_offset += 8) {
+                try self.emitFpOffset(slot + copy_offset);
+                try self.emitLocalGet(src_local);
+                self.body.append(self.allocator, Op.i64_load) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, 3) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, copy_offset) catch return error.OutOfMemory;
+                self.body.append(self.allocator, Op.i64_store) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, 3) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+            }
+
+            // Register for dispatch
+            self.closure_values.put(key, .{
+                .representation = repr,
+                .stack_offset = slot,
+                .lambda_expr = expr_id,
+                .captures = .{ .start = 0, .len = 0 },
             }) catch return error.OutOfMemory;
 
             return true;
@@ -5427,7 +5570,8 @@ const SavedState = struct {
     next_local_idx: u32,
     local_types_items: []ValType,
     local_types_capacity: usize,
-    closure_values: std.AutoHashMap(u64, ClosureValue),
+    // Note: closure_values is NOT saved/restored — once a closure is compiled,
+    // its entry persists globally since the wasm function code is already emitted.
     stack_frame_size: u32,
     uses_stack_memory: bool,
     fp_local: u32,
@@ -5437,7 +5581,6 @@ const SavedState = struct {
 };
 
 /// Capture current codegen state for later restoration.
-/// Clones closure_values so the saved copy is independent of the live map.
 fn saveState(self: *Self) Allocator.Error!SavedState {
     return .{
         .body_items = self.body.items,
@@ -5446,7 +5589,6 @@ fn saveState(self: *Self) Allocator.Error!SavedState {
         .next_local_idx = self.storage.next_local_idx,
         .local_types_items = self.storage.local_types.items,
         .local_types_capacity = self.storage.local_types.capacity,
-        .closure_values = try self.closure_values.clone(),
         .stack_frame_size = self.stack_frame_size,
         .uses_stack_memory = self.uses_stack_memory,
         .fp_local = self.fp_local,
@@ -5467,8 +5609,8 @@ fn restoreState(self: *Self, saved: SavedState) void {
     self.storage.local_types.deinit(self.allocator);
     self.storage.local_types.items = saved.local_types_items;
     self.storage.local_types.capacity = saved.local_types_capacity;
-    self.closure_values.deinit();
-    self.closure_values = saved.closure_values;
+    // Note: closure_values is NOT restored — entries added during nested
+    // compilation must persist since the wasm function code is already emitted.
     self.stack_frame_size = saved.stack_frame_size;
     self.uses_stack_memory = saved.uses_stack_memory;
     self.fp_local = saved.fp_local;
@@ -6215,6 +6357,25 @@ fn getClosureInfoFromExpr(self: *const Self, expr_id: MonoExprId) ?ReturnedClosu
     }
 }
 
+/// Find the closure representation from an expression (recursing through blocks/nominals).
+fn findClosureReprInExpr(self: *const Self, expr_id: MonoExprId) ?mono.MonoIR.ClosureRepresentation {
+    const expr = self.store.getExpr(expr_id);
+    return switch (expr) {
+        .closure => |c| c.representation,
+        .block => |b| self.findClosureReprInExpr(b.final_expr),
+        .nominal => |nom| self.findClosureReprInExpr(nom.backing_expr),
+        .tag => |t| {
+            // Tag wraps a closure payload in lambda sets — recurse into args
+            const tag_args = self.store.getExprSpan(t.args);
+            for (tag_args) |arg_id| {
+                if (self.findClosureReprInExpr(arg_id)) |r| return r;
+            }
+            return null;
+        },
+        else => null,
+    };
+}
+
 /// Generate a closure value based on its representation.
 /// Handles all ClosureRepresentation variants and leaves the appropriate
 /// runtime value on the wasm stack.
@@ -6363,6 +6524,22 @@ fn valTypeSize(vt: ValType) u32 {
     };
 }
 
+/// When a capture symbol isn't a wasm local but IS an unwrapped_capture
+/// closure in closure_values, the closure's value is its own inner capture.
+/// Resolve through the closure to find the inner capture's local.
+fn resolveCaptureThroughClosure(self: *Self, symbol: Symbol) ?u32 {
+    const key: u64 = @bitCast(symbol);
+    const cv = self.closure_values.get(key) orelse return null;
+    if (cv.representation != .unwrapped_capture) return null;
+    const inner_caps = self.store.getCaptures(cv.captures);
+    if (inner_caps.len == 0) return null;
+    // The unwrapped_capture closure IS its single capture value.
+    // Try to find that inner capture as a local.
+    return self.storage.getLocal(inner_caps[0].symbol) orelse
+        // Recurse: the inner capture might also be an unwrapped_capture closure
+        self.resolveCaptureThroughClosure(inner_caps[0].symbol);
+}
+
 /// Dispatch a closure call based on its ClosureValue.
 /// For multi-function lambda sets, generates a switch on the tag.
 fn dispatchClosureCall(
@@ -6392,10 +6569,22 @@ fn dispatchClosureCall(
             // Push roc_ops_ptr first
             try self.emitLocalGet(self.roc_ops_local);
 
-            // Push captures from current scope (for closures)
+            // Push captures from current scope (for closures).
+            // For factory-produced closures, use the bound symbol to find
+            // the capture local (avoids collisions between factory instances).
             const captures = self.store.getCaptures(cv.captures);
             for (captures) |cap| {
+                if (cv.bound_symbol) |bsym| {
+                    if (self.storage.getLocal(bsym)) |local_idx| {
+                        try self.emitLocalGet(local_idx);
+                        continue;
+                    }
+                }
                 if (self.storage.getLocal(cap.symbol)) |local_idx| {
+                    try self.emitLocalGet(local_idx);
+                } else if (self.resolveCaptureThroughClosure(cap.symbol)) |local_idx| {
+                    // The capture symbol is an unwrapped_capture closure whose
+                    // value IS its own capture. Push the inner capture's local.
                     try self.emitLocalGet(local_idx);
                 } else {
                     // Capture not available in current scope — push dummy value to

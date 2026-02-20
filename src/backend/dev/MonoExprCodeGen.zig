@@ -6586,6 +6586,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             var result_slot: ?i32 = null;
             var result_reg: ?GeneralReg = null;
 
+            // Track closure representation when branches produce closure values
+            var closure_repr: ?mono.ClosureRepresentation = null;
+            var closure_lambda: mono.MonoExprId = undefined;
+            var closure_captures: mono.MonoIR.MonoCaptureSpan = undefined;
+
             // Generate each branch
             var first_branch = true;
             for (branches) |branch| {
@@ -6611,8 +6616,14 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         // Update result_size since layout check might have defaulted to target_ptr_size
                         result_size = roc_list_size;
                     }
-                    // Use stack for types > 8 bytes (e.g., i128, Dec) or stack-based values
-                    if (result_size > 8) {
+                    // Detect closure results - capture representation for dispatch
+                    if (body_loc == .closure_value) {
+                        closure_repr = body_loc.closure_value.representation;
+                        closure_lambda = body_loc.closure_value.lambda;
+                        closure_captures = body_loc.closure_value.captures;
+                    }
+                    // Use stack for types > 8 bytes, stack-based values, or closure values
+                    if (result_size > 8 or body_loc == .closure_value) {
                         result_slot = self.codegen.allocStackSlot(result_size);
                     } else {
                         switch (body_loc) {
@@ -6650,8 +6661,14 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
             // Handle case where all branches were composite but else is the first evaluation
             if (result_slot == null and result_reg == null) {
-                // Use stack for types > 8 bytes (e.g., i128, Dec) or stack-based values
-                if (result_size > 8) {
+                // Detect closure results from else branch
+                if (else_loc == .closure_value) {
+                    closure_repr = else_loc.closure_value.representation;
+                    closure_lambda = else_loc.closure_value.lambda;
+                    closure_captures = else_loc.closure_value.captures;
+                }
+                // Use stack for types > 8 bytes, stack-based values, or closure values
+                if (result_size > 8 or else_loc == .closure_value) {
                     result_slot = self.codegen.allocStackSlot(result_size);
                 } else {
                     switch (else_loc) {
@@ -6682,6 +6699,15 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
             // Return the result location - use appropriate types for multi-word values
             if (result_slot) |slot| {
+                // Return closure_value when branches produced closures, preserving dispatch metadata
+                if (closure_repr) |repr| {
+                    return .{ .closure_value = .{
+                        .stack_offset = slot,
+                        .representation = repr,
+                        .lambda = closure_lambda,
+                        .captures = closure_captures,
+                    } };
+                }
                 if (is_str_result) {
                     return .{ .stack_str = slot };
                 }
@@ -8086,10 +8112,15 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     return;
                 },
                 .closure_value => |cv| {
-                    // Copy the closure value from its stack location
+                    // Copy the full closure value from its stack location (may be multi-word for union_repr)
                     const reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadStack(.w64, reg, cv.stack_offset);
-                    try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                    const num_words = (size + 7) / 8;
+                    var w: u32 = 0;
+                    while (w < num_words) : (w += 1) {
+                        const word_off: i32 = @intCast(w * 8);
+                        try self.codegen.emitLoadStack(.w64, reg, cv.stack_offset + word_off);
+                        try self.codegen.emitStoreStack(.w64, dest_offset + word_off, reg);
+                    }
                     self.codegen.freeGeneral(reg);
                     return;
                 },
@@ -10407,7 +10438,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     return try self.dispatchEnumClosure(cv.stack_offset, repr.lambda_set, args_span, ret_layout);
                 },
                 .union_repr => |repr| {
-                    return try self.dispatchUnionClosure(cv.stack_offset, repr, args_span);
+                    return try self.dispatchUnionClosure(cv.stack_offset, repr, args_span, ret_layout);
                 },
                 .unwrapped_capture => {
                     // Single function - call with the captured value
@@ -10462,8 +10493,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const tag_reg = try self.allocTempGeneral();
             try self.codegen.emitLoadStack(.w64, tag_reg, tag_offset);
 
-            // Allocate result slot
-            const result_slot = self.codegen.allocStackSlot(8);
+            // Allocate result slot sized for the return type
+            const ret_size: u32 = self.getLayoutSize(ret_layout);
+            const result_slot = self.codegen.allocStackSlot(@max(ret_size, 8));
 
             // Track end jumps for patching
             var end_jumps = std.ArrayList(usize).empty;
@@ -10479,7 +10511,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                     // Generate code for this branch
                     const result = try self.compileLambdaAndCall(member.lambda_body, args_span, ret_layout);
-                    try self.copyToStackSlot(result_slot, result);
+                    try self.copyResultToSlot(result_slot, result, ret_size);
 
                     // Jump to end
                     try end_jumps.append(self.allocator, try self.codegen.emitJump());
@@ -10489,7 +10521,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 } else {
                     // Last case - no comparison needed (fallthrough)
                     const result = try self.compileLambdaAndCall(member.lambda_body, args_span, ret_layout);
-                    try self.copyToStackSlot(result_slot, result);
+                    try self.copyResultToSlot(result_slot, result, ret_size);
                 }
             }
 
@@ -10499,6 +10531,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             }
 
             self.codegen.freeGeneral(tag_reg);
+            if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec) {
+                return .{ .stack_i128 = result_slot };
+            }
             return .{ .stack = .{ .offset = result_slot } };
         }
 
@@ -10508,6 +10543,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             union_offset: i32,
             repr: anytype,
             args_span: anytype,
+            ret_layout: layout.Idx,
         ) Allocator.Error!ValueLocation {
             const members = self.store.getLambdaSetMembers(repr.lambda_set);
 
@@ -10526,8 +10562,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const tag_reg = try self.allocTempGeneral();
             try self.codegen.emitLoadStack(.w64, tag_reg, union_offset);
 
-            // Allocate result slot
-            const result_slot = self.codegen.allocStackSlot(8);
+            // Allocate result slot sized for the return type
+            const ret_size: u32 = self.getLayoutSize(ret_layout);
+            const result_slot = self.codegen.allocStackSlot(@max(ret_size, 8));
 
             // Track end jumps for patching
             var end_jumps = std.ArrayList(usize).empty;
@@ -10543,7 +10580,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                     // Generate code for this branch (captures at +8 after tag with padding)
                     const result = try self.compileLambdaAndCallWithCaptures(member, union_offset + 8, args_span);
-                    try self.copyToStackSlot(result_slot, result);
+                    try self.copyResultToSlot(result_slot, result, ret_size);
 
                     // Jump to end
                     try end_jumps.append(self.allocator, try self.codegen.emitJump());
@@ -10553,7 +10590,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 } else {
                     // Last case - no comparison needed (fallthrough)
                     const result = try self.compileLambdaAndCallWithCaptures(member, union_offset + 8, args_span);
-                    try self.copyToStackSlot(result_slot, result);
+                    try self.copyResultToSlot(result_slot, result, ret_size);
                 }
             }
 
@@ -10563,6 +10600,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             }
 
             self.codegen.freeGeneral(tag_reg);
+            if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec) {
+                return .{ .stack_i128 = result_slot };
+            }
             return .{ .stack = .{ .offset = result_slot } };
         }
 
@@ -10583,6 +10623,22 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 const capture_layout = ls.getLayout(capture.layout_idx);
                 const capture_size = ls.layoutSizeAlign(capture_layout).size;
                 const capture_offset = cv.stack_offset + offset;
+
+                // If the capture is itself a closure (e.g., add5 = make_adder(5) captured
+                // by another closure), preserve the .closure_value metadata so that calling
+                // the captured closure dispatches correctly. Without this, the closure_value
+                // would be overwritten with raw .stack bytes, and the call would hit
+                // unreachable in generateLookupCall because getSymbolDef returns .call.
+                if (self.symbol_locations.get(symbol_key)) |existing_loc| {
+                    if (existing_loc == .closure_value) {
+                        var updated_cv = existing_loc.closure_value;
+                        updated_cv.stack_offset = capture_offset;
+                        try self.symbol_locations.put(symbol_key, .{ .closure_value = updated_cv });
+                        offset += @intCast(capture_size);
+                        continue;
+                    }
+                }
+
                 // Use the appropriate ValueLocation based on the layout type
                 if (capture.layout_idx == .i128 or capture.layout_idx == .u128 or capture.layout_idx == .dec) {
                     try self.symbol_locations.put(symbol_key, .{ .stack_i128 = capture_offset });
@@ -10654,7 +10710,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             args_span: anytype,
         ) Allocator.Error!ValueLocation {
 
-            // Bind captures from the stack to their symbols
+            // Bind captures from the stack to their symbols.
+            // Must use proper ValueLocation types (like callSingleClosureWithCaptures)
+            // so that captured closures, strings, lists, etc. dispatch correctly.
             const captures = self.store.getCaptures(member.captures);
             var offset: i32 = 0;
             for (captures) |capture| {
@@ -10662,26 +10720,114 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 const ls = self.layout_store orelse unreachable;
                 const capture_layout = ls.getLayout(capture.layout_idx);
                 const capture_size = ls.layoutSizeAlign(capture_layout).size;
-                try self.symbol_locations.put(symbol_key, .{ .stack = .{ .offset = captures_offset + offset } });
+                const capture_offset = captures_offset + offset;
+
+                // Preserve existing .closure_value metadata for captured closures
+                if (self.symbol_locations.get(symbol_key)) |existing_loc| {
+                    if (existing_loc == .closure_value) {
+                        var updated_cv = existing_loc.closure_value;
+                        updated_cv.stack_offset = capture_offset;
+                        try self.symbol_locations.put(symbol_key, .{ .closure_value = updated_cv });
+                        offset += @intCast(capture_size);
+                        continue;
+                    }
+                }
+
+                // Use appropriate ValueLocation based on layout type
+                if (capture.layout_idx == .i128 or capture.layout_idx == .u128 or capture.layout_idx == .dec) {
+                    try self.symbol_locations.put(symbol_key, .{ .stack_i128 = capture_offset });
+                } else if (capture.layout_idx == .str) {
+                    try self.symbol_locations.put(symbol_key, .{ .stack_str = capture_offset });
+                } else if (capture_layout.tag == .list or capture_layout.tag == .list_of_zst) {
+                    try self.symbol_locations.put(symbol_key, .{ .list_stack = .{
+                        .struct_offset = capture_offset,
+                        .data_offset = 0,
+                        .num_elements = 0,
+                    } });
+                } else {
+                    try self.symbol_locations.put(symbol_key, .{ .stack = .{ .offset = capture_offset } });
+                }
                 offset += @intCast(capture_size);
             }
 
-            // Get the lambda and compile as a proc
+            // Inline the lambda body (captures must stay in scope).
+            // We use callLambdaBodyDirect instead of compileLambdaAsProc because
+            // compileLambdaAsProc clears symbol_locations, losing the capture bindings.
             const lambda_expr = self.store.getExpr(member.lambda_body);
             switch (lambda_expr) {
                 .lambda => |l| {
-                    const code_offset = try self.compileLambdaAsProc(member.lambda_body, l);
-                    return try self.generateCallToLambda(code_offset, args_span, l.ret_layout);
+                    return try self.callLambdaBodyDirect(l, args_span);
                 },
                 .closure => |c| {
                     const inner = self.store.getExpr(c.lambda);
                     if (inner == .lambda) {
-                        const code_offset = try self.compileLambdaAsProc(c.lambda, inner.lambda);
-                        return try self.generateCallToLambda(code_offset, args_span, inner.lambda.ret_layout);
+                        return try self.callLambdaBodyDirect(inner.lambda, args_span);
                     }
                     unreachable;
                 },
                 else => unreachable,
+            }
+        }
+
+        /// Get the return layout from a lambda set member's lambda body.
+        fn getLambdaMemberRetLayout(self: *Self, member: mono.LambdaSetMember) layout.Idx {
+            const lambda_expr = self.store.getExpr(member.lambda_body);
+            return switch (lambda_expr) {
+                .lambda => |l| l.ret_layout,
+                .closure => |c| blk: {
+                    const inner = self.store.getExpr(c.lambda);
+                    break :blk switch (inner) {
+                        .lambda => |l| l.ret_layout,
+                        else => .i64, // fallback
+                    };
+                },
+                else => .i64, // fallback
+            };
+        }
+
+        /// Copy a result to a stack slot, handling multi-word types (Dec, i128, etc.).
+        fn copyResultToSlot(self: *Self, slot: i32, loc: ValueLocation, size: u32) Allocator.Error!void {
+            if (size <= 8) {
+                return self.copyToStackSlot(slot, loc);
+            }
+            // Multi-word copy (e.g., Dec/i128 = 16 bytes)
+            switch (loc) {
+                .stack_i128 => |src_offset| {
+                    const temp = try self.allocTempGeneral();
+                    const num_words = (size + 7) / 8;
+                    var w: u32 = 0;
+                    while (w < num_words) : (w += 1) {
+                        const word_off: i32 = @intCast(w * 8);
+                        try self.codegen.emitLoadStack(.w64, temp, src_offset + word_off);
+                        try self.codegen.emitStoreStack(.w64, slot + word_off, temp);
+                    }
+                    self.codegen.freeGeneral(temp);
+                },
+                .stack => |s| {
+                    const temp = try self.allocTempGeneral();
+                    const num_words = (size + 7) / 8;
+                    var w: u32 = 0;
+                    while (w < num_words) : (w += 1) {
+                        const word_off: i32 = @intCast(w * 8);
+                        try self.codegen.emitLoadStack(.w64, temp, s.offset + word_off);
+                        try self.codegen.emitStoreStack(.w64, slot + word_off, temp);
+                    }
+                    self.codegen.freeGeneral(temp);
+                },
+                .immediate_i128 => |val| {
+                    const low: u64 = @truncate(@as(u128, @bitCast(val)));
+                    const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
+                    const temp = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(temp, @bitCast(low));
+                    try self.codegen.emitStoreStack(.w64, slot, temp);
+                    try self.codegen.emitLoadImm(temp, @bitCast(high));
+                    try self.codegen.emitStoreStack(.w64, slot + 8, temp);
+                    self.codegen.freeGeneral(temp);
+                },
+                else => {
+                    // Fallback: copy what we can
+                    try self.copyToStackSlot(slot, loc);
+                },
             }
         }
 
@@ -10877,28 +11023,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             if (block_result == .closure_value) {
                                 return try self.generateClosureDispatch(block_result.closure_value, args_span, ret_layout);
                             }
-                        }
-                        unreachable;
-                    },
-                    .call, .if_then_else => {
-                        // Definition is a call result or conditional (e.g., add5 = make_adder(5),
-                        // f = if cond then |x| ... else |x| ...).
-                        // The closure value may be available through captures or local bindings.
-                        if (self.symbol_locations.get(symbol_key)) |loc| {
-                            return switch (loc) {
-                                .closure_value => |cv| try self.generateClosureDispatch(cv, args_span, ret_layout),
-                                .lambda_code => |lc| try self.generateCallToLambda(lc.code_offset, args_span, ret_layout),
-                                .general_reg, .stack, .immediate_i64 => try self.generateIndirectCall(loc, args_span, ret_layout),
-                                else => unreachable,
-                            };
-                        }
-                        // Not captured — evaluate the expression to produce the closure value
-                        const eval_result = try self.generateExpr(def_expr_id);
-                        if (eval_result == .closure_value) {
-                            return try self.generateClosureDispatch(eval_result.closure_value, args_span, ret_layout);
-                        }
-                        if (eval_result == .lambda_code) {
-                            return try self.generateCallToLambda(eval_result.lambda_code.code_offset, args_span, ret_layout);
                         }
                         unreachable;
                     },

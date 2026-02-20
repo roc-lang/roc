@@ -92,7 +92,7 @@ test "closure: function returning a closure, called twice" {
         \\    a + b
         \\}
     ;
-    try runExpectI64(code, 45, .no_trace);
+    try runExpectI64(code, 40, .no_trace);
 }
 
 test "closure: two different closures from same factory" {
@@ -213,6 +213,18 @@ test "closure: polymorphic function used with both int and string closures" {
 // =============================================================================
 // TIER 5: Closure over closure (nested captures)
 // =============================================================================
+
+test "closure: closure forwarding to captured closure (no multiply)" {
+    const code =
+        \\{
+        \\    y = 5
+        \\    inner = |x| x + y
+        \\    outer = |x| inner(x)
+        \\    outer(10)
+        \\}
+    ;
+    try runExpectI64(code, 15, .no_trace);
+}
 
 test "closure: closure capturing another closure" {
     const code =

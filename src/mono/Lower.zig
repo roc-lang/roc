@@ -4227,7 +4227,8 @@ fn lowerExprWithLambdaSet(
                 },
             };
 
-            return self.store.addExpr(mono_expr, Region.zero());
+            const result_id = try self.store.addExpr(mono_expr, Region.zero());
+            return result_id;
         },
         .e_lambda => |lambda| {
             // Lambda without captures - use enum_dispatch
