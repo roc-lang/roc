@@ -4795,6 +4795,8 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    const expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(expr_idx));
+
     // Check the match's condition
     var does_fx = try self.checkExpr(match.cond, env, .no_expectation);
     const cond_var = ModuleEnv.varFrom(match.cond);
@@ -4854,6 +4856,14 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
         if (!ptrn_result.isOk()) had_type_error = true;
     }
 
+    // Check guard if present
+    if (first_branch.guard) |guard_idx| {
+        does_fx = try self.checkExpr(guard_idx, env, .no_expectation) or does_fx;
+        const guard_var = ModuleEnv.varFrom(guard_idx);
+        const guard_bool_var = try self.freshBool(env, expr_region);
+        _ = try self.unifyInContext(guard_bool_var, guard_var, env, .if_condition);
+    }
+
     // Check the first branch's value, then use that at the branch_var
     does_fx = try self.checkExpr(first_branch.value, env, .no_expectation) or does_fx;
     const val_var = ModuleEnv.varFrom(first_branch.value);
@@ -4879,6 +4889,14 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
                 .match_expr = expr_idx,
             } });
             if (!ptrn_result.isOk()) had_type_error = true;
+        }
+
+        // Check guard if present
+        if (branch.guard) |guard_idx| {
+            does_fx = try self.checkExpr(guard_idx, env, .no_expectation) or does_fx;
+            const guard_var = ModuleEnv.varFrom(guard_idx);
+            const branch_guard_bool_var = try self.freshBool(env, expr_region);
+            _ = try self.unifyInContext(branch_guard_bool_var, guard_var, env, .if_condition);
         }
 
         // Then, check the body

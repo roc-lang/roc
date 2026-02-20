@@ -2857,6 +2857,13 @@ pub fn parseBranch(self: *Parser) Error!AST.MatchBranch.Idx {
 
     const start = self.pos;
     const p = try self.parsePattern(.alternatives_allowed);
+
+    // Parse optional guard: `if <expr>`
+    const guard: ?AST.Expr.Idx = if (self.peek() == .KwIf) blk: {
+        self.advance(); // consume `if`
+        break :blk try self.parseExpr();
+    } else null;
+
     if (self.peek() == .OpFatArrow) {
         self.advance();
     } else if (self.peek() == .OpArrow) {
@@ -2879,6 +2886,7 @@ pub fn parseBranch(self: *Parser) Error!AST.MatchBranch.Idx {
         .region = .{ .start = start, .end = self.pos },
         .pattern = p,
         .body = b,
+        .guard = guard,
     });
 }
 
