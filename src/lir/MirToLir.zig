@@ -347,16 +347,52 @@ fn lowerRecord(self: *Self, rec: anytype, mono_idx: Monotype.Idx, region: Region
     }
 
     const record_layout = try self.layoutFromMonotype(mono_idx);
-    const lir_fields = try self.lowerExprSpan(mir_fields);
-
     const mir_field_names = self.mir_store.getFieldNameSpan(rec.field_names);
-    const lir_field_names = try self.lir_store.addFieldNameSpan(mir_field_names);
+    const record_layout_val = self.layout_store.getLayout(record_layout);
 
-    return self.lir_store.addExpr(.{ .record = .{
-        .record_layout = record_layout,
-        .fields = lir_fields,
-        .field_names = lir_field_names,
-    } }, region);
+    if (record_layout_val.tag == .record) {
+        // MIR fields are in source/alphabetical order, but the layout store sorts
+        // fields by alignment descending then alphabetically. Reorder expressions
+        // to match layout order so codegen can use positional field indices.
+        const record_data = self.layout_store.getRecordData(record_layout_val.data.record.idx);
+        const layout_fields = self.layout_store.record_fields.sliceRange(record_data.getFields());
+
+        const save_exprs = self.scratch_lir_expr_ids.items.len;
+        defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
+        const save_names = self.scratch_field_names.items.len;
+        defer self.scratch_field_names.shrinkRetainingCapacity(save_names);
+
+        for (0..layout_fields.len) |li| {
+            const layout_field_name = layout_fields.get(li).name;
+            for (mir_field_names, 0..) |mir_name, mi| {
+                if (@as(u32, @bitCast(mir_name)) == @as(u32, @bitCast(layout_field_name))) {
+                    const lir_expr = try self.lowerExpr(mir_fields[mi]);
+                    try self.scratch_lir_expr_ids.append(self.allocator, lir_expr);
+                    try self.scratch_field_names.append(self.allocator, mir_name);
+                    break;
+                }
+            }
+        }
+
+        const lir_fields = try self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_exprs..]);
+        const lir_field_names = try self.lir_store.addFieldNameSpan(self.scratch_field_names.items[save_names..]);
+
+        return self.lir_store.addExpr(.{ .record = .{
+            .record_layout = record_layout,
+            .fields = lir_fields,
+            .field_names = lir_field_names,
+        } }, region);
+    } else {
+        // Non-record layout (e.g. single-field optimization or ZST) — pass through directly
+        const lir_fields = try self.lowerExprSpan(mir_fields);
+        const lir_field_names = try self.lir_store.addFieldNameSpan(mir_field_names);
+
+        return self.lir_store.addExpr(.{ .record = .{
+            .record_layout = record_layout,
+            .fields = lir_fields,
+            .field_names = lir_field_names,
+        } }, region);
+    }
 }
 
 fn lowerTuple(self: *Self, tup: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
