@@ -62,6 +62,13 @@ pub const RcInsertPass = struct {
     /// Used by processEarlyReturn to compute remaining refs for cleanup.
     block_consumed_uses: std.AutoHashMap(u64, u32),
 
+    /// Cumulative consumed uses across all enclosing blocks.
+    /// When processBlock saves/restores block_consumed_uses, the outer block's
+    /// consumed uses are invisible to processEarlyReturn in nested blocks.
+    /// This field accumulates uses from all enclosing blocks so that
+    /// processEarlyReturn can see the full picture.
+    cumulative_consumed_uses: std.AutoHashMap(u64, u32),
+
     const LiveRcSymbol = struct {
         symbol: Symbol,
         layout_idx: LayoutIdx,
@@ -77,6 +84,7 @@ pub const RcInsertPass = struct {
             .live_rc_symbols = std.ArrayList(LiveRcSymbol).empty,
             .early_return_scope_base = 0,
             .block_consumed_uses = std.AutoHashMap(u64, u32).init(allocator),
+            .cumulative_consumed_uses = std.AutoHashMap(u64, u32).init(allocator),
         };
     }
 
@@ -85,6 +93,7 @@ pub const RcInsertPass = struct {
         self.symbol_layouts.deinit();
         self.live_rc_symbols.deinit(self.allocator);
         self.block_consumed_uses.deinit();
+        self.cumulative_consumed_uses.deinit();
     }
 
     /// Main entry point: insert RC operations into a LirExpr tree.
@@ -524,8 +533,38 @@ pub const RcInsertPass = struct {
         defer self.live_rc_symbols.shrinkRetainingCapacity(saved_live_len);
 
         // Save and reset block_consumed_uses for this block scope.
+        // Before saving, accumulate current block's consumed uses into cumulative map
+        // so that processEarlyReturn in nested blocks can see all enclosing uses.
+        {
+            var it = self.block_consumed_uses.iterator();
+            while (it.next()) |entry| {
+                const gop = try self.cumulative_consumed_uses.getOrPut(entry.key_ptr.*);
+                if (gop.found_existing) {
+                    gop.value_ptr.* += entry.value_ptr.*;
+                } else {
+                    gop.value_ptr.* = entry.value_ptr.*;
+                }
+            }
+        }
+        // Snapshot cumulative keys/values so we can restore on exit.
+        // We save a copy of the entries we added, to subtract them later.
+        var saved_cumulative_additions = std.AutoHashMap(u64, u32).init(self.allocator);
+        {
+            var it = self.block_consumed_uses.iterator();
+            while (it.next()) |entry| {
+                try saved_cumulative_additions.put(entry.key_ptr.*, entry.value_ptr.*);
+            }
+        }
         const saved_consumed = self.block_consumed_uses.move();
         defer {
+            // Remove the outer block's uses we added to cumulative before entering
+            var sit = saved_cumulative_additions.iterator();
+            while (sit.next()) |entry| {
+                if (self.cumulative_consumed_uses.getPtr(entry.key_ptr.*)) |cum_ptr| {
+                    cum_ptr.* -|= entry.value_ptr.*;
+                }
+            }
+            saved_cumulative_additions.deinit();
             self.block_consumed_uses.deinit();
             self.block_consumed_uses = saved_consumed;
         }
@@ -821,9 +860,7 @@ pub const RcInsertPass = struct {
         var new_branches = std.ArrayList(LirExprId).empty;
         defer new_branches.deinit(self.allocator);
 
-        // discriminant_switch is only used for str_inspekt, which always returns str.
-        // If this changes, add result_layout to the discriminant_switch LIR node.
-        const result_layout: LayoutIdx = .str;
+        const result_layout: LayoutIdx = ds.result_layout;
 
         for (branches, 0..) |br_id, i| {
             const processed = try self.processExpr(br_id);
@@ -836,6 +873,7 @@ pub const RcInsertPass = struct {
             .value = ds.value,
             .union_layout = ds.union_layout,
             .branches = new_branches_span,
+            .result_layout = ds.result_layout,
         } }, region);
     }
 
@@ -986,7 +1024,10 @@ pub const RcInsertPass = struct {
             // Uses consumed by the return expr = ret_use_count.
             // Remaining = global - consumed_before - ret_uses.
             const global_count = self.symbol_use_counts.get(key) orelse 1;
-            const consumed_before = self.block_consumed_uses.get(key) orelse 0;
+            // Include uses consumed by outer enclosing blocks (cumulative)
+            // plus uses consumed by the current inner block's prior statements.
+            const consumed_before = (self.cumulative_consumed_uses.get(key) orelse 0) +
+                (self.block_consumed_uses.get(key) orelse 0);
             const total_consumed = consumed_before + ret_use_count;
             if (total_consumed >= global_count) continue; // all refs accounted for
             const remaining = global_count - total_consumed;
@@ -2869,6 +2910,7 @@ test "RC discriminant_switch: symbol used in switch branches gets per-branch RC"
         .value = val_expr,
         .union_layout = tag_union_layout,
         .branches = branches_span,
+        .result_layout = str_layout,
     } }, Region.zero());
 
     const pat_s = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());

@@ -50,6 +50,25 @@ pub const RcInsertPass = struct {
     /// Tracks layout for each symbol (for generating incref/decref with correct layout).
     symbol_layouts: std.AutoHashMap(u64, LayoutIdx),
 
+    /// Tracks live RC symbols across blocks for early_return cleanup.
+    live_rc_symbols: std.ArrayList(LiveRcSymbol),
+
+    /// Base index into live_rc_symbols for the current function scope.
+    /// early_return only cleans up symbols from early_return_scope_base onward.
+    early_return_scope_base: usize,
+
+    /// Tracks how many uses of each RC symbol have been consumed so far
+    /// in the current block (by already-processed statements).
+    block_consumed_uses: std.AutoHashMap(u64, u32),
+
+    /// Cumulative consumed uses across all enclosing blocks.
+    cumulative_consumed_uses: std.AutoHashMap(u64, u32),
+
+    const LiveRcSymbol = struct {
+        symbol: Symbol,
+        layout_idx: LayoutIdx,
+    };
+
     pub fn init(allocator: Allocator, store: *MonoExprStore, layout_store: *const layout_mod.Store) RcInsertPass {
         return .{
             .allocator = allocator,
@@ -57,12 +76,19 @@ pub const RcInsertPass = struct {
             .layout_store = layout_store,
             .symbol_use_counts = std.AutoHashMap(u64, u32).init(allocator),
             .symbol_layouts = std.AutoHashMap(u64, LayoutIdx).init(allocator),
+            .live_rc_symbols = std.ArrayList(LiveRcSymbol).empty,
+            .early_return_scope_base = 0,
+            .block_consumed_uses = std.AutoHashMap(u64, u32).init(allocator),
+            .cumulative_consumed_uses = std.AutoHashMap(u64, u32).init(allocator),
         };
     }
 
     pub fn deinit(self: *RcInsertPass) void {
         self.symbol_use_counts.deinit();
         self.symbol_layouts.deinit();
+        self.live_rc_symbols.deinit(self.allocator);
+        self.block_consumed_uses.deinit();
+        self.cumulative_consumed_uses.deinit();
     }
 
     /// Main entry point: insert RC operations into a MonoExpr tree.
@@ -421,17 +447,7 @@ pub const RcInsertPass = struct {
             .closure => |clo| self.processClosure(clo, region, expr_id),
             .for_loop => |fl| self.processForLoop(fl, region, expr_id),
             .while_loop => |wl| self.processWhileLoop(wl, region, expr_id),
-            .early_return => |ret| {
-                // Process the return expression for RC ops.
-                // TODO: full early_return cleanup (decref live symbols not consumed
-                // by the return expr) requires live_rc_symbols tracking like the LIR path.
-                const new_expr = try self.processExpr(ret.expr);
-                if (new_expr == ret.expr) return expr_id;
-                return self.store.addExpr(.{ .early_return = .{
-                    .expr = new_expr,
-                    .ret_layout = ret.ret_layout,
-                } }, region);
-            },
+            .early_return => |ret| return self.processEarlyReturn(ret, region, expr_id),
             // For all other expressions, return as-is.
             // RC operations are inserted at block boundaries, not inside
             // individual expressions.
@@ -488,6 +504,43 @@ pub const RcInsertPass = struct {
     ) Allocator.Error!MonoExprId {
         const stmts = self.store.getStmts(stmts_span);
 
+        // Save live_rc_symbols depth so nested blocks restore on exit.
+        const saved_live_len = self.live_rc_symbols.items.len;
+        defer self.live_rc_symbols.shrinkRetainingCapacity(saved_live_len);
+
+        // Save and reset block_consumed_uses for this block scope.
+        // Accumulate current block's consumed uses into cumulative map first.
+        {
+            var it = self.block_consumed_uses.iterator();
+            while (it.next()) |entry| {
+                const gop = try self.cumulative_consumed_uses.getOrPut(entry.key_ptr.*);
+                if (gop.found_existing) {
+                    gop.value_ptr.* += entry.value_ptr.*;
+                } else {
+                    gop.value_ptr.* = entry.value_ptr.*;
+                }
+            }
+        }
+        var saved_cumulative_additions = std.AutoHashMap(u64, u32).init(self.allocator);
+        {
+            var it = self.block_consumed_uses.iterator();
+            while (it.next()) |entry| {
+                try saved_cumulative_additions.put(entry.key_ptr.*, entry.value_ptr.*);
+            }
+        }
+        const saved_consumed = self.block_consumed_uses.move();
+        defer {
+            var sit = saved_cumulative_additions.iterator();
+            while (sit.next()) |entry| {
+                if (self.cumulative_consumed_uses.getPtr(entry.key_ptr.*)) |cum_ptr| {
+                    cum_ptr.* -|= entry.value_ptr.*;
+                }
+            }
+            saved_cumulative_additions.deinit();
+            self.block_consumed_uses.deinit();
+            self.block_consumed_uses = saved_consumed;
+        }
+
         // Use a local buffer to avoid reentrancy issues — processExpr may
         // recurse into another processBlock (e.g. lambda/loop bodies).
         var stmt_buf = std.ArrayList(MonoStmt).empty;
@@ -501,8 +554,26 @@ pub const RcInsertPass = struct {
             const new_expr = try self.processExpr(stmt.expr);
             if (new_expr != stmt.expr) changed = true;
 
+            // Track uses consumed by this statement's expression
+            {
+                var stmt_uses = try self.countUsesLocal(stmt.expr);
+                defer stmt_uses.deinit();
+                var use_it = stmt_uses.iterator();
+                while (use_it.next()) |entry| {
+                    const gop = try self.block_consumed_uses.getOrPut(entry.key_ptr.*);
+                    if (gop.found_existing) {
+                        gop.value_ptr.* += entry.value_ptr.*;
+                    } else {
+                        gop.value_ptr.* = entry.value_ptr.*;
+                    }
+                }
+            }
+
             // Add the (possibly updated) statement
             try stmt_buf.append(self.allocator, .{ .pattern = stmt.pattern, .expr = new_expr });
+
+            // Track live RC symbols bound by this statement's pattern
+            try self.trackLiveRcSymbolsFromPattern(stmt.pattern);
 
             // Emit increfs for multi-use refcounted symbols bound by this pattern
             {
@@ -542,6 +613,108 @@ pub const RcInsertPass = struct {
             .final_expr = new_final,
             .result_layout = result_layout,
         } }, region);
+    }
+
+    /// Process an early_return expression.
+    /// Emits cleanup decrefs for all live RC symbols in enclosing blocks
+    /// that are NOT consumed by the return value expression itself.
+    fn processEarlyReturn(self: *RcInsertPass, ret: anytype, region: Region, expr_id: MonoExprId) Allocator.Error!MonoExprId {
+        const new_expr = try self.processExpr(ret.expr);
+
+        var ret_uses = try self.countUsesLocal(ret.expr);
+        defer ret_uses.deinit();
+
+        var cleanup_stmts = std.ArrayList(MonoStmt).empty;
+        defer cleanup_stmts.deinit(self.allocator);
+
+        const live_syms = self.live_rc_symbols.items[self.early_return_scope_base..];
+        for (live_syms) |live| {
+            const key = @as(u64, @bitCast(live.symbol));
+            const ret_use_count: u32 = ret_uses.get(key) orelse 0;
+            const global_count = self.symbol_use_counts.get(key) orelse 1;
+            const consumed_before = (self.cumulative_consumed_uses.get(key) orelse 0) +
+                (self.block_consumed_uses.get(key) orelse 0);
+            const total_consumed = consumed_before + ret_use_count;
+            if (total_consumed >= global_count) continue;
+            const remaining = global_count - total_consumed;
+            var i: u32 = 0;
+            while (i < remaining) : (i += 1) {
+                try self.emitDecrefInto(live.symbol, live.layout_idx, region, &cleanup_stmts);
+            }
+        }
+
+        if (cleanup_stmts.items.len == 0 and new_expr == ret.expr) return expr_id;
+
+        const early_ret_id = try self.store.addExpr(.{ .early_return = .{
+            .expr = new_expr,
+            .ret_layout = ret.ret_layout,
+        } }, region);
+
+        if (cleanup_stmts.items.len == 0) return early_ret_id;
+
+        // Wrap: block { decref(a); decref(b); early_return(new_expr) }
+        const wildcard = try self.store.addPattern(.{ .wildcard = .{ .layout_idx = .zst } }, region);
+        try cleanup_stmts.append(self.allocator, .{
+            .pattern = wildcard,
+            .expr = early_ret_id,
+        });
+
+        const stmts_span = try self.store.addStmts(cleanup_stmts.items);
+        return self.store.addExpr(.{ .block = .{
+            .stmts = stmts_span,
+            .final_expr = early_ret_id,
+            .result_layout = ret.ret_layout,
+        } }, region);
+    }
+
+    /// Track RC symbols bound by a pattern, adding them to live_rc_symbols.
+    fn trackLiveRcSymbolsFromPattern(self: *RcInsertPass, pat_id: MonoPatternId) Allocator.Error!void {
+        if (pat_id.isNone()) return;
+        const pat = self.store.getPattern(pat_id);
+        switch (pat) {
+            .bind => |bind| {
+                const key = @as(u64, @bitCast(bind.symbol));
+                if (self.symbol_layouts.get(key)) |lay| {
+                    if (self.layoutNeedsRc(lay)) {
+                        try self.live_rc_symbols.append(self.allocator, .{
+                            .symbol = bind.symbol,
+                            .layout_idx = lay,
+                        });
+                    }
+                }
+            },
+            .wildcard => {},
+            .tag => |t| {
+                const args = self.store.getPatternSpan(t.args);
+                for (args) |arg_id| try self.trackLiveRcSymbolsFromPattern(arg_id);
+            },
+            .record => |r| {
+                const fields = self.store.getPatternSpan(r.fields);
+                for (fields) |field_id| try self.trackLiveRcSymbolsFromPattern(field_id);
+            },
+            .tuple => |t| {
+                const elems = self.store.getPatternSpan(t.elems);
+                for (elems) |elem_id| try self.trackLiveRcSymbolsFromPattern(elem_id);
+            },
+            .list => |l| {
+                const prefix = self.store.getPatternSpan(l.prefix);
+                for (prefix) |p_id| try self.trackLiveRcSymbolsFromPattern(p_id);
+                if (!l.rest.isNone()) try self.trackLiveRcSymbolsFromPattern(l.rest);
+            },
+            .as_pattern => |ap| {
+                const key = @as(u64, @bitCast(ap.symbol));
+                if (self.symbol_layouts.get(key)) |lay| {
+                    if (self.layoutNeedsRc(lay)) {
+                        try self.live_rc_symbols.append(self.allocator, .{
+                            .symbol = ap.symbol,
+                            .layout_idx = lay,
+                        });
+                    }
+                }
+                try self.trackLiveRcSymbolsFromPattern(ap.inner);
+            },
+            .int_literal, .float_literal, .str_literal => {},
+        }
     }
 
     /// Process an if-then-else expression.

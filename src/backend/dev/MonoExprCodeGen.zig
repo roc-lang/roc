@@ -6256,6 +6256,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
             if (variant_count == 1) {
                 // Only one variant: compare its payload directly
+                self.codegen.freeGeneral(lhs_disc);
                 const payload_layout_idx = variants.get(0).payload_layout;
                 const payload_layout = ls.getLayout(payload_layout_idx);
                 const payload_size = ls.layoutSizeAlign(payload_layout).size;
@@ -6267,6 +6268,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             } else {
                 // Multiple variants: dispatch based on discriminant value
                 try self.codegen.emitLoadImm(result_reg, 1); // default for ZST payloads
+
+                // Spill lhs_disc to stack before variant loop since
+                // compareFieldByLayout may call C builtins that clobber caller-saved registers.
+                const disc_slot = self.codegen.allocStackSlot(8);
+                try self.codegen.emitStoreStack(.w64, disc_slot, lhs_disc);
+                self.codegen.freeGeneral(lhs_disc);
 
                 var end_patches: [64]usize = undefined;
                 var end_patch_count: u32 = 0;
@@ -6281,14 +6288,18 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         continue;
                     }
 
-                    // Check if disc == variant_i
-                    try self.emitCmpImm(lhs_disc, @intCast(variant_i));
+                    // Reload disc from stack (may have been clobbered by previous iteration)
+                    const disc_temp = try self.allocTempGeneral();
+                    try self.codegen.emitLoadStack(.w64, disc_temp, disc_slot);
+                    try self.emitCmpImm(disc_temp, @intCast(variant_i));
+                    self.codegen.freeGeneral(disc_temp);
                     const skip_patch = try self.emitJumpIfNotEqual();
 
                     // Compare payload for this variant
                     try self.compareFieldByLayout(lhs_base, rhs_base, payload_layout_idx, payload_size, result_reg);
 
                     // Jump to end
+                    std.debug.assert(end_patch_count < end_patches.len);
                     end_patches[end_patch_count] = try self.codegen.emitJump();
                     end_patch_count += 1;
 
@@ -6302,8 +6313,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     self.codegen.patchJump(patch, current);
                 }
             }
-
-            self.codegen.freeGeneral(lhs_disc);
 
             // Patch discriminant-not-equal jump to here
             const done_offset = self.codegen.currentOffset();
@@ -6802,21 +6811,42 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // Try to match the pattern
                 switch (pattern) {
                     .wildcard => {
-                        // Wildcard always matches - generate the body directly
-                        const body_loc = try self.generateExpr(branch.body);
-                        try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
-                        // No more branches needed after wildcard
-                        break;
+                        // Wildcard always matches
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+                        if (guard_patch) |gp| {
+                            const body_loc = try self.generateExpr(branch.body);
+                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                            if (i < branches.len - 1) {
+                                const end_patch = try self.codegen.emitJump();
+                                try end_patches.append(self.allocator, end_patch);
+                            }
+                            self.codegen.patchJump(gp, self.codegen.currentOffset());
+                        } else {
+                            const body_loc = try self.generateExpr(branch.body);
+                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                            break;
+                        }
                     },
                     .bind => |bind| {
-                        // Bind always matches - bind the value and generate body
+                        // Bind always matches - bind the value first
                         const symbol_key: u64 = @bitCast(bind.symbol);
                         try self.symbol_locations.put(symbol_key, value_loc);
 
-                        const body_loc = try self.generateExpr(branch.body);
-                        try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
-                        // No more branches needed after unconditional bind
-                        break;
+                        // Guard must be checked after binding (guard may reference bound var)
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+                        if (guard_patch) |gp| {
+                            const body_loc = try self.generateExpr(branch.body);
+                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                            if (i < branches.len - 1) {
+                                const end_patch = try self.codegen.emitJump();
+                                try end_patches.append(self.allocator, end_patch);
+                            }
+                            self.codegen.patchJump(gp, self.codegen.currentOffset());
+                        } else {
+                            const body_loc = try self.generateExpr(branch.body);
+                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                            break;
+                        }
                     },
                     .int_literal => |int_lit| {
                         // Compare value with literal
@@ -6840,6 +6870,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             next_patch = try self.emitJumpIfNotEqual();
                         }
 
+                        // Guard check
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+
                         // Pattern matched - generate body
                         const body_loc = try self.generateExpr(branch.body);
                         try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
@@ -6854,6 +6887,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 const current_offset = self.codegen.currentOffset();
                                 self.codegen.patchJump(patch, current_offset);
                             }
+                        }
+                        if (guard_patch) |patch| {
+                            self.codegen.patchJump(patch, self.codegen.currentOffset());
                         }
                     },
                     .str_literal => |str_lit_idx| {
@@ -6880,6 +6916,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             next_patch = try self.emitJumpIfEqual();
                         }
 
+                        // Guard check
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+
                         // Pattern matched - generate body
                         const body_loc = try self.generateExpr(branch.body);
                         try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
@@ -6894,6 +6933,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 const current_offset = self.codegen.currentOffset();
                                 self.codegen.patchJump(patch, current_offset);
                             }
+                        }
+                        if (guard_patch) |patch| {
+                            self.codegen.patchJump(patch, self.codegen.currentOffset());
                         }
                     },
                     .tag => |tag_pattern| {
@@ -7095,6 +7137,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             }
                         }
 
+                        // Guard check (after bindings, since guard may reference bound vars)
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+
                         // Generate body
                         const body_loc = try self.generateExpr(branch.body);
                         try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
@@ -7109,6 +7154,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 const current_offset = self.codegen.currentOffset();
                                 self.codegen.patchJump(patch, current_offset);
                             }
+                        }
+                        if (guard_patch) |patch| {
+                            self.codegen.patchJump(patch, self.codegen.currentOffset());
                         }
                     },
                     .list => |list_pattern| {
@@ -7221,6 +7269,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                         self.codegen.freeGeneral(list_ptr_reg);
 
+                        // Guard check (after bindings, since guard may reference bound vars)
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+
                         // Generate body
                         const body_loc = try self.generateExpr(branch.body);
                         try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
@@ -7236,6 +7287,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 self.codegen.patchJump(patch, current_offset);
                             }
                         }
+                        if (guard_patch) |patch| {
+                            self.codegen.patchJump(patch, self.codegen.currentOffset());
+                        }
                     },
                     .record => {
                         // Record destructuring always matches - bind fields and generate body
@@ -7244,10 +7298,20 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         const stack_off = try self.ensureOnStack(value_loc, value_size);
                         try self.bindPattern(branch.pattern, .{ .stack = .{ .offset = stack_off } });
 
-                        const body_loc = try self.generateExpr(branch.body);
-                        try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
-                        // Record destructuring always matches, no more branches needed
-                        break;
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+                        if (guard_patch) |gp| {
+                            const body_loc = try self.generateExpr(branch.body);
+                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                            if (i < branches.len - 1) {
+                                const end_patch = try self.codegen.emitJump();
+                                try end_patches.append(self.allocator, end_patch);
+                            }
+                            self.codegen.patchJump(gp, self.codegen.currentOffset());
+                        } else {
+                            const body_loc = try self.generateExpr(branch.body);
+                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                            break;
+                        }
                     },
                     .tuple => {
                         // Tuple destructuring always matches - bind elements and generate body
@@ -7256,10 +7320,20 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         const stack_off = try self.ensureOnStack(value_loc, value_size);
                         try self.bindPattern(branch.pattern, .{ .stack = .{ .offset = stack_off } });
 
-                        const body_loc = try self.generateExpr(branch.body);
-                        try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
-                        // Tuple destructuring always matches, no more branches needed
-                        break;
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+                        if (guard_patch) |gp| {
+                            const body_loc = try self.generateExpr(branch.body);
+                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                            if (i < branches.len - 1) {
+                                const end_patch = try self.codegen.emitJump();
+                                try end_patches.append(self.allocator, end_patch);
+                            }
+                            self.codegen.patchJump(gp, self.codegen.currentOffset());
+                        } else {
+                            const body_loc = try self.generateExpr(branch.body);
+                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                            break;
+                        }
                     },
                     .as_pattern => |as_pat| {
                         // As-pattern: bind the whole value to the symbol, then match the inner pattern
@@ -7271,10 +7345,20 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         const stack_off = try self.ensureOnStack(value_loc, value_size);
                         try self.bindPattern(as_pat.inner, .{ .stack = .{ .offset = stack_off } });
 
-                        const body_loc = try self.generateExpr(branch.body);
-                        try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
-                        // As-pattern always matches, no more branches needed
-                        break;
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+                        if (guard_patch) |gp| {
+                            const body_loc = try self.generateExpr(branch.body);
+                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                            if (i < branches.len - 1) {
+                                const end_patch = try self.codegen.emitJump();
+                                try end_patches.append(self.allocator, end_patch);
+                            }
+                            self.codegen.patchJump(gp, self.codegen.currentOffset());
+                        } else {
+                            const body_loc = try self.generateExpr(branch.body);
+                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                            break;
+                        }
                     },
                     else => {
                         unreachable;
@@ -7365,6 +7449,17 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 try self.emitMovRegReg(result_reg.*.?, body_reg);
                 self.codegen.freeGeneral(body_reg);
             }
+        }
+
+        /// Emit guard check. If the guard expression is present and evaluates to false,
+        /// emit a conditional jump. Returns the patch location or null if no guard.
+        fn emitGuardCheck(self: *Self, guard: anytype) Allocator.Error!?usize {
+            if (guard.isNone()) return null;
+            const guard_loc = try self.generateExpr(guard);
+            const guard_reg = try self.ensureInGeneralReg(guard_loc);
+            try self.emitCmpImm(guard_reg, 0);
+            self.codegen.freeGeneral(guard_reg);
+            return try self.emitJumpIfEqual();
         }
 
         /// Compare two registers
@@ -14117,8 +14212,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     try self.rebindJoinPointParams(jmp.target, arg_locs.items);
 
                     // Emit jump instruction with placeholder offset
-                    const jump_location = self.codegen.currentOffset();
-                    try self.emitJumpPlaceholder();
+                    const jump_location = try self.emitJumpPlaceholder();
 
                     // Record for patching
                     const jp_key = @intFromEnum(jmp.target);
@@ -14368,7 +14462,43 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             }
                         }
                     },
-                    else => unreachable, // Join point params must be simple bindings
+                    .wildcard => {
+                        // Consume register slots for this param to maintain correct
+                        // register indexing, but don't bind any symbol.
+                        const is_128bit = if (param_idx < layouts.len) blk: {
+                            const param_layout = layouts[param_idx];
+                            break :blk param_layout == .i128 or param_layout == .u128 or param_layout == .dec;
+                        } else false;
+
+                        if (is_128bit) {
+                            reg_idx += 2;
+                        } else {
+                            const is_str = if (param_idx < layouts.len)
+                                layouts[param_idx] == .str
+                            else
+                                false;
+
+                            const is_list = if (param_idx < layouts.len) blk: {
+                                const param_layout = layouts[param_idx];
+                                if (self.layout_store) |ls| {
+                                    if (@intFromEnum(param_layout) >= ls.layouts.len()) {
+                                        break :blk false;
+                                    }
+                                    const layout_val = ls.getLayout(param_layout);
+                                    break :blk layout_val.tag == .list or layout_val.tag == .list_of_zst;
+                                }
+                                break :blk false;
+                            } else false;
+
+                            if (is_str or is_list) {
+                                reg_idx += 3;
+                            } else {
+                                reg_idx += 1;
+                            }
+                        }
+                    },
+                    .int_literal, .float_literal, .str_literal, .tag,
+                    .record, .tuple, .list, .as_pattern => unreachable, // Join point params must be simple bindings or wildcards
                 }
             }
         }
@@ -14383,20 +14513,51 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const layouts = self.store.getLayoutIdxSpan(param_layouts_span);
             const pattern_ids = self.store.getPatternSpan(param_patterns_span);
 
-            // Copy new argument values to the stack slots used by symbol_locations
+            // Optimization: skip temp copy when there's only 1 param (no overlap possible)
+            if (arg_locs.len <= 1) {
+                try self.rebindSingleParam(arg_locs, pattern_ids, layouts);
+                return;
+            }
+
+            // Two-phase copy to avoid clobbering when params reference each other
+            // (e.g., `jump jp(b, a)` swaps params)
+
+            // Phase 1: Copy all sources to temp stack slots
+            const TempInfo = struct { offset: i32, size: u8 };
+            var temp_infos: std.ArrayListUnmanaged(TempInfo) = .empty;
+            defer temp_infos.deinit(self.allocator);
+
             for (arg_locs, 0..) |loc, param_idx| {
-                if (param_idx >= pattern_ids.len) continue;
+                if (param_idx >= pattern_ids.len) {
+                    try temp_infos.append(self.allocator, .{ .offset = 0, .size = 0 });
+                    continue;
+                }
 
                 const pattern = self.store.getPattern(pattern_ids[param_idx]);
-                const symbol_key: u64 = switch (pattern) {
+                switch (pattern) {
+                    .bind => {},
+                    .wildcard => {
+                        try temp_infos.append(self.allocator, .{ .offset = 0, .size = 0 });
+                        continue;
+                    },
+                    .int_literal, .float_literal, .str_literal, .tag,
+                    .record, .tuple, .list, .as_pattern => unreachable,
+                }
+
+                const dst_loc = self.symbol_locations.get(switch (pattern) {
                     .bind => |bind| @bitCast(bind.symbol),
-                    else => continue, // Skip non-bind patterns
+                    else => unreachable,
+                }) orelse {
+                    try temp_infos.append(self.allocator, .{ .offset = 0, .size = 0 });
+                    continue;
                 };
 
-                // Get the destination location (where the join point body will read from)
-                const dst_loc = self.symbol_locations.get(symbol_key) orelse continue;
+                // Determine param size
+                const is_str = if (param_idx < layouts.len)
+                    layouts[param_idx] == .str
+                else
+                    (dst_loc == .stack_str);
 
-                // Determine if this is a list type
                 const is_list = if (param_idx < layouts.len) blk: {
                     const param_layout = layouts[param_idx];
                     if (self.layout_store) |ls| {
@@ -14409,75 +14570,154 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     break :blk (loc == .list_stack or dst_loc == .list_stack);
                 } else (loc == .list_stack or dst_loc == .list_stack);
 
-                // Get the destination stack offset
-                // All join point parameters should be on the stack (set up in setupJoinPointParams)
+                const is_i128 = dst_loc == .stack_i128;
+
+                const size: u8 = if (is_list or is_str) 24 else if (is_i128) 16 else 8;
+                const temp_offset = self.codegen.allocStackSlot(size);
+
+                // Copy source to temp
+                try self.copyParamValueToStack(loc, temp_offset, size, is_i128);
+
+                try temp_infos.append(self.allocator, .{ .offset = temp_offset, .size = size });
+            }
+
+            // Phase 2: Copy from temp slots to destination slots
+            for (temp_infos.items, 0..) |temp_info, param_idx| {
+                if (temp_info.size == 0) continue;
+                if (param_idx >= pattern_ids.len) continue;
+
+                const pattern = self.store.getPattern(pattern_ids[param_idx]);
+                const symbol_key: u64 = switch (pattern) {
+                    .bind => |bind| @bitCast(bind.symbol),
+                    else => continue,
+                };
+
+                const dst_loc = self.symbol_locations.get(symbol_key) orelse continue;
                 const dst_offset: i32 = switch (dst_loc) {
                     .stack => |s| s.offset,
                     .list_stack => |ls_info| ls_info.struct_offset,
                     .stack_i128 => |off| off,
-                    else => unreachable, // Join point params must be on stack
+                    .stack_str => |off| off,
+                    .general_reg, .float_reg, .immediate_i64, .immediate_i128,
+                    .immediate_f64, .closure_value, .lambda_code => unreachable,
                 };
 
-                // Copy the value to the destination
-                if (is_list) {
-                    // Copy 24 bytes (list struct)
-                    const src_offset: i32 = switch (loc) {
-                        .stack => |s| s.offset,
-                        .list_stack => |ls_info| ls_info.struct_offset,
-                        else => unreachable, // Lists must always be on the stack
-                    };
-
-                    // Skip copy if source and destination are the same
-                    if (src_offset == dst_offset) continue;
-
-                    // Copy from src stack to dst stack (24 bytes)
-                    const temp_reg = try self.allocTempGeneral();
-                    try self.emitLoad(.w64, temp_reg, frame_ptr, src_offset);
-                    try self.emitStore(.w64, frame_ptr, dst_offset, temp_reg);
-                    try self.emitLoad(.w64, temp_reg, frame_ptr, src_offset + 8);
-                    try self.emitStore(.w64, frame_ptr, dst_offset + 8, temp_reg);
-                    try self.emitLoad(.w64, temp_reg, frame_ptr, src_offset + 16);
-                    try self.emitStore(.w64, frame_ptr, dst_offset + 16, temp_reg);
-                    self.codegen.freeGeneral(temp_reg);
-                } else if (dst_loc == .stack_i128) {
-                    // Copy 16 bytes (i128)
-                    switch (loc) {
-                        .stack_i128 => |src_offset| {
-                            const temp_reg = try self.allocTempGeneral();
-                            try self.emitLoad(.w64, temp_reg, frame_ptr, src_offset);
-                            try self.emitStore(.w64, frame_ptr, dst_offset, temp_reg);
-                            try self.emitLoad(.w64, temp_reg, frame_ptr, src_offset + 8);
-                            try self.emitStore(.w64, frame_ptr, dst_offset + 8, temp_reg);
-                            self.codegen.freeGeneral(temp_reg);
-                        },
-                        .immediate_i128 => |val| {
-                            const low: u64 = @truncate(@as(u128, @bitCast(val)));
-                            const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
-                            const temp_reg = try self.allocTempGeneral();
-                            try self.codegen.emitLoadImm(temp_reg, @bitCast(low));
-                            try self.codegen.emitStoreStack(.w64, dst_offset, temp_reg);
-                            try self.codegen.emitLoadImm(temp_reg, @bitCast(high));
-                            try self.codegen.emitStoreStack(.w64, dst_offset + 8, temp_reg);
-                            self.codegen.freeGeneral(temp_reg);
-                        },
-                        else => unreachable, // i128 values must be in stack_i128 or immediate_i128
-                    }
-                } else {
-                    // Copy 8 bytes (normal value)
-                    const src_reg = try self.ensureInGeneralReg(loc);
-                    try self.emitStore(.w64, frame_ptr, dst_offset, src_reg);
+                // Copy from temp to dst
+                const temp_reg = try self.allocTempGeneral();
+                var bytes_copied: u8 = 0;
+                while (bytes_copied < temp_info.size) : (bytes_copied += 8) {
+                    try self.emitLoad(.w64, temp_reg, frame_ptr, temp_info.offset + bytes_copied);
+                    try self.emitStore(.w64, frame_ptr, dst_offset + bytes_copied, temp_reg);
                 }
+                self.codegen.freeGeneral(temp_reg);
             }
         }
 
-        /// Emit a jump placeholder (will be patched later)
-        fn emitJumpPlaceholder(self: *Self) Allocator.Error!void {
-            if (comptime target.toCpuArch() == .aarch64) {
-                // B instruction with offset 0 (will be patched)
-                try self.codegen.emit.b(0);
+        /// Copy a value to a stack slot (helper for rebindJoinPointParams)
+        fn copyParamValueToStack(self: *Self, loc: ValueLocation, dst_offset: i32, size: u8, is_i128: bool) Allocator.Error!void {
+            if (size == 24 or (size == 16 and !is_i128)) {
+                // 24-byte (list/str) or generic stack copy
+                const src_offset: i32 = switch (loc) {
+                    .stack => |s| s.offset,
+                    .list_stack => |ls_info| ls_info.struct_offset,
+                    .stack_str => |off| off,
+                    else => unreachable,
+                };
+                const temp_reg = try self.allocTempGeneral();
+                var off: i32 = 0;
+                while (off < size) : (off += 8) {
+                    try self.emitLoad(.w64, temp_reg, frame_ptr, src_offset + off);
+                    try self.emitStore(.w64, frame_ptr, dst_offset + off, temp_reg);
+                }
+                self.codegen.freeGeneral(temp_reg);
+            } else if (is_i128) {
+                switch (loc) {
+                    .stack_i128 => |src_offset| {
+                        const temp_reg = try self.allocTempGeneral();
+                        try self.emitLoad(.w64, temp_reg, frame_ptr, src_offset);
+                        try self.emitStore(.w64, frame_ptr, dst_offset, temp_reg);
+                        try self.emitLoad(.w64, temp_reg, frame_ptr, src_offset + 8);
+                        try self.emitStore(.w64, frame_ptr, dst_offset + 8, temp_reg);
+                        self.codegen.freeGeneral(temp_reg);
+                    },
+                    .immediate_i128 => |val| {
+                        const low: u64 = @truncate(@as(u128, @bitCast(val)));
+                        const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
+                        const temp_reg = try self.allocTempGeneral();
+                        try self.codegen.emitLoadImm(temp_reg, @bitCast(low));
+                        try self.codegen.emitStoreStack(.w64, dst_offset, temp_reg);
+                        try self.codegen.emitLoadImm(temp_reg, @bitCast(high));
+                        try self.codegen.emitStoreStack(.w64, dst_offset + 8, temp_reg);
+                        self.codegen.freeGeneral(temp_reg);
+                    },
+                    else => unreachable,
+                }
             } else {
-                // JMP rel32 with offset 0 (will be patched)
+                // 8-byte normal value
+                const src_reg = try self.ensureInGeneralReg(loc);
+                try self.emitStore(.w64, frame_ptr, dst_offset, src_reg);
+                self.codegen.freeGeneral(src_reg);
+            }
+        }
+
+        /// Fast path for single-param rebind (no clobbering possible)
+        fn rebindSingleParam(self: *Self, arg_locs: []const ValueLocation, pattern_ids: anytype, layouts: anytype) Allocator.Error!void {
+            for (arg_locs, 0..) |loc, param_idx| {
+                if (param_idx >= pattern_ids.len) continue;
+
+                const pattern = self.store.getPattern(pattern_ids[param_idx]);
+                const symbol_key: u64 = switch (pattern) {
+                    .bind => |bind| @bitCast(bind.symbol),
+                    .wildcard => continue,
+                    .int_literal, .float_literal, .str_literal, .tag,
+                    .record, .tuple, .list, .as_pattern => unreachable,
+                };
+
+                const dst_loc = self.symbol_locations.get(symbol_key) orelse continue;
+
+                const is_str = if (param_idx < layouts.len)
+                    layouts[param_idx] == .str
+                else
+                    (dst_loc == .stack_str);
+
+                const is_list = if (param_idx < layouts.len) blk: {
+                    const param_layout = layouts[param_idx];
+                    if (self.layout_store) |ls| {
+                        if (@intFromEnum(param_layout) >= ls.layouts.len()) {
+                            break :blk (loc == .list_stack or dst_loc == .list_stack);
+                        }
+                        const layout_val = ls.getLayout(param_layout);
+                        break :blk layout_val.tag == .list or layout_val.tag == .list_of_zst;
+                    }
+                    break :blk (loc == .list_stack or dst_loc == .list_stack);
+                } else (loc == .list_stack or dst_loc == .list_stack);
+
+                const dst_offset: i32 = switch (dst_loc) {
+                    .stack => |s| s.offset,
+                    .list_stack => |ls_info| ls_info.struct_offset,
+                    .stack_i128 => |off| off,
+                    .stack_str => |off| off,
+                    .general_reg, .float_reg, .immediate_i64, .immediate_i128,
+                    .immediate_f64, .closure_value, .lambda_code => unreachable,
+                };
+
+                const is_i128 = dst_loc == .stack_i128;
+                const size: u8 = if (is_list or is_str) 24 else if (is_i128) 16 else 8;
+                try self.copyParamValueToStack(loc, dst_offset, size, is_i128);
+            }
+        }
+
+        /// Emit a jump placeholder (will be patched later).
+        /// Returns the patch location for use with patchJump.
+        fn emitJumpPlaceholder(self: *Self) Allocator.Error!usize {
+            if (comptime target.toCpuArch() == .aarch64) {
+                const patch_loc = self.codegen.currentOffset();
+                try self.codegen.emit.b(0);
+                return patch_loc;
+            } else {
+                const patch_loc = self.codegen.currentOffset() + 1; // after E9 opcode
                 try self.codegen.emit.jmp(0);
+                return patch_loc;
             }
         }
 
@@ -14600,14 +14840,35 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                 switch (pattern) {
                     .wildcard => {
-                        try self.generateStmt(branch.body);
-                        break;
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+                        if (guard_patch) |gp| {
+                            try self.generateStmt(branch.body);
+                            if (!is_last_branch) {
+                                const end_patch = try self.codegen.emitJump();
+                                try end_patches.append(self.allocator, end_patch);
+                            }
+                            self.codegen.patchJump(gp, self.codegen.currentOffset());
+                        } else {
+                            try self.generateStmt(branch.body);
+                            break;
+                        }
                     },
                     .bind => |bind| {
                         const symbol_key: u64 = @bitCast(bind.symbol);
                         try self.symbol_locations.put(symbol_key, value_loc);
-                        try self.generateStmt(branch.body);
-                        break;
+
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+                        if (guard_patch) |gp| {
+                            try self.generateStmt(branch.body);
+                            if (!is_last_branch) {
+                                const end_patch = try self.codegen.emitJump();
+                                try end_patches.append(self.allocator, end_patch);
+                            }
+                            self.codegen.patchJump(gp, self.codegen.currentOffset());
+                        } else {
+                            try self.generateStmt(branch.body);
+                            break;
+                        }
                     },
                     .int_literal => |int_lit| {
                         const value_reg = try self.ensureInGeneralReg(value_loc);
@@ -14626,6 +14887,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             next_patch = try self.emitJumpIfNotEqual();
                         }
 
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+
                         try self.generateStmt(branch.body);
 
                         if (!is_last_branch) {
@@ -14635,6 +14898,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             if (next_patch) |patch| {
                                 self.codegen.patchJump(patch, self.codegen.currentOffset());
                             }
+                        }
+                        if (guard_patch) |patch| {
+                            self.codegen.patchJump(patch, self.codegen.currentOffset());
                         }
                     },
                     .str_literal => |str_lit_idx| {
@@ -14653,6 +14919,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             next_patch = try self.emitJumpIfEqual();
                         }
 
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+
                         try self.generateStmt(branch.body);
 
                         if (!is_last_branch) {
@@ -14662,6 +14930,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             if (next_patch) |patch| {
                                 self.codegen.patchJump(patch, self.codegen.currentOffset());
                             }
+                        }
+                        if (guard_patch) |patch| {
+                            self.codegen.patchJump(patch, self.codegen.currentOffset());
                         }
                     },
                     .tag => |tag_pattern| {
@@ -14835,6 +15106,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             }
                         }
 
+                        // Guard check (after bindings, since guard may reference bound vars)
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+
                         try self.generateStmt(branch.body);
 
                         if (!is_last_branch) {
@@ -14844,6 +15118,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             if (next_patch) |patch| {
                                 self.codegen.patchJump(patch, self.codegen.currentOffset());
                             }
+                        }
+                        if (guard_patch) |patch| {
+                            self.codegen.patchJump(patch, self.codegen.currentOffset());
                         }
                     },
                     .list => |list_pattern| {
@@ -14934,6 +15211,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                         self.codegen.freeGeneral(list_ptr_reg);
 
+                        // Guard check (after bindings, since guard may reference bound vars)
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+
                         try self.generateStmt(branch.body);
 
                         if (!is_last_branch) {
@@ -14944,20 +15224,45 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 self.codegen.patchJump(patch, self.codegen.currentOffset());
                             }
                         }
+                        if (guard_patch) |patch| {
+                            self.codegen.patchJump(patch, self.codegen.currentOffset());
+                        }
                     },
                     .record => {
                         const value_size = ls.layoutSizeAlign(value_layout_val).size;
                         const stack_off = try self.ensureOnStack(value_loc, value_size);
                         try self.bindPattern(branch.pattern, .{ .stack = .{ .offset = stack_off } });
-                        try self.generateStmt(branch.body);
-                        break;
+
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+                        if (guard_patch) |gp| {
+                            try self.generateStmt(branch.body);
+                            if (!is_last_branch) {
+                                const end_patch = try self.codegen.emitJump();
+                                try end_patches.append(self.allocator, end_patch);
+                            }
+                            self.codegen.patchJump(gp, self.codegen.currentOffset());
+                        } else {
+                            try self.generateStmt(branch.body);
+                            break;
+                        }
                     },
                     .tuple => {
                         const value_size = ls.layoutSizeAlign(value_layout_val).size;
                         const stack_off = try self.ensureOnStack(value_loc, value_size);
                         try self.bindPattern(branch.pattern, .{ .stack = .{ .offset = stack_off } });
-                        try self.generateStmt(branch.body);
-                        break;
+
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+                        if (guard_patch) |gp| {
+                            try self.generateStmt(branch.body);
+                            if (!is_last_branch) {
+                                const end_patch = try self.codegen.emitJump();
+                                try end_patches.append(self.allocator, end_patch);
+                            }
+                            self.codegen.patchJump(gp, self.codegen.currentOffset());
+                        } else {
+                            try self.generateStmt(branch.body);
+                            break;
+                        }
                     },
                     .as_pattern => |as_pat| {
                         const symbol_key: u64 = @bitCast(as_pat.symbol);
@@ -14965,8 +15270,19 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         const value_size = ls.layoutSizeAlign(value_layout_val).size;
                         const stack_off = try self.ensureOnStack(value_loc, value_size);
                         try self.bindPattern(as_pat.inner, .{ .stack = .{ .offset = stack_off } });
-                        try self.generateStmt(branch.body);
-                        break;
+
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+                        if (guard_patch) |gp| {
+                            try self.generateStmt(branch.body);
+                            if (!is_last_branch) {
+                                const end_patch = try self.codegen.emitJump();
+                                try end_patches.append(self.allocator, end_patch);
+                            }
+                            self.codegen.patchJump(gp, self.codegen.currentOffset());
+                        } else {
+                            try self.generateStmt(branch.body);
+                            break;
+                        }
                     },
                     else => {
                         unreachable;

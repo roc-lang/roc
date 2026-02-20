@@ -3138,13 +3138,6 @@ test "issue 8892: nominal type wrapping tag union with match expression" {
 }
 
 test "issue 8927: early return in method argument leaks memory" {
-    // TODO: DevEvaluator returns garbage (pointer value) on aarch64 for this
-    // complex expression involving ? inside a for loop with method calls. The interpreter
-    // correctly returns 0. Simpler ? tests pass on ARM, so the issue is specific
-    // to this combination of closures + for + mutable variables + method calls + early return.
-    if (comptime @import("builtin").cpu.arch == .aarch64)
-        return error.SkipZigTest;
-
     // Regression test for GitHub issue #8927: memory leak when using ? operator
     // inside a for loop that accumulates to a mutable variable via method call.
     //

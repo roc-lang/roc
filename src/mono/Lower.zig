@@ -5419,6 +5419,8 @@ fn lowerMatchToStmt(self: *Self, module_env: *ModuleEnv, match_expr: anytype, re
     var lowered = std.ArrayList(CFMatchBranch).empty;
     defer lowered.deinit(self.allocator);
 
+    var has_complex_pattern = false;
+
     for (branch_indices) |branch_idx| {
         const branch = module_env.store.getMatchBranch(branch_idx);
 
@@ -5437,12 +5439,34 @@ fn lowerMatchToStmt(self: *Self, module_env: *ModuleEnv, match_expr: anytype, re
         for (pattern_indices) |pat_idx| {
             const bp = module_env.store.getMatchBranchPattern(pat_idx);
             const pattern = try self.lowerPattern(module_env, bp.pattern);
+
+            // Check if this pattern type is supported in CFStmt match_stmt.
+            // Complex patterns (record, tuple, list, as_pattern, str_literal, float_literal)
+            // require full expression-level match handling.
+            switch (self.store.getPattern(pattern)) {
+                .bind, .wildcard, .int_literal, .tag => {},
+                .record, .tuple, .list, .as_pattern, .str_literal, .float_literal => {
+                    has_complex_pattern = true;
+                },
+            }
+
             try lowered.append(self.allocator, .{
                 .pattern = pattern,
                 .guard = guard,
                 .body = body,
             });
         }
+    }
+
+    // If any patterns are complex types not supported by the WASM backend's
+    // generateCFMatchBranches, fall back to expression-level match wrapped in ret.
+    if (has_complex_pattern) {
+        const expr = module_env.store.getExpr(expr_idx);
+        const region = module_env.store.getExprRegion(expr_idx);
+        const expr_id = try self.lowerExprInner(module_env, expr, region, expr_idx);
+        return try self.store.addCFStmt(.{
+            .ret = .{ .value = expr_id },
+        });
     }
 
     const branches = try self.store.addCFMatchBranches(lowered.items);

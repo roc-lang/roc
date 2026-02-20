@@ -577,6 +577,8 @@ pub const LirExpr = union(enum) {
         union_layout: layout.Idx,
         /// One expression per variant, indexed by discriminant value
         branches: LirExprSpan,
+        /// Layout of the result produced by each branch
+        result_layout: layout.Idx,
     },
 
     /// Extract the payload from a tag union value.
