@@ -3827,7 +3827,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     }
 
     // Run RC insertion pass
-    var rc_pass = mono.RcInsert.RcInsertPass.init(ctx.gpa, &mono_store, &layout_store);
+    var rc_pass = try mono.RcInsert.RcInsertPass.init(ctx.gpa, &mono_store, &layout_store);
     defer rc_pass.deinit();
 
     for (entrypoints.items) |*ep| {

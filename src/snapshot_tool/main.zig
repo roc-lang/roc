@@ -3958,7 +3958,7 @@ fn processDevObjectSnapshot(
     }
 
     // 9. RC insertion
-    var rc_pass = mono.RcInsert.RcInsertPass.init(allocator, &mono_store, &layout_store);
+    var rc_pass = try mono.RcInsert.RcInsertPass.init(allocator, &mono_store, &layout_store);
     defer rc_pass.deinit();
 
     for (entrypoints.items) |*ep| {

@@ -75,12 +75,17 @@ pub const RcInsertPass = struct {
     /// since the increfs will execute before the early return at runtime.
     pending_branch_increfs: std.AutoHashMap(u64, u32),
 
+    /// Reusable scratch buffer for collecting HashMap keys before sorting.
+    /// Used by wrapBranchWithRcOps and wrapGuardWithIncref to ensure
+    /// deterministic RC op ordering regardless of HashMap iteration order.
+    scratch_keys: base.Scratch(u64),
+
     const LiveRcSymbol = struct {
         symbol: Symbol,
         layout_idx: LayoutIdx,
     };
 
-    pub fn init(allocator: Allocator, store: *LirExprStore, layout_store: *const layout_mod.Store) RcInsertPass {
+    pub fn init(allocator: Allocator, store: *LirExprStore, layout_store: *const layout_mod.Store) Allocator.Error!RcInsertPass {
         return .{
             .allocator = allocator,
             .store = store,
@@ -92,6 +97,7 @@ pub const RcInsertPass = struct {
             .block_consumed_uses = std.AutoHashMap(u64, u32).init(allocator),
             .cumulative_consumed_uses = std.AutoHashMap(u64, u32).init(allocator),
             .pending_branch_increfs = std.AutoHashMap(u64, u32).init(allocator),
+            .scratch_keys = try base.Scratch(u64).init(allocator),
         };
     }
 
@@ -102,6 +108,7 @@ pub const RcInsertPass = struct {
         self.block_consumed_uses.deinit();
         self.cumulative_consumed_uses.deinit();
         self.pending_branch_increfs.deinit();
+        self.scratch_keys.deinit();
     }
 
     /// Main entry point: insert RC operations into a LirExpr tree.
@@ -1297,9 +1304,19 @@ pub const RcInsertPass = struct {
         var rc_stmts = std.ArrayList(LirStmt).empty;
         defer rc_stmts.deinit(self.allocator);
 
-        var it = symbols_in_any_branch.keyIterator();
-        while (it.next()) |key_ptr| {
-            const key = key_ptr.*;
+        // Collect keys and sort for deterministic RC op ordering
+        const keys_start = self.scratch_keys.top();
+        defer self.scratch_keys.clearFrom(keys_start);
+        {
+            var it = symbols_in_any_branch.keyIterator();
+            while (it.next()) |key_ptr| {
+                try self.scratch_keys.append(key_ptr.*);
+            }
+        }
+        const sorted_keys = self.scratch_keys.sliceFromStart(keys_start);
+        std.mem.sort(u64, sorted_keys, {}, std.sort.asc(u64));
+
+        for (sorted_keys) |key| {
             const layout_idx = self.symbol_layouts.get(key) orelse continue;
             const symbol: Symbol = @bitCast(key);
             const local_count = local_uses.get(key) orelse 0;
@@ -1338,10 +1355,20 @@ pub const RcInsertPass = struct {
         var rc_stmts = std.ArrayList(LirStmt).empty;
         defer rc_stmts.deinit(self.allocator);
 
-        var it = guard_uses.iterator();
-        while (it.next()) |entry| {
-            const key = entry.key_ptr.*;
-            const count = entry.value_ptr.*;
+        // Collect keys and sort for deterministic RC op ordering
+        const keys_start = self.scratch_keys.top();
+        defer self.scratch_keys.clearFrom(keys_start);
+        {
+            var it = guard_uses.iterator();
+            while (it.next()) |entry| {
+                try self.scratch_keys.append(entry.key_ptr.*);
+            }
+        }
+        const sorted_keys = self.scratch_keys.sliceFromStart(keys_start);
+        std.mem.sort(u64, sorted_keys, {}, std.sort.asc(u64));
+
+        for (sorted_keys) |key| {
+            const count = guard_uses.get(key) orelse 0;
             if (count == 0) continue;
             if (pattern_bound.contains(key)) continue;
             const layout_idx = self.symbol_layouts.get(key) orelse continue;
@@ -1731,7 +1758,7 @@ test "RC pass-through: non-refcounted i64 block unchanged" {
         .result_layout = i64_layout,
     } }, Region.zero());
 
-    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
     defer pass.deinit();
 
     const result = try pass.insertRcOps(block_expr);
@@ -1778,7 +1805,7 @@ test "RC: string binding used twice gets incref" {
         .result_layout = str_layout,
     } }, Region.zero());
 
-    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
     defer pass.deinit();
 
     const result = try pass.insertRcOps(block_expr);
@@ -1826,7 +1853,7 @@ test "RC: unused string binding gets decref" {
         .result_layout = i64_layout,
     } }, Region.zero());
 
-    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
     defer pass.deinit();
 
     const result = try pass.insertRcOps(block_expr);
@@ -2022,7 +2049,7 @@ test "RC branch-aware: symbol used in both match branches — no incref at bindi
         .result_layout = str_layout,
     } }, Region.zero());
 
-    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
     defer pass.deinit();
 
     const result = try pass.insertRcOps(block_expr);
@@ -2077,7 +2104,7 @@ test "RC branch-aware: symbol used in one match branch only — decref in unused
         .result_layout = str_layout,
     } }, Region.zero());
 
-    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
     defer pass.deinit();
 
     const result = try pass.insertRcOps(block_expr);
@@ -2142,7 +2169,7 @@ test "RC branch-aware: symbol used twice in one branch — incref in that branch
         .result_layout = str_layout,
     } }, Region.zero());
 
-    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
     defer pass.deinit();
 
     const result = try pass.insertRcOps(block_expr);
@@ -2205,7 +2232,7 @@ test "RC branch-aware: symbol used outside and inside branches" {
         .result_layout = str_layout,
     } }, Region.zero());
 
-    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
     defer pass.deinit();
 
     const result = try pass.insertRcOps(block_expr);
@@ -2256,7 +2283,7 @@ test "RC lambda: body with nested block gets RC ops" {
         .ret_layout = str_layout,
     } }, Region.zero());
 
-    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
     defer pass.deinit();
 
     const result = try pass.insertRcOps(lambda_expr);
@@ -2300,7 +2327,7 @@ test "RC lambda: refcounted param used twice gets incref" {
         .ret_layout = str_layout,
     } }, Region.zero());
 
-    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
     defer pass.deinit();
 
     const result = try pass.insertRcOps(lambda_expr);
@@ -2337,7 +2364,7 @@ test "RC lambda: unused refcounted param gets decref" {
         .ret_layout = i64_layout,
     } }, Region.zero());
 
-    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
     defer pass.deinit();
 
     const result = try pass.insertRcOps(lambda_expr);
@@ -2384,7 +2411,7 @@ test "RC for_loop: elem used twice gets incref" {
         .body = body_block,
     } }, Region.zero());
 
-    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
     defer pass.deinit();
 
     const result = try pass.insertRcOps(for_expr);
@@ -2430,7 +2457,7 @@ test "RC closure: wrapping lambda gets RC ops" {
         .is_bound_to_variable = false,
     } }, Region.zero());
 
-    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
     defer pass.deinit();
 
     const result = try pass.insertRcOps(closure_expr);
@@ -2476,7 +2503,7 @@ test "RC block: lambda in stmt.expr gets processed" {
         .result_layout = i64_layout,
     } }, Region.zero());
 
-    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
     defer pass.deinit();
 
     const result = try pass.insertRcOps(block_expr);
@@ -2518,7 +2545,7 @@ test "RC mutation: reassigning refcounted var emits decref before mutation" {
         .result_layout = str_layout,
     } }, Region.zero());
 
-    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
     defer pass.deinit();
 
     const result = try pass.insertRcOps(block_expr);
@@ -2567,7 +2594,7 @@ test "RC for_loop: unused refcounted elem gets decref" {
         .body = int_lit,
     } }, Region.zero());
 
-    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
     defer pass.deinit();
 
     const result = try pass.insertRcOps(for_expr);
@@ -2625,7 +2652,7 @@ test "RC match guard: symbol used only in guard gets proper RC ops" {
         .result_layout = i64_layout,
     } }, Region.zero());
 
-    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
     defer pass.deinit();
 
     const result = try pass.insertRcOps(block_expr);
@@ -2682,7 +2709,7 @@ test "RC match guard+body: symbol used in both guard and body gets proper RC ops
         .result_layout = str_layout,
     } }, Region.zero());
 
-    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
     defer pass.deinit();
 
     const result = try pass.insertRcOps(block_expr);
@@ -2718,7 +2745,7 @@ test "RC for_loop: wrapper block has unit result layout, not elem layout" {
         .body = int_lit,
     } }, Region.zero());
 
-    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
     defer pass.deinit();
 
     const result = try pass.insertRcOps(for_expr);
@@ -2771,7 +2798,7 @@ test "RC if_then_else: symbol used in both branches — no extra incref" {
         .result_layout = str_layout,
     } }, Region.zero());
 
-    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
     defer pass.deinit();
 
     const result = try pass.insertRcOps(block_expr);
@@ -2837,7 +2864,7 @@ test "RC closure: capturing refcounted string gets RC tracking" {
         .result_layout = str_layout,
     } }, Region.zero());
 
-    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
     defer pass.deinit();
 
     const result = try pass.insertRcOps(block_expr);
@@ -2919,7 +2946,7 @@ test "RC nested match: symbol used in inner and outer match branches" {
         .result_layout = str_layout,
     } }, Region.zero());
 
-    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
     defer pass.deinit();
 
     const result = try pass.insertRcOps(block_expr);
@@ -2972,7 +2999,7 @@ test "RC discriminant_switch: symbol used in switch branches gets per-branch RC"
         .result_layout = str_layout,
     } }, Region.zero());
 
-    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
     defer pass.deinit();
 
     const result = try pass.insertRcOps(block_expr);
@@ -3033,7 +3060,7 @@ test "RC discriminant_switch: body-bound symbols don't get per-branch RC ops" {
         .result_layout = str_layout,
     } }, Region.zero());
 
-    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
     defer pass.deinit();
 
     const result = try pass.insertRcOps(block_expr);
@@ -3089,7 +3116,7 @@ test "RC early_return emits correct number of decrefs for multi-use symbol" {
         .result_layout = str_layout,
     } }, Region.zero());
 
-    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
     defer pass.deinit();
 
     const result = try pass.insertRcOps(block_expr);
@@ -3169,7 +3196,7 @@ test "RC early_return inside branch accounts for branch-level increfs" {
         .result_layout = str_layout,
     } }, Region.zero());
 
-    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
     defer pass.deinit();
 
     const result = try pass.insertRcOps(block_expr);

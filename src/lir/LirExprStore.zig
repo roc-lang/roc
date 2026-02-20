@@ -128,6 +128,7 @@ pub fn init(allocator: Allocator) Self {
 /// Initialize with pre-allocated capacity
 pub fn initCapacity(allocator: Allocator, capacity: usize) Allocator.Error!Self {
     var self = init(allocator);
+    errdefer self.deinit();
     try self.exprs.ensureTotalCapacity(allocator, capacity);
     try self.expr_regions.ensureTotalCapacity(allocator, capacity);
     try self.patterns.ensureTotalCapacity(allocator, capacity / 4);
@@ -168,16 +169,19 @@ pub fn addExpr(self: *Self, expr: LirExpr, region: Region) Allocator.Error!LirEx
 
 /// Get an expression by ID
 pub fn getExpr(self: *const Self, id: LirExprId) LirExpr {
+    std.debug.assert(!id.isNone());
     return self.exprs.items[@intFromEnum(id)];
 }
 
 /// Get the source region for an expression (for error messages)
 pub fn getExprRegion(self: *const Self, id: LirExprId) Region {
+    std.debug.assert(!id.isNone());
     return self.expr_regions.items[@intFromEnum(id)];
 }
 
 /// Get a mutable reference to an expression (for patching during lowering)
 pub fn getExprPtr(self: *Self, id: LirExprId) *LirExpr {
+    std.debug.assert(!id.isNone());
     return &self.exprs.items[@intFromEnum(id)];
 }
 
@@ -193,11 +197,13 @@ pub fn addPattern(self: *Self, pattern: LirPattern, region: Region) Allocator.Er
 
 /// Get a pattern by ID
 pub fn getPattern(self: *const Self, id: LirPatternId) LirPattern {
+    std.debug.assert(!id.isNone());
     return self.patterns.items[@intFromEnum(id)];
 }
 
 /// Get the source region for a pattern
 pub fn getPatternRegion(self: *const Self, id: LirPatternId) Region {
+    std.debug.assert(!id.isNone());
     return self.pattern_regions.items[@intFromEnum(id)];
 }
 
@@ -383,6 +389,7 @@ pub fn getLambdaSetMembers(self: *const Self, span: LambdaSetMemberSpan) []const
 
 /// Register a top-level symbol definition
 pub fn registerSymbolDef(self: *Self, symbol: Symbol, expr_id: LirExprId) Allocator.Error!void {
+    std.debug.assert(!self.symbol_defs.contains(@bitCast(symbol)));
     try self.symbol_defs.put(@bitCast(symbol), expr_id);
 }
 
@@ -403,6 +410,11 @@ pub fn getString(self: *const Self, idx: base.StringLiteral.Idx) []const u8 {
 
 /// Add a control flow statement and return its ID
 pub fn addCFStmt(self: *Self, stmt: CFStmt) Allocator.Error!CFStmtId {
+    if (comptime std.debug.runtime_safety) {
+        if (stmt == .join) {
+            std.debug.assert(stmt.join.params.len == stmt.join.param_layouts.len);
+        }
+    }
     const idx = self.cf_stmts.items.len;
     try self.cf_stmts.append(self.allocator, stmt);
     return @enumFromInt(@as(u32, @intCast(idx)));
@@ -410,11 +422,13 @@ pub fn addCFStmt(self: *Self, stmt: CFStmt) Allocator.Error!CFStmtId {
 
 /// Get a control flow statement by ID
 pub fn getCFStmt(self: *const Self, id: CFStmtId) CFStmt {
+    std.debug.assert(!id.isNone());
     return self.cf_stmts.items[@intFromEnum(id)];
 }
 
 /// Get a mutable reference to a control flow statement (for patching)
 pub fn getCFStmtPtr(self: *Self, id: CFStmtId) *CFStmt {
+    std.debug.assert(!id.isNone());
     return &self.cf_stmts.items[@intFromEnum(id)];
 }
 
@@ -487,6 +501,7 @@ pub fn getLayoutIdxSpan(self: *const Self, span: LayoutIdxSpan) []const layout.I
 
 /// Add a procedure and return its index
 pub fn addProc(self: *Self, proc: LirProc) Allocator.Error!usize {
+    std.debug.assert(proc.args.len == proc.arg_layouts.len);
     const idx = self.procs.items.len;
     try self.procs.append(self.allocator, proc);
     return idx;

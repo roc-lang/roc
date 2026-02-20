@@ -301,7 +301,8 @@ pub fn makeTailRecursive(
     var initial_args = std.ArrayList(LirExprId).empty;
     defer initial_args.deinit(allocator);
 
-    for (param_patterns) |pattern_id| {
+    const proc_param_layouts = store.getLayoutIdxSpan(param_layouts);
+    for (param_patterns, 0..) |pattern_id, param_idx| {
         const pattern = store.getPattern(pattern_id);
         switch (pattern) {
             .bind => |bind| {
@@ -317,11 +318,12 @@ pub fn makeTailRecursive(
             .wildcard => {
                 // Wildcard parameter: pass a zero placeholder to maintain arity.
                 // rebindJoinPointParams skips non-bind patterns, so this value
-                // is never stored or used.
-                const placeholder_id = try store.addExpr(
-                    .{ .i64_literal = 0 },
-                    @import("base").Region.zero(),
-                );
+                // is never stored or used. Use layout-aware zero to avoid type mismatch.
+                const param_layout = proc_param_layouts[param_idx];
+                const placeholder_id = if (param_layout == .i128 or param_layout == .u128 or param_layout == .dec)
+                    try store.addExpr(.{ .i128_literal = 0 }, @import("base").Region.zero())
+                else
+                    try store.addExpr(.{ .i64_literal = 0 }, @import("base").Region.zero());
                 try initial_args.append(allocator, placeholder_id);
             },
             else => unreachable, // Only bind and wildcard should appear as function params after desugaring

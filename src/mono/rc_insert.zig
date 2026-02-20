@@ -64,12 +64,17 @@ pub const RcInsertPass = struct {
     /// Cumulative consumed uses across all enclosing blocks.
     cumulative_consumed_uses: std.AutoHashMap(u64, u32),
 
+    /// Reusable scratch buffer for collecting HashMap keys before sorting.
+    /// Used by wrapBranchWithRcOps and wrapGuardWithIncref to ensure
+    /// deterministic RC op ordering regardless of HashMap iteration order.
+    scratch_keys: base.Scratch(u64),
+
     const LiveRcSymbol = struct {
         symbol: Symbol,
         layout_idx: LayoutIdx,
     };
 
-    pub fn init(allocator: Allocator, store: *MonoExprStore, layout_store: *const layout_mod.Store) RcInsertPass {
+    pub fn init(allocator: Allocator, store: *MonoExprStore, layout_store: *const layout_mod.Store) Allocator.Error!RcInsertPass {
         return .{
             .allocator = allocator,
             .store = store,
@@ -80,6 +85,7 @@ pub const RcInsertPass = struct {
             .early_return_scope_base = 0,
             .block_consumed_uses = std.AutoHashMap(u64, u32).init(allocator),
             .cumulative_consumed_uses = std.AutoHashMap(u64, u32).init(allocator),
+            .scratch_keys = try base.Scratch(u64).init(allocator),
         };
     }
 
@@ -89,6 +95,7 @@ pub const RcInsertPass = struct {
         self.live_rc_symbols.deinit(self.allocator);
         self.block_consumed_uses.deinit();
         self.cumulative_consumed_uses.deinit();
+        self.scratch_keys.deinit();
     }
 
     /// Main entry point: insert RC operations into a MonoExpr tree.
@@ -1192,9 +1199,19 @@ pub const RcInsertPass = struct {
         var rc_stmts = std.ArrayList(MonoStmt).empty;
         defer rc_stmts.deinit(self.allocator);
 
-        var it = symbols_in_any_branch.keyIterator();
-        while (it.next()) |key_ptr| {
-            const key = key_ptr.*;
+        // Collect keys and sort for deterministic RC op ordering
+        const keys_start = self.scratch_keys.top();
+        defer self.scratch_keys.clearFrom(keys_start);
+        {
+            var it = symbols_in_any_branch.keyIterator();
+            while (it.next()) |key_ptr| {
+                try self.scratch_keys.append(key_ptr.*);
+            }
+        }
+        const sorted_keys = self.scratch_keys.sliceFromStart(keys_start);
+        std.mem.sort(u64, sorted_keys, {}, std.sort.asc(u64));
+
+        for (sorted_keys) |key| {
             const layout_idx = self.symbol_layouts.get(key) orelse continue;
             const symbol: Symbol = @bitCast(key);
             const local_count = local_uses.get(key) orelse 0;
@@ -1233,10 +1250,20 @@ pub const RcInsertPass = struct {
         var rc_stmts = std.ArrayList(MonoStmt).empty;
         defer rc_stmts.deinit(self.allocator);
 
-        var it = guard_uses.iterator();
-        while (it.next()) |entry| {
-            const key = entry.key_ptr.*;
-            const count = entry.value_ptr.*;
+        // Collect keys and sort for deterministic RC op ordering
+        const keys_start = self.scratch_keys.top();
+        defer self.scratch_keys.clearFrom(keys_start);
+        {
+            var it = guard_uses.iterator();
+            while (it.next()) |entry| {
+                try self.scratch_keys.append(entry.key_ptr.*);
+            }
+        }
+        const sorted_keys = self.scratch_keys.sliceFromStart(keys_start);
+        std.mem.sort(u64, sorted_keys, {}, std.sort.asc(u64));
+
+        for (sorted_keys) |key| {
+            const count = guard_uses.get(key) orelse 0;
             if (count == 0) continue;
             if (pattern_bound.contains(key)) continue;
             const layout_idx = self.symbol_layouts.get(key) orelse continue;
@@ -1590,7 +1617,7 @@ test "RC pass-through: non-refcounted i64 block unchanged" {
         .result_layout = i64_layout,
     } }, Region.zero());
 
-    var pass = RcInsertPass.init(allocator, &env.store, &env.layout_store);
+    var pass = try RcInsertPass.init(allocator, &env.store, &env.layout_store);
     defer pass.deinit();
 
     const result = try pass.insertRcOps(block_expr);
@@ -1636,7 +1663,7 @@ test "RC: string binding used twice gets incref" {
         .result_layout = str_layout,
     } }, Region.zero());
 
-    var pass = RcInsertPass.init(allocator, &env.store, &env.layout_store);
+    var pass = try RcInsertPass.init(allocator, &env.store, &env.layout_store);
     defer pass.deinit();
 
     const result = try pass.insertRcOps(block_expr);
@@ -1714,7 +1741,7 @@ test "RC lambda: body uses don't inflate outer scope" {
         .result_layout = str_layout,
     } }, Region.zero());
 
-    var pass = RcInsertPass.init(allocator, &env.store, &env.layout_store);
+    var pass = try RcInsertPass.init(allocator, &env.store, &env.layout_store);
     defer pass.deinit();
 
     const result = try pass.insertRcOps(block_expr);
