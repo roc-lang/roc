@@ -123,6 +123,16 @@ top_level_ptrns: std.AutoHashMap(CIR.Pattern.Idx, DefProcessed),
 enclosing_func_name: ?Ident.Idx,
 /// Type writer for formatting types at snapshot time
 type_writer: types_mod.TypeWriter,
+/// --- Lazy cycle detection state ---
+///
+/// Only one cycle can be active at a time because defs are processed
+/// sequentially. `defer_generalize` is global: once set, it affects all
+/// defs processed while active, including non-cycle functions that happen
+/// to be checked during the cycle (e.g. a diamond branch that calls into
+/// the cycle). This is safe because those extra vars are still correctly
+/// typed; they just get generalized at the cycle root instead of
+/// independently.
+
 /// The def currently being type-checked (innermost in the call stack)
 current_processing_def: ?CIR.Def.Idx = null,
 /// When a dispatch cycle is detected, the .processing def that is the
@@ -3083,10 +3093,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         // store and merge at the cycle root before generalization.
         // Inner lambdas (rank > outermost+1) always pop normally.
         const at_def_top_level = env.rank() == Rank.outermost.next();
-        const is_intermediate = if (self.cycle_root_def) |root_def|
-            self.current_processing_def == null or root_def != self.current_processing_def.?
+        const is_cycle_root = if (self.cycle_root_def) |root_def|
+            self.current_processing_def != null and root_def == self.current_processing_def.?
         else
             false;
+        const is_intermediate = self.cycle_root_def != null and !is_cycle_root;
 
         if (is_intermediate and at_def_top_level) {
             // Don't pop — vars will be merged by cycle root.
@@ -3717,11 +3728,22 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             // Cycle detected: store env for merge at cycle root.
                             try self.deferred_cycle_envs.append(self.gpa, sub_env);
 
-                            // Use the def's closure/expr var directly. Its rank
-                            // was elevated by e_closure to match the lambda's rank
-                            // (rank 2), so this won't pull body vars below the
-                            // generalization rank. This preserves cross-function
-                            // constraint propagation within the cycle.
+                            // Use the def's closure/expr var directly (unlike the
+                            // static dispatch handler which uses a fresh flex var).
+                            //
+                            // Why def_expr_var here: `break :blk` below skips the
+                            // fallthrough (lines that unify expr_var with pat_var),
+                            // so this explicit unification is the *only* link between
+                            // this lookup's expr_var and the function's type. A fresh
+                            // flex var would leave the lookup unconstrained.
+                            //
+                            // Why fresh flex in static dispatch: the fresh var becomes
+                            // method_var, which is subsequently unified with
+                            // constraint.fn_var — that secondary unification provides
+                            // the missing link.
+                            //
+                            // The e_closure rank elevation makes the direct use safe
+                            // (closure var elevated to rank 2, matching the lambda).
                             const def = self.cir.store.getDef(processing_def.def_idx);
                             const def_expr_var = ModuleEnv.varFrom(def.expr);
                             _ = try self.unify(expr_var, def_expr_var, env);

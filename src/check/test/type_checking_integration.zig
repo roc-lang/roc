@@ -4701,6 +4701,100 @@ test "check type - mutually recursive functions - different arities" {
     );
 }
 
+test "check type - mutually recursive functions - diamond pattern" {
+    const source =
+        \\f = |n| if n <= 0.U64 { 0.U64 } else { g(n - 1.U64) + h(n - 1.U64) }
+        \\g = |n| if n <= 0.U64 { 0.U64 } else { shared(n - 1.U64) }
+        \\h = |n| if n <= 0.U64 { 0.U64 } else { shared(n - 1.U64) }
+        \\shared = |n| if n <= 0.U64 { 0.U64 } else { f(n - 1.U64) }
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "f", .expected = "U64 -> U64" },
+            .{ .def = "g", .expected = "U64 -> U64" },
+            .{ .def = "h", .expected = "U64 -> U64" },
+            .{ .def = "shared", .expected = "U64 -> U64" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - mixed function and value defs" {
+    const source =
+        \\f = |x| if x <= 0.U64 { 0.U64 } else { g(x - 1.U64) }
+        \\g = |x| if x <= 0.U64 { 0.U64 } else { f(x - 1.U64) }
+        \\val = f(10.U64)
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "f", .expected = "U64 -> U64" },
+            .{ .def = "g", .expected = "U64 -> U64" },
+            .{ .def = "val", .expected = "U64" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - entry order independence" {
+    const source =
+        \\ping = |n, x| if n <= 0.U64 { x } else { pong(n - 1.U64, x) }
+        \\pong = |n, x| if n <= 0.U64 { x } else { ping(n - 1.U64, x) }
+        \\use_ping = ping(1.U64, "hello")
+        \\use_pong = pong(1.U64, 42.U8)
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "ping", .expected = "U64, a -> a" },
+            .{ .def = "pong", .expected = "U64, a -> a" },
+            .{ .def = "use_ping", .expected = "Str" },
+            .{ .def = "use_pong", .expected = "U8" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - polymorphic diamond" {
+    const source =
+        \\wrap = |n, x| if n <= 0.U64 { x } else { via_a(n - 1.U64, x) }
+        \\via_a = |n, x| if n <= 0.U64 { x } else { core(n - 1.U64, x) }
+        \\via_b = |n, x| if n <= 0.U64 { x } else { core(n - 1.U64, x) }
+        \\core = |n, x| if n <= 0.U64 { x } else { wrap(n - 1.U64, x) }
+        \\test = (wrap(1.U64, "hi"), via_b(1.U64, 42.U8))
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "wrap", .expected = "U64, a -> a" },
+            .{ .def = "via_a", .expected = "U64, a -> a" },
+            .{ .def = "via_b", .expected = "U64, a -> a" },
+            .{ .def = "core", .expected = "U64, a -> a" },
+            .{ .def = "test", .expected = "(Str, U8)" },
+        },
+    );
+}
+
+test "check type - mutually recursive static dispatch - diamond pattern" {
+    const source =
+        \\Router(a) := [Val(a)].{
+        \\  route = |Router.Val(x), n| if n == 0.U64 { x } else { Router.Val(x).path_a(n - 1.U64) }
+        \\  path_a = |Router.Val(x), n| if n == 0.U64 { x } else { Router.Val(x).hub(n - 1.U64) }
+        \\  path_b = |Router.Val(x), n| if n == 0.U64 { x } else { Router.Val(x).hub(n - 1.U64) }
+        \\  hub = |Router.Val(x), n| if n == 0.U64 { x } else { Router.Val(x).route(n - 1.U64) }
+        \\}
+        \\test = (Router.Val(1.U64).route(2.U64), Router.Val("hi").path_b(1.U64))
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Router.route", .expected = "Router(a), U64 -> a" },
+            .{ .def = "Test.Router.path_a", .expected = "Router(a), U64 -> a" },
+            .{ .def = "Test.Router.path_b", .expected = "Router(a), U64 -> a" },
+            .{ .def = "Test.Router.hub", .expected = "Router(a), U64 -> a" },
+            .{ .def = "test", .expected = "(U64, Str)" },
+        },
+    );
+}
+
 // repros //
 
 test "check type - zulip repro" {
