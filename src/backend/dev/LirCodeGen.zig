@@ -6695,14 +6695,75 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Load RHS into a float register
             const rhs_reg = try self.ensureInFloatReg(rhs_loc);
 
-            // Comparisons produce integer results (0 or 1), not floats
-            const float_cond = floatCondition(op);
-            if (float_cond) |cond| {
-                const result_reg = try self.codegen.allocGeneralFor(0);
-                try self.codegen.emitCmpF64(result_reg, lhs_reg, rhs_reg, cond);
-                self.codegen.freeFloat(lhs_reg);
-                self.codegen.freeFloat(rhs_reg);
-                return .{ .general_reg = result_reg };
+            // Comparisons produce integer results (0 or 1), not floats.
+            // On x86_64, UCOMISD sets PF=1 for NaN (unordered), so eq/neq/lt/lte
+            // need special handling to produce correct results when either operand is NaN.
+            if (comptime target.toCpuArch() == .x86_64) {
+                switch (op) {
+                    .eq => {
+                        // NaN-safe eq: (ZF=1) AND (PF=0) → sete + setnp + and
+                        const result_reg = try self.codegen.allocGeneralFor(0);
+                        const tmp_reg = try self.codegen.allocGeneralFor(0);
+                        try self.codegen.emit.ucomisdRegReg(lhs_reg, rhs_reg);
+                        try self.codegen.emit.setcc(.equal, result_reg);
+                        try self.codegen.emit.setcc(.parity_odd, tmp_reg);
+                        try self.codegen.emit.andRegReg(.w64, result_reg, tmp_reg);
+                        try self.codegen.emit.andRegImm8(result_reg, 1);
+                        self.codegen.freeGeneral(tmp_reg);
+                        self.codegen.freeFloat(lhs_reg);
+                        self.codegen.freeFloat(rhs_reg);
+                        return .{ .general_reg = result_reg };
+                    },
+                    .neq => {
+                        // NaN-safe neq: (ZF=0) OR (PF=1) → setne + setp + or
+                        const result_reg = try self.codegen.allocGeneralFor(0);
+                        const tmp_reg = try self.codegen.allocGeneralFor(0);
+                        try self.codegen.emit.ucomisdRegReg(lhs_reg, rhs_reg);
+                        try self.codegen.emit.setcc(.not_equal, result_reg);
+                        try self.codegen.emit.setcc(.parity_even, tmp_reg);
+                        try self.codegen.emit.orRegReg(.w64, result_reg, tmp_reg);
+                        try self.codegen.emit.andRegImm8(result_reg, 1);
+                        self.codegen.freeGeneral(tmp_reg);
+                        self.codegen.freeFloat(lhs_reg);
+                        self.codegen.freeFloat(rhs_reg);
+                        return .{ .general_reg = result_reg };
+                    },
+                    .lt => {
+                        // NaN-safe lt: swap operands, use "above" (CF=0 AND ZF=0)
+                        const result_reg = try self.codegen.allocGeneralFor(0);
+                        try self.codegen.emitCmpF64(result_reg, rhs_reg, lhs_reg, .above);
+                        self.codegen.freeFloat(lhs_reg);
+                        self.codegen.freeFloat(rhs_reg);
+                        return .{ .general_reg = result_reg };
+                    },
+                    .lte => {
+                        // NaN-safe lte: swap operands, use "above_or_equal" (CF=0)
+                        const result_reg = try self.codegen.allocGeneralFor(0);
+                        try self.codegen.emitCmpF64(result_reg, rhs_reg, lhs_reg, .above_or_equal);
+                        self.codegen.freeFloat(lhs_reg);
+                        self.codegen.freeFloat(rhs_reg);
+                        return .{ .general_reg = result_reg };
+                    },
+                    .gt, .gte => {
+                        // gt/gte are already NaN-safe on x86_64 (above/above_or_equal return false for NaN)
+                        const float_cond = floatCondition(op).?;
+                        const result_reg = try self.codegen.allocGeneralFor(0);
+                        try self.codegen.emitCmpF64(result_reg, lhs_reg, rhs_reg, float_cond);
+                        self.codegen.freeFloat(lhs_reg);
+                        self.codegen.freeFloat(rhs_reg);
+                        return .{ .general_reg = result_reg };
+                    },
+                    else => {},
+                }
+            } else {
+                const float_cond = floatCondition(op);
+                if (float_cond) |cond| {
+                    const result_reg = try self.codegen.allocGeneralFor(0);
+                    try self.codegen.emitCmpF64(result_reg, lhs_reg, rhs_reg, cond);
+                    self.codegen.freeFloat(lhs_reg);
+                    self.codegen.freeFloat(rhs_reg);
+                    return .{ .general_reg = result_reg };
+                }
             }
 
             // Arithmetic operations produce float results
@@ -7728,7 +7789,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
                 return .{ .stack = .{ .offset = result_slot } };
             }
-            return .{ .general_reg = result_reg.? };
+            if (result_reg) |reg| {
+                return .{ .general_reg = reg };
+            } else {
+                return .{ .immediate_i64 = 0 };
+            }
         }
 
         /// Store a match-branch result, dynamically upgrading from register to stack

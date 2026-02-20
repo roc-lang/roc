@@ -2,147 +2,82 @@
 
 ## HIGH — Likely to produce wrong code in specific scenarios
 
-### 1. `lowerRecord` silently drops fields if layout/MIR field names diverge
+### 1. ~~`lowerRecord` silently drops fields if layout/MIR field names diverge~~ FIXED
 
 **File:** `src/lir/MirToLir.zig:372-382`
 
-The record reordering loop iterates layout fields and searches for each in MIR field names. If a layout field name is not found (compiler bug), the inner loop completes without appending — no error, no assertion. The record silently ends up with fewer fields than expected.
-
-**Fix:** Add a debug assertion:
-```zig
-for (0..layout_fields.len) |li| {
-    const layout_field_name = layout_fields.get(li).name;
-    var found = false;
-    for (mir_field_names, 0..) |mir_name, mi| {
-        if (@as(u32, @bitCast(mir_name)) == @as(u32, @bitCast(layout_field_name))) {
-            // ... append ...
-            found = true;
-            break;
-        }
-    }
-    std.debug.assert(found); // compiler bug: layout field not in MIR record
-}
-std.debug.assert(self.scratch_lir_expr_ids.items.len - save_exprs == layout_fields.len);
-```
+Added `found` flag and `std.debug.assert(found)` to catch missing layout fields in debug builds.
 
 ---
 
-### 2. `emitZeroLiteral` outer `else` should be `unreachable`
+### 2. ~~`emitZeroLiteral` outer `else` should be `unreachable`~~ FIXED
 
-**File:** `src/lir/MirToLir.zig:782`
+**File:** `src/lir/MirToLir.zig:774-783`
 
-```zig
-else => LirExpr{ .i64_literal = 0 },  // outer else for non-prim monotypes
-```
-
-`num_is_negative`/`num_is_positive`/`num_is_zero` should only operate on primitive numeric types. Emitting `i64_literal` for a non-primitive is wrong.
-
-**Fix:** Change the outer `else =>` to `else => unreachable`.
+Made both inner and outer switches exhaustive — non-prim monotypes are now `unreachable`.
 
 ---
 
-### 3. TailRecursion.zig is not wired into the LIR pipeline
+### 3. TailRecursion.zig is not wired into the LIR pipeline — DEFERRED
 
 **File:** `src/lir/TailRecursion.zig` (760 lines of dead code)
 
 Neither `MirToLir.zig` nor `LirCodeGen.zig` reference `TailRecursion` anywhere. Tail-recursive functions going through the MIR->LIR->LirCodeGen path will not be optimized, causing stack overflows on deep recursion.
 
-**Fix:** Wire TailRecursion into the pipeline as a post-lowering pass before RC insertion.
+**Fix:** Wire TailRecursion into the pipeline as a post-lowering pass before RC insertion. Requires writing `exprToCFStmt` conversion and `lowerProc` method.
 
 ---
 
-### 4. `processEarlyReturn` reuses `early_ret_id` as both statement and `final_expr`
+### 4. ~~`processEarlyReturn` reuses `early_ret_id` as both statement and `final_expr`~~ FIXED
 
 **File:** `src/lir/rc_insert.zig:1085-1095`
 
-The same `early_ret_id` expression is used as both a statement expression AND `final_expr`. While `final_expr` is dead code (early_return diverges), any pass that does use-counting on the tree will double-count symbols in the return expression.
-
-**Fix:** Use a distinct dead placeholder for `final_expr`:
-```zig
-const dead_final = try self.store.addExpr(.runtime_error, region);
-return self.store.addExpr(.{ .block = .{
-    .stmts = stmts_span,
-    .final_expr = dead_final,
-    .result_layout = ret.ret_layout,
-} }, region);
-```
+Replaced reuse of `early_ret_id` with a distinct `runtime_error` dead expression for `final_expr`.
 
 ---
 
-### 5. `enum_dispatch.tag` is `u8` but `num_functions` is `u16`
+### 5. ~~`enum_dispatch.tag` is `u8` but `num_functions` is `u16`~~ FALSE POSITIVE
 
 **File:** `src/lir/LIR.zig:136-143`
 
-If a lambda set has more than 256 members, `tag: u8` can't represent all values while `num_functions: u16` can count them. Silent truncation.
-
-**Fix:** Change `tag: u8` to `tag: u16` to match `union_repr.tag: u16`.
+Investigation showed `tag` was already `u16`. Updated misleading "single byte tag" comment.
 
 ---
 
-### 6. Tag union comparison `end_patches` uses fixed-size array of 64
+### 6. ~~Tag union comparison `end_patches` uses fixed-size array of 64~~ NO CHANGE NEEDED
 
 **File:** `src/backend/dev/LirCodeGen.zig:5903`
 
-```zig
-var end_patches: [64]usize = undefined;
-```
-
-If a tag union has more than 64 variants with non-ZST payloads, this array overflows with no bounds checking.
-
-**Fix:** Replace with `std.ArrayList(usize)` or add `std.debug.assert(end_patch_count < 64)`.
+Already has `std.debug.assert(end_patch_count < end_patches.len)` which catches overflow in debug builds. Tag unions with >64 non-ZST variants are extremely unlikely.
 
 ---
 
-### 7. `generateStmt` ret handler accesses `.stack.offset` without checking ValueLocation variant
+### 7. ~~`generateStmt` ret handler accesses `.stack.offset` without checking ValueLocation variant~~ FALSE POSITIVE
 
-**File:** `src/backend/dev/LirCodeGen.zig:14325-14328`
+**File:** `src/backend/dev/LirCodeGen.zig:14304-14363`
 
-```zig
-const offset = value_loc.stack.offset;
-```
-
-Assumes `value_loc` is `.stack`, but it could be `.stack_str` or `.list_stack`, causing undefined behavior.
-
-**Fix:** Extract offset from the correct variant:
-```zig
-const offset: i32 = switch (value_loc) {
-    .stack => |s| s.offset,
-    .stack_str => |off| off,
-    .list_stack => |li| li.struct_offset,
-    else => unreachable,
-};
-```
+Investigation showed `.stack.offset` accesses are all inside `else if (value_loc == .stack)` guards. The `.stack_str` and `.list_stack` variants are handled in separate branches above.
 
 ---
 
-### 8. `generateMatch` potential null unwrap for ZST result types
+### 8. ~~`generateMatch` potential null unwrap for ZST result types~~ FIXED
 
 **File:** `src/backend/dev/LirCodeGen.zig:7731`
 
-```zig
-return .{ .general_reg = result_reg.? };
-```
-
-If `use_stack_result` is false and `result_reg` is null (ZST match result where no branch allocated a register), this panics.
-
-**Fix:**
-```zig
-if (result_reg) |reg| {
-    return .{ .general_reg = reg };
-} else {
-    return .{ .immediate_i64 = 0 };
-}
-```
+Added defensive null check — returns `immediate_i64(0)` for ZST results instead of unconditional unwrap.
 
 ---
 
-### 9. Float NaN comparison may be incorrect on x86_64
+### 9. ~~Float NaN comparison may be incorrect on x86_64~~ FIXED
 
-**File:** `src/backend/dev/LirCodeGen.zig:6730-6760`
+**File:** `src/backend/dev/LirCodeGen.zig:6686-6757`
 
-UCOMISD with two NaN operands sets ZF=1, PF=1, CF=1. The `je` instruction checks only ZF, so `NaN == NaN` would incorrectly return true. Roc should have `NaN == NaN` be false.
-
-**Fix:** For float equality, use a compound condition that excludes unordered (NaN) results. On x86_64 this means checking both ZF=1 and PF=0.
+Fixed all four incorrect float comparison conditions on x86_64:
+- **eq**: compound `sete + setnp + and` (true only if equal AND ordered)
+- **neq**: compound `setne + setp + or` (true if not equal OR unordered)
+- **lt**: swap operands + `above` condition (NaN-safe)
+- **lte**: swap operands + `above_or_equal` condition (NaN-safe)
+- **gt/gte**: already correct (kept as-is)
 
 ---
 
