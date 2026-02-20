@@ -3362,22 +3362,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             switch (mode) {
                 .drop_first => {
                     // start = n, len = max(list_len - n, 0)
-                    // Compute len = list_len - n (saturating)
                     const diff_reg = try self.allocTempGeneral();
-                    try self.codegen.emit.movRegReg(.w64, diff_reg, len_reg);
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        // sub, but saturate at 0: if n > len, result = 0
-                        try self.codegen.emit.cmpRegReg(.w64, diff_reg, n_reg);
-                        // Use conditional select: if len >= n, result = len - n, else 0
-                        try self.codegen.emit.subRegRegReg(.w64, diff_reg, diff_reg, n_reg);
-                        // If the subtraction went negative, csel zero
-                        // Actually, for unsigned subtraction, use subs and csel
-                        // Simpler approach: compute max(len - n, 0)
-                        // We already have cmp above. Use csel with condition cs (carry set = no borrow = len >= n)
-                    } else {
-                        try self.codegen.emit.subRegReg(.w64, diff_reg, n_reg);
-                    }
-                    // For simplicity: if n > len, we want 0. The C listSublist handles out-of-bounds gracefully.
+                    try self.emitSaturatingSub(diff_reg, len_reg, n_reg);
                     try self.emitStore(.w64, frame_ptr, start_slot, n_reg);
                     try self.emitStore(.w64, frame_ptr, len_slot, diff_reg);
                     self.codegen.freeGeneral(diff_reg);
@@ -3385,8 +3371,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .drop_last => {
                     // start = 0, len = max(list_len - n, 0)
                     const diff_reg = try self.allocTempGeneral();
-                    try self.codegen.emit.movRegReg(.w64, diff_reg, len_reg);
-                    try self.emitSubRegs(.w64, diff_reg, diff_reg, n_reg);
+                    try self.emitSaturatingSub(diff_reg, len_reg, n_reg);
                     const zero_reg = try self.allocTempGeneral();
                     try self.codegen.emitLoadImm(zero_reg, 0);
                     try self.emitStore(.w64, frame_ptr, start_slot, zero_reg);
@@ -3405,10 +3390,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .take_last => {
                     // start = max(list_len - n, 0), len = n
-                    // But we want the LAST n elements, so len = min(n, list_len)
                     const diff_reg = try self.allocTempGeneral();
-                    try self.codegen.emit.movRegReg(.w64, diff_reg, len_reg);
-                    try self.emitSubRegs(.w64, diff_reg, diff_reg, n_reg);
+                    try self.emitSaturatingSub(diff_reg, len_reg, n_reg);
                     try self.emitStore(.w64, frame_ptr, start_slot, diff_reg);
                     try self.emitStore(.w64, frame_ptr, len_slot, n_reg);
                     self.codegen.freeGeneral(diff_reg);
@@ -8595,6 +8578,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .shr => try self.codegen.emit.shrRegCl(width, dst),
                     .sar => try self.codegen.emit.sarRegCl(width, dst),
                 }
+            }
+        }
+
+        /// Unsigned saturating subtraction: dst = max(a - b, 0)
+        fn emitSaturatingSub(self: *Self, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                // cmp a, b; sub dst, a, b; csel dst, dst, xzr, cs
+                // cs (carry set) = no borrow = a >= b
+                try self.codegen.emit.cmpRegReg(.w64, a, b);
+                try self.codegen.emit.subRegRegReg(.w64, dst, a, b);
+                try self.codegen.emit.csel(.w64, dst, dst, .ZRSP, .cs);
+            } else {
+                // mov dst, a; sub dst, b; mov zero, 0; cmov below, dst, zero
+                if (dst != a) try self.codegen.emit.movRegReg(.w64, dst, a);
+                try self.codegen.emit.subRegReg(.w64, dst, b);
+                const zero_reg = try self.allocTempGeneral();
+                try self.codegen.emitLoadImm(zero_reg, 0);
+                try self.codegen.emit.cmovcc(.below, .w64, dst, zero_reg);
+                self.codegen.freeGeneral(zero_reg);
             }
         }
 

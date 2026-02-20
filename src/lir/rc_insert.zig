@@ -69,6 +69,12 @@ pub const RcInsertPass = struct {
     /// processEarlyReturn can see the full picture.
     cumulative_consumed_uses: std.AutoHashMap(u64, u32),
 
+    /// Pending branch-level incref adjustments. When processing a branch body,
+    /// wrapBranchWithRcOps will later prepend increfs for symbols used more than
+    /// once in the branch. processEarlyReturn must account for these extra refs
+    /// since the increfs will execute before the early return at runtime.
+    pending_branch_increfs: std.AutoHashMap(u64, u32),
+
     const LiveRcSymbol = struct {
         symbol: Symbol,
         layout_idx: LayoutIdx,
@@ -85,6 +91,7 @@ pub const RcInsertPass = struct {
             .early_return_scope_base = 0,
             .block_consumed_uses = std.AutoHashMap(u64, u32).init(allocator),
             .cumulative_consumed_uses = std.AutoHashMap(u64, u32).init(allocator),
+            .pending_branch_increfs = std.AutoHashMap(u64, u32).init(allocator),
         };
     }
 
@@ -94,6 +101,7 @@ pub const RcInsertPass = struct {
         self.live_rc_symbols.deinit(self.allocator);
         self.block_consumed_uses.deinit();
         self.cumulative_consumed_uses.deinit();
+        self.pending_branch_increfs.deinit();
     }
 
     /// Main entry point: insert RC operations into a LirExpr tree.
@@ -714,7 +722,9 @@ pub const RcInsertPass = struct {
         defer new_branches.deinit(self.allocator);
 
         for (branches, 0..) |branch, i| {
+            try self.setPendingBranchIncrefs(&branch_use_maps.items[i], &symbols_in_any_branch);
             const processed_body = try self.processExpr(branch.body);
+            self.clearPendingBranchIncrefs();
             const new_body = try self.wrapBranchWithRcOps(processed_body, &branch_use_maps.items[i], &symbols_in_any_branch, result_layout, region);
             try new_branches.append(self.allocator, .{
                 .cond = branch.cond,
@@ -722,7 +732,9 @@ pub const RcInsertPass = struct {
             });
         }
 
+        try self.setPendingBranchIncrefs(&else_uses, &symbols_in_any_branch);
         const processed_else = try self.processExpr(final_else_id);
+        self.clearPendingBranchIncrefs();
         const new_else = try self.wrapBranchWithRcOps(processed_else, &else_uses, &symbols_in_any_branch, result_layout, region);
 
         const new_branch_span = try self.store.addIfBranches(new_branches.items);
@@ -807,7 +819,9 @@ pub const RcInsertPass = struct {
         defer new_branches.deinit(self.allocator);
 
         for (branches, 0..) |branch, i| {
+            try self.setPendingBranchIncrefs(&body_use_maps.items[i], &symbols_in_any_branch);
             const processed_body = try self.processExpr(branch.body);
+            self.clearPendingBranchIncrefs();
             const processed_guard = try self.processExpr(branch.guard);
             // Body gets per-branch RC ops based on body-only uses
             const new_body = try self.wrapBranchWithRcOps(processed_body, &body_use_maps.items[i], &symbols_in_any_branch, result_layout, region);
@@ -835,6 +849,14 @@ pub const RcInsertPass = struct {
     fn processDiscriminantSwitch(self: *RcInsertPass, ds: anytype, region: Region) Allocator.Error!LirExprId {
         const branches = self.store.getExprSpan(ds.branches);
 
+        // Collect symbols bound within branch bodies — these are local to their
+        // defining branch and must NOT get per-branch RC ops.
+        var body_bound = std.AutoHashMap(u64, void).init(self.allocator);
+        defer body_bound.deinit();
+        for (branches) |br_id| {
+            try self.collectExprBoundSymbols(br_id, &body_bound);
+        }
+
         // Collect per-branch local use counts and union of all refcounted symbols
         var branch_use_maps = std.ArrayList(std.AutoHashMap(u64, u32)).empty;
         defer {
@@ -849,6 +871,7 @@ pub const RcInsertPass = struct {
             var it = local.keyIterator();
             while (it.next()) |key| {
                 const k = key.*;
+                if (body_bound.contains(k)) continue;
                 if (self.symbol_layouts.get(k)) |lay| {
                     if (self.layoutNeedsRc(lay)) try symbols_in_any_branch.put(k, {});
                 }
@@ -863,7 +886,9 @@ pub const RcInsertPass = struct {
         const result_layout: LayoutIdx = ds.result_layout;
 
         for (branches, 0..) |br_id, i| {
+            try self.setPendingBranchIncrefs(&branch_use_maps.items[i], &symbols_in_any_branch);
             const processed = try self.processExpr(br_id);
+            self.clearPendingBranchIncrefs();
             const wrapped = try self.wrapBranchWithRcOps(processed, &branch_use_maps.items[i], &symbols_in_any_branch, result_layout, region);
             try new_branches.append(self.allocator, wrapped);
         }
@@ -1019,18 +1044,19 @@ pub const RcInsertPass = struct {
         for (live_syms) |live| {
             const key = @as(u64, @bitCast(live.symbol));
             const ret_use_count: u32 = ret_uses.get(key) orelse 0;
-            // Total refs from incref at binding = global_use_count.
-            // Uses consumed by prior statements = block_consumed_uses.
-            // Uses consumed by the return expr = ret_use_count.
-            // Remaining = global - consumed_before - ret_uses.
+            // Total refs = global_use_count + pending branch increfs.
+            // The branch wrapper will prepend increfs that execute before
+            // the early return, so we must clean those up too.
             const global_count = self.symbol_use_counts.get(key) orelse 1;
+            const branch_increfs = self.pending_branch_increfs.get(key) orelse 0;
+            const effective_count = global_count + branch_increfs;
             // Include uses consumed by outer enclosing blocks (cumulative)
             // plus uses consumed by the current inner block's prior statements.
             const consumed_before = (self.cumulative_consumed_uses.get(key) orelse 0) +
                 (self.block_consumed_uses.get(key) orelse 0);
             const total_consumed = consumed_before + ret_use_count;
-            if (total_consumed >= global_count) continue; // all refs accounted for
-            const remaining = global_count - total_consumed;
+            if (total_consumed >= effective_count) continue; // all refs accounted for
+            const remaining = effective_count - total_consumed;
             var i: u32 = 0;
             while (i < remaining) : (i += 1) {
                 try self.emitDecrefInto(live.symbol, live.layout_idx, region, &cleanup_stmts);
@@ -1230,6 +1256,29 @@ pub const RcInsertPass = struct {
             .free,
             => {},
         }
+    }
+
+    /// Set pending_branch_increfs for a branch body before processExpr.
+    /// This tells processEarlyReturn about increfs that wrapBranchWithRcOps
+    /// will later prepend, so early returns clean up the extra refs.
+    fn setPendingBranchIncrefs(
+        self: *RcInsertPass,
+        local_uses: *const std.AutoHashMap(u64, u32),
+        symbols_in_any_branch: *const std.AutoHashMap(u64, void),
+    ) Allocator.Error!void {
+        self.pending_branch_increfs.clearRetainingCapacity();
+        var it = symbols_in_any_branch.keyIterator();
+        while (it.next()) |key_ptr| {
+            const key = key_ptr.*;
+            const local_count = local_uses.get(key) orelse 0;
+            if (local_count > 1) {
+                try self.pending_branch_increfs.put(key, @intCast(local_count - 1));
+            }
+        }
+    }
+
+    fn clearPendingBranchIncrefs(self: *RcInsertPass) void {
+        self.pending_branch_increfs.clearRetainingCapacity();
     }
 
     /// Wrap a branch body with per-branch RC operations.
@@ -2934,6 +2983,68 @@ test "RC discriminant_switch: symbol used in switch branches gets per-branch RC"
     try std.testing.expectEqual(@as(u32, 0), rc.decrefs);
 }
 
+test "RC discriminant_switch: body-bound symbols don't get per-branch RC ops" {
+    // { s = "hello"; discriminant_switch(val) { 0 -> { t = "world"; t }, 1 -> s } }
+    // t is bound inside branch 0 and should NOT get per-branch RC ops.
+    // s is used only in branch 1, so needs a decref in branch 0.
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const str_layout: LayoutIdx = .str;
+    const sym_s = makeSymbol(1);
+    const sym_t = makeSymbol(2);
+    const sym_val = makeSymbol(3);
+
+    const tag_union_layout = try env.layout_store.putTagUnion(&.{ str_layout, str_layout });
+
+    // Build branch 0: { t = "world"; t }
+    const str_world = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
+    const lookup_t = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_t, .layout_idx = str_layout } }, Region.zero());
+    const pat_t = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_t, .layout_idx = str_layout } }, Region.zero());
+    const branch0_stmts = try env.lir_store.addStmts(&.{.{ .decl = .{ .pattern = pat_t, .expr = str_world } }});
+    const branch0 = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = branch0_stmts,
+        .final_expr = lookup_t,
+        .result_layout = str_layout,
+    } }, Region.zero());
+
+    // Build branch 1: s
+    const lookup_s = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+
+    // Build: { s = "hello"; discriminant_switch(val) { 0 -> branch0, 1 -> s } }
+    const str_hello = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
+    const val_expr = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_val, .layout_idx = tag_union_layout } }, Region.zero());
+    const branches_span = try env.lir_store.addExprSpan(&.{ branch0, lookup_s });
+    const disc_switch = try env.lir_store.addExpr(.{ .discriminant_switch = .{
+        .value = val_expr,
+        .union_layout = tag_union_layout,
+        .branches = branches_span,
+        .result_layout = str_layout,
+    } }, Region.zero());
+
+    const pat_s = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const stmts = try env.lir_store.addStmts(&.{.{ .decl = .{ .pattern = pat_s, .expr = str_hello } }});
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = disc_switch,
+        .result_layout = str_layout,
+    } }, Region.zero());
+
+    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+
+    // s used in one of two branches → decref in unused branch
+    // t is body-bound and should not cause extra RC ops
+    const rc = countRcOps(&env.lir_store, result);
+    try std.testing.expectEqual(@as(u32, 0), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 1), rc.decrefs);
+}
+
 test "RC early_return emits correct number of decrefs for multi-use symbol" {
     // Build: { s = "hello"; _ = s; early_return(42); _ = s; s }
     // s has global_use_count = 3 → incref(2) at binding.
@@ -2989,4 +3100,85 @@ test "RC early_return emits correct number of decrefs for multi-use symbol" {
     // Expect: 1 incref (at binding, count=2) + 2 decrefs (at early_return cleanup)
     try std.testing.expectEqual(@as(u32, 1), rc.increfs);
     try std.testing.expectEqual(@as(u32, 2), rc.decrefs);
+}
+
+test "RC early_return inside branch accounts for branch-level increfs" {
+    // Build: { s = "hello"; _ = s; if x { _ = s; _ = s; early_return(42) } else { s } }
+    // countUsesInto uses a branching model: the if_then_else contributes 1 use from
+    // the enclosing scope, so global_use_count = 2 (1 from outer stmt + 1 from if_then_else).
+    // At binding: incref(1).
+    // Branch wrapper adds incref(1) for if-body (local_count=2 > 1).
+    // At early_return: effective = 2 + 1 = 3, consumed = 1 (outer) + 2 (inner) = 3, remaining = 0.
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const str_layout: LayoutIdx = .str;
+    const i64_layout: LayoutIdx = .i64;
+    const sym_s = makeSymbol(1);
+
+    // Create expressions
+    const str_hello = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
+    const lookup_s_outer = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const lookup_s1 = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const lookup_s2 = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const lookup_s3 = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const int_42 = try env.lir_store.addExpr(.{ .i64_literal = 42 }, Region.zero());
+    const cond = try env.lir_store.addExpr(.{ .bool_literal = true }, Region.zero());
+
+    // Build if-body: { _ = s; _ = s; early_return(42) }
+    const early_ret = try env.lir_store.addExpr(.{ .early_return = .{
+        .expr = int_42,
+        .ret_layout = i64_layout,
+    } }, Region.zero());
+    const wild1 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = str_layout } }, Region.zero());
+    const wild2 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = str_layout } }, Region.zero());
+    const if_body_stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = wild1, .expr = lookup_s1 } },
+        .{ .decl = .{ .pattern = wild2, .expr = lookup_s2 } },
+    });
+    const if_body = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = if_body_stmts,
+        .final_expr = early_ret,
+        .result_layout = str_layout,
+    } }, Region.zero());
+
+    // Build if-then-else: if x { ... } else { s }
+    const if_branches = try env.lir_store.addIfBranches(&.{.{
+        .cond = cond,
+        .body = if_body,
+    }});
+    const ite = try env.lir_store.addExpr(.{ .if_then_else = .{
+        .branches = if_branches,
+        .final_else = lookup_s3,
+        .result_layout = str_layout,
+    } }, Region.zero());
+
+    // Build outer block: { s = "hello"; _ = s; if ... }
+    const pat_s = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const wild_outer = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = str_layout } }, Region.zero());
+    const stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = pat_s, .expr = str_hello } },
+        .{ .decl = .{ .pattern = wild_outer, .expr = lookup_s_outer } },
+    });
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = ite,
+        .result_layout = str_layout,
+    } }, Region.zero());
+
+    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+
+    // global_use_count = 2 (1 outer stmt + 1 from if_then_else).
+    // At binding: incref(1) = 1 incref node.
+    // Branch wrapper: if-body local_count=2 → incref(1) = 1 incref node.
+    // At early_return: effective = 2 + 1 = 3, consumed = 1 + 2 = 3, remaining = 0 decrefs.
+    // Total: 2 incref nodes, 0 early-return decrefs.
+    const rc = countRcOps(&env.lir_store, result);
+    try std.testing.expectEqual(@as(u32, 2), rc.increfs);
 }
