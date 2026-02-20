@@ -588,8 +588,12 @@ pub const Store = struct {
             max_payload_size = @max(max_payload_size, current_offset);
         }
 
-        // Total size = 8 (tag) + max_payload_size
-        const total_size: u32 = 8 + max_payload_size;
+        // Total size = 8 (tag) + max_payload_size, aligned to max_alignment
+        const total_size: u32 = @intCast(std.mem.alignForward(
+            u32,
+            8 + max_payload_size,
+            @as(u32, @intCast(max_alignment)),
+        ));
 
         // Create a tuple layout with a single dummy field (TupleData requires NonEmptyRange)
         const fields_start = self.tuple_fields.items.len;

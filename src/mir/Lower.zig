@@ -30,10 +30,6 @@ const ModuleEnv = can.ModuleEnv;
 
 const Self = @This();
 
-const RecursionPlaceholder = struct {
-    expr_id: MIR.ExprId,
-    symbol_key: u64,
-};
 
 // --- Fields ---
 
@@ -84,7 +80,7 @@ scratch_stmts: base.Scratch(MIR.Stmt),
 scratch_captures: base.Scratch(MIR.Capture),
 mono_scratches: Monotype.Store.Scratches,
 
-recursion_placeholders: std.ArrayListUnmanaged(RecursionPlaceholder) = .{},
+recursion_placeholders: std.AutoHashMapUnmanaged(u64, std.ArrayListUnmanaged(MIR.ExprId)) = .{},
 
 // --- Init/Deinit ---
 
@@ -139,20 +135,30 @@ pub fn init(
 pub fn deinit(self: *Self) void {
     if (builtin.mode == .Debug) {
         // Verify all recursion placeholders were patched to the correct monotype
-        for (self.recursion_placeholders.items) |placeholder| {
-            if (self.lowered_symbols.get(placeholder.symbol_key)) |resolved_expr| {
+        var ph_it = self.recursion_placeholders.iterator();
+        while (ph_it.next()) |entry| {
+            const symbol_key = entry.key_ptr.*;
+            if (self.lowered_symbols.get(symbol_key)) |resolved_expr| {
                 const resolved_monotype = self.store.typeOf(resolved_expr);
-                const placeholder_monotype = self.store.typeOf(placeholder.expr_id);
-                if (placeholder_monotype != resolved_monotype) {
-                    std.debug.panic(
-                        "Recursion guard placeholder has wrong monotype: placeholder has {d} but resolved symbol has {d}",
-                        .{ @intFromEnum(placeholder_monotype), @intFromEnum(resolved_monotype) },
-                    );
+                for (entry.value_ptr.items) |expr_id| {
+                    const placeholder_monotype = self.store.typeOf(expr_id);
+                    if (placeholder_monotype != resolved_monotype) {
+                        std.debug.panic(
+                            "Recursion guard placeholder has wrong monotype: placeholder has {d} but resolved symbol has {d}",
+                            .{ @intFromEnum(placeholder_monotype), @intFromEnum(resolved_monotype) },
+                        );
+                    }
                 }
             }
         }
     }
-    self.recursion_placeholders.deinit(self.allocator);
+    {
+        var ph_it = self.recursion_placeholders.iterator();
+        while (ph_it.next()) |entry| {
+            entry.value_ptr.deinit(self.allocator);
+        }
+        self.recursion_placeholders.deinit(self.allocator);
+    }
     self.pattern_symbols.deinit();
     self.type_var_seen.deinit();
     self.lowered_symbols.deinit();
@@ -1303,10 +1309,11 @@ pub fn lowerExternalDef(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.Expr.
         // Recursive reference — return a placeholder lookup with unit type.
         // The correct monotype is patched below after lowerExpr completes.
         const placeholder = try self.store.addExpr(self.allocator, .{ .lookup = symbol }, self.store.monotype_store.unit_idx, Region.zero());
-        try self.recursion_placeholders.append(self.allocator, .{
-            .expr_id = placeholder,
-            .symbol_key = symbol_key,
-        });
+        const gop = try self.recursion_placeholders.getOrPut(self.allocator, symbol_key);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = .{};
+        }
+        try gop.value_ptr.append(self.allocator, placeholder);
         return placeholder;
     }
 
@@ -1341,10 +1348,12 @@ pub fn lowerExternalDef(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.Expr.
     // During lowerExpr, recursive references create placeholder lookups with unit type;
     // now that the real definition is resolved, update them to the actual type.
     const resolved_monotype = self.store.typeOf(result);
-    for (self.recursion_placeholders.items) |placeholder| {
-        if (placeholder.symbol_key == symbol_key) {
-            self.store.type_map.items[@intFromEnum(placeholder.expr_id)] = resolved_monotype;
+    if (self.recursion_placeholders.getPtr(symbol_key)) |expr_list| {
+        for (expr_list.items) |expr_id| {
+            self.store.type_map.items[@intFromEnum(expr_id)] = resolved_monotype;
         }
+        expr_list.deinit(self.allocator);
+        _ = self.recursion_placeholders.remove(symbol_key);
     }
 
     _ = self.in_progress_defs.remove(symbol_key);
