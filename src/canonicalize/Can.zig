@@ -3559,6 +3559,17 @@ fn canonicalizeFileImport(self: *Self, fi: @TypeOf(@as(AST.Statement, undefined)
     // Resolve the file path from the StringPart token text
     const path_text = self.parse_ir.resolve(fi.path_tok);
 
+    // File imports require filesystem access, which is not available on wasm32.
+    if (comptime builtin.cpu.arch == .wasm32) {
+        const path_string = try self.env.insertString(path_text);
+        const err_expr = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .file_import_io_error = .{
+            .path = path_string,
+            .region = region,
+        } });
+        try self.createFileImportDef(name_ident, err_expr, region);
+        return;
+    }
+
     // Build the full file path relative to source_dir
     const full_path = if (self.source_dir) |dir|
         std.fs.path.join(self.env.gpa, &.{ dir, path_text }) catch return error.OutOfMemory
