@@ -782,7 +782,9 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
             // Dec is i128 stored in linear memory. The function returned an i32 pointer.
             const ptr: u32 = @bitCast(returns[0].I32);
             const mem_slice = module_instance.memoryAll();
-            if (ptr > mem_slice.len or mem_slice.len - ptr < 16) return error.WasmExecFailed;
+            if (ptr > mem_slice.len or mem_slice.len - ptr < 16) {
+                return error.WasmExecFailed;
+            }
             const low: i64 = @bitCast(mem_slice[ptr..][0..8].*);
             const high: i64 = @bitCast(mem_slice[ptr + 8 ..][0..8].*);
             const val: i128 = @as(i128, high) << 64 | @as(i128, @as(u64, @bitCast(low)));

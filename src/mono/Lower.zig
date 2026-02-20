@@ -460,6 +460,45 @@ fn getBlockLayout(self: *Self, module_env: *ModuleEnv, block: anytype) LayoutIdx
     return self.getExprLayoutFromIdx(module_env, block.final_expr);
 }
 
+/// Get the return layout for a lambda expression.
+/// First tries the body expression's type variable. If that resolves to a flex/rigid
+/// variable (unresolved), falls back to extracting the return type from the lambda's
+/// function type, which is more reliably resolved by type inference.
+fn getLambdaRetLayout(self: *Self, module_env: *ModuleEnv, lambda_expr_idx: CIR.Expr.Idx, body_expr_idx: CIR.Expr.Idx) LayoutIdx {
+    // First, try to get the layout from the body expression's type variable
+    const body_ret_layout = self.getExprLayoutFromIdx(module_env, body_expr_idx);
+
+    // Check if the body's type variable resolved to a concrete type
+    const body_tv = ModuleEnv.varFrom(body_expr_idx);
+    const resolved_body = module_env.types.resolveVar(body_tv);
+    if (resolved_body.desc.content != .flex and resolved_body.desc.content != .rigid) {
+        return body_ret_layout;
+    }
+
+    // Body type is unresolved (flex/rigid). Try to extract the return type
+    // from the lambda expression's function type instead.
+    var lambda_tv = ModuleEnv.varFrom(lambda_expr_idx);
+    if (self.layout_var_overrides.count() > 0) {
+        const resolved = module_env.types.resolveVar(lambda_tv);
+        if (self.layout_var_overrides.get(resolved.var_)) |override_var| {
+            lambda_tv = override_var;
+        }
+    }
+    const resolved_lambda = module_env.types.resolveVar(lambda_tv);
+    if (resolved_lambda.desc.content == .structure) {
+        const flat_type = resolved_lambda.desc.content.structure;
+        const func = switch (flat_type) {
+            .fn_pure, .fn_effectful, .fn_unbound => |f| f,
+            else => return body_ret_layout,
+        };
+        // Use the function's return type variable to compute the ret_layout
+        const ls = self.layout_store orelse return body_ret_layout;
+        return ls.fromTypeVar(self.current_module_idx, func.ret, &self.type_scope, self.type_scope_caller_module) catch body_ret_layout;
+    }
+
+    return body_ret_layout;
+}
+
 /// Get layout for an expression from its index using the global layout store.
 fn getExprLayoutFromIdx(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) LayoutIdx {
     var type_var = ModuleEnv.varFrom(expr_idx);
@@ -2414,7 +2453,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const params = try self.lowerPatternSpan(module_env, lambda.args);
 
             const body = try self.lowerExprFromIdx(module_env, lambda.body);
-            const ret_layout = self.getExprLayoutFromIdx(module_env, lambda.body);
+            const ret_layout = self.getLambdaRetLayout(module_env, expr_idx, lambda.body);
             const fn_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
 
             break :blk .{

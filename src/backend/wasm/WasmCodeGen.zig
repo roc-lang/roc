@@ -5353,9 +5353,8 @@ fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: Sym
 
             // Find the closure representation from one of the branches
             const repr = self.findClosureReprInExpr(branches[0].body) orelse
-                self.findClosureReprInExpr(ite.final_else) orelse {
+                self.findClosureReprInExpr(ite.final_else) orelse
                 return false;
-            };
 
             // Allocate a fixed slot for the closure value
             const slot_size: u32 = switch (repr) {
@@ -6760,9 +6759,22 @@ fn compileLambdaSetMemberAndCall(
     args: mono.MonoIR.MonoExprSpan,
 ) Allocator.Error!void {
     const lambda_expr = self.store.getExpr(member.lambda_body);
+    const member_captures = self.store.getCaptures(member.captures);
 
     const func_idx: u32 = switch (lambda_expr) {
-        .lambda => |lambda| try self.compileLambda(member.lambda_body, lambda),
+        .lambda => |lambda| blk: {
+            if (member_captures.len > 0) {
+                // Lambda body with captures from the lambda set (e.g., if-else closures).
+                // The lowerer stores the inner lambda as lambda_body with captures separate.
+                // Compile as a closure function so capture parameters are added.
+                break :blk try self.compileClosure(member.lambda_body, .{
+                    .lambda = member.lambda_body,
+                    .captures = member.captures,
+                });
+            } else {
+                break :blk try self.compileLambda(member.lambda_body, lambda);
+            }
+        },
         .closure => |closure| try self.compileClosure(member.lambda_body, closure),
         else => unreachable,
     };
@@ -6770,10 +6782,18 @@ fn compileLambdaSetMemberAndCall(
     // Push roc_ops_ptr first
     try self.emitLocalGet(self.roc_ops_local);
 
-    // Push captures if this is a closure
+    // Push captures from the member
     if (lambda_expr == .closure) {
         const captures = self.store.getCaptures(lambda_expr.closure.captures);
         for (captures) |cap| {
+            if (self.storage.getLocal(cap.symbol)) |local_idx| {
+                try self.emitLocalGet(local_idx);
+            }
+        }
+    } else if (member_captures.len > 0) {
+        // Lambda with captures from the lambda set — push the captures
+        // that were bound by dispatchUnionClosure's bindCapturesFromStack.
+        for (member_captures) |cap| {
             if (self.storage.getLocal(cap.symbol)) |local_idx| {
                 try self.emitLocalGet(local_idx);
             }

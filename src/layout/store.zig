@@ -307,17 +307,19 @@ pub const Store = struct {
         self.work.in_progress_nominals.clearRetainingCapacity();
     }
 
-    /// Check if a constraint range contains a from_numeral constraint.
-    /// This is used to determine if an unbound type variable represents
-    /// a numeric type (which should default to Dec) or a phantom type (which is a ZST).
+    /// Check if a constraint range contains a numeric constraint.
+    /// This includes from_numeral (numeric literals), desugared_binop (binary operators
+    /// like +, -, *), and desugared_unaryop (unary operators like negation).
+    /// All of these imply the type variable represents a numeric type which should
+    /// default to Dec rather than being treated as zero-sized.
     fn hasFromNumeralConstraint(self: *const Self, constraints: StaticDispatchConstraint.SafeList.Range) bool {
-        // Empty constraints can't contain from_numeral
         if (constraints.isEmpty()) {
             return false;
         }
         for (self.getTypesStore().sliceStaticDispatchConstraints(constraints)) |constraint| {
-            if (constraint.origin == .from_numeral) {
-                return true;
+            switch (constraint.origin) {
+                .from_numeral, .desugared_binop, .desugared_unaryop => return true,
+                .method_call, .where_clause => {},
             }
         }
         return false;
