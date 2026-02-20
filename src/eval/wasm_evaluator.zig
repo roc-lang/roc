@@ -52,7 +52,6 @@ fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoEx
         .field_access => |fa| fa.field_layout,
         .tuple_access => |ta| ta.elem_layout,
         .closure => |c| c.closure_layout,
-        .nominal => |n| n.nominal_layout,
         .i64_literal => .i64,
         .f64_literal => .f64,
         .f32_literal => .f32,
@@ -62,6 +61,7 @@ fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoEx
         .str_literal => .str,
         .unary_not => .bool,
         // Expressions whose result layout is handled by the fromTypeVar fallback
+        .nominal,
         .for_loop,
         .while_loop,
         .list,

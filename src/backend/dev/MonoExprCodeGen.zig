@@ -10953,7 +10953,39 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             if (self.store.getSymbolDef(lookup.symbol)) |def_expr_id| {
                 const def_expr = self.store.getExpr(def_expr_id);
 
-                return switch (def_expr) {
+                // Symbol bound to a call result (e.g., add5 = make_adder(5)).
+                // When called inside a compiled proc, the result may not be in
+                // symbol_locations (it was computed in the outer block scope).
+                // Check symbol_locations first; if not found, evaluate the call
+                // to produce the closure/lambda value, then dispatch.
+                if (def_expr == .call) {
+                    if (self.symbol_locations.get(symbol_key)) |loc| {
+                        switch (loc) {
+                            .lambda_code => |lc| {
+                                return try self.generateCallToLambda(lc.code_offset, args_span, ret_layout);
+                            },
+                            .closure_value => |cv| {
+                                return try self.generateClosureDispatch(cv, args_span, ret_layout);
+                            },
+                            else => {},
+                        }
+                    }
+                    // Not in symbol_locations — evaluate the defining call to
+                    // produce the function value, then call it with our args.
+                    const call_result = try self.generateCall(def_expr.call);
+                    if (call_result == .lambda_code) {
+                        return try self.generateCallToLambda(
+                            call_result.lambda_code.code_offset,
+                            args_span,
+                            ret_layout,
+                        );
+                    }
+                    if (call_result == .closure_value) {
+                        return try self.generateClosureDispatch(call_result.closure_value, args_span, ret_layout);
+                    }
+                    // Fall through to the rest of the function
+                }
+                if (def_expr != .call) return switch (def_expr) {
                     .lambda => |lambda| {
                         // Inline when:
                         // 1. Args contain callables (higher-order calls)

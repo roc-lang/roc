@@ -5263,10 +5263,19 @@ fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: Sym
             // Call result bound to a symbol: e.g., add_ten = make_adder(10)
             // The call returns a closure value at runtime. We generate the call,
             // store captures into locals, and register the result for later dispatch.
-            const closure_info = self.getReturnedClosureInfo(call_expr.fn_expr) orelse {
+            const fn_result_info = self.getReturnedClosureInfo(call_expr.fn_expr) orelse {
                 return false;
             };
-            // Compile the returned closure's function
+
+            // For chained calls like `add_3_and_4 = make_op(3)(4)`, fn_expr is
+            // itself a call. getReturnedClosureInfo gives us the INTERMEDIATE
+            // closure (what `make_op` returns), but the outer call invokes that
+            // closure, so the actual result is what the intermediate closure returns.
+            const fn_expr_data = self.store.getExpr(call_expr.fn_expr);
+            const closure_info = if (fn_expr_data == .call)
+                self.getReturnedClosureInfo(fn_result_info.lambda_expr) orelse fn_result_info
+            else
+                fn_result_info;
 
             // Compile the returned closure's function (may already be compiled)
             const inner_fn_expr = self.store.getExpr(closure_info.lambda_expr);
@@ -5315,8 +5324,10 @@ fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: Sym
                         try self.emitLocalGet(ptr_local);
                         try self.emitLoadOp(cap_vt, field_offset);
                         try self.emitLocalSet(cap_local);
-                        const cap_size = self.layoutByteSize(cap.layout_idx);
-                        field_offset += if (cap_size < 4) 4 else cap_size;
+                        // Match the layout used by materializeCapturesToStackWithBase:
+                        // offset by wasm value type size, padded to 8 bytes.
+                        const vs: u32 = valTypeSize(cap_vt);
+                        field_offset += if (vs < 8) 8 else vs;
                     }
                 },
                 .enum_dispatch, .union_repr => return false,
