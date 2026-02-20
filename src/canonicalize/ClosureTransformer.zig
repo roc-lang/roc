@@ -1132,7 +1132,7 @@ fn exprContainsPatternRef(
         .e_anno_only,
         .e_lookup_required,
         .e_hosted_lambda,
-        .e_low_level_lambda,
+        .e_run_low_level,
         .e_crash,
         => return false,
     }
@@ -1732,7 +1732,7 @@ pub fn transformExprWithLambdaSet(
                             // Add to lambda set with the lambda's info
                             try lambda_set.addClosure(self.allocator, ClosureInfo{
                                 .tag_name = tag_name,
-                                .source_module = self.module_env.module_name_idx,
+                                .source_module = self.module_env.qualified_module_ident,
                                 .lambda_body = lambda.body,
                                 .lambda_args = lambda.args,
                                 .capture_names = std.ArrayList(base.Ident.Idx).empty,
@@ -1778,7 +1778,7 @@ pub fn transformExprWithLambdaSet(
                         // Add to lambda set with the lambda's info
                         try lambda_set.addClosure(self.allocator, ClosureInfo{
                             .tag_name = tag_name,
-                            .source_module = self.module_env.module_name_idx,
+                            .source_module = self.module_env.qualified_module_ident,
                             .lambda_body = lambda.body,
                             .lambda_args = lambda.args,
                             .capture_names = std.ArrayList(base.Ident.Idx).empty,
@@ -2006,7 +2006,7 @@ pub fn transformClosure(
             // Store closure info for dispatch function generation
             try self.closures.put(closure_expr_idx, ClosureInfo{
                 .tag_name = tag_name,
-                .source_module = self.module_env.module_name_idx,
+                .source_module = self.module_env.qualified_module_ident,
                 .lambda_body = lambda.body,
                 .lambda_args = lambda.args,
                 .capture_names = capture_names,
@@ -2243,7 +2243,7 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
         .e_anno_only,
         .e_lookup_required,
         .e_hosted_lambda,
-        .e_low_level_lambda,
+        .e_run_low_level,
         => return expr_idx,
 
         .e_type_var_dispatch => |tvd| {

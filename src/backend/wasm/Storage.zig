@@ -1,12 +1,12 @@
-//! Tracks where MonoSymbols live in wasm (local variables vs linear memory).
+//! Tracks where Symbols live in wasm (local variables vs linear memory).
 //!
-//! Maps MonoSymbol → wasm local index so that `block` (let bindings) and
+//! Maps Symbol → wasm local index so that `block` (let bindings) and
 //! `lookup` can store / retrieve values.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const mono = @import("mono");
-const MonoSymbol = mono.MonoIR.MonoSymbol;
+const Symbol = mono.MonoIR.Symbol;
 const WasmModule = @import("WasmModule.zig");
 const ValType = WasmModule.ValType;
 
@@ -18,8 +18,8 @@ pub const LocalInfo = struct {
     val_type: ValType,
 };
 
-/// Symbol → wasm local mapping. Key is the u48 bitcast of MonoSymbol.
-locals: std.AutoHashMap(u48, LocalInfo),
+/// Symbol → wasm local mapping. Key is the u64 bitcast of Symbol.
+locals: std.AutoHashMap(u64, LocalInfo),
 /// Next local index to allocate.
 next_local_idx: u32,
 /// Ordered list of local types for the function's locals declaration.
@@ -28,7 +28,7 @@ allocator: Allocator,
 
 pub fn init(allocator: Allocator) Self {
     return .{
-        .locals = std.AutoHashMap(u48, LocalInfo).init(allocator),
+        .locals = std.AutoHashMap(u64, LocalInfo).init(allocator),
         .next_local_idx = 0,
         .local_types = .empty,
         .allocator = allocator,
@@ -41,11 +41,11 @@ pub fn deinit(self: *Self) void {
 }
 
 /// Allocate a new wasm local for the given symbol.
-pub fn allocLocal(self: *Self, symbol: MonoSymbol, val_type: ValType) !u32 {
+pub fn allocLocal(self: *Self, symbol: Symbol, val_type: ValType) !u32 {
     const idx = self.next_local_idx;
     self.next_local_idx += 1;
     try self.local_types.append(self.allocator, val_type);
-    const key: u48 = @bitCast(symbol);
+    const key: u64 = @bitCast(symbol);
     try self.locals.put(key, .{ .idx = idx, .val_type = val_type });
     return idx;
 }
@@ -59,8 +59,8 @@ pub fn allocAnonymousLocal(self: *Self, val_type: ValType) !u32 {
 }
 
 /// Look up the local index for a previously-allocated symbol.
-pub fn getLocal(self: *const Self, symbol: MonoSymbol) ?u32 {
-    const key: u48 = @bitCast(symbol);
+pub fn getLocal(self: *const Self, symbol: Symbol) ?u32 {
+    const key: u64 = @bitCast(symbol);
     if (self.locals.get(key)) |info| {
         return info.idx;
     }

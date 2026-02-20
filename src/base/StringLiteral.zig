@@ -7,7 +7,14 @@ const testing = std.testing;
 const CompactWriter = collections.CompactWriter;
 
 /// The index of this string in a `Store`.
-pub const Idx = enum(u32) { _ };
+pub const Idx = enum(u32) {
+    none = 0,
+    _,
+
+    pub fn isNone(self: Idx) bool {
+        return self == .none;
+    }
+};
 
 /// An interner for string literals.
 ///

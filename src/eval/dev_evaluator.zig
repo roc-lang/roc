@@ -10,7 +10,7 @@
 //! 7. Generating native machine code (x86_64/aarch64)
 //! 8. Executing the generated code
 //!
-//! Code generation uses Mono IR with globally unique MonoSymbol references,
+//! Code generation uses Mono IR with globally unique Symbol references,
 //! eliminating cross-module index collisions.
 //!
 //! The lambda lifting pass (step 5) runs after monomorphization to ensure all
@@ -191,7 +191,7 @@ fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoEx
         // Same for if/match — the result_layout may be wrong, but branch bodies
         // should have the correct layout from their own type variables.
         .if_then_else => |ite| ite.result_layout,
-        .when => |w| w.result_layout,
+        .match_expr => |w| w.result_layout,
         .dbg => |d| d.result_layout,
         .expect => |e| e.result_layout,
         .binop => |b| b.result_layout,
@@ -207,7 +207,7 @@ fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoEx
         .field_access => |fa| fa.field_layout,
         .tuple_access => |ta| ta.elem_layout,
         .closure => |c| c.closure_layout,
-        .nominal => |n| n.nominal_layout,
+        .nominal => |n| monoExprResultLayout(store, n.backing_expr) orelse n.nominal_layout,
         // Note: .list and .empty_list store element layout, not the overall list layout.
         // They are handled by the fromTypeVar fallback.
         // Integer literals don't carry signedness — an i64_literal could be
@@ -219,7 +219,27 @@ fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoEx
         .dec_literal => .dec,
         .str_literal => .str,
         .unary_not => .bool,
-        else => null,
+        // Expressions whose result layout is handled by the fromTypeVar fallback
+        .for_loop,
+        .while_loop,
+        .list,
+        .empty_list,
+        .empty_record,
+        .lambda,
+        .crash,
+        .runtime_error,
+        .str_concat,
+        .int_to_str,
+        .float_to_str,
+        .dec_to_str,
+        .str_escape_and_quote,
+        .discriminant_switch,
+        .tag_payload_access,
+        .hosted_call,
+        .incref,
+        .decref,
+        .free,
+        => null,
     };
 }
 
@@ -694,7 +714,7 @@ pub const DevEvaluator = struct {
         defer mono_store.deinit();
 
         // Find the module index for this module
-        var module_idx: u16 = 0;
+        var module_idx: u32 = 0;
         for (all_module_envs, 0..) |env, i| {
             if (env == module_env) {
                 module_idx = @intCast(i);
@@ -850,7 +870,7 @@ pub const DevEvaluator = struct {
 
         // Create the code generator with the layout store
         // Use HostMonoExprCodeGen since we're executing on the host machine
-        var codegen = backend.HostMonoExprCodeGen.init(
+        var codegen = try backend.HostMonoExprCodeGen.init(
             self.allocator,
             &mono_store,
             layout_store_ptr,

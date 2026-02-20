@@ -1872,7 +1872,7 @@ pub fn getRecordField(store: *const NodeStore, field_idx: AST.RecordField.Idx) A
     };
 }
 
-/// Retrieves when branch data from a stored when branch node.
+/// Retrieves match branch data from a stored match branch node.
 pub fn getBranch(store: *const NodeStore, branch_idx: AST.MatchBranch.Idx) AST.MatchBranch {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(branch_idx)));
     return .{
@@ -2193,6 +2193,7 @@ pub fn clearScratchPatternsFrom(store: *NodeStore, start: u32) void {
 
 /// Creates a slice corresponding to a span.
 pub fn sliceFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) []T {
+    if (span.len == 0) return &.{};
     return @ptrCast(store.extra_data.items[span.start..][0..span.len]);
 }
 

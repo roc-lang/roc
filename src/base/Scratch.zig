@@ -123,6 +123,7 @@ pub fn Scratch(comptime T: type) type {
 
         /// Creates slice from the provided start index
         pub fn sliceFromSpan(self: *Self, span: DataSpan) []T {
+            if (span.len == 0) return &.{};
             const start: usize = @intCast(span.start);
             const end: usize = @intCast(span.start + span.len);
 

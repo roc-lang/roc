@@ -466,6 +466,36 @@ pub fn Emit(comptime target: RocTarget) type {
             }
         }
 
+        /// SHL reg, CL (shift left by CL register)
+        pub fn shlRegCl(self: *Self, width: RegisterWidth, reg: GeneralReg) !void {
+            if (width.requiresSizeOverride()) {
+                try self.buf.append(self.allocator, 0x66);
+            }
+            try self.emitRex(width, null, reg);
+            try self.buf.append(self.allocator, 0xD3);
+            try self.buf.append(self.allocator, modRM(0b11, 4, reg.enc()));
+        }
+
+        /// SHR reg, CL (logical shift right by CL register)
+        pub fn shrRegCl(self: *Self, width: RegisterWidth, reg: GeneralReg) !void {
+            if (width.requiresSizeOverride()) {
+                try self.buf.append(self.allocator, 0x66);
+            }
+            try self.emitRex(width, null, reg);
+            try self.buf.append(self.allocator, 0xD3);
+            try self.buf.append(self.allocator, modRM(0b11, 5, reg.enc()));
+        }
+
+        /// SAR reg, CL (arithmetic shift right by CL register)
+        pub fn sarRegCl(self: *Self, width: RegisterWidth, reg: GeneralReg) !void {
+            if (width.requiresSizeOverride()) {
+                try self.buf.append(self.allocator, 0x66);
+            }
+            try self.emitRex(width, null, reg);
+            try self.buf.append(self.allocator, 0xD3);
+            try self.buf.append(self.allocator, modRM(0b11, 7, reg.enc()));
+        }
+
         // Control flow instructions
 
         /// RET (return from procedure)

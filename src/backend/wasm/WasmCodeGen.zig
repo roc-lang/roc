@@ -19,7 +19,7 @@ const Op = WasmModule.Op;
 const ValType = WasmModule.ValType;
 const BlockType = WasmModule.BlockType;
 
-const MonoSymbol = mono.MonoIR.MonoSymbol;
+const Symbol = mono.MonoIR.Symbol;
 const MonoProc = mono.MonoIR.MonoProc;
 const CFStmtId = mono.MonoIR.CFStmtId;
 
@@ -41,8 +41,8 @@ uses_stack_memory: bool = false,
 fp_local: u32 = 0,
 /// Map from lambda expression ID → compiled wasm function index.
 compiled_lambdas: std.AutoHashMap(u32, u32),
-/// Map from MonoSymbol → ClosureValue (for all callable bindings).
-closure_values: std.AutoHashMap(u48, ClosureValue),
+/// Map from Symbol → ClosureValue (for all callable bindings).
+closure_values: std.AutoHashMap(u64, ClosureValue),
 /// Type index for the RocOps function signature: (i32, i32) -> void.
 roc_ops_type_idx: u32 = 0,
 /// Table indices for RocOps functions (used with call_indirect).
@@ -154,7 +154,7 @@ const ReturnedClosureInfo = struct {
 /// When a higher-order function has a pre-bound callback closure with captures,
 /// those captures become extra leading parameters so the function body can access them.
 const ForwardedCapture = struct {
-    symbol: MonoSymbol,
+    symbol: Symbol,
     layout_idx: layout.Idx,
 };
 
@@ -170,7 +170,7 @@ pub fn init(allocator: Allocator, store: *const MonoExprStore, layout_store: ?*c
         .uses_stack_memory = false,
         .fp_local = 0,
         .compiled_lambdas = std.AutoHashMap(u32, u32).init(allocator),
-        .closure_values = std.AutoHashMap(u48, ClosureValue).init(allocator),
+        .closure_values = std.AutoHashMap(u64, ClosureValue).init(allocator),
         .join_point_depths = std.AutoHashMap(u32, u32).init(allocator),
         .join_point_param_locals = std.AutoHashMap(u32, []u32).init(allocator),
         .forwarded_func_captures = std.AutoHashMap(u32, []ForwardedCapture).init(allocator),
@@ -649,7 +649,7 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
                         .f32 => Op.f32_div,
                         .f64 => Op.f64_div,
                     },
-                    .mod => switch (vt) {
+                    .rem => switch (vt) {
                         .i32 => if (is_unsigned) Op.i32_rem_u else Op.i32_rem_s,
                         .i64 => if (is_unsigned) Op.i64_rem_u else Op.i64_rem_s,
                         .f32, .f64 => {
@@ -941,7 +941,7 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
             try self.generateExpr(b.final_expr);
         },
         .lookup => |l| {
-            const key: u48 = @bitCast(l.symbol);
+            const key: u64 = @bitCast(l.symbol);
             if (self.storage.locals.get(key)) |local_info| {
                 self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                 WasmModule.leb128WriteU32(self.allocator, &self.body, local_info.idx) catch return error.OutOfMemory;
@@ -1023,8 +1023,8 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
             const bt = valTypeToBlockType(self.resolveValType(ite.result_layout));
             try self.generateIfChain(branches, ite.final_else, bt);
         },
-        .when => |w| {
-            try self.generateWhen(w);
+        .match_expr => |w| {
+            try self.generateMatch(w);
         },
         .nominal => |nom| {
             // Nominal is transparent at runtime — just generate the backing expression.
@@ -1317,9 +1317,9 @@ fn generateIfChain(self: *Self, branches: []const mono.MonoIR.MonoIfBranch, fina
     self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
 }
 
-/// Generate a when expression (pattern matching).
-fn generateWhen(self: *Self, w: anytype) Allocator.Error!void {
-    const branches = self.store.getWhenBranches(w.branches);
+/// Generate a match expression (pattern matching).
+fn generateMatch(self: *Self, w: anytype) Allocator.Error!void {
+    const branches = self.store.getMatchBranches(w.branches);
     const bt = valTypeToBlockType(self.resolveValType(w.result_layout));
 
     if (branches.len == 0) {
@@ -1337,10 +1337,10 @@ fn generateWhen(self: *Self, w: anytype) Allocator.Error!void {
     WasmModule.leb128WriteU32(self.allocator, &self.body, temp_local) catch return error.OutOfMemory;
 
     // Generate cascading if/else for each branch
-    try self.generateWhenBranches(branches, temp_local, value_vt, bt);
+    try self.generateMatchBranches(branches, temp_local, value_vt, bt);
 }
 
-fn generateWhenBranches(self: *Self, branches: []const mono.MonoIR.MonoWhenBranch, value_local: u32, value_vt: ValType, bt: BlockType) Allocator.Error!void {
+fn generateMatchBranches(self: *Self, branches: []const mono.MonoIR.MonoMatchBranch, value_local: u32, value_vt: ValType, bt: BlockType) Allocator.Error!void {
     if (branches.len == 0) {
         // Fallthrough — unreachable
         self.body.append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
@@ -1397,7 +1397,7 @@ fn generateWhenBranches(self: *Self, branches: []const mono.MonoIR.MonoWhenBranc
             self.body.append(self.allocator, @intFromEnum(bt)) catch return error.OutOfMemory;
             try self.generateExpr(branch.body);
             self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
-            try self.generateWhenBranches(remaining, value_local, value_vt, bt);
+            try self.generateMatchBranches(remaining, value_local, value_vt, bt);
             self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
         },
         .tag => |tag_pat| {
@@ -1543,7 +1543,7 @@ fn generateWhenBranches(self: *Self, branches: []const mono.MonoIR.MonoWhenBranc
 
             try self.generateExpr(branch.body);
             self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
-            try self.generateWhenBranches(remaining, value_local, value_vt, bt);
+            try self.generateMatchBranches(remaining, value_local, value_vt, bt);
             self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
         },
         .record => |rec_pat| {
@@ -1666,16 +1666,16 @@ fn generateWhenBranches(self: *Self, branches: []const mono.MonoIR.MonoWhenBranc
             self.body.append(self.allocator, @intFromEnum(bt)) catch return error.OutOfMemory;
             try self.generateExpr(branch.body);
             self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
-            try self.generateWhenBranches(remaining, value_local, value_vt, bt);
+            try self.generateMatchBranches(remaining, value_local, value_vt, bt);
             self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
         },
         .tuple => |tup_pat| {
-            // Tuple destructuring in when branch
+            // Tuple destructuring in match branch
             try self.bindTuplePattern(value_local, tup_pat);
             try self.generateExpr(branch.body);
         },
         .str_literal => |str_idx| {
-            // String literal comparison in when branch
+            // String literal comparison in match branch
             const import_idx = self.str_eq_import orelse unreachable;
 
             // Generate the pattern string as a RocStr
@@ -1694,11 +1694,11 @@ fn generateWhenBranches(self: *Self, branches: []const mono.MonoIR.MonoWhenBranc
             self.body.append(self.allocator, @intFromEnum(bt)) catch return error.OutOfMemory;
             try self.generateExpr(branch.body);
             self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
-            try self.generateWhenBranches(remaining, value_local, value_vt, bt);
+            try self.generateMatchBranches(remaining, value_local, value_vt, bt);
             self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
         },
         .list => |list_pat| {
-            // List destructuring in when branch
+            // List destructuring in match branch
             // Check if length matches prefix count (exact match when no rest pattern)
             const prefix_patterns = self.store.getPatternSpan(list_pat.prefix);
             const prefix_count: u32 = @intCast(prefix_patterns.len);
@@ -1843,7 +1843,7 @@ fn generateWhenBranches(self: *Self, branches: []const mono.MonoIR.MonoWhenBranc
 
             try self.generateExpr(branch.body);
             self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
-            try self.generateWhenBranches(remaining, value_local, value_vt, bt);
+            try self.generateMatchBranches(remaining, value_local, value_vt, bt);
             self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
         },
     }
@@ -1877,7 +1877,7 @@ fn exprLayoutIdx(self: *Self, expr_id: MonoExprId) ?layout.Idx {
         .block => |b| b.result_layout,
         .lookup => |l| l.layout_idx,
         .if_then_else => |ite| ite.result_layout,
-        .when => |w| w.result_layout,
+        .match_expr => |w| w.result_layout,
         .nominal => |nom| self.exprLayoutIdx(nom.backing_expr),
         .call => |c| c.ret_layout,
         .record => |r| r.record_layout,
@@ -1925,7 +1925,7 @@ fn exprValType(self: *Self, expr_id: MonoExprId) ValType {
         .block => |b| self.exprValType(b.final_expr),
         .lookup => |l| self.resolveValType(l.layout_idx),
         .if_then_else => |ite| self.resolveValType(ite.result_layout),
-        .when => |w| self.resolveValType(w.result_layout),
+        .match_expr => |w| self.resolveValType(w.result_layout),
         .nominal => |nom| self.exprValType(nom.backing_expr),
         .empty_record => .i32,
         .empty_list => .i32, // pointer to 12-byte RocList
@@ -2001,7 +2001,7 @@ fn isCompositeExpr(self: *const Self, expr_id: MonoExprId) bool {
         .nominal => |nom| self.isCompositeExpr(nom.backing_expr),
         .block => |b| self.isCompositeExpr(b.final_expr),
         .if_then_else => |ite| self.isCompositeLayout(ite.result_layout),
-        .when => |w| self.isCompositeLayout(w.result_layout),
+        .match_expr => |w| self.isCompositeLayout(w.result_layout),
         .lookup => |l| self.isCompositeLayout(l.layout_idx),
         .call => |c| self.isCompositeLayout(c.ret_layout),
         .field_access => |fa| self.isCompositeLayout(fa.field_layout),
@@ -2032,8 +2032,8 @@ fn isCompositeLayout(self: *const Self, layout_idx: layout.Idx) bool {
     return false;
 }
 
-/// Generate structural equality comparison for two composite values (records, tuples).
-/// Compares the underlying memory byte-by-byte using i32 loads.
+/// Generate structural equality comparison for two composite values (records, tuples, tag unions).
+/// Uses layout-aware comparison for fields containing heap types (strings, lists).
 /// Leaves an i32 (bool) on the stack: 1 for equal, 0 for not equal.
 fn generateStructuralEq(self: *Self, lhs: MonoExprId, rhs: MonoExprId, negate: bool) Allocator.Error!void {
     // Check for string/list type via layout
@@ -2070,74 +2070,578 @@ fn generateStructuralEq(self: *Self, lhs: MonoExprId, rhs: MonoExprId, negate: b
         else => {},
     }
 
-    // Get the byte size of the values
-    const byte_size = self.exprByteSize(lhs);
-
     // Generate both operand expressions — each pushes an i32 pointer
     try self.generateExpr(lhs);
     const lhs_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, lhs_local) catch return error.OutOfMemory;
+    try self.emitLocalSet(lhs_local);
 
     try self.generateExpr(rhs);
     const rhs_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, rhs_local) catch return error.OutOfMemory;
+    try self.emitLocalSet(rhs_local);
 
-    if (byte_size == 0) {
-        // Zero-size types are always equal
-        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-        WasmModule.leb128WriteI32(self.allocator, &self.body, if (negate) 0 else 1) catch return error.OutOfMemory;
+    // Try layout-aware comparison for records/tuples/tag unions containing heap types
+    if (self.exprLayoutIdx(lhs)) |lay_idx| {
+        if (self.layout_store) |ls| {
+            const l = ls.getLayout(lay_idx);
+            switch (l.tag) {
+                .record => {
+                    try self.compareCompositeByLayout(lhs_local, rhs_local, lay_idx);
+                    if (negate) {
+                        self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+                    }
+                    return;
+                },
+                .tuple => {
+                    try self.compareCompositeByLayout(lhs_local, rhs_local, lay_idx);
+                    if (negate) {
+                        self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+                    }
+                    return;
+                },
+                .tag_union => {
+                    const tu_info = ls.getTagUnionInfo(l);
+                    if (tu_info.contains_refcounted) {
+                        try self.compareTagUnionByLayout(lhs_local, rhs_local, lay_idx);
+                        if (negate) {
+                            self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+                        }
+                        return;
+                    }
+                    // No heap types — fall through to bytewise comparison
+                },
+                else => {},
+            }
+        }
+    }
+
+    // Fallback: bytewise comparison for types without heap-allocated fields
+    const byte_size = self.exprByteSize(lhs);
+    try self.emitBytewiseEq(lhs_local, rhs_local, byte_size);
+
+    if (negate) {
+        self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+    }
+}
+
+/// Compare a composite type (record or tuple) field-by-field using layout information.
+/// Pushes an i32 (1=equal, 0=not equal) onto the WASM stack.
+fn compareCompositeByLayout(self: *Self, lhs_local: u32, rhs_local: u32, layout_idx: layout.Idx) Allocator.Error!void {
+    const ls = self.layout_store orelse unreachable;
+    const l = ls.getLayout(layout_idx);
+
+    switch (l.tag) {
+        .record => {
+            const record_idx = l.data.record.idx;
+            const record_data = ls.getRecordData(record_idx);
+            const field_count = record_data.fields.count;
+            if (field_count == 0) {
+                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
+                return;
+            }
+
+            var first = true;
+            var field_i: u32 = 0;
+            while (field_i < field_count) : (field_i += 1) {
+                const field_offset = ls.getRecordFieldOffset(record_idx, @intCast(field_i));
+                const field_size = ls.getRecordFieldSize(record_idx, @intCast(field_i));
+                const field_layout_idx = ls.getRecordFieldLayout(record_idx, @intCast(field_i));
+
+                if (field_size == 0) continue;
+
+                try self.compareFieldByLayout(lhs_local, rhs_local, field_offset, field_size, field_layout_idx);
+
+                if (!first) {
+                    self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+                }
+                first = false;
+            }
+
+            if (first) {
+                // All fields were zero-size
+                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
+            }
+        },
+        .tuple => {
+            const tuple_idx = l.data.tuple.idx;
+            const tuple_data = ls.getTupleData(tuple_idx);
+            const elem_count = tuple_data.fields.count;
+            if (elem_count == 0) {
+                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
+                return;
+            }
+
+            var first = true;
+            var elem_i: u32 = 0;
+            while (elem_i < elem_count) : (elem_i += 1) {
+                const elem_offset = ls.getTupleElementOffset(tuple_idx, @intCast(elem_i));
+                const elem_size = ls.getTupleElementSize(tuple_idx, @intCast(elem_i));
+                const elem_layout_idx = ls.getTupleElementLayout(tuple_idx, @intCast(elem_i));
+
+                if (elem_size == 0) continue;
+
+                try self.compareFieldByLayout(lhs_local, rhs_local, elem_offset, elem_size, elem_layout_idx);
+
+                if (!first) {
+                    self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+                }
+                first = false;
+            }
+
+            if (first) {
+                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
+            }
+        },
+        else => {
+            // For non-composite types, fall back to bytewise comparison
+            const byte_size = ls.layoutSizeAlign(l).size;
+            try self.emitBytewiseEq(lhs_local, rhs_local, byte_size);
+        },
+    }
+}
+
+/// Compare a tag union by layout: compare discriminants first, then dispatch
+/// per-variant payload comparison. Pushes i32 result onto the WASM stack.
+fn compareTagUnionByLayout(self: *Self, lhs_local: u32, rhs_local: u32, layout_idx: layout.Idx) Allocator.Error!void {
+    const ls = self.layout_store orelse unreachable;
+    const l = ls.getLayout(layout_idx);
+    std.debug.assert(l.tag == .tag_union);
+
+    const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
+    const disc_offset = tu_data.discriminant_offset;
+    const disc_size = tu_data.discriminant_size;
+
+    // Allocate a local to hold the result
+    const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+
+    // Load LHS discriminant
+    try self.emitLocalGet(lhs_local);
+    try self.emitLoadBySize(disc_size, disc_offset);
+    const lhs_disc = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(lhs_disc);
+
+    // Load RHS discriminant
+    try self.emitLocalGet(rhs_local);
+    try self.emitLoadBySize(disc_size, disc_offset);
+    const rhs_disc = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(rhs_disc);
+
+    // Compare discriminants
+    try self.emitLocalGet(lhs_disc);
+    try self.emitLocalGet(rhs_disc);
+    self.body.append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
+    const disc_eq_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(disc_eq_local);
+
+    // If discriminants differ, result is 0
+    // We use: result = disc_eq AND payload_eq
+    // Start by assuming payload_eq = 1 (for the case where discriminants differ, we short-circuit)
+
+    // Default result: discriminants equal ? (will be AND'd with payload comparison) : 0
+    try self.emitLocalGet(disc_eq_local);
+    try self.emitLocalSet(result_local);
+
+    // Only compare payloads if discriminants are equal
+    // Only compare payloads if discriminants are equal
+    // block { if disc_ne: br 0; ... payload comparison ... } end
+    self.body.append(self.allocator, Op.block) catch return error.OutOfMemory;
+    self.body.append(self.allocator, 0x40) catch return error.OutOfMemory; // void block type
+    try self.emitLocalGet(disc_eq_local);
+    self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory; // disc_ne
+    self.body.append(self.allocator, Op.br_if) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory; // break out of block
+
+    // Payload comparison: compare based on variant
+    // For simplicity, compare the payload bytes up to discriminant_offset
+    // using layout-aware comparison for the variant's payload layout
+    const variants = ls.getTagUnionVariants(tu_data);
+    if (variants.len > 0) {
+        const payload_size = disc_offset; // Payload occupies bytes [0..disc_offset)
+        if (payload_size > 0) {
+            // Compare payloads based on variant layout
+            // For each variant, check if discriminant matches and compare payload
+            // Use a local to accumulate payload equality
+            const payload_eq_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+
+            // Default: payload equal (1) - will be overwritten
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
+            try self.emitLocalSet(payload_eq_local);
+
+            for (0..variants.len) |variant_i| {
+                const variant_payload_layout = variants.get(variant_i).payload_layout;
+                const variant_payload_size = self.layoutByteSize(variant_payload_layout);
+
+                if (variant_payload_size == 0) continue;
+
+                // Check: if (disc == variant_i) { compare payload with this variant's layout }
+                self.body.append(self.allocator, Op.block) catch return error.OutOfMemory;
+                self.body.append(self.allocator, 0x40) catch return error.OutOfMemory; // void block
+
+                // Skip if disc != variant_i
+                try self.emitLocalGet(lhs_disc);
+                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(variant_i)) catch return error.OutOfMemory;
+                self.body.append(self.allocator, Op.i32_ne) catch return error.OutOfMemory;
+                self.body.append(self.allocator, Op.br_if) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+
+                // This variant matches - compare its payload
+                const variant_layout_tag = ls.getLayout(variant_payload_layout).tag;
+                if (variant_payload_layout == .str or variant_layout_tag == .record or
+                    variant_layout_tag == .tuple or variant_layout_tag == .tag_union or
+                    variant_layout_tag == .list)
+                {
+                    // Layout-aware comparison
+                    try self.compareFieldByLayout(lhs_local, rhs_local, 0, variant_payload_size, variant_payload_layout);
+                } else {
+                    // Bytewise comparison for scalar payloads
+                    try self.emitBytewiseEq(lhs_local, rhs_local, variant_payload_size);
+                }
+                try self.emitLocalSet(payload_eq_local);
+
+                self.body.append(self.allocator, Op.end) catch return error.OutOfMemory; // end block
+            }
+
+            // result = disc_eq AND payload_eq
+            try self.emitLocalGet(disc_eq_local);
+            try self.emitLocalGet(payload_eq_local);
+            self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+            try self.emitLocalSet(result_local);
+        }
+    }
+
+    self.body.append(self.allocator, Op.end) catch return error.OutOfMemory; // end outer block
+
+    // Push result
+    try self.emitLocalGet(result_local);
+}
+
+/// Compare a single field by layout type. Pushes i32 (1=equal, 0=not equal) onto the WASM stack.
+/// lhs_local/rhs_local are i32 pointers to the parent struct, field_offset is the byte offset.
+fn compareFieldByLayout(
+    self: *Self,
+    lhs_local: u32,
+    rhs_local: u32,
+    field_offset: u32,
+    field_size: u32,
+    field_layout_idx: layout.Idx,
+) Allocator.Error!void {
+    if (field_layout_idx == .str) {
+        // String: call roc_str_eq(lhs_ptr + offset, rhs_ptr + offset)
+        const import_idx = self.str_eq_import orelse unreachable;
+        try self.emitLocalGet(lhs_local);
+        if (field_offset > 0) {
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(field_offset)) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+        }
+        try self.emitLocalGet(rhs_local);
+        if (field_offset > 0) {
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(field_offset)) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+        }
+        self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
         return;
     }
 
-    // Compare memory word-by-word (or byte-by-byte for remainder)
-    // Strategy: compare each aligned chunk, AND all results together
+    const ls = self.layout_store orelse {
+        // No layout store: fallback to bytewise
+        try self.emitBytewiseEqAtOffset(lhs_local, rhs_local, field_offset, field_size);
+        return;
+    };
+
+    const field_layout = ls.getLayout(field_layout_idx);
+    switch (field_layout.tag) {
+        .list => {
+            // List: call roc_list_eq or roc_list_str_eq
+            const elem_layout = field_layout.data.list;
+            if (elem_layout == .str) {
+                const import_idx = self.list_str_eq_import orelse unreachable;
+                try self.emitLocalGet(lhs_local);
+                if (field_offset > 0) {
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(field_offset)) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                }
+                try self.emitLocalGet(rhs_local);
+                if (field_offset > 0) {
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(field_offset)) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                }
+                self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
+            } else if (ls.getLayout(elem_layout).tag == .list) {
+                // List of lists - use specialized host function with inner element size
+                const inner_elem_layout = ls.getLayout(elem_layout).data.list;
+                const inner_elem_size = self.layoutByteSize(inner_elem_layout);
+                const import_idx = self.list_list_eq_import orelse unreachable;
+                try self.emitLocalGet(lhs_local);
+                if (field_offset > 0) {
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(field_offset)) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                }
+                try self.emitLocalGet(rhs_local);
+                if (field_offset > 0) {
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(field_offset)) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                }
+                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(inner_elem_size)) catch return error.OutOfMemory;
+                self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
+            } else if (ls.layoutContainsRefcounted(ls.getLayout(elem_layout))) {
+                // Composite elements (records/tuples/tag-unions with refcounted fields):
+                // inline element-by-element structural comparison loop.
+                const elem_size = self.layoutByteSize(elem_layout);
+                const lhs_list_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                const rhs_list_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+
+                try self.emitLocalGet(lhs_local);
+                if (field_offset > 0) {
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(field_offset)) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                }
+                try self.emitLocalSet(lhs_list_local);
+
+                try self.emitLocalGet(rhs_local);
+                if (field_offset > 0) {
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(field_offset)) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                }
+                try self.emitLocalSet(rhs_list_local);
+
+                try self.emitListEqLoop(lhs_list_local, rhs_list_local, elem_layout, elem_size);
+            } else {
+                // Simple scalar elements: bytewise comparison via host function
+                const import_idx = self.list_eq_import orelse unreachable;
+                const elem_size = self.layoutByteSize(elem_layout);
+                try self.emitLocalGet(lhs_local);
+                if (field_offset > 0) {
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(field_offset)) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                }
+                try self.emitLocalGet(rhs_local);
+                if (field_offset > 0) {
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(field_offset)) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                }
+                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(elem_size)) catch return error.OutOfMemory;
+                self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
+            }
+        },
+        .record, .tuple, .tag_union => {
+            // Nested composite: create offset locals and recurse
+            const lhs_field_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            const rhs_field_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+
+            try self.emitLocalGet(lhs_local);
+            if (field_offset > 0) {
+                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(field_offset)) catch return error.OutOfMemory;
+                self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+            }
+            try self.emitLocalSet(lhs_field_local);
+
+            try self.emitLocalGet(rhs_local);
+            if (field_offset > 0) {
+                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(field_offset)) catch return error.OutOfMemory;
+                self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+            }
+            try self.emitLocalSet(rhs_field_local);
+
+            if (field_layout.tag == .tag_union) {
+                const tu_info = ls.getTagUnionInfo(field_layout);
+                if (tu_info.contains_refcounted) {
+                    try self.compareTagUnionByLayout(lhs_field_local, rhs_field_local, field_layout_idx);
+                } else {
+                    try self.emitBytewiseEq(lhs_field_local, rhs_field_local, field_size);
+                }
+            } else {
+                try self.compareCompositeByLayout(lhs_field_local, rhs_field_local, field_layout_idx);
+            }
+        },
+        else => {
+            // Scalar/other: bytewise comparison at offset
+            try self.emitBytewiseEqAtOffset(lhs_local, rhs_local, field_offset, field_size);
+        },
+    }
+}
+
+/// Emit an inline element-by-element comparison loop for two lists whose elements
+/// need structural (non-bytewise) equality — e.g. lists of records/tuples/tag-unions
+/// containing refcounted fields.
+/// lhs_local/rhs_local are i32 pointers to 12-byte RocList structs.
+/// Pushes i32 (1=equal, 0=not equal) onto the WASM stack.
+fn emitListEqLoop(
+    self: *Self,
+    lhs_local: u32,
+    rhs_local: u32,
+    elem_layout_idx: layout.Idx,
+    elem_size: u32,
+) Allocator.Error!void {
+    // Allocate scratch locals
+    const lhs_len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const rhs_len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const lhs_data = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const rhs_data = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const idx_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const lhs_elem = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const rhs_elem = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+
+    // Load lhs length (offset 4 in RocList)
+    try self.emitLocalGet(lhs_local);
+    try self.emitLoadOp(.i32, 4);
+    try self.emitLocalSet(lhs_len);
+
+    // Load rhs length (offset 4 in RocList)
+    try self.emitLocalGet(rhs_local);
+    try self.emitLoadOp(.i32, 4);
+    try self.emitLocalSet(rhs_len);
+
+    // result = (lhs_len == rhs_len)
+    try self.emitLocalGet(lhs_len);
+    try self.emitLocalGet(rhs_len);
+    self.body.append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
+    try self.emitLocalSet(result_local);
+
+    // Load data pointers (offset 0 in RocList)
+    try self.emitLocalGet(lhs_local);
+    try self.emitLoadOp(.i32, 0);
+    try self.emitLocalSet(lhs_data);
+
+    try self.emitLocalGet(rhs_local);
+    try self.emitLoadOp(.i32, 0);
+    try self.emitLocalSet(rhs_data);
+
+    // idx = 0
+    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+    WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+    try self.emitLocalSet(idx_local);
+
+    // block { loop {
+    self.body.append(self.allocator, Op.block) catch return error.OutOfMemory;
+    self.body.append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+    self.body.append(self.allocator, Op.loop_) catch return error.OutOfMemory;
+    self.body.append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+
+    // if result == 0, break (lengths didn't match or previous elem failed)
+    try self.emitLocalGet(result_local);
+    self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+    self.body.append(self.allocator, Op.br_if) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
+
+    // if idx >= lhs_len, break (all elements compared)
+    try self.emitLocalGet(idx_local);
+    try self.emitLocalGet(lhs_len);
+    self.body.append(self.allocator, Op.i32_ge_u) catch return error.OutOfMemory;
+    self.body.append(self.allocator, Op.br_if) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
+
+    // lhs_elem = lhs_data + idx * elem_size
+    try self.emitLocalGet(lhs_data);
+    try self.emitLocalGet(idx_local);
+    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(elem_size)) catch return error.OutOfMemory;
+    self.body.append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
+    self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+    try self.emitLocalSet(lhs_elem);
+
+    // rhs_elem = rhs_data + idx * elem_size
+    try self.emitLocalGet(rhs_data);
+    try self.emitLocalGet(idx_local);
+    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(elem_size)) catch return error.OutOfMemory;
+    self.body.append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
+    self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+    try self.emitLocalSet(rhs_elem);
+
+    // Compare elements structurally: pushes i32 result onto stack
+    try self.compareFieldByLayout(lhs_elem, rhs_elem, 0, elem_size, elem_layout_idx);
+
+    // result = result AND elem_eq
+    try self.emitLocalGet(result_local);
+    self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+    try self.emitLocalSet(result_local);
+
+    // idx++
+    try self.emitLocalGet(idx_local);
+    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+    WasmModule.leb128WriteI32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
+    self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+    try self.emitLocalSet(idx_local);
+
+    // br 0 (continue loop)
+    self.body.append(self.allocator, Op.br) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+
+    // end loop, end block
+    self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
+    self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
+
+    // Push final result
+    try self.emitLocalGet(result_local);
+}
+
+/// Emit bytewise equality comparison of two memory regions.
+/// lhs_local and rhs_local are i32 pointers, compared for byte_size bytes starting at offset 0.
+/// Pushes an i32 (1=equal, 0=not equal) onto the WASM stack.
+fn emitBytewiseEq(self: *Self, lhs_local: u32, rhs_local: u32, byte_size: u32) Allocator.Error!void {
+    if (byte_size == 0) {
+        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
+        return;
+    }
+
     var offset: u32 = 0;
     var first = true;
 
-    // Compare i32-sized chunks (use align=0 for safety)
     while (offset + 4 <= byte_size) : (offset += 4) {
-        // Load lhs[offset] as i32
-        self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &self.body, lhs_local) catch return error.OutOfMemory;
+        try self.emitLocalGet(lhs_local);
         self.body.append(self.allocator, Op.i32_load) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory; // align=1 (unaligned)
+        WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
         WasmModule.leb128WriteU32(self.allocator, &self.body, offset) catch return error.OutOfMemory;
 
-        // Load rhs[offset] as i32
-        self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &self.body, rhs_local) catch return error.OutOfMemory;
+        try self.emitLocalGet(rhs_local);
         self.body.append(self.allocator, Op.i32_load) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory; // align=1 (unaligned)
+        WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
         WasmModule.leb128WriteU32(self.allocator, &self.body, offset) catch return error.OutOfMemory;
 
-        // Compare
         self.body.append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
-
-        // AND with previous results
         if (!first) {
             self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
         }
         first = false;
     }
 
-    // Compare remaining bytes (2-byte then 1-byte chunks)
     if (offset + 2 <= byte_size) {
-        self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &self.body, lhs_local) catch return error.OutOfMemory;
+        try self.emitLocalGet(lhs_local);
         self.body.append(self.allocator, Op.i32_load16_u) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &self.body, 1) catch return error.OutOfMemory; // align=2
+        WasmModule.leb128WriteU32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
         WasmModule.leb128WriteU32(self.allocator, &self.body, offset) catch return error.OutOfMemory;
 
-        self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &self.body, rhs_local) catch return error.OutOfMemory;
+        try self.emitLocalGet(rhs_local);
         self.body.append(self.allocator, Op.i32_load16_u) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &self.body, 1) catch return error.OutOfMemory; // align=2
+        WasmModule.leb128WriteU32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
         WasmModule.leb128WriteU32(self.allocator, &self.body, offset) catch return error.OutOfMemory;
 
         self.body.append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
-
         if (!first) {
             self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
         }
@@ -2146,20 +2650,17 @@ fn generateStructuralEq(self: *Self, lhs: MonoExprId, rhs: MonoExprId, negate: b
     }
 
     if (offset < byte_size) {
-        self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &self.body, lhs_local) catch return error.OutOfMemory;
+        try self.emitLocalGet(lhs_local);
         self.body.append(self.allocator, Op.i32_load8_u) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory; // align=1
+        WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
         WasmModule.leb128WriteU32(self.allocator, &self.body, offset) catch return error.OutOfMemory;
 
-        self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &self.body, rhs_local) catch return error.OutOfMemory;
+        try self.emitLocalGet(rhs_local);
         self.body.append(self.allocator, Op.i32_load8_u) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory; // align=1
+        WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
         WasmModule.leb128WriteU32(self.allocator, &self.body, offset) catch return error.OutOfMemory;
 
         self.body.append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
-
         if (!first) {
             self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
         }
@@ -2167,14 +2668,111 @@ fn generateStructuralEq(self: *Self, lhs: MonoExprId, rhs: MonoExprId, negate: b
     }
 
     if (first) {
-        // No bytes to compare (shouldn't happen since byte_size > 0)
         self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
         WasmModule.leb128WriteI32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
     }
+}
 
-    if (negate) {
-        // Flip the result for !=
-        self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+/// Emit bytewise equality comparison at a specific offset within parent structs.
+/// Pushes an i32 (1=equal, 0=not equal) onto the WASM stack.
+fn emitBytewiseEqAtOffset(self: *Self, lhs_local: u32, rhs_local: u32, base_offset: u32, byte_size: u32) Allocator.Error!void {
+    if (byte_size == 0) {
+        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
+        return;
+    }
+
+    var offset: u32 = 0;
+    var first = true;
+
+    while (offset + 4 <= byte_size) : (offset += 4) {
+        try self.emitLocalGet(lhs_local);
+        self.body.append(self.allocator, Op.i32_load) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, base_offset + offset) catch return error.OutOfMemory;
+
+        try self.emitLocalGet(rhs_local);
+        self.body.append(self.allocator, Op.i32_load) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, base_offset + offset) catch return error.OutOfMemory;
+
+        self.body.append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
+        if (!first) {
+            self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+        }
+        first = false;
+    }
+
+    if (offset + 2 <= byte_size) {
+        try self.emitLocalGet(lhs_local);
+        self.body.append(self.allocator, Op.i32_load16_u) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, base_offset + offset) catch return error.OutOfMemory;
+
+        try self.emitLocalGet(rhs_local);
+        self.body.append(self.allocator, Op.i32_load16_u) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, base_offset + offset) catch return error.OutOfMemory;
+
+        self.body.append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
+        if (!first) {
+            self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+        }
+        first = false;
+        offset += 2;
+    }
+
+    if (offset < byte_size) {
+        try self.emitLocalGet(lhs_local);
+        self.body.append(self.allocator, Op.i32_load8_u) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, base_offset + offset) catch return error.OutOfMemory;
+
+        try self.emitLocalGet(rhs_local);
+        self.body.append(self.allocator, Op.i32_load8_u) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, base_offset + offset) catch return error.OutOfMemory;
+
+        self.body.append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
+        if (!first) {
+            self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+        }
+        first = false;
+    }
+
+    if (first) {
+        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
+    }
+}
+
+/// Emit a load instruction appropriate for the discriminant size.
+/// Loads an unsigned integer of disc_size bytes at the given offset from the address on the stack.
+fn emitLoadBySize(self: *Self, disc_size: u8, offset: u16) Allocator.Error!void {
+    switch (disc_size) {
+        1 => {
+            self.body.append(self.allocator, Op.i32_load8_u) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, offset) catch return error.OutOfMemory;
+        },
+        2 => {
+            self.body.append(self.allocator, Op.i32_load16_u) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, offset) catch return error.OutOfMemory;
+        },
+        4 => {
+            self.body.append(self.allocator, Op.i32_load) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, 2) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, offset) catch return error.OutOfMemory;
+        },
+        8 => {
+            self.body.append(self.allocator, Op.i64_load) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, 3) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, offset) catch return error.OutOfMemory;
+            // Wrap to i32 since callers use i32 locals for discriminant values
+            self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+        },
+        else => unreachable,
     }
 }
 
@@ -2245,8 +2843,8 @@ fn generateCompositeI128BinOp(self: *Self, lhs: MonoExprId, rhs: MonoExprId, op:
                 try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx orelse unreachable);
             }
         },
-        .mod => {
-            // i128/u128 modulo via host function
+        .rem => {
+            // i128/u128 remainder via host function
             const is_signed = result_layout == .i128 or result_layout == .dec;
             const import_idx = if (is_signed) self.i128_mod_s_import else self.u128_mod_import;
             try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx orelse unreachable);
@@ -3951,7 +4549,7 @@ fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Allocator.Er
                 // For pre-bound callable params with unwrapped_capture, use the
                 // capture's type instead of the closure layout type, since the
                 // actual runtime value passed is the capture itself (not a pointer).
-                const param_key: u48 = @bitCast(bind.symbol);
+                const param_key: u64 = @bitCast(bind.symbol);
                 const vt = if (self.closure_values.get(param_key)) |cv| blk: {
                     break :blk switch (cv.representation) {
                         .unwrapped_capture => |repr| self.resolveValType(repr.capture_layout),
@@ -3983,7 +4581,7 @@ fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Allocator.Er
         const pat = self.store.getPattern(param_id);
         switch (pat) {
             .bind => |bind| {
-                const param_key: u48 = @bitCast(bind.symbol);
+                const param_key: u64 = @bitCast(bind.symbol);
                 if (self.closure_values.get(param_key)) |cv| {
                     switch (cv.representation) {
                         .struct_captures => {
@@ -4028,7 +4626,7 @@ fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Allocator.Er
 
     // Initialize fresh state for the lambda body
     self.body = .empty;
-    self.storage.locals = std.AutoHashMap(u48, Storage.LocalInfo).init(self.allocator);
+    self.storage.locals = std.AutoHashMap(u64, Storage.LocalInfo).init(self.allocator);
     self.storage.next_local_idx = 0;
     self.storage.local_types = .empty;
     // Note: closure_values is NOT reset for compileLambda — the lambda body
@@ -4053,7 +4651,7 @@ fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Allocator.Er
         switch (pat) {
             .bind => |bind| {
                 // Match the param type override for unwrapped_capture callables
-                const param_key: u48 = @bitCast(bind.symbol);
+                const param_key: u64 = @bitCast(bind.symbol);
                 const vt = if (self.closure_values.get(param_key)) |cv| blk: {
                     break :blk switch (cv.representation) {
                         .unwrapped_capture => |repr| self.resolveValType(repr.capture_layout),
@@ -4090,14 +4688,14 @@ fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Allocator.Er
         const pat = self.store.getPattern(param_id);
         switch (pat) {
             .bind => |bind| {
-                const param_key: u48 = @bitCast(bind.symbol);
+                const param_key: u64 = @bitCast(bind.symbol);
                 if (self.closure_values.get(param_key)) |cv| {
                     switch (cv.representation) {
                         .unwrapped_capture => {
                             const captures = self.store.getCaptures(cv.captures);
                             if (captures.len > 0) {
                                 if (self.storage.getLocal(bind.symbol)) |param_local| {
-                                    const cap_key: u48 = @bitCast(captures[0].symbol);
+                                    const cap_key: u64 = @bitCast(captures[0].symbol);
                                     if (!self.storage.locals.contains(cap_key)) {
                                         const cap_vt = self.resolveValType(captures[0].layout_idx);
                                         self.storage.locals.put(cap_key, .{ .idx = param_local, .val_type = cap_vt }) catch {};
@@ -4226,7 +4824,7 @@ fn compileClosure(self: *Self, expr_id: MonoExprId, closure: anytype) Allocator.
     param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
 
     // Capture types
-    var capture_symbols = self.allocator.alloc(MonoSymbol, captures.len) catch return error.OutOfMemory;
+    var capture_symbols = self.allocator.alloc(Symbol, captures.len) catch return error.OutOfMemory;
     defer self.allocator.free(capture_symbols);
     var capture_val_types = self.allocator.alloc(ValType, captures.len) catch return error.OutOfMemory;
     defer self.allocator.free(capture_val_types);
@@ -4269,7 +4867,7 @@ fn compileClosure(self: *Self, expr_id: MonoExprId, closure: anytype) Allocator.
 
     // Initialize fresh state
     self.body = .empty;
-    self.storage.locals = std.AutoHashMap(u48, Storage.LocalInfo).init(self.allocator);
+    self.storage.locals = std.AutoHashMap(u64, Storage.LocalInfo).init(self.allocator);
     self.storage.next_local_idx = 0;
     self.storage.local_types = .empty;
     // Note: closure_values is NOT reset — the closure body may reference
@@ -4320,14 +4918,14 @@ fn compileClosure(self: *Self, expr_id: MonoExprId, closure: anytype) Allocator.
         const pat = self.store.getPattern(param_id);
         switch (pat) {
             .bind => |bind| {
-                const param_key: u48 = @bitCast(bind.symbol);
+                const param_key: u64 = @bitCast(bind.symbol);
                 if (self.closure_values.get(param_key)) |cv| {
                     switch (cv.representation) {
                         .unwrapped_capture => {
                             const cb_captures = self.store.getCaptures(cv.captures);
                             if (cb_captures.len > 0) {
                                 if (self.storage.getLocal(bind.symbol)) |param_local| {
-                                    const cap_key: u48 = @bitCast(cb_captures[0].symbol);
+                                    const cap_key: u64 = @bitCast(cb_captures[0].symbol);
                                     if (!self.storage.locals.contains(cap_key)) {
                                         const cap_vt = self.resolveValType(cb_captures[0].layout_idx);
                                         self.storage.locals.put(cap_key, .{ .idx = param_local, .val_type = cap_vt }) catch {};
@@ -4479,9 +5077,9 @@ fn preBindCallableArgs(self: *Self, def_expr: MonoExpr, call_args: mono.MonoIR.M
             },
             .lookup => |lk| {
                 // If the argument is a lookup to a known closure, propagate it
-                const src_key: u48 = @bitCast(lk.symbol);
+                const src_key: u64 = @bitCast(lk.symbol);
                 if (self.closure_values.get(src_key)) |cv| {
-                    const dst_key: u48 = @bitCast(param_sym);
+                    const dst_key: u64 = @bitCast(param_sym);
                     self.closure_values.put(dst_key, cv) catch continue;
                 } else if (self.store.getSymbolDef(lk.symbol)) |sym_def_id| {
                     const sym_def = self.store.getExpr(sym_def_id);
@@ -4501,8 +5099,8 @@ fn preBindCallableArgs(self: *Self, def_expr: MonoExpr, call_args: mono.MonoIR.M
 /// Try to bind a function expression (lambda, closure, nominal wrapping one, or
 /// function alias) to a symbol. Returns true if the expression was handled as a
 /// function binding and the caller should `continue` the loop.
-fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: MonoSymbol) Allocator.Error!bool {
-    const key: u48 = @bitCast(symbol);
+fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: Symbol) Allocator.Error!bool {
+    const key: u64 = @bitCast(symbol);
     switch (expr) {
         .lambda => {
             // Lambda with no captures - store as closure_value with direct_call representation
@@ -4564,7 +5162,7 @@ fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: Mon
         },
         .lookup => |lookup_expr| {
             // Function alias: g = f — propagate closure_value
-            const src_key: u48 = @bitCast(lookup_expr.symbol);
+            const src_key: u64 = @bitCast(lookup_expr.symbol);
             if (self.closure_values.get(src_key)) |cv| {
                 self.closure_values.put(key, cv) catch return error.OutOfMemory;
                 return true;
@@ -4652,7 +5250,7 @@ fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: Mon
 
 /// Compile a single MonoProc as a wasm function.
 fn compileProc(self: *Self, proc: MonoProc) Allocator.Error!void {
-    const key: u48 = @bitCast(proc.name);
+    const key: u64 = @bitCast(proc.name);
 
     // Skip if already compiled
     if (self.closure_values.contains(key)) return;
@@ -4690,13 +5288,13 @@ fn compileProc(self: *Self, proc: MonoProc) Allocator.Error!void {
 
     // Initialize fresh state with only self-registration (for recursive calls)
     self.body = .empty;
-    self.storage.locals = std.AutoHashMap(u48, Storage.LocalInfo).init(self.allocator);
+    self.storage.locals = std.AutoHashMap(u64, Storage.LocalInfo).init(self.allocator);
     self.storage.next_local_idx = 0;
     self.storage.local_types = .empty;
     // Free the old closure_values — saveState cloned it independently,
     // so we must free the original to avoid a memory leak.
     self.closure_values.deinit();
-    self.closure_values = std.AutoHashMap(u48, ClosureValue).init(self.allocator);
+    self.closure_values = std.AutoHashMap(u64, ClosureValue).init(self.allocator);
     self.closure_values.put(key, self_cv) catch return error.OutOfMemory;
     self.stack_frame_size = 0;
     self.uses_stack_memory = false;
@@ -4825,11 +5423,11 @@ fn compileProc(self: *Self, proc: MonoProc) Allocator.Error!void {
 const SavedState = struct {
     body_items: []u8,
     body_capacity: usize,
-    locals: std.AutoHashMap(u48, Storage.LocalInfo),
+    locals: std.AutoHashMap(u64, Storage.LocalInfo),
     next_local_idx: u32,
     local_types_items: []ValType,
     local_types_capacity: usize,
-    closure_values: std.AutoHashMap(u48, ClosureValue),
+    closure_values: std.AutoHashMap(u64, ClosureValue),
     stack_frame_size: u32,
     uses_stack_memory: bool,
     fp_local: u32,
@@ -5039,6 +5637,159 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
             }
             // If loop not entered yet (initial jump in remainder), just fall through
         },
+        .match_stmt => |ms| {
+            // Evaluate value, store to local
+            try self.generateExpr(ms.value);
+            const value_vt = self.resolveValType(ms.value_layout);
+            const value_local = self.storage.allocAnonymousLocal(value_vt) catch return error.OutOfMemory;
+            try self.emitLocalSet(value_local);
+
+            const branches = self.store.getCFMatchBranches(ms.branches);
+
+            // Generate cascading pattern match using if/else blocks
+            // Each branch body is a CFStmt that handles its own return/jump
+            try self.generateCFMatchBranches(branches, value_local, value_vt);
+        },
+    }
+}
+
+/// Generate cascading match branches for match_stmt.
+/// Each branch body is a CF statement (handles its own ret/jump).
+fn generateCFMatchBranches(self: *Self, branches: []const mono.MonoIR.CFMatchBranch, value_local: u32, value_vt: ValType) Allocator.Error!void {
+    if (branches.len == 0) {
+        self.body.append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
+        return;
+    }
+
+    const branch = branches[0];
+    const pattern = self.store.getPattern(branch.pattern);
+    const remaining = branches[1..];
+
+    switch (pattern) {
+        .wildcard => {
+            try self.generateCFStmtWithGuard(branch, remaining, value_local, value_vt);
+        },
+        .bind => |bind| {
+            const local_idx = self.storage.allocLocal(bind.symbol, value_vt) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
+            try self.generateCFStmtWithGuard(branch, remaining, value_local, value_vt);
+        },
+        .int_literal => |int_pat| {
+            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
+
+            switch (value_vt) {
+                .i32 => {
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, @truncate(@as(i64, @truncate(int_pat.value)))) catch return error.OutOfMemory;
+                },
+                .i64 => {
+                    self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI64(self.allocator, &self.body, @truncate(int_pat.value)) catch return error.OutOfMemory;
+                },
+                .f32, .f64 => unreachable,
+            }
+
+            const eq_op: u8 = switch (value_vt) {
+                .i32 => Op.i32_eq,
+                .i64 => Op.i64_eq,
+                .f32, .f64 => unreachable,
+            };
+            self.body.append(self.allocator, eq_op) catch return error.OutOfMemory;
+
+            // if match: void block type since branch bodies handle their own control flow
+            self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+            self.body.append(self.allocator, 0x40) catch return error.OutOfMemory; // void
+            self.cf_depth += 1;
+            try self.generateCFStmtWithGuard(branch, remaining, value_local, value_vt);
+            self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+            try self.generateCFMatchBranches(remaining, value_local, value_vt);
+            self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
+            self.cf_depth -= 1;
+        },
+        .tag => |tag_pat| {
+            // For composite tag unions (value_local is a pointer to memory),
+            // load the discriminant from memory before comparing.
+            // For scalar tag unions, value_local holds the discriminant directly.
+            const is_pointer = blk: {
+                if (self.layout_store) |ls| {
+                    const wl = WasmLayout.wasmReprWithStore(tag_pat.union_layout, ls);
+                    break :blk switch (wl) {
+                        .stack_memory => true,
+                        .primitive => false,
+                    };
+                }
+                break :blk false;
+            };
+
+            if (is_pointer) {
+                // Load discriminant from memory at discriminant_offset
+                const ls = self.getLayoutStore();
+                const l = ls.getLayout(tag_pat.union_layout);
+                std.debug.assert(l.tag == .tag_union);
+                const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
+                const disc_offset = tu_data.discriminant_offset;
+                const disc_size: u32 = tu_data.discriminant_size;
+                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
+                try self.emitLoadOpSized(.i32, disc_size, disc_offset);
+            } else {
+                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
+            }
+
+            // Compare against the discriminant constant
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(tag_pat.discriminant)) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
+
+            self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+            self.body.append(self.allocator, 0x40) catch return error.OutOfMemory; // void
+            self.cf_depth += 1;
+            try self.generateCFStmtWithGuard(branch, remaining, value_local, value_vt);
+            self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+            try self.generateCFMatchBranches(remaining, value_local, value_vt);
+            self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
+            self.cf_depth -= 1;
+        },
+        .record, .tuple, .list, .as_pattern => {
+            // These pattern types should not appear in CFStmt match_stmt.
+            // CFStmt match_stmt is used for tail-recursive matches, which only
+            // match on discriminants, integer literals, wildcards, and binds.
+            unreachable;
+        },
+        .float_literal, .str_literal => {
+            unreachable;
+        },
+    }
+}
+
+/// Generate a CF statement body, handling optional guard expressions.
+/// If the branch has a guard, wraps the body in an if/else so that
+/// a failing guard falls through to the remaining branches.
+fn generateCFStmtWithGuard(
+    self: *Self,
+    branch: mono.MonoIR.CFMatchBranch,
+    remaining: []const mono.MonoIR.CFMatchBranch,
+    value_local: u32,
+    value_vt: ValType,
+) Allocator.Error!void {
+    if (!branch.guard.isNone()) {
+        // Evaluate the guard expression (pushes i32 0 or 1)
+        try self.generateExpr(branch.guard);
+        self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+        self.body.append(self.allocator, 0x40) catch return error.OutOfMemory; // void
+        self.cf_depth += 1;
+        try self.generateCFStmt(branch.body);
+        self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+        try self.generateCFMatchBranches(remaining, value_local, value_vt);
+        self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
+        self.cf_depth -= 1;
+    } else {
+        try self.generateCFStmt(branch.body);
     }
 }
 
@@ -5149,7 +5900,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
             try self.emitCall(func_idx);
         },
         .lookup => |lookup| {
-            const key: u48 = @bitCast(lookup.symbol);
+            const key: u64 = @bitCast(lookup.symbol);
             if (self.closure_values.get(key)) |cv| {
                 try self.dispatchClosureCall(cv, c.args, c.ret_layout);
             } else if (self.store.getSymbolDef(lookup.symbol)) |def_expr_id| {
@@ -10221,8 +10972,12 @@ fn generateListEqWithElemLayout(self: *Self, lhs: MonoExprId, rhs: MonoExprId, e
             WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(inner_elem_size)) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
+        } else if (ls.layoutContainsRefcounted(elem_l)) {
+            // Composite elements with refcounted fields: inline structural loop
+            const elem_size = self.layoutByteSize(elem_layout);
+            try self.emitListEqLoop(lhs_local, rhs_local, elem_layout, elem_size);
         } else {
-            // Simple elements - byte-wise comparison
+            // Simple scalar elements - byte-wise comparison
             const import_idx = self.list_eq_import orelse unreachable;
             const elem_size = self.layoutByteSize(elem_layout);
             try self.emitLocalGet(lhs_local);

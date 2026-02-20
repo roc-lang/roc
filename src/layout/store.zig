@@ -18,7 +18,7 @@ const target = base.target;
 /// Different modules can have type variables with the same numeric value that
 /// refer to completely different types, so we key by (module_idx, var).
 pub const ModuleVarKey = packed struct {
-    module_idx: u16,
+    module_idx: u32,
     var_: types.Var,
 };
 const Ident = base.Ident;
@@ -115,7 +115,7 @@ pub const Store = struct {
     allocator: std.mem.Allocator,
 
     /// Current module index during fromTypeVar processing
-    current_module_idx: u16 = 0,
+    current_module_idx: u32 = 0,
 
     /// Optional override types store (used by interpreter for runtime types).
     /// When set, this is used instead of all_module_envs[module_idx].types.
@@ -608,21 +608,78 @@ pub const Store = struct {
         return try self.insertLayout(tuple_layout);
     }
 
+    /// Create a tag union layout from pre-computed variant payload layouts.
+    /// `variant_layouts[i]` is the layout Idx for variant i's payload
+    /// (use ensureZstLayout() for no-payload variants).
+    /// Tags must be sorted alphabetically; variant_layouts[i] corresponds
+    /// to the tag at sorted index i.
+    pub fn putTagUnion(self: *Self, variant_layouts: []const Idx) std.mem.Allocator.Error!Idx {
+        const variants_start: u32 = @intCast(self.tag_union_variants.len());
+
+        var max_payload_size: u32 = 0;
+        var max_payload_alignment: std.mem.Alignment = .@"1";
+
+        for (variant_layouts) |variant_layout_idx| {
+            const variant_layout = self.getLayout(variant_layout_idx);
+            const variant_size = self.layoutSize(variant_layout);
+            const variant_alignment = variant_layout.alignment(self.targetUsize());
+            if (variant_size > max_payload_size) max_payload_size = variant_size;
+            max_payload_alignment = max_payload_alignment.max(variant_alignment);
+
+            _ = try self.tag_union_variants.append(self.allocator, .{
+                .payload_layout = variant_layout_idx,
+            });
+        }
+
+        // Discriminant size from variant count
+        const discriminant_size: u8 = if (variant_layouts.len <= 256) 1 else if (variant_layouts.len <= 65536) 2 else if (variant_layouts.len <= (1 << 32)) 4 else 8;
+        const disc_align = TagUnionData.alignmentForDiscriminantSize(discriminant_size);
+
+        // Canonical layout: payload at offset 0, discriminant after (aligned)
+        const discriminant_offset: u16 = @intCast(
+            std.mem.alignForward(u32, max_payload_size, @intCast(disc_align.toByteUnits())),
+        );
+        const tag_union_alignment = max_payload_alignment.max(disc_align);
+        const total_size = std.mem.alignForward(
+            u32,
+            discriminant_offset + discriminant_size,
+            @intCast(tag_union_alignment.toByteUnits()),
+        );
+
+        const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
+        _ = try self.tag_union_data.append(self.allocator, .{
+            .size = total_size,
+            .discriminant_offset = discriminant_offset,
+            .discriminant_size = discriminant_size,
+            .variants = .{
+                .start = variants_start,
+                .count = @intCast(variant_layouts.len),
+            },
+        });
+
+        const tu_layout = Layout.tagUnion(tag_union_alignment, .{ .int_idx = @intCast(tag_union_data_idx) });
+        return try self.insertLayout(tu_layout);
+    }
+
     /// Create a tuple layout representing the sequential layout of closure captures.
-    /// Captures are stored sequentially with no alignment padding between them.
+    /// Captures are stored with alignment padding between them, like tuple fields.
     pub fn putCaptureStruct(self: *Self, capture_layout_idxs: []const Idx) std.mem.Allocator.Error!Idx {
         var temp_fields = std.ArrayList(TupleField).empty;
         defer temp_fields.deinit(self.allocator);
 
-        var total_size: u32 = 0;
         var max_alignment: usize = 1;
+        var current_offset: u32 = 0;
         for (capture_layout_idxs, 0..) |cap_idx, i| {
             try temp_fields.append(self.allocator, .{ .index = @intCast(i), .layout = cap_idx });
             const cap_layout = self.getLayout(cap_idx);
             const cap_sa = self.layoutSizeAlign(cap_layout);
-            total_size += cap_sa.size;
-            max_alignment = @max(max_alignment, cap_sa.alignment.toByteUnits());
+            const field_alignment = cap_sa.alignment.toByteUnits();
+            max_alignment = @max(max_alignment, field_alignment);
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment))));
+            current_offset += cap_sa.size;
         }
+
+        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment)))));
 
         const fields_start = self.tuple_fields.items.len;
         for (temp_fields.items) |field| {
@@ -643,14 +700,16 @@ pub const Store = struct {
         var max_payload_size: u32 = 0;
         var max_alignment: usize = 8; // At least 8 for the tag
         for (variants) |capture_idxs| {
-            var variant_size: u32 = 0;
+            var current_offset: u32 = 0;
             for (capture_idxs) |cap_idx| {
                 const cap_layout = self.getLayout(cap_idx);
                 const cap_sa = self.layoutSizeAlign(cap_layout);
-                variant_size += cap_sa.size;
-                max_alignment = @max(max_alignment, cap_sa.alignment.toByteUnits());
+                const field_alignment = cap_sa.alignment.toByteUnits();
+                max_alignment = @max(max_alignment, field_alignment);
+                current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment))));
+                current_offset += cap_sa.size;
             }
-            max_payload_size = @max(max_payload_size, variant_size);
+            max_payload_size = @max(max_payload_size, current_offset);
         }
 
         // Total size = 8 (tag) + max_payload_size
@@ -1100,6 +1159,45 @@ pub const Store = struct {
 
     pub fn ensureEmptyRecordLayout(self: *Self) !Idx {
         return self.getEmptyRecordLayout();
+    }
+
+    /// Get the boxed layout for a recursive nominal type, if it exists.
+    /// This is used for list elements where the element type is a recursive nominal.
+    /// Returns null if the type is not a recursive nominal.
+    pub fn getRecursiveBoxedLayout(self: *const Self, module_idx: u32, type_var: Var) ?Layout {
+        const key = ModuleVarKey{ .module_idx = module_idx, .var_ = type_var };
+        if (self.recursive_boxed_layouts.get(key)) |boxed_idx| {
+            return self.getLayout(boxed_idx);
+        }
+        return null;
+    }
+
+    /// Check if a nominal type (by identity) is recursive and return its boxed layout.
+    /// This is needed because different vars can represent the same nominal type,
+    /// and the boxed layout might have been stored under a different var.
+    pub fn getRecursiveBoxedLayoutByNominalKey(self: *const Self, nominal_key: work.NominalKey) ?Layout {
+        // Iterate through recursive_boxed_layouts to find an entry whose var
+        // resolves to this nominal type identity.
+        var iter = self.recursive_boxed_layouts.iterator();
+        while (iter.next()) |entry| {
+            const cache_key = entry.key_ptr.*;
+            const boxed_idx = entry.value_ptr.*;
+            if (boxed_idx == Idx.none) continue;
+            const module_env = self.all_module_envs[cache_key.module_idx];
+            const resolved = module_env.types.resolveVar(cache_key.var_);
+            if (resolved.desc.content == .structure) {
+                const flat_type = resolved.desc.content.structure;
+                if (flat_type == .nominal_type) {
+                    const nom = flat_type.nominal_type;
+                    if (nom.ident.ident_idx == nominal_key.ident_idx and
+                        nom.origin_module == nominal_key.origin_module)
+                    {
+                        return self.getLayout(boxed_idx);
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     /// Get or create a zero-sized type layout
@@ -1694,11 +1792,11 @@ pub const Store = struct {
 
     pub fn fromTypeVar(
         self: *Self,
-        module_idx: u16,
+        module_idx: u32,
         unresolved_var: Var,
         type_scope: *const TypeScope,
-        use_type_scope: bool,
-    ) FromTypeVarError!Idx {
+        caller_module_idx: ?u32,
+    ) std.mem.Allocator.Error!Idx {
         // Set the current module for this computation
         self.current_module_idx = module_idx;
 
@@ -3233,11 +3331,11 @@ pub const Store = struct {
     /// numerics) but we need to compute a proper List layout based on the expression structure.
     pub fn computeListLayout(
         self: *Self,
-        module_idx: u16,
+        module_idx: u32,
         module_env: *ModuleEnv,
         list_elem_span: can.CIR.Expr.Span,
         type_scope: *const TypeScope,
-        use_type_scope: bool,
+        caller_module_idx: ?u32,
     ) !Idx {
         const elems = module_env.store.exprSlice(list_elem_span);
 

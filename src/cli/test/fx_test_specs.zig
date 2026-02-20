@@ -310,14 +310,34 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Regression test: Hosted effects on opaque types with data (not just [])",
     },
     .{
-        .roc_file = "test/fx/cross_module_recursive_nominal.roc",
-        .io_spec = "1>Div (correct)",
-        .description = "Regression test: cross-module recursive nominal type gets correct layout for pattern matching",
+        .roc_file = "test/fx/record_field_access.roc",
+        .io_spec = "1>Alice|1>30|1>100",
+        .description = "Regression test: Record field access with alignment-reordered fields (layout order != monotype order)",
     },
     .{
-        .roc_file = "test/fx/test_no_dbg.roc",
-        .io_spec = "1>Text",
-        .description = "Regression test: recursive nominal type with list containers and pattern matching",
+        .roc_file = "test/fx/early_return_rc.roc",
+        .io_spec = "1>empty",
+        .description = "Regression test: Early return properly cleans up live refcounted symbols",
+    },
+    .{
+        .roc_file = "test/fx/float_comparison.roc",
+        .io_spec = "1>3.14 > 0.0: True|1>0.0 < 3.14: True|1>3.14 >= 3.14: True",
+        .description = "Regression test: F64 comparisons use float instructions, not integer bit-pattern",
+    },
+    .{
+        .roc_file = "test/fx/many_args.roc",
+        .io_spec = "1>36",
+        .description = "Test: Function with 8 arguments exercises register spilling",
+    },
+    .{
+        .roc_file = "test/fx/or_pattern.roc",
+        .io_spec = "1>cool|1>warm|1>cool|1>warm",
+        .description = "Test: OR-pattern (pat1 | pat2 => body) with tag union",
+    },
+    .{
+        .roc_file = "test/fx/record_destructure.roc",
+        .io_spec = "1>Bob 25 99",
+        .description = "Regression test: Record destructuring with alignment-reordered fields",
     },
 };
 

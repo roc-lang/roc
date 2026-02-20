@@ -2228,8 +2228,9 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                     }
                 },
                 .pending => {
-                    // Pending lookups must be resolved before type-checking
-                    unreachable;
+                    // If an import references a non-existent module (e.g., missing from
+                    // platform bundle), the pending lookup can't be resolved. Treat as error.
+                    try self.unifyWith(anno_var, .err, env);
                 },
             }
         },
@@ -2434,8 +2435,9 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                     }
                 },
                 .pending => {
-                    // Pending lookups must be resolved before type-checking
-                    unreachable;
+                    // If an import references a non-existent module (e.g., missing from
+                    // platform bundle), the pending lookup can't be resolved. Treat as error.
+                    try self.unifyWith(anno_var, .err, env);
                 },
             }
         },
@@ -4324,64 +4326,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 },
             }
         },
-        .e_low_level_lambda => |ll| {
-            // For low-level lambda expressions, treat like a lambda with a crash body.
-            // Check the body (which will be e_runtime_error or similar)
-            does_fx = try self.checkExpr(ll.body, env, .no_expectation) or does_fx;
-
-            // Check the argument patterns and unify them with the annotation's
-            // function parameter types. Without this, pattern type variables remain
-            // as bare flex vars, which resolve to ZST layouts during lowering.
-            // This mirrors what e_lambda does at its pattern-checking step.
-            const arg_pattern_idxs = self.cir.store.slicePatterns(ll.args);
-            for (arg_pattern_idxs) |pattern_idx| {
-                try self.checkPattern(pattern_idx, env);
-            }
-
-            if (mb_anno_vars) |anno_vars| {
-                const mb_anno_func: ?types_mod.Func = func_blk: {
-                    var var_ = anno_vars.anno_var;
-                    var guard = types_mod.debug.IterationGuard.init("checkExpr.ll_lambda.unwrapExpectedFunc");
-                    while (true) {
-                        guard.tick();
-                        switch (self.types.resolveVar(var_).desc.content) {
-                            .structure => |flat_type| {
-                                switch (flat_type) {
-                                    .fn_pure => |func| break :func_blk func,
-                                    .fn_unbound => |func| break :func_blk func,
-                                    .fn_effectful => |func| break :func_blk func,
-                                    else => break :func_blk null,
-                                }
-                            },
-                            .alias => |alias| {
-                                var_ = self.types.getAliasBackingVar(alias);
-                            },
-                            else => break :func_blk null,
-                        }
-                    }
-                };
-
-                if (mb_anno_func) |anno_func| {
-                    const anno_func_args = self.types.sliceVars(anno_func.args);
-                    if (anno_func_args.len == arg_pattern_idxs.len) {
-                        for (anno_func_args, arg_pattern_idxs) |expected_arg_var, pattern_idx| {
-                            _ = try self.unifyInContext(expected_arg_var, ModuleEnv.varFrom(pattern_idx), env, .type_annotation);
-                        }
-                    }
-                }
-            }
-
-            // For low level lambda expressions, the type comes from the annotation.
-            // This is similar to e_anno_only - the implementation is provided by the host.
-            switch (expected) {
-                .no_expectation => {
-                    // This shouldn't happen since hosted lambdas always have annotations
-                    try self.unifyWith(expr_var, .err, env);
-                },
-                .expected => |_| {
-                    // The expr will be unified with the expected type below
-                    // expr_var is a flex var by default, so no action is need here
-                },
+        .e_run_low_level => |run_ll| {
+            // Check each argument expression in the run_low_level node
+            for (self.cir.store.exprSlice(run_ll.args)) |arg_idx| {
+                does_fx = try self.checkExpr(arg_idx, env, .no_expectation) or does_fx;
             }
         },
         .e_type_var_dispatch => |tvd| {
@@ -4513,7 +4461,7 @@ fn isLambdaExpr(expr: CIR.Expr) bool {
         // These represent polymorphic function signatures and should be generalized
         .e_anno_only => true,
         // Hosted/low-level lambdas also represent function declarations
-        .e_hosted_lambda, .e_low_level_lambda => true,
+        .e_hosted_lambda => true,
         else => false,
     };
 }
@@ -5533,7 +5481,7 @@ fn checkNominalTypeUsage(
 
         // If this nominal type is opaque and we're not in the defining module
         // then report an error
-        if (!nominal_type.canLiftInner(self.cir.module_name_idx)) {
+        if (!nominal_type.canLiftInner(self.cir.qualified_module_ident)) {
             _ = try self.problems.appendProblem(self.cir.gpa, .{ .cannot_access_opaque_nominal = .{
                 .var_ = target_var,
                 .nominal_type_name = nominal_type.ident.ident_idx,
@@ -5870,11 +5818,15 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                     }
                 } else {
                     // For types from other modules (not this module, not builtin), find the
-                    // module environment from imported_modules by matching the module name.
-                    // We compare string values because origin_module is an ident from where the
-                    // type was defined, while module_name is the canonical name from imported_env.
+                    // module environment from imported_modules by matching the qualified module name.
+                    // We use qualified_module_ident (package-qualified) for comparison since origin_module
+                    // is also package-qualified (e.g., "pf.Builder" rather than just "Builder").
                     for (self.imported_modules) |imported_env| {
-                        const imported_module_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text(imported_env.module_name));
+                        const imported_name = if (!imported_env.qualified_module_ident.isNone())
+                            imported_env.getIdent(imported_env.qualified_module_ident)
+                        else
+                            imported_env.module_name;
+                        const imported_module_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text(imported_name));
                         if (imported_module_ident == original_module_ident) {
                             break :blk imported_env;
                         }

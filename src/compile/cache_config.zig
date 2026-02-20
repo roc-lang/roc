@@ -110,6 +110,14 @@ pub const CacheConfig = struct {
         return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "exe" });
     }
 
+    /// Get the test cache directory (for cached test results).
+    pub fn getTestCacheDir(self: Self, allocator: Allocator) ![]u8 {
+        const version_dir = try self.getVersionCacheDir(allocator);
+        defer allocator.free(version_dir);
+
+        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "test" });
+    }
+
     /// Alias for getModuleCacheDir for backwards compatibility.
     pub fn getCacheEntriesDir(self: Self, allocator: Allocator) ![]u8 {
         return self.getModuleCacheDir(allocator);

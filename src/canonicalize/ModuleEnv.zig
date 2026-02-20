@@ -422,8 +422,12 @@ imports: CIR.Import.Store,
 /// The module's name as a string
 /// This is needed for import resolution to match import names to modules
 module_name: []const u8,
-/// The module's name as an interned identifier (for fast comparisons)
-module_name_idx: Ident.Idx,
+/// The module's bare name as an interned identifier (e.g., "Color").
+/// Used for display, type module validation, and method name construction.
+display_module_name_idx: Ident.Idx,
+/// Package-qualified module identity (e.g., "pf.Color"). Used as origin_module on types
+/// for identity comparisons across packages. Set by the coordinator after parse or cache hit.
+qualified_module_ident: Ident.Idx,
 /// Diagnostics collected during canonicalization (optional)
 diagnostics: CIR.Diagnostic.Span,
 /// Stores the raw nodes which represent the intermediate representation
@@ -535,7 +539,8 @@ pub fn initCIRFields(self: *Self, module_name: []const u8) !void {
     // Note: external_decls already exists from ModuleEnv.init(), so we don't create a new one
     self.imports = CIR.Import.Store.init();
     self.module_name = module_name;
-    self.module_name_idx = try self.insertIdent(Ident.for_text(module_name));
+    self.display_module_name_idx = try self.insertIdent(Ident.for_text(module_name));
+    self.qualified_module_ident = self.display_module_name_idx; // Default to bare name; coordinator overrides with package-qualified name
     self.diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
     // Note: self.store already exists from ModuleEnv.init(), so we don't create a new one
     self.evaluation_order = null; // Will be set after canonicalization completes
@@ -572,7 +577,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .external_decls = try CIR.ExternalDecl.SafeList.initCapacity(gpa, 16),
         .imports = CIR.Import.Store.init(),
         .module_name = undefined, // Will be set later during canonicalization
-        .module_name_idx = Ident.Idx.NONE, // Will be set later during canonicalization
+        .display_module_name_idx = Ident.Idx.NONE, // Will be set later during canonicalization
+        .qualified_module_ident = Ident.Idx.NONE, // Will be set by coordinator
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
         .store = try NodeStore.initCapacity(gpa, node_capacity),
         .evaluation_order = null, // Will be set after canonicalization completes
@@ -2306,7 +2312,8 @@ pub const Serialized = extern struct {
     external_decls: CIR.ExternalDecl.SafeList.Serialized,
     imports: CIR.Import.Store.Serialized,
     module_name: [2]u64, // Reserve space for slice (ptr + len), provided during deserialization
-    module_name_idx_reserved: u32, // Reserved space for module_name_idx field (interned during deserialization)
+    display_module_name_idx_reserved: u32, // Reserved space for display_module_name_idx field (interned during deserialization)
+    qualified_module_ident_reserved: u32, // Reserved space for qualified_module_ident field
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
     evaluation_order_reserved: u64, // Reserved space for evaluation_order field (required for in-place deserialization cast)
@@ -2351,11 +2358,13 @@ pub const Serialized = extern struct {
         // Serialize deferred numeric literals (will be empty during serialization since it's only used during type checking/evaluation)
         try self.deferred_numeric_literals.serialize(&env.deferred_numeric_literals, allocator, writer);
 
-        // Set gpa, module_name, module_name_idx_reserved, evaluation_order_reserved to zeros;
+        // Set gpa, module_name, evaluation_order_reserved to zeros;
         // these are runtime-only and will be set during deserialization.
+        // Preserve display_module_name_idx since the ident store is also serialized and indices remain valid.
         self.gpa = .{ 0, 0 };
         self.module_name = .{ 0, 0 };
-        self.module_name_idx_reserved = 0;
+        self.display_module_name_idx_reserved = @bitCast(env.display_module_name_idx);
+        self.qualified_module_ident_reserved = @bitCast(env.qualified_module_ident);
         self.evaluation_order_reserved = 0;
         // rigid_vars is runtime-only and initialized fresh during deserialization
         self.rigid_vars_reserved = .{ 0, 0, 0, 0 };
@@ -2401,7 +2410,8 @@ pub const Serialized = extern struct {
             .external_decls = self.external_decls.deserializeInto(base_addr),
             .imports = try self.imports.deserializeInto(base_addr, gpa),
             .module_name = module_name,
-            .module_name_idx = Ident.Idx.NONE, // Not used for deserialized modules
+            .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
+            .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
             .diagnostics = self.diagnostics,
             .store = self.store.deserializeInto(base_addr, gpa),
             .evaluation_order = null, // Not serialized, will be recomputed if needed
@@ -2445,7 +2455,8 @@ pub const Serialized = extern struct {
             .external_decls = self.external_decls.deserializeInto(base_addr),
             .imports = try self.imports.deserializeInto(base_addr, gpa),
             .module_name = module_name,
-            .module_name_idx = Ident.Idx.NONE,
+            .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
+            .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
             .diagnostics = self.diagnostics,
             // Use deserializeWithCopy for NodeStore so regions can be extended
             .store = try self.store.deserializeWithCopy(base_addr, gpa),

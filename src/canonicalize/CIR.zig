@@ -758,8 +758,14 @@ pub const Import = struct {
         _,
     };
 
-    /// Sentinel value indicating unresolved import (max u32)
-    pub const UNRESOLVED_MODULE: u32 = std.math.maxInt(u32);
+    pub const ResolvedModuleIdx = enum(u32) {
+        none = std.math.maxInt(u32),
+        _,
+
+        pub fn isNone(self: ResolvedModuleIdx) bool {
+            return self == .none;
+        }
+    };
 
     pub const Store = struct {
         /// Map from interned string idx to Import.Idx for deduplication
@@ -770,8 +776,8 @@ pub const Import = struct {
         /// Used for efficient index-based lookups instead of string comparison
         import_idents: collections.SafeList(base.Ident.Idx) = .{},
         /// Resolved module indices, parallel to imports list
-        /// Each entry is either a valid module index or UNRESOLVED_MODULE
-        resolved_modules: collections.SafeList(u32) = .{},
+        /// Each entry is either a valid module index or unresolved
+        resolved_modules: collections.SafeList(ResolvedModuleIdx) = .{},
 
         pub fn init() Store {
             return .{};
@@ -793,7 +799,7 @@ pub const Import = struct {
 
         /// Get or create an Import.Idx for the given module name.
         /// The module name is first checked against existing imports by comparing strings.
-        /// New imports are initially unresolved (UNRESOLVED_MODULE).
+        /// New imports are initially unresolved (unresolved).
         /// If ident_idx is provided, it will be stored for index-based lookups.
         pub fn getOrPut(self: *Store, allocator: std.mem.Allocator, strings: *base.StringLiteral.Store, module_name: []const u8) !Import.Idx {
             return self.getOrPutWithIdent(allocator, strings, module_name, null);
@@ -801,7 +807,7 @@ pub const Import = struct {
 
         /// Get or create an Import.Idx for the given module name, with an associated ident.
         /// The module name is first checked against existing imports by comparing strings.
-        /// New imports are initially unresolved (UNRESOLVED_MODULE).
+        /// New imports are initially unresolved (unresolved).
         /// If ident_idx is provided, it will be stored for index-based lookups.
         pub fn getOrPutWithIdent(self: *Store, allocator: std.mem.Allocator, strings: *base.StringLiteral.Store, module_name: []const u8, ident_idx: ?base.Ident.Idx) !Import.Idx {
             // First check if we already have this module name by comparing strings
@@ -829,7 +835,7 @@ pub const Import = struct {
             // Add to both the list and the map, with unresolved module initially
             _ = try self.imports.append(allocator, string_idx);
             _ = try self.import_idents.append(allocator, ident_idx orelse base.Ident.Idx.NONE);
-            _ = try self.resolved_modules.append(allocator, Import.UNRESOLVED_MODULE);
+            _ = try self.resolved_modules.append(allocator, ResolvedModuleIdx.none);
             try self.map.put(allocator, string_idx, idx);
 
             return idx;
@@ -849,15 +855,15 @@ pub const Import = struct {
             const idx = @intFromEnum(import_idx);
             if (idx >= self.resolved_modules.len()) return null;
             const resolved = self.resolved_modules.items.items[idx];
-            if (resolved == Import.UNRESOLVED_MODULE) return null;
-            return resolved;
+            if (resolved.isNone()) return null;
+            return @intFromEnum(resolved);
         }
 
         /// Set the resolved module index for an import
         pub fn setResolvedModule(self: *Store, import_idx: Import.Idx, module_idx: u32) void {
             const idx = @intFromEnum(import_idx);
             if (idx < self.resolved_modules.len()) {
-                self.resolved_modules.items.items[idx] = module_idx;
+                self.resolved_modules.items.items[idx] = @enumFromInt(module_idx);
             }
         }
 
@@ -940,7 +946,7 @@ pub const Import = struct {
             map: [3]u64,
             imports: collections.SafeList(base.StringLiteral.Idx).Serialized,
             import_idents: collections.SafeList(base.Ident.Idx).Serialized,
-            resolved_modules: collections.SafeList(u32).Serialized,
+            resolved_modules: collections.SafeList(Import.ResolvedModuleIdx).Serialized,
 
             /// Serialize a Store into this Serialized struct, appending data to the writer
             pub fn serialize(

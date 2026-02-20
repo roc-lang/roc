@@ -22,7 +22,7 @@
 //! ```
 //!
 //! Key properties:
-//! - All lookups use global MonoSymbol (module_idx + ident_idx) - never module-local indices
+//! - All lookups use global Symbol (module_idx + ident_idx) - never module-local indices
 //! - Every expression has concrete type info via layout.Idx - no type variables
 //! - Flat storage in MonoExprStore with MonoExprId indices
 //! - No scope/bindings system - all references are global symbols
@@ -31,37 +31,13 @@ const std = @import("std");
 const base = @import("base");
 const layout = @import("layout");
 const types = @import("types");
+const mir = @import("mir");
 
 const Ident = base.Ident;
 const StringLiteral = base.StringLiteral;
 const CalledVia = base.CalledVia;
 
-/// Global identifier - combines module index with local identifier.
-/// This is the key innovation: references are globally unique, not module-local.
-/// Enables cross-module code generation without index collisions.
-pub const MonoSymbol = packed struct(u48) {
-    /// Index into all_module_envs array (which module this symbol is from)
-    module_idx: u16,
-    /// Ident.Idx within that module's ident store
-    ident_idx: Ident.Idx,
-
-    pub fn eql(a: MonoSymbol, b: MonoSymbol) bool {
-        return @as(u48, @bitCast(a)) == @as(u48, @bitCast(b));
-    }
-
-    pub fn hash(self: MonoSymbol) u64 {
-        return @as(u64, @bitCast(self));
-    }
-
-    pub const none: MonoSymbol = .{
-        .module_idx = std.math.maxInt(u16),
-        .ident_idx = Ident.Idx.NONE,
-    };
-
-    pub fn isNone(self: MonoSymbol) bool {
-        return self.module_idx == std.math.maxInt(u16);
-    }
-};
+pub const Symbol = mir.Symbol;
 
 /// Index into MonoExprStore.exprs
 pub const MonoExprId = enum(u32) {
@@ -131,7 +107,7 @@ pub const MonoCaptureSpan = extern struct {
 
 /// A captured symbol in a closure
 pub const MonoCapture = struct {
-    symbol: MonoSymbol,
+    symbol: Symbol,
     layout_idx: layout.Idx,
 };
 
@@ -211,7 +187,7 @@ pub const LambdaSetRepresentation = enum {
 /// A member of a lambda set
 pub const LambdaSetMember = struct {
     /// Global symbol for this lambda (from LambdaSetInference)
-    lambda_symbol: MonoSymbol,
+    lambda_symbol: Symbol,
     /// Captures for this member
     captures: MonoCaptureSpan,
     /// The lambda body expression
@@ -269,18 +245,18 @@ pub const SelfRecursive = union(enum) {
     self_recursive: JoinPointId,
 };
 
-/// Span of when branches
-pub const MonoWhenBranchSpan = extern struct {
+/// Span of match branches
+pub const MonoMatchBranchSpan = extern struct {
     start: u32,
     len: u16,
 
-    pub fn empty() MonoWhenBranchSpan {
+    pub fn empty() MonoMatchBranchSpan {
         return .{ .start = 0, .len = 0 };
     }
 };
 
-/// A branch in a when/match expression
-pub const MonoWhenBranch = struct {
+/// A branch in a match expression
+pub const MonoMatchBranch = struct {
     /// Pattern to match against
     pattern: MonoPatternId,
     /// Optional guard expression (must evaluate to Bool)
@@ -293,6 +269,14 @@ pub const MonoWhenBranch = struct {
 pub const MonoIfBranchSpan = extern struct {
     start: u32,
     len: u16,
+
+    pub fn empty() MonoIfBranchSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: MonoIfBranchSpan) bool {
+        return self.len == 0;
+    }
 };
 
 /// A branch in an if expression (condition + body)
@@ -355,7 +339,7 @@ pub const MonoExpr = union(enum) {
 
     /// Lookup a symbol - globally unique identifier + its layout
     lookup: struct {
-        symbol: MonoSymbol,
+        symbol: Symbol,
         layout_idx: layout.Idx,
     },
 
@@ -471,13 +455,13 @@ pub const MonoExpr = union(enum) {
         result_layout: layout.Idx,
     },
 
-    /// When/match expression
-    when: struct {
+    /// Match expression
+    match_expr: struct {
         /// Value being matched
         value: MonoExprId,
         value_layout: layout.Idx,
         /// Branches to try
-        branches: MonoWhenBranchSpan,
+        branches: MonoMatchBranchSpan,
         result_layout: layout.Idx,
     },
 
@@ -666,7 +650,7 @@ pub const MonoExpr = union(enum) {
         mul,
         div,
         div_trunc, // Truncating division (integer division)
-        mod,
+        rem, // Remainder (truncates toward zero, like C's %)
 
         // Comparison
         eq,
@@ -1042,7 +1026,7 @@ pub const MonoExpr = union(enum) {
 pub const MonoPattern = union(enum) {
     /// Bind to a symbol (always matches)
     bind: struct {
-        symbol: MonoSymbol,
+        symbol: Symbol,
         layout_idx: layout.Idx,
     },
 
@@ -1103,7 +1087,7 @@ pub const MonoPattern = union(enum) {
 
     /// As-pattern: bind and also match inner pattern
     as_pattern: struct {
-        symbol: MonoSymbol,
+        symbol: Symbol,
         layout_idx: layout.Idx,
         inner: MonoPatternId,
     },
@@ -1154,6 +1138,30 @@ pub const CFSwitchBranchSpan = extern struct {
     }
 
     pub fn isEmpty(self: CFSwitchBranchSpan) bool {
+        return self.len == 0;
+    }
+};
+
+/// A branch in a control flow match statement (pattern matching)
+pub const CFMatchBranch = struct {
+    /// The pattern to match against
+    pattern: MonoPatternId,
+    /// Optional guard expression (MonoExprId.none if no guard)
+    guard: MonoExprId,
+    /// The statement body for this branch
+    body: CFStmtId,
+};
+
+/// Span of control flow match branches
+pub const CFMatchBranchSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() CFMatchBranchSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: CFMatchBranchSpan) bool {
         return self.len == 0;
     }
 };
@@ -1224,6 +1232,18 @@ pub const CFStmt = union(enum) {
         /// Layout of the result
         ret_layout: layout.Idx,
     },
+
+    /// Pattern match statement (for `when` expressions in tail position)
+    match_stmt: struct {
+        /// The value being matched
+        value: MonoExprId,
+        /// Layout of the value being matched
+        value_layout: layout.Idx,
+        /// Pattern match branches
+        branches: CFMatchBranchSpan,
+        /// Layout of the result
+        ret_layout: layout.Idx,
+    },
 };
 
 /// A complete procedure/function ready for code generation
@@ -1234,7 +1254,7 @@ pub const CFStmt = union(enum) {
 /// defined (including RET instruction) before recursion can occur.
 pub const MonoProc = struct {
     /// The symbol this procedure is bound to
-    name: MonoSymbol,
+    name: Symbol,
     /// Parameter patterns
     args: MonoPatternSpan,
     /// Layout of each argument
@@ -1249,19 +1269,19 @@ pub const MonoProc = struct {
     is_self_recursive: SelfRecursive,
 };
 
-test "MonoSymbol size and alignment" {
-    // MonoSymbol is a packed(u48) but may be padded to 8 bytes depending on platform
-    try std.testing.expect(@sizeOf(MonoSymbol) <= 8);
-    try std.testing.expect(@alignOf(MonoSymbol) >= 2);
+test "Symbol size and alignment" {
+    // Symbol is a packed(u64) struct with natural u64 alignment
+    try std.testing.expectEqual(@as(usize, 8), @sizeOf(Symbol));
+    try std.testing.expectEqual(@as(usize, 8), @alignOf(Symbol));
 }
 
-test "MonoSymbol equality" {
+test "Symbol equality" {
     const ident1 = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 42 };
     const ident2 = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 42 };
 
-    const sym1 = MonoSymbol{ .module_idx = 0, .ident_idx = ident1 };
-    const sym2 = MonoSymbol{ .module_idx = 0, .ident_idx = ident2 };
-    const sym3 = MonoSymbol{ .module_idx = 1, .ident_idx = ident1 };
+    const sym1 = Symbol{ .module_idx = 0, .ident_idx = ident1 };
+    const sym2 = Symbol{ .module_idx = 0, .ident_idx = ident2 };
+    const sym3 = Symbol{ .module_idx = 1, .ident_idx = ident1 };
 
     try std.testing.expect(sym1.eql(sym2));
     try std.testing.expect(!sym1.eql(sym3));

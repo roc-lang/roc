@@ -596,6 +596,8 @@ const DeadFilesDetector = struct {
             "fuzz_sort.zig", // Fuzzing entry point
             "watch.zig", // File watcher entry point
             "fx_platform_test.zig", // FX platform tests
+            "glue_test.zig", // Glue generation tests
+            "host.zig", // Glue platform host
             "roc_subcommands.zig", // CLI subcommand tests
             "test_runner.zig", // Test runner executable
             "llvm_evaluator.zig", // LLVM evaluator executable

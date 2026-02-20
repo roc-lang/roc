@@ -885,15 +885,13 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .body = @enumFromInt(args_body.node),
             } };
         },
-        .expr_low_level => {
-            const p = payload.expr_low_level;
-            // Retrieve low-level lambda data from span_with_node_data
-            const args_body = store.span_with_node_data.items.items[p.args_body_idx];
+        .expr_run_low_level => {
+            const p = payload.expr_run_low_level;
+            const args_span = store.span2_data.items.items[p.args_span2_idx];
 
-            return CIR.Expr{ .e_low_level_lambda = .{
+            return CIR.Expr{ .e_run_low_level = .{
                 .op = @enumFromInt(p.op),
-                .args = .{ .span = .{ .start = args_body.start, .len = args_body.len } },
-                .body = @enumFromInt(args_body.node),
+                .args = .{ .span = .{ .start = args_span.start, .len = args_span.len } },
             } };
         },
         .expr_expect => {
@@ -2024,18 +2022,14 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .args_body_idx = args_body_idx,
             } });
         },
-        .e_low_level_lambda => |low_level| {
-            node.tag = .expr_low_level;
-            const args_body_idx: u32 = @intCast(store.span_with_node_data.len());
-            _ = try store.span_with_node_data.append(store.gpa, .{
-                .start = low_level.args.span.start,
-                .len = low_level.args.span.len,
-                .node = @intFromEnum(low_level.body),
-            });
+        .e_run_low_level => |run_ll| {
+            node.tag = .expr_run_low_level;
+            const span2_idx: u32 = @intCast(store.span2_data.len());
+            _ = try store.span2_data.append(store.gpa, .{ .start = run_ll.args.span.start, .len = run_ll.args.span.len });
 
-            node.setPayload(.{ .expr_low_level = .{
-                .op = @intFromEnum(low_level.op),
-                .args_body_idx = args_body_idx,
+            node.setPayload(.{ .expr_run_low_level = .{
+                .op = @intFromEnum(run_ll.op),
+                .args_span2_idx = span2_idx,
             } });
         },
         .e_match => |e| {
@@ -2632,9 +2626,12 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addTypeHeader(store: *NodeStore, typeHeader: CIR.TypeHeader, region: base.Region) Allocator.Error!CIR.TypeHeader.Idx {
-    std.debug.assert(typeHeader.args.span.start <= std.math.maxInt(u16));
     std.debug.assert(typeHeader.args.span.len <= std.math.maxInt(u16));
-    const packed_args: u32 = (@as(u32, @intCast(typeHeader.args.span.start)) << 16) | @as(u32, @intCast(typeHeader.args.span.len));
+    std.debug.assert(typeHeader.args.span.len == 0 or typeHeader.args.span.start <= std.math.maxInt(u16));
+    const packed_args: u32 = if (typeHeader.args.span.len == 0)
+        0
+    else
+        (@as(u32, @intCast(typeHeader.args.span.start)) << 16) | @as(u32, @intCast(typeHeader.args.span.len));
 
     var node = Node.init(.type_header);
     node.setPayload(.{ .type_header = .{
@@ -3063,6 +3060,7 @@ pub fn clearScratchDefsFrom(store: *NodeStore, start: u32) void {
 
 /// Creates a slice corresponding to a span.
 pub fn sliceFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) []T {
+    if (span.len == 0) return &.{};
     return @ptrCast(store.index_data.items.items[span.start..][0..span.len]);
 }
 
