@@ -128,6 +128,7 @@ pub fn init(allocator: Allocator) Self {
 /// Initialize with pre-allocated capacity
 pub fn initCapacity(allocator: Allocator, capacity: usize) Allocator.Error!Self {
     var self = init(allocator);
+    errdefer self.deinit();
     try self.exprs.ensureTotalCapacity(allocator, capacity);
     try self.expr_regions.ensureTotalCapacity(allocator, capacity);
     try self.patterns.ensureTotalCapacity(allocator, capacity / 4);

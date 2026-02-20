@@ -301,7 +301,8 @@ pub fn makeTailRecursive(
     var initial_args = std.ArrayList(MonoExprId).empty;
     defer initial_args.deinit(allocator);
 
-    for (param_patterns) |pattern_id| {
+    const proc_param_layouts = store.getLayoutIdxSpan(param_layouts);
+    for (param_patterns, 0..) |pattern_id, param_idx| {
         const pattern = store.getPattern(pattern_id);
         switch (pattern) {
             .bind => |bind| {
@@ -315,11 +316,13 @@ pub fn makeTailRecursive(
                 try initial_args.append(allocator, lookup_id);
             },
             .wildcard => {
-                // Wildcard params need a placeholder to maintain arity
-                const placeholder_id = try store.addExpr(
-                    .{ .i64_literal = 0 },
-                    @import("base").Region.zero(),
-                );
+                // Wildcard params need a placeholder to maintain arity.
+                // Use layout-aware zero to avoid type mismatch.
+                const param_layout = proc_param_layouts[param_idx];
+                const placeholder_id = if (param_layout == .i128 or param_layout == .u128 or param_layout == .dec)
+                    try store.addExpr(.{ .i128_literal = 0 }, @import("base").Region.zero())
+                else
+                    try store.addExpr(.{ .i64_literal = 0 }, @import("base").Region.zero());
                 try initial_args.append(allocator, placeholder_id);
             },
             else => unreachable,

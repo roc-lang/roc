@@ -137,7 +137,7 @@ pub const ClosureRepresentation = union(enum) {
         /// Number of functions in the set
         num_functions: u16,
         /// This function's tag value (position in lambda set)
-        tag: u8,
+        tag: u16,
         /// All members of the lambda set (for dispatch at call sites)
         lambda_set: LambdaSetMemberSpan,
     },
@@ -484,6 +484,7 @@ pub const MonoExpr = union(enum) {
         lhs: MonoExprId,
         rhs: MonoExprId,
         result_layout: layout.Idx,
+        operand_layout: layout.Idx,
     },
 
     /// Unary minus/negation

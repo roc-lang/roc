@@ -137,7 +137,7 @@ pub const ClosureRepresentation = union(enum) {
         /// Number of functions in the set
         num_functions: u16,
         /// This function's tag value (position in lambda set)
-        tag: u8,
+        tag: u16,
         /// All members of the lambda set (for dispatch at call sites)
         lambda_set: LambdaSetMemberSpan,
     },
@@ -158,30 +158,6 @@ pub const ClosureRepresentation = union(enum) {
     /// No representation needed - function is called directly.
     /// Used when a lambda is immediately called and never stored.
     direct_call: void,
-};
-
-/// Lambda set - all possible lambdas at a call site.
-/// When a function parameter or variable can hold different closures,
-/// this tracks all the possibilities for dispatch.
-pub const LambdaSet = struct {
-    /// Span into the lambda set members storage
-    members: LambdaSetMemberSpan,
-    /// The representation chosen for this lambda set
-    representation: LambdaSetRepresentation,
-};
-
-/// How a lambda set is represented at runtime
-pub const LambdaSetRepresentation = enum {
-    /// Single function, single capture - unwrapped
-    unwrapped_capture,
-    /// Single function, multiple captures - struct
-    struct_captures,
-    /// Multiple functions, no captures - enum dispatch
-    enum_dispatch,
-    /// Multiple functions, some with captures - tagged union
-    union_repr,
-    /// Direct call, no runtime representation
-    direct_call,
 };
 
 /// A member of a lambda set
@@ -499,6 +475,7 @@ pub const LirExpr = union(enum) {
         lhs: LirExprId,
         rhs: LirExprId,
         result_layout: layout.Idx,
+        operand_layout: layout.Idx,
     },
 
     /// Unary minus/negation

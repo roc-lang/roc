@@ -3258,6 +3258,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 .lhs = lhs,
                 .rhs = rhs,
                 .result_layout = result_layout,
+                .operand_layout = self.getExprLayoutFromIdx(module_env, binop.lhs),
             } };
         },
 

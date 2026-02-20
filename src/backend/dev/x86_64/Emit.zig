@@ -158,6 +158,16 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.append(self.allocator, modRM(0b11, src.enc(), dst.enc()));
         }
 
+        /// XCHG reg, reg (exchange two registers)
+        pub fn xchgRegReg(self: *Self, width: RegisterWidth, a: GeneralReg, b: GeneralReg) !void {
+            if (width.requiresSizeOverride()) {
+                try self.buf.append(self.allocator, 0x66);
+            }
+            try self.emitRex(width, a, b);
+            try self.buf.append(self.allocator, 0x87); // XCHG r/m, r
+            try self.buf.append(self.allocator, modRM(0b11, a.enc(), b.enc()));
+        }
+
         /// MOV reg, imm64 (movabs)
         pub fn movRegImm64(self: *Self, dst: GeneralReg, imm: i64) !void {
             try self.emitRex(.w64, null, dst);
@@ -640,6 +650,12 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.append(self.allocator, 0x0F);
             try self.buf.append(self.allocator, 0x90 + @as(u8, @intFromEnum(cond)));
             try self.buf.append(self.allocator, modRM(0b11, 0, reg.enc()));
+        }
+
+        /// UD2 - Undefined instruction (generates SIGILL, used as trap)
+        pub fn ud2(self: *Self) !void {
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0x0B);
         }
 
         // Memory instructions

@@ -849,6 +849,13 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.csinc(width, dst, .ZRSP, .ZRSP, cond.invert());
         }
 
+        /// BRK #1 - Breakpoint instruction (generates SIGTRAP, used as trap)
+        pub fn brk(self: *Self) !void {
+            // BRK #imm16: 1101_0100_001 imm16 00000
+            // Using imm16=1 as a conventional trap value
+            try self.emit32(0xD4200020);
+        }
+
         // Memory instructions
 
         /// LDR (load register) with unsigned offset

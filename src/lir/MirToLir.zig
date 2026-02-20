@@ -305,18 +305,25 @@ fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
     };
 }
 
-fn lowerInt(self: *Self, int_data: anytype, _: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
+fn lowerInt(self: *Self, int_data: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
+    // Use the monotype to determine if this is a 128-bit type.
+    // For 128-bit types, always emit i128_literal even if the value fits in i64,
+    // because getExprLayout uses the literal type to determine size, and emitting
+    // i64_literal for a u128/i128 variable would cause wrong-sized allocations.
+    const target_layout = try self.layoutFromMonotype(mono_idx);
+    const needs_128 = target_layout == .i128 or target_layout == .u128 or target_layout == .dec;
+
     switch (int_data.value.kind) {
         .u128 => {
             const val: u128 = @bitCast(int_data.value.bytes);
-            if (val <= std.math.maxInt(i64)) {
+            if (!needs_128 and val <= std.math.maxInt(i64)) {
                 return self.lir_store.addExpr(.{ .i64_literal = @intCast(val) }, region);
             }
             return self.lir_store.addExpr(.{ .i128_literal = @bitCast(val) }, region);
         },
         .i128 => {
             const val = int_data.value.toI128();
-            if (val >= std.math.minInt(i64) and val <= std.math.maxInt(i64)) {
+            if (!needs_128 and val >= std.math.minInt(i64) and val <= std.math.maxInt(i64)) {
                 return self.lir_store.addExpr(.{ .i64_literal = @intCast(val) }, region);
             }
             return self.lir_store.addExpr(.{ .i128_literal = val }, region);
@@ -347,16 +354,52 @@ fn lowerRecord(self: *Self, rec: anytype, mono_idx: Monotype.Idx, region: Region
     }
 
     const record_layout = try self.layoutFromMonotype(mono_idx);
-    const lir_fields = try self.lowerExprSpan(mir_fields);
-
     const mir_field_names = self.mir_store.getFieldNameSpan(rec.field_names);
-    const lir_field_names = try self.lir_store.addFieldNameSpan(mir_field_names);
+    const record_layout_val = self.layout_store.getLayout(record_layout);
 
-    return self.lir_store.addExpr(.{ .record = .{
-        .record_layout = record_layout,
-        .fields = lir_fields,
-        .field_names = lir_field_names,
-    } }, region);
+    if (record_layout_val.tag == .record) {
+        // MIR fields are in source/alphabetical order, but the layout store sorts
+        // fields by alignment descending then alphabetically. Reorder expressions
+        // to match layout order so codegen can use positional field indices.
+        const record_data = self.layout_store.getRecordData(record_layout_val.data.record.idx);
+        const layout_fields = self.layout_store.record_fields.sliceRange(record_data.getFields());
+
+        const save_exprs = self.scratch_lir_expr_ids.items.len;
+        defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
+        const save_names = self.scratch_field_names.items.len;
+        defer self.scratch_field_names.shrinkRetainingCapacity(save_names);
+
+        for (0..layout_fields.len) |li| {
+            const layout_field_name = layout_fields.get(li).name;
+            for (mir_field_names, 0..) |mir_name, mi| {
+                if (@as(u32, @bitCast(mir_name)) == @as(u32, @bitCast(layout_field_name))) {
+                    const lir_expr = try self.lowerExpr(mir_fields[mi]);
+                    try self.scratch_lir_expr_ids.append(self.allocator, lir_expr);
+                    try self.scratch_field_names.append(self.allocator, mir_name);
+                    break;
+                }
+            }
+        }
+
+        const lir_fields = try self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_exprs..]);
+        const lir_field_names = try self.lir_store.addFieldNameSpan(self.scratch_field_names.items[save_names..]);
+
+        return self.lir_store.addExpr(.{ .record = .{
+            .record_layout = record_layout,
+            .fields = lir_fields,
+            .field_names = lir_field_names,
+        } }, region);
+    } else {
+        // Non-record layout (e.g. single-field optimization or ZST) — pass through directly
+        const lir_fields = try self.lowerExprSpan(mir_fields);
+        const lir_field_names = try self.lir_store.addFieldNameSpan(mir_field_names);
+
+        return self.lir_store.addExpr(.{ .record = .{
+            .record_layout = record_layout,
+            .fields = lir_fields,
+            .field_names = lir_field_names,
+        } }, region);
+    }
 }
 
 fn lowerTuple(self: *Self, tup: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
@@ -664,11 +707,13 @@ fn lowerLowLevel(self: *Self, ll: anytype, mono_idx: Monotype.Idx, region: Regio
     // Check if this maps to a .binop (comparisons, div_trunc, rem)
     if (lowLevelToBinop(ll.op)) |binop| {
         const args_slice = self.lir_store.getExprSpan(lir_args);
+        const operand_layout = try self.layoutFromMonotype(self.mir_store.typeOf(mir_args[0]));
         return self.lir_store.addExpr(.{ .binop = .{
             .op = binop,
             .lhs = args_slice[0],
             .rhs = args_slice[1],
             .result_layout = ret_layout,
+            .operand_layout = operand_layout,
         } }, region);
     }
 
@@ -677,11 +722,13 @@ fn lowerLowLevel(self: *Self, ll: anytype, mono_idx: Monotype.Idx, region: Regio
         const args_slice = self.lir_store.getExprSpan(lir_args);
         const zero = try self.emitZeroLiteral(mir_args[0], region);
         const cmp_op: LirExpr.BinOp = if (ll.op == .num_is_negative) .lt else .gt;
+        const operand_layout = try self.layoutFromMonotype(self.mir_store.typeOf(mir_args[0]));
         return self.lir_store.addExpr(.{ .binop = .{
             .op = cmp_op,
             .lhs = args_slice[0],
             .rhs = zero,
             .result_layout = ret_layout,
+            .operand_layout = operand_layout,
         } }, region);
     }
 
@@ -698,11 +745,13 @@ fn lowerLowLevel(self: *Self, ll: anytype, mono_idx: Monotype.Idx, region: Regio
     if (ll.op == .num_is_zero) {
         const args_slice = self.lir_store.getExprSpan(lir_args);
         const zero = try self.emitZeroLiteral(mir_args[0], region);
+        const operand_layout = try self.layoutFromMonotype(self.mir_store.typeOf(mir_args[0]));
         return self.lir_store.addExpr(.{ .binop = .{
             .op = .eq,
             .lhs = args_slice[0],
             .rhs = zero,
             .result_layout = ret_layout,
+            .operand_layout = operand_layout,
         } }, region);
     }
 
@@ -718,7 +767,7 @@ fn lowerLowLevel(self: *Self, ll: anytype, mono_idx: Monotype.Idx, region: Regio
 }
 
 /// Emit a zero literal matching the type of the given MIR expression.
-/// For float/dec types, emits the correct float/dec zero instead of i64.
+/// For float/dec/i128 types, emits the correct typed zero instead of i64.
 fn emitZeroLiteral(self: *Self, mir_expr: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
     const arg_mono_idx = self.mir_store.typeOf(mir_expr);
     const arg_monotype = self.mir_store.monotype_store.getMonotype(arg_mono_idx);
@@ -727,6 +776,7 @@ fn emitZeroLiteral(self: *Self, mir_expr: MIR.ExprId, region: Region) Allocator.
             .f32 => LirExpr{ .f32_literal = 0.0 },
             .f64 => LirExpr{ .f64_literal = 0.0 },
             .dec => LirExpr{ .dec_literal = 0 },
+            .i128, .u128 => LirExpr{ .i128_literal = 0 },
             else => LirExpr{ .i64_literal = 0 },
         },
         else => LirExpr{ .i64_literal = 0 },
@@ -3002,6 +3052,41 @@ test "MIR num_is_zero with f64 operand emits f64 zero literal" {
     try testing.expect(rhs_expr == .f64_literal);
 }
 
+test "MIR num_is_zero with i128 operand emits i128 zero literal" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i128_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i128)];
+    const bool_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.bool)];
+
+    // Build MIR: run_low_level(.num_is_zero, [42_i128])
+    const arg0 = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(u128, 42)), .kind = .i128 },
+    } }, i128_mono, Region.zero());
+    const args = try env.mir_store.addExprSpan(allocator, &.{arg0});
+    const ll_expr = try env.mir_store.addExpr(allocator, .{ .run_low_level = .{
+        .op = .num_is_zero,
+        .args = args,
+    } }, bool_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(ll_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+
+    // Should be a binop eq comparing the i128 operand with a zero literal
+    try testing.expect(lir_expr == .binop);
+    try testing.expect(lir_expr.binop.op == .eq);
+
+    // The RHS (zero literal) should be an i128_literal, not i64_literal
+    const rhs_expr = env.lir_store.getExpr(lir_expr.binop.rhs);
+    try testing.expect(rhs_expr == .i128_literal);
+}
+
 test "MIR large unsigned int (U64 max) lowers to LIR i128_literal" {
     const allocator = testing.allocator;
 
@@ -3143,4 +3228,54 @@ test "record destructure wildcard gets actual field layout not zst" {
     // Third is the bind for a (U8 layout)
     const pat2 = env.lir_store.getPattern(field_pats[2]);
     try testing.expect(pat2 == .bind);
+}
+
+test "MIR small i128 value emits i128_literal not i64_literal" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i128_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i128)];
+
+    // Value 42 fits in i64, but monotype is i128.
+    // Must emit i128_literal so getExprLayout returns the correct 128-bit layout.
+    const int_expr = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
+    } }, i128_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(int_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+
+    try testing.expect(lir_expr == .i128_literal);
+    try testing.expectEqual(@as(i128, 42), lir_expr.i128_literal);
+}
+
+test "MIR small u128 value emits i128_literal not i64_literal" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const u128_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.u128)];
+
+    // Value 7 fits in i64, but monotype is u128.
+    // Must emit i128_literal so getExprLayout returns the correct 128-bit layout.
+    const int_expr = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(u128, 7)), .kind = .u128 },
+    } }, u128_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(int_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+
+    try testing.expect(lir_expr == .i128_literal);
+    try testing.expectEqual(@as(i128, 7), lir_expr.i128_literal);
 }
