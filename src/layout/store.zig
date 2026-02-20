@@ -1940,6 +1940,10 @@ pub const Store = struct {
 
             // Declare layout outside the if so it's accessible in container finalization
             var layout: Layout = undefined;
+            // Track when we've identified a Bool nominal type. Layout.boolType() is
+            // Layout.int(.u8) which insertLayout would map to Idx.u8, losing the Bool
+            // distinction. This flag lets us map directly to Idx.bool instead.
+            var is_bool_layout = false;
 
             if (!skip_layout_computation) {
                 // Mark this var as in-progress before processing.
@@ -1988,7 +1992,9 @@ pub const Store = struct {
                                 break :blk false;
                             };
                             if (is_builtin_bool) {
-                                // This is Builtin.Bool - use bool layout (u8)
+                                // This is Builtin.Bool - use bool layout (u8).
+                                // Set flag so we map to Idx.bool instead of Idx.u8.
+                                is_bool_layout = true;
                                 break :flat_type Layout.boolType();
                             }
 
@@ -2645,7 +2651,9 @@ pub const Store = struct {
                 };
 
                 // We actually resolved a layout that wasn't zero-sized!
-                layout_idx = try self.insertLayout(layout);
+                // Bool needs special handling: Layout.boolType() is Layout.int(.u8),
+                // so insertLayout would produce Idx.u8 instead of Idx.bool.
+                layout_idx = if (is_bool_layout) .bool else try self.insertLayout(layout);
                 const layout_cache_key = ModuleVarKey{ .module_idx = self.current_module_idx, .var_ = current.var_ };
                 // Only cache if the layout doesn't depend on unresolved type parameters.
                 // Layouts that depend on unresolved params (like List(a) where 'a' has no mapping)
