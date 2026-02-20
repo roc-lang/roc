@@ -10180,7 +10180,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         fn generateCall(self: *Self, call: anytype) Allocator.Error!ValueLocation {
             // Get the function expression
             const fn_expr = self.store.getExpr(call.fn_expr);
-
             return switch (fn_expr) {
                 // Direct lambda call: inline the body in the current scope.
                 // Inline lambdas are defined at a single call site, cannot be
@@ -10238,6 +10237,24 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (self.symbol_locations.get(symbol_key)) |loc| {
                         switch (loc) {
                             .lambda_code => |lc| {
+                                // Before dispatching to compiled proc, check if the call
+                                // needs inlining (callable args or body returns callable).
+                                // Compiled procs can't return closure_value (captures live
+                                // on the proc's stack frame which is deallocated on return).
+                                if (self.hasCallableArguments(call.args)) {
+                                    if (self.store.getSymbolDef(lookup.symbol)) |def_id| {
+                                        const def_expr = self.store.getExpr(def_id);
+                                        if (def_expr == .lambda) {
+                                            return try self.callLambdaBodyDirect(def_expr.lambda, call.args);
+                                        }
+                                    }
+                                }
+                                if (self.store.getSymbolDef(lookup.symbol)) |def_id| {
+                                    const def_expr = self.store.getExpr(def_id);
+                                    if (def_expr == .lambda and self.bodyReturnsCallable(def_expr.lambda.body)) {
+                                        return try self.callLambdaBodyDirect(def_expr.lambda, call.args);
+                                    }
+                                }
                                 return try self.generateCallToLambda(
                                     lc.code_offset,
                                     call.args,
@@ -10785,16 +10802,25 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 const capture_size = ls.layoutSizeAlign(capture_layout).size;
                 const capture_offset = cv.stack_offset + offset;
 
-                // If the capture is itself a closure (e.g., add5 = make_adder(5) captured
-                // by another closure), preserve the .closure_value metadata so that calling
-                // the captured closure dispatches correctly. Without this, the closure_value
-                // would be overwritten with raw .stack bytes, and the call would hit
-                // unreachable in generateLookupCall because getSymbolDef returns .call.
+                // If the capture is itself a closure or lambda, preserve the calling
+                // metadata so that dispatch works correctly. Without this, the
+                // closure_value/lambda_code would be overwritten with raw .stack bytes.
                 if (self.symbol_locations.get(symbol_key)) |existing_loc| {
                     if (existing_loc == .closure_value) {
+                        // Closure value: update stack_offset to point to the new
+                        // capture location within the enclosing closure struct.
                         var updated_cv = existing_loc.closure_value;
                         updated_cv.stack_offset = capture_offset;
                         try self.symbol_locations.put(symbol_key, .{ .closure_value = updated_cv });
+                        offset += @intCast(capture_size);
+                        continue;
+                    }
+                    if (existing_loc == .lambda_code) {
+                        // Lambda code: keep the existing code_offset metadata.
+                        // The closure layout includes a Closure header that the
+                        // dev backend doesn't use, so the raw capture bytes may
+                        // not match the layout size. The metadata (code_offset)
+                        // is all we need for correct dispatch.
                         offset += @intCast(capture_size);
                         continue;
                     }
