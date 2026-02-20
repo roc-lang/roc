@@ -6574,6 +6574,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         .tuple => ls.getTupleData(result_layout.data.tuple.idx).size,
                         .record => ls.getRecordData(result_layout.data.record.idx).size,
                         .tag_union => ls.getTagUnionData(result_layout.data.tag_union.idx).size,
+                        .closure => ls.layoutSizeAlign(result_layout).size,
                         .zst => 0,
                         .scalar => ls.layoutSizeAlign(result_layout).size,
                         else => unreachable,
@@ -10876,6 +10877,28 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             if (block_result == .closure_value) {
                                 return try self.generateClosureDispatch(block_result.closure_value, args_span, ret_layout);
                             }
+                        }
+                        unreachable;
+                    },
+                    .call, .if_then_else => {
+                        // Definition is a call result or conditional (e.g., add5 = make_adder(5),
+                        // f = if cond then |x| ... else |x| ...).
+                        // The closure value may be available through captures or local bindings.
+                        if (self.symbol_locations.get(symbol_key)) |loc| {
+                            return switch (loc) {
+                                .closure_value => |cv| try self.generateClosureDispatch(cv, args_span, ret_layout),
+                                .lambda_code => |lc| try self.generateCallToLambda(lc.code_offset, args_span, ret_layout),
+                                .general_reg, .stack, .immediate_i64 => try self.generateIndirectCall(loc, args_span, ret_layout),
+                                else => unreachable,
+                            };
+                        }
+                        // Not captured — evaluate the expression to produce the closure value
+                        const eval_result = try self.generateExpr(def_expr_id);
+                        if (eval_result == .closure_value) {
+                            return try self.generateClosureDispatch(eval_result.closure_value, args_span, ret_layout);
+                        }
+                        if (eval_result == .lambda_code) {
+                            return try self.generateCallToLambda(eval_result.lambda_code.code_offset, args_span, ret_layout);
                         }
                         unreachable;
                     },

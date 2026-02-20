@@ -6169,6 +6169,23 @@ fn getReturnedClosureInfo(self: *const Self, fn_expr_id: MonoExprId) ?ReturnedCl
         .lookup => |lookup| {
             // Follow the symbol definition to find what calling this function returns
             if (self.store.getSymbolDef(lookup.symbol)) |def_id| {
+                const def_expr = self.store.getExpr(def_id);
+                if (def_expr == .call) {
+                    // Symbol is bound to a call result (e.g., add5 = make_adder(5)).
+                    // First find what the call returns — that's what this symbol IS.
+                    const call_result_info = self.getReturnedClosureInfo(def_expr.call.fn_expr) orelse return null;
+                    // call_result_info describes the closure this symbol evaluates to.
+                    // Now find what CALLING that closure returns.
+                    const inner_expr = self.store.getExpr(call_result_info.lambda_expr);
+                    return switch (inner_expr) {
+                        .closure => |c| blk: {
+                            const lam = self.store.getExpr(c.lambda);
+                            break :blk if (lam == .lambda) self.getClosureInfoFromExpr(lam.lambda.body) else null;
+                        },
+                        .lambda => |l| self.getClosureInfoFromExpr(l.body),
+                        else => null,
+                    };
+                }
                 return self.getReturnedClosureInfo(def_id);
             }
             return null;
