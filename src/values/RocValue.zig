@@ -274,8 +274,8 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
         var i: usize = 0;
         while (i < fields.len) : (i += 1) {
             const fld = fields.get(i);
-            // Resolve field name from layout store's module-independent interner
-            const name_text = ctx.layout_store.getFieldName(fld.name);
+            // Resolve field name from ident store
+            const name_text = if (ctx.ident_store) |idents| idents.getText(fld.name) else "?";
             try out.appendSlice(name_text);
             try out.appendSlice(": ");
             const offset = ctx.layout_store.getRecordFieldOffset(self.lay.data.record.idx, @intCast(i));

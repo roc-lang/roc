@@ -16,11 +16,11 @@ const can = @import("can");
 
 const Allocator = std.mem.Allocator;
 const LayoutIdx = layout_mod.Idx;
-const MonoSymbol = mono.MonoSymbol;
+const MonoSymbol = mono.Symbol;
 const Var = types_mod.Var;
 
 /// Helper to create a test symbol
-fn testSymbol(module_idx: u16, ident_idx: u29) MonoSymbol {
+fn testSymbol(module_idx: u32, ident_idx: u29) MonoSymbol {
     return MonoSymbol{
         .module_idx = module_idx,
         .ident_idx = base.Ident.Idx{
@@ -41,9 +41,9 @@ test "specialization: same type produces same specialization key" {
     const type_var_2 = testVar(42); // Same type variable
 
     // Compute specialization keys
-    const base_key: u48 = @bitCast(base_symbol);
-    const var_1_int: u48 = @intCast(@intFromEnum(type_var_1));
-    const var_2_int: u48 = @intCast(@intFromEnum(type_var_2));
+    const base_key: u64 = @bitCast(base_symbol);
+    const var_1_int: u64 = @intCast(@intFromEnum(type_var_1));
+    const var_2_int: u64 = @intCast(@intFromEnum(type_var_2));
 
     const spec_key_1: u96 = (@as(u96, var_1_int) << 48) | base_key;
     const spec_key_2: u96 = (@as(u96, var_2_int) << 48) | base_key;
@@ -58,9 +58,9 @@ test "specialization: different types produce different specialization keys" {
     const type_var_string = testVar(43); // Different type variable
 
     // Compute specialization keys
-    const base_key: u48 = @bitCast(base_symbol);
-    const var_i64_int: u48 = @intCast(@intFromEnum(type_var_i64));
-    const var_string_int: u48 = @intCast(@intFromEnum(type_var_string));
+    const base_key: u64 = @bitCast(base_symbol);
+    const var_i64_int: u64 = @intCast(@intFromEnum(type_var_i64));
+    const var_string_int: u64 = @intCast(@intFromEnum(type_var_string));
 
     const spec_key_i64: u96 = (@as(u96, var_i64_int) << 48) | base_key;
     const spec_key_string: u96 = (@as(u96, var_string_int) << 48) | base_key;
@@ -95,8 +95,8 @@ test "specialization: fresh symbols are unique" {
     };
 
     // Symbols should be different
-    const key_1: u48 = @bitCast(spec_symbol_1);
-    const key_2: u48 = @bitCast(spec_symbol_2);
+    const key_1: u64 = @bitCast(spec_symbol_1);
+    const key_2: u64 = @bitCast(spec_symbol_2);
     try testing.expect(key_1 != key_2);
 }
 
@@ -111,8 +111,8 @@ test "specialization: multiple instantiations track separately" {
 
     // First specialization: (base_symbol, i64)
     const type_var_i64 = testVar(42);
-    const base_key: u48 = @bitCast(base_symbol);
-    const var_i64_int: u48 = @intCast(@intFromEnum(type_var_i64));
+    const base_key: u64 = @bitCast(base_symbol);
+    const var_i64_int: u64 = @intCast(@intFromEnum(type_var_i64));
     const spec_key_i64: u96 = (@as(u96, var_i64_int) << 48) | base_key;
 
     const spec_symbol_i64 = testSymbol(0, 200);
@@ -120,7 +120,7 @@ test "specialization: multiple instantiations track separately" {
 
     // Second specialization: (base_symbol, string)
     const type_var_string = testVar(43);
-    const var_string_int: u48 = @intCast(@intFromEnum(type_var_string));
+    const var_string_int: u64 = @intCast(@intFromEnum(type_var_string));
     const spec_key_string: u96 = (@as(u96, var_string_int) << 48) | base_key;
 
     const spec_symbol_string = testSymbol(0, 201);
@@ -131,8 +131,8 @@ test "specialization: multiple instantiations track separately" {
     try testing.expectEqual(specializations.get(spec_key_string).?, spec_symbol_string);
 
     // Verify they're different
-    const key_i64: u48 = @bitCast(spec_symbol_i64);
-    const key_string: u48 = @bitCast(spec_symbol_string);
+    const key_i64: u64 = @bitCast(spec_symbol_i64);
+    const key_string: u64 = @bitCast(spec_symbol_string);
     try testing.expect(key_i64 != key_string);
 }
 
@@ -147,15 +147,15 @@ test "specialization: reusing same type returns same specialization" {
     defer specializations.deinit();
 
     // Record first use of i64
-    const base_key: u48 = @bitCast(base_symbol);
-    const var_int: u48 = @intCast(@intFromEnum(type_var_i64_first));
+    const base_key: u64 = @bitCast(base_symbol);
+    const var_int: u64 = @intCast(@intFromEnum(type_var_i64_first));
     const spec_key_1: u96 = (@as(u96, var_int) << 48) | base_key;
 
     const spec_symbol = testSymbol(0, 200);
     try specializations.put(spec_key_1, spec_symbol);
 
     // Look up same type again
-    const var_int_2: u48 = @intCast(@intFromEnum(type_var_i64_second));
+    const var_int_2: u64 = @intCast(@intFromEnum(type_var_i64_second));
     const spec_key_2: u96 = (@as(u96, var_int_2) << 48) | base_key;
 
     // Should find the same specialization
@@ -178,8 +178,8 @@ test "specialization: comprehensive let-binding scenario" {
     // Use 1: id(10) - type is i64
     const type_i64 = testVar(42);
     {
-        const base_key: u48 = @bitCast(id_symbol);
-        const var_int: u48 = @intCast(@intFromEnum(type_i64));
+        const base_key: u64 = @bitCast(id_symbol);
+        const var_int: u64 = @intCast(@intFromEnum(type_i64));
         const spec_key: u96 = (@as(u96, var_int) << 48) | base_key;
 
         if (specializations.get(spec_key) == null) {
@@ -200,8 +200,8 @@ test "specialization: comprehensive let-binding scenario" {
     // Use 2: id("Hello") - type is string
     const type_string = testVar(43);
     {
-        const base_key: u48 = @bitCast(id_symbol);
-        const var_int: u48 = @intCast(@intFromEnum(type_string));
+        const base_key: u64 = @bitCast(id_symbol);
+        const var_int: u64 = @intCast(@intFromEnum(type_string));
         const spec_key: u96 = (@as(u96, var_int) << 48) | base_key;
 
         if (specializations.get(spec_key) == null) {
@@ -222,8 +222,8 @@ test "specialization: comprehensive let-binding scenario" {
     // Use 3: id(20) - type is i64 again
     const type_i64_again = testVar(42);
     {
-        const base_key: u48 = @bitCast(id_symbol);
-        const var_int: u48 = @intCast(@intFromEnum(type_i64_again));
+        const base_key: u64 = @bitCast(id_symbol);
+        const var_int: u64 = @intCast(@intFromEnum(type_i64_again));
         const spec_key: u96 = (@as(u96, var_int) << 48) | base_key;
 
         // Should reuse the i64 specialization

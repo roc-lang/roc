@@ -239,6 +239,8 @@ fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoEx
         .incref,
         .decref,
         .free,
+        .i64_literal,
+        .i128_literal,
         => null,
     };
 }
@@ -727,21 +729,13 @@ pub const DevEvaluator = struct {
         const layout_store_ptr = try self.ensureGlobalLayoutStore(all_module_envs);
 
         // In REPL sessions, module type stores get fresh type variables on each evaluation,
-        // but the global layout store persists. Clear all type variable cache entries
-        // so that recycled type_var indices don't map to wrong layouts from previous evals.
+        // but the global layout store persists. Clear stale cached layouts.
         layout_store_ptr.resetModuleCache(all_module_envs);
 
-        // Initialize polymorphic let-binding instantiator (lazy, demand-driven)
-        // During lowering, specializations are discovered when e_lookup_local encounters
-        // polymorphic bindings with concrete types. This follows COR's approach.
-        var instantiator = mono.Instantiate.init(self.allocator, all_module_envs);
-        defer instantiator.deinit();
-
-        // Create the lowerer with the instantiator
+        // Create the lowerer
         // Note: app_module_idx is null for JIT evaluation (no platform/app distinction)
         // Note: hosted_functions is null because dev evaluator uses interpreter for hosted calls
         var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, layout_store_ptr, null, null);
-        lowerer.instantiate = &instantiator;
         defer lowerer.deinit();
 
         // Lower CIR expression to Mono IR
@@ -749,68 +743,8 @@ pub const DevEvaluator = struct {
             return error.RuntimeError;
         };
 
-        // Solve needed specializations (discovered during lowering)
-        //
-        // APPROACH: Re-lower with concrete type scope (matching COR's strategy)
-        //
-        // For each specialization, we:
-        // 1. Extract the concrete argument/return types from spec.type_var
-        // 2. Build a TypeScope mapping generic parameter type variables to concrete ones
-        // 3. Re-lower the definition with this scope so parameters get correct concrete layouts
-        //
-        // This ensures identity(5) and identity("hello") compile with different calling
-        // conventions based on their concrete parameter types.
-        {
-            while (instantiator.nextNeededSpecialization()) |spec| {
-                const spec_module_env = all_module_envs[@as(usize, spec.module_idx)];
-
-                // Create a fresh lowerer for this specialization
-                var spec_lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, layout_store_ptr, null, null);
-                defer spec_lowerer.deinit();
-
-                // Get the generic definition's function type to extract parameter vars
-                const def_type_var = ModuleEnv.varFrom(spec.def_expr);
-                const def_resolved = spec_module_env.types.resolveVar(def_type_var);
-
-                if (def_resolved.desc.content.unwrapFunc()) |generic_func_type| {
-                    const generic_param_vars = spec_module_env.types.sliceVars(generic_func_type.args);
-                    const generic_ret_var = generic_func_type.ret;
-
-                    // Create type scope mapping generic → concrete
-                    // spec.type_var is the concrete type (argument type) for this specialization
-                    var spec_scope = types.VarMap.init(self.allocator);
-
-                    // Map all generic parameters to spec.type_var (the concrete arg type)
-                    // For single-parameter functions like identity(a), this is sufficient
-                    for (generic_param_vars) |generic| {
-                        try spec_scope.put(generic, types.ModuleVar{
-                            .module_idx = spec.module_idx,
-                            .var_ = spec.type_var,
-                        });
-                    }
-
-                    // Map return type to spec.type_var as well (for identity, same type as param)
-                    try spec_scope.put(generic_ret_var, types.ModuleVar{
-                        .module_idx = spec.module_idx,
-                        .var_ = spec.type_var,
-                    });
-
-                    // Configure lowerer with type scope
-                    try spec_lowerer.type_scope.scopes.append(spec_scope);
-                    spec_lowerer.use_type_scope = true;
-                }
-
-                // Re-lower the definition with type scope configured
-                const lowered_spec = spec_lowerer.lowerExpr(spec.module_idx, spec.def_expr) catch {
-                    return error.RuntimeError;
-                };
-                spec.lowered = lowered_spec;
-
-                // Register under the fresh symbol
-                const symbol_key: u48 = @bitCast(spec.name_new);
-                try mono_store.symbol_defs.put(symbol_key, lowered_spec);
-            }
-        }
+        // TODO: Polymorphic specialization was removed during lower-mir merge.
+        // The lower-mir branch handles specialization differently.
 
         // Perform lambda lifting on all expressions
         // This lifts nested lambdas to top-level after monomorphization
@@ -857,7 +791,7 @@ pub const DevEvaluator = struct {
             const type_var = can.ModuleEnv.varFrom(expr_idx);
             var type_scope = types.TypeScope.init(self.allocator);
             defer type_scope.deinit();
-            break :blk layout_store_ptr.fromTypeVar(module_idx, type_var, &type_scope, false) catch {
+            break :blk layout_store_ptr.fromTypeVar(module_idx, type_var, &type_scope, null) catch {
                 return error.RuntimeError;
             };
         };
@@ -876,7 +810,6 @@ pub const DevEvaluator = struct {
             layout_store_ptr,
             &self.static_interner,
         );
-        codegen.lambda_lifter = &lambda_lifter;
         defer codegen.deinit();
 
         // Compile all procedures first (for recursive functions)

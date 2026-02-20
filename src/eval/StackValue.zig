@@ -1194,7 +1194,7 @@ pub const RecordAccessor = struct {
 
     /// Get a StackValue for the field with the given name
     pub fn getFieldByName(self: RecordAccessor, field_name: []const u8, field_rt_var: types.Var) !?StackValue {
-        const field_offset = self.layout_cache.getRecordFieldOffsetByName(
+        const field_offset = self.layout_cache.getRecordFieldOffsetByNameStr(
             self.record_layout.data.record.idx,
             field_name,
         ) orelse return null;

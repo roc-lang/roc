@@ -63,7 +63,7 @@ const Allocator = std.mem.Allocator;
 
 const MonoExprId = ir.MonoExprId;
 const MonoPatternId = ir.MonoPatternId;
-const MonoSymbol = ir.MonoSymbol;
+const MonoSymbol = ir.Symbol;
 const LayoutIdx = layout_mod.Idx;
 const LayoutStore = layout_mod.Store;
 const TypeStore = types_mod.Store;
@@ -115,7 +115,7 @@ lifted_lambdas_map: std.AutoHashMap(u32, LiftedLambda),
 processed_exprs: std.AutoHashMap(u32, void),
 
 /// Reference capture symbols to avoid duplicates
-capture_by_symbol: std.AutoHashMap(u48, Capture),
+capture_by_symbol: std.AutoHashMap(u64, Capture),
 
 /// ============================================================================
 /// Initialization and Cleanup
@@ -138,7 +138,7 @@ pub fn init(
         .type_store = type_store,
         .lifted_lambdas_map = std.AutoHashMap(u32, LiftedLambda).init(allocator),
         .processed_exprs = std.AutoHashMap(u32, void).init(allocator),
-        .capture_by_symbol = std.AutoHashMap(u48, Capture).init(allocator),
+        .capture_by_symbol = std.AutoHashMap(u64, Capture).init(allocator),
     };
 }
 
@@ -264,7 +264,7 @@ fn liftLambdaExpr(self: *Self, lambda: anytype, expr_id: MonoExprId) !void {
     }
 
     // Step 1: Extract bound symbols from lambda parameters
-    var bound_symbols = std.AutoHashMap(u48, void).init(self.allocator);
+    var bound_symbols = std.AutoHashMap(u64, void).init(self.allocator);
     defer bound_symbols.deinit();
 
     const param_ids = self.store.getPatternSpan(lambda.params);
@@ -280,11 +280,11 @@ fn liftLambdaExpr(self: *Self, lambda: anytype, expr_id: MonoExprId) !void {
     // Step 3: Deduplicate captures (stable order, first occurrence wins)
     var unique_captures_buf: [64]Capture = undefined;
     var unique_captures_len: usize = 0;
-    var seen_symbols = std.AutoHashMap(u48, void).init(self.allocator);
+    var seen_symbols = std.AutoHashMap(u64, void).init(self.allocator);
     defer seen_symbols.deinit();
 
     for (captures_buf[0..captures_len]) |capture| {
-        const sym_key: u48 = @bitCast(capture.symbol);
+        const sym_key: u64 = @bitCast(capture.symbol);
         if (!seen_symbols.contains(sym_key)) {
             if (unique_captures_len < 64) {
                 unique_captures_buf[unique_captures_len] = capture;
@@ -327,12 +327,12 @@ fn liftLambdaExpr(self: *Self, lambda: anytype, expr_id: MonoExprId) !void {
 }
 
 /// Extract bound symbols from a pattern (parameters, destructuring)
-fn extractBoundSymbolsFromPattern(self: *Self, pattern_id: MonoPatternId, bound: *std.AutoHashMap(u48, void)) !void {
+fn extractBoundSymbolsFromPattern(self: *Self, pattern_id: MonoPatternId, bound: *std.AutoHashMap(u64, void)) !void {
     const pattern = self.store.getPattern(pattern_id);
 
     switch (pattern) {
         .bind => |bind_pattern| {
-            const sym_key: u48 = @bitCast(bind_pattern.symbol);
+            const sym_key: u64 = @bitCast(bind_pattern.symbol);
             try bound.put(sym_key, {});
         },
         .tag => |tag_pattern| {
@@ -354,7 +354,7 @@ fn extractBoundSymbolsFromPattern(self: *Self, pattern_id: MonoPatternId, bound:
             }
         },
         .as_pattern => |as_pat| {
-            const sym_key: u48 = @bitCast(as_pat.symbol);
+            const sym_key: u64 = @bitCast(as_pat.symbol);
             try bound.put(sym_key, {});
             try self.extractBoundSymbolsFromPattern(as_pat.inner, bound);
         },
@@ -374,12 +374,12 @@ fn extractBoundSymbolsFromPattern(self: *Self, pattern_id: MonoPatternId, bound:
 }
 
 /// Collect free variables in an expression
-fn collectFreeVariablesInExpr(self: *Self, expr_id: MonoExprId, bound: *std.AutoHashMap(u48, void), captures_buf: *[64]Capture, captures_len: *usize) !void {
+fn collectFreeVariablesInExpr(self: *Self, expr_id: MonoExprId, bound: *std.AutoHashMap(u64, void), captures_buf: *[64]Capture, captures_len: *usize) !void {
     const expr = self.store.getExpr(expr_id);
 
     switch (expr) {
         .lookup => |lookup| {
-            const sym_key: u48 = @bitCast(lookup.symbol);
+            const sym_key: u64 = @bitCast(lookup.symbol);
             if (!bound.contains(sym_key)) {
                 // This is a free variable - it must be captured
                 if (captures_len.* < 64) {
@@ -432,9 +432,9 @@ fn collectFreeVariablesInExpr(self: *Self, expr_id: MonoExprId, bound: *std.Auto
             try self.collectFreeVariablesInExpr(ite.final_else, bound, captures_buf, captures_len);
         },
 
-        .when => |when_expr| {
-            try self.collectFreeVariablesInExpr(when_expr.value, bound, captures_buf, captures_len);
-            const branches = self.store.getWhenBranches(when_expr.branches);
+        .match_expr => |match_data| {
+            try self.collectFreeVariablesInExpr(match_data.value, bound, captures_buf, captures_len);
+            const branches = self.store.getMatchBranches(match_data.branches);
             for (branches) |branch| {
                 try self.extractBoundSymbolsFromPattern(branch.pattern, bound);
                 // Don't process guard here - it's processed elsewhere
@@ -597,7 +597,7 @@ fn collectFreeVariablesInExpr(self: *Self, expr_id: MonoExprId, bound: *std.Auto
 }
 
 /// Add bound variables from a statement
-fn addStmtBoundVars(self: *Self, stmt: ir.MonoStmt, bound: *std.AutoHashMap(u48, void)) !void {
+fn addStmtBoundVars(self: *Self, stmt: ir.MonoStmt, bound: *std.AutoHashMap(u64, void)) !void {
     // MonoStmt is a simple struct with pattern and expr
     // The pattern defines bound variables
     try self.extractBoundSymbolsFromPattern(stmt.pattern, bound);
@@ -675,11 +675,11 @@ fn validateLiftedLambda(self: *Self, lifted: LiftedLambda) !void {
     }
 
     // Verify no duplicate captures
-    var seen_symbols = std.AutoHashMap(u48, void).init(self.allocator);
+    var seen_symbols = std.AutoHashMap(u64, void).init(self.allocator);
     defer seen_symbols.deinit();
 
     for (lifted.captures) |cap| {
-        const sym_key: u48 = @bitCast(cap.symbol);
+        const sym_key: u64 = @bitCast(cap.symbol);
         std.debug.assert(!seen_symbols.contains(sym_key));
         try seen_symbols.put(sym_key, {});
     }
@@ -769,9 +769,9 @@ fn containsLambda(self: *Self, expr_id: MonoExprId) bool {
             return self.containsLambda(ite.final_else);
         },
 
-        .when => |when_expr| {
-            if (self.containsLambda(when_expr.value)) return true;
-            const branches = self.store.getWhenBranches(when_expr.branches);
+        .match_expr => |match_data| {
+            if (self.containsLambda(match_data.value)) return true;
+            const branches = self.store.getMatchBranches(match_data.branches);
             for (branches) |branch| {
                 if (self.containsLambda(branch.body)) return true;
             }
@@ -960,9 +960,9 @@ fn containsUnliftedLambda(self: *Self, expr_id: MonoExprId) bool {
             return self.containsUnliftedLambda(ite.final_else);
         },
 
-        .when => |when_expr| {
-            if (self.containsUnliftedLambda(when_expr.value)) return true;
-            const branches = self.store.getWhenBranches(when_expr.branches);
+        .match_expr => |match_data| {
+            if (self.containsUnliftedLambda(match_data.value)) return true;
+            const branches = self.store.getMatchBranches(match_data.branches);
             for (branches) |branch| {
                 if (self.containsUnliftedLambda(branch.body)) return true;
             }

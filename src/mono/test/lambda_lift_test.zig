@@ -17,7 +17,7 @@ const can = @import("can");
 const Allocator = std.mem.Allocator;
 const LayoutIdx = layout_mod.Idx;
 const MonoPatternId = mono.MonoPatternId;
-const MonoSymbol = mono.MonoSymbol;
+const MonoSymbol = mono.Symbol;
 const MonoExprStore = mono.MonoExprStore;
 const LambdaLift = mono.LambdaLift;
 
@@ -27,7 +27,7 @@ const dummy_region = base.Region{
 };
 
 /// Helper to create a test symbol
-fn testSymbol(module_idx: u16, ident_idx: u29) MonoSymbol {
+fn testSymbol(module_idx: u32, ident_idx: u29) MonoSymbol {
     return MonoSymbol{
         .module_idx = module_idx,
         .ident_idx = base.Ident.Idx{

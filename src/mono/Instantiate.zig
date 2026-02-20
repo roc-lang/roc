@@ -25,7 +25,7 @@ const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
 const CIR = can.CIR;
 const Ident = base.Ident;
-const MonoSymbol = ir.MonoSymbol;
+const MonoSymbol = ir.Symbol;
 
 const Self = @This();
 

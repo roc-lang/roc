@@ -28,8 +28,6 @@ const StaticDispatchConstraint = types.StaticDispatchConstraint;
 const Layout = layout_mod.Layout;
 const Idx = layout_mod.Idx;
 const RecordField = layout_mod.RecordField;
-const FieldNameIdx = layout_mod.FieldNameIdx;
-const SmallStringInterner = base.SmallStringInterner;
 const Scalar = layout_mod.Scalar;
 const RecordData = layout_mod.RecordData;
 const RecordIdx = layout_mod.RecordIdx;
@@ -48,63 +46,12 @@ const TagUnionInfo = layout_mod.TagUnionInfo;
 const ScalarInfo = layout_mod.ScalarInfo;
 const Work = work.Work;
 
-/// Encapsulates the finalized layout mapping for recursive nominal types.
-///
-/// When a recursive nominal type finishes computing, we store its boxed layout here.
-/// This allows cache-hit paths (e.g., List/Box container elements) and finalization
-/// paths to find the boxed layout for recursive nominals.
-///
-/// Invariants (enforced by assertions):
-///   1. Write-once: each nominal is registered exactly once via `register()`
-///   2. After registration, `getBoxLayout()` always returns the box for the nominal_var
-///   3. The inner layout is always derivable: `store.getLayout(box_idx).data.box`
-pub const RecursiveNominalRegistry = struct {
-    /// Maps ModuleVarKey -> box layout Idx.
-    /// Contains entries for the nominal_var only (not the backing_var, which
-    /// should resolve to the raw inner layout for pattern matching etc.).
-    overrides: std.AutoHashMap(ModuleVarKey, Idx),
-
-    pub fn init(allocator: std.mem.Allocator) RecursiveNominalRegistry {
-        return .{ .overrides = std.AutoHashMap(ModuleVarKey, Idx).init(allocator) };
-    }
-
-    pub fn deinit(self: *RecursiveNominalRegistry) void {
-        self.overrides.deinit();
-    }
-
-    /// Register a finalized recursive nominal.
-    /// Called exactly once, when the backing type is fully resolved.
-    pub fn register(
-        self: *RecursiveNominalRegistry,
-        nominal_key: ModuleVarKey,
-        box_idx: Idx,
-    ) !void {
-        std.debug.assert(!self.overrides.contains(nominal_key)); // write-once
-        try self.overrides.put(nominal_key, box_idx);
-    }
-
-    /// Look up the box layout for a type variable.
-    /// Returns null if the var is not part of a recursive nominal.
-    pub fn getBoxLayout(self: *const RecursiveNominalRegistry, key: ModuleVarKey) ?Idx {
-        return self.overrides.get(key);
-    }
-};
-
 /// Errors that can occur during layout computation
 /// Stores Layout instances by Idx.
 ///
 /// This is a GLOBAL layout store that serves all modules in the build.
 /// Layout indices are only meaningful within their originating store, so using
 /// per-module stores causes crashes when layout indices cross module boundaries.
-/// Entry in the computed_nominals cache. Stores both the layout index and the
-/// module that computed it, so cross-module lookups can resolve per-module
-/// Ident.Idx values to their text for comparison.
-const ComputedNominalEntry = struct {
-    layout_idx: Idx,
-    module_idx: u16,
-};
-
-/// Layout store that computes and caches memory layouts from type variables.
 pub const Store = struct {
     const Self = @This();
 
@@ -125,11 +72,6 @@ pub const Store = struct {
     /// When set, getMutableEnv() returns this instead of null.
     mutable_env: ?*ModuleEnv = null,
 
-    /// Module-independent string interner for record field names.
-    /// Record fields store FieldNameIdx values that index into this interner,
-    /// making field name resolution independent of any specific module's ident store.
-    field_name_interner: SmallStringInterner,
-
     layouts: collections.SafeList(Layout),
     tuple_elems: collections.SafeList(Idx),
     record_fields: RecordField.SafeMultiList,
@@ -142,21 +84,11 @@ pub const Store = struct {
     // Cache to avoid duplicate work - keyed by (module_idx, var) for cross-module correctness
     layouts_by_module_var: std.AutoHashMap(ModuleVarKey, Idx),
 
-    // Registry for finalized recursive nominal types. Provides priority lookup
-    // in fromTypeVar that supersedes the general cache, making cache-overwrite bugs
-    // structurally impossible.
-    recursive_nominal_registry: RecursiveNominalRegistry,
-
-    // Cache of fully-computed nominal types, keyed by NominalKey (ident + origin_module).
-    // This ensures that different type variables resolving to the same nominal type
-    // always produce the same layout. Without this, each type variable would trigger
-    // a separate tag union computation that could produce inconsistent sizes due to
-    // different recursive placeholder states.
-    //
-    // IMPORTANT: NominalKey uses per-module Ident.Idx values, which differ across modules
-    // for the same nominal type. Use findComputedNominal() for lookups, which falls back
-    // to cross-module text comparison when the exact key doesn't match.
-    computed_nominals: std.AutoHashMap(work.NominalKey, ComputedNominalEntry),
+    // Cache for boxed layouts of recursive nominal types.
+    // When a recursive nominal type finishes computing, we store its boxed layout here.
+    // This allows List(RecursiveType) to use the boxed element type even after computation.
+    // Keyed by (module_idx, var) for cross-module correctness.
+    recursive_boxed_layouts: std.AutoHashMap(ModuleVarKey, Idx),
 
     // Cache for RAW (unboxed) layouts of recursive nominal types.
     // When a recursive nominal is encountered INSIDE a Box/List container during cycle
@@ -286,10 +218,8 @@ pub const Store = struct {
             .tag_union_variants = try TagUnionVariant.SafeMultiList.initCapacity(allocator, 64),
             .tag_union_data = try collections.SafeList(TagUnionData).initCapacity(allocator, 64),
             .layouts_by_module_var = std.AutoHashMap(ModuleVarKey, Idx).init(allocator),
-            .recursive_nominal_registry = RecursiveNominalRegistry.init(allocator),
-            .computed_nominals = std.AutoHashMap(work.NominalKey, ComputedNominalEntry).init(allocator),
+            .recursive_boxed_layouts = std.AutoHashMap(ModuleVarKey, Idx).init(allocator),
             .raw_layout_placeholders = std.AutoHashMap(ModuleVarKey, Idx).init(allocator),
-            .field_name_interner = try SmallStringInterner.initCapacity(allocator, 64),
             .work = try Work.initCapacity(allocator, 32),
             .builtin_str_ident = builtin_str_ident,
             .builtin_str_plain_ident = env.idents.str,
@@ -326,34 +256,6 @@ pub const Store = struct {
         return self.all_module_envs[self.current_module_idx];
     }
 
-    /// Look up a nominal type in the computed_nominals cache, supporting cross-module lookups.
-    ///
-    /// NominalKey uses per-module Ident.Idx values (ident_idx, origin_module), which are
-    /// different across modules even for the same nominal type. This function first tries
-    /// an exact key match (fast path for same-module lookups), then falls back to comparing
-    /// identifier text strings across all cached entries.
-    fn findComputedNominal(self: *const Self, nk: work.NominalKey) ?Idx {
-        // Fast path: exact key match (same module)
-        if (self.computed_nominals.get(nk)) |entry| return entry.layout_idx;
-
-        // Slow path: cross-module text comparison
-        const current_store = self.currentEnv().getIdentStoreConst();
-        const target_ident = current_store.getText(nk.ident_idx);
-        const target_origin = current_store.getText(nk.origin_module);
-
-        var iter = self.computed_nominals.iterator();
-        while (iter.next()) |entry| {
-            const other_env = self.all_module_envs[entry.value_ptr.module_idx];
-            const other_store = other_env.getIdentStoreConst();
-            const other_ident = other_store.getText(entry.key_ptr.ident_idx);
-            const other_origin = other_store.getText(entry.key_ptr.origin_module);
-            if (std.mem.eql(u8, target_ident, other_ident) and std.mem.eql(u8, target_origin, other_origin)) {
-                return entry.value_ptr.layout_idx;
-            }
-        }
-        return null;
-    }
-
     /// Set an override types store for runtime type resolution (used by interpreter).
     /// When set, fromTypeVar will use this store instead of all_module_envs[module_idx].types.
     pub fn setOverrideTypesStore(self: *Self, override: *const types_store.Store) void {
@@ -377,29 +279,6 @@ pub const Store = struct {
         self.mutable_env = env;
     }
 
-    /// Update module environments and clear all type variable caches.
-    /// This is needed for REPL sessions where module type stores get fresh type variables
-    /// on each evaluation. Without clearing, cached (module_idx, type_var) entries from
-    /// the previous evaluation would map to wrong layouts. Both the REPL module and
-    /// builtin module caches must be cleared because polymorphic builtin functions
-    /// (e.g. List.repeat) have type variables that get unified differently per call.
-    pub fn resetModuleCache(self: *Self, new_module_envs: []const *const ModuleEnv) void {
-        self.all_module_envs = new_module_envs;
-        self.layouts_by_module_var.clearRetainingCapacity();
-        self.recursive_nominal_registry.overrides.clearRetainingCapacity();
-        self.raw_layout_placeholders.clearRetainingCapacity();
-        // Clear computed_nominals because nominal types like Try(a, err) are keyed
-        // only by (ident_idx, origin_module), not by type arguments. If the same
-        // nominal type is instantiated with different type arguments across REPL
-        // evaluations (e.g., Try(Dec, [OutOfBounds]) then Try(Str, [OutOfBounds])),
-        // the cached layout from the first evaluation would be incorrectly reused.
-        self.computed_nominals.clearRetainingCapacity();
-        // Also clear work state that may be dirty from a previous evaluation that
-        // was interrupted mid-way (e.g. by the snapshot tool's panic handler).
-        self.work.in_progress_vars.clearRetainingCapacity();
-        self.work.in_progress_nominals.clearRetainingCapacity();
-    }
-
     pub fn deinit(self: *Self) void {
         self.layouts.deinit(self.allocator);
         self.tuple_elems.deinit(self.allocator);
@@ -410,11 +289,22 @@ pub const Store = struct {
         self.tag_union_variants.deinit(self.allocator);
         self.tag_union_data.deinit(self.allocator);
         self.layouts_by_module_var.deinit();
-        self.recursive_nominal_registry.deinit();
-        self.computed_nominals.deinit();
+        self.recursive_boxed_layouts.deinit();
         self.raw_layout_placeholders.deinit();
-        self.field_name_interner.deinit(self.allocator);
         self.work.deinit(self.allocator);
+    }
+
+    /// Reset caches between evaluations (e.g., REPL sessions, test runs).
+    /// Module type stores get fresh type variables on each evaluation,
+    /// so cached layout mappings from old vars become stale.
+    /// Retains allocated capacity for reuse.
+    pub fn resetModuleCache(self: *Self, new_module_envs: []const *const ModuleEnv) void {
+        self.all_module_envs = new_module_envs;
+        self.layouts_by_module_var.clearRetainingCapacity();
+        self.recursive_boxed_layouts.clearRetainingCapacity();
+        self.raw_layout_placeholders.clearRetainingCapacity();
+        self.work.in_progress_vars.clearRetainingCapacity();
+        self.work.in_progress_nominals.clearRetainingCapacity();
     }
 
     /// Check if a constraint range contains a from_numeral constraint.
@@ -473,10 +363,8 @@ pub const Store = struct {
 
         for (field_layouts, field_names) |field_layout, field_name| {
             const field_layout_idx = try self.insertLayout(field_layout);
-            const field_name_str = env.getIdent(field_name);
-            const interned_name = try self.internFieldName(field_name_str);
             try temp_fields.append(self.allocator, .{
-                .name = interned_name,
+                .name = field_name,
                 .layout = field_layout_idx,
             });
         }
@@ -484,6 +372,7 @@ pub const Store = struct {
         // Sort fields
         const AlignmentSortCtx = struct {
             store: *Self,
+            env: *const ModuleEnv,
             target_usize: target.TargetUsize,
             pub fn lessThan(ctx: @This(), lhs: RecordField, rhs: RecordField) bool {
                 const lhs_layout = ctx.store.getLayout(lhs.layout);
@@ -493,8 +382,8 @@ pub const Store = struct {
                 if (lhs_alignment.toByteUnits() != rhs_alignment.toByteUnits()) {
                     return lhs_alignment.toByteUnits() > rhs_alignment.toByteUnits();
                 }
-                const lhs_str = ctx.store.getFieldName(lhs.name);
-                const rhs_str = ctx.store.getFieldName(rhs.name);
+                const lhs_str = ctx.env.getIdent(lhs.name);
+                const rhs_str = ctx.env.getIdent(rhs.name);
                 return std.mem.order(u8, lhs_str, rhs_str) == .lt;
             }
         };
@@ -507,7 +396,7 @@ pub const Store = struct {
         std.mem.sort(
             RecordField,
             temp_fields.items,
-            AlignmentSortCtx{ .store = self, .target_usize = self.targetUsize() },
+            AlignmentSortCtx{ .store = self, .env = env, .target_usize = self.targetUsize() },
             AlignmentSortCtx.lessThan,
         );
 
@@ -994,19 +883,6 @@ pub const Store = struct {
         return self.layoutSizeAlign(field_layout).size;
     }
 
-    /// Intern a field name string into the layout store's module-independent interner.
-    /// Returns a FieldNameIdx that can be stored in RecordField.name.
-    pub fn internFieldName(self: *Self, name: []const u8) std.mem.Allocator.Error!FieldNameIdx {
-        const interner_idx = try self.field_name_interner.insert(self.allocator, name);
-        return @enumFromInt(@intFromEnum(interner_idx));
-    }
-
-    /// Resolve a FieldNameIdx back to its string representation.
-    pub fn getFieldName(self: *const Self, idx: FieldNameIdx) []const u8 {
-        const interner_idx: SmallStringInterner.Idx = @enumFromInt(@intFromEnum(idx));
-        return self.field_name_interner.getText(interner_idx);
-    }
-
     /// Get the layout index of a record field at the given sorted index.
     pub fn getRecordFieldLayout(self: *const Self, record_idx: RecordIdx, field_index_in_sorted_fields: u32) Idx {
         const record_data = self.getRecordData(record_idx);
@@ -1014,7 +890,44 @@ pub const Store = struct {
         return sorted_fields.get(field_index_in_sorted_fields).layout;
     }
 
-    pub fn getRecordFieldOffsetByName(self: *const Self, record_idx: RecordIdx, field_name: []const u8) ?u32 {
+    pub fn getRecordFieldOffsetByName(self: *const Self, record_idx: RecordIdx, field_name_idx: Ident.Idx) ?u32 {
+        const record_data = self.getRecordData(record_idx);
+        const sorted_fields = self.record_fields.sliceRange(record_data.getFields());
+
+        var current_offset: u32 = 0;
+        var i: usize = 0;
+        while (i < sorted_fields.len) : (i += 1) {
+            const field = sorted_fields.get(i);
+            const field_layout = self.getLayout(field.layout);
+            const field_size_align = self.layoutSizeAlign(field_layout);
+
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_size_align.alignment.toByteUnits()))));
+
+            if (field.name == field_name_idx) {
+                return current_offset;
+            }
+
+            current_offset += field_size_align.size;
+        }
+
+        return null;
+    }
+
+    /// Get the field name text for an Ident.Idx using the current module's ident store.
+    /// Used by the interpreter/evaluator to compare field names by string.
+    pub fn getFieldName(self: *const Self, idx: Ident.Idx) []const u8 {
+        if (self.mutable_env) |env| {
+            return env.getIdent(idx);
+        }
+        if (self.current_module_idx < self.all_module_envs.len) {
+            return self.all_module_envs[self.current_module_idx].getIdent(idx);
+        }
+        return "?";
+    }
+
+    /// Get record field offset by string name (used by interpreter).
+    /// Compares field name text instead of Ident.Idx directly.
+    pub fn getRecordFieldOffsetByNameStr(self: *const Self, record_idx: RecordIdx, field_name: []const u8) ?u32 {
         const record_data = self.getRecordData(record_idx);
         const sorted_fields = self.record_fields.sliceRange(record_data.getFields());
 
@@ -1499,12 +1412,9 @@ pub const Store = struct {
         var temp_fields = std.ArrayList(RecordField).empty;
         defer temp_fields.deinit(self.allocator);
 
-        const env = self.currentEnv();
         for (updated_record.resolved_fields_start..resolved_fields_end) |i| {
-            const field_name_str = env.getIdent(field_names[i]);
-            const interned_name = try self.internFieldName(field_name_str);
             try temp_fields.append(self.allocator, .{
-                .name = interned_name,
+                .name = field_names[i],
                 .layout = field_idxs[i],
             });
         }
@@ -1512,6 +1422,7 @@ pub const Store = struct {
         // Sort fields by alignment (descending) first, then by name (ascending)
         const AlignmentSortCtx = struct {
             store: *Self,
+            env: *const ModuleEnv,
             target_usize: target.TargetUsize,
             pub fn lessThan(ctx: @This(), lhs: RecordField, rhs: RecordField) bool {
                 const lhs_layout = ctx.store.getLayout(lhs.layout);
@@ -1526,8 +1437,8 @@ pub const Store = struct {
                 }
 
                 // Then sort by name (ascending)
-                const lhs_str = ctx.store.getFieldName(lhs.name);
-                const rhs_str = ctx.store.getFieldName(rhs.name);
+                const lhs_str = ctx.env.getIdent(lhs.name);
+                const rhs_str = ctx.env.getIdent(rhs.name);
                 return std.mem.order(u8, lhs_str, rhs_str) == .lt;
             }
         };
@@ -1535,7 +1446,7 @@ pub const Store = struct {
         std.mem.sort(
             RecordField,
             temp_fields.items,
-            AlignmentSortCtx{ .store = self, .target_usize = self.targetUsize() },
+            AlignmentSortCtx{ .store = self, .env = self.currentEnv(), .target_usize = self.targetUsize() },
             AlignmentSortCtx.lessThan,
         );
 
@@ -1784,12 +1695,10 @@ pub const Store = struct {
     /// This is essential for cross-module layout computation where different modules
     /// may have type variables with the same numeric value referring to different types.
     ///
-    /// The use_type_scope parameter controls whether type scope lookups are performed.
-    /// When true, flex/rigid vars are looked up in type_scope, and each scope entry's
-    /// ModuleVar carries the correct module index for resolution. When false, the type
-    /// scope is skipped entirely (we're in a same-module context).
-    pub const FromTypeVarError = std.mem.Allocator.Error || error{NotImplemented};
-
+    /// The caller_module_idx parameter specifies the module that owns the type variables
+    /// in the type_scope mappings. When a flex/rigid var is looked up in type_scope and
+    /// found, the mapped var belongs to caller_module_idx, not module_idx. This is critical
+    /// for cross-module polymorphic function calls.
     pub fn fromTypeVar(
         self: *Self,
         module_idx: u32,
@@ -1805,22 +1714,7 @@ pub const Store = struct {
 
         // If we've already seen this (module, var) pair, return the layout we resolved it to.
         const cache_key = ModuleVarKey{ .module_idx = module_idx, .var_ = current.var_ };
-
         if (self.layouts_by_module_var.get(cache_key)) |cached_idx| {
-            // For recursive nominals, the cache stores Box(tag_union). When not inside
-            // a container (top-level caller), unwrap to return the raw tag_union.
-            // The Box is only needed for recursive references WITHIN the type's definition
-            // (to break infinite size) and for fields in records/tuples.
-            if (self.work.pending_containers.len == 0) {
-                const cached_layout = self.getLayout(cached_idx);
-                if (cached_layout.tag == .box and cached_layout.data.box != .opaque_ptr) {
-                    if (current.desc.content == .structure and
-                        current.desc.content.structure == .nominal_type)
-                    {
-                        return cached_layout.data.box;
-                    }
-                }
-            }
             return cached_idx;
         }
 
@@ -1856,7 +1750,6 @@ pub const Store = struct {
             // Check cache at every iteration - critical for recursive types
             // where the inner reference may resolve to the same var as the outer type
             const current_cache_key = ModuleVarKey{ .module_idx = self.current_module_idx, .var_ = current.var_ };
-
             if (self.layouts_by_module_var.get(current_cache_key)) |cached_idx| {
                 // Check if this cache hit is a recursive reference to an in-progress nominal.
                 // When we cache a nominal's placeholder (Box) and later hit that cache from
@@ -1877,15 +1770,6 @@ pub const Store = struct {
                             progress.is_recursive = true;
                             is_in_progress_recursive = true;
                             maybe_progress = progress;
-                            // Check if the recursion path goes through a heap container.
-                            // If so, the Box is only a computation artifact, not needed at runtime.
-                            const containers = self.work.pending_containers.slice().items(.container);
-                            for (containers[container_base_depth..]) |container| {
-                                if (container == .list or container == .box) {
-                                    progress.recursion_through_heap = true;
-                                    break;
-                                }
-                            }
                         }
                     }
                 }
@@ -1893,10 +1777,10 @@ pub const Store = struct {
                 // we need to use the boxed layout, not the raw cached layout.
                 // But for tag union and record fields, we use the raw layout - the type
                 // system says it's Node, not Box(Node).
-                if (self.work.pending_containers.len > container_base_depth) {
+                if (self.work.pending_containers.len > 0) {
                     const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
                     if (pending_item.container == .list or pending_item.container == .box) {
-                        if (self.recursive_nominal_registry.getBoxLayout(current_cache_key)) |boxed_idx| {
+                        if (self.recursive_boxed_layouts.get(current_cache_key)) |boxed_idx| {
                             layout_idx = boxed_idx;
                         } else if (is_in_progress_recursive) {
                             // This is a recursive reference to an in-progress nominal, and we're
@@ -1921,73 +1805,10 @@ pub const Store = struct {
                     } else {
                         layout_idx = cached_idx;
                     }
-                } else if (self.work.pending_containers.len == container_base_depth) {
-                    // Not inside a container from this invocation — unwrap Box
-                    // for top-level callers who expect the raw tag_union layout.
-                    const cached_layout = self.getLayout(cached_idx);
-                    if (cached_layout.tag == .box and cached_layout.data.box != .opaque_ptr and
-                        current.desc.content == .structure and
-                        current.desc.content.structure == .nominal_type)
-                    {
-                        layout_idx = cached_layout.data.box;
-                    } else {
-                        layout_idx = cached_idx;
-                    }
                 } else {
                     layout_idx = cached_idx;
                 }
                 skip_layout_computation = true;
-
-                // When a backing type hits the cache (already computed by a previous
-                // nominal sharing the same backing type), check if any in-progress
-                // nominals should be finalized with this cached layout.
-                if (!is_in_progress_recursive) {
-                    var nominals_to_remove_cache = std.ArrayList(work.NominalKey).empty;
-                    defer nominals_to_remove_cache.deinit(self.allocator);
-
-                    var nominal_iter_cache = self.work.in_progress_nominals.iterator();
-                    while (nominal_iter_cache.next()) |entry| {
-                        const progress = entry.value_ptr.*;
-                        if (progress.backing_var == current.var_) {
-                            const nominal_cache_key_ch = ModuleVarKey{ .module_idx = self.current_module_idx, .var_ = progress.nominal_var };
-                            if (self.layouts_by_module_var.get(nominal_cache_key_ch)) |reserved_idx| {
-                                self.updateLayout(reserved_idx, Layout.box(layout_idx));
-                                if (progress.is_recursive) {
-                                    try self.recursive_nominal_registry.register(nominal_cache_key_ch, reserved_idx);
-                                }
-                            }
-                            if (self.raw_layout_placeholders.get(nominal_cache_key_ch)) |raw_idx| {
-                                self.updateLayout(raw_idx, self.getLayout(layout_idx));
-                            }
-                            // For this nominal, the box layout should be returned, not the raw.
-                            if (self.layouts_by_module_var.get(nominal_cache_key_ch)) |box_idx| {
-                                layout_idx = box_idx;
-                            }
-                            try nominals_to_remove_cache.append(self.allocator, entry.key_ptr.*);
-                        }
-                    }
-                    for (nominals_to_remove_cache.items) |key| {
-                        // Register the computed nominal so other type vars for the same
-                        // nominal type reuse this layout instead of recomputing.
-                        // Only cache non-polymorphic nominals (no type args). Polymorphic
-                        // nominals like Try have different layouts per instantiation, so
-                        // caching would cause cross-instantiation pollution.
-                        if (self.work.in_progress_nominals.get(key)) |progress| {
-                            if (progress.type_args_range.count == 0) {
-                                const nck = ModuleVarKey{ .module_idx = progress.cache_module_idx, .var_ = progress.nominal_var };
-                                if (self.layouts_by_module_var.get(nck)) |final_idx| {
-                                    if (comptime std.debug.runtime_safety) {
-                                        if (self.computed_nominals.get(key)) |existing| {
-                                            std.debug.assert(existing.layout_idx == final_idx);
-                                        }
-                                    }
-                                    try self.computed_nominals.put(key, .{ .layout_idx = final_idx, .module_idx = progress.cache_module_idx });
-                                }
-                            }
-                        }
-                        _ = self.work.in_progress_nominals.swapRemove(key);
-                    }
-                }
             } else if (self.work.in_progress_vars.contains(.{ .module_idx = self.current_module_idx, .var_ = current.var_ })) {
                 // Cycle detection: this var is already being processed, indicating a recursive type.
                 //
@@ -2035,32 +1856,9 @@ pub const Store = struct {
                         // Valid recursive reference - heap allocation breaks the infinite size
                         layout_idx = try self.insertLayout(Layout.opaquePtr());
                         skip_layout_computation = true;
-
-                        // Mark only the in-progress nominals whose backing type is part of
-                        // the current computation as recursive. A var cycle within a heap
-                        // container means the type is recursive, but when multiple unrelated
-                        // nominals are in-progress simultaneously (e.g., A := [X(B)], B := [Y(Str)]),
-                        // a cycle in A's tree should not mark B as recursive.
-                        // We check if the nominal's backing_var is in the in_progress_vars set,
-                        // which means it's actively being computed and part of the current recursion chain.
-                        var nom_cycle_iter = self.work.in_progress_nominals.iterator();
-                        while (nom_cycle_iter.next()) |entry| {
-                            const progress = entry.value_ptr.*;
-                            if (self.work.in_progress_vars.contains(.{ .module_idx = progress.cache_module_idx, .var_ = progress.backing_var })) {
-                                entry.value_ptr.is_recursive = true;
-                                // Check if the recursion path goes through a heap container.
-                                const containers = self.work.pending_containers.slice().items(.container);
-                                for (containers[container_base_depth..]) |container| {
-                                    if (container == .list or container == .box) {
-                                        entry.value_ptr.recursion_through_heap = true;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
                     } else {
                         // Invalid: recursive type without heap allocation would have infinite size.
-                        return error.NotImplemented;
+                        unreachable;
                     }
                 }
             } else if (current.desc.content == .structure) blk: {
@@ -2099,19 +1897,10 @@ pub const Store = struct {
                         // This IS a true recursive reference - the type refers to itself.
                         // Mark it as truly recursive so we know to box its values.
                         progress.is_recursive = true;
-                        // Check if the recursion path goes through a heap container.
-                        // If so, the Box is only a computation artifact, not needed at runtime.
-                        const containers3 = self.work.pending_containers.slice().items(.container);
-                        for (containers3[container_base_depth..]) |container| {
-                            if (container == .list or container == .box) {
-                                progress.recursion_through_heap = true;
-                                break;
-                            }
-                        }
                         // Use the cached placeholder index for the nominal.
                         // The placeholder will be updated with the real layout once
                         // the nominal's backing type is fully computed.
-                        const progress_cache_key = ModuleVarKey{ .module_idx = progress.cache_module_idx, .var_ = progress.nominal_var };
+                        const progress_cache_key = ModuleVarKey{ .module_idx = self.current_module_idx, .var_ = progress.nominal_var };
                         if (self.layouts_by_module_var.get(progress_cache_key)) |cached_idx| {
                             // We have a placeholder - but we need to check if we're inside a List/Box.
                             // If we are inside a List/Box, we need a RAW layout placeholder, not the
@@ -2149,58 +1938,8 @@ pub const Store = struct {
                 }
             }
 
-            // Check if this nominal type was already fully computed by a different type variable.
-            // Different type variables can resolve to the same nominal type, and without this
-            // check each would trigger a separate tag union computation that could produce
-            // inconsistent sizes due to different recursive placeholder states.
-            if (!skip_layout_computation) {
-                if (current.desc.content == .structure) {
-                    if (current.desc.content.structure == .nominal_type) {
-                        const nt = current.desc.content.structure.nominal_type;
-                        const nk = work.NominalKey{ .ident_idx = nt.ident.ident_idx, .origin_module = nt.origin_module };
-                        // Only use computed_nominals for non-polymorphic nominals (no type args).
-                        // Polymorphic nominals like Try have different layouts per instantiation,
-                        // so we must compute each instantiation independently.
-                        const nt_type_args = types.Store.getNominalArgsRange(nt);
-                        const found_computed = if (nt_type_args.count == 0) self.findComputedNominal(nk) else null;
-                        if (found_computed) |existing_idx| {
-                            // For recursive nominals (Box layout) inside List/Box containers,
-                            // use the inner (raw) layout instead of the Box. The container
-                            // itself provides heap allocation, so using the Box would cause
-                            // double-boxing. This mirrors the logic in the layouts_by_module_var
-                            // cache hit path above.
-                            const existing_layout = self.getLayout(existing_idx);
-                            if (existing_layout.tag == .box and self.work.pending_containers.len > container_base_depth) {
-                                const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
-                                if (pending_item.container == .list or pending_item.container == .box) {
-                                    // Heap containers provide their own allocation, so use
-                                    // the raw inner layout to avoid double-boxing.
-                                    layout_idx = existing_layout.data.box;
-                                } else {
-                                    layout_idx = existing_idx;
-                                }
-                            } else if (existing_layout.tag == .box and existing_layout.data.box != .opaque_ptr and
-                                self.work.pending_containers.len == container_base_depth)
-                            {
-                                // Not inside a container from this invocation - unwrap Box
-                                // for top-level callers who expect the raw tag_union layout.
-                                layout_idx = existing_layout.data.box;
-                            } else {
-                                layout_idx = existing_idx;
-                            }
-                            try self.layouts_by_module_var.put(current_cache_key, existing_idx);
-                            skip_layout_computation = true;
-                        }
-                    }
-                }
-            }
-
             // Declare layout outside the if so it's accessible in container finalization
             var layout: Layout = undefined;
-            // Flag to override layout_idx to Idx.bool after insertLayout.
-            // Bool has a dedicated sentinel (Idx.bool = 0) distinct from Idx.u8 = 3,
-            // but insertLayout maps Layout.boolType() (= Layout.int(.u8)) to Idx.u8.
-            var is_bool_override = false;
 
             if (!skip_layout_computation) {
                 // Mark this var as in-progress before processing.
@@ -2249,9 +1988,7 @@ pub const Store = struct {
                                 break :blk false;
                             };
                             if (is_builtin_bool) {
-                                // This is Builtin.Bool - use bool layout (u8).
-                                // Set flag so layout_idx is overridden to Idx.bool after insertLayout.
-                                is_bool_override = true;
+                                // This is Builtin.Bool - use bool layout (u8)
                                 break :flat_type Layout.boolType();
                             }
 
@@ -2302,7 +2039,6 @@ pub const Store = struct {
                                     nominal_type.ident.ident_idx == list_ident
                             else
                                 false;
-
                             if (is_builtin_list) {
                                 // Extract the element type from the type arguments
                                 const type_args = self.getTypesStore().sliceNominalArgs(nominal_type);
@@ -2317,11 +2053,11 @@ pub const Store = struct {
                                 const is_elem_zst = switch (elem_content) {
                                     .flex => |flex| blk: {
                                         // If mapped in type scope, check what it maps to
-                                        if (use_type_scope) {
-                                            if (type_scope.lookup(elem_resolved.var_)) |mapped| {
-                                                // Resolve the mapped type in the mapped var's own module
-                                                const caller_env = self.all_module_envs[mapped.module_idx];
-                                                const mapped_resolved = caller_env.types.resolveVar(mapped.var_);
+                                        if (caller_module_idx) |caller_mod| {
+                                            if (type_scope.lookup(elem_resolved.var_)) |mapped_var| {
+                                                // Resolve the mapped type in the caller module
+                                                const caller_env = self.all_module_envs[caller_mod];
+                                                const mapped_resolved = caller_env.types.resolveVar(mapped_var);
                                                 // If there's a mapping, the element type is NOT ZST.
                                                 // We'll compute the actual layout recursively.
                                                 // Only treat as ZST if the mapped type is truly empty.
@@ -2344,11 +2080,11 @@ pub const Store = struct {
                                     },
                                     .rigid => |rigid| blk: {
                                         // If mapped in type scope, check what it maps to
-                                        if (use_type_scope) {
-                                            if (type_scope.lookup(elem_resolved.var_)) |mapped| {
-                                                // Resolve the mapped type in the mapped var's own module
-                                                const caller_env = self.all_module_envs[mapped.module_idx];
-                                                const mapped_resolved = caller_env.types.resolveVar(mapped.var_);
+                                        if (caller_module_idx) |caller_mod| {
+                                            if (type_scope.lookup(elem_resolved.var_)) |mapped_var| {
+                                                // Resolve the mapped type in the caller module
+                                                const caller_env = self.all_module_envs[caller_mod];
+                                                const mapped_resolved = caller_env.types.resolveVar(mapped_var);
                                                 // If there's a mapping, the element type is NOT ZST.
                                                 // We'll compute the actual layout recursively.
                                                 // Only treat as ZST if the mapped type is truly empty.
@@ -2366,22 +2102,17 @@ pub const Store = struct {
                                         // No mapping found for this rigid type parameter.
                                         // Try to find ANY rigid mapping as a heuristic - in a monomorphized
                                         // function, all unmapped rigids should map to the same concrete type.
-                                        if (use_type_scope) {
+                                        if (caller_module_idx) |caller_mod| {
                                             if (type_scope.scopes.items.len > 0) {
                                                 var iter = type_scope.scopes.items[0].iterator();
                                                 while (iter.next()) |entry| {
                                                     // Check if this mapping is from a rigid (not a specific structure)
                                                     const ext_env = self.all_module_envs[self.current_module_idx];
-                                                    // Guard: ensure key is valid for the ext module's type store
-                                                    const key_int = @intFromEnum(entry.key_ptr.*);
-                                                    if (key_int >= ext_env.types.len()) continue;
                                                     const key_resolved = ext_env.types.resolveVar(entry.key_ptr.*);
                                                     if (key_resolved.desc.content == .rigid) {
-                                                        // Use the module from the scope entry
-                                                        const mapped_entry = entry.value_ptr.*;
-                                                        const caller_env = self.all_module_envs[mapped_entry.module_idx];
                                                         // Found a rigid mapping - use it
-                                                        const mapped_resolved = caller_env.types.resolveVar(mapped_entry.var_);
+                                                        const caller_env = self.all_module_envs[caller_mod];
+                                                        const mapped_resolved = caller_env.types.resolveVar(entry.value_ptr.*);
                                                         break :blk switch (mapped_resolved.desc.content) {
                                                             .structure => |ft| switch (ft) {
                                                                 .empty_record, .empty_tag_union => true,
@@ -2460,18 +2191,9 @@ pub const Store = struct {
                                 .origin_module = nominal_type.origin_module,
                             };
 
-                            // Get the backing var before we modify current.
-                            // Follow alias chains to get the final var, so it matches
-                            // the container var when the backing type finishes processing.
-                            // Without this, alias resolution in the main loop changes
-                            // current.var_ between the nominal detection and container push,
-                            // causing the finalization match to fail.
+                            // Get the backing var before we modify current
                             const backing_var = self.getTypesStore().getNominalBackingVar(nominal_type);
-                            var resolved_backing = self.getTypesStore().resolveVar(backing_var);
-                            while (resolved_backing.desc.content == .alias) {
-                                const alias_backing = self.getTypesStore().getAliasBackingVar(resolved_backing.desc.content.alias);
-                                resolved_backing = self.getTypesStore().resolveVar(alias_backing);
-                            }
+                            const resolved_backing = self.getTypesStore().resolveVar(backing_var);
 
                             // Reserve a placeholder layout and cache it for the nominal's var.
                             // This allows recursive references to find this layout index.
@@ -2492,9 +2214,9 @@ pub const Store = struct {
                             try self.work.in_progress_nominals.put(nominal_key, .{
                                 .nominal_var = current.var_,
                                 .backing_var = resolved_backing.var_,
-                                .cache_module_idx = self.current_module_idx,
                                 .type_args_range = type_args_range,
                             });
+
                             // From a layout perspective, nominal types are identical to type aliases:
                             // all we care about is what's inside, so just unroll it.
                             current = resolved_backing;
@@ -2771,11 +2493,11 @@ pub const Store = struct {
                     },
                     .flex => |flex| blk: {
                         // Only look up in TypeScope if we're doing cross-module resolution.
-                        // use_type_scope being true indicates the type_scope has mappings
-                        // from an external module's vars to the caller's vars. If false,
+                        // caller_module_idx being set indicates the type_scope has mappings
+                        // from an external module's vars to the caller's vars. If it's null,
                         // we're already in the target module and shouldn't apply mappings.
-                        if (use_type_scope) {
-                            if (type_scope.lookup(current.var_)) |mapped| {
+                        if (caller_module_idx != null) {
+                            if (type_scope.lookup(current.var_)) |mapped_var| {
                                 // Debug-only cycle detection: if we've visited this var before,
                                 // there's a cycle which indicates a bug in type checking.
                                 if (@import("builtin").mode == .Debug) {
@@ -2789,19 +2511,19 @@ pub const Store = struct {
                                         scope_lookup_count += 1;
                                     }
                                 }
-                                // Each scope entry carries its own module index — no heuristic needed.
-                                const resolve_module = mapped.module_idx;
-                                const mapped_var = mapped.var_;
                                 // IMPORTANT: Remove the flex from in_progress_vars before making
                                 // the recursive call. Otherwise, if the recursive call resolves to
                                 // the same flex, it will see it in in_progress_vars and incorrectly
                                 // detect a cycle.
                                 _ = self.work.in_progress_vars.swapRemove(.{ .module_idx = self.current_module_idx, .var_ = current.var_ });
-                                // Make a recursive call to compute the layout in the resolve module.
-                                // Pass use_type_scope=true so chained type scope lookups
+                                // Make a recursive call to compute the layout in the caller's module.
+                                // This avoids switching current_module_idx which would mess up pending
+                                // work items from the current module.
+                                const target_module = caller_module_idx.?;
+                                // Pass target_module as caller so chained type scope lookups
                                 // work (e.g., rigid → flex → concrete via two scope entries).
                                 // Cycle detection prevents infinite loops.
-                                layout_idx = try self.fromTypeVar(resolve_module, mapped_var, type_scope, true);
+                                layout_idx = try self.fromTypeVar(target_module, mapped_var, type_scope, target_module);
                                 skip_layout_computation = true;
                                 break :blk self.getLayout(layout_idx);
                             }
@@ -2837,14 +2559,11 @@ pub const Store = struct {
                     },
                     .rigid => |rigid| blk: {
                         // Only look up in TypeScope if we're doing cross-module resolution.
-                        // use_type_scope being true indicates the type_scope has mappings
-                        // from an external module's vars to the caller's vars. If false,
+                        // caller_module_idx being set indicates the type_scope has mappings
+                        // from an external module's vars to the caller's vars. If it's null,
                         // we're already in the target module and shouldn't apply mappings.
-                        if (use_type_scope) {
-                            if (type_scope.lookup(current.var_)) |mapped| {
-                                // Each scope entry carries its own module index — no heuristic needed.
-                                const resolve_module = mapped.module_idx;
-                                const mapped_var = mapped.var_;
+                        if (caller_module_idx != null) {
+                            if (type_scope.lookup(current.var_)) |mapped_var| {
                                 // Debug-only cycle detection: if we've visited this var before,
                                 // there's a cycle which indicates a bug in type checking.
                                 if (@import("builtin").mode == .Debug) {
@@ -2859,9 +2578,18 @@ pub const Store = struct {
                                     }
                                 }
                                 // IMPORTANT: Remove the rigid from in_progress_vars before making
-                                // the recursive call.
+                                // the recursive call. Otherwise, if the recursive call resolves to
+                                // the same rigid, it will see it in in_progress_vars and incorrectly
+                                // detect a cycle.
                                 _ = self.work.in_progress_vars.swapRemove(.{ .module_idx = self.current_module_idx, .var_ = current.var_ });
-                                layout_idx = try self.fromTypeVar(resolve_module, mapped_var, type_scope, true);
+                                // Make a recursive call to compute the layout in the caller's module.
+                                // This avoids switching current_module_idx which would mess up pending
+                                // work items from the current module.
+                                const target_module = caller_module_idx.?;
+                                // Pass target_module as caller so chained type scope lookups
+                                // work (e.g., rigid → flex → concrete via two scope entries).
+                                // Cycle detection prevents infinite loops.
+                                layout_idx = try self.fromTypeVar(target_module, mapped_var, type_scope, target_module);
                                 skip_layout_computation = true;
                                 break :blk self.getLayout(layout_idx);
                             }
@@ -2900,10 +2628,8 @@ pub const Store = struct {
                             break :blk Layout.zst();
                         }
 
-                        // Constrained rigid vars that couldn't be resolved through the type scope.
-                        // Default to opaquePtr so compilation can continue; the runtime will
-                        // use the concrete type from the caller's instantiation.
-                        break :blk Layout.opaquePtr();
+                        // Rigid vars with constraints must be resolvable.
+                        unreachable;
                     },
                     .alias => |alias| {
                         // Follow the alias by updating the work item
@@ -2920,9 +2646,6 @@ pub const Store = struct {
 
                 // We actually resolved a layout that wasn't zero-sized!
                 layout_idx = try self.insertLayout(layout);
-                // Override to Idx.bool for Bool types. insertLayout maps Layout.boolType()
-                // (= Layout.int(.u8)) to Idx.u8, but Bool needs its own sentinel Idx.
-                if (is_bool_override) layout_idx = Idx.bool;
                 const layout_cache_key = ModuleVarKey{ .module_idx = self.current_module_idx, .var_ = current.var_ };
                 // Only cache if the layout doesn't depend on unresolved type parameters.
                 // Layouts that depend on unresolved params (like List(a) where 'a' has no mapping)
@@ -2936,7 +2659,7 @@ pub const Store = struct {
 
                 // Check if any in-progress nominals need their reserved layouts updated.
                 // When a nominal type's backing type finishes, update the nominal's placeholder.
-                var nominals_to_remove = std.ArrayList(work.NominalKey).empty;
+                var nominals_to_remove = std.ArrayList(work.NominalKey){};
                 defer nominals_to_remove.deinit(self.allocator);
 
                 var nominal_iter = self.work.in_progress_nominals.iterator();
@@ -2964,28 +2687,27 @@ pub const Store = struct {
                             // Update the placeholder to Box(layout_idx) instead of replacing it
                             // with the raw layout. This keeps recursive references boxed.
                             self.updateLayout(reserved_idx, Layout.box(layout_idx));
-                            // Register in the recursive nominal registry if truly recursive.
+                            // Only store in recursive_boxed_layouts if this type is truly recursive
+                            // (i.e., a cycle was detected during its processing). Non-recursive
+                            // nominal types don't need boxing for their values.
                             if (progress.is_recursive) {
-                                try self.recursive_nominal_registry.register(nominal_cache_key, reserved_idx);
+                                try self.recursive_boxed_layouts.put(nominal_cache_key, reserved_idx);
                             }
                         }
                         // Also update the raw layout placeholder if one was created
                         if (self.raw_layout_placeholders.get(nominal_cache_key)) |raw_idx| {
                             self.updateLayout(raw_idx, self.getLayout(layout_idx));
                         }
-                        // Update the cache. For recursive nominals, keep the box layout
-                        // (reserved_idx) — overwriting with the raw layout would cause
-                        // fromTypeVar to return unboxed layouts for recursive types.
-                        if (!progress.is_recursive) {
-                            try self.layouts_by_module_var.put(nominal_cache_key, layout_idx);
-                        }
+                        // Update the cache so direct lookups get the actual layout
+                        try self.layouts_by_module_var.put(nominal_cache_key, layout_idx);
                         try nominals_to_remove.append(self.allocator, entry.key_ptr.*);
 
                         // CRITICAL: If there are pending containers (List, Box, etc.), update layout_idx
                         // to use the boxed layout. Container elements need boxed layouts for recursive
-                        // types to have fixed size.
-                        if (self.work.pending_containers.len > 0 and progress.is_recursive) {
-                            if (self.recursive_nominal_registry.getBoxLayout(nominal_cache_key)) |boxed_layout_idx| {
+                        // types to have fixed size. The boxed layout was stored in recursive_boxed_layouts.
+                        if (self.work.pending_containers.len > 0) {
+                            if (self.recursive_boxed_layouts.get(nominal_cache_key)) |boxed_layout_idx| {
+                                // Use the boxed layout for pending containers
                                 layout_idx = boxed_layout_idx;
                             }
                         }
@@ -2994,20 +2716,6 @@ pub const Store = struct {
 
                 // Remove the nominals we updated
                 for (nominals_to_remove.items) |key| {
-                    // Only cache non-polymorphic nominals (no type args) in computed_nominals.
-                    if (self.work.in_progress_nominals.get(key)) |progress| {
-                        if (progress.type_args_range.count == 0) {
-                            const nck = ModuleVarKey{ .module_idx = progress.cache_module_idx, .var_ = progress.nominal_var };
-                            if (self.layouts_by_module_var.get(nck)) |final_idx| {
-                                if (comptime std.debug.runtime_safety) {
-                                    if (self.computed_nominals.get(key)) |existing| {
-                                        std.debug.assert(existing.layout_idx == final_idx);
-                                    }
-                                }
-                                try self.computed_nominals.put(key, .{ .layout_idx = final_idx, .module_idx = progress.cache_module_idx });
-                            }
-                        }
-                    }
                     _ = self.work.in_progress_nominals.swapRemove(key);
                 }
             } // end if (!skip_layout_computation)
@@ -3041,9 +2749,6 @@ pub const Store = struct {
                         } else {
                             layout = Layout.list(layout_idx);
                         }
-                        // TODO: This should become an assertion once all cross-module
-                        // type scope resolution is verified. Recursive nominal types
-                        // can still produce .opaque_ptr during multi-pass layout resolution.
                     },
                     .record => |*pending_record| {
                         std.debug.assert(pending_record.pending_fields > 0);
@@ -3172,7 +2877,7 @@ pub const Store = struct {
 
                     // Check if any in-progress nominals need their reserved layouts updated.
                     // This handles the case where a nominal's backing type is a container (e.g., tag union).
-                    var nominals_to_remove_container = std.ArrayList(work.NominalKey).empty;
+                    var nominals_to_remove_container = std.ArrayList(work.NominalKey){};
                     defer nominals_to_remove_container.deinit(self.allocator);
 
                     var nominal_iter_container = self.work.in_progress_nominals.iterator();
@@ -3191,12 +2896,11 @@ pub const Store = struct {
                                 // Update the placeholder to Box(layout_idx) instead of replacing it
                                 // with the raw layout. This keeps recursive references boxed.
                                 self.updateLayout(reserved_idx, Layout.box(layout_idx));
-                                // Register in the recursive nominal registry if truly recursive
-                                // AND the recursion is direct (not through a heap container).
-                                // Heap-recursive nominals don't need Box at runtime — the
-                                // heap container (List/Box) provides sufficient indirection.
-                                if (progress.is_recursive and !progress.recursion_through_heap) {
-                                    try self.recursive_nominal_registry.register(container_nominal_key, reserved_idx);
+                                // Only store in recursive_boxed_layouts if this type is truly recursive
+                                // (i.e., a cycle was detected during its processing). Non-recursive
+                                // nominal types don't need boxing for their values.
+                                if (progress.is_recursive) {
+                                    try self.recursive_boxed_layouts.put(container_nominal_key, reserved_idx);
                                 }
                             }
                             // Also update the raw layout placeholder if one was created.
@@ -3212,15 +2916,12 @@ pub const Store = struct {
                                 }
                                 self.updateLayout(raw_idx, new_layout);
                             }
-                            // Update the cache. For directly-recursive nominals, keep the box
-                            // layout (reserved_idx) in the cache — Box IS the runtime repr.
-                            // For non-recursive or heap-recursive nominals, use the raw layout.
-                            // Heap-recursive nominals don't need Box at runtime (the heap
-                            // container provides indirection), so they're transparent like
-                            // non-recursive nominals.
-                            if (!progress.is_recursive or progress.recursion_through_heap) {
-                                try self.layouts_by_module_var.put(container_nominal_key, layout_idx);
-                            }
+                            // Note: It's valid for is_recursive to be true without a raw_placeholder
+                            // when the recursion doesn't go through a Box/List container directly.
+                            // For example: IntList := [Nil, Cons(I64, IntList)] - the recursion is
+                            // handled by implicit boxing, not an explicit Box type.
+                            // Update the cache so direct lookups get the actual layout
+                            try self.layouts_by_module_var.put(container_nominal_key, layout_idx);
                             try nominals_to_remove_container.append(self.allocator, entry.key_ptr.*);
 
                             // CRITICAL: If there are more pending containers, update layout_idx
@@ -3229,12 +2930,13 @@ pub const Store = struct {
                             //
                             // HOWEVER: For Box/List containers, we should NOT use the boxed layout.
                             // Box/List elements are heap-allocated, so they should use the raw layout.
-                            // Using the boxed layout would cause double-boxing.
-                            if (self.work.pending_containers.len > 0 and progress.is_recursive) {
+                            // Using the boxed layout would cause double-boxing (issue #8916).
+                            if (self.work.pending_containers.len > 0) {
                                 const next_container = self.work.pending_containers.slice().items(.container)[self.work.pending_containers.len - 1];
                                 const is_heap_container = next_container == .box or next_container == .list;
                                 if (!is_heap_container) {
-                                    if (self.recursive_nominal_registry.getBoxLayout(container_nominal_key)) |boxed_layout_idx| {
+                                    if (self.recursive_boxed_layouts.get(container_nominal_key)) |boxed_layout_idx| {
+                                        // Use the boxed layout for pending containers (record/tuple fields)
                                         layout_idx = boxed_layout_idx;
                                     }
                                 }
@@ -3244,20 +2946,6 @@ pub const Store = struct {
 
                     // Remove the nominals we updated
                     for (nominals_to_remove_container.items) |key| {
-                        // Only cache non-polymorphic nominals (no type args) in computed_nominals.
-                        if (self.work.in_progress_nominals.get(key)) |progress| {
-                            if (progress.type_args_range.count == 0) {
-                                const nck = ModuleVarKey{ .module_idx = progress.cache_module_idx, .var_ = progress.nominal_var };
-                                if (self.layouts_by_module_var.get(nck)) |final_idx| {
-                                    if (comptime std.debug.runtime_safety) {
-                                        if (self.computed_nominals.get(key)) |existing| {
-                                            std.debug.assert(existing.layout_idx == final_idx);
-                                        }
-                                    }
-                                    try self.computed_nominals.put(key, .{ .layout_idx = final_idx, .module_idx = progress.cache_module_idx });
-                                }
-                            }
-                        }
                         _ = self.work.in_progress_nominals.swapRemove(key);
                     }
                 }
@@ -3275,30 +2963,6 @@ pub const Store = struct {
             // Note: Work fields (in_progress_vars, in_progress_nominals, etc.) are not cleared
             // here because individual entries are removed via swapRemove/pop when types finish
             // processing, so these should be empty when the top-level call returns.
-
-            // Check if a nominal reservation was created for the original var during this call.
-            // When a nominal type's backing type was already cached from a previous computation,
-            // the container finalization path is never triggered, leaving the reservation as
-            // an unfinalized Box(opaque_ptr). Detect this and finalize it now.
-            if (self.layouts_by_module_var.get(cache_key)) |reserved| {
-                if (reserved != layout_idx) {
-                    const reserved_layout = self.getLayout(reserved);
-                    if (reserved_layout.tag == .box and reserved_layout.data.box == .opaque_ptr) {
-                        // Unfinalized box reservation - update it with the real layout
-                        self.updateLayout(reserved, Layout.box(layout_idx));
-                    }
-                    // If reserved is Box(layout_idx), the nominal is non-recursive
-                    // (recursive nominals are finalized through the container path).
-                    // Update the cache to store the raw layout so subsequent lookups
-                    // (e.g., record field layout resolution) get the correct layout.
-                    const final_reserved = self.getLayout(reserved);
-                    if (final_reserved.tag == .box and final_reserved.data.box == layout_idx) {
-                        try self.layouts_by_module_var.put(cache_key, layout_idx);
-                        return layout_idx;
-                    }
-                    return reserved;
-                }
-            }
             return layout_idx;
         }
     }
@@ -3356,7 +3020,7 @@ pub const Store = struct {
                 module_env,
                 first_elem.e_list.elems,
                 type_scope,
-                use_type_scope,
+                caller_module_idx,
             );
             // Return List(nested_list_layout)
             const list_layout = Layout.list(nested_list_layout_idx);
@@ -3365,7 +3029,7 @@ pub const Store = struct {
 
         // For non-list elements, try to compute layout from the type var
         const elem_type_var = ModuleEnv.varFrom(first_elem_idx);
-        const elem_layout_idx = try self.fromTypeVar(module_idx, elem_type_var, type_scope, use_type_scope);
+        const elem_layout_idx = try self.fromTypeVar(module_idx, elem_type_var, type_scope, caller_module_idx);
 
         // Return List(element_layout)
         const list_layout = Layout.list(elem_layout_idx);

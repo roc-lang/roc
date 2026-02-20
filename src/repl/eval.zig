@@ -1019,7 +1019,7 @@ fn formatRecord(
     for (0..count) |i| {
         const l_fld = layout_fields.get(i);
         const t_fld = type_fields.get(i);
-        const name_text = layout_store.getFieldName(l_fld.name);
+        const name_text = module_env.getIdent(l_fld.name);
         try out.appendSlice(name_text);
         try out.appendSlice(": ");
 
