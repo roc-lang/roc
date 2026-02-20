@@ -132,7 +132,6 @@ type_writer: types_mod.TypeWriter,
 /// the cycle). This is safe because those extra vars are still correctly
 /// typed; they just get generalized at the cycle root instead of
 /// independently.
-
 /// The def currently being type-checked (innermost in the call stack)
 current_processing_def: ?CIR.Def.Idx = null,
 /// When a dispatch cycle is detected, the .processing def that is the
@@ -142,7 +141,10 @@ cycle_root_def: ?CIR.Def.Idx = null,
 defer_generalize: bool = false,
 /// Deferred def-level unifications (def_var = ptrn_var = expr_var).
 /// These must happen AFTER generalization to avoid lowering expr_var's rank
-/// before generalization can process it.
+/// before generalization can process it, but BEFORE eql constraint resolution
+/// so that def/ptrn vars point to generalized expr vars when cross-function
+/// constraints resolve. This ordering requirement is why these can't be
+/// stored in the `constraints` list (which runs after both steps).
 deferred_def_unifications: std.ArrayListUnmanaged(DeferredDefUnification),
 /// Envs from cycle participants whose vars need to be merged at the cycle root.
 /// Stored here instead of merging eagerly so that ranks remain correct
@@ -3728,25 +3730,16 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         try self.checkDef(processing_def.def_idx, &sub_env);
 
                         if (self.defer_generalize) {
+                            std.debug.assert(self.cycle_root_def != null);
+
                             // Cycle detected: store env for merge at cycle root.
                             try self.deferred_cycle_envs.append(self.gpa, sub_env);
 
-                            // Use the def's closure/expr var directly (unlike the
-                            // static dispatch handler which uses a fresh flex var).
-                            //
-                            // Why def_expr_var here: `break :blk` below skips the
-                            // fallthrough (lines that unify expr_var with pat_var),
-                            // so this explicit unification is the *only* link between
-                            // this lookup's expr_var and the function's type. A fresh
-                            // flex var would leave the lookup unconstrained.
-                            //
-                            // Why fresh flex in static dispatch: the fresh var becomes
-                            // method_var, which is subsequently unified with
-                            // constraint.fn_var — that secondary unification provides
-                            // the missing link.
-                            //
-                            // The e_closure rank elevation makes the direct use safe
-                            // (closure var elevated to rank 2, matching the lambda).
+                            // Use the def's closure/expr var directly. After
+                            // checkDef, e_closure rank elevation has already run,
+                            // so the closure var is at rank 2 — safe for
+                            // unification without pulling body vars below the
+                            // generalization rank.
                             const def = self.cir.store.getDef(processing_def.def_idx);
                             const def_expr_var = ModuleEnv.varFrom(def.expr);
                             _ = try self.unify(expr_var, def_expr_var, env);
@@ -3790,10 +3783,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             if (current_def != processing_def.def_idx) {
                                 const ref_def = self.cir.store.getDef(processing_def.def_idx);
                                 if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(ref_def.expr))) {
-                                    self.defer_generalize = true;
                                     if (self.cycle_root_def == null) {
+                                        // First cycle detection: no prior cycle should be in progress.
+                                        std.debug.assert(!self.defer_generalize);
+                                        std.debug.assert(self.deferred_cycle_envs.items.len == 0);
+                                        std.debug.assert(self.deferred_def_unifications.items.len == 0);
                                         self.cycle_root_def = processing_def.def_idx;
                                     }
+                                    self.defer_generalize = true;
                                 }
                             }
                         }
@@ -6098,11 +6095,16 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                                 try self.checkDef(processing_def.def_idx, &sub_env);
 
                                 if (self.defer_generalize) {
+                                    std.debug.assert(self.cycle_root_def != null);
+
                                     // Cycle detected: store env for merge at cycle root.
                                     try self.deferred_cycle_envs.append(self.gpa, sub_env);
-                                    // Use a fresh flex at the current rank (like .processing does)
-                                    // to avoid rank lowering from the closure var at outermost.
-                                    cycle_method_expr_var = try self.fresh(env, region);
+                                    // Use the def's closure/expr var directly (same
+                                    // as e_lookup_local .not_processed). After checkDef,
+                                    // e_closure rank elevation has already run, so the
+                                    // closure var is at rank 2 — safe for unification.
+                                    const def_expr_var = ModuleEnv.varFrom(def.expr);
+                                    cycle_method_expr_var = def_expr_var;
                                 } else {
                                     std.debug.assert(sub_env.rank() == .outermost);
                                     self.env_pool.release(sub_env);
@@ -6121,10 +6123,14 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                                     if (current_def != processing_def.def_idx) {
                                         const ref_def = self.cir.store.getDef(processing_def.def_idx);
                                         if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(ref_def.expr))) {
-                                            self.defer_generalize = true;
                                             if (self.cycle_root_def == null) {
+                                                // First cycle detection: no prior cycle should be in progress.
+                                                std.debug.assert(!self.defer_generalize);
+                                                std.debug.assert(self.deferred_cycle_envs.items.len == 0);
+                                                std.debug.assert(self.deferred_def_unifications.items.len == 0);
                                                 self.cycle_root_def = processing_def.def_idx;
                                             }
+                                            self.defer_generalize = true;
                                         }
                                     }
                                 }
