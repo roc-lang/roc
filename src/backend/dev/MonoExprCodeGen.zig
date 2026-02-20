@@ -859,6 +859,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 /// Capture specifications (symbols and layouts)
                 captures: mono.MonoIR.MonoCaptureSpan,
             },
+            /// Code path that never produces a value (crash/runtime_error).
+            /// A trap instruction has been emitted; execution will never reach here.
+            noreturn: void,
         };
 
         /// Result of code generation
@@ -1336,15 +1339,16 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .expect => |expect_expr| try self.generateExpect(expect_expr),
 
                 // Crash and runtime errors
-                .crash => unreachable,
+                .crash => |crash| {
+                    const msg = self.store.getString(crash.msg);
+                    try self.emitRocCrash(msg);
+                    try self.emitTrap();
+                    return .noreturn;
+                },
                 .runtime_error => {
-                    // Emit a roc_crashed call for dead code paths (e.g., the Err
-                    // branch of a ? suffix at the top level, where the canonicalizer
-                    // emits e_runtime_error because there is no enclosing lambda
-                    // for early return). The branch is never taken at runtime, but
-                    // eager codegen must still emit something for it.
-                    try self.emitRocCrash("hit a runtime error (dead code path)");
-                    return .{ .immediate_i64 = 0 };
+                    try self.emitRocCrash("hit a runtime error");
+                    try self.emitTrap();
+                    return .noreturn;
                 },
 
                 // String formatting for inspect
@@ -3186,7 +3190,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // TODO: Pass the user's crash message string from the args
                     // instead of this static message.
                     try self.emitRocCrash("Roc crashed");
-                    unreachable;
+                    try self.emitTrap();
+                    return .noreturn;
                 },
             }
         }
@@ -8014,6 +8019,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emitStoreStack(.w64, offset, reg);
                     self.codegen.freeGeneral(reg);
                 },
+                .noreturn => unreachable,
             }
         }
         /// Copy a specific number of bytes from a value location to a stack offset
@@ -8901,6 +8907,16 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        /// Emit a hardware trap instruction (ud2 on x86_64, brk on aarch64).
+        /// Used after crash/runtime_error to guarantee the program never continues.
+        fn emitTrap(self: *Self) Allocator.Error!void {
+            if (comptime target.toCpuArch() == .aarch64) {
+                try self.codegen.emit.brk();
+            } else {
+                try self.codegen.emit.ud2();
+            }
+        }
+
         /// Generate code for string concatenation
         fn generateStrConcat(self: *Self, exprs: anytype) Allocator.Error!ValueLocation {
             const expr_ids = self.store.getExprSpan(exprs);
@@ -9087,6 +9103,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .lambda_code => unreachable, // Dec is not a lambda
                 .closure_value => unreachable, // Dec is not a closure
                 .immediate_f64 => unreachable, // Dec is not a float
+                .noreturn => unreachable,
             };
         }
 
@@ -10904,8 +10921,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     },
                     .runtime_error => {
                         // Dead code path in a call — emit roc_crashed and return dummy.
-                        try self.emitRocCrash("hit a runtime error in call (dead code path)");
-                        return .{ .immediate_i64 = 0 };
+                        try self.emitRocCrash("hit a runtime error in call");
+                        try self.emitTrap();
+                        return .noreturn;
                     },
                     else => unreachable,
                 };
@@ -11193,6 +11211,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .float_reg, .immediate_f64 => {
                     unreachable;
                 },
+                .noreturn => unreachable,
             }
         }
 
@@ -11422,6 +11441,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // Convert float to int or lambda_code to register - this shouldn't happen in normal code
                     unreachable;
                 },
+                .noreturn => unreachable,
             }
         }
 
@@ -11469,6 +11489,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .general_reg, .immediate_i128, .stack_i128, .stack_str, .list_stack, .lambda_code, .closure_value => {
                     unreachable;
                 },
+                .noreturn => unreachable,
             }
         }
 
@@ -14296,6 +14317,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     .stack_str => |off| off,
                     .general_reg, .float_reg, .immediate_i64, .immediate_i128,
                     .immediate_f64, .closure_value, .lambda_code => unreachable,
+                    .noreturn => unreachable,
                 };
 
                 // Copy from temp to dst
@@ -14395,6 +14417,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     .stack_str => |off| off,
                     .general_reg, .float_reg, .immediate_i64, .immediate_i128,
                     .immediate_f64, .closure_value, .lambda_code => unreachable,
+                    .noreturn => unreachable,
                 };
 
                 const is_i128 = dst_loc == .stack_i128;

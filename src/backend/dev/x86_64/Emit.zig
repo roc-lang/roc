@@ -642,6 +642,12 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.append(self.allocator, modRM(0b11, 0, reg.enc()));
         }
 
+        /// UD2 - Undefined instruction (generates SIGILL, used as trap)
+        pub fn ud2(self: *Self) !void {
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0x0B);
+        }
+
         // Memory instructions
 
         /// MOV reg, [base + disp32] (load from memory)
