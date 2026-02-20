@@ -14033,14 +14033,23 @@ pub const Interpreter = struct {
         var capture_values = try self.allocator.alloc(StackValue, caps.len);
         defer self.allocator.free(capture_values);
 
+        // Get the mutable env used by the runtime layout store for field name lookups.
+        // We must re-intern capture names into this env so that the Ident.Idx values
+        // stored in the record are valid when getFieldName looks them up later.
+        const layout_mutable_env = self.runtime_layout_store.getMutableEnv().?;
+
         for (caps, 0..) |cap_idx, i| {
             const cap = self.env.store.getCapture(cap_idx);
-            // Use cap.name directly - it's already valid in self.env
-            field_names[i] = cap.name;
+
+            // Translate cap.name from self.env's interner to mutable_env's interner
+            const name_text = self.env.getIdent(cap.name);
+            field_names[i] = layout_mutable_env.insertIdent(base_pkg.Ident.for_text(name_text)) catch {
+                self.triggerCrash("e_closure: failed to intern capture name", false, roc_ops);
+                return error.Crash;
+            };
 
             const cap_val = self.resolveCapture(cap, roc_ops) orelse {
                 // Include capture name, module, expr_idx, and pattern_idx in error for debugging
-                const name_text = self.env.getIdent(cap.name);
                 var buf: [512]u8 = undefined;
                 const module_name = self.env.module_name;
                 const msg = std.fmt.bufPrint(&buf, "e_closure(expr={d}): failed to resolve capture '{s}' (pattern_idx={d}) in module '{s}', bindings.len={d}", .{ @intFromEnum(expr_idx), name_text, @intFromEnum(cap.pattern_idx), module_name, self.bindings.items.len }) catch "e_closure: failed to resolve capture value";
@@ -14051,8 +14060,8 @@ pub const Interpreter = struct {
             field_layouts[i] = cap_val.layout;
         }
 
-        // Use self.env for putRecord since field_names are valid in self.env's interner
-        const captures_layout_idx = try self.runtime_layout_store.putRecord(self.env, field_layouts, field_names);
+        // Use layout_mutable_env for putRecord since field_names have been re-interned into it
+        const captures_layout_idx = try self.runtime_layout_store.putRecord(layout_mutable_env, field_layouts, field_names);
         const captures_layout = self.runtime_layout_store.getLayout(captures_layout_idx);
         const closure_layout = Layout.closure(captures_layout_idx);
         // Get rt_var for the closure
@@ -14081,7 +14090,7 @@ pub const Interpreter = struct {
             for (caps, 0..) |_, cap_i| {
                 const cap_val = capture_values[cap_i];
                 const translated_name = field_names[cap_i];
-                const idx_opt = accessor.findFieldIndex(self.env.getIdent(translated_name)) orelse {
+                const idx_opt = accessor.findFieldIndex(layout_mutable_env.getIdent(translated_name)) orelse {
                     self.triggerCrash("e_closure: capture field not found in record", false, roc_ops);
                     return error.Crash;
                 };
