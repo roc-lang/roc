@@ -11261,11 +11261,11 @@ pub const Interpreter = struct {
         // crash at runtime. This catches type mismatches that the checker detected
         // but that weren't converted to e_runtime_error nodes in the CIR.
         //
-        // We only check specific expression types where .err genuinely means a type
-        // error that the interpreter would otherwise silently ignore. A universal
-        // check is too aggressive because polymorphic function bodies can have .err
-        // on sub-expressions (e.g., e_match, e_if) from unresolved rigid type
-        // variables that get resolved at call sites.
+        // We only check specific expression types (binops, calls, unary ops) here.
+        // For e_match/e_if, failed unification poisons ALL connected branch body
+        // vars via union-find, making .err checks on them unreliable. Instead,
+        // branch-level errors are handled via the erroneous_exprs side-table,
+        // checked in the match_branches, match_guard, and if_branch continuations.
         switch (expr) {
             .e_binop, .e_call, .e_unary_minus, .e_unary_not => {
                 const expr_ct_var = can.ModuleEnv.varFrom(expr_idx);
@@ -14878,7 +14878,12 @@ pub const Interpreter = struct {
                 const is_true = self.boolValueEquals(true, cond, roc_ops);
 
                 if (is_true) {
-                    // Condition is true, evaluate the body
+                    // Condition is true, evaluate the body.
+                    // Check if the type checker flagged this branch body as erroneous.
+                    if (self.env.store.erroneous_exprs.contains(@intFromEnum(ib.body))) {
+                        self.triggerCrash("This branch has a type mismatch - the body type is incompatible with the expected return type.", false, roc_ops);
+                        return error.Crash;
+                    }
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = ib.body,
                         .expected_rt_var = ib.expected_rt_var,
@@ -14899,7 +14904,12 @@ pub const Interpreter = struct {
                         .expected_rt_var = null,
                     } });
                 } else {
-                    // No more branches, evaluate final else
+                    // No more branches, evaluate final else.
+                    // Check if the type checker flagged the else body as erroneous.
+                    if (self.env.store.erroneous_exprs.contains(@intFromEnum(ib.final_else))) {
+                        self.triggerCrash("This branch has a type mismatch - the body type is incompatible with the expected return type.", false, roc_ops);
+                        return error.Crash;
+                    }
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = ib.final_else,
                         .expected_rt_var = ib.expected_rt_var,
@@ -16463,6 +16473,15 @@ pub const Interpreter = struct {
                         // No guard - evaluate body directly
                         scrutinee.decref(&self.runtime_layout_store, roc_ops);
 
+                        // Check if the type checker flagged this branch body as having a
+                        // type error (body type incompatible with expected return type).
+                        // Only crash when the erroneous branch is actually taken.
+                        if (self.env.store.erroneous_exprs.contains(@intFromEnum(br.value))) {
+                            self.trimBindingList(&self.bindings, start_len, roc_ops);
+                            self.triggerCrash("This branch has a type mismatch - the body type is incompatible with the expected return type.", false, roc_ops);
+                            return error.Crash;
+                        }
+
                         try work_stack.push(.{ .apply_continuation = .{ .match_cleanup = .{
                             .bindings_start = start_len,
                         } } });
@@ -16507,6 +16526,13 @@ pub const Interpreter = struct {
                     // Scrutinee is still on value stack - pop and decref it
                     const scrutinee = value_stack.pop() orelse return error.Crash;
                     scrutinee.decref(&self.runtime_layout_store, roc_ops);
+
+                    // Check if the type checker flagged this branch body as erroneous
+                    if (self.env.store.erroneous_exprs.contains(@intFromEnum(mg.branch_body))) {
+                        self.trimBindingList(&self.bindings, mg.bindings_start, roc_ops);
+                        self.triggerCrash("This branch has a type mismatch - the body type is incompatible with the expected return type.", false, roc_ops);
+                        return error.Crash;
+                    }
 
                     try work_stack.push(.{ .apply_continuation = .{ .match_cleanup = .{
                         .bindings_start = mg.bindings_start,

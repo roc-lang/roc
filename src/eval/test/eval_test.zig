@@ -34,6 +34,7 @@ const runExpectRecord = helpers.runExpectRecord;
 const runExpectListI64 = helpers.runExpectListI64;
 const runExpectListZst = helpers.runExpectListZst;
 const runExpectDec = helpers.runExpectDec;
+const runExpectTypeMismatchAndCrash = helpers.runExpectTypeMismatchAndCrash;
 const ExpectedField = helpers.ExpectedField;
 
 const TraceWriterState = struct {
@@ -3461,6 +3462,60 @@ test "polymorphic tag union payload substitution: multiple type vars" {
         \\    get_err(val)
         \\}
     , "hello", .no_trace);
+}
+
+test "polymorphic tag union: erroneous match branch crashes at runtime" {
+    // The Ok branch returns "" (Str) but the return type requires `e` (I64 when called with Ok(I64)).
+    // The type checker marks this branch as erroneous. When the Ok branch is actually taken
+    // at runtime, the interpreter should crash.
+    try runExpectTypeMismatchAndCrash(
+        \\{
+        \\    get_err : [Ok(a), Err(e)] -> e
+        \\    get_err = |result| match result {
+        \\        Ok(_) => ""
+        \\        Err(e) => e
+        \\    }
+        \\
+        \\    val : [Ok(I64), Err(Str)]
+        \\    val = Ok(42)
+        \\    get_err(val)
+        \\}
+    );
+}
+
+test "polymorphic: erroneous if-else branch crashes at runtime" {
+    // The then-branch returns "" (Str) but the return type requires `e` (I64 when called).
+    // When the erroneous then-branch is taken at runtime, the interpreter should crash.
+    try runExpectTypeMismatchAndCrash(
+        \\{
+        \\    get_val : Bool, e -> e
+        \\    get_val = |flag, val| if (flag) "" else val
+        \\
+        \\    get_val(Bool.true, 42)
+        \\}
+    );
+}
+
+test "polymorphic tag union: erroneous match in block crashes at runtime" {
+    // The match is nested inside a block (the lambda body is a block whose
+    // final expression is a match). The erroneous branch detection should
+    // still work through blocks.
+    try runExpectTypeMismatchAndCrash(
+        \\{
+        \\    get_err : [Ok(a), Err(e)] -> e
+        \\    get_err = |result| {
+        \\        unused = 0
+        \\        match result {
+        \\            Ok(_) => ""
+        \\            Err(e) => e
+        \\        }
+        \\    }
+        \\
+        \\    val : [Ok(I64), Err(Str)]
+        \\    val = Ok(42)
+        \\    get_err(val)
+        \\}
+    );
 }
 
 test "polymorphic tag union payload substitution: wrap and unwrap" {
