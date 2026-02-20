@@ -406,6 +406,19 @@ test "closure: triple-nested closure factory" {
     try runExpectI64(code, 16, .no_trace);
 }
 
+test "closure: closure capturing another closure (2 levels)" {
+    const code =
+        \\{
+        \\    a = 1
+        \\    f = |x| x + a
+        \\    b = 2
+        \\    g = |x| f(x) + b
+        \\    g(10)
+        \\}
+    ;
+    try runExpectI64(code, 13, .no_trace);
+}
+
 test "closure: closure capturing another closure that captures a third" {
     const code =
         \\{
