@@ -10255,6 +10255,72 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     return try self.generateLookupCall(lookup, call.args, call.ret_layout);
                 },
 
+                // Field access on a record containing closures/lambdas
+                // (e.g., rec.add_a(5) where rec = { add_a: |x| x + a })
+                // Follow the record to find the field's definition and call it directly
+                .field_access => |fa| {
+                    const record_expr = self.store.getExpr(fa.record_expr);
+                    if (record_expr == .record) {
+                        const field_exprs = self.store.getExprSpan(record_expr.record.fields);
+                        if (fa.field_idx < field_exprs.len) {
+                            const field_expr_id = field_exprs[fa.field_idx];
+                            const field_value = self.store.getExpr(field_expr_id);
+                            if (field_value == .lambda) {
+                                return try self.callLambdaBodyDirect(field_value.lambda, call.args);
+                            }
+                            if (field_value == .closure) {
+                                const cv_loc = try self.generateClosure(field_value.closure);
+                                if (cv_loc == .closure_value) {
+                                    return try self.generateClosureDispatch(cv_loc.closure_value, call.args, call.ret_layout);
+                                }
+                                if (cv_loc == .lambda_code) {
+                                    return try self.generateCallToLambda(cv_loc.lambda_code.code_offset, call.args, call.ret_layout);
+                                }
+                            }
+                        }
+                    }
+                    // record_expr might be a lookup pointing to the record
+                    if (record_expr == .lookup) {
+                        const def_opt = self.store.getSymbolDef(record_expr.lookup.symbol);
+                        if (def_opt) |def_id| {
+                            const def = self.store.getExpr(def_id);
+                            if (def == .record) {
+                                const field_exprs = self.store.getExprSpan(def.record.fields);
+                                if (fa.field_idx < field_exprs.len) {
+                                    const field_expr_id = field_exprs[fa.field_idx];
+                                    const field_value = self.store.getExpr(field_expr_id);
+                                    if (field_value == .lambda) {
+                                        return try self.callLambdaBodyDirect(field_value.lambda, call.args);
+                                    }
+                                    if (field_value == .closure) {
+                                        // Generate the closure to get a closure_value with captures
+                                        const cv_loc = try self.generateClosure(field_value.closure);
+                                        if (cv_loc == .closure_value) {
+                                            return try self.generateClosureDispatch(cv_loc.closure_value, call.args, call.ret_layout);
+                                        }
+                                        if (cv_loc == .lambda_code) {
+                                            return try self.generateCallToLambda(cv_loc.lambda_code.code_offset, call.args, call.ret_layout);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // Fall back: evaluate the field_access and call the result
+                    const fa_result = try self.generateFieldAccess(fa);
+                    if (fa_result == .lambda_code) {
+                        return try self.generateCallToLambda(
+                            fa_result.lambda_code.code_offset,
+                            call.args,
+                            call.ret_layout,
+                        );
+                    }
+                    if (fa_result == .closure_value) {
+                        return try self.generateClosureDispatch(fa_result.closure_value, call.args, call.ret_layout);
+                    }
+                    unreachable;
+                },
+
                 else => unreachable,
             };
         }

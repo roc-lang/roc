@@ -3054,7 +3054,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                     }
                 }
             }
-            break :blk .{
+            const field_access_expr: ir.MonoExpr = .{
                 .field_access = .{
                     .record_expr = receiver,
                     .record_layout = receiver_layout,
@@ -3063,6 +3063,64 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                     .field_name = dot.field_name,
                 },
             };
+
+            // If dot.args has elements, wrap the field access in a call
+            // (e.g., rec.add_a(5) where rec is a plain record with closure fields)
+            if (dot.args) |arg_span| {
+                const arg_slice = module_env.store.sliceExpr(arg_span);
+                if (arg_slice.len > 0) {
+                    const fn_expr_id = try self.store.addExpr(field_access_expr, region);
+                    var all_args = std.ArrayList(ir.MonoExprId).empty;
+                    defer all_args.deinit(self.allocator);
+                    for (arg_slice) |arg_idx| {
+                        try all_args.append(self.allocator, try self.lowerExprFromIdx(module_env, arg_idx));
+                    }
+                    const args_span = try self.store.addExprSpan(all_args.items);
+                    // Compute ret_layout: first try the CIR expression's type.
+                    // If the type resolves to err (type checker can't type record
+                    // field method calls), derive from the lowered closure's lambda.
+                    var call_ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
+                    const ret_tv = ModuleEnv.varFrom(expr_idx);
+                    const ret_resolved = module_env.types.resolveVar(ret_tv);
+                    if (ret_resolved.desc.content == .err) {
+                        // Look up the already-lowered record's field closure to
+                        // get the lambda's ret_layout.
+                        const recv_expr = self.store.getExpr(receiver);
+                        const rec_def_id = if (recv_expr == .lookup)
+                            self.store.getSymbolDef(recv_expr.lookup.symbol)
+                        else
+                            null;
+                        if (rec_def_id) |rid| {
+                            const rec_def = self.store.getExpr(rid);
+                            if (rec_def == .record) {
+                                const rec_fields = self.store.getExprSpan(rec_def.record.fields);
+                                if (field_idx < rec_fields.len) {
+                                    const fld = self.store.getExpr(rec_fields[field_idx]);
+                                    if (fld == .closure) {
+                                        const inner = self.store.getExpr(fld.closure.lambda);
+                                        if (inner == .lambda) {
+                                            call_ret_layout = inner.lambda.ret_layout;
+                                        }
+                                    } else if (fld == .lambda) {
+                                        call_ret_layout = fld.lambda.ret_layout;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    break :blk .{
+                        .call = .{
+                            .fn_expr = fn_expr_id,
+                            .fn_layout = field_layout,
+                            .args = args_span,
+                            .ret_layout = call_ret_layout,
+                            .called_via = .apply,
+                        },
+                    };
+                }
+            }
+
+            break :blk field_access_expr;
         },
 
         .e_zero_argument_tag => |tag| blk: {
@@ -3179,11 +3237,27 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const lhs = try self.lowerExprFromIdx(module_env, binop.lhs);
             const rhs = try self.lowerExprFromIdx(module_env, binop.rhs);
             const op = cirBinopToMonoBinop(binop.op);
+            // For numeric binops, result_layout == operand layout.
+            // If the CIR type resolves to err (e.g., from record field
+            // method calls that the type checker can't resolve), derive
+            // from the lowered lhs expression's layout.
+            var result_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
+            const binop_tv = ModuleEnv.varFrom(expr_idx);
+            const binop_resolved = module_env.types.resolveVar(binop_tv);
+            if (binop_resolved.desc.content == .err) {
+                const lhs_expr = self.store.getExpr(lhs);
+                result_layout = switch (lhs_expr) {
+                    .call => |c| c.ret_layout,
+                    .binop => |b| b.result_layout,
+                    .lookup => |l| l.layout_idx,
+                    else => result_layout,
+                };
+            }
             break :blk .{ .binop = .{
                 .op = op,
                 .lhs = lhs,
                 .rhs = rhs,
-                .result_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
+                .result_layout = result_layout,
             } };
         },
 
