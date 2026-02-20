@@ -6909,21 +6909,42 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Try to match the pattern
                 switch (pattern) {
                     .wildcard => {
-                        // Wildcard always matches - generate the body directly
-                        const body_loc = try self.generateExpr(branch.body);
-                        try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
-                        // No more branches needed after wildcard
-                        break;
+                        // Wildcard always matches
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+                        if (guard_patch) |gp| {
+                            const body_loc = try self.generateExpr(branch.body);
+                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                            if (i < branches.len - 1) {
+                                const end_patch = try self.codegen.emitJump();
+                                try end_patches.append(self.allocator, end_patch);
+                            }
+                            self.codegen.patchJump(gp, self.codegen.currentOffset());
+                        } else {
+                            const body_loc = try self.generateExpr(branch.body);
+                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                            break;
+                        }
                     },
                     .bind => |bind| {
-                        // Bind always matches - bind the value and generate body
+                        // Bind always matches - bind the value first
                         const symbol_key: u64 = @bitCast(bind.symbol);
                         try self.symbol_locations.put(symbol_key, value_loc);
 
-                        const body_loc = try self.generateExpr(branch.body);
-                        try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
-                        // No more branches needed after unconditional bind
-                        break;
+                        // Guard must be checked after binding (guard may reference bound var)
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+                        if (guard_patch) |gp| {
+                            const body_loc = try self.generateExpr(branch.body);
+                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                            if (i < branches.len - 1) {
+                                const end_patch = try self.codegen.emitJump();
+                                try end_patches.append(self.allocator, end_patch);
+                            }
+                            self.codegen.patchJump(gp, self.codegen.currentOffset());
+                        } else {
+                            const body_loc = try self.generateExpr(branch.body);
+                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                            break;
+                        }
                     },
                     .int_literal => |int_lit| {
                         // Compare value with literal
@@ -6947,6 +6968,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             next_patch = try self.emitJumpIfNotEqual();
                         }
 
+                        // Guard check
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+
                         // Pattern matched - generate body
                         const body_loc = try self.generateExpr(branch.body);
                         try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
@@ -6961,6 +6985,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 const current_offset = self.codegen.currentOffset();
                                 self.codegen.patchJump(patch, current_offset);
                             }
+                        }
+                        if (guard_patch) |patch| {
+                            self.codegen.patchJump(patch, self.codegen.currentOffset());
                         }
                     },
                     .str_literal => |str_lit_idx| {
@@ -6987,6 +7014,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             next_patch = try self.emitJumpIfEqual();
                         }
 
+                        // Guard check
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+
                         // Pattern matched - generate body
                         const body_loc = try self.generateExpr(branch.body);
                         try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
@@ -7001,6 +7031,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 const current_offset = self.codegen.currentOffset();
                                 self.codegen.patchJump(patch, current_offset);
                             }
+                        }
+                        if (guard_patch) |patch| {
+                            self.codegen.patchJump(patch, self.codegen.currentOffset());
                         }
                     },
                     .tag => |tag_pattern| {
@@ -7202,6 +7235,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             }
                         }
 
+                        // Guard check (after bindings, since guard may reference bound vars)
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+
                         // Generate body
                         const body_loc = try self.generateExpr(branch.body);
                         try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
@@ -7216,6 +7252,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 const current_offset = self.codegen.currentOffset();
                                 self.codegen.patchJump(patch, current_offset);
                             }
+                        }
+                        if (guard_patch) |patch| {
+                            self.codegen.patchJump(patch, self.codegen.currentOffset());
                         }
                     },
                     .list => |list_pattern| {
@@ -7388,6 +7427,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                         self.codegen.freeGeneral(list_ptr_reg);
 
+                        // Guard check (after bindings, since guard may reference bound vars)
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+
                         // Generate body
                         const body_loc = try self.generateExpr(branch.body);
                         try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
@@ -7403,6 +7445,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 self.codegen.patchJump(patch, current_offset);
                             }
                         }
+                        if (guard_patch) |patch| {
+                            self.codegen.patchJump(patch, self.codegen.currentOffset());
+                        }
                     },
                     .record => {
                         // Record destructuring always matches - bind fields and generate body
@@ -7411,10 +7456,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const stack_off = try self.ensureOnStack(value_loc, value_size);
                         try self.bindPattern(branch.pattern, .{ .stack = .{ .offset = stack_off } });
 
-                        const body_loc = try self.generateExpr(branch.body);
-                        try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
-                        // Record destructuring always matches, no more branches needed
-                        break;
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+                        if (guard_patch) |gp| {
+                            const body_loc = try self.generateExpr(branch.body);
+                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                            if (i < branches.len - 1) {
+                                const end_patch = try self.codegen.emitJump();
+                                try end_patches.append(self.allocator, end_patch);
+                            }
+                            self.codegen.patchJump(gp, self.codegen.currentOffset());
+                        } else {
+                            const body_loc = try self.generateExpr(branch.body);
+                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                            break;
+                        }
                     },
                     .tuple => {
                         // Tuple destructuring always matches - bind elements and generate body
@@ -7423,10 +7478,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const stack_off = try self.ensureOnStack(value_loc, value_size);
                         try self.bindPattern(branch.pattern, .{ .stack = .{ .offset = stack_off } });
 
-                        const body_loc = try self.generateExpr(branch.body);
-                        try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
-                        // Tuple destructuring always matches, no more branches needed
-                        break;
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+                        if (guard_patch) |gp| {
+                            const body_loc = try self.generateExpr(branch.body);
+                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                            if (i < branches.len - 1) {
+                                const end_patch = try self.codegen.emitJump();
+                                try end_patches.append(self.allocator, end_patch);
+                            }
+                            self.codegen.patchJump(gp, self.codegen.currentOffset());
+                        } else {
+                            const body_loc = try self.generateExpr(branch.body);
+                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                            break;
+                        }
                     },
                     .as_pattern => |as_pat| {
                         // As-pattern: bind the whole value to the symbol, then match the inner pattern
@@ -7438,10 +7503,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const stack_off = try self.ensureOnStack(value_loc, value_size);
                         try self.bindPattern(as_pat.inner, .{ .stack = .{ .offset = stack_off } });
 
-                        const body_loc = try self.generateExpr(branch.body);
-                        try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
-                        // As-pattern always matches, no more branches needed
-                        break;
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+                        if (guard_patch) |gp| {
+                            const body_loc = try self.generateExpr(branch.body);
+                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                            if (i < branches.len - 1) {
+                                const end_patch = try self.codegen.emitJump();
+                                try end_patches.append(self.allocator, end_patch);
+                            }
+                            self.codegen.patchJump(gp, self.codegen.currentOffset());
+                        } else {
+                            const body_loc = try self.generateExpr(branch.body);
+                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                            break;
+                        }
                     },
                     else => {
                         unreachable;
@@ -7532,6 +7607,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitMovRegReg(result_reg.*.?, body_reg);
                 self.codegen.freeGeneral(body_reg);
             }
+        }
+
+        /// Emit guard check. If the guard expression is present and evaluates to false,
+        /// emit a conditional jump. Returns the patch location or null if no guard.
+        fn emitGuardCheck(self: *Self, guard: anytype) Allocator.Error!?usize {
+            if (guard.isNone()) return null;
+            const guard_loc = try self.generateExpr(guard);
+            const guard_reg = try self.ensureInGeneralReg(guard_loc);
+            try self.emitCmpImm(guard_reg, 0);
+            self.codegen.freeGeneral(guard_reg);
+            return try self.emitJumpIfEqual();
         }
 
         /// Compare two registers
@@ -14320,14 +14406,35 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 switch (pattern) {
                     .wildcard => {
-                        try self.generateStmt(branch.body);
-                        break;
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+                        if (guard_patch) |gp| {
+                            try self.generateStmt(branch.body);
+                            if (!is_last_branch) {
+                                const end_patch = try self.codegen.emitJump();
+                                try end_patches.append(self.allocator, end_patch);
+                            }
+                            self.codegen.patchJump(gp, self.codegen.currentOffset());
+                        } else {
+                            try self.generateStmt(branch.body);
+                            break;
+                        }
                     },
                     .bind => |bind| {
                         const symbol_key: u64 = @bitCast(bind.symbol);
                         try self.symbol_locations.put(symbol_key, value_loc);
-                        try self.generateStmt(branch.body);
-                        break;
+
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+                        if (guard_patch) |gp| {
+                            try self.generateStmt(branch.body);
+                            if (!is_last_branch) {
+                                const end_patch = try self.codegen.emitJump();
+                                try end_patches.append(self.allocator, end_patch);
+                            }
+                            self.codegen.patchJump(gp, self.codegen.currentOffset());
+                        } else {
+                            try self.generateStmt(branch.body);
+                            break;
+                        }
                     },
                     .int_literal => |int_lit| {
                         const value_reg = try self.ensureInGeneralReg(value_loc);
@@ -14346,6 +14453,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             next_patch = try self.emitJumpIfNotEqual();
                         }
 
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+
                         try self.generateStmt(branch.body);
 
                         if (!is_last_branch) {
@@ -14355,6 +14464,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             if (next_patch) |patch| {
                                 self.codegen.patchJump(patch, self.codegen.currentOffset());
                             }
+                        }
+                        if (guard_patch) |patch| {
+                            self.codegen.patchJump(patch, self.codegen.currentOffset());
                         }
                     },
                     .str_literal => |str_lit_idx| {
@@ -14373,6 +14485,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             next_patch = try self.emitJumpIfEqual();
                         }
 
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+
                         try self.generateStmt(branch.body);
 
                         if (!is_last_branch) {
@@ -14382,6 +14496,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             if (next_patch) |patch| {
                                 self.codegen.patchJump(patch, self.codegen.currentOffset());
                             }
+                        }
+                        if (guard_patch) |patch| {
+                            self.codegen.patchJump(patch, self.codegen.currentOffset());
                         }
                     },
                     .tag => |tag_pattern| {
@@ -14555,6 +14672,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             }
                         }
 
+                        // Guard check (after bindings, since guard may reference bound vars)
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+
                         try self.generateStmt(branch.body);
 
                         if (!is_last_branch) {
@@ -14564,6 +14684,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             if (next_patch) |patch| {
                                 self.codegen.patchJump(patch, self.codegen.currentOffset());
                             }
+                        }
+                        if (guard_patch) |patch| {
+                            self.codegen.patchJump(patch, self.codegen.currentOffset());
                         }
                     },
                     .list => |list_pattern| {
@@ -14654,6 +14777,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                         self.codegen.freeGeneral(list_ptr_reg);
 
+                        // Guard check (after bindings, since guard may reference bound vars)
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+
                         try self.generateStmt(branch.body);
 
                         if (!is_last_branch) {
@@ -14664,20 +14790,45 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 self.codegen.patchJump(patch, self.codegen.currentOffset());
                             }
                         }
+                        if (guard_patch) |patch| {
+                            self.codegen.patchJump(patch, self.codegen.currentOffset());
+                        }
                     },
                     .record => {
                         const value_size = ls.layoutSizeAlign(value_layout_val).size;
                         const stack_off = try self.ensureOnStack(value_loc, value_size);
                         try self.bindPattern(branch.pattern, .{ .stack = .{ .offset = stack_off } });
-                        try self.generateStmt(branch.body);
-                        break;
+
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+                        if (guard_patch) |gp| {
+                            try self.generateStmt(branch.body);
+                            if (!is_last_branch) {
+                                const end_patch = try self.codegen.emitJump();
+                                try end_patches.append(self.allocator, end_patch);
+                            }
+                            self.codegen.patchJump(gp, self.codegen.currentOffset());
+                        } else {
+                            try self.generateStmt(branch.body);
+                            break;
+                        }
                     },
                     .tuple => {
                         const value_size = ls.layoutSizeAlign(value_layout_val).size;
                         const stack_off = try self.ensureOnStack(value_loc, value_size);
                         try self.bindPattern(branch.pattern, .{ .stack = .{ .offset = stack_off } });
-                        try self.generateStmt(branch.body);
-                        break;
+
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+                        if (guard_patch) |gp| {
+                            try self.generateStmt(branch.body);
+                            if (!is_last_branch) {
+                                const end_patch = try self.codegen.emitJump();
+                                try end_patches.append(self.allocator, end_patch);
+                            }
+                            self.codegen.patchJump(gp, self.codegen.currentOffset());
+                        } else {
+                            try self.generateStmt(branch.body);
+                            break;
+                        }
                     },
                     .as_pattern => |as_pat| {
                         const symbol_key: u64 = @bitCast(as_pat.symbol);
@@ -14685,8 +14836,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const value_size = ls.layoutSizeAlign(value_layout_val).size;
                         const stack_off = try self.ensureOnStack(value_loc, value_size);
                         try self.bindPattern(as_pat.inner, .{ .stack = .{ .offset = stack_off } });
-                        try self.generateStmt(branch.body);
-                        break;
+
+                        const guard_patch = try self.emitGuardCheck(branch.guard);
+                        if (guard_patch) |gp| {
+                            try self.generateStmt(branch.body);
+                            if (!is_last_branch) {
+                                const end_patch = try self.codegen.emitJump();
+                                try end_patches.append(self.allocator, end_patch);
+                            }
+                            self.codegen.patchJump(gp, self.codegen.currentOffset());
+                        } else {
+                            try self.generateStmt(branch.body);
+                            break;
+                        }
                     },
                     else => {
                         unreachable;
