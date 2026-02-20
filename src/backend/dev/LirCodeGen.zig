@@ -4261,37 +4261,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
 
             // Determine if this is an integer or float operation.
-            // For comparisons, result_layout is .bool, so check operand types.
-            const is_float = switch (binop.result_layout) {
-                .f32, .f64 => true,
-                else => blk: {
-                    const lhs_e = self.store.getExpr(binop.lhs);
-                    break :blk switch (lhs_e) {
-                        .f32_literal => true,
-                        .f64_literal => true,
-                        .lookup => |l| l.layout_idx == .f32 or l.layout_idx == .f64,
-                        .call => |c| c.ret_layout == .f32 or c.ret_layout == .f64,
-                        .block => |b| b.result_layout == .f32 or b.result_layout == .f64,
-                        .low_level => |ll| ll.ret_layout == .f32 or ll.ret_layout == .f64,
-                        .binop => |b| b.result_layout == .f32 or b.result_layout == .f64,
-                        .unary_minus => |u| u.result_layout == .f32 or u.result_layout == .f64,
-                        else => false,
-                    };
-                },
-            };
+            // Use operand_layout which reliably carries the operand type,
+            // even for comparisons where result_layout is .bool.
+            const is_float = binop.operand_layout == .f32 or binop.operand_layout == .f64;
 
             if (is_float) {
                 return self.generateFloatBinop(binop.op, lhs_loc, rhs_loc);
-            } else if (operands_are_i128 or binop.result_layout == .i128 or binop.result_layout == .u128 or binop.result_layout == .dec) {
+            } else if (operands_are_i128
+                or binop.operand_layout == .i128 or binop.operand_layout == .u128 or binop.operand_layout == .dec) {
                 // Use i128 path for Dec/i128 operands (even for comparisons that return bool)
                 // Convert .stack locations to .stack_i128 for Dec operations, since Dec values are 16 bytes
                 // but may be stored with .stack location type (e.g., mutable variables)
-                const is_dec_op = binop.result_layout == .dec or binop.result_layout == .i128 or binop.result_layout == .u128;
-                const adj_lhs = if (is_dec_op and lhs_loc == .stack) ValueLocation{ .stack_i128 = lhs_loc.stack.offset } else lhs_loc;
-                const adj_rhs = if (is_dec_op and rhs_loc == .stack) ValueLocation{ .stack_i128 = rhs_loc.stack.offset } else rhs_loc;
-                return self.generateI128Binop(binop.op, adj_lhs, adj_rhs, binop.result_layout);
+                const is_i128_op = binop.operand_layout == .dec or binop.operand_layout == .i128 or binop.operand_layout == .u128;
+                const adj_lhs = if (is_i128_op and lhs_loc == .stack) ValueLocation{ .stack_i128 = lhs_loc.stack.offset } else lhs_loc;
+                const adj_rhs = if (is_i128_op and rhs_loc == .stack) ValueLocation{ .stack_i128 = rhs_loc.stack.offset } else rhs_loc;
+                return self.generateI128Binop(binop.op, adj_lhs, adj_rhs, binop.operand_layout);
             } else {
-                return self.generateIntBinop(binop.op, lhs_loc, rhs_loc, binop.result_layout);
+                return self.generateIntBinop(binop.op, lhs_loc, rhs_loc, binop.operand_layout);
             }
         }
 
@@ -4301,7 +4287,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             op: LirExpr.BinOp,
             lhs_loc: ValueLocation,
             rhs_loc: ValueLocation,
-            result_layout: layout.Idx,
+            operand_layout: layout.Idx,
         ) Allocator.Error!ValueLocation {
             // Load operands into registers
             const rhs_reg = try self.ensureInGeneralReg(rhs_loc);
@@ -4310,8 +4296,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Allocate result register
             const result_reg = try self.allocTempGeneral();
 
-            // Determine if this is an unsigned type (for division/modulo)
-            const is_unsigned = switch (result_layout) {
+            // Determine if this is an unsigned type (for division/modulo/comparisons)
+            const is_unsigned = switch (operand_layout) {
                 layout.Idx.u8, layout.Idx.u16, layout.Idx.u32, layout.Idx.u64, layout.Idx.u128 => true,
                 else => false,
             };
@@ -4345,10 +4331,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condEqual());
                 },
                 .neq => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condNotEqual()),
-                .lt => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condLess()),
-                .lte => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condLessOrEqual()),
-                .gt => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condGreater()),
-                .gte => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condGreaterOrEqual()),
+                .lt => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg,
+                    if (is_unsigned) condBelow() else condLess()),
+                .lte => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg,
+                    if (is_unsigned) condBelowOrEqual() else condLessOrEqual()),
+                .gt => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg,
+                    if (is_unsigned) condAbove() else condGreater()),
+                .gte => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg,
+                    if (is_unsigned) condAboveOrEqual() else condGreaterOrEqual()),
                 // Boolean operations - AND/OR two values
                 // Boolean values in Roc are represented as 0 (false) or 1 (true).
                 // Bitwise AND/OR work correctly for single-bit boolean values.
@@ -4372,6 +4362,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return if (comptime target.toCpuArch() == .aarch64) .ne else .not_equal;
         }
 
+        // Signed condition codes
         fn condLess() Condition {
             return if (comptime target.toCpuArch() == .aarch64) .lt else .less;
         }
@@ -4388,19 +4379,36 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return if (comptime target.toCpuArch() == .aarch64) .ge else .greater_or_equal;
         }
 
+        // Unsigned condition codes
+        fn condBelow() Condition {
+            return if (comptime target.toCpuArch() == .aarch64) .cc else .below;
+        }
+
+        fn condBelowOrEqual() Condition {
+            return if (comptime target.toCpuArch() == .aarch64) .ls else .below_or_equal;
+        }
+
+        fn condAbove() Condition {
+            return if (comptime target.toCpuArch() == .aarch64) .hi else .above;
+        }
+
+        fn condAboveOrEqual() Condition {
+            return if (comptime target.toCpuArch() == .aarch64) .cs else .above_or_equal;
+        }
+
         /// Generate 128-bit integer binary operation
         fn generateI128Binop(
             self: *Self,
             op: LirExpr.BinOp,
             lhs_loc: ValueLocation,
             rhs_loc: ValueLocation,
-            result_layout: layout.Idx,
+            operand_layout: layout.Idx,
         ) Allocator.Error!ValueLocation {
             // For 128-bit operations, we work with the values as pairs of 64-bit words
             // Low word at offset 0, high word at offset 8
 
             // Get low and high parts of both operands
-            const signedness: std.builtin.Signedness = if (result_layout == .u128) .unsigned else .signed;
+            const signedness: std.builtin.Signedness = if (operand_layout == .u128) .unsigned else .signed;
             const lhs_parts = try self.getI128Parts(lhs_loc, signedness);
             const rhs_parts = try self.getI128Parts(rhs_loc, signedness);
 
@@ -4408,7 +4416,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_low = try self.allocTempGeneral();
             const result_high = try self.allocTempGeneral();
 
-            const is_unsigned = result_layout == .u128;
+            const is_unsigned = operand_layout == .u128;
 
             switch (op) {
                 .add => {
@@ -4440,7 +4448,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                 },
                 .mul => {
-                    if (result_layout == .dec) {
+                    if (operand_layout == .dec) {
                         // Dec multiplication: call builtin function
                         // mulSaturatedC(RocDec, RocDec) -> RocDec
                         // RocDec is extern struct { num: i128 }
@@ -4549,7 +4557,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                 },
                 .div => {
-                    if (result_layout == .dec) {
+                    if (operand_layout == .dec) {
                         // Dec division: call builtin function
                         // divC(RocDec, RocDec, *RocOps) -> i128
                         try self.callDecDiv(lhs_parts, rhs_parts, result_low, result_high);
@@ -4559,7 +4567,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                 },
                 .div_trunc => {
-                    if (result_layout == .dec) {
+                    if (operand_layout == .dec) {
                         // Dec truncating division: divide and truncate to whole number
                         // divTruncC(RocDec, RocDec, *RocOps) -> i128
                         try self.callDecDivTrunc(lhs_parts, rhs_parts, result_low, result_high);
@@ -8527,10 +8535,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 try self.codegen.emit.lslRegReg(width, dst, src, amount);
             } else {
-                if (dst != src) try self.codegen.emit.movRegReg(width, dst, src);
-                // x86_64 shifts require amount in CL; move amount there if needed
-                if (amount != .RCX) try self.codegen.emit.movRegReg(.w64, .RCX, amount);
-                try self.codegen.emit.shlRegCl(width, dst);
+                try self.emitShiftRegX86(width, dst, src, amount, .shl);
             }
         }
 
@@ -8539,9 +8544,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 try self.codegen.emit.lsrRegReg(width, dst, src, amount);
             } else {
-                if (dst != src) try self.codegen.emit.movRegReg(width, dst, src);
-                if (amount != .RCX) try self.codegen.emit.movRegReg(.w64, .RCX, amount);
-                try self.codegen.emit.shrRegCl(width, dst);
+                try self.emitShiftRegX86(width, dst, src, amount, .shr);
             }
         }
 
@@ -8550,9 +8553,48 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 try self.codegen.emit.asrRegReg(width, dst, src, amount);
             } else {
+                try self.emitShiftRegX86(width, dst, src, amount, .sar);
+            }
+        }
+
+        const ShiftOp = enum { shl, shr, sar };
+
+        /// x86_64 shift by register, handling the RCX constraint correctly.
+        /// x86_64 shifts require the amount in CL (part of RCX). When dst==RCX,
+        /// we must shift into R11 (scratch) and move the result back.
+        fn emitShiftRegX86(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: GeneralReg, comptime op: ShiftOp) !void {
+            if (dst == .RCX) {
+                // RCX is both destination and shift-amount register.
+                // Shift into R11 (scratch), then move result to RCX.
+                if (src == .RCX and amount == .R11) {
+                    // Circular: need RCX→R11 (src) and R11→RCX (amount). Swap.
+                    try self.codegen.emit.xchgRegReg(.w64, .RCX, .R11);
+                } else if (amount == .R11) {
+                    // amount is in R11 — must move to RCX before we use R11 for src
+                    try self.codegen.emit.movRegReg(.w64, .RCX, amount);
+                    if (src != .R11) try self.codegen.emit.movRegReg(width, .R11, src);
+                } else {
+                    // Safe: amount is not R11, so moving src to R11 won't clobber amount
+                    if (src != .R11) try self.codegen.emit.movRegReg(width, .R11, src);
+                    if (amount != .RCX) try self.codegen.emit.movRegReg(.w64, .RCX, amount);
+                }
+                // R11 has value to shift, CL has shift amount
+                switch (op) {
+                    .shl => try self.codegen.emit.shlRegCl(width, .R11),
+                    .shr => try self.codegen.emit.shrRegCl(width, .R11),
+                    .sar => try self.codegen.emit.sarRegCl(width, .R11),
+                }
+                try self.codegen.emit.movRegReg(width, .RCX, .R11);
+            } else {
+                // dst is not RCX — safe to shift in-place.
+                // Note: if src==RCX, the mov dst←src happens before RCX is overwritten with amount.
                 if (dst != src) try self.codegen.emit.movRegReg(width, dst, src);
                 if (amount != .RCX) try self.codegen.emit.movRegReg(.w64, .RCX, amount);
-                try self.codegen.emit.sarRegCl(width, dst);
+                switch (op) {
+                    .shl => try self.codegen.emit.shlRegCl(width, dst),
+                    .shr => try self.codegen.emit.shrRegCl(width, dst),
+                    .sar => try self.codegen.emit.sarRegCl(width, dst),
+                }
             }
         }
 
@@ -16096,6 +16138,7 @@ test "generate addition" {
         .lhs = lhs_id,
         .rhs = rhs_id,
         .result_layout = .i64,
+        .operand_layout = .i64,
     } }, base.Region.zero());
 
     var codegen = try HostLirCodeGen.init(allocator, &store, null, null);
@@ -16177,6 +16220,7 @@ test "record equality uses layout-aware comparison" {
         .lhs = lhs_record,
         .rhs = rhs_record,
         .result_layout = .bool,
+        .operand_layout = .bool,
     } }, base.Region.zero());
 
     // With layout_store: should use generateRecordComparisonByLayout (no crash)
@@ -16206,6 +16250,7 @@ test "generate modulo" {
         .lhs = lhs,
         .rhs = rhs,
         .result_layout = .i64,
+        .operand_layout = .i64,
     } }, base.Region.zero());
 
     var codegen = try HostLirCodeGen.init(allocator, &store, null, null);
@@ -16234,6 +16279,7 @@ test "generate shift left" {
         .lhs = lhs,
         .rhs = rhs,
         .result_layout = .i64,
+        .operand_layout = .i64,
     } }, base.Region.zero());
 
     var codegen = try HostLirCodeGen.init(allocator, &store, null, null);
@@ -16262,6 +16308,7 @@ test "generate shift right" {
         .lhs = lhs,
         .rhs = rhs,
         .result_layout = .i64,
+        .operand_layout = .i64,
     } }, base.Region.zero());
 
     var codegen = try HostLirCodeGen.init(allocator, &store, null, null);
@@ -16290,6 +16337,7 @@ test "generate shift right zero-fill" {
         .lhs = lhs,
         .rhs = rhs,
         .result_layout = .i64,
+        .operand_layout = .i64,
     } }, base.Region.zero());
 
     var codegen = try HostLirCodeGen.init(allocator, &store, null, null);

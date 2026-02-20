@@ -700,11 +700,13 @@ fn lowerLowLevel(self: *Self, ll: anytype, mono_idx: Monotype.Idx, region: Regio
     // Check if this maps to a .binop (comparisons, div_trunc, rem)
     if (lowLevelToBinop(ll.op)) |binop| {
         const args_slice = self.lir_store.getExprSpan(lir_args);
+        const operand_layout = try self.layoutFromMonotype(self.mir_store.typeOf(mir_args[0]));
         return self.lir_store.addExpr(.{ .binop = .{
             .op = binop,
             .lhs = args_slice[0],
             .rhs = args_slice[1],
             .result_layout = ret_layout,
+            .operand_layout = operand_layout,
         } }, region);
     }
 
@@ -713,11 +715,13 @@ fn lowerLowLevel(self: *Self, ll: anytype, mono_idx: Monotype.Idx, region: Regio
         const args_slice = self.lir_store.getExprSpan(lir_args);
         const zero = try self.emitZeroLiteral(mir_args[0], region);
         const cmp_op: LirExpr.BinOp = if (ll.op == .num_is_negative) .lt else .gt;
+        const operand_layout = try self.layoutFromMonotype(self.mir_store.typeOf(mir_args[0]));
         return self.lir_store.addExpr(.{ .binop = .{
             .op = cmp_op,
             .lhs = args_slice[0],
             .rhs = zero,
             .result_layout = ret_layout,
+            .operand_layout = operand_layout,
         } }, region);
     }
 
@@ -734,11 +738,13 @@ fn lowerLowLevel(self: *Self, ll: anytype, mono_idx: Monotype.Idx, region: Regio
     if (ll.op == .num_is_zero) {
         const args_slice = self.lir_store.getExprSpan(lir_args);
         const zero = try self.emitZeroLiteral(mir_args[0], region);
+        const operand_layout = try self.layoutFromMonotype(self.mir_store.typeOf(mir_args[0]));
         return self.lir_store.addExpr(.{ .binop = .{
             .op = .eq,
             .lhs = args_slice[0],
             .rhs = zero,
             .result_layout = ret_layout,
+            .operand_layout = operand_layout,
         } }, region);
     }
 

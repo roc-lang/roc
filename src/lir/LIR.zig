@@ -499,6 +499,7 @@ pub const LirExpr = union(enum) {
         lhs: LirExprId,
         rhs: LirExprId,
         result_layout: layout.Idx,
+        operand_layout: layout.Idx,
     },
 
     /// Unary minus/negation

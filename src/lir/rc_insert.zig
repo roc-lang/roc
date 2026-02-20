@@ -2065,6 +2065,7 @@ test "RC branch-aware: symbol used twice in one branch — incref in that branch
         .rhs = lookup_s2,
         .op = .add,
         .result_layout = str_layout,
+        .operand_layout = str_layout,
     } }, Region.zero());
 
     const wild_pat1 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = i64_layout } }, Region.zero());
@@ -2237,6 +2238,7 @@ test "RC lambda: refcounted param used twice gets incref" {
         .rhs = lookup_s2,
         .op = .add,
         .result_layout = str_layout,
+        .operand_layout = str_layout,
     } }, Region.zero());
 
     // Build lambda: |s| binop(s, s)

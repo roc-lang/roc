@@ -484,6 +484,7 @@ pub const MonoExpr = union(enum) {
         lhs: MonoExprId,
         rhs: MonoExprId,
         result_layout: layout.Idx,
+        operand_layout: layout.Idx,
     },
 
     /// Unary minus/negation

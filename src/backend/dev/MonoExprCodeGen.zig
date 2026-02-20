@@ -4241,24 +4241,24 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 },
             };
 
-            // Determine if this is an integer or float operation
-            const is_float = switch (binop.result_layout) {
-                .f32, .f64 => true,
-                else => false,
-            };
+            // Determine if this is an integer or float operation.
+            // Use operand_layout which reliably carries the operand type,
+            // even for comparisons where result_layout is .bool.
+            const is_float = binop.operand_layout == .f32 or binop.operand_layout == .f64;
 
             if (is_float) {
                 return self.generateFloatBinop(binop.op, lhs_loc, rhs_loc);
-            } else if (operands_are_i128 or binop.result_layout == .i128 or binop.result_layout == .u128 or binop.result_layout == .dec) {
+            } else if (operands_are_i128
+                or binop.operand_layout == .i128 or binop.operand_layout == .u128 or binop.operand_layout == .dec) {
                 // Use i128 path for Dec/i128 operands (even for comparisons that return bool)
                 // Convert .stack locations to .stack_i128 for Dec operations, since Dec values are 16 bytes
                 // but may be stored with .stack location type (e.g., mutable variables)
-                const is_dec_op = binop.result_layout == .dec or binop.result_layout == .i128 or binop.result_layout == .u128;
-                const adj_lhs = if (is_dec_op and lhs_loc == .stack) ValueLocation{ .stack_i128 = lhs_loc.stack.offset } else lhs_loc;
-                const adj_rhs = if (is_dec_op and rhs_loc == .stack) ValueLocation{ .stack_i128 = rhs_loc.stack.offset } else rhs_loc;
-                return self.generateI128Binop(binop.op, adj_lhs, adj_rhs, binop.result_layout);
+                const is_i128_op = binop.operand_layout == .dec or binop.operand_layout == .i128 or binop.operand_layout == .u128;
+                const adj_lhs = if (is_i128_op and lhs_loc == .stack) ValueLocation{ .stack_i128 = lhs_loc.stack.offset } else lhs_loc;
+                const adj_rhs = if (is_i128_op and rhs_loc == .stack) ValueLocation{ .stack_i128 = rhs_loc.stack.offset } else rhs_loc;
+                return self.generateI128Binop(binop.op, adj_lhs, adj_rhs, binop.operand_layout);
             } else {
-                return self.generateIntBinop(binop.op, lhs_loc, rhs_loc, binop.result_layout);
+                return self.generateIntBinop(binop.op, lhs_loc, rhs_loc, binop.operand_layout);
             }
         }
 
@@ -4268,7 +4268,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             op: MonoExpr.BinOp,
             lhs_loc: ValueLocation,
             rhs_loc: ValueLocation,
-            result_layout: layout.Idx,
+            operand_layout: layout.Idx,
         ) Allocator.Error!ValueLocation {
             // Load operands into registers
             const rhs_reg = try self.ensureInGeneralReg(rhs_loc);
@@ -4277,8 +4277,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Allocate result register
             const result_reg = try self.allocTempGeneral();
 
-            // Determine if this is an unsigned type (for division/modulo)
-            const is_unsigned = switch (result_layout) {
+            // Determine if this is an unsigned type (for division/modulo/comparisons)
+            const is_unsigned = switch (operand_layout) {
                 layout.Idx.u8, layout.Idx.u16, layout.Idx.u32, layout.Idx.u64, layout.Idx.u128 => true,
                 else => false,
             };
@@ -4307,10 +4307,14 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condEqual());
                 },
                 .neq => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condNotEqual()),
-                .lt => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condLess()),
-                .lte => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condLessOrEqual()),
-                .gt => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condGreater()),
-                .gte => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condGreaterOrEqual()),
+                .lt => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg,
+                    if (is_unsigned) condBelow() else condLess()),
+                .lte => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg,
+                    if (is_unsigned) condBelowOrEqual() else condLessOrEqual()),
+                .gt => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg,
+                    if (is_unsigned) condAbove() else condGreater()),
+                .gte => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg,
+                    if (is_unsigned) condAboveOrEqual() else condGreaterOrEqual()),
                 // Boolean operations - AND/OR two values
                 // Boolean values in Roc are represented as 0 (false) or 1 (true).
                 // Bitwise AND/OR work correctly for single-bit boolean values.
@@ -4334,6 +4338,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             return if (comptime target.toCpuArch() == .aarch64) .ne else .not_equal;
         }
 
+        // Signed condition codes
         fn condLess() Condition {
             return if (comptime target.toCpuArch() == .aarch64) .lt else .less;
         }
@@ -4350,19 +4355,36 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             return if (comptime target.toCpuArch() == .aarch64) .ge else .greater_or_equal;
         }
 
+        // Unsigned condition codes
+        fn condBelow() Condition {
+            return if (comptime target.toCpuArch() == .aarch64) .cc else .below;
+        }
+
+        fn condBelowOrEqual() Condition {
+            return if (comptime target.toCpuArch() == .aarch64) .ls else .below_or_equal;
+        }
+
+        fn condAbove() Condition {
+            return if (comptime target.toCpuArch() == .aarch64) .hi else .above;
+        }
+
+        fn condAboveOrEqual() Condition {
+            return if (comptime target.toCpuArch() == .aarch64) .cs else .above_or_equal;
+        }
+
         /// Generate 128-bit integer binary operation
         fn generateI128Binop(
             self: *Self,
             op: MonoExpr.BinOp,
             lhs_loc: ValueLocation,
             rhs_loc: ValueLocation,
-            result_layout: layout.Idx,
+            operand_layout: layout.Idx,
         ) Allocator.Error!ValueLocation {
             // For 128-bit operations, we work with the values as pairs of 64-bit words
             // Low word at offset 0, high word at offset 8
 
             // Get low and high parts of both operands
-            const signedness: std.builtin.Signedness = if (result_layout == .u128) .unsigned else .signed;
+            const signedness: std.builtin.Signedness = if (operand_layout == .u128) .unsigned else .signed;
             const lhs_parts = try self.getI128Parts(lhs_loc, signedness);
             const rhs_parts = try self.getI128Parts(rhs_loc, signedness);
 
@@ -4370,7 +4392,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const result_low = try self.allocTempGeneral();
             const result_high = try self.allocTempGeneral();
 
-            const is_unsigned = result_layout == .u128;
+            const is_unsigned = operand_layout == .u128;
 
             switch (op) {
                 .add => {
@@ -4402,7 +4424,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     }
                 },
                 .mul => {
-                    if (result_layout == .dec) {
+                    if (operand_layout == .dec) {
                         // Dec multiplication: call builtin function
                         // mulSaturatedC(RocDec, RocDec) -> RocDec
                         // RocDec is extern struct { num: i128 }
@@ -4511,7 +4533,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     }
                 },
                 .div => {
-                    if (result_layout == .dec) {
+                    if (operand_layout == .dec) {
                         // Dec division: call builtin function
                         // divC(RocDec, RocDec, *RocOps) -> i128
                         try self.callDecDiv(lhs_parts, rhs_parts, result_low, result_high);
@@ -4521,7 +4543,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     }
                 },
                 .div_trunc => {
-                    if (result_layout == .dec) {
+                    if (operand_layout == .dec) {
                         // Dec truncating division: divide and truncate to whole number
                         // divTruncC(RocDec, RocDec, *RocOps) -> i128
                         try self.callDecDivTrunc(lhs_parts, rhs_parts, result_low, result_high);
@@ -16021,6 +16043,7 @@ test "generate addition" {
         .lhs = lhs_id,
         .rhs = rhs_id,
         .result_layout = .i64,
+        .operand_layout = .i64,
     } }, base.Region.zero());
 
     var codegen = try HostMonoExprCodeGen.init(allocator, &store, null, null);
