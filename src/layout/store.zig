@@ -252,7 +252,7 @@ pub const Store = struct {
     }
 
     /// Get the current module environment
-    fn currentEnv(self: *const Self) *const ModuleEnv {
+    pub fn currentEnv(self: *const Self) *const ModuleEnv {
         return self.all_module_envs[self.current_module_idx];
     }
 
