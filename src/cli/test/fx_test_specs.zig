@@ -312,6 +312,13 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>Hello, World!",
         .description = "Regression test: Hosted effects on opaque types with data (not just [])",
     },
+
+    // File import tests
+    .{
+        .roc_file = "test/fx/file_import_str.roc",
+        .io_spec = "1>bytes: 370077",
+        .description = "File import as Str: import large file and verify byte count",
+    },
 };
 
 /// Get the total number of IO spec tests

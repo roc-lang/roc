@@ -11295,6 +11295,11 @@ pub const Interpreter = struct {
                 try value_stack.push(value);
             },
 
+            .e_bytes_literal => |bytes| {
+                const value = try self.evalBytesLiteral(expected_rt_var, bytes, roc_ops);
+                try value_stack.push(value);
+            },
+
             .e_str => |str_expr| {
                 traceDbg(roc_ops, "e_str: entering", .{});
                 const segments = self.env.store.sliceExpr(str_expr.span);
@@ -13570,6 +13575,32 @@ pub const Interpreter = struct {
         // Use arena allocator for string literals - freed wholesale at interpreter deinit
         roc_str.* = try self.createConstantStr(content);
         return value;
+    }
+
+    /// Evaluate a bytes literal (e_bytes_literal) - produces a RocList of U8
+    fn evalBytesLiteral(
+        self: *Interpreter,
+        expected_rt_var: ?types.Var,
+        bytes: @TypeOf(@as(can.CIR.Expr, undefined).e_bytes_literal),
+        roc_ops: *RocOps,
+    ) Error!StackValue {
+        const content = self.env.getString(bytes.literal);
+
+        // Create List(U8) type
+        const list_rt_var = expected_rt_var orelse try self.createListU8Type();
+
+        // Create layout for List(U8)
+        const u8_layout_idx = try self.runtime_layout_store.insertLayout(Layout.int(.u8));
+        const result_layout = Layout.list(u8_layout_idx);
+
+        // Create the RocList from the bytes content
+        const roc_list = RocList.fromSlice(u8, content, false, roc_ops);
+
+        var out = try self.pushRaw(result_layout, 0, list_rt_var);
+        out.is_initialized = false;
+        out.setRocList(roc_list);
+        out.is_initialized = true;
+        return out;
     }
 
     /// Evaluate an empty record literal (e_empty_record)

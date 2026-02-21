@@ -334,6 +334,9 @@ pub const MonoExpr = union(enum) {
     /// String literal reference
     str_literal: StringLiteral.Idx,
 
+    /// Bytes literal (for List(U8) file imports)
+    bytes_literal: StringLiteral.Idx,
+
     /// Boolean literal
     bool_literal: bool,
 

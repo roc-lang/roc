@@ -1174,6 +1174,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .i128_literal => .i128,
                 .dec_literal => .dec,
                 .str_literal => .str,
+                // bytes_literal is a List(U8) - layout computed dynamically, falls through to else
                 .str_concat => .str,
                 .int_to_str => .str,
                 .float_to_str => .str,
@@ -1288,6 +1289,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                 // String literals
                 .str_literal => |str_idx| try self.generateStrLiteral(str_idx),
+
+                // Bytes literal (List(U8) from file import)
+                .bytes_literal => |bytes_idx| try self.generateBytesLiteral(bytes_idx),
 
                 // Reference counting operations
                 .incref => |rc_op| try self.generateIncref(rc_op),
@@ -8427,6 +8431,105 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             }
 
             return .{ .stack_str = base_offset };
+        }
+
+        /// Generate code for a bytes literal (List(U8) from file import).
+        /// The layout is identical to RocList: {pointer, length, capacity}.
+        fn generateBytesLiteral(self: *Self, bytes_idx: base.StringLiteral.Idx) Error!ValueLocation {
+            const bytes = self.store.getString(bytes_idx);
+
+            if (bytes.len == 0) {
+                return self.generateEmptyList();
+            }
+
+            // Allocate space on stack for RocList struct: {pointer, length, capacity}
+            const base_offset = self.codegen.allocStackSlot(roc_str_size);
+
+            // Allocate heap memory for the bytes
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const fn_addr: usize = @intFromPtr(&allocateWithRefcountC);
+
+            const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addImmArg(@intCast(bytes.len));
+            try builder.addImmArg(1); // byte alignment
+            try builder.addImmArg(0); // elements_refcounted = false
+            try builder.addRegArg(roc_ops_reg);
+            try self.callBuiltin(&builder, fn_addr, .allocate_with_refcount);
+
+            // Save heap pointer
+            if (comptime target.toCpuArch() == .aarch64) {
+                try self.codegen.emit.strRegMemSoff(.w64, .X0, .FP, heap_ptr_slot);
+            } else {
+                try self.codegen.emit.movMemReg(.w64, .RBP, heap_ptr_slot, .RAX);
+            }
+
+            // Copy bytes to heap memory
+            const heap_ptr = try self.allocTempGeneral();
+            if (comptime target.toCpuArch() == .aarch64) {
+                try self.codegen.emit.ldrRegMemSoff(.w64, heap_ptr, .FP, heap_ptr_slot);
+            } else {
+                try self.codegen.emit.movRegMem(.w64, heap_ptr, .RBP, heap_ptr_slot);
+            }
+
+            var remaining: usize = bytes.len;
+            var offset: usize = 0;
+            const temp_reg = try self.allocTempGeneral();
+
+            while (remaining >= 8) {
+                const chunk: u64 = @bitCast(bytes[offset..][0..8].*);
+                try self.codegen.emitLoadImm(temp_reg, @bitCast(chunk));
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, @intCast(offset));
+                } else {
+                    try self.codegen.emit.movMemReg(.w64, heap_ptr, @intCast(offset), temp_reg);
+                }
+                offset += 8;
+                remaining -= 8;
+            }
+
+            if (remaining > 0) {
+                var last_chunk: u64 = 0;
+                for (0..remaining) |j| {
+                    last_chunk |= @as(u64, bytes[offset + j]) << @intCast(j * 8);
+                }
+                try self.codegen.emitLoadImm(temp_reg, @bitCast(last_chunk));
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, @intCast(offset));
+                } else {
+                    try self.codegen.emit.movMemReg(.w64, heap_ptr, @intCast(offset), temp_reg);
+                }
+            }
+
+            self.codegen.freeGeneral(temp_reg);
+            self.codegen.freeGeneral(heap_ptr);
+
+            // Construct RocList struct on stack: {pointer, length, capacity}
+            const ptr_reg = try self.allocTempGeneral();
+            if (comptime target.toCpuArch() == .aarch64) {
+                try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, heap_ptr_slot);
+            } else {
+                try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, heap_ptr_slot);
+            }
+
+            // Store pointer
+            try self.codegen.emitStoreStack(.w64, base_offset, ptr_reg);
+
+            // Store length
+            try self.codegen.emitLoadImm(ptr_reg, @intCast(bytes.len));
+            try self.codegen.emitStoreStack(.w64, base_offset + 8, ptr_reg);
+
+            // Store capacity (same as length for immutable data)
+            try self.codegen.emitStoreStack(.w64, base_offset + 16, ptr_reg);
+
+            self.codegen.freeGeneral(ptr_reg);
+
+            return .{ .list_stack = .{
+                .struct_offset = base_offset,
+                .data_offset = 0,
+                .num_elements = @intCast(bytes.len),
+            } };
         }
 
         /// Generate code for a for loop over a list

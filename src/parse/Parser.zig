@@ -1319,6 +1319,76 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
             }
             const start = self.pos;
             self.advance(); // Advance past KwImport
+
+            // File import: import "filepath" as name : Str/List(U8)
+            if (self.peek() == .StringStart) {
+                self.advance(); // Advance past StringStart
+                const path_tok = self.pos;
+                self.expect(.StringPart) catch {
+                    return try self.pushMalformed(AST.Statement.Idx, .incomplete_import, start);
+                };
+                self.expect(.StringEnd) catch {
+                    return try self.pushMalformed(AST.Statement.Idx, .incomplete_import, start);
+                };
+                self.expect(.KwAs) catch {
+                    return try self.pushMalformed(AST.Statement.Idx, .file_import_expected_as, start);
+                };
+                const name_tok = self.pos;
+                self.expect(.LowerIdent) catch {
+                    return try self.pushMalformed(AST.Statement.Idx, .file_import_expected_name, start);
+                };
+                self.expect(.OpColon) catch {
+                    return try self.pushMalformed(AST.Statement.Idx, .file_import_expected_type, start);
+                };
+                const type_tok = self.pos;
+                self.expect(.UpperIdent) catch {
+                    return try self.pushMalformed(AST.Statement.Idx, .file_import_expected_type, start);
+                };
+                // Determine if it's Str or List(U8)
+                const type_text = blk: {
+                    const range = self.tok_buf.resolve(type_tok);
+                    break :blk self.tok_buf.env.source[@intCast(range.start.offset)..@intCast(range.end.offset)];
+                };
+                var is_bytes = false;
+                if (std.mem.eql(u8, type_text, "Str")) {
+                    // Str type, is_bytes stays false
+                } else if (std.mem.eql(u8, type_text, "List")) {
+                    is_bytes = true;
+                    // Parse (U8)
+                    self.expect(.NoSpaceOpenRound) catch {
+                        self.expect(.OpenRound) catch {
+                            return try self.pushMalformed(AST.Statement.Idx, .file_import_invalid_type, start);
+                        };
+                    };
+                    // Expect U8
+                    if (self.peek() != .UpperIdent) {
+                        return try self.pushMalformed(AST.Statement.Idx, .file_import_invalid_type, start);
+                    }
+                    const inner_type = blk2: {
+                        const range2 = self.tok_buf.resolve(self.pos);
+                        break :blk2 self.tok_buf.env.source[@intCast(range2.start.offset)..@intCast(range2.end.offset)];
+                    };
+                    if (!std.mem.eql(u8, inner_type, "U8")) {
+                        return try self.pushMalformed(AST.Statement.Idx, .file_import_invalid_type, start);
+                    }
+                    self.advance(); // Advance past U8
+                    self.expect(.CloseRound) catch {
+                        return try self.pushMalformed(AST.Statement.Idx, .file_import_invalid_type, start);
+                    };
+                } else {
+                    return try self.pushMalformed(AST.Statement.Idx, .file_import_invalid_type, start);
+                }
+
+                const statement_idx = try self.store.addStatement(.{ .file_import = .{
+                    .path_tok = path_tok,
+                    .name_tok = name_tok,
+                    .type_tok = type_tok,
+                    .is_bytes = is_bytes,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+                return statement_idx;
+            }
+
             var qualifier: ?TokenIdx = null;
             var alias_tok: ?TokenIdx = null;
             if (self.peek() == .LowerIdent) {
