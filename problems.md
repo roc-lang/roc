@@ -1,32 +1,5 @@
 # Code Review: `lower-mir` Branch
 
-## CRITICAL — Correctness Bugs
-
-### 1. rc_insert.zig: Double-free on early_return inside a branch that decrefs an unused symbol
-
-**File:** `src/lir/rc_insert.zig`
-
-**Problem:** The Perceus-inspired RC insertion has a branch-ownership model where if a symbol is used in one branch but not another, the unused branch emits a decref. However, `processEarlyReturn` independently computes cleanup decrefs for all live symbols. When a branch that already decrefs an unused symbol also contains an `early_return`, the symbol gets decreffed twice: once by the branch wrapper, once by `processEarlyReturn`.
-
-The `pending_branch_increfs` mechanism only handles the case where `local_count > 1` (extra increfs needed), not the case where `local_count == 0` (branch emitted a decref). So early_return doesn't know to skip the decref that the branch already handles.
-
-**Trace:** Symbol `s` is live in the outer scope. An if-then-else has branch A (uses `s`) and branch B (doesn't use `s`, contains `early_return`).
-
-1. `countUsesInto(branch_B.body)` -> `s` has `local_count = 0`
-2. `setPendingBranchIncrefs(local_count=0)` -> skipped (only tracks `local_count > 1`)
-3. `processExpr(branch_B.body)` calls `processEarlyReturn`:
-   - `pending_branch_increfs.get(s)` -> `0` (not in map)
-   - `effective_count = global_count + 0`
-   - Sees `s` is not fully consumed -> **emits decref for `s`**
-4. `countUsesInto(branch_B.body)` again -> still `local_count = 0`
-5. `wrapBranchWithRcOps` sees `local_count == 0` -> **emits another decref for `s`**
-
-Result: Two decrefs for one reference — a double-free.
-
-**Fix:** Extend `pending_branch_increfs` to also track pending branch decrefs. When `local_count == 0` for a symbol that appears in `symbols_in_any_branch`, record it (e.g., use `i32` instead of `u32`, with negative values representing decrefs, or add a separate `pending_branch_decrefs` map). In `processEarlyReturn`, subtract pending_branch_decrefs from `effective_count` so it knows the branch wrapper already handles the decref.
-
----
-
 ## HIGH — Likely Correctness Bugs
 
 ### 2. LirCodeGen.zig: `generateDiscriminantSwitch` always loads discriminant as 8 bytes
