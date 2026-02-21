@@ -79,7 +79,6 @@ const strWithAsciiUppercased = builtins.str.strWithAsciiUppercased;
 const strFromUtf8Lossy = builtins.str.fromUtf8Lossy;
 const strFromUtf8C = builtins.str.fromUtf8C;
 const FromUtf8Try = builtins.str.FromUtf8Try;
-const UpdateMode = builtins.utils.UpdateMode;
 
 const Relocation = @import("Relocation.zig").Relocation;
 const StaticDataInterner = @import("StaticDataInterner.zig");
@@ -191,6 +190,8 @@ pub const BuiltinFn = enum {
     int_to_str,
     float_to_str,
     int_from_str,
+    dec_from_str,
+    float_from_str,
 
     /// Get the exported symbol name for object file linking.
     pub fn symbolName(self: BuiltinFn) []const u8 {
@@ -270,6 +271,8 @@ pub const BuiltinFn = enum {
             .int_to_str => "roc_builtins_int_to_str",
             .float_to_str => "roc_builtins_float_to_str",
             .int_from_str => "roc_builtins_int_from_str",
+            .dec_from_str => "roc_builtins_dec_from_str",
+            .float_from_str => "roc_builtins_float_from_str",
         };
     }
 };
@@ -454,7 +457,7 @@ fn wrapStrFromUtf8Lossy(out: *RocStr, list_bytes: ?[*]u8, list_len: usize, list_
 fn wrapStrFromUtf8(out: [*]u8, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, roc_ops: *RocOps) callconv(.c) void {
     const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     const result = strFromUtf8C(list, .Immutable, roc_ops);
-    @as(*FromUtf8Try, @alignCast(@ptrCast(out))).* = result;
+    @as(*FromUtf8Try, @ptrCast(@alignCast(out))).* = result;
 }
 
 /// Wrapper: escape special characters and wrap in double quotes for Str.inspect
@@ -4461,8 +4464,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
             if (is_float) {
                 return self.generateFloatBinop(binop.op, lhs_loc, rhs_loc);
-            } else if (operands_are_i128
-                or binop.operand_layout == .i128 or binop.operand_layout == .u128 or binop.operand_layout == .dec) {
+            } else if (operands_are_i128 or binop.operand_layout == .i128 or binop.operand_layout == .u128 or binop.operand_layout == .dec) {
                 // Use i128 path for Dec/i128 operands (even for comparisons that return bool)
                 // Convert .stack locations to .stack_i128 for Dec operations, since Dec values are 16 bytes
                 // but may be stored with .stack location type (e.g., mutable variables)
@@ -4520,14 +4522,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condEqual());
                 },
                 .neq => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condNotEqual()),
-                .lt => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg,
-                    if (is_unsigned) condBelow() else condLess()),
-                .lte => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg,
-                    if (is_unsigned) condBelowOrEqual() else condLessOrEqual()),
-                .gt => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg,
-                    if (is_unsigned) condAbove() else condGreater()),
-                .gte => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg,
-                    if (is_unsigned) condAboveOrEqual() else condGreaterOrEqual()),
+                .lt => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, if (is_unsigned) condBelow() else condLess()),
+                .lte => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, if (is_unsigned) condBelowOrEqual() else condLessOrEqual()),
+                .gt => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, if (is_unsigned) condAbove() else condGreater()),
+                .gte => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, if (is_unsigned) condAboveOrEqual() else condGreaterOrEqual()),
                 // Boolean operations - AND/OR two values
                 // Boolean values in Roc are represented as 0 (false) or 1 (true).
                 // Bitwise AND/OR work correctly for single-bit boolean values.
@@ -5115,33 +5113,56 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const variants = ls.getTagUnionVariants(tu_data);
             const payload_idx = if (variants.len > 1) variants.get(1).payload_layout else variants.get(0).payload_layout;
 
-            // Determine integer width and signedness from the layout index
-            const int_width: u8 = switch (payload_idx) {
-                .u8, .i8 => 1,
-                .u16, .i16 => 2,
-                .u32, .i32 => 4,
-                .u64, .i64 => 8,
-                else => unreachable, // Non-integer num_from_str not yet supported
-            };
-            const is_signed: bool = switch (payload_idx) {
-                .i8, .i16, .i32, .i64 => true,
-                .u8, .u16, .u32, .u64 => false,
-                else => unreachable,
-            };
-
-            const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_int_from_str);
             const base_reg = frame_ptr;
 
-            // roc_builtins_int_from_str(out, str_bytes, str_len, str_cap, int_width, is_signed, disc_offset)
-            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            try builder.addLeaArg(base_reg, result_offset);
-            try builder.addMemArg(base_reg, str_off);
-            try builder.addMemArg(base_reg, str_off + 8);
-            try builder.addMemArg(base_reg, str_off + 16);
-            try builder.addImmArg(@intCast(int_width));
-            try builder.addImmArg(if (is_signed) @as(i64, 1) else @as(i64, 0));
-            try builder.addImmArg(@intCast(disc_offset));
-            try self.callBuiltin(&builder, fn_addr, .int_from_str);
+            if (payload_idx == .dec) {
+                // Dec from string
+                const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_dec_from_str);
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                try builder.addLeaArg(base_reg, result_offset);
+                try builder.addMemArg(base_reg, str_off);
+                try builder.addMemArg(base_reg, str_off + 8);
+                try builder.addMemArg(base_reg, str_off + 16);
+                try builder.addImmArg(@intCast(disc_offset));
+                try self.callBuiltin(&builder, fn_addr, .dec_from_str);
+            } else if (payload_idx == .f32 or payload_idx == .f64) {
+                // Float from string
+                const float_width: u8 = if (payload_idx == .f32) 4 else 8;
+                const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_float_from_str);
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                try builder.addLeaArg(base_reg, result_offset);
+                try builder.addMemArg(base_reg, str_off);
+                try builder.addMemArg(base_reg, str_off + 8);
+                try builder.addMemArg(base_reg, str_off + 16);
+                try builder.addImmArg(@intCast(float_width));
+                try builder.addImmArg(@intCast(disc_offset));
+                try self.callBuiltin(&builder, fn_addr, .float_from_str);
+            } else {
+                // Integer from string
+                const int_width: u8 = switch (payload_idx) {
+                    .u8, .i8 => 1,
+                    .u16, .i16 => 2,
+                    .u32, .i32 => 4,
+                    .u64, .i64 => 8,
+                    .u128, .i128 => 16,
+                    else => unreachable,
+                };
+                const is_signed: bool = switch (payload_idx) {
+                    .i8, .i16, .i32, .i64, .i128 => true,
+                    .u8, .u16, .u32, .u64, .u128 => false,
+                    else => unreachable,
+                };
+                const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_int_from_str);
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                try builder.addLeaArg(base_reg, result_offset);
+                try builder.addMemArg(base_reg, str_off);
+                try builder.addMemArg(base_reg, str_off + 8);
+                try builder.addMemArg(base_reg, str_off + 16);
+                try builder.addImmArg(@intCast(int_width));
+                try builder.addImmArg(if (is_signed) @as(i64, 1) else @as(i64, 0));
+                try builder.addImmArg(@intCast(disc_offset));
+                try self.callBuiltin(&builder, fn_addr, .int_from_str);
+            }
 
             return .{ .stack = .{ .offset = result_offset } };
         }
@@ -10141,16 +10162,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        /// Emit a correctly-sized store to the stack.
-        fn emitSizedStoreStack(self: *Self, offset: i32, reg: GeneralReg, size: ValueSize) Allocator.Error!void {
-            switch (size) {
-                .byte => try self.emitStoreStackW8(offset, reg),
-                .word => try self.emitStoreStackW16(offset, reg),
-                .dword => try self.codegen.emitStoreStack(.w32, offset, reg),
-                .qword => try self.codegen.emitStoreStack(.w64, offset, reg),
-            }
-        }
-
         /// Emit a correctly-sized load from memory (arbitrary base register + offset),
         /// zero-extending sub-word values to 64 bits.
         fn emitSizedLoadMem(self: *Self, dst: GeneralReg, base_reg: GeneralReg, offset: i32, size: ValueSize) Allocator.Error!void {
@@ -11003,12 +11014,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             args_span: anytype,
             ret_layout: layout.Idx,
         ) Allocator.Error!ValueLocation {
-            const ls = self.layout_store orelse unreachable;
-            const union_layout_val = ls.getLayout(repr.union_layout);
-            std.debug.assert(union_layout_val.tag == .tag_union);
-            const tu_data = ls.getTagUnionData(union_layout_val.data.tag_union.idx);
-            const disc_offset: i32 = @intCast(tu_data.discriminant_offset);
-
             const members = self.store.getLambdaSetMembers(repr.lambda_set);
 
             if (members.len == 0) {
@@ -11021,11 +11026,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 return try self.compileLambdaAndCallWithCaptures(member, union_offset, args_span);
             }
 
-            // Load discriminant from its correct offset in the tag union
-            // Layout: [payload at offset 0][discriminant at discriminant_offset]
-            const disc_use_w32 = (disc_offset + 8 > @as(i32, @intCast(tu_data.size)));
+            // putCaptureUnion creates a tuple layout: [tag: u64 at offset 0][captures at offset 8]
+            const captures_offset: i32 = 8;
             const tag_reg = try self.allocTempGeneral();
-            try self.codegen.emitLoadStack(if (disc_use_w32) .w32 else .w64, tag_reg, union_offset + disc_offset);
+            try self.codegen.emitLoadStack(.w64, tag_reg, union_offset);
 
             // Allocate result slot sized for the return type
             const ret_size: u32 = self.getLayoutSize(ret_layout);
@@ -11043,8 +11047,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     try self.emitCmpImm(tag_reg, member.tag);
                     const skip_jump = try self.emitJumpIfNotEqual();
 
-                    // Captures are the payload at offset 0
-                    const result = try self.compileLambdaAndCallWithCaptures(member, union_offset, args_span);
+                    // Captures start at offset 8 (after the tag)
+                    const result = try self.compileLambdaAndCallWithCaptures(member, union_offset + captures_offset, args_span);
                     try self.copyResultToSlot(result_slot, result, ret_size);
 
                     // Jump to end
@@ -11054,7 +11058,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
                 } else {
                     // Last case - no comparison needed (fallthrough)
-                    const result = try self.compileLambdaAndCallWithCaptures(member, union_offset, args_span);
+                    const result = try self.compileLambdaAndCallWithCaptures(member, union_offset + captures_offset, args_span);
                     try self.copyResultToSlot(result_slot, result, ret_size);
                 }
             }
@@ -11241,22 +11245,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 },
                 else => unreachable,
             }
-        }
-
-        /// Get the return layout from a lambda set member's lambda body.
-        fn getLambdaMemberRetLayout(self: *Self, member: mono.LambdaSetMember) layout.Idx {
-            const lambda_expr = self.store.getExpr(member.lambda_body);
-            return switch (lambda_expr) {
-                .lambda => |l| l.ret_layout,
-                .closure => |c| blk: {
-                    const inner = self.store.getExpr(c.lambda);
-                    break :blk switch (inner) {
-                        .lambda => |l| l.ret_layout,
-                        else => .i64, // fallback
-                    };
-                },
-                else => .i64, // fallback
-            };
         }
 
         /// Copy a result to a stack slot, handling multi-word types (Dec, i128, etc.).
@@ -14880,8 +14868,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             }
                         }
                     },
-                    .int_literal, .float_literal, .str_literal, .tag,
-                    .record, .tuple, .list, .as_pattern => unreachable, // Join point params must be simple bindings or wildcards
+                    .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => unreachable, // Join point params must be simple bindings or wildcards
                 }
             }
         }
@@ -14923,8 +14910,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         try temp_infos.append(self.allocator, .{ .offset = 0, .size = 0 });
                         continue;
                     },
-                    .int_literal, .float_literal, .str_literal, .tag,
-                    .record, .tuple, .list, .as_pattern => unreachable,
+                    .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => unreachable,
                 }
 
                 const dst_loc = self.symbol_locations.get(switch (pattern) {
@@ -14981,8 +14967,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     .list_stack => |ls_info| ls_info.struct_offset,
                     .stack_i128 => |off| off,
                     .stack_str => |off| off,
-                    .general_reg, .float_reg, .immediate_i64, .immediate_i128,
-                    .immediate_f64, .closure_value, .lambda_code => unreachable,
+                    .general_reg, .float_reg, .immediate_i64, .immediate_i128, .immediate_f64, .closure_value, .lambda_code => unreachable,
                     .noreturn => unreachable,
                 };
 
@@ -15053,8 +15038,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 const symbol_key: u64 = switch (pattern) {
                     .bind => |bind| @bitCast(bind.symbol),
                     .wildcard => continue,
-                    .int_literal, .float_literal, .str_literal, .tag,
-                    .record, .tuple, .list, .as_pattern => unreachable,
+                    .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => unreachable,
                 };
 
                 const dst_loc = self.symbol_locations.get(symbol_key) orelse continue;
@@ -15081,8 +15065,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     .list_stack => |ls_info| ls_info.struct_offset,
                     .stack_i128 => |off| off,
                     .stack_str => |off| off,
-                    .general_reg, .float_reg, .immediate_i64, .immediate_i128,
-                    .immediate_f64, .closure_value, .lambda_code => unreachable,
+                    .general_reg, .float_reg, .immediate_i64, .immediate_i128, .immediate_f64, .closure_value, .lambda_code => unreachable,
                     .noreturn => unreachable,
                 };
 

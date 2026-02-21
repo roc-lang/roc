@@ -477,6 +477,10 @@ pub const RcInsertPass = struct {
 
     /// Check if a layout needs reference counting (directly or transitively).
     fn layoutNeedsRc(self: *const RcInsertPass, layout_idx: LayoutIdx) bool {
+        // Guard against sentinel/out-of-range layout indices (e.g., named_fn, none)
+        // which can appear for function-typed symbols that don't need RC.
+        const idx_int = @intFromEnum(layout_idx);
+        if (idx_int >= self.layout_store.layouts.len()) return false;
         const l = self.layout_store.getLayout(layout_idx);
         return self.layout_store.layoutContainsRefcounted(l);
     }

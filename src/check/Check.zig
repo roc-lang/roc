@@ -155,6 +155,10 @@ deferred_def_unifications: std.ArrayListUnmanaged(DeferredDefUnification),
 /// Stored here instead of merging eagerly so that ranks remain correct
 /// (no `popRankRetainingVars` needed).
 deferred_cycle_envs: std.ArrayListUnmanaged(Env),
+/// Tracks binop expressions whose dispatch constraints may fail.
+/// After constraint resolution, if the fn_var resolves to .err, the
+/// corresponding expression is marked as erroneous (added to erroneous_exprs).
+binop_dispatch_tracking: std.ArrayListUnmanaged(BinopDispatchEntry),
 
 /// A def + processing data
 const DefProcessed = struct {
@@ -171,6 +175,13 @@ const DeferredDefUnification = struct {
     def_var: Var,
     ptrn_var: Var,
     expr_var: Var,
+};
+
+/// Tracks a binop expression and its dispatch constraint fn_var.
+/// Used to detect failed dispatch after constraint resolution.
+const BinopDispatchEntry = struct {
+    expr_idx: CIR.Expr.Idx,
+    fn_var: Var,
 };
 
 /// A struct scratch info about a static dispatch constraint
@@ -268,6 +279,7 @@ pub fn init(
         .type_writer = try types_mod.TypeWriter.initFromParts(gpa, types, mutable_cir.getIdentStore(), null),
         .deferred_def_unifications = .{},
         .deferred_cycle_envs = .{},
+        .binop_dispatch_tracking = .{},
     };
 }
 
@@ -291,6 +303,7 @@ pub fn deinit(self: *Self) void {
         self.env_pool.release(deferred_env);
     }
     self.deferred_cycle_envs.deinit(self.gpa);
+    self.binop_dispatch_tracking.deinit(self.gpa);
     self.env_pool.deinit();
     self.generalizer.deinit(self.gpa);
     self.var_map.deinit();
@@ -1269,6 +1282,9 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         try self.finalizeNumericDefaultsInternal(&env);
     }
 
+    // Mark binop expressions whose dispatch constraints failed as erroneous
+    try self.markErroneousBinopDispatches();
+
     // After solving all deferred constraints, check for infinite types
     for (defs_slice) |def_idx| {
         try self.checkForInfiniteType(CIR.Def.Idx, def_idx);
@@ -1743,6 +1759,9 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
         try self.checkStaticDispatchConstraints(&env);
         try self.checkAllConstraints(&env);
     }
+
+    // Mark binop expressions whose dispatch constraints failed as erroneous
+    try self.markErroneousBinopDispatches();
 
     // After solving all deferred constraints, check for infinite types
     for (defs_slice) |def_idx| {
@@ -5411,6 +5430,7 @@ fn checkBinopExpr(
                 method_name,
                 env,
                 expr_region,
+                expr_idx,
             );
 
             // Set the expression to redirect to the return type
@@ -5448,6 +5468,7 @@ fn checkBinopExpr(
                 method_name,
                 env,
                 expr_region,
+                expr_idx,
             );
 
             // Set the expression to redirect to the return type
@@ -5479,7 +5500,7 @@ fn checkBinopExpr(
             const eq_ret_var = try self.freshBool(env, expr_region);
 
             // Create the eq static dispatch function: arg.is_eq(arg) -> Bool
-            try self.mkBinopConstraint(eq_arg_var, eq_arg_var, eq_ret_var, eq_method_name, env, expr_region);
+            try self.mkBinopConstraint(eq_arg_var, eq_arg_var, eq_ret_var, eq_method_name, env, expr_region, expr_idx);
 
             // Get the not method + ret var
             const not_method_name = self.cir.idents.not;
@@ -5544,6 +5565,7 @@ fn mkBinopConstraint(
     method_name: Ident.Idx,
     env: *Env,
     region: Region,
+    binop_expr_idx: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -5574,6 +5596,14 @@ fn mkBinopConstraint(
     );
 
     _ = try self.unify(constrained_var, lhs_var, env);
+
+    // Track this binop so we can mark it as erroneous if dispatch fails
+    if (binop_expr_idx) |idx| {
+        try self.binop_dispatch_tracking.append(self.gpa, .{
+            .expr_idx = idx,
+            .fn_var = constraint_fn_var,
+        });
+    }
 }
 
 /// Create a static dispatch fn like: `arg, arg -> ret` and assert the
@@ -5834,6 +5864,19 @@ fn checkAllConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     while (self.constraints.items.items.len > 0) {
         try self.checkConstraints(env);
         try self.checkStaticDispatchConstraints(env);
+    }
+}
+
+/// After constraint resolution, check tracked binop expressions for failed
+/// dispatch. The fn_var of the dispatch constraint is set to .err specifically
+/// when dispatch fails, making this a reliable indicator (unlike expression
+/// type vars which can be poisoned via union-find propagation).
+fn markErroneousBinopDispatches(self: *Self) Allocator.Error!void {
+    for (self.binop_dispatch_tracking.items) |entry| {
+        const resolved = self.types.resolveVar(entry.fn_var);
+        if (resolved.desc.content == .err) {
+            try self.cir.store.erroneous_exprs.put(self.gpa, @intFromEnum(entry.expr_idx), {});
+        }
     }
 }
 

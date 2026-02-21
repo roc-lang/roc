@@ -747,7 +747,9 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
                         // Check if the bound expression is a lambda — if so, compile
                         // as a wasm function and record symbol→func_idx mapping.
                         const stmt_expr = self.store.getExpr(stmt.expr);
-                        if (try self.tryBindFunction(stmt.expr, stmt_expr, bind.symbol)) continue;
+                        if (try self.tryBindFunction(stmt.expr, stmt_expr, bind.symbol)) {
+                            continue;
+                        }
                         // Non-lambda, non-closure, non-function-alias — fall through to value binding
                         {
                             // Check for type representation mismatch: composite expr bound
@@ -4717,6 +4719,11 @@ fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Allocator.Er
     const type_idx = self.module.addFuncType(param_types.items, &.{ret_vt}) catch return error.OutOfMemory;
     const func_idx = self.module.addFunction(type_idx) catch return error.OutOfMemory;
 
+    // Cache the compiled function EARLY (before body compilation) to support
+    // mutual recursion: if this lambda's body calls another lambda that calls
+    // back to this one, the recursive lookup will find this func_idx.
+    self.compiled_lambdas.put(expr_key, func_idx) catch return error.OutOfMemory;
+
     // Store forwarded captures in map for call sites to use
     if (forwarded_captures.items.len > 0) {
         const caps = self.allocator.alloc(ForwardedCapture, forwarded_captures.items.len) catch return error.OutOfMemory;
@@ -4893,9 +4900,6 @@ fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Allocator.Er
     // If the lambda used stack memory, the outer scope needs to know
     if (lambda_used_stack_memory) self.uses_stack_memory = true;
 
-    // Cache the compiled function
-    self.compiled_lambdas.put(expr_key, func_idx) catch return error.OutOfMemory;
-
     return func_idx;
 }
 
@@ -4964,6 +4968,12 @@ fn compileClosure(self: *Self, expr_id: MonoExprId, closure: anytype) Allocator.
         self.resolveValType(lambda.ret_layout);
     const type_idx = self.module.addFuncType(param_types.items, &.{ret_vt}) catch return error.OutOfMemory;
     const func_idx = self.module.addFunction(type_idx) catch return error.OutOfMemory;
+
+    // Cache the compiled closure EARLY (before body compilation) to support
+    // mutual recursion: if this closure's body calls another closure that calls
+    // back to this one, the recursive lookup will find this func_idx.
+    self.compiled_lambdas.put(expr_key, func_idx) catch return error.OutOfMemory;
+
     // Save current codegen state
     const saved = self.saveState() catch return error.OutOfMemory;
 
@@ -5198,20 +5208,26 @@ fn compileClosure(self: *Self, expr_id: MonoExprId, closure: anytype) Allocator.
     // If the closure used stack memory, the outer scope needs to know
     if (closure_used_stack_memory) self.uses_stack_memory = true;
 
-    // Cache
-    self.compiled_lambdas.put(expr_key, func_idx) catch return error.OutOfMemory;
-
     return func_idx;
 }
 
 /// Compile all MonoProcs as separate wasm functions.
 /// Must be called before generateExpr so that call sites can find compiled procs.
 pub fn compileAllProcs(self: *Self, procs: []const MonoProc) Allocator.Error!void {
+    // Two-pass compilation to support mutual recursion.
+    // Pass 1: Register ALL procs (create function types, get func_idx).
+    // This ensures that when compiling any proc body, all sibling procs
+    // are already known and can be called without triggering recursive compilation.
     for (procs) |proc| {
-        self.compileProc(proc) catch {
+        const key: u64 = @bitCast(proc.name);
+        if (self.closure_values.contains(key)) continue;
+        try self.registerProc(proc);
+    }
+    // Pass 2: Compile proc bodies.
+    for (procs) |proc| {
+        self.compileProcBody(proc) catch {
             // Failed to compile proc body (e.g., unsupported callback dispatch).
             // The proc has a trap body set, so it exists but traps when called.
-            // Keep it in closure_values so lookups find it (avoids getSymbolDef fallback).
             continue;
         };
     }
@@ -5299,8 +5315,8 @@ fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: Sym
             // parameter-bound functions (e.g., compose = |f, g| |x| f(g(x))).
             // In that case, register with func_idx=null for deferred compilation
             // at the call site where the actual arguments are known.
-            const fid = self.compileLambda(expr_id, expr.lambda) catch |err| {
-                if (err == error.OutOfMemory) {
+            const fid = self.compileLambda(expr_id, expr.lambda) catch |err| switch (err) {
+                error.OutOfMemory => {
                     self.closure_values.put(key, .{
                         .representation = .{ .direct_call = {} },
                         .stack_offset = 0,
@@ -5309,8 +5325,7 @@ fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: Sym
                         .func_idx = null,
                     }) catch return error.OutOfMemory;
                     return true;
-                }
-                return err;
+                },
             };
             self.closure_values.put(key, .{
                 .representation = .{ .direct_call = {} },
@@ -5592,53 +5607,57 @@ fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: Sym
 }
 
 /// Compile a single MonoProc as a wasm function.
-fn compileProc(self: *Self, proc: MonoProc) Allocator.Error!void {
+/// Register a proc in closure_values (create function type, get func_idx).
+/// Does NOT compile the body — that's done by compileProcBody.
+fn registerProc(self: *Self, proc: MonoProc) Allocator.Error!void {
     const key: u64 = @bitCast(proc.name);
-
-    // Skip if already compiled
-    if (self.closure_values.contains(key)) return;
 
     // Build parameter types: roc_ops_ptr first, then arg_layouts
     const arg_layouts = self.store.getLayoutIdxSpan(proc.arg_layouts);
     var param_types: std.ArrayList(ValType) = .empty;
     defer param_types.deinit(self.allocator);
 
-    // First parameter: roc_ops_ptr (i32)
     param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
-
     for (arg_layouts) |arg_layout| {
         const vt = self.resolveValType(arg_layout);
         param_types.append(self.allocator, vt) catch return error.OutOfMemory;
     }
 
     const ret_vt = self.resolveValType(proc.ret_layout);
-
-    // Create function type and add to module
     const type_idx = self.module.addFuncType(param_types.items, &.{ret_vt}) catch return error.OutOfMemory;
     const func_idx = self.module.addFunction(type_idx) catch return error.OutOfMemory;
-    // Register BEFORE generating body (for recursive calls)
-    const self_cv: ClosureValue = .{
+
+    self.closure_values.put(key, .{
         .representation = .{ .direct_call = {} },
         .stack_offset = 0,
-        .lambda_expr = undefined, // Not used - func_idx is set
+        .lambda_expr = undefined,
         .captures = .{ .start = 0, .len = 0 },
         .func_idx = func_idx,
-    };
-    self.closure_values.put(key, self_cv) catch return error.OutOfMemory;
+    }) catch return error.OutOfMemory;
+}
 
-    // Save current codegen state (clones closure_values for safe restore)
+/// Compile a proc body. The proc must already be registered via registerProc.
+fn compileProcBody(self: *Self, proc: MonoProc) Allocator.Error!void {
+    const key: u64 = @bitCast(proc.name);
+
+    // Get the pre-registered func_idx
+    const self_cv = self.closure_values.get(key) orelse return;
+    const func_idx = self_cv.func_idx orelse return;
+
+    const arg_layouts = self.store.getLayoutIdxSpan(proc.arg_layouts);
+    const ret_vt = self.resolveValType(proc.ret_layout);
+
+    // Save current codegen state
     const saved = self.saveState() catch return error.OutOfMemory;
 
-    // Initialize fresh state with only self-registration (for recursive calls)
+    // Initialize fresh state with ALL registered procs (for mutual recursion)
     self.body = .empty;
     self.storage.locals = std.AutoHashMap(u64, Storage.LocalInfo).init(self.allocator);
     self.storage.next_local_idx = 0;
     self.storage.local_types = .empty;
-    // Free the old closure_values — saveState cloned it independently,
-    // so we must free the original to avoid a memory leak.
-    self.closure_values.deinit();
-    self.closure_values = std.AutoHashMap(u64, ClosureValue).init(self.allocator);
-    self.closure_values.put(key, self_cv) catch return error.OutOfMemory;
+    // Note: closure_values is NOT cleared — all pre-registered procs remain
+    // visible. This is critical for mutual recursion: when compiling is_even's
+    // body, calls to is_odd must find its func_idx without re-compilation.
     self.stack_frame_size = 0;
     self.uses_stack_memory = false;
     self.fp_local = 0;
@@ -6830,6 +6849,13 @@ fn valTypeSize(vt: ValType) u32 {
 /// closure in closure_values, the closure's value is its own inner capture.
 /// Resolve through the closure to find the inner capture's local.
 fn resolveCaptureThroughClosure(self: *Self, symbol: Symbol) ?u32 {
+    return self.resolveCaptureThroughClosureImpl(symbol, 0);
+}
+
+fn resolveCaptureThroughClosureImpl(self: *Self, symbol: Symbol, depth: u32) ?u32 {
+    // Guard against infinite recursion from mutual captures (e.g., is_even captures is_odd,
+    // is_odd captures is_even). A chain longer than 8 means we're in a cycle.
+    if (depth > 8) return null;
     const key: u64 = @bitCast(symbol);
     const cv = self.closure_values.get(key) orelse return null;
     if (cv.representation != .unwrapped_capture) return null;
@@ -6839,7 +6865,7 @@ fn resolveCaptureThroughClosure(self: *Self, symbol: Symbol) ?u32 {
     // Try to find that inner capture as a local.
     return self.storage.getLocal(inner_caps[0].symbol) orelse
         // Recurse: the inner capture might also be an unwrapped_capture closure
-        self.resolveCaptureThroughClosure(inner_caps[0].symbol);
+        self.resolveCaptureThroughClosureImpl(inner_caps[0].symbol, depth + 1);
 }
 
 /// Dispatch a closure call based on its ClosureValue.

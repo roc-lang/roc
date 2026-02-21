@@ -9,13 +9,8 @@
 const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
-const layout_mod = @import("layout");
 const types_mod = @import("types");
 const mono = @import("../mod.zig");
-const can = @import("can");
-
-const Allocator = std.mem.Allocator;
-const LayoutIdx = layout_mod.Idx;
 const MonoSymbol = mono.Symbol;
 const Var = types_mod.Var;
 

@@ -30,7 +30,6 @@ const ModuleEnv = can.ModuleEnv;
 
 const Self = @This();
 
-
 // --- Fields ---
 
 allocator: Allocator,
@@ -274,6 +273,23 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
         // --- Lookups ---
         .e_lookup_local => |lookup| {
             const symbol = try self.patternToSymbol(lookup.pattern_idx);
+
+            // Ensure the local definition is lowered if it's a top-level def.
+            // This is needed so that cross-module lowering (via lowerExternalDef)
+            // properly registers all transitively-referenced definitions.
+            const symbol_key: u64 = @bitCast(symbol);
+            if (!self.lowered_symbols.contains(symbol_key) and !self.in_progress_defs.contains(symbol_key)) {
+                // Find the CIR def for this pattern in the current module
+                const defs = module_env.store.sliceDefs(module_env.all_defs);
+                for (defs) |def_idx| {
+                    const def = module_env.store.getDef(def_idx);
+                    if (def.pattern == lookup.pattern_idx) {
+                        _ = try self.lowerExternalDef(symbol, def.expr);
+                        break;
+                    }
+                }
+            }
+
             return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, monotype, region);
         },
         .e_lookup_external => |ext| {
@@ -285,6 +301,18 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                 .module_idx = target_module_idx,
                 .ident_idx = ext.ident_idx,
             };
+
+            // Ensure the external definition is lowered.
+            const symbol_key: u64 = @bitCast(symbol);
+            if (!self.lowered_symbols.contains(symbol_key) and !self.in_progress_defs.contains(symbol_key)) {
+                const target_env = self.all_module_envs[target_module_idx];
+                if (target_env.store.isDefNode(ext.target_node_idx)) {
+                    const def_idx: CIR.Def.Idx = @enumFromInt(ext.target_node_idx);
+                    const def = target_env.store.getDef(def_idx);
+                    _ = try self.lowerExternalDef(symbol, def.expr);
+                }
+            }
+
             return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, monotype, region);
         },
         .e_lookup_pending => {

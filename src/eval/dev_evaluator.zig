@@ -4,17 +4,14 @@
 //! 1. Parsing source code
 //! 2. Canonicalizing to CIR
 //! 3. Type checking
-//! 4. Lowering to Mono IR (globally unique symbols)
-//! 5. Lambda lifting (moving nested lambdas to top-level)
+//! 4. Lowering to MIR (monomorphized intermediate representation)
+//! 5. Lowering MIR to LIR (low-level IR with globally unique symbols)
 //! 6. Reference counting insertion
 //! 7. Generating native machine code (x86_64/aarch64)
 //! 8. Executing the generated code
 //!
-//! Code generation uses Mono IR with globally unique Symbol references,
+//! Code generation uses LIR with globally unique Symbol references,
 //! eliminating cross-module index collisions.
-//!
-//! The lambda lifting pass (step 5) runs after monomorphization to ensure all
-//! type variables are fully resolved before lambda extraction and captures are computed.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -23,7 +20,10 @@ const can = @import("can");
 const layout = @import("layout");
 const types = @import("types");
 const backend = @import("backend");
-const mono = @import("mono");
+const mir = @import("mir");
+const MIR = mir.MIR;
+const lir = @import("lir");
+const LirExprStore = lir.LirExprStore;
 const builtin_loading = @import("builtin_loading.zig");
 const builtins = @import("builtins");
 const i128h = builtins.compiler_rt_128;
@@ -169,27 +169,20 @@ const RocDbg = builtins.host_abi.RocDbg;
 const RocExpectFailed = builtins.host_abi.RocExpectFailed;
 const RocCrashed = builtins.host_abi.RocCrashed;
 
-// Mono IR types
-const MonoExprStore = mono.MonoExprStore;
-const MonoLower = mono.Lower;
 
 // Static data interner for string literals
 const StaticDataInterner = backend.StaticDataInterner;
 const MemoryBackend = StaticDataInterner.MemoryBackend;
 
-/// Extract the result layout from a Mono IR expression for use as the overall
+/// Extract the result layout from a LIR expression for use as the overall
 /// expression result layout. For blocks and other compound expressions where the
 /// lowerer may have computed the layout from a CIR type variable with Content.err,
 /// this follows through to the final/inner expression to find the true layout.
-fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoExprId) ?layout.Idx {
-    const MonoExpr = mono.MonoIR.MonoExpr;
-    const expr: MonoExpr = store.getExpr(expr_id);
+fn lirExprResultLayout(store: *const LirExprStore, expr_id: lir.LirExprId) ?layout.Idx {
+    const LirExpr = lir.LirExpr;
+    const expr: LirExpr = store.getExpr(expr_id);
     return switch (expr) {
-        // For blocks, the result_layout may be wrong if derived from a CIR type variable
-        // with Content.err. Follow through to the final expression instead.
-        .block => |b| monoExprResultLayout(store, b.final_expr),
-        // Same for if/match — the result_layout may be wrong, but branch bodies
-        // should have the correct layout from their own type variables.
+        .block => |b| lirExprResultLayout(store, b.final_expr),
         .if_then_else => |ite| ite.result_layout,
         .match_expr => |w| w.result_layout,
         .dbg => |d| d.result_layout,
@@ -206,41 +199,36 @@ fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoEx
         .zero_arg_tag => |z| z.union_layout,
         .field_access => |fa| fa.field_layout,
         .tuple_access => |ta| ta.elem_layout,
-        .closure => |c| c.closure_layout,
-        .nominal => |n| monoExprResultLayout(store, n.backing_expr) orelse n.nominal_layout,
-        // Note: .list and .empty_list store element layout, not the overall list layout.
-        // They are handled by the fromTypeVar fallback.
-        // Integer literals don't carry signedness — an i64_literal could be
-        // U8, I32, U128, etc. and an i128_literal could be I128 or U128.
-        // Fall through to fromTypeVar which has the actual type.
+        .closure => |c| store.getClosureData(c).closure_layout,
+        .nominal => |n| lirExprResultLayout(store, n.backing_expr) orelse n.nominal_layout,
+        .discriminant_switch => |ds| ds.result_layout,
         .f64_literal => .f64,
         .f32_literal => .f32,
         .bool_literal => .bool,
         .dec_literal => .dec,
         .str_literal => .str,
+        .i64_literal => .i64,
+        .i128_literal => .i128,
         .unary_not => .bool,
-        // Expressions whose result layout is handled by the fromTypeVar fallback
-        .for_loop,
-        .while_loop,
         .list,
         .empty_list,
         .empty_record,
         .lambda,
         .crash,
         .runtime_error,
+        .hosted_call,
+        .incref,
+        .decref,
+        .free,
+        .for_loop,
+        .while_loop,
         .str_concat,
         .int_to_str,
         .float_to_str,
         .dec_to_str,
         .str_escape_and_quote,
-        .discriminant_switch,
         .tag_payload_access,
-        .hosted_call,
-        .incref,
-        .decref,
-        .free,
-        .i64_literal,
-        .i128_literal,
+        .break_expr,
         => null,
     };
 }
@@ -711,10 +699,6 @@ pub const DevEvaluator = struct {
         // Reset the static bump allocator so each evaluation starts fresh
         DevRocEnv.StaticAlloc.reset();
 
-        // Create a Mono IR store for lowered expressions
-        var mono_store = MonoExprStore.init(self.allocator);
-        defer mono_store.deinit();
-
         // Find the module index for this module
         var module_idx: u32 = 0;
         for (all_module_envs, 0..) |env, i| {
@@ -732,48 +716,49 @@ pub const DevEvaluator = struct {
         // but the global layout store persists. Clear stale cached layouts.
         layout_store_ptr.resetModuleCache(all_module_envs);
 
-        // Create the lowerer
-        // Note: app_module_idx is null for JIT evaluation (no platform/app distinction)
-        // Note: hosted_functions is null because dev evaluator uses interpreter for hosted calls
-        var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, layout_store_ptr, null, null);
-        defer lowerer.deinit();
+        // Lower CIR to MIR
+        var mir_store = MIR.Store.init(self.allocator) catch return error.OutOfMemory;
+        defer mir_store.deinit(self.allocator);
 
-        // Lower CIR expression to Mono IR
-        const lowered_expr_id = lowerer.lowerExpr(module_idx, expr_idx) catch {
-            return error.RuntimeError;
-        };
-
-        // TODO: Polymorphic specialization was removed during lower-mir merge.
-        // The lower-mir branch handles specialization differently.
-
-        // Perform lambda lifting on all expressions
-        // This lifts nested lambdas to top-level after monomorphization
-        var lambda_lifter = mono.LambdaLift.init(
+        var mir_lower = mir.Lower.init(
             self.allocator,
-            &mono_store,
+            &mir_store,
             all_module_envs,
+            &module_env.types,
+            self.builtin_indices,
+            module_idx,
             null, // app_module_idx - not used for JIT evaluation
-            layout_store_ptr,
-            null, // type_store - optional for validation
-        );
-        defer lambda_lifter.deinit();
-        lambda_lifter.liftAllLambdas() catch {
+        ) catch return error.OutOfMemory;
+        defer mir_lower.deinit();
+
+        const mir_expr_id = mir_lower.lowerExpr(expr_idx) catch {
             return error.RuntimeError;
         };
 
-        // Run RC insertion pass on the Mono IR
-        var rc_pass = mono.RcInsert.RcInsertPass.init(self.allocator, &mono_store, layout_store_ptr) catch return error.OutOfMemory;
+        // Lower MIR to LIR
+        var lir_store = LirExprStore.init(self.allocator);
+        defer lir_store.deinit();
+
+        var mir_to_lir = lir.MirToLir.init(self.allocator, &mir_store, &lir_store, layout_store_ptr, module_env, all_module_envs, module_env.idents.true_tag);
+        defer mir_to_lir.deinit();
+
+        const lir_expr_id = mir_to_lir.lower(mir_expr_id) catch {
+            return error.RuntimeError;
+        };
+
+        // Run RC insertion pass on the LIR
+        var rc_pass = lir.RcInsert.RcInsertPass.init(self.allocator, &lir_store, layout_store_ptr) catch return error.OutOfMemory;
         defer rc_pass.deinit();
-        const mono_expr_id = rc_pass.insertRcOps(lowered_expr_id) catch lowered_expr_id;
+        const final_expr_id = rc_pass.insertRcOps(lir_expr_id) catch lir_expr_id;
 
         // Run RC insertion pass on all function definitions (symbol_defs)
         // so that lambda bodies get proper incref/decref annotations.
         {
-            var def_iter = mono_store.symbol_defs.iterator();
+            var def_iter = lir_store.symbol_defs.iterator();
             while (def_iter.next()) |entry| {
-                var fn_rc = mono.RcInsert.RcInsertPass.init(
+                var fn_rc = lir.RcInsert.RcInsertPass.init(
                     self.allocator,
-                    &mono_store,
+                    &lir_store,
                     layout_store_ptr,
                 ) catch continue;
                 defer fn_rc.deinit();
@@ -781,12 +766,12 @@ pub const DevEvaluator = struct {
             }
         }
 
-        // Determine the result layout from the Mono IR expression.
-        // We prefer the layout embedded in the Mono expression because the CIR
+        // Determine the result layout from the LIR expression.
+        // We prefer the layout embedded in the LIR expression because the CIR
         // type variable can have Content.err for expressions involving the `?`
         // operator at top level (where the Err branch desugars to runtime_error).
         const cir_expr = module_env.store.getExpr(expr_idx);
-        const result_layout = monoExprResultLayout(&mono_store, mono_expr_id) orelse blk: {
+        const result_layout = lirExprResultLayout(&lir_store, final_expr_id) orelse blk: {
             // Fallback: resolve from the CIR type variable
             const type_var = can.ModuleEnv.varFrom(expr_idx);
             var type_scope = types.TypeScope.init(self.allocator);
@@ -803,19 +788,19 @@ pub const DevEvaluator = struct {
             1;
 
         // Create the code generator with the layout store
-        // Use HostMonoExprCodeGen since we're executing on the host machine
-        var codegen = try backend.HostMonoExprCodeGen.init(
+        // Use HostLirCodeGen since we're executing on the host machine
+        var codegen = backend.HostLirCodeGen.init(
             self.allocator,
-            &mono_store,
+            &lir_store,
             layout_store_ptr,
             &self.static_interner,
-        );
+        ) catch return error.OutOfMemory;
         defer codegen.deinit();
 
         // Compile all procedures first (for recursive functions)
         // This ensures recursive closures are compiled as complete procedures
         // before we generate calls to them.
-        const procs = mono_store.getProcs();
+        const procs = lir_store.getProcs();
         if (procs.len > 0) {
             codegen.compileAllProcs(procs) catch {
                 return error.RuntimeError;
@@ -823,7 +808,7 @@ pub const DevEvaluator = struct {
         }
 
         // Generate code for the expression
-        const gen_result = codegen.generateCode(mono_expr_id, result_layout, tuple_len) catch {
+        const gen_result = codegen.generateCode(final_expr_id, result_layout, tuple_len) catch {
             return error.RuntimeError;
         };
 

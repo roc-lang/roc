@@ -14,7 +14,6 @@ const layout_mod = @import("layout");
 const mono = @import("../mod.zig");
 const can = @import("can");
 
-const Allocator = std.mem.Allocator;
 const LayoutIdx = layout_mod.Idx;
 const MonoPatternId = mono.MonoPatternId;
 const MonoSymbol = mono.Symbol;
@@ -62,6 +61,7 @@ test "lambda lifting: simple lambda with no captures" {
         .lhs = x_lookup_id,
         .rhs = one_literal_id,
         .result_layout = .i64,
+        .operand_layout = .i64,
     } }, dummy_region);
 
     const lambda_id = try store.addExpr(.{ .lambda = .{
@@ -120,6 +120,7 @@ test "lambda lifting: lambda with single capture" {
         .lhs = y_lookup_id,
         .rhs = x_lookup_id,
         .result_layout = .i64,
+        .operand_layout = .i64,
     } }, dummy_region);
 
     const lambda_id = try store.addExpr(.{ .lambda = .{
@@ -175,6 +176,7 @@ test "lambda lifting: lambda with multiple captures" {
         .lhs = y_lookup,
         .rhs = z_lookup,
         .result_layout = .i64,
+        .operand_layout = .i64,
     } }, dummy_region);
 
     // (y + z) + x
@@ -183,6 +185,7 @@ test "lambda lifting: lambda with multiple captures" {
         .lhs = y_plus_z,
         .rhs = x_lookup,
         .result_layout = .i64,
+        .operand_layout = .i64,
     } }, dummy_region);
 
     const lambda_id = try store.addExpr(.{ .lambda = .{
@@ -233,6 +236,7 @@ test "lambda lifting: nested lambda captures outer scope variables" {
         .lhs = x_from_inner,
         .rhs = y_from_inner,
         .result_layout = .i64,
+        .operand_layout = .i64,
     } }, dummy_region);
 
     // Inner lambda definition
@@ -309,6 +313,7 @@ test "lambda lifting: no duplicate captures" {
         .lhs = y_first,
         .rhs = y_second,
         .result_layout = .i64,
+        .operand_layout = .i64,
     } }, dummy_region);
 
     // (y + y) + z
@@ -317,6 +322,7 @@ test "lambda lifting: no duplicate captures" {
         .lhs = y_plus_y,
         .rhs = z_lookup,
         .result_layout = .i64,
+        .operand_layout = .i64,
     } }, dummy_region);
 
     const lambda_id = try store.addExpr(.{ .lambda = .{
@@ -366,6 +372,7 @@ test "lambda lifting: lifted symbols are unique" {
         .lhs = x1,
         .rhs = one,
         .result_layout = .i64,
+        .operand_layout = .i64,
     } }, dummy_region);
 
     const lambda1 = try store.addExpr(.{ .lambda = .{
@@ -393,6 +400,7 @@ test "lambda lifting: lifted symbols are unique" {
         .lhs = x2,
         .rhs = two,
         .result_layout = .i64,
+        .operand_layout = .i64,
     } }, dummy_region);
 
     const lambda2 = try store.addExpr(.{ .lambda = .{
@@ -492,6 +500,7 @@ test "lambda lifting: captures type information" {
         .lhs = y_lookup,
         .rhs = x_lookup,
         .result_layout = .i64,
+        .operand_layout = .i64,
     } }, dummy_region);
 
     const lambda_id = try store.addExpr(.{ .lambda = .{

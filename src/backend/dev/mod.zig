@@ -59,6 +59,9 @@ pub const MonoExprCodeGen = MonoExprCodeGenMod.MonoExprCodeGen;
 /// Pre-instantiated MonoExprCodeGen for the host platform (the machine running the compiler)
 pub const HostMonoExprCodeGen = MonoExprCodeGenMod.HostMonoExprCodeGen;
 
+/// Pre-instantiated LirCodeGen for the host platform (the machine running the compiler)
+pub const HostLirCodeGen = LirCodeGenMod.HostLirCodeGen;
+
 /// x86_64 Linux with glibc
 pub const X64GlibcMonoExprCodeGen = MonoExprCodeGenMod.X64GlibcMonoExprCodeGen;
 /// x86_64 Linux with musl

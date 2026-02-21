@@ -109,5 +109,4 @@ test "mono tests" {
     std.testing.refAllDecls(RcInsert);
     std.testing.refAllDecls(@import("test/lambda_lift_test.zig"));
     std.testing.refAllDecls(@import("test/specialization_test.zig"));
-    //std.testing.refAllDecls(@import("test/instantiate_test.zig"));
 }

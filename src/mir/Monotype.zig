@@ -408,7 +408,14 @@ pub const Store = struct {
                     try scratches.tags.append(.{ .name = name, .payloads = payloads_span });
                 }
 
-                const tag_span = try self.addTags(allocator, scratches.tags.sliceFromStart(tags_top));
+                // Sort tags alphabetically by name (required by discriminant lookup)
+                const collected_tags = scratches.tags.sliceFromStart(tags_top);
+                std.mem.sort(Tag, collected_tags, {}, struct {
+                    fn cmp(_: void, a: Tag, b: Tag) bool {
+                        return @as(u32, @bitCast(a.name)) < @as(u32, @bitCast(b.name));
+                    }
+                }.cmp);
+                const tag_span = try self.addTags(allocator, collected_tags);
                 self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .tag_union = .{ .tags = tag_span } };
                 return placeholder_idx;
             },

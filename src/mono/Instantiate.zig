@@ -47,27 +47,6 @@ pub const NeededSpecialization = struct {
     lowered: ?ir.MonoExprId = null,
 };
 
-/// Key for the specialization cache: (module_idx, def_expr_idx, concrete_type_var)
-const SpecializationKey = struct {
-    module_idx: u16,
-    def_expr_idx: u32,
-    type_var_u16: u16,
-
-    fn compute(module_idx: u16, def_expr_idx: u32, type_var: types_mod.Var) SpecializationKey {
-        return .{
-            .module_idx = module_idx,
-            .def_expr_idx = def_expr_idx,
-            .type_var_u16 = @truncate(@intFromEnum(type_var)),
-        };
-    }
-
-    fn equals(a: SpecializationKey, b: SpecializationKey) bool {
-        return a.module_idx == b.module_idx and
-               a.def_expr_idx == b.def_expr_idx and
-               a.type_var_u16 == b.type_var_u16;
-    }
-};
-
 allocator: Allocator,
 all_module_envs: []const *ModuleEnv,
 
@@ -112,8 +91,8 @@ pub fn requestSpecialization(
 ) Allocator.Error!MonoSymbol {
     // Create a u64 key for the cache
     const key: u64 = (@as(u64, module_idx) << 48) |
-                     (@as(u64, @intFromEnum(def_expr)) << 16) |
-                     @as(u64, @as(u16, @truncate(@intFromEnum(type_var))));
+        (@as(u64, @intFromEnum(def_expr)) << 16) |
+        @as(u64, @as(u16, @truncate(@intFromEnum(type_var))));
 
     // Check if already specialized
     if (self.cache.get(key)) |symbol| {
