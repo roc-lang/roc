@@ -69,11 +69,13 @@ pub const RcInsertPass = struct {
     /// processEarlyReturn can see the full picture.
     cumulative_consumed_uses: std.AutoHashMap(u64, u32),
 
-    /// Pending branch-level incref adjustments. When processing a branch body,
-    /// wrapBranchWithRcOps will later prepend increfs for symbols used more than
-    /// once in the branch. processEarlyReturn must account for these extra refs
-    /// since the increfs will execute before the early return at runtime.
-    pending_branch_increfs: std.AutoHashMap(u64, u32),
+    /// Pending branch-level RC adjustments. When processing a branch body,
+    /// wrapBranchWithRcOps will later prepend RC ops for symbols:
+    /// - local_count > 1: incref(local_count - 1) → positive adjustment
+    /// - local_count == 0: decref → negative adjustment (-1)
+    /// processEarlyReturn must account for these since they execute before
+    /// the early return at runtime.
+    pending_branch_rc_adj: std.AutoHashMap(u64, i32),
 
     /// Reusable scratch map for counting symbol uses within sub-expressions.
     /// Cleared and reused at each call site, avoiding per-call HashMap allocations.
@@ -104,7 +106,7 @@ pub const RcInsertPass = struct {
             .early_return_scope_base = 0,
             .block_consumed_uses = std.AutoHashMap(u64, u32).init(allocator),
             .cumulative_consumed_uses = std.AutoHashMap(u64, u32).init(allocator),
-            .pending_branch_increfs = std.AutoHashMap(u64, u32).init(allocator),
+            .pending_branch_rc_adj = std.AutoHashMap(u64, i32).init(allocator),
             .scratch_uses = std.AutoHashMap(u64, u32).init(allocator),
             .scratch_keys = try base.Scratch(u64).init(allocator),
         };
@@ -116,7 +118,7 @@ pub const RcInsertPass = struct {
         self.live_rc_symbols.deinit(self.allocator);
         self.block_consumed_uses.deinit();
         self.cumulative_consumed_uses.deinit();
-        self.pending_branch_increfs.deinit();
+        self.pending_branch_rc_adj.deinit();
         self.scratch_uses.deinit();
         self.scratch_keys.deinit();
     }
@@ -130,7 +132,7 @@ pub const RcInsertPass = struct {
         self.live_rc_symbols.clearRetainingCapacity();
         self.block_consumed_uses.clearRetainingCapacity();
         self.cumulative_consumed_uses.clearRetainingCapacity();
-        self.pending_branch_increfs.clearRetainingCapacity();
+        self.pending_branch_rc_adj.clearRetainingCapacity();
         self.scratch_uses.clearRetainingCapacity();
 
         // Phase 1: Count all symbol uses and record layouts
@@ -733,9 +735,9 @@ pub const RcInsertPass = struct {
         for (branches) |branch| {
             self.scratch_uses.clearRetainingCapacity();
             try self.countUsesInto(branch.body, &self.scratch_uses);
-            try self.setPendingBranchIncrefs(&self.scratch_uses, &symbols_in_any_branch);
+            try self.setPendingBranchRcAdj(&self.scratch_uses, &symbols_in_any_branch);
             const processed_body = try self.processExpr(branch.body);
-            self.clearPendingBranchIncrefs();
+            self.clearPendingBranchRcAdj();
             // Re-count: processExpr may have used scratch_uses recursively
             self.scratch_uses.clearRetainingCapacity();
             try self.countUsesInto(branch.body, &self.scratch_uses);
@@ -749,9 +751,9 @@ pub const RcInsertPass = struct {
         // else branch
         self.scratch_uses.clearRetainingCapacity();
         try self.countUsesInto(final_else_id, &self.scratch_uses);
-        try self.setPendingBranchIncrefs(&self.scratch_uses, &symbols_in_any_branch);
+        try self.setPendingBranchRcAdj(&self.scratch_uses, &symbols_in_any_branch);
         const processed_else = try self.processExpr(final_else_id);
-        self.clearPendingBranchIncrefs();
+        self.clearPendingBranchRcAdj();
         self.scratch_uses.clearRetainingCapacity();
         try self.countUsesInto(final_else_id, &self.scratch_uses);
         const new_else = try self.wrapBranchWithRcOps(processed_else, &self.scratch_uses, &symbols_in_any_branch, result_layout, region);
@@ -827,12 +829,12 @@ pub const RcInsertPass = struct {
         defer new_branches.deinit(self.allocator);
 
         for (branches) |branch| {
-            // Count body uses for setPendingBranchIncrefs
+            // Count body uses for setPendingBranchRcAdj
             self.scratch_uses.clearRetainingCapacity();
             try self.countUsesInto(branch.body, &self.scratch_uses);
-            try self.setPendingBranchIncrefs(&self.scratch_uses, &symbols_in_any_branch);
+            try self.setPendingBranchRcAdj(&self.scratch_uses, &symbols_in_any_branch);
             const processed_body = try self.processExpr(branch.body);
-            self.clearPendingBranchIncrefs();
+            self.clearPendingBranchRcAdj();
             const processed_guard = try self.processExpr(branch.guard);
             // Re-count body uses for wrapBranchWithRcOps
             self.scratch_uses.clearRetainingCapacity();
@@ -898,9 +900,9 @@ pub const RcInsertPass = struct {
         for (branches) |br_id| {
             self.scratch_uses.clearRetainingCapacity();
             try self.countUsesInto(br_id, &self.scratch_uses);
-            try self.setPendingBranchIncrefs(&self.scratch_uses, &symbols_in_any_branch);
+            try self.setPendingBranchRcAdj(&self.scratch_uses, &symbols_in_any_branch);
             const processed = try self.processExpr(br_id);
-            self.clearPendingBranchIncrefs();
+            self.clearPendingBranchRcAdj();
             // Re-count: processExpr may have used scratch_uses recursively
             self.scratch_uses.clearRetainingCapacity();
             try self.countUsesInto(br_id, &self.scratch_uses);
@@ -1060,12 +1062,15 @@ pub const RcInsertPass = struct {
         for (live_syms) |live| {
             const key = @as(u64, @bitCast(live.symbol));
             const ret_use_count: u32 = self.scratch_uses.get(key) orelse 0;
-            // Total refs = global_use_count + pending branch increfs.
-            // The branch wrapper will prepend increfs that execute before
-            // the early return, so we must clean those up too.
+            // Total refs = global_use_count + pending branch RC adjustments.
+            // The branch wrapper will prepend RC ops that execute before
+            // the early return: increfs (positive adj) add refs to clean up,
+            // decrefs (negative adj) reduce refs since they're already handled.
             const global_count = self.symbol_use_counts.get(key) orelse 1;
-            const branch_increfs = self.pending_branch_increfs.get(key) orelse 0;
-            const effective_count = global_count + branch_increfs;
+            const branch_adj: i32 = self.pending_branch_rc_adj.get(key) orelse 0;
+            const effective_signed: i32 = @as(i32, @intCast(global_count)) + branch_adj;
+            if (effective_signed <= 0) continue; // branch wrapper decrefs handle all refs
+            const effective_count: u32 = @intCast(effective_signed);
             // Include uses consumed by outer enclosing blocks (cumulative)
             // plus uses consumed by the current inner block's prior statements.
             const consumed_before = (self.cumulative_consumed_uses.get(key) orelse 0) +
@@ -1242,27 +1247,31 @@ pub const RcInsertPass = struct {
         }
     }
 
-    /// Set pending_branch_increfs for a branch body before processExpr.
-    /// This tells processEarlyReturn about increfs that wrapBranchWithRcOps
-    /// will later prepend, so early returns clean up the extra refs.
-    fn setPendingBranchIncrefs(
+    /// Set pending branch RC adjustments for a branch body before processExpr.
+    /// This tells processEarlyReturn about RC ops that wrapBranchWithRcOps
+    /// will later prepend:
+    /// - local_count > 1: incref(local_count - 1) → adjustment = +(local_count - 1)
+    /// - local_count == 0: decref → adjustment = -1
+    fn setPendingBranchRcAdj(
         self: *RcInsertPass,
         local_uses: *const std.AutoHashMap(u64, u32),
         symbols_in_any_branch: *const std.AutoHashMap(u64, void),
     ) Allocator.Error!void {
-        self.pending_branch_increfs.clearRetainingCapacity();
+        self.pending_branch_rc_adj.clearRetainingCapacity();
         var it = symbols_in_any_branch.keyIterator();
         while (it.next()) |key_ptr| {
             const key = key_ptr.*;
             const local_count = local_uses.get(key) orelse 0;
             if (local_count > 1) {
-                try self.pending_branch_increfs.put(key, @intCast(local_count - 1));
+                try self.pending_branch_rc_adj.put(key, @intCast(local_count - 1));
+            } else if (local_count == 0) {
+                try self.pending_branch_rc_adj.put(key, -1);
             }
         }
     }
 
-    fn clearPendingBranchIncrefs(self: *RcInsertPass) void {
-        self.pending_branch_increfs.clearRetainingCapacity();
+    fn clearPendingBranchRcAdj(self: *RcInsertPass) void {
+        self.pending_branch_rc_adj.clearRetainingCapacity();
     }
 
     /// Wrap a branch body with per-branch RC operations.
