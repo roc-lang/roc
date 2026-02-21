@@ -75,6 +75,10 @@ pub const RcInsertPass = struct {
     /// since the increfs will execute before the early return at runtime.
     pending_branch_increfs: std.AutoHashMap(u64, u32),
 
+    /// Reusable scratch map for counting symbol uses within sub-expressions.
+    /// Cleared and reused at each call site, avoiding per-call HashMap allocations.
+    scratch_uses: std.AutoHashMap(u64, u32),
+
     /// Reusable scratch buffer for collecting HashMap keys before sorting.
     /// Used by wrapBranchWithRcOps and wrapGuardWithIncref to ensure
     /// deterministic RC op ordering regardless of HashMap iteration order.
@@ -84,6 +88,10 @@ pub const RcInsertPass = struct {
         symbol: Symbol,
         layout_idx: LayoutIdx,
     };
+
+    comptime {
+        std.debug.assert(@sizeOf(Symbol) == @sizeOf(u64));
+    }
 
     pub fn init(allocator: Allocator, store: *LirExprStore, layout_store: *const layout_mod.Store) Allocator.Error!RcInsertPass {
         return .{
@@ -97,6 +105,7 @@ pub const RcInsertPass = struct {
             .block_consumed_uses = std.AutoHashMap(u64, u32).init(allocator),
             .cumulative_consumed_uses = std.AutoHashMap(u64, u32).init(allocator),
             .pending_branch_increfs = std.AutoHashMap(u64, u32).init(allocator),
+            .scratch_uses = std.AutoHashMap(u64, u32).init(allocator),
             .scratch_keys = try base.Scratch(u64).init(allocator),
         };
     }
@@ -108,12 +117,22 @@ pub const RcInsertPass = struct {
         self.block_consumed_uses.deinit();
         self.cumulative_consumed_uses.deinit();
         self.pending_branch_increfs.deinit();
+        self.scratch_uses.deinit();
         self.scratch_keys.deinit();
     }
 
     /// Main entry point: insert RC operations into a LirExpr tree.
     /// Returns a new LirExprId for the RC-annotated tree.
     pub fn insertRcOps(self: *RcInsertPass, expr_id: LirExprId) Allocator.Error!LirExprId {
+        // Clear all accumulated state so insertRcOps is safe to call multiple times.
+        self.symbol_use_counts.clearRetainingCapacity();
+        self.symbol_layouts.clearRetainingCapacity();
+        self.live_rc_symbols.clearRetainingCapacity();
+        self.block_consumed_uses.clearRetainingCapacity();
+        self.cumulative_consumed_uses.clearRetainingCapacity();
+        self.pending_branch_increfs.clearRetainingCapacity();
+        self.scratch_uses.clearRetainingCapacity();
+
         // Phase 1: Count all symbol uses and record layouts
         try self.countUses(expr_id);
 
@@ -126,14 +145,6 @@ pub const RcInsertPass = struct {
     /// Wrapper around countUsesInto that targets self.symbol_use_counts.
     fn countUses(self: *RcInsertPass, expr_id: LirExprId) Allocator.Error!void {
         try self.countUsesInto(expr_id, &self.symbol_use_counts);
-    }
-
-    /// Count uses into a fresh local map and return it. Caller owns the map.
-    fn countUsesLocal(self: *RcInsertPass, expr_id: LirExprId) Allocator.Error!std.AutoHashMap(u64, u32) {
-        var local = std.AutoHashMap(u64, u32).init(self.allocator);
-        errdefer local.deinit();
-        try self.countUsesInto(expr_id, &local);
-        return local;
     }
 
     /// Count how many times each symbol is referenced, writing into `target`.
@@ -159,10 +170,13 @@ pub const RcInsertPass = struct {
             },
             .block => |block| {
                 const stmts = self.store.getStmts(block.stmts);
+                // Pre-register all pattern symbols so lambdas in early
+                // statements can detect captures from later siblings.
                 for (stmts) |stmt| {
-                    const b = stmt.binding();
-                    try self.registerPatternSymbolInto(b.pattern, target);
-                    try self.countUsesInto(b.expr, target);
+                    try self.registerPatternSymbolInto(stmt.binding().pattern, target);
+                }
+                for (stmts) |stmt| {
+                    try self.countUsesInto(stmt.binding().expr, target);
                 }
                 try self.countUsesInto(block.final_expr, target);
             },
@@ -257,7 +271,8 @@ pub const RcInsertPass = struct {
                     }
                 }
             },
-            .closure => |clo| {
+            .closure => |clo_id| {
+                const clo = self.store.getClosureData(clo_id);
                 try self.countUsesInto(clo.lambda, target);
                 // Each capture consumes a reference to the captured symbol.
                 const captures = self.store.getCaptures(clo.captures);
@@ -410,57 +425,52 @@ pub const RcInsertPass = struct {
         }
     }
 
-    /// Register a pattern's bound symbol with its layout (into self.symbol_use_counts).
-    /// Register a pattern's bound symbol with its layout into a given target map.
-    fn registerPatternSymbolInto(self: *RcInsertPass, pat_id: LirPatternId, target: *std.AutoHashMap(u64, u32)) Allocator.Error!void {
+    /// Walk a pattern tree, calling ctx.onBind(symbol, layout_idx) at each
+    /// .bind and .as_pattern leaf. Handles the full recursion over all pattern
+    /// variants so callers only need to implement the leaf action.
+    fn walkPatternBinds(store: *const LirExprStore, pat_id: LirPatternId, ctx: anytype) Allocator.Error!void {
         if (pat_id.isNone()) return;
-        const pat = self.store.getPattern(pat_id);
+        const pat = store.getPattern(pat_id);
         switch (pat) {
             .bind => |bind| {
-                if (!bind.symbol.isNone()) {
-                    const key = @as(u64, @bitCast(bind.symbol));
-                    try self.symbol_layouts.put(key, bind.layout_idx);
-                    if (!target.contains(key)) {
-                        try target.put(key, 0);
-                    }
-                }
+                if (!bind.symbol.isNone()) try ctx.onBind(bind.symbol, bind.layout_idx);
             },
             .as_pattern => |as_pat| {
-                if (!as_pat.symbol.isNone()) {
-                    const key = @as(u64, @bitCast(as_pat.symbol));
-                    try self.symbol_layouts.put(key, as_pat.layout_idx);
-                    if (!target.contains(key)) {
-                        try target.put(key, 0);
-                    }
-                }
-                try self.registerPatternSymbolInto(as_pat.inner, target);
+                if (!as_pat.symbol.isNone()) try ctx.onBind(as_pat.symbol, as_pat.layout_idx);
+                try walkPatternBinds(store, as_pat.inner, ctx);
             },
-            .tag => |t| {
-                for (self.store.getPatternSpan(t.args)) |arg_pat| {
-                    try self.registerPatternSymbolInto(arg_pat, target);
-                }
+            .tag => |t| for (store.getPatternSpan(t.args)) |a| {
+                try walkPatternBinds(store, a, ctx);
             },
-            .record => |r| {
-                for (self.store.getPatternSpan(r.fields)) |field_pat| {
-                    try self.registerPatternSymbolInto(field_pat, target);
-                }
+            .record => |r| for (store.getPatternSpan(r.fields)) |f| {
+                try walkPatternBinds(store, f, ctx);
             },
-            .tuple => |t| {
-                for (self.store.getPatternSpan(t.elems)) |elem_pat| {
-                    try self.registerPatternSymbolInto(elem_pat, target);
-                }
+            .tuple => |t| for (store.getPatternSpan(t.elems)) |e| {
+                try walkPatternBinds(store, e, ctx);
             },
             .list => |l| {
-                for (self.store.getPatternSpan(l.prefix)) |pre_pat| {
-                    try self.registerPatternSymbolInto(pre_pat, target);
-                }
-                try self.registerPatternSymbolInto(l.rest, target);
-                for (self.store.getPatternSpan(l.suffix)) |suf_pat| {
-                    try self.registerPatternSymbolInto(suf_pat, target);
-                }
+                for (store.getPatternSpan(l.prefix)) |p| try walkPatternBinds(store, p, ctx);
+                try walkPatternBinds(store, l.rest, ctx);
+                for (store.getPatternSpan(l.suffix)) |s| try walkPatternBinds(store, s, ctx);
             },
             .wildcard, .int_literal, .float_literal, .str_literal => {},
         }
+    }
+
+    /// Register a pattern's bound symbol with its layout into a given target map.
+    fn registerPatternSymbolInto(self: *RcInsertPass, pat_id: LirPatternId, target: *std.AutoHashMap(u64, u32)) Allocator.Error!void {
+        const Ctx = struct {
+            pass: *RcInsertPass,
+            target: *std.AutoHashMap(u64, u32),
+            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
+                const key = @as(u64, @bitCast(symbol));
+                try ctx.pass.symbol_layouts.put(key, layout_idx);
+                if (!ctx.target.contains(key)) {
+                    try ctx.target.put(key, 0);
+                }
+            }
+        };
+        try walkPatternBinds(self.store, pat_id, Ctx{ .pass = self, .target = target });
     }
 
     /// Check if a layout needs reference counting (directly or transitively).
@@ -478,11 +488,11 @@ pub const RcInsertPass = struct {
         const region = self.store.getExprRegion(expr_id);
 
         return switch (expr) {
-            .block => |block| self.processBlock(block.stmts, block.final_expr, block.result_layout, region),
+            .block => |block| self.processBlock(expr_id, block.stmts, block.final_expr, block.result_layout, region),
             .if_then_else => |ite| self.processIfThenElse(ite.branches, ite.final_else, ite.result_layout, region),
             .match_expr => |w| self.processMatch(w.value, w.value_layout, w.branches, w.result_layout, region),
             .lambda => |lam| self.processLambda(lam, region, expr_id),
-            .closure => |clo| self.processClosure(clo, region, expr_id),
+            .closure => |clo_id| self.processClosure(self.store.getClosureData(clo_id), region, expr_id),
             .for_loop => |fl| self.processForLoop(fl, region, expr_id),
             .while_loop => |wl| self.processWhileLoop(wl, region, expr_id),
             .discriminant_switch => |ds| self.processDiscriminantSwitch(ds, region),
@@ -536,6 +546,7 @@ pub const RcInsertPass = struct {
     /// and increfs for multi-use symbols.
     fn processBlock(
         self: *RcInsertPass,
+        orig_expr_id: LirExprId,
         stmts_span: LirStmtSpan,
         final_expr: LirExprId,
         result_layout: LayoutIdx,
@@ -601,9 +612,9 @@ pub const RcInsertPass = struct {
             // Track uses consumed by this statement's expression
             // so processEarlyReturn can compute remaining refs.
             {
-                var stmt_uses = try self.countUsesLocal(b.expr);
-                defer stmt_uses.deinit();
-                var use_it = stmt_uses.iterator();
+                self.scratch_uses.clearRetainingCapacity();
+                try self.countUsesInto(b.expr, &self.scratch_uses);
+                var use_it = self.scratch_uses.iterator();
                 while (use_it.next()) |entry| {
                     const gop = try self.block_consumed_uses.getOrPut(entry.key_ptr.*);
                     if (gop.found_existing) {
@@ -651,13 +662,9 @@ pub const RcInsertPass = struct {
             if (stmt_buf.items.len > before_len) changed = true;
         }
 
-        // If nothing changed, return a block with the original data
+        // If nothing changed, return the original expression as-is
         if (!changed) {
-            return self.store.addExpr(.{ .block = .{
-                .stmts = stmts_span,
-                .final_expr = final_expr,
-                .result_layout = result_layout,
-            } }, region);
+            return orig_expr_id;
         }
 
         // Build the new statement span
@@ -690,18 +697,14 @@ pub const RcInsertPass = struct {
         }
         try self.collectExprBoundSymbols(final_else_id, &body_bound);
 
-        // Collect per-branch local use counts and union of all refcounted symbols
-        var branch_use_maps = std.ArrayList(std.AutoHashMap(u64, u32)).empty;
-        defer {
-            for (branch_use_maps.items) |*m| m.deinit();
-            branch_use_maps.deinit(self.allocator);
-        }
+        // Collect union of all refcounted symbols across all branches (using scratch_uses)
         var symbols_in_any_branch = std.AutoHashMap(u64, void).init(self.allocator);
         defer symbols_in_any_branch.deinit();
 
         for (branches) |branch| {
-            var local = try self.countUsesLocal(branch.body);
-            var it = local.keyIterator();
+            self.scratch_uses.clearRetainingCapacity();
+            try self.countUsesInto(branch.body, &self.scratch_uses);
+            var it = self.scratch_uses.keyIterator();
             while (it.next()) |key| {
                 const k = key.*;
                 if (body_bound.contains(k)) continue;
@@ -709,13 +712,12 @@ pub const RcInsertPass = struct {
                     if (self.layoutNeedsRc(lay)) try symbols_in_any_branch.put(k, {});
                 }
             }
-            try branch_use_maps.append(self.allocator, local);
         }
         // else branch
-        var else_uses = try self.countUsesLocal(final_else_id);
-        defer else_uses.deinit();
         {
-            var it = else_uses.keyIterator();
+            self.scratch_uses.clearRetainingCapacity();
+            try self.countUsesInto(final_else_id, &self.scratch_uses);
+            var it = self.scratch_uses.keyIterator();
             while (it.next()) |key| {
                 const k = key.*;
                 if (body_bound.contains(k)) continue;
@@ -728,21 +730,31 @@ pub const RcInsertPass = struct {
         var new_branches = std.ArrayList(LirIfBranch).empty;
         defer new_branches.deinit(self.allocator);
 
-        for (branches, 0..) |branch, i| {
-            try self.setPendingBranchIncrefs(&branch_use_maps.items[i], &symbols_in_any_branch);
+        for (branches) |branch| {
+            self.scratch_uses.clearRetainingCapacity();
+            try self.countUsesInto(branch.body, &self.scratch_uses);
+            try self.setPendingBranchIncrefs(&self.scratch_uses, &symbols_in_any_branch);
             const processed_body = try self.processExpr(branch.body);
             self.clearPendingBranchIncrefs();
-            const new_body = try self.wrapBranchWithRcOps(processed_body, &branch_use_maps.items[i], &symbols_in_any_branch, result_layout, region);
+            // Re-count: processExpr may have used scratch_uses recursively
+            self.scratch_uses.clearRetainingCapacity();
+            try self.countUsesInto(branch.body, &self.scratch_uses);
+            const new_body = try self.wrapBranchWithRcOps(processed_body, &self.scratch_uses, &symbols_in_any_branch, result_layout, region);
             try new_branches.append(self.allocator, .{
                 .cond = branch.cond,
                 .body = new_body,
             });
         }
 
-        try self.setPendingBranchIncrefs(&else_uses, &symbols_in_any_branch);
+        // else branch
+        self.scratch_uses.clearRetainingCapacity();
+        try self.countUsesInto(final_else_id, &self.scratch_uses);
+        try self.setPendingBranchIncrefs(&self.scratch_uses, &symbols_in_any_branch);
         const processed_else = try self.processExpr(final_else_id);
         self.clearPendingBranchIncrefs();
-        const new_else = try self.wrapBranchWithRcOps(processed_else, &else_uses, &symbols_in_any_branch, result_layout, region);
+        self.scratch_uses.clearRetainingCapacity();
+        try self.countUsesInto(final_else_id, &self.scratch_uses);
+        const new_else = try self.wrapBranchWithRcOps(processed_else, &self.scratch_uses, &symbols_in_any_branch, result_layout, region);
 
         const new_branch_span = try self.store.addIfBranches(new_branches.items);
         return self.store.addExpr(.{ .if_then_else = .{
@@ -780,28 +792,16 @@ pub const RcInsertPass = struct {
             try self.collectExprBoundSymbols(branch.body, &body_bound);
         }
 
-        // Collect per-branch body and guard use counts separately.
-        // Both contribute to symbols_in_any_branch (so unused branches decref),
-        // but body uses drive wrapBranchWithRcOps while guard uses get
-        // borrow-style increfs via wrapGuardWithIncref.
-        var body_use_maps = std.ArrayList(std.AutoHashMap(u64, u32)).empty;
-        defer {
-            for (body_use_maps.items) |*m| m.deinit();
-            body_use_maps.deinit(self.allocator);
-        }
-        var guard_use_maps = std.ArrayList(std.AutoHashMap(u64, u32)).empty;
-        defer {
-            for (guard_use_maps.items) |*m| m.deinit();
-            guard_use_maps.deinit(self.allocator);
-        }
+        // Collect union of all refcounted symbols across all branches (using scratch_uses).
+        // Both body and guard symbols contribute so unused branches decref.
         var symbols_in_any_branch = std.AutoHashMap(u64, void).init(self.allocator);
         defer symbols_in_any_branch.deinit();
 
         for (branches) |branch| {
-            var body_local = try self.countUsesLocal(branch.body);
-            var guard_local = try self.countUsesLocal(branch.guard);
-            // Both guard and body symbols contribute to symbols_in_any_branch
-            var it = body_local.keyIterator();
+            // Body symbols
+            self.scratch_uses.clearRetainingCapacity();
+            try self.countUsesInto(branch.body, &self.scratch_uses);
+            var it = self.scratch_uses.keyIterator();
             while (it.next()) |key| {
                 const k = key.*;
                 if (pattern_bound.contains(k)) continue;
@@ -810,7 +810,10 @@ pub const RcInsertPass = struct {
                     if (self.layoutNeedsRc(lay)) try symbols_in_any_branch.put(k, {});
                 }
             }
-            var it2 = guard_local.keyIterator();
+            // Guard symbols
+            self.scratch_uses.clearRetainingCapacity();
+            try self.countUsesInto(branch.guard, &self.scratch_uses);
+            var it2 = self.scratch_uses.keyIterator();
             while (it2.next()) |key| {
                 const k = key.*;
                 if (pattern_bound.contains(k)) continue;
@@ -818,22 +821,27 @@ pub const RcInsertPass = struct {
                     if (self.layoutNeedsRc(lay)) try symbols_in_any_branch.put(k, {});
                 }
             }
-            try body_use_maps.append(self.allocator, body_local);
-            try guard_use_maps.append(self.allocator, guard_local);
         }
 
         var new_branches = std.ArrayList(LirMatchBranch).empty;
         defer new_branches.deinit(self.allocator);
 
-        for (branches, 0..) |branch, i| {
-            try self.setPendingBranchIncrefs(&body_use_maps.items[i], &symbols_in_any_branch);
+        for (branches) |branch| {
+            // Count body uses for setPendingBranchIncrefs
+            self.scratch_uses.clearRetainingCapacity();
+            try self.countUsesInto(branch.body, &self.scratch_uses);
+            try self.setPendingBranchIncrefs(&self.scratch_uses, &symbols_in_any_branch);
             const processed_body = try self.processExpr(branch.body);
             self.clearPendingBranchIncrefs();
             const processed_guard = try self.processExpr(branch.guard);
-            // Body gets per-branch RC ops based on body-only uses
-            const new_body = try self.wrapBranchWithRcOps(processed_body, &body_use_maps.items[i], &symbols_in_any_branch, result_layout, region);
-            // Guard gets borrow-style increfs for symbols it uses
-            const new_guard = try self.wrapGuardWithIncref(processed_guard, &guard_use_maps.items[i], &pattern_bound, region);
+            // Re-count body uses for wrapBranchWithRcOps
+            self.scratch_uses.clearRetainingCapacity();
+            try self.countUsesInto(branch.body, &self.scratch_uses);
+            const new_body = try self.wrapBranchWithRcOps(processed_body, &self.scratch_uses, &symbols_in_any_branch, result_layout, region);
+            // Count guard uses for wrapGuardWithIncref
+            self.scratch_uses.clearRetainingCapacity();
+            try self.countUsesInto(branch.guard, &self.scratch_uses);
+            const new_guard = try self.wrapGuardWithIncref(processed_guard, &self.scratch_uses, &pattern_bound, region);
             try new_branches.append(self.allocator, .{
                 .pattern = branch.pattern,
                 .guard = new_guard,
@@ -864,18 +872,14 @@ pub const RcInsertPass = struct {
             try self.collectExprBoundSymbols(br_id, &body_bound);
         }
 
-        // Collect per-branch local use counts and union of all refcounted symbols
-        var branch_use_maps = std.ArrayList(std.AutoHashMap(u64, u32)).empty;
-        defer {
-            for (branch_use_maps.items) |*m| m.deinit();
-            branch_use_maps.deinit(self.allocator);
-        }
+        // Collect union of all refcounted symbols across all branches (using scratch_uses)
         var symbols_in_any_branch = std.AutoHashMap(u64, void).init(self.allocator);
         defer symbols_in_any_branch.deinit();
 
         for (branches) |br_id| {
-            var local = try self.countUsesLocal(br_id);
-            var it = local.keyIterator();
+            self.scratch_uses.clearRetainingCapacity();
+            try self.countUsesInto(br_id, &self.scratch_uses);
+            var it = self.scratch_uses.keyIterator();
             while (it.next()) |key| {
                 const k = key.*;
                 if (body_bound.contains(k)) continue;
@@ -883,7 +887,6 @@ pub const RcInsertPass = struct {
                     if (self.layoutNeedsRc(lay)) try symbols_in_any_branch.put(k, {});
                 }
             }
-            try branch_use_maps.append(self.allocator, local);
         }
 
         // Process each branch and wrap with per-branch RC ops
@@ -892,11 +895,16 @@ pub const RcInsertPass = struct {
 
         const result_layout: LayoutIdx = ds.result_layout;
 
-        for (branches, 0..) |br_id, i| {
-            try self.setPendingBranchIncrefs(&branch_use_maps.items[i], &symbols_in_any_branch);
+        for (branches) |br_id| {
+            self.scratch_uses.clearRetainingCapacity();
+            try self.countUsesInto(br_id, &self.scratch_uses);
+            try self.setPendingBranchIncrefs(&self.scratch_uses, &symbols_in_any_branch);
             const processed = try self.processExpr(br_id);
             self.clearPendingBranchIncrefs();
-            const wrapped = try self.wrapBranchWithRcOps(processed, &branch_use_maps.items[i], &symbols_in_any_branch, result_layout, region);
+            // Re-count: processExpr may have used scratch_uses recursively
+            self.scratch_uses.clearRetainingCapacity();
+            try self.countUsesInto(br_id, &self.scratch_uses);
+            const wrapped = try self.wrapBranchWithRcOps(processed, &self.scratch_uses, &symbols_in_any_branch, result_layout, region);
             try new_branches.append(self.allocator, wrapped);
         }
 
@@ -925,9 +933,9 @@ pub const RcInsertPass = struct {
 
         const new_body = try self.processExpr(lam.body);
 
-        // Count uses locally within the lambda body
-        var local_uses = try self.countUsesLocal(lam.body);
-        defer local_uses.deinit();
+        // Count uses locally within the lambda body (using scratch_uses)
+        self.scratch_uses.clearRetainingCapacity();
+        try self.countUsesInto(lam.body, &self.scratch_uses);
 
         // Emit RC ops for lambda parameters
         var rc_stmts = std.ArrayList(LirStmt).empty;
@@ -935,7 +943,7 @@ pub const RcInsertPass = struct {
 
         const params = self.store.getPatternSpan(lam.params);
         for (params) |pat_id| {
-            try self.emitRcOpsForPatternInto(pat_id, &local_uses, region, &rc_stmts);
+            try self.emitRcOpsForPatternInto(pat_id, &self.scratch_uses, region, &rc_stmts);
         }
 
         // If RC ops needed, wrap body in a block with RC stmts prepended
@@ -965,7 +973,7 @@ pub const RcInsertPass = struct {
     fn processClosure(self: *RcInsertPass, clo: anytype, region: Region, expr_id: LirExprId) Allocator.Error!LirExprId {
         const new_lambda = try self.processExpr(clo.lambda);
         if (new_lambda != clo.lambda) {
-            return self.store.addExpr(.{ .closure = .{
+            const new_clo_id = try self.store.addClosureData(.{
                 .closure_layout = clo.closure_layout,
                 .lambda = new_lambda,
                 .captures = clo.captures,
@@ -973,7 +981,8 @@ pub const RcInsertPass = struct {
                 .recursion = clo.recursion,
                 .self_recursive = clo.self_recursive,
                 .is_bound_to_variable = clo.is_bound_to_variable,
-            } }, region);
+            });
+            return self.store.addExpr(.{ .closure = new_clo_id }, region);
         }
         return expr_id;
     }
@@ -985,15 +994,15 @@ pub const RcInsertPass = struct {
     fn processForLoop(self: *RcInsertPass, fl: anytype, region: Region, expr_id: LirExprId) Allocator.Error!LirExprId {
         const new_body = try self.processExpr(fl.body);
 
-        // Count uses locally within the loop body
-        var local_uses = try self.countUsesLocal(fl.body);
-        defer local_uses.deinit();
+        // Count uses locally within the loop body (using scratch_uses)
+        self.scratch_uses.clearRetainingCapacity();
+        try self.countUsesInto(fl.body, &self.scratch_uses);
 
         // Emit RC ops for the elem_pattern
         var rc_stmts = std.ArrayList(LirStmt).empty;
         defer rc_stmts.deinit(self.allocator);
 
-        try self.emitRcOpsForPatternInto(fl.elem_pattern, &local_uses, region, &rc_stmts);
+        try self.emitRcOpsForPatternInto(fl.elem_pattern, &self.scratch_uses, region, &rc_stmts);
 
         // If RC ops needed, wrap body in a block with RC stmts prepended
         var final_body = new_body;
@@ -1039,9 +1048,9 @@ pub const RcInsertPass = struct {
         // Recurse into the return value expression
         const new_expr = try self.processExpr(ret.expr);
 
-        // Find which symbols the return expression consumes
-        var ret_uses = try self.countUsesLocal(ret.expr);
-        defer ret_uses.deinit();
+        // Find which symbols the return expression consumes (using scratch_uses)
+        self.scratch_uses.clearRetainingCapacity();
+        try self.countUsesInto(ret.expr, &self.scratch_uses);
 
         // Collect cleanup decrefs for live RC symbols not consumed by the return
         var cleanup_stmts = std.ArrayList(LirStmt).empty;
@@ -1050,7 +1059,7 @@ pub const RcInsertPass = struct {
         const live_syms = self.live_rc_symbols.items[self.early_return_scope_base..];
         for (live_syms) |live| {
             const key = @as(u64, @bitCast(live.symbol));
-            const ret_use_count: u32 = ret_uses.get(key) orelse 0;
+            const ret_use_count: u32 = self.scratch_uses.get(key) orelse 0;
             // Total refs = global_use_count + pending branch increfs.
             // The branch wrapper will prepend increfs that execute before
             // the early return, so we must clean those up too.
@@ -1100,46 +1109,13 @@ pub const RcInsertPass = struct {
 
     /// Collect all symbols bound by a pattern into a set.
     fn collectPatternSymbols(self: *const RcInsertPass, pat_id: LirPatternId, set: *std.AutoHashMap(u64, void)) Allocator.Error!void {
-        if (pat_id.isNone()) return;
-        const pat = self.store.getPattern(pat_id);
-        switch (pat) {
-            .bind => |bind| {
-                if (!bind.symbol.isNone()) {
-                    try set.put(@as(u64, @bitCast(bind.symbol)), {});
-                }
-            },
-            .as_pattern => |as_pat| {
-                if (!as_pat.symbol.isNone()) {
-                    try set.put(@as(u64, @bitCast(as_pat.symbol)), {});
-                }
-                try self.collectPatternSymbols(as_pat.inner, set);
-            },
-            .tag => |t| {
-                for (self.store.getPatternSpan(t.args)) |arg_pat| {
-                    try self.collectPatternSymbols(arg_pat, set);
-                }
-            },
-            .record => |r| {
-                for (self.store.getPatternSpan(r.fields)) |field_pat| {
-                    try self.collectPatternSymbols(field_pat, set);
-                }
-            },
-            .tuple => |t| {
-                for (self.store.getPatternSpan(t.elems)) |elem_pat| {
-                    try self.collectPatternSymbols(elem_pat, set);
-                }
-            },
-            .list => |l| {
-                for (self.store.getPatternSpan(l.prefix)) |pre_pat| {
-                    try self.collectPatternSymbols(pre_pat, set);
-                }
-                try self.collectPatternSymbols(l.rest, set);
-                for (self.store.getPatternSpan(l.suffix)) |suf_pat| {
-                    try self.collectPatternSymbols(suf_pat, set);
-                }
-            },
-            .wildcard, .int_literal, .float_literal, .str_literal => {},
-        }
+        const Ctx = struct {
+            set: *std.AutoHashMap(u64, void),
+            fn onBind(ctx: @This(), symbol: Symbol, _: LayoutIdx) Allocator.Error!void {
+                try ctx.set.put(@as(u64, @bitCast(symbol)), {});
+            }
+        };
+        try walkPatternBinds(self.store, pat_id, Ctx{ .set = set });
     }
 
     /// Collect all symbols bound by patterns within an expression tree.
@@ -1395,96 +1371,33 @@ pub const RcInsertPass = struct {
         region: Region,
         stmts: *std.ArrayList(LirStmt),
     ) Allocator.Error!void {
-        if (pat_id.isNone()) return;
-        const pat = self.store.getPattern(pat_id);
-        switch (pat) {
-            .bind => |bind| {
-                if (!bind.symbol.isNone() and self.layoutNeedsRc(bind.layout_idx)) {
-                    try self.emitDecrefInto(bind.symbol, bind.layout_idx, region, stmts);
+        const Ctx = struct {
+            pass: *RcInsertPass,
+            region: Region,
+            stmts: *std.ArrayList(LirStmt),
+            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
+                if (ctx.pass.layoutNeedsRc(layout_idx)) {
+                    try ctx.pass.emitDecrefInto(symbol, layout_idx, ctx.region, ctx.stmts);
                 }
-            },
-            .as_pattern => |as_pat| {
-                if (!as_pat.symbol.isNone() and self.layoutNeedsRc(as_pat.layout_idx)) {
-                    try self.emitDecrefInto(as_pat.symbol, as_pat.layout_idx, region, stmts);
-                }
-                try self.emitMutateDecrefsForPattern(as_pat.inner, region, stmts);
-            },
-            .tag => |t| {
-                for (self.store.getPatternSpan(t.args)) |arg_pat| {
-                    try self.emitMutateDecrefsForPattern(arg_pat, region, stmts);
-                }
-            },
-            .record => |r| {
-                for (self.store.getPatternSpan(r.fields)) |field_pat| {
-                    try self.emitMutateDecrefsForPattern(field_pat, region, stmts);
-                }
-            },
-            .tuple => |t| {
-                for (self.store.getPatternSpan(t.elems)) |elem_pat| {
-                    try self.emitMutateDecrefsForPattern(elem_pat, region, stmts);
-                }
-            },
-            .list => |l| {
-                for (self.store.getPatternSpan(l.prefix)) |pre_pat| {
-                    try self.emitMutateDecrefsForPattern(pre_pat, region, stmts);
-                }
-                try self.emitMutateDecrefsForPattern(l.rest, region, stmts);
-                for (self.store.getPatternSpan(l.suffix)) |suf_pat| {
-                    try self.emitMutateDecrefsForPattern(suf_pat, region, stmts);
-                }
-            },
-            .wildcard, .int_literal, .float_literal, .str_literal => {},
-        }
+            }
+        };
+        try walkPatternBinds(self.store, pat_id, Ctx{ .pass = self, .region = region, .stmts = stmts });
     }
 
     /// Recursively track live RC symbols for early_return cleanup.
     fn trackLiveRcSymbolsForPattern(self: *RcInsertPass, pat_id: LirPatternId) Allocator.Error!void {
-        if (pat_id.isNone()) return;
-        const pat = self.store.getPattern(pat_id);
-        switch (pat) {
-            .bind => |bind| {
-                if (!bind.symbol.isNone() and self.layoutNeedsRc(bind.layout_idx)) {
-                    try self.live_rc_symbols.append(self.allocator, .{
-                        .symbol = bind.symbol,
-                        .layout_idx = bind.layout_idx,
+        const Ctx = struct {
+            pass: *RcInsertPass,
+            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
+                if (ctx.pass.layoutNeedsRc(layout_idx)) {
+                    try ctx.pass.live_rc_symbols.append(ctx.pass.allocator, .{
+                        .symbol = symbol,
+                        .layout_idx = layout_idx,
                     });
                 }
-            },
-            .as_pattern => |as_pat| {
-                if (!as_pat.symbol.isNone() and self.layoutNeedsRc(as_pat.layout_idx)) {
-                    try self.live_rc_symbols.append(self.allocator, .{
-                        .symbol = as_pat.symbol,
-                        .layout_idx = as_pat.layout_idx,
-                    });
-                }
-                try self.trackLiveRcSymbolsForPattern(as_pat.inner);
-            },
-            .tag => |t| {
-                for (self.store.getPatternSpan(t.args)) |arg_pat| {
-                    try self.trackLiveRcSymbolsForPattern(arg_pat);
-                }
-            },
-            .record => |r| {
-                for (self.store.getPatternSpan(r.fields)) |field_pat| {
-                    try self.trackLiveRcSymbolsForPattern(field_pat);
-                }
-            },
-            .tuple => |t| {
-                for (self.store.getPatternSpan(t.elems)) |elem_pat| {
-                    try self.trackLiveRcSymbolsForPattern(elem_pat);
-                }
-            },
-            .list => |l| {
-                for (self.store.getPatternSpan(l.prefix)) |pre_pat| {
-                    try self.trackLiveRcSymbolsForPattern(pre_pat);
-                }
-                try self.trackLiveRcSymbolsForPattern(l.rest);
-                for (self.store.getPatternSpan(l.suffix)) |suf_pat| {
-                    try self.trackLiveRcSymbolsForPattern(suf_pat);
-                }
-            },
-            .wildcard, .int_literal, .float_literal, .str_literal => {},
-        }
+            }
+        };
+        try walkPatternBinds(self.store, pat_id, Ctx{ .pass = self });
     }
 
     /// Recursively emit increfs for multi-use refcounted symbols bound by a pattern.
@@ -1495,54 +1408,21 @@ pub const RcInsertPass = struct {
         region: Region,
         stmts: *std.ArrayList(LirStmt),
     ) Allocator.Error!void {
-        if (pat_id.isNone()) return;
-        const pat = self.store.getPattern(pat_id);
-        switch (pat) {
-            .bind => |bind| {
-                if (!bind.symbol.isNone() and self.layoutNeedsRc(bind.layout_idx)) {
-                    const key = @as(u64, @bitCast(bind.symbol));
-                    const use_count = self.symbol_use_counts.get(key) orelse 0;
+        const Ctx = struct {
+            pass: *RcInsertPass,
+            region: Region,
+            stmts: *std.ArrayList(LirStmt),
+            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
+                if (ctx.pass.layoutNeedsRc(layout_idx)) {
+                    const key = @as(u64, @bitCast(symbol));
+                    const use_count = ctx.pass.symbol_use_counts.get(key) orelse 0;
                     if (use_count > 1) {
-                        try self.emitIncrefInto(bind.symbol, bind.layout_idx, @intCast(use_count - 1), region, stmts);
+                        try ctx.pass.emitIncrefInto(symbol, layout_idx, @intCast(use_count - 1), ctx.region, ctx.stmts);
                     }
                 }
-            },
-            .as_pattern => |as_pat| {
-                if (!as_pat.symbol.isNone() and self.layoutNeedsRc(as_pat.layout_idx)) {
-                    const key = @as(u64, @bitCast(as_pat.symbol));
-                    const use_count = self.symbol_use_counts.get(key) orelse 0;
-                    if (use_count > 1) {
-                        try self.emitIncrefInto(as_pat.symbol, as_pat.layout_idx, @intCast(use_count - 1), region, stmts);
-                    }
-                }
-                try self.emitBlockIncrefsForPattern(as_pat.inner, region, stmts);
-            },
-            .tag => |t| {
-                for (self.store.getPatternSpan(t.args)) |arg_pat| {
-                    try self.emitBlockIncrefsForPattern(arg_pat, region, stmts);
-                }
-            },
-            .record => |r| {
-                for (self.store.getPatternSpan(r.fields)) |field_pat| {
-                    try self.emitBlockIncrefsForPattern(field_pat, region, stmts);
-                }
-            },
-            .tuple => |t| {
-                for (self.store.getPatternSpan(t.elems)) |elem_pat| {
-                    try self.emitBlockIncrefsForPattern(elem_pat, region, stmts);
-                }
-            },
-            .list => |l| {
-                for (self.store.getPatternSpan(l.prefix)) |pre_pat| {
-                    try self.emitBlockIncrefsForPattern(pre_pat, region, stmts);
-                }
-                try self.emitBlockIncrefsForPattern(l.rest, region, stmts);
-                for (self.store.getPatternSpan(l.suffix)) |suf_pat| {
-                    try self.emitBlockIncrefsForPattern(suf_pat, region, stmts);
-                }
-            },
-            .wildcard, .int_literal, .float_literal, .str_literal => {},
-        }
+            }
+        };
+        try walkPatternBinds(self.store, pat_id, Ctx{ .pass = self, .region = region, .stmts = stmts });
     }
 
     /// Recursively emit decrefs for unused refcounted symbols bound by a pattern.
@@ -1553,54 +1433,21 @@ pub const RcInsertPass = struct {
         region: Region,
         stmts: *std.ArrayList(LirStmt),
     ) Allocator.Error!void {
-        if (pat_id.isNone()) return;
-        const pat = self.store.getPattern(pat_id);
-        switch (pat) {
-            .bind => |bind| {
-                if (!bind.symbol.isNone() and self.layoutNeedsRc(bind.layout_idx)) {
-                    const key = @as(u64, @bitCast(bind.symbol));
-                    const use_count = self.symbol_use_counts.get(key) orelse 0;
+        const Ctx = struct {
+            pass: *RcInsertPass,
+            region: Region,
+            stmts: *std.ArrayList(LirStmt),
+            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
+                if (ctx.pass.layoutNeedsRc(layout_idx)) {
+                    const key = @as(u64, @bitCast(symbol));
+                    const use_count = ctx.pass.symbol_use_counts.get(key) orelse 0;
                     if (use_count == 0) {
-                        try self.emitDecrefInto(bind.symbol, bind.layout_idx, region, stmts);
+                        try ctx.pass.emitDecrefInto(symbol, layout_idx, ctx.region, ctx.stmts);
                     }
                 }
-            },
-            .as_pattern => |as_pat| {
-                if (!as_pat.symbol.isNone() and self.layoutNeedsRc(as_pat.layout_idx)) {
-                    const key = @as(u64, @bitCast(as_pat.symbol));
-                    const use_count = self.symbol_use_counts.get(key) orelse 0;
-                    if (use_count == 0) {
-                        try self.emitDecrefInto(as_pat.symbol, as_pat.layout_idx, region, stmts);
-                    }
-                }
-                try self.emitBlockDecrefsForPattern(as_pat.inner, region, stmts);
-            },
-            .tag => |t| {
-                for (self.store.getPatternSpan(t.args)) |arg_pat| {
-                    try self.emitBlockDecrefsForPattern(arg_pat, region, stmts);
-                }
-            },
-            .record => |r| {
-                for (self.store.getPatternSpan(r.fields)) |field_pat| {
-                    try self.emitBlockDecrefsForPattern(field_pat, region, stmts);
-                }
-            },
-            .tuple => |t| {
-                for (self.store.getPatternSpan(t.elems)) |elem_pat| {
-                    try self.emitBlockDecrefsForPattern(elem_pat, region, stmts);
-                }
-            },
-            .list => |l| {
-                for (self.store.getPatternSpan(l.prefix)) |pre_pat| {
-                    try self.emitBlockDecrefsForPattern(pre_pat, region, stmts);
-                }
-                try self.emitBlockDecrefsForPattern(l.rest, region, stmts);
-                for (self.store.getPatternSpan(l.suffix)) |suf_pat| {
-                    try self.emitBlockDecrefsForPattern(suf_pat, region, stmts);
-                }
-            },
-            .wildcard, .int_literal, .float_literal, .str_literal => {},
-        }
+            }
+        };
+        try walkPatternBinds(self.store, pat_id, Ctx{ .pass = self, .region = region, .stmts = stmts });
     }
 
     /// Recursively emit RC ops for all symbols bound by a pattern.
@@ -1615,58 +1462,24 @@ pub const RcInsertPass = struct {
         region: Region,
         rc_stmts: *std.ArrayList(LirStmt),
     ) Allocator.Error!void {
-        if (pat_id.isNone()) return;
-        const pat = self.store.getPattern(pat_id);
-        switch (pat) {
-            .bind => |bind| {
-                if (!bind.symbol.isNone() and self.layoutNeedsRc(bind.layout_idx)) {
-                    const key = @as(u64, @bitCast(bind.symbol));
-                    const use_count = local_uses.get(key) orelse 0;
+        const Ctx = struct {
+            pass: *RcInsertPass,
+            local_uses: *const std.AutoHashMap(u64, u32),
+            region: Region,
+            rc_stmts: *std.ArrayList(LirStmt),
+            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
+                if (ctx.pass.layoutNeedsRc(layout_idx)) {
+                    const key = @as(u64, @bitCast(symbol));
+                    const use_count = ctx.local_uses.get(key) orelse 0;
                     if (use_count == 0) {
-                        try self.emitDecrefInto(bind.symbol, bind.layout_idx, region, rc_stmts);
+                        try ctx.pass.emitDecrefInto(symbol, layout_idx, ctx.region, ctx.rc_stmts);
                     } else if (use_count > 1) {
-                        try self.emitIncrefInto(bind.symbol, bind.layout_idx, @intCast(use_count - 1), region, rc_stmts);
+                        try ctx.pass.emitIncrefInto(symbol, layout_idx, @intCast(use_count - 1), ctx.region, ctx.rc_stmts);
                     }
                 }
-            },
-            .as_pattern => |as_pat| {
-                if (!as_pat.symbol.isNone() and self.layoutNeedsRc(as_pat.layout_idx)) {
-                    const key = @as(u64, @bitCast(as_pat.symbol));
-                    const use_count = local_uses.get(key) orelse 0;
-                    if (use_count == 0) {
-                        try self.emitDecrefInto(as_pat.symbol, as_pat.layout_idx, region, rc_stmts);
-                    } else if (use_count > 1) {
-                        try self.emitIncrefInto(as_pat.symbol, as_pat.layout_idx, @intCast(use_count - 1), region, rc_stmts);
-                    }
-                }
-                try self.emitRcOpsForPatternInto(as_pat.inner, local_uses, region, rc_stmts);
-            },
-            .tag => |t| {
-                for (self.store.getPatternSpan(t.args)) |arg_pat| {
-                    try self.emitRcOpsForPatternInto(arg_pat, local_uses, region, rc_stmts);
-                }
-            },
-            .record => |r| {
-                for (self.store.getPatternSpan(r.fields)) |field_pat| {
-                    try self.emitRcOpsForPatternInto(field_pat, local_uses, region, rc_stmts);
-                }
-            },
-            .tuple => |t| {
-                for (self.store.getPatternSpan(t.elems)) |elem_pat| {
-                    try self.emitRcOpsForPatternInto(elem_pat, local_uses, region, rc_stmts);
-                }
-            },
-            .list => |l| {
-                for (self.store.getPatternSpan(l.prefix)) |pre_pat| {
-                    try self.emitRcOpsForPatternInto(pre_pat, local_uses, region, rc_stmts);
-                }
-                try self.emitRcOpsForPatternInto(l.rest, local_uses, region, rc_stmts);
-                for (self.store.getPatternSpan(l.suffix)) |suf_pat| {
-                    try self.emitRcOpsForPatternInto(suf_pat, local_uses, region, rc_stmts);
-                }
-            },
-            .wildcard, .int_literal, .float_literal, .str_literal => {},
-        }
+            }
+        };
+        try walkPatternBinds(self.store, pat_id, Ctx{ .pass = self, .local_uses = local_uses, .region = region, .rc_stmts = rc_stmts });
     }
 
     /// Emit an incref statement into a given statement list.
@@ -1924,7 +1737,8 @@ fn countRcOps(store: *const LirExprStore, expr_id: LirExprId) RcOpCounts {
             increfs += sub.increfs;
             decrefs += sub.decrefs;
         },
-        .closure => |clo| {
+        .closure => |clo_id| {
+            const clo = store.getClosureData(clo_id);
             const sub = countRcOps(store, clo.lambda);
             increfs += sub.increfs;
             decrefs += sub.decrefs;
@@ -2448,7 +2262,7 @@ test "RC closure: wrapping lambda gets RC ops" {
     } }, Region.zero());
 
     // Wrap in closure
-    const closure_expr = try env.lir_store.addExpr(.{ .closure = .{
+    const closure_data_id = try env.lir_store.addClosureData(.{
         .closure_layout = i64_layout,
         .lambda = lambda_expr,
         .captures = LIR.LirCaptureSpan.empty(),
@@ -2456,7 +2270,8 @@ test "RC closure: wrapping lambda gets RC ops" {
         .recursion = .not_recursive,
         .self_recursive = .not_self_recursive,
         .is_bound_to_variable = false,
-    } }, Region.zero());
+    });
+    const closure_expr = try env.lir_store.addExpr(.{ .closure = closure_data_id }, Region.zero());
 
     var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
     defer pass.deinit();
@@ -2845,7 +2660,7 @@ test "RC closure: capturing refcounted string gets RC tracking" {
     }});
 
     // Build closure wrapping the lambda with capture of s
-    const closure_expr = try env.lir_store.addExpr(.{ .closure = .{
+    const closure_data_id = try env.lir_store.addClosureData(.{
         .closure_layout = str_layout,
         .lambda = lambda_expr,
         .captures = captures,
@@ -2853,7 +2668,8 @@ test "RC closure: capturing refcounted string gets RC tracking" {
         .recursion = .not_recursive,
         .self_recursive = .not_self_recursive,
         .is_bound_to_variable = false,
-    } }, Region.zero());
+    });
+    const closure_expr = try env.lir_store.addExpr(.{ .closure = closure_data_id }, Region.zero());
 
     // Build block: { s = "hello"; <closure> }
     const str_hello = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());

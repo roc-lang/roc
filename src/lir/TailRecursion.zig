@@ -53,6 +53,7 @@ const CFSwitchBranch = ir.CFSwitchBranch;
 const CFMatchBranch = ir.CFMatchBranch;
 const LayoutIdxSpan = ir.LayoutIdxSpan;
 
+const Region = @import("base").Region;
 const Allocator = std.mem.Allocator;
 
 /// Transforms tail-recursive calls into loops using join points
@@ -91,7 +92,8 @@ pub const TailRecursionPass = struct {
                             return call.args;
                         }
                     },
-                    .closure => |closure| {
+                    .closure => |closure_id| {
+                        const closure = self.store.getClosureData(closure_id);
                         // Check if this closure is the recursive one
                         switch (closure.self_recursive) {
                             .self_recursive => |jp_id| {
@@ -145,7 +147,7 @@ pub const TailRecursionPass = struct {
 
                 // Not a tail call - recurse into next
                 const new_next = try self.transformStmt(let_s.next);
-                if (@intFromEnum(new_next) != @intFromEnum(let_s.next)) {
+                if (new_next != let_s.next) {
                     return try self.store.addCFStmt(.{
                         .let_stmt = .{
                             .pattern = let_s.pattern,
@@ -166,12 +168,12 @@ pub const TailRecursionPass = struct {
                 const branches = self.store.getCFSwitchBranches(sw.branches);
                 for (branches) |branch| {
                     const new_body = try self.transformStmt(branch.body);
-                    if (@intFromEnum(new_body) != @intFromEnum(branch.body)) changed = true;
+                    if (new_body != branch.body) changed = true;
                     try new_branches.append(self.allocator, .{ .value = branch.value, .body = new_body });
                 }
 
                 const new_default = try self.transformStmt(sw.default_branch);
-                if (@intFromEnum(new_default) != @intFromEnum(sw.default_branch)) changed = true;
+                if (new_default != sw.default_branch) changed = true;
 
                 if (changed) {
                     const branch_span = try self.store.addCFSwitchBranches(new_branches.items);
@@ -192,7 +194,7 @@ pub const TailRecursionPass = struct {
                 // Recurse into both body and remainder
                 const new_body = try self.transformStmt(j.body);
                 const new_remainder = try self.transformStmt(j.remainder);
-                if (@intFromEnum(new_body) != @intFromEnum(j.body) or @intFromEnum(new_remainder) != @intFromEnum(j.remainder)) {
+                if (new_body != j.body or new_remainder != j.remainder) {
                     return try self.store.addCFStmt(.{
                         .join = .{
                             .id = j.id,
@@ -228,7 +230,7 @@ pub const TailRecursionPass = struct {
 
             .expr_stmt => |e| {
                 const new_next = try self.transformStmt(e.next);
-                if (@intFromEnum(new_next) != @intFromEnum(e.next)) {
+                if (new_next != e.next) {
                     return try self.store.addCFStmt(.{
                         .expr_stmt = .{ .value = e.value, .next = new_next },
                     });
@@ -245,7 +247,7 @@ pub const TailRecursionPass = struct {
                 const branches = self.store.getCFMatchBranches(ms.branches);
                 for (branches) |branch| {
                     const new_body = try self.transformStmt(branch.body);
-                    if (@intFromEnum(new_body) != @intFromEnum(branch.body)) changed = true;
+                    if (new_body != branch.body) changed = true;
                     try new_branches.append(self.allocator, .{
                         .pattern = branch.pattern,
                         .guard = branch.guard,
@@ -301,8 +303,7 @@ pub fn makeTailRecursive(
     var initial_args = std.ArrayList(LirExprId).empty;
     defer initial_args.deinit(allocator);
 
-    const proc_param_layouts = store.getLayoutIdxSpan(param_layouts);
-    for (param_patterns, 0..) |pattern_id, param_idx| {
+    for (param_patterns) |pattern_id| {
         const pattern = store.getPattern(pattern_id);
         switch (pattern) {
             .bind => |bind| {
@@ -312,18 +313,14 @@ pub fn makeTailRecursive(
                         .symbol = bind.symbol,
                         .layout_idx = bind.layout_idx,
                     },
-                }, @import("base").Region.zero());
+                }, Region.zero());
                 try initial_args.append(allocator, lookup_id);
             },
             .wildcard => {
                 // Wildcard parameter: pass a zero placeholder to maintain arity.
                 // rebindJoinPointParams skips non-bind patterns, so this value
-                // is never stored or used. Use layout-aware zero to avoid type mismatch.
-                const param_layout = proc_param_layouts[param_idx];
-                const placeholder_id = if (param_layout == .i128 or param_layout == .u128 or param_layout == .dec)
-                    try store.addExpr(.{ .i128_literal = 0 }, @import("base").Region.zero())
-                else
-                    try store.addExpr(.{ .i64_literal = 0 }, @import("base").Region.zero());
+                // is never stored or used at runtime.
+                const placeholder_id = try store.addExpr(.{ .i64_literal = 0 }, Region.zero());
                 try initial_args.append(allocator, placeholder_id);
             },
             else => unreachable, // Only bind and wildcard should appear as function params after desugaring
@@ -375,7 +372,7 @@ test "TailRecursionPass: tail call is transformed to jump" {
     // where f is the target symbol => should become a jump
     const allocator = std.testing.allocator;
     const base = @import("base");
-    const Region = base.Region;
+
 
     var store = LirExprStore.init(allocator);
     defer store.deinit();
@@ -437,7 +434,7 @@ test "TailRecursionPass: non-tail call is not transformed" {
     // result != other_symbol, so this is NOT a tail call
     const allocator = std.testing.allocator;
     const base = @import("base");
-    const Region = base.Region;
+
 
     var store = LirExprStore.init(allocator);
     defer store.deinit();
@@ -494,7 +491,7 @@ test "makeTailRecursive: end-to-end transforms tail-recursive body" {
     // makeTailRecursive should wrap it in join/jump
     const allocator = std.testing.allocator;
     const base = @import("base");
-    const Region = base.Region;
+
     const layout = @import("layout");
 
     var store = LirExprStore.init(allocator);
@@ -570,7 +567,7 @@ test "TailRecursionPass: tail call inside switch_stmt branch is transformed" {
     // Branch 0 contains a tail call to f. After transformation, it should become a jump.
     const allocator = std.testing.allocator;
     const base = @import("base");
-    const Region = base.Region;
+
 
     var store = LirExprStore.init(allocator);
     defer store.deinit();
@@ -655,7 +652,7 @@ test "TailRecursionPass: direct ret f(...) is transformed to jump" {
     // The transformStmt .ret case handles this directly.
     const allocator = std.testing.allocator;
     const base = @import("base");
-    const Region = base.Region;
+
 
     var store = LirExprStore.init(allocator);
     defer store.deinit();
@@ -707,7 +704,7 @@ test "TailRecursionPass: call to non-target function is not detected as tail cal
     // where g is a DIFFERENT function from target_sym => should NOT be a tail call
     const allocator = std.testing.allocator;
     const base = @import("base");
-    const Region = base.Region;
+
 
     var store = LirExprStore.init(allocator);
     defer store.deinit();

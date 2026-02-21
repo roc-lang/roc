@@ -154,7 +154,7 @@ fn layoutFromRecord(self: *Self, record: anytype) Allocator.Error!layout.Idx {
     const fields = self.mir_store.monotype_store.getFields(record.fields);
     if (fields.len == 0) return .zst;
 
-    const env = self.layout_store.all_module_envs[self.layout_store.current_module_idx];
+    const env = self.layout_store.currentEnv();
     const save_layouts = self.scratch_layouts.items.len;
     defer self.scratch_layouts.shrinkRetainingCapacity(save_layouts);
     const save_names = self.scratch_field_names.items.len;
@@ -299,7 +299,7 @@ fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
         .dbg_expr => |d| self.lowerDbg(d, mono_idx, region),
         .expect => |e| self.lowerExpect(e, mono_idx, region),
         .for_loop => |f| self.lowerForLoop(f, mono_idx, region),
-        .while_loop => |w| self.lowerWhileLoop(w, region),
+        .while_loop => |w| self.lowerWhileLoop(w, mono_idx, region),
         .return_expr => |r| self.lowerReturn(r, mono_idx, region),
         .break_expr => self.lir_store.addExpr(.break_expr, region),
     };
@@ -563,17 +563,21 @@ fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, region: Region
         if (capture_items.len == 1) {
             // Single capture: unwrapped_capture (zero overhead)
             const cap_layout = capture_items[0].layout_idx;
-            return self.lir_store.addExpr(.{ .closure = .{
+            const closure_data_id = try self.lir_store.addClosureData(.{
                 .closure_layout = cap_layout,
                 .lambda = lambda_expr,
                 .captures = lir_captures,
                 .representation = .{ .unwrapped_capture = .{
                     .capture_layout = cap_layout,
                 } },
+                // Recursion flags default to not_recursive here. The TailRecursion pass
+                // (run after lowering, before RC insertion) analyzes the call graph and
+                // updates these flags for self-recursive closures.
                 .recursion = .not_recursive,
                 .self_recursive = .not_self_recursive,
                 .is_bound_to_variable = false,
-            } }, region);
+            });
+            return self.lir_store.addExpr(.{ .closure = closure_data_id }, region);
         } else {
             // Multiple captures: struct_captures with a tuple layout (positional, no names needed)
             var cap_layout_idxs = std.ArrayList(layout.Idx).empty;
@@ -582,7 +586,7 @@ fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, region: Region
                 try cap_layout_idxs.append(self.allocator, cap.layout_idx);
             }
             const closure_layout = try self.layout_store.putCaptureStruct(cap_layout_idxs.items);
-            return self.lir_store.addExpr(.{ .closure = .{
+            const closure_data_id = try self.lir_store.addClosureData(.{
                 .closure_layout = closure_layout,
                 .lambda = lambda_expr,
                 .captures = lir_captures,
@@ -590,10 +594,14 @@ fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, region: Region
                     .captures = lir_captures,
                     .struct_layout = closure_layout,
                 } },
+                // Recursion flags default to not_recursive here. The TailRecursion pass
+                // (run after lowering, before RC insertion) analyzes the call graph and
+                // updates these flags for self-recursive closures.
                 .recursion = .not_recursive,
                 .self_recursive = .not_self_recursive,
                 .is_bound_to_variable = false,
-            } }, region);
+            });
+            return self.lir_store.addExpr(.{ .closure = closure_data_id }, region);
         }
     }
 
@@ -1134,6 +1142,10 @@ fn lowLevelToBinop(op: CIR.Expr.LowLevel) ?LirExpr.BinOp {
 }
 
 fn lowerHosted(self: *Self, h: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
+    // h.body and h.symbol_name are intentionally unused. The MIR hosted body
+    // just forwards parameters to a host call — we reconstruct that directly
+    // as a hosted_call expression using h.index (the host function's dispatch
+    // index). The string name is only needed for linking, handled separately.
     const fn_layout = try self.layoutFromMonotype(mono_idx);
     const monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
     const ret_layout = switch (monotype) {
@@ -1215,7 +1227,8 @@ fn lowerExpect(self: *Self, e: anytype, mono_idx: Monotype.Idx, region: Region) 
     } }, region);
 }
 
-fn lowerForLoop(self: *Self, f: anytype, _: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
+fn lowerForLoop(self: *Self, f: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
+    std.debug.assert(mono_idx == self.mir_store.monotype_store.unit_idx);
     const lir_list = try self.lowerExpr(f.list);
     const list_mono = self.mir_store.typeOf(f.list);
     const list_monotype = self.mir_store.monotype_store.getMonotype(list_mono);
@@ -1234,7 +1247,8 @@ fn lowerForLoop(self: *Self, f: anytype, _: Monotype.Idx, region: Region) Alloca
     } }, region);
 }
 
-fn lowerWhileLoop(self: *Self, w: anytype, region: Region) Allocator.Error!LirExprId {
+fn lowerWhileLoop(self: *Self, w: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
+    std.debug.assert(mono_idx == self.mir_store.monotype_store.unit_idx);
     const lir_cond = try self.lowerExpr(w.cond);
     const lir_body = try self.lowerExpr(w.body);
 
@@ -2242,7 +2256,8 @@ test "MIR lambda with single capture lowers to closure with unwrapped_capture" {
     // Should produce a closure, not a plain lambda
     try testing.expect(lir_expr == .closure);
     // Single capture → unwrapped_capture representation
-    try testing.expect(lir_expr.closure.representation == .unwrapped_capture);
+    const clo = env.lir_store.getClosureData(lir_expr.closure);
+    try testing.expect(clo.representation == .unwrapped_capture);
 }
 
 test "MIR lambda with multiple captures lowers to closure with struct_captures" {
@@ -2300,7 +2315,8 @@ test "MIR lambda with multiple captures lowers to closure with struct_captures" 
     // Should produce a closure, not a plain lambda
     try testing.expect(lir_expr == .closure);
     // Multiple captures → struct_captures representation
-    try testing.expect(lir_expr.closure.representation == .struct_captures);
+    const clo = env.lir_store.getClosureData(lir_expr.closure);
+    try testing.expect(clo.representation == .struct_captures);
 }
 
 test "MIR record access finds correct field index for non-first field" {
@@ -2779,7 +2795,8 @@ test "MIR lambda with heterogeneous captures (I64 + Str) lowers to closure with 
     // Should produce a closure
     try testing.expect(lir_expr == .closure);
     // Multiple captures → struct_captures representation
-    try testing.expect(lir_expr.closure.representation == .struct_captures);
+    const clo = env.lir_store.getClosureData(lir_expr.closure);
+    try testing.expect(clo.representation == .struct_captures);
 }
 
 test "MIR for_loop lowers to LIR for_loop" {
