@@ -123,6 +123,11 @@ top_level_ptrns: std.AutoHashMap(CIR.Pattern.Idx, DefProcessed),
 enclosing_func_name: ?Ident.Idx,
 /// Type writer for formatting types at snapshot time
 type_writer: types_mod.TypeWriter,
+/// When checking a match that's the body of a lambda with a return type annotation,
+/// this holds the expected return type. Used to detect which match branches have
+/// body types incompatible with the expected return type, BEFORE pairwise unification
+/// poisons all branch body vars via union-find.
+expected_match_ret: ?Var = null,
 
 /// A def + processing data
 const DefProcessed = struct {
@@ -3869,7 +3874,15 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // Check the the body of the expr
             // If we have an expected function, use that as the expr's expected type
             if (mb_anno_func) |expected_func| {
+                // If the body is a match/if expression (possibly nested in a block),
+                // set expected_match_ret so the checker can detect erroneous branches
+                // BEFORE pairwise unification poisons all branch body vars via union-find.
+                const saved_expected = self.expected_match_ret;
+                if (self.findBranchingBodyExpr(lambda.body)) {
+                    self.expected_match_ret = expected_func.ret;
+                }
                 does_fx = try self.checkExpr(lambda.body, env, .no_expectation) or does_fx;
+                self.expected_match_ret = saved_expected;
                 _ = try self.unifyInContext(expected_func.ret, body_var, env, .type_annotation);
             } else {
                 does_fx = try self.checkExpr(lambda.body, env, .no_expectation) or does_fx;
@@ -4703,6 +4716,10 @@ fn checkIfElseExpr(
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    // Consume expected_match_ret so nested if/match don't inherit it
+    const expected_branch_ret = self.expected_match_ret;
+    self.expected_match_ret = null;
+
     const branches = self.cir.store.sliceIfBranches(if_.branches);
 
     // Should never be 0
@@ -4720,6 +4737,14 @@ fn checkIfElseExpr(
 
     // Then we check the 1st branch's body
     does_fx = try self.checkExpr(first_branch.body, env, .no_expectation) or does_fx;
+
+    // Check first branch body against expected return type
+    if (expected_branch_ret) |expected_ret| {
+        const first_body_var = ModuleEnv.varFrom(first_branch.body);
+        if (!self.isCompatibleWithExpected(first_body_var, expected_ret)) {
+            try self.cir.store.erroneous_exprs.put(self.gpa, @intFromEnum(first_branch.body), {});
+        }
+    }
 
     // The 1st branch's body is the type all other branches must match
     const branch_var = @as(Var, ModuleEnv.varFrom(first_branch.body));
@@ -4739,6 +4764,15 @@ fn checkIfElseExpr(
 
         // Check the branch body
         does_fx = try self.checkExpr(branch.body, env, .no_expectation) or does_fx;
+
+        // Check against expected return type BEFORE pairwise unification
+        if (expected_branch_ret) |expected_ret| {
+            const this_body_var = ModuleEnv.varFrom(branch.body);
+            if (!self.isCompatibleWithExpected(this_body_var, expected_ret)) {
+                try self.cir.store.erroneous_exprs.put(self.gpa, @intFromEnum(branch.body), {});
+            }
+        }
+
         const body_var: Var = ModuleEnv.varFrom(branch.body);
         const body_result = try self.unifyInContext(branch_var, body_var, env, .{ .if_branch = .{
             .branch_index = @intCast(cur_index),
@@ -4760,6 +4794,15 @@ fn checkIfElseExpr(
                 _ = try self.unifyInContext(fresh_bool, remaining_cond_var, env, .if_condition);
 
                 does_fx = try self.checkExpr(remaining_branch.body, env, .no_expectation) or does_fx;
+
+                // Check against expected return type before setting to .err
+                if (expected_branch_ret) |expected_ret| {
+                    const rem_body_var = ModuleEnv.varFrom(remaining_branch.body);
+                    if (!self.isCompatibleWithExpected(rem_body_var, expected_ret)) {
+                        try self.cir.store.erroneous_exprs.put(self.gpa, @intFromEnum(remaining_branch.body), {});
+                    }
+                }
+
                 try self.unifyWith(ModuleEnv.varFrom(remaining_branch.body), .err, env);
             }
 
@@ -4772,6 +4815,15 @@ fn checkIfElseExpr(
 
     // Check the final else
     does_fx = try self.checkExpr(if_.final_else, env, .no_expectation) or does_fx;
+
+    // Check final else against expected return type before pairwise unification
+    if (expected_branch_ret) |expected_ret| {
+        const final_else_body_var = ModuleEnv.varFrom(if_.final_else);
+        if (!self.isCompatibleWithExpected(final_else_body_var, expected_ret)) {
+            try self.cir.store.erroneous_exprs.put(self.gpa, @intFromEnum(if_.final_else), {});
+        }
+    }
+
     const final_else_var: Var = ModuleEnv.varFrom(if_.final_else);
     _ = try self.unifyInContext(branch_var, final_else_var, env, .{ .if_branch = .{
         .branch_index = num_branches - 1,
@@ -4796,6 +4848,10 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
     defer trace.end();
 
     const expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(expr_idx));
+
+    // Consume expected_match_ret so nested matches don't inherit it
+    const expected_match_ret = self.expected_match_ret;
+    self.expected_match_ret = null;
 
     // Check the match's condition
     var does_fx = try self.checkExpr(match.cond, env, .no_expectation);
@@ -4866,6 +4922,15 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
 
     // Check the first branch's value, then use that at the branch_var
     does_fx = try self.checkExpr(first_branch.value, env, .no_expectation) or does_fx;
+
+    // Check first branch body against expected return type
+    if (expected_match_ret) |expected_ret| {
+        const first_body_var = ModuleEnv.varFrom(first_branch.value);
+        if (!self.isCompatibleWithExpected(first_body_var, expected_ret)) {
+            try self.cir.store.erroneous_exprs.put(self.gpa, @intFromEnum(first_branch.value), {});
+        }
+    }
+
     const val_var = ModuleEnv.varFrom(first_branch.value);
 
     // Then iterate over the rest of the branches
@@ -4901,6 +4966,17 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
 
         // Then, check the body
         does_fx = try self.checkExpr(branch.value, env, .no_expectation) or does_fx;
+
+        // Check branch body against expected return type BEFORE pairwise unification.
+        // Pairwise unification poisons ALL connected vars via union-find on failure,
+        // making it impossible to distinguish correct from incorrect branches afterward.
+        if (expected_match_ret) |expected_ret| {
+            const body_var = ModuleEnv.varFrom(branch.value);
+            if (!self.isCompatibleWithExpected(body_var, expected_ret)) {
+                try self.cir.store.erroneous_exprs.put(self.gpa, @intFromEnum(branch.value), {});
+            }
+        }
+
         const branch_result = try self.unifyInContext(val_var, ModuleEnv.varFrom(branch.value), env, .{ .match_branch = .{
             .branch_index = @intCast(branch_cur_index),
             .num_branches = @intCast(match.branches.span.len),
@@ -4933,6 +5009,15 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
 
                 // Then check the other branch's exprs
                 does_fx = try self.checkExpr(other_branch.value, env, .no_expectation) or does_fx;
+
+                // Check against expected return type before setting to .err
+                if (expected_match_ret) |expected_ret| {
+                    const other_body_var = ModuleEnv.varFrom(other_branch.value);
+                    if (!self.isCompatibleWithExpected(other_body_var, expected_ret)) {
+                        try self.cir.store.erroneous_exprs.put(self.gpa, @intFromEnum(other_branch.value), {});
+                    }
+                }
+
                 try self.unifyWith(ModuleEnv.varFrom(other_branch.value), .err, env);
             }
 
@@ -6195,6 +6280,50 @@ fn checkFlexVarConstraintCompatibility(self: *Self, var_: Var, env: *Env) Alloca
 /// we should use the annotation type for the pattern instead of the expression type.
 /// This handles cases like `Error -> Error` where the root is a function but the
 /// argument/return types are errors.
+/// Check if a branch body type is compatible with the expected return type.
+/// This is a non-destructive structural check (no unification) used to detect
+/// which match branches have types incompatible with the function's declared
+/// return type. Must be called BEFORE pairwise unification poisons branch vars.
+/// Returns true if the given expression is (or contains as its final expression)
+/// a match or if expression that could have erroneous branches.
+/// Walks through blocks to find the final branching expression.
+fn findBranchingBodyExpr(self: *Self, expr_idx: CIR.Expr.Idx) bool {
+    const expr = self.cir.store.getExpr(expr_idx);
+    return switch (expr) {
+        .e_match, .e_if => true,
+        .e_block => |blk| self.findBranchingBodyExpr(blk.final_expr),
+        else => false,
+    };
+}
+
+fn isCompatibleWithExpected(self: *Self, body_var: Var, expected_var: Var) bool {
+    const body = self.types.resolveVar(body_var);
+    const expected = self.types.resolveVar(expected_var);
+
+    // Same resolved var (unified) → compatible
+    if (body.var_ == expected.var_) return true;
+
+    // If either is .err, assume compatible (don't add additional errors)
+    if (body.desc.content == .err or expected.desc.content == .err) return true;
+
+    // If expected is rigid, body must be the same rigid (checked above, failed)
+    // A concrete type cannot match a rigid at definition level
+    if (expected.desc.content == .rigid) return false;
+
+    // If body is rigid and expected is concrete, also incompatible
+    if (body.desc.content == .rigid) return false;
+
+    // If expected is flex, anything is compatible
+    if (expected.desc.content == .flex) return true;
+
+    // If body is flex, it could be anything - assume compatible
+    if (body.desc.content == .flex) return true;
+
+    // Both concrete: assume compatible (conservative)
+    // A full structural comparison could be added here for more precision
+    return true;
+}
+
 fn varContainsError(self: *Self, var_: Var, visited: *std.AutoHashMap(Var, void)) bool {
     const resolved = self.types.resolveVar(var_);
 

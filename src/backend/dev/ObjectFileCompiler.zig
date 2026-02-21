@@ -139,7 +139,7 @@ fn compileWithCodeGen(
         mono_store,
         layout_store,
         &static_interner,
-    );
+    ) catch return CompilationError.CodeGenerationFailed;
     defer codegen.deinit();
 
     // Set object file mode to generate relocatable symbol references instead of direct pointers

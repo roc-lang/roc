@@ -5,11 +5,16 @@
 //! 2. Canonicalizing to CIR
 //! 3. Type checking
 //! 4. Lowering to Mono IR (globally unique symbols)
-//! 5. Generating native machine code (x86_64/aarch64)
-//! 6. Executing the generated code
+//! 5. Lambda lifting (moving nested lambdas to top-level)
+//! 6. Reference counting insertion
+//! 7. Generating native machine code (x86_64/aarch64)
+//! 8. Executing the generated code
 //!
 //! Code generation uses Mono IR with globally unique Symbol references,
 //! eliminating cross-module index collisions.
+//!
+//! The lambda lifting pass (step 5) runs after monomorphization to ensure all
+//! type variables are fully resolved before lambda extraction and captures are computed.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -186,7 +191,7 @@ fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoEx
         // Same for if/match — the result_layout may be wrong, but branch bodies
         // should have the correct layout from their own type variables.
         .if_then_else => |ite| ite.result_layout,
-        .when => |w| w.result_layout,
+        .match_expr => |w| w.result_layout,
         .dbg => |d| d.result_layout,
         .expect => |e| e.result_layout,
         .binop => |b| b.result_layout,
@@ -202,18 +207,41 @@ fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoEx
         .field_access => |fa| fa.field_layout,
         .tuple_access => |ta| ta.elem_layout,
         .closure => |c| c.closure_layout,
-        .nominal => |n| n.nominal_layout,
+        .nominal => |n| monoExprResultLayout(store, n.backing_expr) orelse n.nominal_layout,
         // Note: .list and .empty_list store element layout, not the overall list layout.
         // They are handled by the fromTypeVar fallback.
-        .i64_literal => .i64,
+        // Integer literals don't carry signedness — an i64_literal could be
+        // U8, I32, U128, etc. and an i128_literal could be I128 or U128.
+        // Fall through to fromTypeVar which has the actual type.
         .f64_literal => .f64,
         .f32_literal => .f32,
         .bool_literal => .bool,
-        .i128_literal => .i128,
         .dec_literal => .dec,
         .str_literal => .str,
         .unary_not => .bool,
-        else => null,
+        // Expressions whose result layout is handled by the fromTypeVar fallback
+        .for_loop,
+        .while_loop,
+        .list,
+        .empty_list,
+        .empty_record,
+        .lambda,
+        .crash,
+        .runtime_error,
+        .str_concat,
+        .int_to_str,
+        .float_to_str,
+        .dec_to_str,
+        .str_escape_and_quote,
+        .discriminant_switch,
+        .tag_payload_access,
+        .hosted_call,
+        .incref,
+        .decref,
+        .free,
+        .i64_literal,
+        .i128_literal,
+        => null,
     };
 }
 
@@ -300,19 +328,26 @@ const DevRocEnv = struct {
             }
             return 0;
         }
+
+        fn reset() void {
+            offset = 0;
+            alloc_count = 0;
+        }
     };
 
     /// Allocation function for RocOps.
     fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.c) void {
-        _ = env; // unused with static buffer workaround
-
         // Align the offset to the requested alignment
         const alignment = roc_alloc.alignment;
         const mask = alignment - 1;
         const aligned_offset = (StaticAlloc.offset + mask) & ~mask;
 
         if (aligned_offset + roc_alloc.length > StaticAlloc.buffer.len) {
-            @panic("DevRocEnv: static buffer overflow");
+            const self: *DevRocEnv = @ptrCast(@alignCast(env));
+            self.crashed = true;
+            if (self.crash_message) |old| self.allocator.free(old);
+            self.crash_message = self.allocator.dupe(u8, "static buffer overflow in alloc") catch null;
+            longjmp(&self.jmp_buf, 1);
         }
 
         const ptr: [*]u8 = @ptrCast(&StaticAlloc.buffer[aligned_offset]);
@@ -332,14 +367,18 @@ const DevRocEnv = struct {
 
     /// Reallocation function for RocOps.
     /// With static buffer, we allocate new space and copy data (old space is not reclaimed).
-    fn rocReallocFn(roc_realloc: *RocRealloc, _: *anyopaque) callconv(.c) void {
+    fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.c) void {
         // Align the offset to the requested alignment
         const alignment = roc_realloc.alignment;
         const mask = alignment - 1;
         const aligned_offset = (StaticAlloc.offset + mask) & ~mask;
 
         if (aligned_offset + roc_realloc.new_length > StaticAlloc.buffer.len) {
-            @panic("DevRocEnv: static buffer overflow in realloc");
+            const self: *DevRocEnv = @ptrCast(@alignCast(env));
+            self.crashed = true;
+            if (self.crash_message) |old| self.allocator.free(old);
+            self.crash_message = self.allocator.dupe(u8, "static buffer overflow in realloc") catch null;
+            longjmp(&self.jmp_buf, 1);
         }
 
         const new_ptr: [*]u8 = @ptrCast(&StaticAlloc.buffer[aligned_offset]);
@@ -544,6 +583,14 @@ pub const DevEvaluator = struct {
     pub fn callWithCrashProtection(self: *DevEvaluator, executable: *const backend.ExecutableMemory, result_ptr: *anyopaque) error{ RocCrashed, Segfault }!void {
         self.roc_env.crashed = false;
 
+        if (comptime builtin.mode == .Debug) {
+            builtins.utils.DebugRefcountTracker.enable();
+        }
+        defer if (comptime builtin.mode == .Debug) {
+            _ = builtins.utils.DebugRefcountTracker.reportLeaks();
+            builtins.utils.DebugRefcountTracker.disable();
+        };
+
         // On Windows, install the VEH handler to catch segfaults
         const veh_handle = WindowsSEH.install(&self.roc_env.jmp_buf);
         defer WindowsSEH.remove(veh_handle);
@@ -661,6 +708,9 @@ pub const DevEvaluator = struct {
         expr_idx: CIR.Expr.Idx,
         all_module_envs: []const *ModuleEnv,
     ) Error!CodeResult {
+        // Reset the static bump allocator so each evaluation starts fresh
+        DevRocEnv.StaticAlloc.reset();
+
         // Create a Mono IR store for lowered expressions
         var mono_store = MonoExprStore.init(self.allocator);
         defer mono_store.deinit();
@@ -678,7 +728,11 @@ pub const DevEvaluator = struct {
         // This is a single store shared across all modules for cross-module correctness
         const layout_store_ptr = try self.ensureGlobalLayoutStore(all_module_envs);
 
-        // Create the lowerer with the layout store
+        // In REPL sessions, module type stores get fresh type variables on each evaluation,
+        // but the global layout store persists. Clear stale cached layouts.
+        layout_store_ptr.resetModuleCache(all_module_envs);
+
+        // Create the lowerer
         // Note: app_module_idx is null for JIT evaluation (no platform/app distinction)
         // Note: hosted_functions is null because dev evaluator uses interpreter for hosted calls
         var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, layout_store_ptr, null, null);
@@ -689,10 +743,43 @@ pub const DevEvaluator = struct {
             return error.RuntimeError;
         };
 
+        // TODO: Polymorphic specialization was removed during lower-mir merge.
+        // The lower-mir branch handles specialization differently.
+
+        // Perform lambda lifting on all expressions
+        // This lifts nested lambdas to top-level after monomorphization
+        var lambda_lifter = mono.LambdaLift.init(
+            self.allocator,
+            &mono_store,
+            all_module_envs,
+            null, // app_module_idx - not used for JIT evaluation
+            layout_store_ptr,
+            null, // type_store - optional for validation
+        );
+        defer lambda_lifter.deinit();
+        lambda_lifter.liftAllLambdas() catch {
+            return error.RuntimeError;
+        };
+
         // Run RC insertion pass on the Mono IR
-        var rc_pass = mono.RcInsert.RcInsertPass.init(self.allocator, &mono_store, layout_store_ptr);
+        var rc_pass = mono.RcInsert.RcInsertPass.init(self.allocator, &mono_store, layout_store_ptr) catch return error.OutOfMemory;
         defer rc_pass.deinit();
         const mono_expr_id = rc_pass.insertRcOps(lowered_expr_id) catch lowered_expr_id;
+
+        // Run RC insertion pass on all function definitions (symbol_defs)
+        // so that lambda bodies get proper incref/decref annotations.
+        {
+            var def_iter = mono_store.symbol_defs.iterator();
+            while (def_iter.next()) |entry| {
+                var fn_rc = mono.RcInsert.RcInsertPass.init(
+                    self.allocator,
+                    &mono_store,
+                    layout_store_ptr,
+                ) catch continue;
+                defer fn_rc.deinit();
+                entry.value_ptr.* = fn_rc.insertRcOps(entry.value_ptr.*) catch entry.value_ptr.*;
+            }
+        }
 
         // Determine the result layout from the Mono IR expression.
         // We prefer the layout embedded in the Mono expression because the CIR
@@ -717,7 +804,7 @@ pub const DevEvaluator = struct {
 
         // Create the code generator with the layout store
         // Use HostMonoExprCodeGen since we're executing on the host machine
-        var codegen = backend.HostMonoExprCodeGen.init(
+        var codegen = try backend.HostMonoExprCodeGen.init(
             self.allocator,
             &mono_store,
             layout_store_ptr,

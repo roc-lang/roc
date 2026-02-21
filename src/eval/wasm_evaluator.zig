@@ -36,7 +36,7 @@ fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoEx
     return switch (expr) {
         .block => |b| monoExprResultLayout(store, b.final_expr),
         .if_then_else => |ite| ite.result_layout,
-        .when => |w| w.result_layout,
+        .match_expr => |w| w.result_layout,
         .dbg => |d| d.result_layout,
         .expect => |e| e.result_layout,
         .binop => |b| b.result_layout,
@@ -52,7 +52,6 @@ fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoEx
         .field_access => |fa| fa.field_layout,
         .tuple_access => |ta| ta.elem_layout,
         .closure => |c| c.closure_layout,
-        .nominal => |n| monoExprResultLayout(store, n.backing_expr) orelse n.nominal_layout,
         .i64_literal => .i64,
         .f64_literal => .f64,
         .f32_literal => .f32,
@@ -61,7 +60,28 @@ fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoEx
         .dec_literal => .dec,
         .str_literal => .str,
         .unary_not => .bool,
-        else => null,
+        // Expressions whose result layout is handled by the fromTypeVar fallback
+        .nominal,
+        .for_loop,
+        .while_loop,
+        .list,
+        .empty_list,
+        .empty_record,
+        .lambda,
+        .crash,
+        .runtime_error,
+        .str_concat,
+        .int_to_str,
+        .float_to_str,
+        .dec_to_str,
+        .str_escape_and_quote,
+        .discriminant_switch,
+        .tag_payload_access,
+        .hosted_call,
+        .incref,
+        .decref,
+        .free,
+        => null,
     };
 }
 
@@ -174,8 +194,23 @@ pub const WasmEvaluator = struct {
             return error.RuntimeError;
         };
 
+        // Perform lambda lifting on all expressions
+        // This lifts nested lambdas to top-level after monomorphization
+        var lambda_lifter = mono.LambdaLift.init(
+            self.allocator,
+            &mono_store,
+            all_module_envs,
+            null, // app_module_idx - not used for Wasm evaluation
+            layout_store_ptr,
+            null, // type_store - optional for validation
+        );
+        defer lambda_lifter.deinit();
+        lambda_lifter.liftAllLambdas() catch {
+            return error.RuntimeError;
+        };
+
         // Run RC insertion pass
-        var rc_pass = mono.RcInsert.RcInsertPass.init(self.allocator, &mono_store, layout_store_ptr);
+        var rc_pass = mono.RcInsert.RcInsertPass.init(self.allocator, &mono_store, layout_store_ptr) catch return error.OutOfMemory;
         defer rc_pass.deinit();
         const mono_expr_id = rc_pass.insertRcOps(lowered_expr_id) catch lowered_expr_id;
 
@@ -196,9 +231,10 @@ pub const WasmEvaluator = struct {
         else
             1;
 
-        // Generate wasm module
+        // Generate wasm module with lambda lifting info
         var codegen = WasmCodeGen.init(self.allocator, &mono_store, layout_store_ptr);
         codegen.wasm_stack_bytes = self.wasm_stack_bytes;
+        codegen.lambda_lifter = &lambda_lifter;
         defer codegen.deinit();
 
         const gen_result = codegen.generateModule(mono_expr_id, result_layout) catch {

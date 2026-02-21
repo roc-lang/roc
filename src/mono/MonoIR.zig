@@ -69,7 +69,7 @@ pub const MonoExprSpan = extern struct {
     len: u16,
 
     pub fn empty() MonoExprSpan {
-        return .{ .start = undefined, .len = 0 };
+        return .{ .start = 0, .len = 0 };
     }
 
     pub fn isEmpty(self: MonoExprSpan) bool {
@@ -85,7 +85,7 @@ pub const MonoPatternSpan = extern struct {
     len: u16,
 
     pub fn empty() MonoPatternSpan {
-        return .{ .start = undefined, .len = 0 };
+        return .{ .start = 0, .len = 0 };
     }
 
     pub fn isEmpty(self: MonoPatternSpan) bool {
@@ -101,7 +101,7 @@ pub const MonoCaptureSpan = extern struct {
     len: u16,
 
     pub fn empty() MonoCaptureSpan {
-        return .{ .start = undefined, .len = 0 };
+        return .{ .start = 0, .len = 0 };
     }
 };
 
@@ -137,7 +137,7 @@ pub const ClosureRepresentation = union(enum) {
         /// Number of functions in the set
         num_functions: u16,
         /// This function's tag value (position in lambda set)
-        tag: u8,
+        tag: u16,
         /// All members of the lambda set (for dispatch at call sites)
         lambda_set: LambdaSetMemberSpan,
     },
@@ -202,7 +202,7 @@ pub const LambdaSetMemberSpan = extern struct {
     len: u16,
 
     pub fn empty() LambdaSetMemberSpan {
-        return .{ .start = undefined, .len = 0 };
+        return .{ .start = 0, .len = 0 };
     }
 
     pub fn isEmpty(self: LambdaSetMemberSpan) bool {
@@ -245,18 +245,18 @@ pub const SelfRecursive = union(enum) {
     self_recursive: JoinPointId,
 };
 
-/// Span of when branches
-pub const MonoWhenBranchSpan = extern struct {
+/// Span of match branches
+pub const MonoMatchBranchSpan = extern struct {
     start: u32,
     len: u16,
 
-    pub fn empty() MonoWhenBranchSpan {
-        return .{ .start = undefined, .len = 0 };
+    pub fn empty() MonoMatchBranchSpan {
+        return .{ .start = 0, .len = 0 };
     }
 };
 
-/// A branch in a when/match expression
-pub const MonoWhenBranch = struct {
+/// A branch in a match expression
+pub const MonoMatchBranch = struct {
     /// Pattern to match against
     pattern: MonoPatternId,
     /// Optional guard expression (must evaluate to Bool)
@@ -271,7 +271,7 @@ pub const MonoIfBranchSpan = extern struct {
     len: u16,
 
     pub fn empty() MonoIfBranchSpan {
-        return .{ .start = undefined, .len = 0 };
+        return .{ .start = 0, .len = 0 };
     }
 
     pub fn isEmpty(self: MonoIfBranchSpan) bool {
@@ -291,7 +291,7 @@ pub const MonoStmtSpan = extern struct {
     len: u16,
 
     pub fn empty() MonoStmtSpan {
-        return .{ .start = undefined, .len = 0 };
+        return .{ .start = 0, .len = 0 };
     }
 };
 
@@ -307,7 +307,7 @@ pub const MonoFieldNameSpan = extern struct {
     len: u16,
 
     pub fn empty() MonoFieldNameSpan {
-        return .{ .start = undefined, .len = 0 };
+        return .{ .start = 0, .len = 0 };
     }
 };
 
@@ -455,13 +455,13 @@ pub const MonoExpr = union(enum) {
         result_layout: layout.Idx,
     },
 
-    /// When/match expression
-    when: struct {
+    /// Match expression
+    match_expr: struct {
         /// Value being matched
         value: MonoExprId,
         value_layout: layout.Idx,
         /// Branches to try
-        branches: MonoWhenBranchSpan,
+        branches: MonoMatchBranchSpan,
         result_layout: layout.Idx,
     },
 
@@ -484,6 +484,7 @@ pub const MonoExpr = union(enum) {
         lhs: MonoExprId,
         rhs: MonoExprId,
         result_layout: layout.Idx,
+        operand_layout: layout.Idx,
     },
 
     /// Unary minus/negation
@@ -650,7 +651,7 @@ pub const MonoExpr = union(enum) {
         mul,
         div,
         div_trunc, // Truncating division (integer division)
-        mod,
+        rem, // Remainder (truncates toward zero, like C's %)
 
         // Comparison
         eq,
@@ -709,6 +710,7 @@ pub const MonoExpr = union(enum) {
         list_drop_last,
         list_take_first,
         list_take_last,
+        list_sublist,
         list_contains,
         list_reverse,
         list_reserve,
@@ -1111,7 +1113,7 @@ pub const LayoutIdxSpan = extern struct {
     len: u16,
 
     pub fn empty() LayoutIdxSpan {
-        return .{ .start = undefined, .len = 0 };
+        return .{ .start = 0, .len = 0 };
     }
 
     pub fn isEmpty(self: LayoutIdxSpan) bool {
@@ -1133,10 +1135,34 @@ pub const CFSwitchBranchSpan = extern struct {
     len: u16,
 
     pub fn empty() CFSwitchBranchSpan {
-        return .{ .start = undefined, .len = 0 };
+        return .{ .start = 0, .len = 0 };
     }
 
     pub fn isEmpty(self: CFSwitchBranchSpan) bool {
+        return self.len == 0;
+    }
+};
+
+/// A branch in a control flow match statement (pattern matching)
+pub const CFMatchBranch = struct {
+    /// The pattern to match against
+    pattern: MonoPatternId,
+    /// Optional guard expression (MonoExprId.none if no guard)
+    guard: MonoExprId,
+    /// The statement body for this branch
+    body: CFStmtId,
+};
+
+/// Span of control flow match branches
+pub const CFMatchBranchSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() CFMatchBranchSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: CFMatchBranchSpan) bool {
         return self.len == 0;
     }
 };
@@ -1204,6 +1230,18 @@ pub const CFStmt = union(enum) {
         branches: CFSwitchBranchSpan,
         /// Default branch (if no match)
         default_branch: CFStmtId,
+        /// Layout of the result
+        ret_layout: layout.Idx,
+    },
+
+    /// Pattern match statement (for `when` expressions in tail position)
+    match_stmt: struct {
+        /// The value being matched
+        value: MonoExprId,
+        /// Layout of the value being matched
+        value_layout: layout.Idx,
+        /// Pattern match branches
+        branches: CFMatchBranchSpan,
         /// Layout of the result
         ret_layout: layout.Idx,
     },

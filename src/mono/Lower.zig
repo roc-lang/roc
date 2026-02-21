@@ -40,7 +40,7 @@ const MonoFieldNameSpan = ir.MonoFieldNameSpan;
 const Symbol = ir.Symbol;
 const MonoCapture = ir.MonoCapture;
 const MonoCaptureSpan = ir.MonoCaptureSpan;
-const MonoWhenBranch = ir.MonoWhenBranch;
+const MonoMatchBranch = ir.MonoMatchBranch;
 const ClosureRepresentation = ir.ClosureRepresentation;
 const Recursive = ir.Recursive;
 const SelfRecursive = ir.SelfRecursive;
@@ -51,6 +51,7 @@ const MonoStmt = ir.MonoStmt;
 // Control flow statement types (for tail recursion)
 const CFStmtId = ir.CFStmtId;
 const CFSwitchBranch = ir.CFSwitchBranch;
+const CFMatchBranch = ir.CFMatchBranch;
 const LayoutIdxSpan = ir.LayoutIdxSpan;
 const MonoProc = ir.MonoProc;
 
@@ -457,6 +458,45 @@ fn getBlockLayout(self: *Self, module_env: *ModuleEnv, block: anytype) LayoutIdx
 
     // Return the layout of the final expression using type variable
     return self.getExprLayoutFromIdx(module_env, block.final_expr);
+}
+
+/// Get the return layout for a lambda expression.
+/// First tries the body expression's type variable. If that resolves to a flex/rigid
+/// variable (unresolved), falls back to extracting the return type from the lambda's
+/// function type, which is more reliably resolved by type inference.
+fn getLambdaRetLayout(self: *Self, module_env: *ModuleEnv, lambda_expr_idx: CIR.Expr.Idx, body_expr_idx: CIR.Expr.Idx) LayoutIdx {
+    // First, try to get the layout from the body expression's type variable
+    const body_ret_layout = self.getExprLayoutFromIdx(module_env, body_expr_idx);
+
+    // Check if the body's type variable resolved to a concrete type
+    const body_tv = ModuleEnv.varFrom(body_expr_idx);
+    const resolved_body = module_env.types.resolveVar(body_tv);
+    if (resolved_body.desc.content != .flex and resolved_body.desc.content != .rigid) {
+        return body_ret_layout;
+    }
+
+    // Body type is unresolved (flex/rigid). Try to extract the return type
+    // from the lambda expression's function type instead.
+    var lambda_tv = ModuleEnv.varFrom(lambda_expr_idx);
+    if (self.layout_var_overrides.count() > 0) {
+        const resolved = module_env.types.resolveVar(lambda_tv);
+        if (self.layout_var_overrides.get(resolved.var_)) |override_var| {
+            lambda_tv = override_var;
+        }
+    }
+    const resolved_lambda = module_env.types.resolveVar(lambda_tv);
+    if (resolved_lambda.desc.content == .structure) {
+        const flat_type = resolved_lambda.desc.content.structure;
+        const func = switch (flat_type) {
+            .fn_pure, .fn_effectful, .fn_unbound => |f| f,
+            else => return body_ret_layout,
+        };
+        // Use the function's return type variable to compute the ret_layout
+        const ls = self.layout_store orelse return body_ret_layout;
+        return ls.fromTypeVar(self.current_module_idx, func.ret, &self.type_scope, self.type_scope_caller_module) catch body_ret_layout;
+    }
+
+    return body_ret_layout;
 }
 
 /// Get layout for an expression from its index using the global layout store.
@@ -2413,7 +2453,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const params = try self.lowerPatternSpan(module_env, lambda.args);
 
             const body = try self.lowerExprFromIdx(module_env, lambda.body);
-            const ret_layout = self.getExprLayoutFromIdx(module_env, lambda.body);
+            const ret_layout = self.getLambdaRetLayout(module_env, expr_idx, lambda.body);
             const fn_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
 
             break :blk .{
@@ -2521,8 +2561,22 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
         },
 
         .e_record => |rec| blk: {
-            const result = try self.lowerRecordFields(module_env, rec.fields);
             const record_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
+
+            // Handle record update syntax: {..base, field1: val1, ...}
+            // When ext is set, fields not explicitly listed must be copied from the base.
+            if (rec.ext) |ext_expr_idx| {
+                const result = try self.lowerRecordWithSpread(module_env, rec.fields, ext_expr_idx, record_layout, expr_idx);
+                break :blk .{
+                    .record = .{
+                        .record_layout = record_layout,
+                        .fields = result.fields,
+                        .field_names = result.field_names,
+                    },
+                };
+            }
+
+            const result = try self.lowerRecordFields(module_env, rec.fields);
             break :blk .{
                 .record = .{
                     .record_layout = record_layout,
@@ -3000,7 +3054,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                     }
                 }
             }
-            break :blk .{
+            const field_access_expr: ir.MonoExpr = .{
                 .field_access = .{
                     .record_expr = receiver,
                     .record_layout = receiver_layout,
@@ -3009,6 +3063,64 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                     .field_name = dot.field_name,
                 },
             };
+
+            // If dot.args has elements, wrap the field access in a call
+            // (e.g., rec.add_a(5) where rec is a plain record with closure fields)
+            if (dot.args) |arg_span| {
+                const arg_slice = module_env.store.sliceExpr(arg_span);
+                if (arg_slice.len > 0) {
+                    const fn_expr_id = try self.store.addExpr(field_access_expr, region);
+                    var all_args = std.ArrayList(ir.MonoExprId).empty;
+                    defer all_args.deinit(self.allocator);
+                    for (arg_slice) |arg_idx| {
+                        try all_args.append(self.allocator, try self.lowerExprFromIdx(module_env, arg_idx));
+                    }
+                    const args_span = try self.store.addExprSpan(all_args.items);
+                    // Compute ret_layout: first try the CIR expression's type.
+                    // If the type resolves to err (type checker can't type record
+                    // field method calls), derive from the lowered closure's lambda.
+                    var call_ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
+                    const ret_tv = ModuleEnv.varFrom(expr_idx);
+                    const ret_resolved = module_env.types.resolveVar(ret_tv);
+                    if (ret_resolved.desc.content == .err) {
+                        // Look up the already-lowered record's field closure to
+                        // get the lambda's ret_layout.
+                        const recv_expr = self.store.getExpr(receiver);
+                        const rec_def_id = if (recv_expr == .lookup)
+                            self.store.getSymbolDef(recv_expr.lookup.symbol)
+                        else
+                            null;
+                        if (rec_def_id) |rid| {
+                            const rec_def = self.store.getExpr(rid);
+                            if (rec_def == .record) {
+                                const rec_fields = self.store.getExprSpan(rec_def.record.fields);
+                                if (field_idx < rec_fields.len) {
+                                    const fld = self.store.getExpr(rec_fields[field_idx]);
+                                    if (fld == .closure) {
+                                        const inner = self.store.getExpr(fld.closure.lambda);
+                                        if (inner == .lambda) {
+                                            call_ret_layout = inner.lambda.ret_layout;
+                                        }
+                                    } else if (fld == .lambda) {
+                                        call_ret_layout = fld.lambda.ret_layout;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    break :blk .{
+                        .call = .{
+                            .fn_expr = fn_expr_id,
+                            .fn_layout = field_layout,
+                            .args = args_span,
+                            .ret_layout = call_ret_layout,
+                            .called_via = .apply,
+                        },
+                    };
+                }
+            }
+
+            break :blk field_access_expr;
         },
 
         .e_zero_argument_tag => |tag| blk: {
@@ -3090,9 +3202,9 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
         .e_match => |match_expr| blk: {
             const cond = try self.lowerExprFromIdx(module_env, match_expr.cond);
-            const branches = try self.lowerWhenBranches(module_env, match_expr.branches);
+            const branches = try self.lowerMatchBranches(module_env, match_expr.branches);
             break :blk .{
-                .when = .{
+                .match_expr = .{
                     .value = cond,
                     .value_layout = self.getExprLayoutFromIdx(module_env, match_expr.cond),
                     .branches = branches,
@@ -3125,11 +3237,28 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const lhs = try self.lowerExprFromIdx(module_env, binop.lhs);
             const rhs = try self.lowerExprFromIdx(module_env, binop.rhs);
             const op = cirBinopToMonoBinop(binop.op);
+            // For numeric binops, result_layout == operand layout.
+            // If the CIR type resolves to err (e.g., from record field
+            // method calls that the type checker can't resolve), derive
+            // from the lowered lhs expression's layout.
+            var result_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
+            const binop_tv = ModuleEnv.varFrom(expr_idx);
+            const binop_resolved = module_env.types.resolveVar(binop_tv);
+            if (binop_resolved.desc.content == .err) {
+                const lhs_expr = self.store.getExpr(lhs);
+                result_layout = switch (lhs_expr) {
+                    .call => |c| c.ret_layout,
+                    .binop => |b| b.result_layout,
+                    .lookup => |l| l.layout_idx,
+                    else => result_layout,
+                };
+            }
             break :blk .{ .binop = .{
                 .op = op,
                 .lhs = lhs,
                 .rhs = rhs,
-                .result_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
+                .result_layout = result_layout,
+                .operand_layout = self.getExprLayoutFromIdx(module_env, binop.lhs),
             } };
         },
 
@@ -3576,6 +3705,85 @@ fn lowerRecordFields(self: *Self, module_env: *ModuleEnv, fields: CIR.RecordFiel
     };
 }
 
+/// Lower a record expression with spread syntax: {..base, field1: val1, ...}
+/// Expands the spread by generating field_access expressions for fields
+/// not explicitly listed, then merges with the explicit fields.
+fn lowerRecordWithSpread(
+    self: *Self,
+    module_env: *ModuleEnv,
+    explicit_fields: CIR.RecordField.Span,
+    ext_expr_idx: CIR.Expr.Idx,
+    record_layout: LayoutIdx,
+    record_expr_idx: CIR.Expr.Idx,
+) Allocator.Error!LowerRecordFieldsResult {
+    const ls = self.layout_store orelse return self.lowerRecordFields(module_env, explicit_fields);
+    const layout_val = ls.getLayout(record_layout);
+    if (layout_val.tag != .record) return self.lowerRecordFields(module_env, explicit_fields);
+
+    // Get all fields from the record layout (sorted by alignment desc, then alphabetically)
+    const record_data = ls.getRecordData(layout_val.data.record.idx);
+    const layout_fields = ls.record_fields.sliceRange(record_data.getFields());
+
+    // Collect explicit field names
+    const explicit_indices = module_env.store.sliceRecordFields(explicit_fields);
+    var explicit_names = std.ArrayList([]const u8).empty;
+    defer explicit_names.deinit(self.allocator);
+    for (explicit_indices) |field_idx| {
+        const field = module_env.store.getRecordField(field_idx);
+        try explicit_names.append(self.allocator, module_env.getIdent(field.name));
+    }
+
+    // Lower the base/ext expression
+    const ext_mono = try self.lowerExprFromIdx(module_env, ext_expr_idx);
+    const ext_layout = self.getExprLayoutFromIdx(module_env, ext_expr_idx);
+    const region = module_env.store.getExprRegion(record_expr_idx);
+
+    // Build complete field list: for each field in the layout, use explicit value
+    // if provided, otherwise create a field_access on the base record.
+    var lowered = std.ArrayList(MonoExprId).empty;
+    defer lowered.deinit(self.allocator);
+    var names = std.ArrayList(base.Ident.Idx).empty;
+    defer names.deinit(self.allocator);
+
+    var field_idx: u16 = 0;
+    while (field_idx < layout_fields.len) : (field_idx += 1) {
+        const layout_field = layout_fields.get(field_idx);
+        const layout_field_name = ls.getFieldName(layout_field.name);
+
+        // Check if this field is explicitly set
+        var found_explicit = false;
+        for (explicit_indices) |ei| {
+            const ef = module_env.store.getRecordField(ei);
+            if (std.mem.eql(u8, module_env.getIdent(ef.name), layout_field_name)) {
+                // Explicitly set — lower the value expression
+                const id = try self.lowerExprFromIdx(module_env, ef.value);
+                try lowered.append(self.allocator, id);
+                try names.append(self.allocator, ef.name);
+                found_explicit = true;
+                break;
+            }
+        }
+
+        if (!found_explicit) {
+            // Not explicitly set — create field_access(ext, field_idx)
+            const field_access_expr = try self.store.addExpr(.{ .field_access = .{
+                .record_expr = ext_mono,
+                .record_layout = ext_layout,
+                .field_layout = layout_field.layout,
+                .field_idx = field_idx,
+                .field_name = layout_field.name,
+            } }, region);
+            try lowered.append(self.allocator, field_access_expr);
+            try names.append(self.allocator, layout_field.name);
+        }
+    }
+
+    return .{
+        .fields = self.store.addExprSpan(lowered.items) catch return error.OutOfMemory,
+        .field_names = self.store.addFieldNameSpan(names.items) catch return error.OutOfMemory,
+    };
+}
+
 /// Lower a pattern
 fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Idx) Allocator.Error!MonoPatternId {
     const pattern = module_env.store.getPattern(pattern_idx);
@@ -3621,16 +3829,55 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
         },
 
         .record_destructure => |r| blk: {
-            // Record destructures contain RecordDestruct entries, not direct patterns
-            // For now, we create binding patterns for each destruct entry
+            // Record destructures contain RecordDestruct entries, not direct patterns.
+            // Must be sorted to match layout order (alignment desc, then alphabetical)
+            // because the backend accesses fields by index into the sorted layout.
             const destruct_indices = module_env.store.sliceRecordDestructs(r.destructs);
-            var field_patterns = std.ArrayList(MonoPatternId).empty;
-            defer field_patterns.deinit(self.allocator);
+
+            const DestructPair = struct {
+                label: base.Ident.Idx,
+                destruct_idx: CIR.Pattern.RecordDestruct.Idx,
+                alignment: u32,
+            };
+
+            var pairs = std.ArrayList(DestructPair).empty;
+            defer pairs.deinit(self.allocator);
 
             for (destruct_indices) |destruct_idx| {
                 const destruct = module_env.store.getRecordDestruct(destruct_idx);
-                // Create a binding pattern for this destruct
-                // Both Required and SubPattern contain a pattern index
+                // Get alignment from the field's pattern layout
+                const sub_pattern_idx = destruct.kind.toPatternIdx();
+                const field_layout_idx = self.getPatternLayout(sub_pattern_idx);
+                const alignment: u32 = if (self.layout_store) |ls| a_blk: {
+                    const field_layout = ls.getLayout(field_layout_idx);
+                    break :a_blk @intCast(ls.layoutSizeAlign(field_layout).alignment.toByteUnits());
+                } else 1;
+                try pairs.append(self.allocator, .{
+                    .label = destruct.label,
+                    .destruct_idx = destruct_idx,
+                    .alignment = alignment,
+                });
+            }
+
+            // Sort by alignment descending, then alphabetically - matching lowerRecordFields
+            const SortCtx = struct {
+                env: *ModuleEnv,
+                pub fn lessThan(ctx: @This(), a: DestructPair, b: DestructPair) bool {
+                    if (a.alignment != b.alignment) {
+                        return a.alignment > b.alignment;
+                    }
+                    const a_str = ctx.env.getIdent(a.label);
+                    const b_str = ctx.env.getIdent(b.label);
+                    return std.mem.order(u8, a_str, b_str) == .lt;
+                }
+            };
+            std.mem.sort(DestructPair, pairs.items, SortCtx{ .env = module_env }, SortCtx.lessThan);
+
+            var field_patterns = std.ArrayList(MonoPatternId).empty;
+            defer field_patterns.deinit(self.allocator);
+
+            for (pairs.items) |pair| {
+                const destruct = module_env.store.getRecordDestruct(pair.destruct_idx);
                 const sub_pattern_idx = destruct.kind.toPatternIdx();
                 const lowered_id = try self.lowerPattern(module_env, sub_pattern_idx);
                 try field_patterns.append(self.allocator, lowered_id);
@@ -4187,7 +4434,8 @@ fn lowerExprWithLambdaSet(
                 },
             };
 
-            return self.store.addExpr(mono_expr, Region.zero());
+            const result_id = try self.store.addExpr(mono_expr, Region.zero());
+            return result_id;
         },
         .e_lambda => |lambda| {
             // Lambda without captures - use enum_dispatch
@@ -4329,23 +4577,18 @@ fn computeUnionLayout(self: *Self, ls: *LayoutStore, members: []const ir.LambdaS
     return try ls.putCaptureUnion(S.variants_buf[0..variant_count]);
 }
 
-/// Lower when/match branches
-fn lowerWhenBranches(self: *Self, module_env: *ModuleEnv, branches: CIR.Expr.Match.Branch.Span) Allocator.Error!ir.MonoWhenBranchSpan {
+/// Lower match branches
+fn lowerMatchBranches(self: *Self, module_env: *ModuleEnv, branches: CIR.Expr.Match.Branch.Span) Allocator.Error!ir.MonoMatchBranchSpan {
     const branch_indices = module_env.store.sliceMatchBranches(branches);
 
-    var lowered = std.ArrayList(MonoWhenBranch).empty;
+    var lowered = std.ArrayList(MonoMatchBranch).empty;
     defer lowered.deinit(self.allocator);
 
     for (branch_indices) |branch_idx| {
         const branch = module_env.store.getMatchBranch(branch_idx);
 
-        // Match branches can have multiple patterns (for or-patterns like `A | B => ...`)
-        // For now, we lower just the first pattern
         const pattern_indices = module_env.store.sliceMatchBranchPatterns(branch.patterns);
         if (pattern_indices.len == 0) continue;
-
-        const first_bp = module_env.store.getMatchBranchPattern(pattern_indices[0]);
-        const pattern = try self.lowerPattern(module_env, first_bp.pattern);
 
         const guard = if (branch.guard) |guard_idx|
             try self.lowerExprFromIdx(module_env, guard_idx)
@@ -4353,14 +4596,18 @@ fn lowerWhenBranches(self: *Self, module_env: *ModuleEnv, branches: CIR.Expr.Mat
             MonoExprId.none;
         const body = try self.lowerExprFromIdx(module_env, branch.value);
 
-        try lowered.append(self.allocator, .{
-            .pattern = pattern,
-            .guard = guard,
-            .body = body,
-        });
+        for (pattern_indices) |pat_idx| {
+            const bp = module_env.store.getMatchBranchPattern(pat_idx);
+            const pattern = try self.lowerPattern(module_env, bp.pattern);
+            try lowered.append(self.allocator, .{
+                .pattern = pattern,
+                .guard = guard,
+                .body = body,
+            });
+        }
     }
 
-    return self.store.addWhenBranches(lowered.items);
+    return self.store.addMatchBranches(lowered.items);
 }
 
 /// Lower statements in a block
@@ -4522,7 +4769,7 @@ fn cirBinopToMonoBinop(op: CIR.Expr.Binop.Op) MonoExpr.BinOp {
         .sub => .sub,
         .mul => .mul,
         .div => .div,
-        .rem => .mod,
+        .rem => .rem,
         .eq => .eq,
         .ne => .neq,
         .lt => .lt,
@@ -5148,6 +5395,7 @@ fn lowerExprToStmt(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, 
     return switch (expr) {
         .e_block => |block| try self.lowerBlockToStmt(module_env, block, ret_layout),
         .e_if => |ite| try self.lowerIfToSwitchStmt(module_env, ite, ret_layout),
+        .e_match => |match_expr| try self.lowerMatchToStmt(module_env, match_expr, ret_layout, expr_idx),
         else => {
             // For other expressions, wrap in a return statement
             const expr_id = try self.lowerExprInner(module_env, expr, region, expr_idx);
@@ -5268,6 +5516,83 @@ fn lowerIfToSwitchStmt(self: *Self, module_env: *ModuleEnv, ite: anytype, ret_la
     }
 
     return else_stmt;
+}
+
+/// Lower a match expression to a match control flow statement.
+/// Each branch body is lowered as a statement (not an expression), so tail calls
+/// inside `when` branches can be detected and optimized.
+fn lowerMatchToStmt(self: *Self, module_env: *ModuleEnv, match_expr: anytype, ret_layout: LayoutIdx, expr_idx: CIR.Expr.Idx) Allocator.Error!CFStmtId {
+    // Lower the scrutinee
+    const cond = try self.lowerExprFromIdx(module_env, match_expr.cond);
+    const value_layout = self.getExprLayoutFromIdx(module_env, match_expr.cond);
+    const result_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
+
+    // Lower branches — each body is lowered as a CF statement
+    const branch_indices = module_env.store.sliceMatchBranches(match_expr.branches);
+
+    var lowered = std.ArrayList(CFMatchBranch).empty;
+    defer lowered.deinit(self.allocator);
+
+    var has_complex_pattern = false;
+
+    for (branch_indices) |branch_idx| {
+        const branch = module_env.store.getMatchBranch(branch_idx);
+
+        const pattern_indices = module_env.store.sliceMatchBranchPatterns(branch.patterns);
+        if (pattern_indices.len == 0) continue;
+
+        const guard = if (branch.guard) |guard_idx|
+            try self.lowerExprFromIdx(module_env, guard_idx)
+        else
+            MonoExprId.none;
+
+        // Key difference from lowerMatchBranches: lower body as statement, not expression
+        const body = try self.lowerExprToStmt(module_env, branch.value, ret_layout);
+
+        // Flatten OR patterns (one CFMatchBranch per pattern)
+        for (pattern_indices) |pat_idx| {
+            const bp = module_env.store.getMatchBranchPattern(pat_idx);
+            const pattern = try self.lowerPattern(module_env, bp.pattern);
+
+            // Check if this pattern type is supported in CFStmt match_stmt.
+            // Complex patterns (record, tuple, list, as_pattern, str_literal, float_literal)
+            // require full expression-level match handling.
+            switch (self.store.getPattern(pattern)) {
+                .bind, .wildcard, .int_literal, .tag => {},
+                .record, .tuple, .list, .as_pattern, .str_literal, .float_literal => {
+                    has_complex_pattern = true;
+                },
+            }
+
+            try lowered.append(self.allocator, .{
+                .pattern = pattern,
+                .guard = guard,
+                .body = body,
+            });
+        }
+    }
+
+    // If any patterns are complex types not supported by the WASM backend's
+    // generateCFMatchBranches, fall back to expression-level match wrapped in ret.
+    if (has_complex_pattern) {
+        const expr = module_env.store.getExpr(expr_idx);
+        const region = module_env.store.getExprRegion(expr_idx);
+        const expr_id = try self.lowerExprInner(module_env, expr, region, expr_idx);
+        return try self.store.addCFStmt(.{
+            .ret = .{ .value = expr_id },
+        });
+    }
+
+    const branches = try self.store.addCFMatchBranches(lowered.items);
+
+    return try self.store.addCFStmt(.{
+        .match_stmt = .{
+            .value = cond,
+            .value_layout = value_layout,
+            .branches = branches,
+            .ret_layout = result_layout,
+        },
+    });
 }
 
 /// Lower a closure to a complete procedure (MonoProc).

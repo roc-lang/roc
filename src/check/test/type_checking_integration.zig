@@ -3018,7 +3018,7 @@ test "check type - comprehensive: polymorphism + lambdas + dispatch + annotation
         \\# Fifth layer: combine everything
         \\main = {
         \\  # Let-polymorphism layer 1
-        \\  # TODO INLINE ANNOS
+        \\  # TODO LOCAL ANNOS
         \\  # id : a -> a
         \\  id = |x| x
         \\

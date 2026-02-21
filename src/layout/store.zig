@@ -294,17 +294,32 @@ pub const Store = struct {
         self.work.deinit(self.allocator);
     }
 
-    /// Check if a constraint range contains a from_numeral constraint.
-    /// This is used to determine if an unbound type variable represents
-    /// a numeric type (which should default to Dec) or a phantom type (which is a ZST).
+    /// Reset caches between evaluations (e.g., REPL sessions, test runs).
+    /// Module type stores get fresh type variables on each evaluation,
+    /// so cached layout mappings from old vars become stale.
+    /// Retains allocated capacity for reuse.
+    pub fn resetModuleCache(self: *Self, new_module_envs: []const *const ModuleEnv) void {
+        self.all_module_envs = new_module_envs;
+        self.layouts_by_module_var.clearRetainingCapacity();
+        self.recursive_boxed_layouts.clearRetainingCapacity();
+        self.raw_layout_placeholders.clearRetainingCapacity();
+        self.work.in_progress_vars.clearRetainingCapacity();
+        self.work.in_progress_nominals.clearRetainingCapacity();
+    }
+
+    /// Check if a constraint range contains a numeric constraint.
+    /// This includes from_numeral (numeric literals), desugared_binop (binary operators
+    /// like +, -, *), and desugared_unaryop (unary operators like negation).
+    /// All of these imply the type variable represents a numeric type which should
+    /// default to Dec rather than being treated as zero-sized.
     fn hasFromNumeralConstraint(self: *const Self, constraints: StaticDispatchConstraint.SafeList.Range) bool {
-        // Empty constraints can't contain from_numeral
         if (constraints.isEmpty()) {
             return false;
         }
         for (self.getTypesStore().sliceStaticDispatchConstraints(constraints)) |constraint| {
-            if (constraint.origin == .from_numeral) {
-                return true;
+            switch (constraint.origin) {
+                .from_numeral, .desugared_binop, .desugared_unaryop => return true,
+                .method_call, .where_clause => {},
             }
         }
         return false;
@@ -484,21 +499,78 @@ pub const Store = struct {
         return try self.insertLayout(tuple_layout);
     }
 
+    /// Create a tag union layout from pre-computed variant payload layouts.
+    /// `variant_layouts[i]` is the layout Idx for variant i's payload
+    /// (use ensureZstLayout() for no-payload variants).
+    /// Tags must be sorted alphabetically; variant_layouts[i] corresponds
+    /// to the tag at sorted index i.
+    pub fn putTagUnion(self: *Self, variant_layouts: []const Idx) std.mem.Allocator.Error!Idx {
+        const variants_start: u32 = @intCast(self.tag_union_variants.len());
+
+        var max_payload_size: u32 = 0;
+        var max_payload_alignment: std.mem.Alignment = .@"1";
+
+        for (variant_layouts) |variant_layout_idx| {
+            const variant_layout = self.getLayout(variant_layout_idx);
+            const variant_size = self.layoutSize(variant_layout);
+            const variant_alignment = variant_layout.alignment(self.targetUsize());
+            if (variant_size > max_payload_size) max_payload_size = variant_size;
+            max_payload_alignment = max_payload_alignment.max(variant_alignment);
+
+            _ = try self.tag_union_variants.append(self.allocator, .{
+                .payload_layout = variant_layout_idx,
+            });
+        }
+
+        // Discriminant size from variant count
+        const discriminant_size: u8 = if (variant_layouts.len <= 256) 1 else if (variant_layouts.len <= 65536) 2 else if (variant_layouts.len <= (1 << 32)) 4 else 8;
+        const disc_align = TagUnionData.alignmentForDiscriminantSize(discriminant_size);
+
+        // Canonical layout: payload at offset 0, discriminant after (aligned)
+        const discriminant_offset: u16 = @intCast(
+            std.mem.alignForward(u32, max_payload_size, @intCast(disc_align.toByteUnits())),
+        );
+        const tag_union_alignment = max_payload_alignment.max(disc_align);
+        const total_size = std.mem.alignForward(
+            u32,
+            discriminant_offset + discriminant_size,
+            @intCast(tag_union_alignment.toByteUnits()),
+        );
+
+        const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
+        _ = try self.tag_union_data.append(self.allocator, .{
+            .size = total_size,
+            .discriminant_offset = discriminant_offset,
+            .discriminant_size = discriminant_size,
+            .variants = .{
+                .start = variants_start,
+                .count = @intCast(variant_layouts.len),
+            },
+        });
+
+        const tu_layout = Layout.tagUnion(tag_union_alignment, .{ .int_idx = @intCast(tag_union_data_idx) });
+        return try self.insertLayout(tu_layout);
+    }
+
     /// Create a tuple layout representing the sequential layout of closure captures.
-    /// Captures are stored sequentially with no alignment padding between them.
+    /// Captures are stored with alignment padding between them, like tuple fields.
     pub fn putCaptureStruct(self: *Self, capture_layout_idxs: []const Idx) std.mem.Allocator.Error!Idx {
         var temp_fields = std.ArrayList(TupleField).empty;
         defer temp_fields.deinit(self.allocator);
 
-        var total_size: u32 = 0;
         var max_alignment: usize = 1;
+        var current_offset: u32 = 0;
         for (capture_layout_idxs, 0..) |cap_idx, i| {
             try temp_fields.append(self.allocator, .{ .index = @intCast(i), .layout = cap_idx });
             const cap_layout = self.getLayout(cap_idx);
             const cap_sa = self.layoutSizeAlign(cap_layout);
-            total_size += cap_sa.size;
-            max_alignment = @max(max_alignment, cap_sa.alignment.toByteUnits());
+            const field_alignment = cap_sa.alignment.toByteUnits();
+            max_alignment = @max(max_alignment, field_alignment);
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment))));
+            current_offset += cap_sa.size;
         }
+
+        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment)))));
 
         const fields_start = self.tuple_fields.items.len;
         for (temp_fields.items) |field| {
@@ -519,18 +591,24 @@ pub const Store = struct {
         var max_payload_size: u32 = 0;
         var max_alignment: usize = 8; // At least 8 for the tag
         for (variants) |capture_idxs| {
-            var variant_size: u32 = 0;
+            var current_offset: u32 = 0;
             for (capture_idxs) |cap_idx| {
                 const cap_layout = self.getLayout(cap_idx);
                 const cap_sa = self.layoutSizeAlign(cap_layout);
-                variant_size += cap_sa.size;
-                max_alignment = @max(max_alignment, cap_sa.alignment.toByteUnits());
+                const field_alignment = cap_sa.alignment.toByteUnits();
+                max_alignment = @max(max_alignment, field_alignment);
+                current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment))));
+                current_offset += cap_sa.size;
             }
-            max_payload_size = @max(max_payload_size, variant_size);
+            max_payload_size = @max(max_payload_size, current_offset);
         }
 
-        // Total size = 8 (tag) + max_payload_size
-        const total_size: u32 = 8 + max_payload_size;
+        // Total size = 8 (tag) + max_payload_size, aligned to max_alignment
+        const total_size: u32 = @intCast(std.mem.alignForward(
+            u32,
+            8 + max_payload_size,
+            @as(u32, @intCast(max_alignment)),
+        ));
 
         // Create a tuple layout with a single dummy field (TupleData requires NonEmptyRange)
         const fields_start = self.tuple_fields.items.len;
@@ -832,6 +910,43 @@ pub const Store = struct {
             current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_size_align.alignment.toByteUnits()))));
 
             if (field.name == field_name_idx) {
+                return current_offset;
+            }
+
+            current_offset += field_size_align.size;
+        }
+
+        return null;
+    }
+
+    /// Get the field name text for an Ident.Idx using the current module's ident store.
+    /// Used by the interpreter/evaluator to compare field names by string.
+    pub fn getFieldName(self: *const Self, idx: Ident.Idx) []const u8 {
+        if (self.mutable_env) |env| {
+            return env.getIdent(idx);
+        }
+        if (self.current_module_idx < self.all_module_envs.len) {
+            return self.all_module_envs[self.current_module_idx].getIdent(idx);
+        }
+        return "?";
+    }
+
+    /// Get record field offset by string name (used by interpreter).
+    /// Compares field name text instead of Ident.Idx directly.
+    pub fn getRecordFieldOffsetByNameStr(self: *const Self, record_idx: RecordIdx, field_name: []const u8) ?u32 {
+        const record_data = self.getRecordData(record_idx);
+        const sorted_fields = self.record_fields.sliceRange(record_data.getFields());
+
+        var current_offset: u32 = 0;
+        var i: usize = 0;
+        while (i < sorted_fields.len) : (i += 1) {
+            const field = sorted_fields.get(i);
+            const field_layout = self.getLayout(field.layout);
+            const field_size_align = self.layoutSizeAlign(field_layout);
+
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_size_align.alignment.toByteUnits()))));
+
+            if (std.mem.eql(u8, self.getFieldName(field.name), field_name)) {
                 return current_offset;
             }
 
@@ -1831,6 +1946,10 @@ pub const Store = struct {
 
             // Declare layout outside the if so it's accessible in container finalization
             var layout: Layout = undefined;
+            // Track when we've identified a Bool nominal type. Layout.boolType() is
+            // Layout.int(.u8) which insertLayout would map to Idx.u8, losing the Bool
+            // distinction. This flag lets us map directly to Idx.bool instead.
+            var is_bool_layout = false;
 
             if (!skip_layout_computation) {
                 // Mark this var as in-progress before processing.
@@ -1879,7 +1998,9 @@ pub const Store = struct {
                                 break :blk false;
                             };
                             if (is_builtin_bool) {
-                                // This is Builtin.Bool - use bool layout (u8)
+                                // This is Builtin.Bool - use bool layout (u8).
+                                // Set flag so we map to Idx.bool instead of Idx.u8.
+                                is_bool_layout = true;
                                 break :flat_type Layout.boolType();
                             }
 
@@ -2536,7 +2657,9 @@ pub const Store = struct {
                 };
 
                 // We actually resolved a layout that wasn't zero-sized!
-                layout_idx = try self.insertLayout(layout);
+                // Bool needs special handling: Layout.boolType() is Layout.int(.u8),
+                // so insertLayout would produce Idx.u8 instead of Idx.bool.
+                layout_idx = if (is_bool_layout) .bool else try self.insertLayout(layout);
                 const layout_cache_key = ModuleVarKey{ .module_idx = self.current_module_idx, .var_ = current.var_ };
                 // Only cache if the layout doesn't depend on unresolved type parameters.
                 // Layouts that depend on unresolved params (like List(a) where 'a' has no mapping)
