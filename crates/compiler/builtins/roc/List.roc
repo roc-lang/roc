@@ -1,93 +1,7 @@
-module [
-    is_empty,
-    get,
-    set,
-    replace,
-    update,
-    append,
-    append_if_ok,
-    prepend,
-    prepend_if_ok,
-    map,
-    map_try,
-    map_try!,
-    len,
-    with_capacity,
-    walk_backwards,
-    concat,
-    first,
-    single,
-    repeat,
-    reverse,
-    join,
-    keep_if,
-    keep_if_try!,
-    contains,
-    sum,
-    walk,
-    walk!,
-    walk_try,
-    walk_try!,
-    last,
-    keep_oks,
-    keep_errs,
-    for_each!,
-    for_each_try!,
-    map_with_index,
-    map2,
-    map3,
-    map4,
-    join_map,
-    join_map!,
-    product,
-    walk_with_index,
-    walk_until,
-    walk_with_index_until,
-    walk_from,
-    walk_from_until,
-    range,
-    sort_with,
-    swap,
-    drop_at,
-    min,
-    max,
-    any,
-    take_first,
-    take_last,
-    drop_first,
-    drop_last,
-    find_first,
-    find_last,
-    find_first_index,
-    find_last_index,
-    sublist,
-    intersperse,
-    split_at,
-    split_on,
-    split_on_list,
-    split_first,
-    split_last,
-    starts_with,
-    ends_with,
-    all,
-    drop_if,
-    sort_asc,
-    sort_desc,
-    reserve,
-    release_excess_capacity,
-    walk_backwards_until,
-    count_if,
-    chunks_of,
-    concat_utf8,
-]
-
-import Bool exposing [Bool, Eq]
-import Result exposing [Result]
-import Num exposing [U64, Num, U8]
-
-## ## Types
-##
 ## A sequential list of values.
+##
+## ## [Types](#types) #{types}
+##
 ## ```roc
 ## [1, 2, 3] # a list of numbers
 ## ["a", "b", "c"] # a list of strings
@@ -104,12 +18,12 @@ import Num exposing [U64, Num, U8]
 ## > in Roc code will always fail, although in practice it is likely to fail
 ## > at much smaller lengths due to insufficient memory being available.
 ##
-## ## Performance Details
+## ## [Performance Details](#performance-details) #{performance-details}
 ##
 ## Under the hood, a list is a record containing a `len : U64` field, a `capacity : U64`
 ## field, and a pointer to a reference count and a flat array of bytes.
 ##
-## ## Shared Lists
+## ## [Shared Lists](#shared-lists) #{shared-lists}
 ##
 ## Shared lists are [reference counted](https://en.wikipedia.org/wiki/Reference_counting).
 ##
@@ -220,8 +134,92 @@ import Num exposing [U64, Num, U8]
 ## * Even when copying is faster, other list operations may still be slightly slower with persistent data structures. For example, even if it were a persistent data structure, [List.map], [List.walk], and [List.keep_if] would all need to traverse every element in the list and build up the result from scratch. These operations are all
 ## * Roc's compiler optimizes many list operations into in-place mutations behind the scenes, depending on how the list is being used. For example, [List.map], [List.keep_if], and [List.set] can all be optimized to perform in-place mutations.
 ## * If possible, it is usually best for performance to use large lists in a way where the optimizer can turn them into in-place mutations. If this is not possible, a persistent data structure might be faster - but this is a rare enough scenario that it would not be good for the average Roc program's performance if this were the way [List] worked by default. Instead, you can look outside Roc's standard modules for an implementation of a persistent data structure - likely built using [List] under the hood!
+module [
+    is_empty,
+    get,
+    set,
+    replace,
+    update,
+    append,
+    append_if_ok,
+    prepend,
+    prepend_if_ok,
+    map,
+    map_try,
+    map_try!,
+    len,
+    with_capacity,
+    walk_backwards,
+    concat,
+    first,
+    single,
+    repeat,
+    reverse,
+    join,
+    keep_if,
+    keep_if_try!,
+    contains,
+    sum,
+    walk,
+    walk!,
+    walk_try,
+    walk_try!,
+    last,
+    keep_oks,
+    keep_errs,
+    for_each!,
+    for_each_try!,
+    map_with_index,
+    map2,
+    map3,
+    map4,
+    join_map,
+    join_map!,
+    product,
+    walk_with_index,
+    walk_until,
+    walk_with_index_until,
+    walk_from,
+    walk_from_until,
+    range,
+    sort_with,
+    swap,
+    drop_at,
+    min,
+    max,
+    any,
+    take_first,
+    take_last,
+    drop_first,
+    drop_last,
+    find_first,
+    find_last,
+    find_first_index,
+    find_last_index,
+    sublist,
+    intersperse,
+    split_at,
+    split_on,
+    split_on_list,
+    split_first,
+    split_last,
+    starts_with,
+    ends_with,
+    all,
+    drop_if,
+    sort_asc,
+    sort_desc,
+    reserve,
+    release_excess_capacity,
+    walk_backwards_until,
+    count_if,
+    chunks_of,
+    concat_utf8,
+]
 
-# separator so List.is_empty doesn't absorb the above into its doc comment
+import Bool exposing [Bool, Eq]
+import Result exposing [Result]
+import Num exposing [U64, Num, U8]
 
 ##  Check if the list is empty.
 ## ```roc
@@ -570,7 +568,7 @@ walk_backwards_help = |list, state, f, index_plus_one|
 
 ## Same as [List.walk], except you can stop walking early.
 ##
-## ## Performance Details
+## ## [Performance Details](#performance-details-walk-until) #{performance-details-walk-until}
 ##
 ## Compared to [List.walk], this can potentially visit fewer elements (which can
 ## improve performance) at the cost of making each step take longer.
@@ -649,7 +647,7 @@ all = |list, predicate|
 ## ```roc
 ## List.keep_if([1, 2, 3, 4], (|num| num > 2))
 ## ```
-## ## Performance Details
+## ## [Performance Details](#performance-details-keep-if) #{performance-details-keep-if}
 ##
 ## [List.keep_if] always returns a list that takes up exactly the same amount
 ## of memory as the original, even if its length decreases. This is because it
@@ -708,7 +706,7 @@ keep_if_try_help! = |list, predicate!, kept, index, length|
 ## ```roc
 ## List.drop_if([1, 2, 3, 4], (|num| num > 2))
 ## ```
-## ## Performance Details
+## ## [Performance Details](#performance-details-drop-if) #{performance-details-drop-if}
 ##
 ## `List.drop_if` has the same performance characteristics as [List.keep_if].
 ## See its documentation for details on those characteristics!
@@ -1457,7 +1455,7 @@ map_try! = |list, to_result_fun!|
 
 ## Same as [List.walk], except you can stop walking early by returning `Err`.
 ##
-## ## Performance Details
+## ## [Performance Details](#performance-details-walk-try) #{performance-details-walk-try}
 ##
 ## Compared to [List.walk], this can potentially visit fewer elements (which can
 ## improve performance) at the cost of making each step take longer.

@@ -193,7 +193,7 @@ import Result exposing [Result]
 ## In this way, the [Num] type makes it possible to have `1 + 0x1` return
 ## `2 : Int *` and `1.5 + 1.5` return `3.0 : Frac`.
 ##
-## ## Number Literals
+## ## [Number Literals](#number-literals) #{number-literals}
 ##
 ## Number literals without decimal points (like `0`, `4` or `360`)
 ## have the type `Num *` at first, but usually end up taking on
@@ -256,7 +256,7 @@ Num range := range
 ##
 ## This pattern continues up to [U128] and [I128].
 ##
-## ## Performance Details
+## ## [Performance Details](#performance-details-int) #{performance-details-int}
 ##
 ## In general, using smaller numeric sizes means your program will use less memory.
 ## However, if a mathematical operation results in an answer that is too big
@@ -388,7 +388,7 @@ Int range : Num (Integer range)
 ## Whenever a function in this module could return one of these values, that
 ## possibility is noted in the function's documentation.
 ##
-## ## Performance Details
+## ## [Performance Details](#performance-details-frac) #{performance-details-frac}
 ##
 ## On typical modern CPUs, performance is similar between [Dec], [F64], and [F32]
 ## for addition and subtraction. For example, [F32] and [F64] do addition using
@@ -502,7 +502,7 @@ F32 : Num (FloatingPoint Binary32)
 ## has 18 digits after the `.`, the number of digits after the `.` that [F32] can [F64] can represent
 ## without precision loss depends on what comes before it.
 ##
-## ## Performance Details
+## ## [Performance Details](#performance-details-dec) #{performance-details-dec}
 ##
 ## CPUs have dedicated instructions for many [F32] and [F64] operations, but none for [Dec].
 ## Internally, [Dec] is represented as a 128-bit integer and uses multiple instructions to
@@ -1079,7 +1079,7 @@ pow : Frac a, Frac a -> Frac a
 ## For a [Frac] alternative to this function, which supports negative exponents,
 ## see #Num.pow.
 ##
-## ## Warning
+## ## [Warning](#warning) #{warning}
 ##
 ## It is very easy for this function to produce an answer
 ## so large it causes an overflow.
