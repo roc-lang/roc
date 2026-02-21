@@ -418,10 +418,27 @@ Builtin :: [].{
 				},
 			),
 		].{
+		    init : Bool, List(U8), List(U8) -> Numeral
+			init = |is_neg, before_pt, after_pt| Self({
+    			is_negative: is_neg,
+                digits_before_pt: before_pt,
+                digits_after_pt: after_pt,
+            })
+
 			is_negative : Numeral -> Bool
 			is_negative = |self| match self {
 				# TODO make this a nominal record once we have those
 				Self({ is_negative: neg, digits_before_pt: _, digits_after_pt: _ }) => neg
+			}
+
+            digits_before_pt : Numeral -> List(U8)
+            digits_before_pt = |self| match self {
+                Self({ is_negative: _, digits_before_pt: digits, digits_after_pt: _ }) => digits
+			}
+
+            digits_after_pt : Numeral -> List(U8)
+			digits_after_pt = |self| match self {
+				Self({ is_negative: _, digits_before_pt: _, digits_after_pt: digits }) => digits
 			}
 		}
 
