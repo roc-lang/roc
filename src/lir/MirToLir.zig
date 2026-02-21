@@ -371,14 +371,17 @@ fn lowerRecord(self: *Self, rec: anytype, mono_idx: Monotype.Idx, region: Region
 
         for (0..layout_fields.len) |li| {
             const layout_field_name = layout_fields.get(li).name;
+            var found = false;
             for (mir_field_names, 0..) |mir_name, mi| {
                 if (@as(u32, @bitCast(mir_name)) == @as(u32, @bitCast(layout_field_name))) {
                     const lir_expr = try self.lowerExpr(mir_fields[mi]);
                     try self.scratch_lir_expr_ids.append(self.allocator, lir_expr);
                     try self.scratch_field_names.append(self.allocator, mir_name);
+                    found = true;
                     break;
                 }
             }
+            std.debug.assert(found);
         }
 
         const lir_fields = try self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_exprs..]);
@@ -777,9 +780,9 @@ fn emitZeroLiteral(self: *Self, mir_expr: MIR.ExprId, region: Region) Allocator.
             .f64 => LirExpr{ .f64_literal = 0.0 },
             .dec => LirExpr{ .dec_literal = 0 },
             .i128, .u128 => LirExpr{ .i128_literal = 0 },
-            else => LirExpr{ .i64_literal = 0 },
+            .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64 => LirExpr{ .i64_literal = 0 },
         },
-        else => LirExpr{ .i64_literal = 0 },
+        .func, .tag_union, .record, .tuple, .list, .box, .unit => unreachable,
     }, region);
 }
 

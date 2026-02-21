@@ -213,7 +213,7 @@ pub const RcInsertPass = struct {
                 var local = std.AutoHashMap(u64, u32).init(self.allocator);
                 defer local.deinit();
                 for (branches) |branch| {
-                    try self.registerPatternSymbolInto(branch.pattern, target);
+                    try self.registerPatternSymbolInto(branch.pattern, &local);
                     local.clearRetainingCapacity();
                     try self.countUsesInto(branch.guard, &local);
                     try self.countUsesInto(branch.body, &local);
@@ -1089,10 +1089,11 @@ pub const RcInsertPass = struct {
 
         const stmts_span = try self.store.addStmts(cleanup_stmts.items);
         // The block's final_expr is never reached (early_return diverges),
-        // but we need a valid expr — use the early_return itself.
+        // but we need a distinct valid expr — not early_ret_id which is already used as a stmt.
+        const dead_final = try self.store.addExpr(.{ .runtime_error = {} }, region);
         return self.store.addExpr(.{ .block = .{
             .stmts = stmts_span,
-            .final_expr = early_ret_id,
+            .final_expr = dead_final,
             .result_layout = ret.ret_layout,
         } }, region);
     }

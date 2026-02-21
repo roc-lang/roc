@@ -131,7 +131,7 @@ pub const ClosureRepresentation = union(enum) {
         struct_layout: layout.Idx,
     },
 
-    /// N functions, 0 captures → single byte tag.
+    /// N functions, 0 captures → small tag (Bool for 2 fns, U8 for 3+).
     /// No payload needed, just Bool (2 fns) or U8 (3+ fns).
     enum_dispatch: struct {
         /// Number of functions in the set
