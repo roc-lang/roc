@@ -11262,19 +11262,13 @@ pub const Interpreter = struct {
         // but that weren't converted to e_runtime_error nodes in the CIR.
         //
         // We only check specific expression types (binops, calls, unary ops) here.
-        // For e_match/e_if, failed unification poisons ALL connected branch body
-        // vars via union-find, making .err checks on them unreliable. Instead,
-        // branch-level errors are handled via the erroneous_exprs side-table,
-        // checked in the match_branches, match_guard, and if_branch continuations.
-        switch (expr) {
-            .e_binop, .e_call, .e_unary_minus, .e_unary_not => {
-                const expr_ct_var = can.ModuleEnv.varFrom(expr_idx);
-                const expr_ct_resolved = self.env.types.resolveVar(expr_ct_var);
-                if (expr_ct_resolved.desc.content == .err) {
-                    return error.Crash;
-                }
-            },
-            else => {},
+        // Failed unification poisons ALL connected vars via union-find, making
+        // .err checks on resolved type vars unreliable (false positives for
+        // mutually recursive closures, branches, etc.). Use the erroneous_exprs
+        // side-table instead — it tracks genuinely erroneous expressions.
+        if (self.env.store.erroneous_exprs.contains(@intFromEnum(expr_idx))) {
+            self.triggerCrash("Compile-time error encountered at runtime", false, roc_ops);
+            return error.Crash;
         }
 
         // WASM-compatible tracing for expression evaluation

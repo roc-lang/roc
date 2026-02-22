@@ -50,6 +50,17 @@ pub const LirExprId = enum(u32) {
     }
 };
 
+/// Index into LirExprStore.closure_data
+pub const ClosureDataId = enum(u32) {
+    _,
+
+    pub const none: ClosureDataId = @enumFromInt(std.math.maxInt(u32));
+
+    pub fn isNone(self: ClosureDataId) bool {
+        return self == none;
+    }
+};
+
 /// Index into LirExprStore.patterns
 pub const LirPatternId = enum(u32) {
     _,
@@ -158,6 +169,25 @@ pub const ClosureRepresentation = union(enum) {
     /// No representation needed - function is called directly.
     /// Used when a lambda is immediately called and never stored.
     direct_call: void,
+};
+
+/// Closure data stored in a side table (LirExprStore.closure_data) to reduce
+/// LirExpr union size. Referenced by ClosureDataId.
+pub const ClosureData = struct {
+    /// Layout of the closure type (includes captures)
+    closure_layout: layout.Idx,
+    /// The underlying lambda expression
+    lambda: LirExprId,
+    /// Captured symbols and their layouts
+    captures: LirCaptureSpan,
+    /// How this closure is represented at runtime
+    representation: ClosureRepresentation,
+    /// Whether this closure is recursive (calls itself)
+    recursion: Recursive,
+    /// Whether this closure captures itself (for recursive closures)
+    self_recursive: SelfRecursive,
+    /// Whether this closure is bound to a variable (vs. used directly as an argument).
+    is_bound_to_variable: bool,
 };
 
 /// A member of a lambda set
@@ -357,23 +387,9 @@ pub const LirExpr = union(enum) {
         ret_layout: layout.Idx,
     },
 
-    /// Closure (function with captured environment)
-    closure: struct {
-        /// Layout of the closure type (includes captures)
-        closure_layout: layout.Idx,
-        /// The underlying lambda expression
-        lambda: LirExprId,
-        /// Captured symbols and their layouts
-        captures: LirCaptureSpan,
-        /// How this closure is represented at runtime
-        representation: ClosureRepresentation,
-        /// Whether this closure is recursive (calls itself)
-        recursion: Recursive,
-        /// Whether this closure captures itself (for recursive closures)
-        self_recursive: SelfRecursive,
-        /// Whether this closure is bound to a variable (vs. used directly as an argument).
-        is_bound_to_variable: bool,
-    },
+    /// Closure (function with captured environment).
+    /// Data stored in LirExprStore.closure_data side table to reduce LirExpr size.
+    closure: ClosureDataId,
 
     /// Empty list `[]`
     empty_list: struct {

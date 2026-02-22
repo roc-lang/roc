@@ -4,11 +4,13 @@
 //! 1. Parsing source code
 //! 2. Canonicalizing to CIR
 //! 3. Type checking
-//! 4. Lowering to Mono IR (globally unique symbols)
-//! 5. Generating LLVM bitcode via MonoLlvmCodeGen
-//! 6. Compiling bitcode to a native object file via LLVM
-//! 7. Extracting the .text section from the object file
-//! 8. Executing the generated code in mmap'd memory
+//! 4. Lowering to MIR (monomorphized intermediate representation)
+//! 5. Lowering MIR to LIR (low-level IR with globally unique symbols)
+//! 6. Reference counting insertion
+//! 7. Generating LLVM bitcode via MonoLlvmCodeGen
+//! 8. Compiling bitcode to a native object file via LLVM
+//! 9. Extracting the .text section from the object file
+//! 10. Executing the generated code in mmap'd memory
 //!
 //! This mirrors the dev backend pipeline, except the code generation
 //! produces LLVM IR which is then compiled through LLVM's backend.
@@ -18,7 +20,10 @@ const builtin = @import("builtin");
 const base = @import("base");
 const can = @import("can");
 const layout = @import("layout");
-const mono = @import("mono");
+const mir = @import("mir");
+const MIR = mir.MIR;
+const lir = @import("lir");
+const LirExprStore = lir.LirExprStore;
 const backend = @import("backend");
 const builtin_loading = @import("builtin_loading.zig");
 const compiled_builtins = @import("compiled_builtins");
@@ -36,10 +41,6 @@ const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const LoadedModule = builtin_loading.LoadedModule;
 
-// Mono IR types
-const MonoExprStore = mono.MonoExprStore;
-const MonoLower = mono.Lower;
-
 // LLVM code generation and compilation are accessed via the "llvm_compile"
 // anonymous import, but only inside function bodies (lazy evaluation) to
 // avoid breaking builds that don't link LLVM (e.g., playground wasm).
@@ -50,17 +51,17 @@ const RocOps = builtins.host_abi.RocOps;
 /// Layout index for result types
 pub const LayoutIdx = layout.Idx;
 
-/// Extract the result layout from a Mono IR expression for use as the overall
+/// Extract the result layout from a LIR expression for use as the overall
 /// expression result layout. For blocks and other compound expressions where the
 /// lowerer may have computed the layout from a CIR type variable with Content.err,
 /// this follows through to the final/inner expression to find the true layout.
-fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoExprId) ?layout.Idx {
-    const MonoExpr = mono.MonoIR.MonoExpr;
-    const expr: MonoExpr = store.getExpr(expr_id);
+fn lirExprResultLayout(store: *const LirExprStore, expr_id: lir.LirExprId) ?layout.Idx {
+    const LirExpr = lir.LirExpr;
+    const expr: LirExpr = store.getExpr(expr_id);
     return switch (expr) {
-        .block => |b| monoExprResultLayout(store, b.final_expr),
+        .block => |b| lirExprResultLayout(store, b.final_expr),
         .if_then_else => |ite| ite.result_layout,
-        .match_expr => |m| m.result_layout,
+        .match_expr => |w| w.result_layout,
         .dbg => |d| d.result_layout,
         .expect => |e| e.result_layout,
         .binop => |b| b.result_layout,
@@ -75,17 +76,37 @@ fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoEx
         .zero_arg_tag => |z| z.union_layout,
         .field_access => |fa| fa.field_layout,
         .tuple_access => |ta| ta.elem_layout,
-        .closure => |c| c.closure_layout,
-        .nominal => |n| n.nominal_layout,
-        .i64_literal => .i64,
+        .closure => |c| store.getClosureData(c).closure_layout,
+        .nominal => |n| lirExprResultLayout(store, n.backing_expr) orelse n.nominal_layout,
+        .discriminant_switch => |ds| ds.result_layout,
         .f64_literal => .f64,
         .f32_literal => .f32,
         .bool_literal => .bool,
-        .i128_literal => .i128,
         .dec_literal => .dec,
         .str_literal => .str,
+        .i64_literal => .i64,
+        .i128_literal => .i128,
         .unary_not => .bool,
-        else => null,
+        .list,
+        .empty_list,
+        .empty_record,
+        .lambda,
+        .crash,
+        .runtime_error,
+        .hosted_call,
+        .incref,
+        .decref,
+        .free,
+        .for_loop,
+        .while_loop,
+        .str_concat,
+        .int_to_str,
+        .float_to_str,
+        .dec_to_str,
+        .str_escape_and_quote,
+        .tag_payload_access,
+        .break_expr,
+        => null,
     };
 }
 
@@ -94,7 +115,7 @@ fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoEx
 /// Orchestrates the full compilation pipeline:
 /// - Initializes with builtin modules
 /// - Parses, canonicalizes, and type-checks expressions
-/// - Lowers to Mono IR
+/// - Lowers CIR to MIR, then MIR to LIR
 /// - Generates LLVM bitcode
 /// - Compiles to native object file
 /// - Extracts and executes native code
@@ -112,10 +133,6 @@ pub const LlvmEvaluator = struct {
     /// RocOps instance for passing to generated code.
     /// Contains function pointers for allocation, deallocation, and error handling.
     roc_ops: RocOps,
-
-    /// When true, disables LLVM optimization passes (uses OptLevel.None).
-    /// This is a bool rather than the LLVM type to preserve the lazy import
-    /// pattern — non-LLVM builds don't need the LLVM bindings at struct scope.
 
     /// Global layout store shared across compilations (cached).
     global_layout_store: ?*layout.Store = null,
@@ -209,11 +226,12 @@ pub const LlvmEvaluator = struct {
     /// Generate code for a CIR expression (full pipeline)
     ///
     /// This runs the complete pipeline:
-    /// 1. Pre-codegen transforms (lambda lifting, closure transformation)
-    /// 2. Lowering CIR to Mono IR
-    /// 3. Generating LLVM bitcode
-    /// 4. Compiling bitcode to native object file
-    /// 5. Extracting .text section with entry point
+    /// 1. Lowering CIR to MIR
+    /// 2. Lowering MIR to LIR
+    /// 3. Reference counting insertion
+    /// 4. Generating LLVM bitcode
+    /// 5. Compiling bitcode to native object file
+    /// 6. Extracting .text section with entry point
     pub fn generateCode(
         self: *LlvmEvaluator,
         module_env: *ModuleEnv,
@@ -221,10 +239,6 @@ pub const LlvmEvaluator = struct {
         all_module_envs: []const *ModuleEnv,
         builtin_module_env: ?*const ModuleEnv,
     ) Error!CodeResult {
-        // 1. Create Mono IR store and lower
-        var mono_store = MonoExprStore.init(self.allocator);
-        defer mono_store.deinit();
-
         // Find the module index for this module
         var module_idx: u32 = 0;
         for (all_module_envs, 0..) |env, i| {
@@ -241,41 +255,47 @@ pub const LlvmEvaluator = struct {
         // but the global layout store persists. Clear stale cached layouts.
         layout_store_ptr.resetModuleCache(all_module_envs);
 
-        // Create the lowerer with the layout store
-        var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, layout_store_ptr, null, null);
-        defer lowerer.deinit();
+        // 1. Lower CIR to MIR
+        var mir_store = MIR.Store.init(self.allocator) catch return error.OutOfMemory;
+        defer mir_store.deinit(self.allocator);
 
-        // Lower CIR expression to Mono IR
-        const lowered_expr_id = lowerer.lowerExpr(module_idx, expr_idx) catch {
-            return error.CompilationFailed;
-        };
-
-        // 2. Lambda lifting: lift nested lambdas to top-level after monomorphization
-        var lambda_lifter = mono.LambdaLift.init(
+        var mir_lower = mir.Lower.init(
             self.allocator,
-            &mono_store,
+            &mir_store,
             all_module_envs,
+            &module_env.types,
+            module_idx,
             null, // app_module_idx - not used for JIT evaluation
-            layout_store_ptr,
-            null, // type_store - optional for validation
-        );
-        defer lambda_lifter.deinit();
-        lambda_lifter.liftAllLambdas() catch {
+        ) catch return error.OutOfMemory;
+        defer mir_lower.deinit();
+
+        const mir_expr_id = mir_lower.lowerExpr(expr_idx) catch {
             return error.CompilationFailed;
         };
 
-        // 3. RC insertion pass on the Mono IR
-        var rc_pass = mono.RcInsert.RcInsertPass.init(self.allocator, &mono_store, layout_store_ptr) catch return error.OutOfMemory;
+        // 2. Lower MIR to LIR
+        var lir_store = LirExprStore.init(self.allocator);
+        defer lir_store.deinit();
+
+        var mir_to_lir = lir.MirToLir.init(self.allocator, &mir_store, &lir_store, layout_store_ptr, module_env, all_module_envs, module_env.idents.true_tag);
+        defer mir_to_lir.deinit();
+
+        const lir_expr_id = mir_to_lir.lower(mir_expr_id) catch {
+            return error.CompilationFailed;
+        };
+
+        // 3. RC insertion pass on the LIR
+        var rc_pass = lir.RcInsert.RcInsertPass.init(self.allocator, &lir_store, layout_store_ptr) catch return error.OutOfMemory;
         defer rc_pass.deinit();
-        const mono_expr_id = rc_pass.insertRcOps(lowered_expr_id) catch lowered_expr_id;
+        const final_expr_id = rc_pass.insertRcOps(lir_expr_id) catch lir_expr_id;
 
         // Run RC insertion on all function definitions (symbol_defs)
         {
-            var def_iter = mono_store.symbol_defs.iterator();
+            var def_iter = lir_store.symbol_defs.iterator();
             while (def_iter.next()) |entry| {
-                var fn_rc = mono.RcInsert.RcInsertPass.init(
+                var fn_rc = lir.RcInsert.RcInsertPass.init(
                     self.allocator,
-                    &mono_store,
+                    &lir_store,
                     layout_store_ptr,
                 ) catch continue;
                 defer fn_rc.deinit();
@@ -283,8 +303,8 @@ pub const LlvmEvaluator = struct {
             }
         }
 
-        // 4. Determine result layout from Mono IR expression.
-        const result_layout = monoExprResultLayout(&mono_store, mono_expr_id) orelse blk: {
+        // 4. Determine result layout from LIR expression.
+        const result_layout = lirExprResultLayout(&lir_store, final_expr_id) orelse blk: {
             // Fallback: resolve from the CIR type variable
             const type_var = can.ModuleEnv.varFrom(expr_idx);
             var type_scope = types.TypeScope.init(self.allocator);
@@ -296,13 +316,13 @@ pub const LlvmEvaluator = struct {
         const llvm_compile = @import("llvm_compile");
         const MonoLlvmCodeGen = llvm_compile.MonoLlvmCodeGen;
 
-        var codegen = MonoLlvmCodeGen.init(self.allocator, &mono_store);
+        var codegen = MonoLlvmCodeGen.init(self.allocator, &lir_store);
         defer codegen.deinit();
 
         // Provide layout store for composite types (records, tuples)
         codegen.layout_store = layout_store_ptr;
 
-        var gen_result = codegen.generateCode(mono_expr_id, result_layout) catch |e| switch (e) {
+        var gen_result = codegen.generateCode(final_expr_id, result_layout) catch |e| switch (e) {
             error.OutOfMemory => return error.OutOfMemory,
             error.CompilationFailed => unreachable,
         };

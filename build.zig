@@ -245,7 +245,8 @@ const CheckTypeCheckerPatternsStep = struct {
         // Record field lookup by name in store.zig requires string comparison
         // because FieldNameIdx values come from a module-independent interner
         // but callers may pass raw field name strings from different modules
-        .{ .file = "store.zig", .start = 965, .end = 975 },
+        .{ .file = "store.zig", .start = 945, .end = 955 },
+        .{ .file = "StackValue.zig", .start = 1254, .end = 1264 },
     };
 
     fn isInExcludedRange(file_path: []const u8, line_number: usize) bool {
@@ -2446,7 +2447,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/backend/llvm/MonoLlvmCodeGen.zig"),
     });
     llvm_codegen_module.addImport("layout", roc_modules.layout);
-    llvm_codegen_module.addImport("mono", roc_modules.mono);
+    llvm_codegen_module.addImport("lir", roc_modules.lir);
 
     // Add llvm_compile module to eval for LLVM evaluator support
     roc_modules.eval.addAnonymousImport("llvm_compile", .{
@@ -2454,7 +2455,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "layout", .module = roc_modules.layout },
             .{ .name = "backend", .module = roc_modules.backend },
-            .{ .name = "mono", .module = roc_modules.mono },
+            .{ .name = "lir", .module = roc_modules.lir },
             .{ .name = "llvm_codegen", .module = llvm_codegen_module },
         },
     });
@@ -2518,7 +2519,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "builtins", .module = roc_modules.builtins },
             .{ .name = "layout", .module = roc_modules.layout },
             .{ .name = "backend", .module = roc_modules.backend },
-            .{ .name = "mono", .module = roc_modules.mono },
+            .{ .name = "lir", .module = roc_modules.lir },
             .{ .name = "llvm_codegen", .module = llvm_codegen_module },
         },
     });
@@ -2699,7 +2700,7 @@ pub fn build(b: *std.Build) void {
                         .{ .name = "builtins", .module = roc_modules.builtins },
                         .{ .name = "layout", .module = roc_modules.layout },
                         .{ .name = "backend", .module = roc_modules.backend },
-                        .{ .name = "mono", .module = roc_modules.mono },
+                        .{ .name = "lir", .module = roc_modules.lir },
                         .{ .name = "llvm_codegen", .module = llvm_codegen_module },
                     },
                 });
@@ -2761,7 +2762,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "builtins", .module = roc_modules.builtins },
                 .{ .name = "layout", .module = roc_modules.layout },
                 .{ .name = "backend", .module = roc_modules.backend },
-                .{ .name = "mono", .module = roc_modules.mono },
+                .{ .name = "lir", .module = roc_modules.lir },
                 .{ .name = "llvm_codegen", .module = llvm_codegen_module },
             },
         });

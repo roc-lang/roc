@@ -798,6 +798,13 @@ fn writeIntParseResult(comptime T: type, out: [*]u8, disc_offset: u32, roc_str: 
     out[disc_offset] = 1 - r.errorcode;
 }
 
+fn writeFloatParseResult(comptime T: type, out: [*]u8, disc_offset: u32, roc_str: RocStr) void {
+    const r = num.parseFloatFromStr(T, roc_str);
+    const value_bytes = std.mem.asBytes(&r.value);
+    @memcpy(out[0..value_bytes.len], value_bytes);
+    out[disc_offset] = 1 - r.errorcode;
+}
+
 /// Unified integer-from-string wrapper: parses a string into an integer of the given width.
 /// Writes the result directly into the tag union memory at `out`:
 ///   - Payload (parsed value) at offset 0
@@ -818,6 +825,7 @@ pub fn roc_builtins_int_from_str(
             2 => writeIntParseResult(i16, out, disc_offset, roc_str),
             4 => writeIntParseResult(i32, out, disc_offset, roc_str),
             8 => writeIntParseResult(i64, out, disc_offset, roc_str),
+            16 => writeIntParseResult(i128, out, disc_offset, roc_str),
             else => unreachable,
         }
     } else {
@@ -826,7 +834,42 @@ pub fn roc_builtins_int_from_str(
             2 => writeIntParseResult(u16, out, disc_offset, roc_str),
             4 => writeIntParseResult(u32, out, disc_offset, roc_str),
             8 => writeIntParseResult(u64, out, disc_offset, roc_str),
+            16 => writeIntParseResult(u128, out, disc_offset, roc_str),
             else => unreachable,
         }
+    }
+}
+
+/// Dec-from-string wrapper: parses a string into a Dec (i128).
+/// Writes the result directly into the tag union memory at `out`.
+pub fn roc_builtins_dec_from_str(
+    out: [*]u8,
+    str_bytes: ?[*]u8,
+    str_len: usize,
+    str_cap: usize,
+    disc_offset: u32,
+) callconv(.c) void {
+    const roc_str = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    const r = dec.fromStr(roc_str);
+    const value_bytes = std.mem.asBytes(&r.value);
+    @memcpy(out[0..value_bytes.len], value_bytes);
+    out[disc_offset] = 1 - r.errorcode;
+}
+
+/// Float-from-string wrapper: parses a string into f32 or f64.
+/// Writes the result directly into the tag union memory at `out`.
+pub fn roc_builtins_float_from_str(
+    out: [*]u8,
+    str_bytes: ?[*]u8,
+    str_len: usize,
+    str_cap: usize,
+    float_width: u8,
+    disc_offset: u32,
+) callconv(.c) void {
+    const roc_str = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    switch (float_width) {
+        4 => writeFloatParseResult(f32, out, disc_offset, roc_str),
+        8 => writeFloatParseResult(f64, out, disc_offset, roc_str),
+        else => unreachable,
     }
 }

@@ -1,17 +1,18 @@
-//! MonoIR -> WebAssembly code generator.
+//! LIR -> WebAssembly code generator.
 //!
-//! Walks MonoIR expressions and emits wasm instructions. Each `generateExpr`
+//! Walks LIR expressions and emits wasm instructions. Each `generateExpr`
 //! call leaves the result on the wasm value stack (for primitives) or writes
 //! to linear memory (for composites).
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const layout = @import("layout");
-const mono = @import("mono");
-const MonoExprStore = mono.MonoExprStore;
-const MonoExpr = mono.MonoIR.MonoExpr;
-const MonoExprId = mono.MonoIR.MonoExprId;
-const MonoPattern = mono.MonoIR.MonoPattern;
+const lir = @import("lir");
+const LIR = lir.LIR;
+const LirExprStore = lir.LirExprStore;
+const LirExpr = LIR.LirExpr;
+const LirExprId = LIR.LirExprId;
+const LirPattern = LIR.LirPattern;
 const WasmModule = @import("WasmModule.zig");
 const WasmLayout = @import("WasmLayout.zig");
 const Storage = @import("Storage.zig");
@@ -19,16 +20,16 @@ const Op = WasmModule.Op;
 const ValType = WasmModule.ValType;
 const BlockType = WasmModule.BlockType;
 
-const Symbol = mono.MonoIR.Symbol;
-const MonoProc = mono.MonoIR.MonoProc;
-const CFStmtId = mono.MonoIR.CFStmtId;
+const Symbol = LIR.Symbol;
+const LirProc = LIR.LirProc;
+const CFStmtId = LIR.CFStmtId;
 
 const LayoutStore = layout.Store;
 
 const Self = @This();
 
 allocator: Allocator,
-store: *const MonoExprStore,
+store: *const LirExprStore,
 layout_store: ?*const LayoutStore,
 module: WasmModule,
 body: std.ArrayList(u8), // instruction bytes for current function
@@ -126,19 +127,19 @@ wasm_stack_bytes: u32 = 1024 * 1024,
 wasm_memory_pages: u32 = 0,
 /// Lambda lifting information (optional, set after init if available).
 /// Used to determine if a lambda expression should be lifted to a procedure.
-lambda_lifter: ?*const mono.LambdaLift = null,
+// Lambda lifting is integrated into the MIR→LIR pipeline (no separate pass).
 
 /// Closure value storage for runtime dispatch.
 /// Tracks how a closure is stored so call sites can dispatch correctly.
 const ClosureValue = struct {
     /// The closure representation determines dispatch strategy
-    representation: mono.MonoIR.ClosureRepresentation,
+    representation: LIR.ClosureRepresentation,
     /// Stack offset where the closure value is stored (fp + offset)
     stack_offset: u32,
     /// The lambda expression (for single-function cases). Invalid for procs.
-    lambda_expr: MonoExprId,
+    lambda_expr: LirExprId,
     /// Captures span (for binding at call site)
-    captures: mono.MonoIR.MonoCaptureSpan,
+    captures: LIR.LirCaptureSpan,
     /// Pre-compiled function index (set for procs)
     func_idx: ?u32 = null,
     /// For factory-produced closures: the symbol this closure was bound to.
@@ -149,9 +150,9 @@ const ClosureValue = struct {
 
 /// Info about a closure returned by a call, for chained call dispatch.
 const ReturnedClosureInfo = struct {
-    representation: mono.MonoIR.ClosureRepresentation,
-    lambda_expr: MonoExprId,
-    captures: mono.MonoIR.MonoCaptureSpan,
+    representation: LIR.ClosureRepresentation,
+    lambda_expr: LirExprId,
+    captures: LIR.LirCaptureSpan,
 };
 
 /// A capture that needs to be forwarded through a compiled function as an extra parameter.
@@ -162,7 +163,7 @@ const ForwardedCapture = struct {
     layout_idx: layout.Idx,
 };
 
-pub fn init(allocator: Allocator, store: *const MonoExprStore, layout_store: ?*const LayoutStore) Self {
+pub fn init(allocator: Allocator, store: *const LirExprStore, layout_store: ?*const LayoutStore) Self {
     return .{
         .allocator = allocator,
         .store = store,
@@ -354,7 +355,7 @@ pub const GenerateResult = struct {
 
 /// Generate a complete wasm module for a single expression.
 /// The expression becomes the body of an exported "main" function.
-pub fn generateModule(self: *Self, expr_id: MonoExprId, result_layout: layout.Idx) Allocator.Error!GenerateResult {
+pub fn generateModule(self: *Self, expr_id: LirExprId, result_layout: layout.Idx) Allocator.Error!GenerateResult {
     // Register host function imports (must be done before addFunction calls)
     self.registerHostImports() catch return error.OutOfMemory;
 
@@ -516,9 +517,9 @@ fn encodeLocalsDecl(self: *Self, func_body: *std.ArrayList(u8), skip_count: u32)
     }
 }
 
-/// Generate wasm instructions for a MonoExpr, leaving the result on the value stack.
-fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
-    const expr: MonoExpr = self.store.getExpr(expr_id);
+/// Generate wasm instructions for a LirExpr, leaving the result on the value stack.
+fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
+    const expr: LirExpr = self.store.getExpr(expr_id);
     switch (expr) {
         .i64_literal => |val| {
             self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
@@ -697,6 +698,30 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
                         .f32 => Op.f32_ge,
                         .f64 => Op.f64_ge,
                     },
+                    .mod => switch (vt) {
+                        // mod (Python-style): for integers, same as rem for now
+                        .i32 => if (is_unsigned) Op.i32_rem_u else Op.i32_rem_s,
+                        .i64 => if (is_unsigned) Op.i64_rem_u else Op.i64_rem_s,
+                        .f32, .f64 => {
+                            try self.emitFloatMod(vt);
+                            return;
+                        },
+                    },
+                    .shl => switch (vt) {
+                        .i32 => Op.i32_shl,
+                        .i64 => Op.i64_shl,
+                        .f32, .f64 => unreachable,
+                    },
+                    .shr => switch (vt) {
+                        .i32 => Op.i32_shr_s,
+                        .i64 => Op.i64_shr_s,
+                        .f32, .f64 => unreachable,
+                    },
+                    .shr_zf => switch (vt) {
+                        .i32 => Op.i32_shr_u,
+                        .i64 => Op.i64_shr_u,
+                        .f32, .f64 => unreachable,
+                    },
                     .@"and" => Op.i32_and,
                     .@"or" => Op.i32_or,
                 };
@@ -740,14 +765,17 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
         .block => |b| {
             // Process statements (let bindings)
             const stmts = self.store.getStmts(b.stmts);
-            for (stmts) |stmt| {
+            for (stmts) |stmt_union| {
+                const stmt = stmt_union.binding();
                 const pattern = self.store.getPattern(stmt.pattern);
                 switch (pattern) {
                     .bind => |bind| {
                         // Check if the bound expression is a lambda — if so, compile
                         // as a wasm function and record symbol→func_idx mapping.
                         const stmt_expr = self.store.getExpr(stmt.expr);
-                        if (try self.tryBindFunction(stmt.expr, stmt_expr, bind.symbol)) continue;
+                        if (try self.tryBindFunction(stmt.expr, stmt_expr, bind.symbol)) {
+                            continue;
+                        }
                         // Non-lambda, non-closure, non-function-alias — fall through to value binding
                         {
                             // Check for type representation mismatch: composite expr bound
@@ -963,7 +991,7 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
                 const def_id = self.store.getSymbolDef(l.symbol) orelse unreachable;
                 const def_expr = self.store.getExpr(def_id);
                 switch (def_expr) {
-                    .closure => |closure| try self.generateClosureValue(closure),
+                    .closure => |closure_id| try self.generateClosureValue(self.store.getClosureData(closure_id)),
                     .lambda => {
                         // Lambda with no captures: push dummy 0 (direct_call)
                         self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
@@ -972,7 +1000,7 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
                     .nominal => |nom| {
                         const inner = self.store.getExpr(nom.backing_expr);
                         switch (inner) {
-                            .closure => |closure| try self.generateClosureValue(closure),
+                            .closure => |inner_closure_id| try self.generateClosureValue(self.store.getClosureData(inner_closure_id)),
                             .lambda => {
                                 self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                                 WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
@@ -1000,7 +1028,7 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
                             const cv_def_id = self.store.getSymbolDef(l.symbol) orelse unreachable;
                             const cv_def_expr = self.store.getExpr(cv_def_id);
                             switch (cv_def_expr) {
-                                .closure => |closure| try self.generateClosureValue(closure),
+                                .closure => |closure_id| try self.generateClosureValue(self.store.getClosureData(closure_id)),
                                 .lambda => {
                                     self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                                     WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
@@ -1008,7 +1036,7 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
                                 .nominal => |nom| {
                                     const inner = self.store.getExpr(nom.backing_expr);
                                     switch (inner) {
-                                        .closure => |closure| try self.generateClosureValue(closure),
+                                        .closure => |inner_closure_id| try self.generateClosureValue(self.store.getClosureData(inner_closure_id)),
                                         .lambda => {
                                             self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                                             WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
@@ -1118,46 +1146,7 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
             self.body.append(self.allocator, Op.@"return") catch return error.OutOfMemory;
         },
         .lambda => |lambda| {
-            // Check if this lambda has been lifted
-            if (self.lambda_lifter) |lifter| {
-                if (lifter.isLiftedLambda(expr_id)) {
-                    // Lambda has been lifted to a separate procedure
-                    // Create a closure that references the lifted procedure with its captures
-                    const lifted = lifter.getLiftedLambda(expr_id) orelse {
-                        // Lambda marked as lifted but info not found - shouldn't happen
-                        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                        WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-                        return;
-                    };
-
-                    // Generate closure value with lifted procedure symbol and captures
-                    if (lifted.captures.len == 0) {
-                        // No captures - direct call to lifted procedure
-                        // Push dummy value (caller will reference the lifted symbol directly)
-                        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                        WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-                    } else if (lifted.captures.len == 1) {
-                        // Single capture - push the capture value directly
-                        const cap = lifted.captures[0];
-                        if (self.storage.getLocal(cap.symbol)) |local_idx| {
-                            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-                            WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
-                        } else {
-                            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                            WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-                        }
-                    } else {
-                        // Multiple captures - for lifted lambdas, captures are handled when the lifted
-                        // procedure is called. For now, just push a dummy value.
-                        // TODO: Properly materialize captured values when lifted lambda is used as closure
-                        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                        WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-                    }
-                    return;
-                }
-            }
-
-            // Non-lifted lambda: compile it as a separate wasm function.
+            // Compile lambda as a separate wasm function.
             // The result is a function index we can reference later.
             _ = try self.compileLambda(expr_id, lambda);
             // Lambda as a value — push a placeholder i32.
@@ -1186,7 +1175,8 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
         .tag => |t| {
             try self.generateTag(t);
         },
-        .closure => |closure| {
+        .closure => |closure_id| {
+            const closure = self.store.getClosureData(closure_id);
             // Handle closure based on its representation
             switch (closure.representation) {
                 .enum_dispatch => |repr| {
@@ -1297,11 +1287,12 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
             }
         },
         .hosted_call => unreachable,
+        .break_expr => unreachable,
     }
 }
 
-/// Generate a cascading if/else chain from MonoIfBranch array + final_else.
-fn generateIfChain(self: *Self, branches: []const mono.MonoIR.MonoIfBranch, final_else: MonoExprId, bt: BlockType) Allocator.Error!void {
+/// Generate a cascading if/else chain from LirIfBranch array + final_else.
+fn generateIfChain(self: *Self, branches: []const LIR.LirIfBranch, final_else: LirExprId, bt: BlockType) Allocator.Error!void {
     if (branches.len == 0) {
         // No branches — just generate the else expression
         try self.generateExpr(final_else);
@@ -1350,7 +1341,7 @@ fn generateMatch(self: *Self, w: anytype) Allocator.Error!void {
     try self.generateMatchBranches(branches, temp_local, value_vt, bt);
 }
 
-fn generateMatchBranches(self: *Self, branches: []const mono.MonoIR.MonoMatchBranch, value_local: u32, value_vt: ValType, bt: BlockType) Allocator.Error!void {
+fn generateMatchBranches(self: *Self, branches: []const LIR.LirMatchBranch, value_local: u32, value_vt: ValType, bt: BlockType) Allocator.Error!void {
     if (branches.len == 0) {
         // Fallthrough — unreachable
         self.body.append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
@@ -1878,7 +1869,7 @@ fn valTypeToBlockType(vt: ValType) BlockType {
 }
 
 /// Try to infer the layout.Idx of an expression (for signedness checks).
-fn exprLayoutIdx(self: *Self, expr_id: MonoExprId) ?layout.Idx {
+fn exprLayoutIdx(self: *Self, expr_id: LirExprId) ?layout.Idx {
     const expr = self.store.getExpr(expr_id);
     return switch (expr) {
         .binop => |b| b.result_layout,
@@ -1896,7 +1887,7 @@ fn exprLayoutIdx(self: *Self, expr_id: MonoExprId) ?layout.Idx {
         .tuple_access => |ta| ta.elem_layout,
         .zero_arg_tag => |z| z.union_layout,
         .tag => |t| t.union_layout,
-        .closure => |c| c.closure_layout,
+        .closure => |c| self.store.getClosureData(c).closure_layout,
         .low_level => |ll| ll.ret_layout,
         .dbg => |d| d.result_layout,
         .expect => |e| e.result_layout,
@@ -1921,7 +1912,7 @@ fn exprLayoutIdx(self: *Self, expr_id: MonoExprId) ?layout.Idx {
 }
 
 /// Infer the wasm ValType that an expression will push onto the stack.
-fn exprValType(self: *Self, expr_id: MonoExprId) ValType {
+fn exprValType(self: *Self, expr_id: LirExprId) ValType {
     const expr = self.store.getExpr(expr_id);
     return switch (expr) {
         .i64_literal => .i64,
@@ -1973,7 +1964,7 @@ fn exprValType(self: *Self, expr_id: MonoExprId) ValType {
 }
 
 /// Get the byte size of the value an expression produces.
-fn exprByteSize(self: *Self, expr_id: MonoExprId) u32 {
+fn exprByteSize(self: *Self, expr_id: LirExprId) u32 {
     if (self.exprLayoutIdx(expr_id)) |lay_idx| {
         return self.layoutByteSize(lay_idx);
     }
@@ -1992,7 +1983,7 @@ fn exprByteSize(self: *Self, expr_id: MonoExprId) u32 {
 }
 
 /// Check if an expression produces a composite value (stored in stack memory).
-fn isCompositeExpr(self: *const Self, expr_id: MonoExprId) bool {
+fn isCompositeExpr(self: *const Self, expr_id: LirExprId) bool {
     const expr = self.store.getExpr(expr_id);
     return switch (expr) {
         .dec_literal, .i128_literal => true, // 16 bytes in stack memory
@@ -2045,7 +2036,7 @@ fn isCompositeLayout(self: *const Self, layout_idx: layout.Idx) bool {
 /// Generate structural equality comparison for two composite values (records, tuples, tag unions).
 /// Uses layout-aware comparison for fields containing heap types (strings, lists).
 /// Leaves an i32 (bool) on the stack: 1 for equal, 0 for not equal.
-fn generateStructuralEq(self: *Self, lhs: MonoExprId, rhs: MonoExprId, negate: bool) Allocator.Error!void {
+fn generateStructuralEq(self: *Self, lhs: LirExprId, rhs: LirExprId, negate: bool) Allocator.Error!void {
     // Check for string/list type via layout
     if (self.exprLayoutIdx(lhs)) |lay_idx| {
         if (lay_idx == .str) {
@@ -2820,7 +2811,7 @@ fn stabilizeCompositeResult(self: *Self, size: u32) Allocator.Error!u32 {
 
 /// Generate i128/Dec binary operations (add, sub, comparisons).
 /// Both operands are i32 pointers to 16-byte values in linear memory.
-fn generateCompositeI128BinOp(self: *Self, lhs: MonoExprId, rhs: MonoExprId, op: anytype, result_layout: layout.Idx) Allocator.Error!void {
+fn generateCompositeI128BinOp(self: *Self, lhs: LirExprId, rhs: LirExprId, op: anytype, result_layout: layout.Idx) Allocator.Error!void {
     // Generate operand pointers.
     // After generating each operand, copy the 16-byte value to a caller-owned
     // buffer. This prevents stack use-after-free when operands are function
@@ -2896,6 +2887,14 @@ fn generateCompositeI128BinOp(self: *Self, lhs: MonoExprId, rhs: MonoExprId, op:
         .lte => try self.emitI128Compare(lhs_local, rhs_local, .lte),
         .gt => try self.emitI128Compare(lhs_local, rhs_local, .gt),
         .gte => try self.emitI128Compare(lhs_local, rhs_local, .gte),
+        .mod => {
+            // mod (Python-style) for i128 via host function
+            const is_signed = result_layout == .i128 or result_layout == .dec;
+            const import_idx = if (is_signed) self.i128_mod_s_import else self.u128_mod_import;
+            try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx orelse unreachable);
+        },
+        // Shift ops for i128 via host function
+        .shl, .shr, .shr_zf => unreachable, // TODO: i128 shifts not yet implemented for wasm
         // eq/neq are handled by generateStructuralEq before reaching here
         .eq, .neq => unreachable,
         // Boolean ops don't apply to i128
@@ -3398,7 +3397,7 @@ fn emitI128Compare(self: *Self, lhs_local: u32, rhs_local: u32, cmp_op: I128CmpO
 /// Emit i128 bitwise operation (AND, OR, XOR) on both halves.
 /// Result is a pointer to 16-byte stack memory.
 /// Generate i128/Dec negation: result = -value (two's complement)
-fn generateCompositeI128Negate(self: *Self, expr: MonoExprId, _: layout.Idx) Allocator.Error!void {
+fn generateCompositeI128Negate(self: *Self, expr: LirExprId, _: layout.Idx) Allocator.Error!void {
     try self.generateExpr(expr);
     const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
@@ -4380,10 +4379,10 @@ fn emitI128TryToI128(self: *Self) Allocator.Error!void {
 /// (not one of the well-known sentinel values like .bool, .i32, etc.).
 /// If a lambda's body returns an unwrapped_capture closure, get the capture's layout.
 /// The runtime return value is the capture itself, not a closure pointer.
-fn getUnwrappedCaptureLayout(self: *const Self, body_id: MonoExprId) ?layout.Idx {
+fn getUnwrappedCaptureLayout(self: *const Self, body_id: LirExprId) ?layout.Idx {
     const body = self.store.getExpr(body_id);
     return switch (body) {
-        .closure => |c| switch (c.representation) {
+        .closure => |c| switch (self.store.getClosureData(c).representation) {
             .unwrapped_capture => |uc| uc.capture_layout,
             else => null,
         },
@@ -4630,7 +4629,7 @@ fn emitConversion(self: *Self, source: ValType, target: ValType) Allocator.Error
 
 /// Compile a lambda expression as a separate wasm function.
 /// Returns the wasm function index.
-fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Allocator.Error!u32 {
+fn compileLambda(self: *Self, expr_id: LirExprId, lambda: anytype) Allocator.Error!u32 {
     // Check if already compiled
     const expr_key: u32 = @intFromEnum(expr_id);
     if (self.compiled_lambdas.get(expr_key)) |existing| {
@@ -4716,6 +4715,11 @@ fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Allocator.Er
     // Add function type and function to the module
     const type_idx = self.module.addFuncType(param_types.items, &.{ret_vt}) catch return error.OutOfMemory;
     const func_idx = self.module.addFunction(type_idx) catch return error.OutOfMemory;
+
+    // Cache the compiled function EARLY (before body compilation) to support
+    // mutual recursion: if this lambda's body calls another lambda that calls
+    // back to this one, the recursive lookup will find this func_idx.
+    self.compiled_lambdas.put(expr_key, func_idx) catch return error.OutOfMemory;
 
     // Store forwarded captures in map for call sites to use
     if (forwarded_captures.items.len > 0) {
@@ -4893,16 +4897,13 @@ fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Allocator.Er
     // If the lambda used stack memory, the outer scope needs to know
     if (lambda_used_stack_memory) self.uses_stack_memory = true;
 
-    // Cache the compiled function
-    self.compiled_lambdas.put(expr_key, func_idx) catch return error.OutOfMemory;
-
     return func_idx;
 }
 
 /// Compile a closure (lambda with captures) as a separate wasm function.
 /// Captures become extra leading parameters in the compiled function.
 /// Returns the wasm function index.
-fn compileClosure(self: *Self, expr_id: MonoExprId, closure: anytype) Allocator.Error!u32 {
+fn compileClosure(self: *Self, expr_id: LirExprId, closure: anytype) Allocator.Error!u32 {
     // Check if already compiled
     const expr_key: u32 = @intFromEnum(expr_id);
     if (self.compiled_lambdas.get(expr_key)) |existing| {
@@ -4964,6 +4965,12 @@ fn compileClosure(self: *Self, expr_id: MonoExprId, closure: anytype) Allocator.
         self.resolveValType(lambda.ret_layout);
     const type_idx = self.module.addFuncType(param_types.items, &.{ret_vt}) catch return error.OutOfMemory;
     const func_idx = self.module.addFunction(type_idx) catch return error.OutOfMemory;
+
+    // Cache the compiled closure EARLY (before body compilation) to support
+    // mutual recursion: if this closure's body calls another closure that calls
+    // back to this one, the recursive lookup will find this func_idx.
+    self.compiled_lambdas.put(expr_key, func_idx) catch return error.OutOfMemory;
+
     // Save current codegen state
     const saved = self.saveState() catch return error.OutOfMemory;
 
@@ -4999,7 +5006,8 @@ fn compileClosure(self: *Self, expr_id: MonoExprId, closure: anytype) Allocator.
             if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
                 const def_expr = self.store.getExpr(def_expr_id);
                 switch (def_expr) {
-                    .closure => |cap_closure| {
+                    .closure => |cap_closure_id| {
+                        const cap_closure = self.store.getClosureData(cap_closure_id);
                         const fid = self.compileClosure(def_expr_id, cap_closure) catch null;
                         self.closure_values.put(cap_key, .{
                             .representation = cap_closure.representation,
@@ -5198,20 +5206,26 @@ fn compileClosure(self: *Self, expr_id: MonoExprId, closure: anytype) Allocator.
     // If the closure used stack memory, the outer scope needs to know
     if (closure_used_stack_memory) self.uses_stack_memory = true;
 
-    // Cache
-    self.compiled_lambdas.put(expr_key, func_idx) catch return error.OutOfMemory;
-
     return func_idx;
 }
 
-/// Compile all MonoProcs as separate wasm functions.
+/// Compile all LirProcs as separate wasm functions.
 /// Must be called before generateExpr so that call sites can find compiled procs.
-pub fn compileAllProcs(self: *Self, procs: []const MonoProc) Allocator.Error!void {
+pub fn compileAllProcs(self: *Self, procs: []const LirProc) Allocator.Error!void {
+    // Two-pass compilation to support mutual recursion.
+    // Pass 1: Register ALL procs (create function types, get func_idx).
+    // This ensures that when compiling any proc body, all sibling procs
+    // are already known and can be called without triggering recursive compilation.
     for (procs) |proc| {
-        self.compileProc(proc) catch {
+        const key: u64 = @bitCast(proc.name);
+        if (self.closure_values.contains(key)) continue;
+        try self.registerProc(proc);
+    }
+    // Pass 2: Compile proc bodies.
+    for (procs) |proc| {
+        self.compileProcBody(proc) catch {
             // Failed to compile proc body (e.g., unsupported callback dispatch).
             // The proc has a trap body set, so it exists but traps when called.
-            // Keep it in closure_values so lookups find it (avoids getSymbolDef fallback).
             continue;
         };
     }
@@ -5221,16 +5235,16 @@ pub fn compileAllProcs(self: *Self, procs: []const MonoProc) Allocator.Error!voi
 /// This enables higher-order functions: when `apply = |f, x| f(x)` is called as
 /// `apply(|n| n + 1, 5)`, we compile `|n| n + 1` and register it in closure_values
 /// under `f`'s symbol BEFORE compiling `apply`'s body.
-fn preBindCallableArgs(self: *Self, def_expr: MonoExpr, call_args: mono.MonoIR.MonoExprSpan) Allocator.Error!void {
+fn preBindCallableArgs(self: *Self, def_expr: LirExpr, call_args: LIR.LirExprSpan) Allocator.Error!void {
     // Extract parameter pattern span from the function definition
-    const param_span: mono.MonoIR.MonoPatternSpan = switch (def_expr) {
+    const param_span: LIR.LirPatternSpan = switch (def_expr) {
         .lambda => |l| l.params,
         .nominal => |n| blk: {
             const inner = self.store.getExpr(n.backing_expr);
             break :blk switch (inner) {
                 .lambda => |l| l.params,
                 .closure => |c| blk2: {
-                    const lam = self.store.getExpr(c.lambda);
+                    const lam = self.store.getExpr(self.store.getClosureData(c).lambda);
                     break :blk2 switch (lam) {
                         .lambda => |l| l.params,
                         else => return,
@@ -5240,7 +5254,7 @@ fn preBindCallableArgs(self: *Self, def_expr: MonoExpr, call_args: mono.MonoIR.M
             };
         },
         .closure => |c| blk: {
-            const lam = self.store.getExpr(c.lambda);
+            const lam = self.store.getExpr(self.store.getClosureData(c).lambda);
             break :blk switch (lam) {
                 .lambda => |l| l.params,
                 else => return,
@@ -5290,7 +5304,7 @@ fn preBindCallableArgs(self: *Self, def_expr: MonoExpr, call_args: mono.MonoIR.M
 /// Try to bind a function expression (lambda, closure, nominal wrapping one, or
 /// function alias) to a symbol. Returns true if the expression was handled as a
 /// function binding and the caller should `continue` the loop.
-fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: Symbol) Allocator.Error!bool {
+fn tryBindFunction(self: *Self, expr_id: LirExprId, expr: LirExpr, symbol: Symbol) Allocator.Error!bool {
     const key: u64 = @bitCast(symbol);
     switch (expr) {
         .lambda => {
@@ -5299,8 +5313,8 @@ fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: Sym
             // parameter-bound functions (e.g., compose = |f, g| |x| f(g(x))).
             // In that case, register with func_idx=null for deferred compilation
             // at the call site where the actual arguments are known.
-            const fid = self.compileLambda(expr_id, expr.lambda) catch |err| {
-                if (err == error.OutOfMemory) {
+            const fid = self.compileLambda(expr_id, expr.lambda) catch |err| switch (err) {
+                error.OutOfMemory => {
                     self.closure_values.put(key, .{
                         .representation = .{ .direct_call = {} },
                         .stack_offset = 0,
@@ -5309,8 +5323,7 @@ fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: Sym
                         .func_idx = null,
                     }) catch return error.OutOfMemory;
                     return true;
-                }
-                return err;
+                },
             };
             self.closure_values.put(key, .{
                 .representation = .{ .direct_call = {} },
@@ -5321,7 +5334,8 @@ fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: Sym
             }) catch return error.OutOfMemory;
             return true;
         },
-        .closure => |closure| {
+        .closure => |closure_id| {
+            const closure = self.store.getClosureData(closure_id);
             const fid = try self.compileClosure(expr_id, closure);
 
             // Determine stack_offset based on whether we need to materialize captures
@@ -5462,7 +5476,7 @@ fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: Sym
             // Compile the returned closure's function (may already be compiled)
             const inner_fn_expr = self.store.getExpr(closure_info.lambda_expr);
             const func_idx = switch (inner_fn_expr) {
-                .closure => |closure| try self.compileClosure(closure_info.lambda_expr, closure),
+                .closure => |closure_id| try self.compileClosure(closure_info.lambda_expr, self.store.getClosureData(closure_id)),
                 .lambda => |lambda| try self.compileLambda(closure_info.lambda_expr, lambda),
                 else => return false,
             };
@@ -5591,54 +5605,58 @@ fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: Sym
     }
 }
 
-/// Compile a single MonoProc as a wasm function.
-fn compileProc(self: *Self, proc: MonoProc) Allocator.Error!void {
+/// Compile a single LirProc as a wasm function.
+/// Register a proc in closure_values (create function type, get func_idx).
+/// Does NOT compile the body — that's done by compileProcBody.
+fn registerProc(self: *Self, proc: LirProc) Allocator.Error!void {
     const key: u64 = @bitCast(proc.name);
-
-    // Skip if already compiled
-    if (self.closure_values.contains(key)) return;
 
     // Build parameter types: roc_ops_ptr first, then arg_layouts
     const arg_layouts = self.store.getLayoutIdxSpan(proc.arg_layouts);
     var param_types: std.ArrayList(ValType) = .empty;
     defer param_types.deinit(self.allocator);
 
-    // First parameter: roc_ops_ptr (i32)
     param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
-
     for (arg_layouts) |arg_layout| {
         const vt = self.resolveValType(arg_layout);
         param_types.append(self.allocator, vt) catch return error.OutOfMemory;
     }
 
     const ret_vt = self.resolveValType(proc.ret_layout);
-
-    // Create function type and add to module
     const type_idx = self.module.addFuncType(param_types.items, &.{ret_vt}) catch return error.OutOfMemory;
     const func_idx = self.module.addFunction(type_idx) catch return error.OutOfMemory;
-    // Register BEFORE generating body (for recursive calls)
-    const self_cv: ClosureValue = .{
+
+    self.closure_values.put(key, .{
         .representation = .{ .direct_call = {} },
         .stack_offset = 0,
-        .lambda_expr = undefined, // Not used - func_idx is set
+        .lambda_expr = undefined,
         .captures = .{ .start = 0, .len = 0 },
         .func_idx = func_idx,
-    };
-    self.closure_values.put(key, self_cv) catch return error.OutOfMemory;
+    }) catch return error.OutOfMemory;
+}
 
-    // Save current codegen state (clones closure_values for safe restore)
+/// Compile a proc body. The proc must already be registered via registerProc.
+fn compileProcBody(self: *Self, proc: LirProc) Allocator.Error!void {
+    const key: u64 = @bitCast(proc.name);
+
+    // Get the pre-registered func_idx
+    const self_cv = self.closure_values.get(key) orelse return;
+    const func_idx = self_cv.func_idx orelse return;
+
+    const arg_layouts = self.store.getLayoutIdxSpan(proc.arg_layouts);
+    const ret_vt = self.resolveValType(proc.ret_layout);
+
+    // Save current codegen state
     const saved = self.saveState() catch return error.OutOfMemory;
 
-    // Initialize fresh state with only self-registration (for recursive calls)
+    // Initialize fresh state with ALL registered procs (for mutual recursion)
     self.body = .empty;
     self.storage.locals = std.AutoHashMap(u64, Storage.LocalInfo).init(self.allocator);
     self.storage.next_local_idx = 0;
     self.storage.local_types = .empty;
-    // Free the old closure_values — saveState cloned it independently,
-    // so we must free the original to avoid a memory leak.
-    self.closure_values.deinit();
-    self.closure_values = std.AutoHashMap(u64, ClosureValue).init(self.allocator);
-    self.closure_values.put(key, self_cv) catch return error.OutOfMemory;
+    // Note: closure_values is NOT cleared — all pre-registered procs remain
+    // visible. This is critical for mutual recursion: when compiling is_even's
+    // body, calls to is_odd must find its func_idx without re-compilation.
     self.stack_frame_size = 0;
     self.uses_stack_memory = false;
     self.fp_local = 0;
@@ -5819,7 +5837,7 @@ fn restoreState(self: *Self, saved: SavedState) void {
     self.in_proc = saved.in_proc;
 }
 
-/// Generate code for a control flow statement (used in MonoProc bodies).
+/// Generate code for a control flow statement (used in LirProc bodies).
 fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
     if (stmt_id.isNone()) return;
     const stmt = self.store.getCFStmt(stmt_id);
@@ -5997,7 +6015,7 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
 
 /// Generate cascading match branches for match_stmt.
 /// Each branch body is a CF statement (handles its own ret/jump).
-fn generateCFMatchBranches(self: *Self, branches: []const mono.MonoIR.CFMatchBranch, value_local: u32, value_vt: ValType) Allocator.Error!void {
+fn generateCFMatchBranches(self: *Self, branches: []const LIR.CFMatchBranch, value_local: u32, value_vt: ValType) Allocator.Error!void {
     if (branches.len == 0) {
         self.body.append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
         return;
@@ -6114,8 +6132,8 @@ fn generateCFMatchBranches(self: *Self, branches: []const mono.MonoIR.CFMatchBra
 /// a failing guard falls through to the remaining branches.
 fn generateCFStmtWithGuard(
     self: *Self,
-    branch: mono.MonoIR.CFMatchBranch,
-    remaining: []const mono.MonoIR.CFMatchBranch,
+    branch: LIR.CFMatchBranch,
+    remaining: []const LIR.CFMatchBranch,
     value_local: u32,
     value_vt: ValType,
 ) Allocator.Error!void {
@@ -6137,7 +6155,7 @@ fn generateCFStmtWithGuard(
 
 /// Bind a CFStmt let-pattern to the value just generated.
 /// The value is on the wasm stack. We need to store it to a local.
-fn bindCFLetPattern(self: *Self, pat: MonoPattern, value_expr: MonoExprId) Allocator.Error!void {
+fn bindCFLetPattern(self: *Self, pat: LirPattern, value_expr: LirExprId) Allocator.Error!void {
     switch (pat) {
         .bind => |bind| {
             const expr_is_composite = self.isCompositeExpr(value_expr);
@@ -6228,7 +6246,8 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
             try self.generateCallArgs(c.args);
             try self.emitCall(func_idx);
         },
-        .closure => |closure| {
+        .closure => |closure_id| {
+            const closure = self.store.getClosureData(closure_id);
             const func_idx = try self.compileClosure(c.fn_expr, closure);
             // Push roc_ops_ptr first, then captures, then forwarded captures, then args
             try self.emitLocalGet(self.roc_ops_local);
@@ -6291,7 +6310,8 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
                     try self.generateCallArgs(c.args);
                     try self.emitCall(func_idx);
                 },
-                .closure => |closure| {
+                .closure => |closure_id| {
+                    const closure = self.store.getClosureData(closure_id);
                     const func_idx = try self.compileClosure(nom.backing_expr, closure);
                     try self.emitLocalGet(self.roc_ops_local);
                     const captures = self.store.getCaptures(closure.captures);
@@ -6334,7 +6354,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
             // Compile the inner closure function
             const inner_fn_expr = self.store.getExpr(inner_closure_info.lambda_expr);
             const func_idx = switch (inner_fn_expr) {
-                .closure => |closure| try self.compileClosure(inner_closure_info.lambda_expr, closure),
+                .closure => |closure_id| try self.compileClosure(inner_closure_info.lambda_expr, self.store.getClosureData(closure_id)),
                 .lambda => |lambda| try self.compileLambda(inner_closure_info.lambda_expr, lambda),
                 else => unreachable,
             };
@@ -6468,7 +6488,8 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
                     try self.generateCallArgs(c.args);
                     try self.emitCall(func_idx);
                 },
-                .closure => |closure| {
+                .closure => |closure_id| {
+                    const closure = self.store.getClosureData(closure_id);
                     const func_idx = try self.compileClosure(field_expr_id, closure);
                     try self.emitLocalGet(self.roc_ops_local);
                     const captures = self.store.getCaptures(closure.captures);
@@ -6497,7 +6518,7 @@ fn emitCall(self: *Self, func_idx: u32) Allocator.Error!void {
 }
 
 /// Generate call arguments (helper to avoid duplication).
-fn generateCallArgs(self: *Self, args: mono.MonoIR.MonoExprSpan) Allocator.Error!void {
+fn generateCallArgs(self: *Self, args: LIR.LirExprSpan) Allocator.Error!void {
     const arg_exprs = self.store.getExprSpan(args);
     for (arg_exprs) |arg_id| {
         try self.generateExpr(arg_id);
@@ -6526,13 +6547,14 @@ fn emitForwardedCaptures(self: *Self, func_idx: u32) Allocator.Error!void {
 
 /// Examine a function expression to see if calling it returns a closure.
 /// For chained calls, we need to know statically what the inner call returns.
-fn getReturnedClosureInfo(self: *const Self, fn_expr_id: MonoExprId) ?ReturnedClosureInfo {
+fn getReturnedClosureInfo(self: *const Self, fn_expr_id: LirExprId) ?ReturnedClosureInfo {
     const fn_expr = self.store.getExpr(fn_expr_id);
     switch (fn_expr) {
         .lambda => |lambda| {
             return self.getClosureInfoFromExpr(lambda.body);
         },
-        .closure => |closure| {
+        .closure => |closure_id| {
+            const closure = self.store.getClosureData(closure_id);
             const inner = self.store.getExpr(closure.lambda);
             if (inner == .lambda) {
                 return self.getClosureInfoFromExpr(inner.lambda.body);
@@ -6553,7 +6575,7 @@ fn getReturnedClosureInfo(self: *const Self, fn_expr_id: MonoExprId) ?ReturnedCl
                 const dispatch_expr = self.store.getExpr(dispatched.lambda_expr);
                 return switch (dispatch_expr) {
                     .closure => |c| blk: {
-                        const lam = self.store.getExpr(c.lambda);
+                        const lam = self.store.getExpr(self.store.getClosureData(c).lambda);
                         break :blk if (lam == .lambda) self.getClosureInfoFromExpr(lam.lambda.body) else null;
                     },
                     .lambda => |l| self.getClosureInfoFromExpr(l.body),
@@ -6576,7 +6598,7 @@ fn getReturnedClosureInfo(self: *const Self, fn_expr_id: MonoExprId) ?ReturnedCl
                     const inner_expr = self.store.getExpr(call_result_info.lambda_expr);
                     const result = switch (inner_expr) {
                         .closure => |c| blk: {
-                            const lam = self.store.getExpr(c.lambda);
+                            const lam = self.store.getExpr(self.store.getClosureData(c).lambda);
                             break :blk if (lam == .lambda) self.getClosureInfoFromExpr(lam.lambda.body) else null;
                         },
                         .lambda => |l| self.getClosureInfoFromExpr(l.body),
@@ -6593,10 +6615,11 @@ fn getReturnedClosureInfo(self: *const Self, fn_expr_id: MonoExprId) ?ReturnedCl
 }
 
 /// Extract closure info from an expression (the body/return value of a lambda).
-fn getClosureInfoFromExpr(self: *const Self, expr_id: MonoExprId) ?ReturnedClosureInfo {
+fn getClosureInfoFromExpr(self: *const Self, expr_id: LirExprId) ?ReturnedClosureInfo {
     const expr = self.store.getExpr(expr_id);
     switch (expr) {
-        .closure => |closure| {
+        .closure => |closure_id| {
+            const closure = self.store.getClosureData(closure_id);
             return .{
                 .representation = closure.representation,
                 .lambda_expr = expr_id,
@@ -6614,10 +6637,10 @@ fn getClosureInfoFromExpr(self: *const Self, expr_id: MonoExprId) ?ReturnedClosu
 }
 
 /// Find the closure representation from an expression (recursing through blocks/nominals).
-fn findClosureReprInExpr(self: *const Self, expr_id: MonoExprId) ?mono.MonoIR.ClosureRepresentation {
+fn findClosureReprInExpr(self: *const Self, expr_id: LirExprId) ?LIR.ClosureRepresentation {
     const expr = self.store.getExpr(expr_id);
     return switch (expr) {
-        .closure => |c| c.representation,
+        .closure => |c| self.store.getClosureData(c).representation,
         .block => |b| self.findClosureReprInExpr(b.final_expr),
         .nominal => |nom| self.findClosureReprInExpr(nom.backing_expr),
         .tag => |t| {
@@ -6724,7 +6747,7 @@ fn generateClosureValue(self: *Self, closure: anytype) Allocator.Error!void {
 }
 
 /// Materialize closure captures to a stack memory location at fp + stack_offset.
-fn materializeCapturesToStack(self: *Self, captures_span: mono.MonoIR.MonoCaptureSpan, stack_offset: u32) Allocator.Error!void {
+fn materializeCapturesToStack(self: *Self, captures_span: LIR.LirCaptureSpan, stack_offset: u32) Allocator.Error!void {
     const captures = self.store.getCaptures(captures_span);
     if (captures.len == 0) return;
 
@@ -6737,7 +6760,7 @@ fn materializeCapturesToStack(self: *Self, captures_span: mono.MonoIR.MonoCaptur
 }
 
 /// Materialize closure captures to memory at base_local + payload_offset.
-fn materializeCapturesToStackWithBase(self: *Self, captures_span: mono.MonoIR.MonoCaptureSpan, base_local: u32, payload_offset: u32) Allocator.Error!void {
+fn materializeCapturesToStackWithBase(self: *Self, captures_span: LIR.LirCaptureSpan, base_local: u32, payload_offset: u32) Allocator.Error!void {
     const captures = self.store.getCaptures(captures_span);
     var offset: u32 = payload_offset;
 
@@ -6830,6 +6853,13 @@ fn valTypeSize(vt: ValType) u32 {
 /// closure in closure_values, the closure's value is its own inner capture.
 /// Resolve through the closure to find the inner capture's local.
 fn resolveCaptureThroughClosure(self: *Self, symbol: Symbol) ?u32 {
+    return self.resolveCaptureThroughClosureImpl(symbol, 0);
+}
+
+fn resolveCaptureThroughClosureImpl(self: *Self, symbol: Symbol, depth: u32) ?u32 {
+    // Guard against infinite recursion from mutual captures (e.g., is_even captures is_odd,
+    // is_odd captures is_even). A chain longer than 8 means we're in a cycle.
+    if (depth > 8) return null;
     const key: u64 = @bitCast(symbol);
     const cv = self.closure_values.get(key) orelse return null;
     if (cv.representation != .unwrapped_capture) return null;
@@ -6839,7 +6869,7 @@ fn resolveCaptureThroughClosure(self: *Self, symbol: Symbol) ?u32 {
     // Try to find that inner capture as a local.
     return self.storage.getLocal(inner_caps[0].symbol) orelse
         // Recurse: the inner capture might also be an unwrapped_capture closure
-        self.resolveCaptureThroughClosure(inner_caps[0].symbol);
+        self.resolveCaptureThroughClosureImpl(inner_caps[0].symbol, depth + 1);
 }
 
 /// Dispatch a closure call based on its ClosureValue.
@@ -6847,7 +6877,7 @@ fn resolveCaptureThroughClosure(self: *Self, symbol: Symbol) ?u32 {
 fn dispatchClosureCall(
     self: *Self,
     cv: ClosureValue,
-    args: mono.MonoIR.MonoExprSpan,
+    args: LIR.LirExprSpan,
     ret_layout: layout.Idx,
 ) Allocator.Error!void {
     switch (cv.representation) {
@@ -6862,7 +6892,7 @@ fn dispatchClosureCall(
             const func_idx = if (cv.func_idx) |fid| fid else blk: {
                 const fn_expr = self.store.getExpr(cv.lambda_expr);
                 break :blk switch (fn_expr) {
-                    .closure => |closure| try self.compileClosure(cv.lambda_expr, closure),
+                    .closure => |closure_id| try self.compileClosure(cv.lambda_expr, self.store.getClosureData(closure_id)),
                     .lambda => |lambda| try self.compileLambda(cv.lambda_expr, lambda),
                     else => unreachable,
                 };
@@ -6914,8 +6944,8 @@ fn dispatchClosureCall(
 fn dispatchEnumClosure(
     self: *Self,
     tag_offset: u32,
-    lambda_set: mono.MonoIR.LambdaSetMemberSpan,
-    args: mono.MonoIR.MonoExprSpan,
+    lambda_set: LIR.LambdaSetMemberSpan,
+    args: LIR.LirExprSpan,
     ret_layout: layout.Idx,
 ) Allocator.Error!void {
     const members = self.store.getLambdaSetMembers(lambda_set);
@@ -6970,8 +7000,8 @@ fn dispatchEnumClosure(
 fn dispatchUnionClosure(
     self: *Self,
     union_offset: u32,
-    lambda_set: mono.MonoIR.LambdaSetMemberSpan,
-    args: mono.MonoIR.MonoExprSpan,
+    lambda_set: LIR.LambdaSetMemberSpan,
+    args: LIR.LirExprSpan,
     ret_layout: layout.Idx,
 ) Allocator.Error!void {
     const members = self.store.getLambdaSetMembers(lambda_set);
@@ -7026,7 +7056,7 @@ fn dispatchUnionClosure(
 }
 
 /// Bind captures from a stack location to their symbols as locals.
-fn bindCapturesFromStack(self: *Self, captures_span: mono.MonoIR.MonoCaptureSpan, base_offset: u32) Allocator.Error!void {
+fn bindCapturesFromStack(self: *Self, captures_span: LIR.LirCaptureSpan, base_offset: u32) Allocator.Error!void {
     const captures = self.store.getCaptures(captures_span);
     var offset: u32 = 0;
 
@@ -7047,8 +7077,8 @@ fn bindCapturesFromStack(self: *Self, captures_span: mono.MonoIR.MonoCaptureSpan
 /// Compile a lambda set member and call it with arguments.
 fn compileLambdaSetMemberAndCall(
     self: *Self,
-    member: mono.MonoIR.LambdaSetMember,
-    args: mono.MonoIR.MonoExprSpan,
+    member: LIR.LambdaSetMember,
+    args: LIR.LirExprSpan,
 ) Allocator.Error!void {
     const lambda_expr = self.store.getExpr(member.lambda_body);
     const member_captures = self.store.getCaptures(member.captures);
@@ -7067,7 +7097,7 @@ fn compileLambdaSetMemberAndCall(
                 break :blk try self.compileLambda(member.lambda_body, lambda);
             }
         },
-        .closure => |closure| try self.compileClosure(member.lambda_body, closure),
+        .closure => |closure_id| try self.compileClosure(member.lambda_body, self.store.getClosureData(closure_id)),
         else => unreachable,
     };
 
@@ -7076,7 +7106,7 @@ fn compileLambdaSetMemberAndCall(
 
     // Push captures from the member
     if (lambda_expr == .closure) {
-        const captures = self.store.getCaptures(lambda_expr.closure.captures);
+        const captures = self.store.getCaptures(self.store.getClosureData(lambda_expr.closure).captures);
         for (captures) |cap| {
             if (self.storage.getLocal(cap.symbol)) |local_idx| {
                 try self.emitLocalGet(local_idx);
@@ -8030,7 +8060,7 @@ fn generateDiscriminantSwitch(self: *Self, ds: anytype) Allocator.Error!void {
     try self.generateDiscSwitchBranches(branches, disc_local, bt, 0);
 }
 
-fn generateDiscSwitchBranches(self: *Self, branches: []const MonoExprId, disc_local: u32, bt: BlockType, disc_value: u32) Allocator.Error!void {
+fn generateDiscSwitchBranches(self: *Self, branches: []const LirExprId, disc_local: u32, bt: BlockType, disc_value: u32) Allocator.Error!void {
     if (branches.len == 1) {
         // Last branch — generate unconditionally
         try self.generateExpr(branches[0]);
@@ -8881,7 +8911,58 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
 
         // Bitwise operations
-        .num_pow, .num_log => unreachable, // Resolved by MonoIR lowering
+        .num_pow, .num_log => unreachable, // Resolved by MIR/LIR lowering
+
+        .num_is_zero => {
+            // num_is_zero(x) -> Bool: compare x == 0
+            try self.generateExpr(args[0]);
+            const arg_vt = self.exprValType(args[0]);
+            switch (arg_vt) {
+                .i32 => {
+                    self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+                },
+                .i64 => {
+                    self.body.append(self.allocator, Op.i64_eqz) catch return error.OutOfMemory;
+                },
+                .f32 => {
+                    self.body.append(self.allocator, Op.f32_const) catch return error.OutOfMemory;
+                    const zero_bytes: [4]u8 = @bitCast(@as(f32, 0.0));
+                    self.body.appendSlice(self.allocator, &zero_bytes) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.f32_eq) catch return error.OutOfMemory;
+                },
+                .f64 => {
+                    self.body.append(self.allocator, Op.f64_const) catch return error.OutOfMemory;
+                    const zero_bytes: [8]u8 = @bitCast(@as(f64, 0.0));
+                    self.body.appendSlice(self.allocator, &zero_bytes) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.f64_eq) catch return error.OutOfMemory;
+                },
+            }
+        },
+
+        .num_abs_diff => {
+            // abs_diff(a, b) -> |a - b|
+            return self.generateNumericLowLevel(ll.op, args, ll.ret_layout);
+        },
+
+        .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by => {
+            // Shift operations: shift(value, amount)
+            return self.generateNumericLowLevel(ll.op, args, ll.ret_layout);
+        },
+
+        .str_inspekt => {
+            // str_inspekt: fallback to host import
+            unreachable; // TODO: implement str_inspekt for wasm
+        },
+
+        .list_sort_with => {
+            // list_sort_with: requires higher-order function call
+            unreachable; // TODO: implement list_sort_with for wasm
+        },
+
+        .list_drop_at => {
+            // list_drop_at: requires host support
+            unreachable; // TODO: implement list_drop_at for wasm
+        },
 
         // List element access operations (no heap allocation needed)
         .list_first => {
@@ -11177,11 +11258,21 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
         },
+
+        // Not yet implemented in wasm backend
+        .list_split_first,
+        .list_split_last,
+        .num_to_str,
+        .num_from_str,
+        .num_from_numeral,
+        .box_box,
+        .box_unbox,
+        => unreachable,
     }
 }
 
 /// Generate numeric low-level operations (num_add, num_sub, etc.)
-fn generateNumericLowLevel(self: *Self, op: anytype, args: []const MonoExprId, ret_layout: layout.Idx) Allocator.Error!void {
+fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LirExprId, ret_layout: layout.Idx) Allocator.Error!void {
     const vt = self.resolveValType(ret_layout);
 
     switch (op) {
@@ -11312,13 +11403,93 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const MonoExprId, r
                 .f32, .f64 => try self.emitFloatMod(vt),
             }
         },
+        .num_abs_diff => {
+            // abs_diff(a, b) = abs(a - b)
+            try self.generateExpr(args[0]);
+            try self.generateExpr(args[1]);
+            switch (vt) {
+                .i32 => {
+                    self.body.append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
+                    // abs via select: result = select(x, -x, x >= 0)
+                    const temp = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_tee) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, temp) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, temp) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, temp) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_ge_s) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.select) catch return error.OutOfMemory;
+                },
+                .i64 => {
+                    self.body.append(self.allocator, Op.i64_sub) catch return error.OutOfMemory;
+                    const temp = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_tee) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, temp) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI64(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, temp) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i64_sub) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, temp) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI64(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i64_ge_s) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.select) catch return error.OutOfMemory;
+                },
+                .f32 => {
+                    self.body.append(self.allocator, Op.f32_sub) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.f32_abs) catch return error.OutOfMemory;
+                },
+                .f64 => {
+                    self.body.append(self.allocator, Op.f64_sub) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.f64_abs) catch return error.OutOfMemory;
+                },
+            }
+        },
+        .num_shift_left_by => {
+            try self.generateExpr(args[0]);
+            try self.generateExpr(args[1]);
+            const wasm_op: u8 = switch (vt) {
+                .i32 => Op.i32_shl,
+                .i64 => Op.i64_shl,
+                .f32, .f64 => unreachable,
+            };
+            self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
+        },
+        .num_shift_right_by => {
+            try self.generateExpr(args[0]);
+            try self.generateExpr(args[1]);
+            const wasm_op: u8 = switch (vt) {
+                .i32 => Op.i32_shr_s,
+                .i64 => Op.i64_shr_s,
+                .f32, .f64 => unreachable,
+            };
+            self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
+        },
+        .num_shift_right_zf_by => {
+            try self.generateExpr(args[0]);
+            try self.generateExpr(args[1]);
+            const wasm_op: u8 = switch (vt) {
+                .i32 => Op.i32_shr_u,
+                .i64 => Op.i64_shr_u,
+                .f32, .f64 => unreachable,
+            };
+            self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
+        },
         else => unreachable,
     }
 }
 
 /// Generate string equality comparison using roc_str_eq host function.
 /// Both lhs and rhs should produce i32 pointers to 12-byte RocStr values.
-fn generateStrEq(self: *Self, lhs: MonoExprId, rhs: MonoExprId, negate: bool) Allocator.Error!void {
+fn generateStrEq(self: *Self, lhs: LirExprId, rhs: LirExprId, negate: bool) Allocator.Error!void {
     const import_idx = self.str_eq_import orelse unreachable;
 
     // Generate both string expressions, store to locals
@@ -11344,7 +11515,7 @@ fn generateStrEq(self: *Self, lhs: MonoExprId, rhs: MonoExprId, negate: bool) Al
 
 /// Generate list equality comparison using roc_list_eq host function.
 /// Both lhs and rhs should produce i32 pointers to 12-byte RocList values.
-fn generateListEq(self: *Self, lhs: MonoExprId, rhs: MonoExprId, list_layout_idx: layout.Idx, negate: bool) Allocator.Error!void {
+fn generateListEq(self: *Self, lhs: LirExprId, rhs: LirExprId, list_layout_idx: layout.Idx, negate: bool) Allocator.Error!void {
     const ls = self.getLayoutStore();
     const list_layout = ls.getLayout(list_layout_idx);
     std.debug.assert(list_layout.tag == .list);
@@ -11354,7 +11525,7 @@ fn generateListEq(self: *Self, lhs: MonoExprId, rhs: MonoExprId, list_layout_idx
 
 /// Generate list equality with a known element layout.
 /// Supports all element types including strings and nested lists.
-fn generateListEqWithElemLayout(self: *Self, lhs: MonoExprId, rhs: MonoExprId, elem_layout: layout.Idx, negate: bool) Allocator.Error!void {
+fn generateListEqWithElemLayout(self: *Self, lhs: LirExprId, rhs: LirExprId, elem_layout: layout.Idx, negate: bool) Allocator.Error!void {
     // Generate both list expressions, store to locals
     try self.generateExpr(lhs);
     const lhs_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -11806,7 +11977,7 @@ fn buildHeapRocStr(self: *Self, ptr_local: u32, len_local: u32) Allocator.Error!
 /// Generate str_to_utf8: convert RocStr to RocList(U8).
 /// SSO strings have their bytes copied to heap memory.
 /// Non-SSO strings share the same layout, so the 12 bytes are copied directly.
-fn generateStrToUtf8(self: *Self, str_arg: MonoExprId) Allocator.Error!void {
+fn generateStrToUtf8(self: *Self, str_arg: LirExprId) Allocator.Error!void {
     // Generate the string expression (produces i32 pointer to 12-byte RocStr)
     try self.generateExpr(str_arg);
     const str_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -11887,7 +12058,7 @@ fn generateStrToUtf8(self: *Self, str_arg: MonoExprId) Allocator.Error!void {
 /// Generate str_from_utf8_lossy: convert RocList(U8) to RocStr.
 /// Short lists (len <= 11) produce SSO strings.
 /// Longer lists share the same layout, so the 12 bytes are copied directly.
-fn generateStrFromUtf8Lossy(self: *Self, list_arg: MonoExprId) Allocator.Error!void {
+fn generateStrFromUtf8Lossy(self: *Self, list_arg: LirExprId) Allocator.Error!void {
     // Generate the list expression (produces i32 pointer to 12-byte RocList)
     try self.generateExpr(list_arg);
     const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;

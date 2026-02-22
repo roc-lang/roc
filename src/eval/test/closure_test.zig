@@ -10,16 +10,12 @@
 //!   which Procedure to call and extract the corresponding capture payload
 //! - No heap-allocated closures — captures live in tagged union payloads on the stack
 
-const std = @import("std");
 const helpers = @import("helpers.zig");
-const testing = std.testing;
 
 const runExpectI64 = helpers.runExpectI64;
 const runExpectStr = helpers.runExpectStr;
 
-// =============================================================================
 // TIER 1: Basic closure with captures
-// =============================================================================
 
 test "closure: lambda capturing one local variable" {
     const code =
@@ -67,9 +63,7 @@ test "closure: lambda capturing multiple strings" {
     try runExpectStr(code, "Hello World!", .no_trace);
 }
 
-// =============================================================================
 // TIER 2: Functions returning functions (closure escaping defining scope)
-// =============================================================================
 
 test "closure: function returning a closure (make_adder)" {
     const code =
@@ -129,9 +123,7 @@ test "closure: two-level deep closure (function returning function returning fun
     try runExpectI64(code, 17, .no_trace);
 }
 
-// =============================================================================
 // TIER 3: Higher-order functions with closure arguments
-// =============================================================================
 
 test "closure: passing closure to higher-order function" {
     const code =
@@ -180,9 +172,7 @@ test "closure: HOF with closure returning string" {
     try runExpectStr(code, "Hello World", .no_trace);
 }
 
-// =============================================================================
 // TIER 4: Polymorphic functions with closures
-// =============================================================================
 
 test "closure: polymorphic identity applied to closure result" {
     const code =
@@ -210,9 +200,7 @@ test "closure: polymorphic function used with both int and string closures" {
     try runExpectStr(code, "Hi Bob", .no_trace);
 }
 
-// =============================================================================
 // TIER 5: Closure over closure (nested captures)
-// =============================================================================
 
 test "closure: closure forwarding to captured closure (no multiply)" {
     const code =
@@ -250,10 +238,8 @@ test "closure: closure capturing a factory-produced closure" {
     try runExpectI64(code, 30, .no_trace);
 }
 
-// =============================================================================
 // TIER 6: Multiple closures with different captures at same call site
 // (lambda set dispatch - the core of defunctionalization)
-// =============================================================================
 
 test "closure: if-else choosing between two closures with different captures" {
     const code =
@@ -292,9 +278,7 @@ test "closure: if-else choosing between closures with different capture counts" 
     try runExpectI64(code, 15, .no_trace);
 }
 
-// =============================================================================
 // TIER 7: Closure used in data structures
-// =============================================================================
 
 test "closure: closure stored in record field then called" {
     const code =
@@ -319,9 +303,7 @@ test "closure: two closures in record, each with own captures" {
     try runExpectI64(code, 40, .no_trace);
 }
 
-// =============================================================================
 // TIER 8: Composition and chaining
-// =============================================================================
 
 test "closure: compose two functions" {
     const code =
@@ -362,9 +344,7 @@ test "closure: pipe (flip of compose)" {
     try runExpectI64(code, 15, .no_trace);
 }
 
-// =============================================================================
 // TIER 9: Recursive closures and self-reference
-// =============================================================================
 
 test "closure: recursive function in let binding" {
     // factorial via named recursion
@@ -388,9 +368,7 @@ test "closure: mutual recursion between two closures" {
     try runExpectI64(code, 1, .no_trace);
 }
 
-// =============================================================================
 // TIER 10: Extremely complex / stress tests
-// =============================================================================
 
 test "closure: triple-nested closure factory" {
     // make_op returns a closure that returns a closure that returns a closure
@@ -590,9 +568,7 @@ test "closure: closure that ignores capture and uses argument" {
     try runExpectI64(code, 42, .no_trace);
 }
 
-// =============================================================================
-// TIER 11: Monomorphic identity — isolating polymorphic specialization
-// =============================================================================
+// TIER 11: Monomorphic identity -- isolating polymorphic specialization
 
 test "closure: monomorphic Str identity (no polymorphism)" {
     // Same as the failing "polymorphic identity function" test but with

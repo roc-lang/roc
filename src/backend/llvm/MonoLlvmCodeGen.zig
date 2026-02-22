@@ -1,31 +1,31 @@
-//! Mono IR to LLVM Code Generator
+//! LIR to LLVM Code Generator
 //!
-//! This module generates LLVM IR from Mono IR expressions.
+//! This module generates LLVM IR from LIR (Low-level IR) expressions.
 //! It uses Zig's std.zig.llvm.Builder for IR generation.
 //!
 //! Pipeline position:
 //! ```
-//! CIR -> Mono IR Lowering -> MonoLlvmCodeGen -> LLVM Bitcode -> Native Code
+//! CIR -> MIR -> LIR -> MonoLlvmCodeGen -> LLVM Bitcode -> Native Code
 //! ```
 //!
 //! Key properties:
-//! - Consumes the same Mono IR as the dev backend
+//! - Consumes the same LIR as the dev backend
 //! - Generates LLVM IR via Zig's llvm.Builder
 //! - Produces bitcode that can be compiled to native code via LLVM
 
 const std = @import("std");
 const builtin = @import("builtin");
 const layout = @import("layout");
-const mono = @import("mono");
+const lir = @import("lir");
 
 const LlvmBuilder = std.zig.llvm.Builder;
 
-const MonoExprStore = mono.MonoExprStore;
-const MonoExprId = mono.MonoExprId;
-const MonoPatternId = mono.MonoPatternId;
-const MonoSymbol = mono.Symbol;
-const MonoProc = mono.MonoProc;
-const CFStmtId = mono.CFStmtId;
+const LirExprStore = lir.LirExprStore;
+const LirExprId = lir.LirExprId;
+const LirPatternId = lir.LirPatternId;
+const Symbol = lir.Symbol;
+const LirProc = lir.LirProc;
+const CFStmtId = lir.CFStmtId;
 
 const Allocator = std.mem.Allocator;
 
@@ -80,10 +80,10 @@ fn getLlvmTriple() []const u8 {
 pub const MonoLlvmCodeGen = struct {
     allocator: Allocator,
 
-    /// The Mono IR store containing expressions to compile
-    store: *const MonoExprStore,
+    /// The LIR store containing expressions to compile
+    store: *const LirExprStore,
 
-    /// Map from MonoSymbol to LLVM value
+    /// Map from Symbol to LLVM value
     symbol_values: std.AutoHashMap(u64, LlvmBuilder.Value),
 
     /// Registry of compiled procedures (symbol -> function index)
@@ -93,7 +93,7 @@ pub const MonoLlvmCodeGen = struct {
     join_points: std.AutoHashMap(u32, LlvmBuilder.Function.Block.Index),
 
     /// Join point parameters (join point id -> parameter patterns)
-    join_point_params: std.AutoHashMap(u32, []MonoPatternId),
+    join_point_params: std.AutoHashMap(u32, []LirPatternId),
 
     /// Join point parameter allocas for SSA-correct join point handling.
     /// Maps join point id to an array of alloca pointers, one per parameter.
@@ -159,9 +159,9 @@ pub const MonoLlvmCodeGen = struct {
     };
 
     const ClosureMeta = struct {
-        representation: mono.MonoIR.ClosureRepresentation,
-        lambda: MonoExprId,
-        captures: mono.MonoIR.MonoCaptureSpan,
+        representation: lir.ClosureRepresentation,
+        lambda: LirExprId,
+        captures: lir.LIR.LirCaptureSpan,
     };
 
     /// Result of bitcode generation
@@ -184,7 +184,7 @@ pub const MonoLlvmCodeGen = struct {
     /// Initialize the code generator
     pub fn init(
         allocator: Allocator,
-        store: *const MonoExprStore,
+        store: *const LirExprStore,
     ) MonoLlvmCodeGen {
         return .{
             .allocator = allocator,
@@ -192,7 +192,7 @@ pub const MonoLlvmCodeGen = struct {
             .symbol_values = std.AutoHashMap(u64, LlvmBuilder.Value).init(allocator),
             .proc_registry = std.AutoHashMap(u64, LlvmBuilder.Function.Index).init(allocator),
             .join_points = std.AutoHashMap(u32, LlvmBuilder.Function.Block.Index).init(allocator),
-            .join_point_params = std.AutoHashMap(u32, []MonoPatternId).init(allocator),
+            .join_point_params = std.AutoHashMap(u32, []LirPatternId).init(allocator),
             .join_param_allocas = std.AutoHashMap(u32, []LlvmBuilder.Value).init(allocator),
             .join_param_types = std.AutoHashMap(u32, []LlvmBuilder.Type).init(allocator),
             .loop_var_allocas = std.AutoHashMap(u64, LoopVarAlloca).init(allocator),
@@ -299,7 +299,7 @@ pub const MonoLlvmCodeGen = struct {
     /// Generate LLVM bitcode for a Mono IR expression
     pub fn generateCode(
         self: *MonoLlvmCodeGen,
-        expr_id: MonoExprId,
+        expr_id: LirExprId,
         result_layout: layout.Idx,
     ) Error!BitcodeResult {
         // Create LLVM Builder
@@ -477,7 +477,7 @@ pub const MonoLlvmCodeGen = struct {
     /// Mirrors dev backend's compileAllProcs: creates each proc as a callable
     /// LLVM function and registers it in proc_registry before compiling the body,
     /// so recursive calls within the body can find the function.
-    pub fn compileAllProcs(self: *MonoLlvmCodeGen, procs: []const MonoProc) Error!void {
+    pub fn compileAllProcs(self: *MonoLlvmCodeGen, procs: []const LirProc) Error!void {
         for (procs) |proc| {
             self.compileProc(proc) catch {
                 // Skip procs that can't be compiled (e.g. OOM).
@@ -488,7 +488,7 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    fn compileProc(self: *MonoLlvmCodeGen, proc: MonoProc) Error!void {
+    fn compileProc(self: *MonoLlvmCodeGen, proc: LirProc) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
 
         // Build the LLVM function type from arg_layouts and ret_layout.
@@ -629,7 +629,7 @@ pub const MonoLlvmCodeGen = struct {
                 // Store join point parameters for rebinding on jumps
                 const jp_key = @intFromEnum(j.id);
                 const params = self.store.getPatternSpan(j.params);
-                const params_copy = self.allocator.dupe(MonoPatternId, params) catch return error.OutOfMemory;
+                const params_copy = self.allocator.dupe(LirPatternId, params) catch return error.OutOfMemory;
                 self.join_point_params.put(jp_key, params_copy) catch return error.OutOfMemory;
 
                 // Create allocas for each join point parameter so that jumps from
@@ -821,7 +821,7 @@ pub const MonoLlvmCodeGen = struct {
     // ---------------------------------------------------------------
 
     /// Generate LLVM IR for an expression
-    fn generateExpr(self: *MonoLlvmCodeGen, expr_id: MonoExprId) Error!LlvmBuilder.Value {
+    fn generateExpr(self: *MonoLlvmCodeGen, expr_id: LirExprId) Error!LlvmBuilder.Value {
         const expr = self.store.getExpr(expr_id);
 
         return switch (expr) {
@@ -852,7 +852,7 @@ pub const MonoLlvmCodeGen = struct {
             // Function calls and lambdas
             .call => |call| self.generateCall(call),
             .lambda => |lambda| self.generateLambdaExpr(lambda, expr_id),
-            .closure => |closure| self.generateClosureExpr(closure, expr_id),
+            .closure => |closure_id| self.generateClosureExpr(self.store.getClosureData(closure_id), expr_id),
 
             // Records and tuples
             .record => |rec| self.generateRecord(rec),
@@ -914,6 +914,10 @@ pub const MonoLlvmCodeGen = struct {
             // Loops
             .while_loop => |wl| self.generateWhileLoop(wl),
             .for_loop => |fl| self.generateForLoop(fl),
+            .break_expr => {
+                // break returns unit (i8 0), loop body handles the actual break
+                return (self.builder orelse return error.CompilationFailed).intValue(.i8, 0) catch return error.OutOfMemory;
+            },
 
             // These should never reach LLVM codegen:
             // str_concat is lowered to low_level ops before codegen
@@ -951,7 +955,7 @@ pub const MonoLlvmCodeGen = struct {
         return (builder.intConst(.i1, @intFromBool(val)) catch return error.OutOfMemory).toValue();
     }
 
-    fn generateLookup(self: *MonoLlvmCodeGen, symbol: MonoSymbol, _: layout.Idx) Error!LlvmBuilder.Value {
+    fn generateLookup(self: *MonoLlvmCodeGen, symbol: Symbol, _: layout.Idx) Error!LlvmBuilder.Value {
         const symbol_key: u64 = @bitCast(symbol);
 
         // Check if we have a value for this symbol
@@ -1157,6 +1161,17 @@ pub const MonoLlvmCodeGen = struct {
             else
                 wip.icmp(.uge, lhs, rhs, "") catch return error.CompilationFailed,
 
+            .mod => if (is_float)
+                wip.bin(.frem, lhs, rhs, "") catch return error.CompilationFailed
+            else if (isSigned(binop.result_layout))
+                wip.bin(.srem, lhs, rhs, "") catch return error.CompilationFailed
+            else
+                wip.bin(.urem, lhs, rhs, "") catch return error.CompilationFailed,
+
+            .shl => wip.bin(.shl, lhs, rhs, "") catch return error.CompilationFailed,
+            .shr => wip.bin(.ashr, lhs, rhs, "") catch return error.CompilationFailed,
+            .shr_zf => wip.bin(.lshr, lhs, rhs, "") catch return error.CompilationFailed,
+
             .@"and" => wip.bin(.@"and", lhs, rhs, "") catch return error.CompilationFailed,
             .@"or" => wip.bin(.@"or", lhs, rhs, "") catch return error.CompilationFailed,
         };
@@ -1255,7 +1270,7 @@ pub const MonoLlvmCodeGen = struct {
     /// Generate inline list equality comparison.
     /// Materializes both lists, compares lengths, then loops through elements.
     /// Takes the element layout index directly.
-    fn generateListEqualityByElem(self: *MonoLlvmCodeGen, lhs_expr: MonoExprId, rhs_expr: MonoExprId, elem_layout_idx: layout.Idx) Error!LlvmBuilder.Value {
+    fn generateListEqualityByElem(self: *MonoLlvmCodeGen, lhs_expr: LirExprId, rhs_expr: LirExprId, elem_layout_idx: layout.Idx) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
         const ls = self.layout_store orelse unreachable;
@@ -4081,7 +4096,7 @@ pub const MonoLlvmCodeGen = struct {
     /// a temporary stack slot via alloca, points out_ptr at it, generates the
     /// expression, and returns the alloca pointer. For scalar types, it allocates,
     /// stores the value, and returns the pointer.
-    fn materializeAsPtr(self: *MonoLlvmCodeGen, expr_id: MonoExprId, size: u32) Error!LlvmBuilder.Value {
+    fn materializeAsPtr(self: *MonoLlvmCodeGen, expr_id: LirExprId, size: u32) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
 
@@ -4353,7 +4368,7 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Call a (str, str) -> bool builtin with decomposed args.
     /// Materializes both string args, loads their 3 fields, calls the named builtin.
-    fn callStrStr2Bool(self: *MonoLlvmCodeGen, arg_a: MonoExprId, arg_b: MonoExprId, builtin_name: []const u8) Error!LlvmBuilder.Value {
+    fn callStrStr2Bool(self: *MonoLlvmCodeGen, arg_a: LirExprId, arg_b: LirExprId, builtin_name: []const u8) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
         const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
@@ -4386,7 +4401,7 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Helper: call a (str, roc_ops) -> str builtin, writing result to out_ptr.
     /// Pattern: fn(out, bytes, len, cap, roc_ops) -> void
-    fn callStr2Str(self: *MonoLlvmCodeGen, arg: MonoExprId, builtin_name: []const u8) Error!LlvmBuilder.Value {
+    fn callStr2Str(self: *MonoLlvmCodeGen, arg: LirExprId, builtin_name: []const u8) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
         const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
@@ -4409,7 +4424,7 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Helper: call a (str, str, roc_ops) -> str builtin, writing result to out_ptr.
     /// Pattern: fn(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, roc_ops) -> void
-    fn callStrStr2Str(self: *MonoLlvmCodeGen, arg_a: MonoExprId, arg_b: MonoExprId, builtin_name: []const u8) Error!LlvmBuilder.Value {
+    fn callStrStr2Str(self: *MonoLlvmCodeGen, arg_a: LirExprId, arg_b: LirExprId, builtin_name: []const u8) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
         const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
@@ -4440,7 +4455,7 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Helper: call a (str, u64, roc_ops) -> str builtin, writing result to out_ptr.
     /// Pattern: fn(out, bytes, len, cap, u64_val, roc_ops) -> void
-    fn callStrU642Str(self: *MonoLlvmCodeGen, str_arg: MonoExprId, u64_arg: MonoExprId, builtin_name: []const u8) Error!LlvmBuilder.Value {
+    fn callStrU642Str(self: *MonoLlvmCodeGen, str_arg: LirExprId, u64_arg: LirExprId, builtin_name: []const u8) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
         const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
@@ -4468,7 +4483,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     /// Helper: call listSublist wrapper, materializing list from expression.
-    fn callListSublist(self: *MonoLlvmCodeGen, list_arg: MonoExprId, start: LlvmBuilder.Value, count: LlvmBuilder.Value, ll: anytype) Error!LlvmBuilder.Value {
+    fn callListSublist(self: *MonoLlvmCodeGen, list_arg: LirExprId, start: LlvmBuilder.Value, count: LlvmBuilder.Value, ll: anytype) Error!LlvmBuilder.Value {
         const list_ptr = try self.materializeAsPtr(list_arg, 24);
         return try self.callListSublistFromPtr(list_ptr, start, count, ll);
     }
@@ -4796,10 +4811,10 @@ pub const MonoLlvmCodeGen = struct {
         return .none;
     }
 
-    /// Get the result layout of a mono expression (for determining operand types).
-    fn getExprResultLayout(self: *const MonoLlvmCodeGen, expr_id: MonoExprId) ?layout.Idx {
-        const MonoExpr = mono.MonoIR.MonoExpr;
-        const expr: MonoExpr = self.store.getExpr(expr_id);
+    /// Get the result layout of a LIR expression (for determining operand types).
+    fn getExprResultLayout(self: *const MonoLlvmCodeGen, expr_id: LirExprId) ?layout.Idx {
+        const LirExpr = lir.LirExpr;
+        const expr: LirExpr = self.store.getExpr(expr_id);
         return switch (expr) {
             .block => |b| self.getExprResultLayout(b.final_expr),
             .binop => |b| b.result_layout,
@@ -5022,30 +5037,32 @@ pub const MonoLlvmCodeGen = struct {
         // Process all statements (let bindings)
         const stmts = self.store.getStmts(block_data.stmts);
         for (stmts) |stmt| {
+            const b = stmt.binding();
             // Check if the expression is a lambda or closure — track in closure_bindings
-            const stmt_expr = self.store.getExpr(stmt.expr);
+            const stmt_expr = self.store.getExpr(b.expr);
             switch (stmt_expr) {
                 .lambda => |lambda| {
-                    const val = try self.generateExpr(stmt.expr);
-                    try self.bindPattern(stmt.pattern, val);
+                    const val = try self.generateExpr(b.expr);
+                    try self.bindPattern(b.pattern, val);
                     // Track closure metadata for the bound symbol
-                    const pattern = self.store.getPattern(stmt.pattern);
+                    const pattern = self.store.getPattern(b.pattern);
                     if (pattern == .bind) {
                         const key: u64 = @bitCast(pattern.bind.symbol);
                         self.closure_bindings.put(key, .{
                             .representation = .{ .direct_call = {} },
-                            .lambda = stmt.expr,
-                            .captures = mono.MonoIR.MonoCaptureSpan.empty(),
+                            .lambda = b.expr,
+                            .captures = lir.LIR.LirCaptureSpan.empty(),
                         }) catch return error.OutOfMemory;
                         _ = lambda;
                     }
                     continue;
                 },
-                .closure => |closure| {
-                    const val = try self.generateExpr(stmt.expr);
-                    try self.bindPattern(stmt.pattern, val);
+                .closure => |closure_id| {
+                    const closure = self.store.getClosureData(closure_id);
+                    const val = try self.generateExpr(b.expr);
+                    try self.bindPattern(b.pattern, val);
                     // Track closure metadata for the bound symbol
-                    const pattern = self.store.getPattern(stmt.pattern);
+                    const pattern = self.store.getPattern(b.pattern);
                     if (pattern == .bind) {
                         const key: u64 = @bitCast(pattern.bind.symbol);
                         self.closure_bindings.put(key, .{
@@ -5059,10 +5076,10 @@ pub const MonoLlvmCodeGen = struct {
                 else => {},
             }
 
-            const val = try self.generateExpr(stmt.expr);
+            const val = try self.generateExpr(b.expr);
 
             // Bind the pattern
-            try self.bindPattern(stmt.pattern, val);
+            try self.bindPattern(b.pattern, val);
         }
 
         // Restore out_ptr for the final expression
@@ -5084,7 +5101,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     /// Resolve a function expression and call it with the given arguments.
-    fn callExprWithArgs(self: *MonoLlvmCodeGen, fn_expr_id: MonoExprId, args_span: anytype, ret_layout: layout.Idx) Error!LlvmBuilder.Value {
+    fn callExprWithArgs(self: *MonoLlvmCodeGen, fn_expr_id: LirExprId, args_span: anytype, ret_layout: layout.Idx) Error!LlvmBuilder.Value {
         const fn_expr = self.store.getExpr(fn_expr_id);
         return switch (fn_expr) {
             .lookup => |lookup| self.generateLookupCall(lookup, args_span, ret_layout),
@@ -5093,7 +5110,7 @@ pub const MonoLlvmCodeGen = struct {
                 const func_idx = try self.compileLambdaAsFunc(fn_expr_id, lambda, ret_layout, null);
                 return self.callCompiledFuncWithClosureData(func_idx, args_span, null, ret_layout);
             },
-            .closure => |closure| self.callClosureWithArgs(closure, args_span, ret_layout),
+            .closure => |closure_id| self.callClosureWithArgs(self.store.getClosureData(closure_id), args_span, ret_layout),
             .call => |inner_call| self.callChainedExpr(inner_call, args_span, ret_layout),
             .block => |block_data| {
                 // Evaluate the block to get its result (a closure value or lambda)
@@ -5101,7 +5118,8 @@ pub const MonoLlvmCodeGen = struct {
                 // Check if the block's final expression is a closure/lambda
                 const final_expr = self.store.getExpr(block_data.final_expr);
                 switch (final_expr) {
-                    .closure => |closure| {
+                    .closure => |closure_id| {
+                        const closure = self.store.getClosureData(closure_id);
                         return self.callClosureWithArgsAndValue(closure, args_span, ret_layout, block_val);
                     },
                     else => unreachable, // Block's final expr in call position must be a closure
@@ -5132,7 +5150,8 @@ pub const MonoLlvmCodeGen = struct {
                     const func_idx = try self.compileLambdaAsFunc(def_expr_id, lambda, ret_layout, null);
                     return self.callCompiledFuncWithClosureData(func_idx, args_span, null, ret_layout);
                 },
-                .closure => |closure| {
+                .closure => |closure_id| {
+                    const closure = self.store.getClosureData(closure_id);
                     return self.callClosureWithArgs(closure, args_span, ret_layout);
                 },
                 else => {},
@@ -5175,7 +5194,7 @@ pub const MonoLlvmCodeGen = struct {
     /// user params and roc_ops.
     fn compileLambdaAsFunc(
         self: *MonoLlvmCodeGen,
-        lambda_expr_id: MonoExprId,
+        lambda_expr_id: LirExprId,
         lambda: anytype,
         caller_ret_layout: layout.Idx,
         closure_layout: ?layout.Idx,
@@ -5304,12 +5323,12 @@ pub const MonoLlvmCodeGen = struct {
     /// Compile a lambda with captures: bind capture symbols from the closure data parameter.
     fn compileLambdaWithCaptures(
         self: *MonoLlvmCodeGen,
-        lambda_expr_id: MonoExprId,
+        lambda_expr_id: LirExprId,
         lambda: anytype,
         ret_layout: layout.Idx,
         closure_layout: layout.Idx,
-        captures: mono.MonoIR.MonoCaptureSpan,
-        representation: mono.MonoIR.ClosureRepresentation,
+        captures: lir.LIR.LirCaptureSpan,
+        representation: lir.ClosureRepresentation,
     ) Error!LlvmBuilder.Function.Index {
         const builder = self.builder orelse return error.CompilationFailed;
 
@@ -5420,8 +5439,8 @@ pub const MonoLlvmCodeGen = struct {
     fn bindCapturesFromClosureData(
         self: *MonoLlvmCodeGen,
         closure_data: LlvmBuilder.Value,
-        captures: mono.MonoIR.MonoCaptureSpan,
-        representation: mono.MonoIR.ClosureRepresentation,
+        captures: lir.LIR.LirCaptureSpan,
+        representation: lir.ClosureRepresentation,
     ) Error!void {
         const capture_list = self.store.getCaptures(captures);
         if (capture_list.len == 0) return;
@@ -5470,7 +5489,7 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Generate a lambda expression (not a call — just materializes the function).
     /// For standalone lambda expressions, we compile the function and return a dummy value.
-    fn generateLambdaExpr(self: *MonoLlvmCodeGen, lambda: anytype, expr_id: MonoExprId) Error!LlvmBuilder.Value {
+    fn generateLambdaExpr(self: *MonoLlvmCodeGen, lambda: anytype, expr_id: LirExprId) Error!LlvmBuilder.Value {
         const builder = self.builder orelse return error.CompilationFailed;
         // Compile the lambda as a function (will be called later)
         _ = try self.compileLambdaAsFunc(expr_id, lambda, lambda.ret_layout, null);
@@ -5479,7 +5498,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     /// Generate a closure expression — materializes the closure's runtime value.
-    fn generateClosureExpr(self: *MonoLlvmCodeGen, closure: anytype, expr_id: MonoExprId) Error!LlvmBuilder.Value {
+    fn generateClosureExpr(self: *MonoLlvmCodeGen, closure: anytype, expr_id: LirExprId) Error!LlvmBuilder.Value {
         const builder = self.builder orelse return error.CompilationFailed;
         _ = expr_id;
 
@@ -5746,7 +5765,8 @@ pub const MonoLlvmCodeGen = struct {
                     },
                 }
             },
-            .closure => |closure| {
+            .closure => |closure_id| {
+                const closure = self.store.getClosureData(closure_id);
                 return self.callClosureWithArgs(closure, args_span, ret_layout);
             },
             else => unreachable, // Closure meta lambda must resolve to .lambda or .closure
@@ -5843,14 +5863,15 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     /// IR introspection: trace fn_expr through lambdas/closures to find ClosureMeta.
-    fn resolveToClosureMeta(self: *MonoLlvmCodeGen, fn_expr_id: MonoExprId) ?ClosureMeta {
+    fn resolveToClosureMeta(self: *MonoLlvmCodeGen, fn_expr_id: LirExprId) ?ClosureMeta {
         const expr = self.store.getExpr(fn_expr_id);
         switch (expr) {
             .lambda => |lambda| {
                 // The lambda's body is the closure we want
                 const body_expr = self.store.getExpr(lambda.body);
                 switch (body_expr) {
-                    .closure => |closure| {
+                    .closure => |closure_id| {
+                        const closure = self.store.getClosureData(closure_id);
                         return ClosureMeta{
                             .representation = closure.representation,
                             .lambda = closure.lambda,
@@ -5861,17 +5882,19 @@ pub const MonoLlvmCodeGen = struct {
                         // Check if block's final expr is a closure
                         const final = self.store.getExpr(block_data.final_expr);
                         if (final == .closure) {
+                            const closure = self.store.getClosureData(final.closure);
                             return ClosureMeta{
-                                .representation = final.closure.representation,
-                                .lambda = final.closure.lambda,
-                                .captures = final.closure.captures,
+                                .representation = closure.representation,
+                                .lambda = closure.lambda,
+                                .captures = closure.captures,
                             };
                         }
                     },
                     else => {},
                 }
             },
-            .closure => |closure| {
+            .closure => |closure_id| {
+                const closure = self.store.getClosureData(closure_id);
                 // The closure's lambda body is what returns the inner closure
                 const inner_lambda_expr = self.store.getExpr(closure.lambda);
                 if (inner_lambda_expr == .lambda) {
@@ -5964,7 +5987,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     /// Dispatch a union_repr closure: LLVM switch on tag, each case extracts captures and calls.
-    fn dispatchUnionClosure(self: *MonoLlvmCodeGen, ur: anytype, _: mono.MonoIR.MonoCaptureSpan, args_span: anytype, ret_layout: layout.Idx) Error!LlvmBuilder.Value {
+    fn dispatchUnionClosure(self: *MonoLlvmCodeGen, ur: anytype, _: lir.LIR.LirCaptureSpan, args_span: anytype, ret_layout: layout.Idx) Error!LlvmBuilder.Value {
         const members = self.store.getLambdaSetMembers(ur.lambda_set);
         std.debug.assert(members.len != 0);
 
@@ -6003,7 +6026,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     /// Extract layout index from a pattern (for lambda parameter typing).
-    fn getPatternLayoutIdx(self: *MonoLlvmCodeGen, pattern_id: MonoPatternId) ?layout.Idx {
+    fn getPatternLayoutIdx(self: *MonoLlvmCodeGen, pattern_id: LirPatternId) ?layout.Idx {
         const pattern = self.store.getPattern(pattern_id);
         return switch (pattern) {
             .bind => |b| b.layout_idx,
@@ -6154,7 +6177,7 @@ pub const MonoLlvmCodeGen = struct {
     /// Bind a pattern to an LLVM value.
     /// If the symbol has a loop variable alloca, also stores the value there
     /// so that post-loop code can load the final value.
-    fn bindPattern(self: *MonoLlvmCodeGen, pattern_id: MonoPatternId, value: LlvmBuilder.Value) Error!void {
+    fn bindPattern(self: *MonoLlvmCodeGen, pattern_id: LirPatternId, value: LlvmBuilder.Value) Error!void {
         const pattern = self.store.getPattern(pattern_id);
         switch (pattern) {
             .bind => |bind| {

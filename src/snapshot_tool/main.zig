@@ -32,14 +32,11 @@ threadlocal var panic_msg: ?[]const u8 = null;
 fn panicHandler(msg: []const u8, ret_addr: ?usize) noreturn {
     if (panic_jmp) |jmp| {
         panic_msg = msg;
-        // Print stack trace before longjmp so we can identify the unreachable location
         if (verbose_log) {
             std.debug.print("  PANIC TRACE: {s}\n", .{msg});
             if (ret_addr) |addr| {
                 std.debug.print("  return address: 0x{x}\n", .{addr});
             }
-            const trace = @returnAddress();
-            std.debug.print("  handler address: 0x{x}\n", .{trace});
             std.debug.dumpCurrentStackTrace(ret_addr);
         }
         panic_jmp = null; // prevent re-entry
@@ -3854,11 +3851,7 @@ fn processDevObjectSnapshot(
         }
     }
 
-    // 6. Process hosted functions
-    const mono = @import("mono");
-    var hosted_functions = mono.Lower.HostedFunctionMap.init(allocator);
-    defer hosted_functions.deinit();
-
+    // 6. Process hosted functions (write hosted_index into CIR node payloads)
     {
         const HostedCompiler = can.HostedCompiler;
         var all_hosted_fns = std.ArrayList(HostedCompiler.HostedFunctionInfo).empty;
@@ -3906,8 +3899,8 @@ fn processDevObjectSnapshot(
             }
             all_hosted_fns.shrinkRetainingCapacity(write_idx);
 
-            // Register hosted functions
-            for (modules, 0..) |mod, global_module_idx| {
+            // Write hosted_index into CIR node payloads (mir.Lower reads e_hosted_lambda.index directly)
+            for (modules) |mod| {
                 if (!mod.is_platform_sibling) continue;
                 const plat_env = mod.env;
 
@@ -3937,11 +3930,6 @@ fn processDevObjectSnapshot(
                                 payload.index = hosted_index;
                                 expr_node.setPayload(.{ .expr_hosted_lambda = payload });
                                 plat_env.store.nodes.set(expr_node_idx, expr_node);
-
-                                const mod_idx: u16 = @intCast(global_module_idx + 1);
-                                hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def_idx)), hosted_index) catch {};
-                                hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def.pattern)), hosted_index) catch {};
-                                hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def.expr)), hosted_index) catch {};
                                 break;
                             }
                         }
@@ -3965,7 +3953,11 @@ fn processDevObjectSnapshot(
     };
     defer layout_store.deinit();
 
-    // 8. Find app module index and lower to Mono IR
+    // 8. Find app module index and lower CIR → MIR → LIR
+    const mir_mod = @import("mir");
+    const MIR = mir_mod.MIR;
+    const lir_mod = @import("lir");
+
     var app_module_idx: ?u32 = null;
     for (modules, 0..) |mod, i| {
         if (mod.is_app) {
@@ -3974,15 +3966,30 @@ fn processDevObjectSnapshot(
         }
     }
 
-    var mono_store = mono.MonoExprStore.init(allocator);
-    defer mono_store.deinit();
+    const platform_module_idx: u32 = @intCast(platform_idx + 1);
+    const platform_types = &all_module_envs[platform_module_idx].types;
 
-    var lowerer = mono.Lower.init(allocator, &mono_store, all_module_envs, &lambda_inference, &layout_store, app_module_idx, &hosted_functions);
-    defer lowerer.deinit();
+    var mir_store = MIR.Store.init(allocator) catch {
+        std.log.err("Failed to create MIR store", .{});
+        return false;
+    };
+    defer mir_store.deinit(allocator);
+
+    var mir_lower = mir_mod.Lower.init(allocator, &mir_store, all_module_envs, platform_types, platform_module_idx, app_module_idx) catch {
+        std.log.err("Failed to create MIR lowerer", .{});
+        return false;
+    };
+    defer mir_lower.deinit();
+
+    var lir_store = lir_mod.LirExprStore.init(allocator);
+    defer lir_store.deinit();
+
+    var mir_to_lir = lir_mod.MirToLir.init(allocator, &mir_store, &lir_store, &layout_store, all_module_envs[platform_module_idx], all_module_envs, all_module_envs[0].idents.true_tag);
+    defer mir_to_lir.deinit();
 
     // Use provides entries from build pipeline (centralized in CompiledModuleInfo)
-    const backend = @import("backend");
-    var entrypoints = std.ArrayList(backend.Entrypoint).empty;
+    const backend_mod = @import("backend");
+    var entrypoints = std.ArrayList(backend_mod.Entrypoint).empty;
     defer {
         for (entrypoints.items) |ep| {
             allocator.free(ep.symbol_name);
@@ -4006,16 +4013,20 @@ fn processDevObjectSnapshot(
                 .assign => |assign| {
                     const ident_name = platform_module.env.getIdent(assign.ident);
                     if (std.mem.eql(u8, ident_name, entry.roc_ident)) {
-                        const mono_expr_id = lowerer.lowerExpr(@intCast(platform_idx + 1), def.expr) catch continue;
+                        // Lower CIR → MIR
+                        const mir_expr_id = mir_lower.lowerExpr(def.expr) catch continue;
+                        // Lower MIR → LIR
+                        const lir_expr_id = mir_to_lir.lower(mir_expr_id) catch continue;
+
                         const type_var = can.ModuleEnv.varFrom(def.expr);
                         var scope = types.TypeScope.init(allocator);
                         defer scope.deinit();
-                        const ret_layout = layout_store.fromTypeVar(@intCast(platform_idx + 1), type_var, &scope, null) catch continue;
+                        const ret_layout = layout_store.fromTypeVar(platform_module_idx, type_var, &scope, null) catch continue;
 
                         const symbol_name = std.fmt.allocPrint(allocator, "roc__{s}", .{entry.ffi_symbol}) catch continue;
                         entrypoints.append(allocator, .{
                             .symbol_name = symbol_name,
-                            .body_expr = mono_expr_id,
+                            .body_expr = lir_expr_id,
                             .arg_layouts = &[_]layout_mod.Idx{},
                             .ret_layout = ret_layout,
                         }) catch continue;
@@ -4033,14 +4044,17 @@ fn processDevObjectSnapshot(
     }
 
     // 9. RC insertion
-    var rc_pass = try mono.RcInsert.RcInsertPass.init(allocator, &mono_store, &layout_store);
+    var rc_pass = lir_mod.RcInsert.RcInsertPass.init(allocator, &lir_store, &layout_store) catch {
+        std.log.err("Failed to create RC insertion pass", .{});
+        return false;
+    };
     defer rc_pass.deinit();
 
     for (entrypoints.items) |*ep| {
         ep.body_expr = rc_pass.insertRcOps(ep.body_expr) catch ep.body_expr;
     }
 
-    const procs = mono_store.getProcs();
+    const procs = lir_store.getProcs();
 
     // 10. Cross-compile for all targets and hash
     const RocTarget = roc_target.RocTarget;
@@ -4049,7 +4063,7 @@ fn processDevObjectSnapshot(
 
     var hash_results: [roc_target_fields.len]TargetHashResult = undefined;
 
-    var object_compiler = backend.ObjectFileCompiler.init(allocator);
+    var object_compiler = backend_mod.ObjectFileCompiler.init(allocator);
 
     inline for (roc_target_fields, 0..) |field, i| {
         const target: RocTarget = @enumFromInt(field.value);
@@ -4058,7 +4072,7 @@ fn processDevObjectSnapshot(
         const arch = target.toCpuArch();
         if (arch == .x86_64 or arch == .aarch64 or arch == .aarch64_be) {
             if (object_compiler.compileToObjectFile(
-                &mono_store,
+                &lir_store,
                 &layout_store,
                 entrypoints.items,
                 procs,

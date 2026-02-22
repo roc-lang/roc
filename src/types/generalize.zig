@@ -487,6 +487,16 @@ pub const VarPool = struct {
         }
     }
 
+    /// Merge another VarPool's vars into this one, rank by rank.
+    /// Both pools must be at the same current_rank.
+    pub fn mergeFrom(self: *Self, other: *const VarPool) std.mem.Allocator.Error!void {
+        std.debug.assert(self.current_rank == other.current_rank);
+        const upper = @intFromEnum(self.current_rank) + 1;
+        for (0..upper) |rank_idx| {
+            try self.ranks.items[rank_idx].appendSlice(other.ranks.items[rank_idx].items);
+        }
+    }
+
     pub fn addVarToRank(self: *Self, variable: Var, rank: Rank) !void {
         if (builtin.mode == .Debug) {
             if (@intFromEnum(rank) > @intFromEnum(self.current_rank)) {
@@ -514,3 +524,119 @@ pub const VarPool = struct {
         return self.ranks.items[@intFromEnum(rank)].items;
     }
 };
+
+// helpers for tests //
+
+fn mkVar(n: u32) Var {
+    return @enumFromInt(n);
+}
+
+fn expectVarsEqual(actual: []Var, expected: []const Var) !void {
+    try std.testing.expectEqual(expected.len, actual.len);
+    for (expected, actual) |e, a| {
+        try std.testing.expectEqual(e, a);
+    }
+}
+
+// tests //
+
+test "mergeFrom - merge empty into empty" {
+    const gpa = std.testing.allocator;
+    var pool_a = try VarPool.init(gpa);
+    defer pool_a.deinit();
+    var pool_b = try VarPool.init(gpa);
+    defer pool_b.deinit();
+
+    try pool_a.mergeFrom(&pool_b);
+
+    try std.testing.expectEqual(Rank.generalized, pool_a.current_rank);
+}
+
+test "mergeFrom - merge non-empty into empty" {
+    const gpa = std.testing.allocator;
+    var pool_a = try VarPool.init(gpa);
+    defer pool_a.deinit();
+    var pool_b = try VarPool.init(gpa);
+    defer pool_b.deinit();
+
+    // Both pools at rank 2
+    try pool_a.pushRank(); // rank 1
+    try pool_a.pushRank(); // rank 2
+    try pool_b.pushRank(); // rank 1
+    try pool_b.pushRank(); // rank 2
+
+    try pool_b.addVarToRank(mkVar(10), .outermost);
+    try pool_b.addVarToRank(mkVar(20), @enumFromInt(2));
+    try pool_b.addVarToRank(mkVar(21), @enumFromInt(2));
+
+    try pool_a.mergeFrom(&pool_b);
+
+    try expectVarsEqual(pool_a.getVarsForRank(.outermost), &.{mkVar(10)});
+    try expectVarsEqual(pool_a.getVarsForRank(@enumFromInt(2)), &.{ mkVar(20), mkVar(21) });
+}
+
+test "mergeFrom - merge empty into non-empty" {
+    const gpa = std.testing.allocator;
+    var pool_a = try VarPool.init(gpa);
+    defer pool_a.deinit();
+    var pool_b = try VarPool.init(gpa);
+    defer pool_b.deinit();
+
+    // Both pools at rank 1
+    try pool_a.pushRank();
+    try pool_b.pushRank();
+
+    try pool_a.addVarToRank(mkVar(5), .outermost);
+
+    try pool_a.mergeFrom(&pool_b);
+
+    try expectVarsEqual(pool_a.getVarsForRank(.outermost), &.{mkVar(5)});
+}
+
+test "mergeFrom - combines vars at same rank" {
+    const gpa = std.testing.allocator;
+    var pool_a = try VarPool.init(gpa);
+    defer pool_a.deinit();
+    var pool_b = try VarPool.init(gpa);
+    defer pool_b.deinit();
+
+    // Both pools at rank 1
+    try pool_a.pushRank();
+    try pool_a.addVarToRank(mkVar(1), .outermost);
+    try pool_a.addVarToRank(mkVar(2), .outermost);
+
+    try pool_b.pushRank();
+    try pool_b.addVarToRank(mkVar(10), .outermost);
+    try pool_b.addVarToRank(mkVar(11), .outermost);
+
+    try pool_a.mergeFrom(&pool_b);
+
+    try expectVarsEqual(pool_a.getVarsForRank(.outermost), &.{ mkVar(1), mkVar(2), mkVar(10), mkVar(11) });
+}
+
+test "mergeFrom - vars at multiple ranks" {
+    const gpa = std.testing.allocator;
+    var pool_a = try VarPool.init(gpa);
+    defer pool_a.deinit();
+    var pool_b = try VarPool.init(gpa);
+    defer pool_b.deinit();
+
+    // Both pools at rank 3
+    try pool_a.pushRank(); // 1
+    try pool_a.pushRank(); // 2
+    try pool_a.pushRank(); // 3
+    try pool_a.addVarToRank(mkVar(1), .outermost);
+    try pool_a.addVarToRank(mkVar(30), @enumFromInt(3));
+
+    try pool_b.pushRank(); // 1
+    try pool_b.pushRank(); // 2
+    try pool_b.pushRank(); // 3
+    try pool_b.addVarToRank(mkVar(10), .outermost);
+    try pool_b.addVarToRank(mkVar(20), @enumFromInt(2));
+
+    try pool_a.mergeFrom(&pool_b);
+
+    try expectVarsEqual(pool_a.getVarsForRank(.outermost), &.{ mkVar(1), mkVar(10) });
+    try expectVarsEqual(pool_a.getVarsForRank(@enumFromInt(2)), &.{mkVar(20)});
+    try expectVarsEqual(pool_a.getVarsForRank(@enumFromInt(3)), &.{mkVar(30)});
+}

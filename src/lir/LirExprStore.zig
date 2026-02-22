@@ -26,6 +26,8 @@ const LirExprSpan = ir.LirExprSpan;
 const LirPatternSpan = ir.LirPatternSpan;
 const LirCaptureSpan = ir.LirCaptureSpan;
 const LirCapture = ir.LirCapture;
+const ClosureData = ir.ClosureData;
+const ClosureDataId = ir.ClosureDataId;
 const LirMatchBranch = ir.LirMatchBranch;
 const LirMatchBranchSpan = ir.LirMatchBranchSpan;
 const LambdaSetMember = ir.LambdaSetMember;
@@ -76,6 +78,9 @@ stmts: std.ArrayList(LirStmt),
 /// Captures (symbols captured by closures)
 captures: std.ArrayList(LirCapture),
 
+/// Closure data (side table to reduce LirExpr union size)
+closure_data: std.ArrayList(ClosureData),
+
 /// Lambda set members (for closure dispatch)
 lambda_set_members: std.ArrayList(LambdaSetMember),
 
@@ -114,6 +119,7 @@ pub fn init(allocator: Allocator) Self {
         .if_branches = std.ArrayList(LirIfBranch).empty,
         .stmts = std.ArrayList(LirStmt).empty,
         .captures = std.ArrayList(LirCapture).empty,
+        .closure_data = std.ArrayList(ClosureData).empty,
         .lambda_set_members = std.ArrayList(LambdaSetMember).empty,
         .cf_stmts = std.ArrayList(CFStmt).empty,
         .cf_switch_branches = std.ArrayList(CFSwitchBranch).empty,
@@ -148,6 +154,7 @@ pub fn deinit(self: *Self) void {
     self.if_branches.deinit(self.allocator);
     self.stmts.deinit(self.allocator);
     self.captures.deinit(self.allocator);
+    self.closure_data.deinit(self.allocator);
     self.lambda_set_members.deinit(self.allocator);
     self.cf_stmts.deinit(self.allocator);
     self.cf_switch_branches.deinit(self.allocator);
@@ -215,8 +222,9 @@ pub fn addExprSpan(self: *Self, expr_ids: []const LirExprId) Allocator.Error!Lir
 
     const start = @as(u32, @intCast(self.extra_data.items.len));
 
+    try self.extra_data.ensureUnusedCapacity(self.allocator, expr_ids.len);
     for (expr_ids) |id| {
-        try self.extra_data.append(self.allocator, @intFromEnum(id));
+        self.extra_data.appendAssumeCapacity(@intFromEnum(id));
     }
 
     return .{
@@ -240,8 +248,9 @@ pub fn addPatternSpan(self: *Self, pattern_ids: []const LirPatternId) Allocator.
 
     const start = @as(u32, @intCast(self.extra_data.items.len));
 
+    try self.extra_data.ensureUnusedCapacity(self.allocator, pattern_ids.len);
     for (pattern_ids) |id| {
-        try self.extra_data.append(self.allocator, @intFromEnum(id));
+        self.extra_data.appendAssumeCapacity(@intFromEnum(id));
     }
 
     return .{
@@ -265,8 +274,9 @@ pub fn addFieldNameSpan(self: *Self, field_names: []const base.Ident.Idx) Alloca
 
     const start = @as(u32, @intCast(self.extra_data.items.len));
 
+    try self.extra_data.ensureUnusedCapacity(self.allocator, field_names.len);
     for (field_names) |name| {
-        try self.extra_data.append(self.allocator, @bitCast(name));
+        self.extra_data.appendAssumeCapacity(@bitCast(name));
     }
 
     return .{
@@ -364,6 +374,19 @@ pub fn addCaptures(self: *Self, capture_list: []const LirCapture) Allocator.Erro
 pub fn getCaptures(self: *const Self, span: LirCaptureSpan) []const LirCapture {
     if (span.len == 0) return &.{};
     return self.captures.items[span.start..][0..span.len];
+}
+
+/// Add closure data to the side table and return its ID
+pub fn addClosureData(self: *Self, data: ClosureData) Allocator.Error!ClosureDataId {
+    const idx = self.closure_data.items.len;
+    try self.closure_data.append(self.allocator, data);
+    return @enumFromInt(@as(u32, @intCast(idx)));
+}
+
+/// Get closure data by ID
+pub fn getClosureData(self: *const Self, id: ClosureDataId) ClosureData {
+    std.debug.assert(!id.isNone());
+    return self.closure_data.items[@intFromEnum(id)];
 }
 
 /// Add lambda set members and return a span
@@ -482,8 +505,9 @@ pub fn addLayoutIdxSpan(self: *Self, layouts: []const layout.Idx) Allocator.Erro
 
     const start = @as(u32, @intCast(self.extra_data.items.len));
 
+    try self.extra_data.ensureUnusedCapacity(self.allocator, layouts.len);
     for (layouts) |idx| {
-        try self.extra_data.append(self.allocator, @intFromEnum(idx));
+        self.extra_data.appendAssumeCapacity(@intFromEnum(idx));
     }
 
     return .{

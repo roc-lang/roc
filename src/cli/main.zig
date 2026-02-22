@@ -91,7 +91,6 @@ const CacheConfig = compile.CacheConfig;
 const serialize_modules = compile.serialize_modules;
 const TestRunner = eval.TestRunner;
 const backend = @import("backend");
-const mono = @import("mono");
 const layout = @import("layout");
 const Allocators = base.Allocators;
 
@@ -3624,11 +3623,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         }
     }
 
-    // Process hosted functions - assign global indices based on alphabetical order
-    // and build a map for fast lookup during lowering.
-    var hosted_functions = mono.Lower.HostedFunctionMap.init(ctx.gpa);
-    defer hosted_functions.deinit();
-
+    // Process hosted functions - write hosted_index into CIR node payloads
     {
         const HostedCompiler = can.HostedCompiler;
         var all_hosted_fns = std.ArrayList(HostedCompiler.HostedFunctionInfo).empty;
@@ -3678,8 +3673,8 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             }
             all_hosted_fns.shrinkRetainingCapacity(write_idx);
 
-            // Assign global indices and register in the hosted function registry
-            for (modules, 0..) |mod, global_module_idx| {
+            // Write hosted_index into CIR node payloads (mir.Lower reads e_hosted_lambda.index directly)
+            for (modules) |mod| {
                 if (!mod.is_platform_sibling) continue;
                 const platform_env = mod.env;
 
@@ -3711,15 +3706,6 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                                 payload.index = hosted_index;
                                 expr_node.setPayload(.{ .expr_hosted_lambda = payload });
                                 platform_env.store.nodes.set(expr_node_idx, expr_node);
-
-                                // Register in the hosted function map for fast lookup during lowering
-                                // Store mappings for def_idx, pattern_idx, and expr_idx so lookup
-                                // succeeds regardless of which node target_node_idx points to
-                                const mod_idx: u16 = @intCast(global_module_idx + 1);
-                                hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def_idx)), hosted_index) catch {};
-                                hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def.pattern)), hosted_index) catch {};
-                                hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def.expr)), hosted_index) catch {};
-
                                 break;
                             }
                         }
@@ -3757,14 +3743,32 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     }
     std.log.debug("App module index: {?}", .{app_module_idx});
 
-    // Create Mono IR store
-    std.log.debug("Creating Mono IR store and lowering expressions...", .{});
-    var mono_store = mono.MonoExprStore.init(ctx.gpa);
-    defer mono_store.deinit();
+    // Lower CIR → MIR → LIR
+    const mir = @import("mir");
+    const MIR = mir.MIR;
+    const lir = @import("lir");
 
-    // Create lowerer with hosted function map
-    var lowerer = mono.Lower.init(ctx.gpa, &mono_store, all_module_envs, &lambda_inference, &layout_store, app_module_idx, &hosted_functions);
-    defer lowerer.deinit();
+    std.log.debug("Creating MIR/LIR stores and lowering expressions...", .{});
+    const platform_module_idx: u32 = @intCast(platform_idx + 1);
+    const platform_types = &all_module_envs[platform_module_idx].types;
+
+    var mir_store = MIR.Store.init(ctx.gpa) catch {
+        std.log.err("Failed to create MIR store", .{});
+        return error.OutOfMemory;
+    };
+    defer mir_store.deinit(ctx.gpa);
+
+    var mir_lower = mir.Lower.init(ctx.gpa, &mir_store, all_module_envs, platform_types, platform_module_idx, app_module_idx) catch {
+        std.log.err("Failed to create MIR lowerer", .{});
+        return error.OutOfMemory;
+    };
+    defer mir_lower.deinit();
+
+    var lir_store = lir.LirExprStore.init(ctx.gpa);
+    defer lir_store.deinit();
+
+    var mir_to_lir = lir.MirToLir.init(ctx.gpa, &mir_store, &lir_store, &layout_store, all_module_envs[platform_idx + 1], all_module_envs, all_module_envs[0].idents.true_tag);
+    defer mir_to_lir.deinit();
 
     // Find and lower entrypoint expressions from platform module
     // The platform's provides clause maps Roc identifiers to FFI symbols
@@ -3793,9 +3797,14 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         }
 
         if (found_expr) |expr_idx| {
-            // Lower the expression from the platform module
-            const mono_expr_id = lowerer.lowerExpr(@intCast(platform_idx + 1), expr_idx) catch |err| {
+            // Lower CIR → MIR
+            const mir_expr_id = mir_lower.lowerExpr(expr_idx) catch |err| {
                 std.log.err("Failed to lower expression for entrypoint {s} ({s}): {}", .{ entry.roc_ident, entry.ffi_symbol, err });
+                continue;
+            };
+            // Lower MIR → LIR
+            const lir_expr_id = mir_to_lir.lower(mir_expr_id) catch |err| {
+                std.log.err("Failed to lower MIR to LIR for entrypoint {s} ({s}): {}", .{ entry.roc_ident, entry.ffi_symbol, err });
                 continue;
             };
 
@@ -3803,14 +3812,14 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             const type_var = can.ModuleEnv.varFrom(expr_idx);
             var type_scope = @import("types").TypeScope.init(ctx.gpa);
             defer type_scope.deinit();
-            const ret_layout = layout_store.fromTypeVar(@intCast(platform_idx + 1), type_var, &type_scope, null) catch {
+            const ret_layout = layout_store.fromTypeVar(platform_module_idx, type_var, &type_scope, null) catch {
                 std.log.err("Failed to get layout for entrypoint {s}", .{entry.roc_ident});
                 continue;
             };
 
             try entrypoints.append(ctx.gpa, .{
                 .symbol_name = try std.fmt.allocPrint(ctx.arena, "roc__{s}", .{entry.ffi_symbol}),
-                .body_expr = mono_expr_id,
+                .body_expr = lir_expr_id,
                 .arg_layouts = &[_]layout.Idx{}, // Top-level constants have no args
                 .ret_layout = ret_layout,
             });
@@ -3827,15 +3836,18 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     }
 
     // Run RC insertion pass
-    var rc_pass = try mono.RcInsert.RcInsertPass.init(ctx.gpa, &mono_store, &layout_store);
+    var rc_pass = lir.RcInsert.RcInsertPass.init(ctx.gpa, &lir_store, &layout_store) catch {
+        std.log.err("Failed to create RC insertion pass", .{});
+        return error.OutOfMemory;
+    };
     defer rc_pass.deinit();
 
     for (entrypoints.items) |*ep| {
         ep.body_expr = rc_pass.insertRcOps(ep.body_expr) catch ep.body_expr;
     }
 
-    // Get procedures from the mono store
-    const procs = mono_store.getProcs();
+    // Get procedures from the LIR store
+    const procs = lir_store.getProcs();
 
     // Compile to object file
     std.log.debug("Generating native code...", .{});
@@ -3845,7 +3857,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     const obj_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, obj_filename });
 
     object_compiler.compileToObjectFileAndWrite(
-        &mono_store,
+        &lir_store,
         &layout_store,
         entrypoints.items,
         procs,

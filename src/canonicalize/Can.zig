@@ -7901,6 +7901,15 @@ pub fn canonicalizePattern(
                 const current_scope = &self.scopes.items[self.scopes.items.len - 1];
                 const placeholder_exists = self.isPlaceholder(ident_idx);
 
+                // Check if a forward reference exists for this ident (from block hoisting).
+                // Reuse its pattern so that e_lookup_local nodes created during the
+                // forward-reference phase point to the same pattern as the def.
+                if (current_scope.forward_references.fetchRemove(ident_idx)) |kv| {
+                    var mut_regions = kv.value.reference_regions;
+                    mut_regions.deinit(self.env.gpa);
+                    return kv.value.pattern_idx;
+                }
+
                 // Create a Pattern node for our identifier
                 const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{
                     .ident = ident_idx,
@@ -10256,6 +10265,33 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
 
     // Canonicalize all statements in the block
     const ast_stmt_idxs = self.parse_ir.store.statementSlice(e.statements);
+
+    // Pre-pass: Create forward references for lambda declaration patterns.
+    // This enables mutual recursion between closures in the same block by
+    // making all lambda-bound names visible before any bodies are canonicalized.
+    for (ast_stmt_idxs) |ast_stmt_idx| {
+        const ast_stmt = self.parse_ir.store.getStatement(ast_stmt_idx);
+        if (ast_stmt != .decl) continue;
+        const d = ast_stmt.decl;
+        const ast_body_expr = self.parse_ir.store.getExpr(d.body);
+        if (ast_body_expr != .lambda) continue;
+        const ast_pattern = self.parse_ir.store.getPattern(d.pattern);
+        if (ast_pattern != .ident) continue;
+        const ident_idx = self.parse_ir.tokens.resolveIdentifier(ast_pattern.ident.ident_tok) orelse continue;
+        // Skip if already in scope (from outer scope or duplicate)
+        if (self.scopeLookup(.ident, ident_idx) == .found) continue;
+        const region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.ident.region);
+        const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{
+            .ident = ident_idx,
+        } }, region);
+        const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+        try current_scope.forward_references.put(self.env.gpa, ident_idx, .{
+            .pattern_idx = pattern_idx,
+            .reference_regions = std.ArrayList(Region){},
+        });
+        try current_scope.idents.put(self.env.gpa, ident_idx, pattern_idx);
+    }
+
     var last_expr: ?CanonicalizedExpr = null;
 
     var i: u32 = 0;

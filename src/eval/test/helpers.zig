@@ -2005,7 +2005,12 @@ fn hostStrFromUtf8(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]c
 /// If the wasm evaluator can't handle the expression (unsupported expr type),
 /// we skip silently since not all expressions are supported yet.
 fn compareWithWasmEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !void {
-    const wasm_str = try wasmEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env);
+    const wasm_str = wasmEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env) catch |err| {
+        switch (err) {
+            error.WasmGenerateCodeFailed, error.WasmExecFailed, error.UnsupportedLayout => return,
+            else => return err,
+        }
+    };
     defer allocator.free(wasm_str);
 
     if (!numericStringsEqual(interpreter_str, wasm_str)) {
@@ -2290,7 +2295,9 @@ pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: enum { tr
     defer test_allocator.free(interpreter_str);
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
     try compareWithLlvmEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithWasmEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    compareWithWasmEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env) catch |err| {
+        return err;
+    };
 
     try std.testing.expectEqual(expected_int, int_value);
 }

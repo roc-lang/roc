@@ -9,12 +9,12 @@
 
 const std = @import("std");
 const base = @import("base");
-const types = @import("types");
 const can = @import("can");
+const types = @import("types");
 
 const Ident = base.Ident;
 const Allocator = std.mem.Allocator;
-const CIR = can.CIR;
+const CommonIdents = can.ModuleEnv.CommonIdents;
 
 /// Index into the Store's monotypes array.
 /// Since MIR has a 1:1 expr-to-type mapping, an Expr.Idx can be directly
@@ -279,7 +279,7 @@ pub const Store = struct {
         allocator: Allocator,
         types_store: *const types.Store,
         type_var: types.Var,
-        builtin_indices: CIR.BuiltinIndices,
+        common_idents: CommonIdents,
         seen: *std.AutoHashMap(types.Var, Idx),
         scratches: *Scratches,
     ) Allocator.Error!Idx {
@@ -290,17 +290,17 @@ pub const Store = struct {
 
         return switch (resolved.desc.content) {
             .flex, .rigid => {
-                // Unresolved type variables must not appear in monomorphic code.
-                // Reaching here means the type checker left something unresolved.
-                unreachable;
+                // Unconstrained type variables (e.g. the element type of an empty list `[]`)
+                // have no concrete type, so they are zero-sized.
+                return self.unit_idx;
             },
             .alias => |alias| {
                 // Aliases are transparent — follow the backing var
                 const backing_var = types_store.getAliasBackingVar(alias);
-                return try self.fromTypeVar(allocator, types_store, backing_var, builtin_indices, seen, scratches);
+                return try self.fromTypeVar(allocator, types_store, backing_var, common_idents, seen, scratches);
             },
             .structure => |flat_type| {
-                return try self.fromFlatType(allocator, types_store, resolved.var_, flat_type, builtin_indices, seen, scratches);
+                return try self.fromFlatType(allocator, types_store, resolved.var_, flat_type, common_idents, seen, scratches);
             },
             // Error types are caught in lowerExpr before resolveMonotype;
             // reaching here means a compiler bug in an earlier phase.
@@ -314,13 +314,13 @@ pub const Store = struct {
         types_store: *const types.Store,
         var_: types.Var,
         flat_type: types.FlatType,
-        builtin_indices: CIR.BuiltinIndices,
+        common_idents: CommonIdents,
         seen: *std.AutoHashMap(types.Var, Idx),
         scratches: *Scratches,
     ) Allocator.Error!Idx {
         return switch (flat_type) {
             .nominal_type => |nominal| {
-                return try self.fromNominalType(allocator, types_store, var_, nominal, builtin_indices, seen, scratches);
+                return try self.fromNominalType(allocator, types_store, var_, nominal, common_idents, seen, scratches);
             },
             .empty_record => self.unit_idx,
             .empty_tag_union => try self.addMonotype(allocator, .{ .tag_union = .{ .tags = TagSpan.empty() } }),
@@ -337,7 +337,7 @@ pub const Store = struct {
                 defer scratches.fields.clearFrom(scratch_top);
 
                 for (names, vars) |name, field_var| {
-                    const field_type = try self.fromTypeVar(allocator, types_store, field_var, builtin_indices, seen, scratches);
+                    const field_type = try self.fromTypeVar(allocator, types_store, field_var, common_idents, seen, scratches);
                     try scratches.fields.append(.{ .name = name, .type_idx = field_type });
                 }
 
@@ -358,7 +358,7 @@ pub const Store = struct {
                 defer scratches.fields.clearFrom(scratch_top);
 
                 for (names, vars) |name, field_var| {
-                    const field_type = try self.fromTypeVar(allocator, types_store, field_var, builtin_indices, seen, scratches);
+                    const field_type = try self.fromTypeVar(allocator, types_store, field_var, common_idents, seen, scratches);
                     try scratches.fields.append(.{ .name = name, .type_idx = field_type });
                 }
 
@@ -375,7 +375,7 @@ pub const Store = struct {
                 defer scratches.idxs.clearFrom(scratch_top);
 
                 for (elem_vars) |elem_var| {
-                    const elem_type = try self.fromTypeVar(allocator, types_store, elem_var, builtin_indices, seen, scratches);
+                    const elem_type = try self.fromTypeVar(allocator, types_store, elem_var, common_idents, seen, scratches);
                     try scratches.idxs.append(elem_type);
                 }
 
@@ -400,7 +400,7 @@ pub const Store = struct {
                     defer scratches.idxs.clearFrom(idxs_top);
 
                     for (arg_vars) |arg_var| {
-                        const payload_type = try self.fromTypeVar(allocator, types_store, arg_var, builtin_indices, seen, scratches);
+                        const payload_type = try self.fromTypeVar(allocator, types_store, arg_var, common_idents, seen, scratches);
                         try scratches.idxs.append(payload_type);
                     }
 
@@ -408,13 +408,20 @@ pub const Store = struct {
                     try scratches.tags.append(.{ .name = name, .payloads = payloads_span });
                 }
 
-                const tag_span = try self.addTags(allocator, scratches.tags.sliceFromStart(tags_top));
+                // Sort tags alphabetically by name (required by discriminant lookup)
+                const collected_tags = scratches.tags.sliceFromStart(tags_top);
+                std.mem.sort(Tag, collected_tags, {}, struct {
+                    fn cmp(_: void, a: Tag, b: Tag) bool {
+                        return @as(u32, @bitCast(a.name)) < @as(u32, @bitCast(b.name));
+                    }
+                }.cmp);
+                const tag_span = try self.addTags(allocator, collected_tags);
                 self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .tag_union = .{ .tags = tag_span } };
                 return placeholder_idx;
             },
-            .fn_pure => |func| try self.fromFuncType(allocator, types_store, var_, func, false, builtin_indices, seen, scratches),
-            .fn_effectful => |func| try self.fromFuncType(allocator, types_store, var_, func, true, builtin_indices, seen, scratches),
-            .fn_unbound => |func| try self.fromFuncType(allocator, types_store, var_, func, false, builtin_indices, seen, scratches),
+            .fn_pure => |func| try self.fromFuncType(allocator, types_store, var_, func, false, common_idents, seen, scratches),
+            .fn_effectful => |func| try self.fromFuncType(allocator, types_store, var_, func, true, common_idents, seen, scratches),
+            .fn_unbound => |func| try self.fromFuncType(allocator, types_store, var_, func, false, common_idents, seen, scratches),
         };
     }
 
@@ -425,7 +432,7 @@ pub const Store = struct {
         var_: types.Var,
         func: types.Func,
         effectful: bool,
-        builtin_indices: CIR.BuiltinIndices,
+        common_idents: CommonIdents,
         seen: *std.AutoHashMap(types.Var, Idx),
         scratches: *Scratches,
     ) Allocator.Error!Idx {
@@ -437,12 +444,12 @@ pub const Store = struct {
         defer scratches.idxs.clearFrom(scratch_top);
 
         for (arg_vars) |arg_var| {
-            const arg_type = try self.fromTypeVar(allocator, types_store, arg_var, builtin_indices, seen, scratches);
+            const arg_type = try self.fromTypeVar(allocator, types_store, arg_var, common_idents, seen, scratches);
             try scratches.idxs.append(arg_type);
         }
 
         const args_span = try self.addIdxSpan(allocator, scratches.idxs.sliceFromStart(scratch_top));
-        const ret = try self.fromTypeVar(allocator, types_store, func.ret, builtin_indices, seen, scratches);
+        const ret = try self.fromTypeVar(allocator, types_store, func.ret, common_idents, seen, scratches);
 
         self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .func = .{
             .args = args_span,
@@ -458,48 +465,52 @@ pub const Store = struct {
         types_store: *const types.Store,
         nominal_var: types.Var,
         nominal: types.NominalType,
-        builtin_indices: CIR.BuiltinIndices,
+        common_idents: CommonIdents,
         seen: *std.AutoHashMap(types.Var, Idx),
         scratches: *Scratches,
     ) Allocator.Error!Idx {
         const ident = nominal.ident.ident_idx;
+        const origin = nominal.origin_module;
 
-        // Check if this is a builtin primitive type
-        if (ident == builtin_indices.bool_ident) return self.primIdx(.bool);
-        if (ident == builtin_indices.str_ident) return self.primIdx(.str);
-        if (ident == builtin_indices.u8_ident) return self.primIdx(.u8);
-        if (ident == builtin_indices.i8_ident) return self.primIdx(.i8);
-        if (ident == builtin_indices.u16_ident) return self.primIdx(.u16);
-        if (ident == builtin_indices.i16_ident) return self.primIdx(.i16);
-        if (ident == builtin_indices.u32_ident) return self.primIdx(.u32);
-        if (ident == builtin_indices.i32_ident) return self.primIdx(.i32);
-        if (ident == builtin_indices.u64_ident) return self.primIdx(.u64);
-        if (ident == builtin_indices.i64_ident) return self.primIdx(.i64);
-        if (ident == builtin_indices.u128_ident) return self.primIdx(.u128);
-        if (ident == builtin_indices.i128_ident) return self.primIdx(.i128);
-        if (ident == builtin_indices.dec_ident) return self.primIdx(.dec);
-        if (ident == builtin_indices.f32_ident) return self.primIdx(.f32);
-        if (ident == builtin_indices.f64_ident) return self.primIdx(.f64);
+        if (origin == common_idents.builtin_module) {
+            // Bool/Str: unqualified idents from source declarations
+            if (ident == common_idents.str) return self.primIdx(.str);
+            if (ident == common_idents.bool) return self.primIdx(.bool);
 
-        // Check if this is a builtin List type
-        if (ident == builtin_indices.list_ident) {
-            const type_args = types_store.sliceNominalArgs(nominal);
-            if (type_args.len > 0) {
-                const elem_type = try self.fromTypeVar(allocator, types_store, type_args[0], builtin_indices, seen, scratches);
-                return try self.addMonotype(allocator, .{ .list = .{ .elem = elem_type } });
+            // List: unqualified ident from mkListContent
+            if (ident == common_idents.list) {
+                const type_args = types_store.sliceNominalArgs(nominal);
+                if (type_args.len > 0) {
+                    const elem_type = try self.fromTypeVar(allocator, types_store, type_args[0], common_idents, seen, scratches);
+                    return try self.addMonotype(allocator, .{ .list = .{ .elem = elem_type } });
+                }
+                return self.unit_idx;
             }
-            // List with no type arg — shouldn't happen in well-typed code
-            return self.unit_idx;
-        }
 
-        // Check if this is a builtin Box type
-        if (ident == builtin_indices.box_ident) {
-            const type_args = types_store.sliceNominalArgs(nominal);
-            if (type_args.len > 0) {
-                const inner_type = try self.fromTypeVar(allocator, types_store, type_args[0], builtin_indices, seen, scratches);
-                return try self.addMonotype(allocator, .{ .box = .{ .inner = inner_type } });
+            // Box: unqualified ident from mkBoxContent
+            if (ident == common_idents.box) {
+                const type_args = types_store.sliceNominalArgs(nominal);
+                if (type_args.len > 0) {
+                    const inner_type = try self.fromTypeVar(allocator, types_store, type_args[0], common_idents, seen, scratches);
+                    return try self.addMonotype(allocator, .{ .box = .{ .inner = inner_type } });
+                }
+                return self.unit_idx;
             }
-            return self.unit_idx;
+
+            // Numeric types: qualified idents from mkNumberTypeContent (e.g. "Builtin.Num.I64")
+            if (ident == common_idents.i64_type) return self.primIdx(.i64);
+            if (ident == common_idents.u8_type) return self.primIdx(.u8);
+            if (ident == common_idents.i8_type) return self.primIdx(.i8);
+            if (ident == common_idents.u16_type) return self.primIdx(.u16);
+            if (ident == common_idents.i16_type) return self.primIdx(.i16);
+            if (ident == common_idents.u32_type) return self.primIdx(.u32);
+            if (ident == common_idents.i32_type) return self.primIdx(.i32);
+            if (ident == common_idents.u64_type) return self.primIdx(.u64);
+            if (ident == common_idents.u128_type) return self.primIdx(.u128);
+            if (ident == common_idents.i128_type) return self.primIdx(.i128);
+            if (ident == common_idents.f32_type) return self.primIdx(.f32);
+            if (ident == common_idents.f64_type) return self.primIdx(.f64);
+            if (ident == common_idents.dec_type) return self.primIdx(.dec);
         }
 
         // For all other nominal types, strip the wrapper and follow the backing var.
@@ -515,7 +526,7 @@ pub const Store = struct {
         try seen.put(nominal_var, placeholder_idx);
 
         const backing_var = types_store.getNominalBackingVar(nominal);
-        const backing_idx = try self.fromTypeVar(allocator, types_store, backing_var, builtin_indices, seen, scratches);
+        const backing_idx = try self.fromTypeVar(allocator, types_store, backing_var, common_idents, seen, scratches);
 
         // Copy the resolved backing type's value into our placeholder slot.
         // This value-copy is safe (unlike the other handlers which build fresh

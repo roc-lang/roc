@@ -359,6 +359,16 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>Bob 25 99",
         .description = "Regression test: Record destructuring with alignment-reordered fields",
     },
+    .{
+        .roc_file = "test/fx/cross_module_recursive_nominal.roc",
+        .io_spec = "1>Div (correct)",
+        .description = "Cross-module recursive nominal types with pattern matching",
+    },
+    .{
+        .roc_file = "test/fx/test_no_dbg.roc",
+        .io_spec = "1>Text",
+        .description = "Recursive nominal type with List and pattern matching",
+    },
 };
 
 /// Get the total number of IO spec tests
