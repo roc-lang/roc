@@ -3542,6 +3542,34 @@ test "Bool in record with mixed alignment fields - bug confirmation" {
     try runExpectBool("{ key: 42u64, count: 1u32, flag: Bool.False }.flag", false, .no_trace);
 }
 
+// --- Bool.not runtime tests ---
+// These execute Bool.not across all backends (interpreter, dev, wasm)
+// to narrow down where the negation bug occurs.
+
+test "Bool.not(Bool.True) returns False" {
+    try runExpectBool("Bool.not(Bool.True)", false, .no_trace);
+}
+
+test "Bool.not(Bool.False) returns True" {
+    try runExpectBool("Bool.not(Bool.False)", true, .no_trace);
+}
+
+test "Bool.not(True) with unqualified arg returns False" {
+    try runExpectBool("Bool.not(True)", false, .no_trace);
+}
+
+test "Bool.not(False) with unqualified arg returns True" {
+    try runExpectBool("Bool.not(False)", true, .no_trace);
+}
+
+test "!Bool.True returns False" {
+    try runExpectBool("!Bool.True", false, .no_trace);
+}
+
+test "!Bool.False returns True" {
+    try runExpectBool("!Bool.False", true, .no_trace);
+}
+
 test "Str.trim" {
     try runExpectStr("Str.trim(\"  hello  \")", "hello", .no_trace);
     try runExpectStr("Str.trim(\"hello\")", "hello", .no_trace);
