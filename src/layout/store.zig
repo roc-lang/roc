@@ -353,7 +353,7 @@ pub const Store = struct {
 
     pub fn putRecord(
         self: *Self,
-        env: *const ModuleEnv,
+        _: *const ModuleEnv,
         field_layouts: []const Layout,
         field_names: []const Ident.Idx,
     ) std.mem.Allocator.Error!Idx {
@@ -371,10 +371,11 @@ pub const Store = struct {
             });
         }
 
-        // Sort fields
+        // Sort fields by alignment (descending), then by name (ascending).
+        // Use getFieldName which resolves idents across all module envs,
+        // so cross-module record field names (e.g., from Builtin) are found.
         const AlignmentSortCtx = struct {
             store: *Self,
-            env: *const ModuleEnv,
             target_usize: target.TargetUsize,
             pub fn lessThan(ctx: @This(), lhs: RecordField, rhs: RecordField) bool {
                 const lhs_layout = ctx.store.getLayout(lhs.layout);
@@ -384,8 +385,8 @@ pub const Store = struct {
                 if (lhs_alignment.toByteUnits() != rhs_alignment.toByteUnits()) {
                     return lhs_alignment.toByteUnits() > rhs_alignment.toByteUnits();
                 }
-                const lhs_str = ctx.env.getIdent(lhs.name);
-                const rhs_str = ctx.env.getIdent(rhs.name);
+                const lhs_str = ctx.store.getFieldName(lhs.name);
+                const rhs_str = ctx.store.getFieldName(rhs.name);
                 return std.mem.order(u8, lhs_str, rhs_str) == .lt;
             }
         };
@@ -398,7 +399,7 @@ pub const Store = struct {
         std.mem.sort(
             RecordField,
             temp_fields.items,
-            AlignmentSortCtx{ .store = self, .env = env, .target_usize = self.targetUsize() },
+            AlignmentSortCtx{ .store = self, .target_usize = self.targetUsize() },
             AlignmentSortCtx.lessThan,
         );
 
@@ -919,14 +920,24 @@ pub const Store = struct {
         return null;
     }
 
-    /// Get the field name text for an Ident.Idx using the current module's ident store.
-    /// Used by the interpreter/evaluator to compare field names by string.
+    /// Get the field name text for an Ident.Idx.
+    /// Tries the current module first, then falls back to all module envs
+    /// for cross-module identifiers (e.g., record field names from Builtin).
     pub fn getFieldName(self: *const Self, idx: Ident.Idx) []const u8 {
         if (self.mutable_env) |env| {
             return env.getIdent(idx);
         }
+        const raw_idx: u32 = idx.idx;
+        // Try current module first
         if (self.current_module_idx < self.all_module_envs.len) {
-            return self.all_module_envs[self.current_module_idx].getIdent(idx);
+            const env = self.all_module_envs[self.current_module_idx];
+            if (raw_idx < env.common.idents.interner.bytes.len())
+                return env.getIdent(idx);
+        }
+        // Fall back to all modules for cross-module idents
+        for (self.all_module_envs) |env| {
+            if (raw_idx < env.common.idents.interner.bytes.len())
+                return env.getIdent(idx);
         }
         return "?";
     }

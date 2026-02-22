@@ -3227,9 +3227,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_shift_right_by,
                 .num_shift_right_zf_by,
                 .str_inspekt,
+                .list_sublist => {
+                    // list_sublist(list, {start, len}) -> List
+                    if (args.len != 2) unreachable;
+                    const list_loc = try self.generateExpr(args[0]);
+                    const record_loc = try self.generateExpr(args[1]);
+                    return try self.callListSublistFromRecord(ll, list_loc, record_loc);
+                },
                 .list_sort_with,
                 .list_drop_at,
-                .list_sublist,
                 .compare,
                 => {
                     if (std.debug.runtime_safety) unreachable;
@@ -3455,6 +3461,49 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addMemArg(base_reg, len_slot);
                 try builder.addRegArg(roc_ops_reg);
 
+                try self.callBuiltin(&builder, fn_addr, .list_sublist);
+            }
+
+            return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
+        }
+
+        /// list_sublist(list, {start, len}) -> List
+        /// The record {start: U64, len: U64} has fields at offsets determined by the layout store.
+        fn callListSublistFromRecord(self: *Self, ll: anytype, list_loc: ValueLocation, record_loc: ValueLocation) Allocator.Error!ValueLocation {
+            const ls = self.layout_store orelse unreachable;
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+
+            const elem_size_align: layout.SizeAlign = blk: {
+                const ret_layout = ls.getLayout(ll.ret_layout);
+                break :blk switch (ret_layout.tag) {
+                    .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
+                    .list_of_zst => .{ .size = 0, .alignment = .@"1" },
+                    else => unreachable,
+                };
+            };
+
+            const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+            // The record is {start: U64, len: U64} = 16 bytes
+            const record_off = try self.ensureOnStack(record_loc, 16);
+
+            const result_offset = self.codegen.allocStackSlot(roc_str_size);
+            const alignment_bytes = elem_size_align.alignment.toByteUnits();
+            const fn_addr: usize = @intFromPtr(&wrapListSublist);
+
+            {
+                // wrapListSublist(out, list_bytes, list_len, list_cap, alignment, element_width, start, len, roc_ops)
+                const base_reg = frame_ptr;
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                try builder.addLeaArg(base_reg, result_offset);
+                try builder.addMemArg(base_reg, list_off);
+                try builder.addMemArg(base_reg, list_off + 8);
+                try builder.addMemArg(base_reg, list_off + 16);
+                try builder.addImmArg(@intCast(alignment_bytes));
+                try builder.addImmArg(@intCast(elem_size_align.size));
+                // Record fields: {start: U64, len: U64} — start at offset 0, len at offset 8
+                try builder.addMemArg(base_reg, record_off);
+                try builder.addMemArg(base_reg, record_off + 8);
+                try builder.addRegArg(roc_ops_reg);
                 try self.callBuiltin(&builder, fn_addr, .list_sublist);
             }
 
@@ -11864,7 +11913,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.emitRocCrash("hit a runtime error in call (dead code path)");
                         return .{ .immediate_i64 = 0 };
                     },
-                    else => unreachable,
+                    else => @panic("generateLookupCall: unexpected def expr type in symbol_defs"),
                 };
             }
 
@@ -11889,7 +11938,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
 
-            unreachable;
+            @panic("generateLookupCall: symbol not found in proc_registry, symbol_defs, or symbol_locations");
         }
 
         /// Generate a call to an already-compiled procedure.
