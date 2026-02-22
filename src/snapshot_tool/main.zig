@@ -48,6 +48,7 @@ fn panicHandler(msg: []const u8, ret_addr: ?usize) noreturn {
 
 /// Unix signal handler for catching segfaults and illegal instructions from
 /// generated code. Uses the same panic_jmp mechanism as the panic handler.
+/// Not available on Windows (no POSIX signals).
 fn crashSignalHandler(_: i32) callconv(.c) void {
     if (panic_jmp) |jmp| {
         panic_msg = "signal: segfault or illegal instruction in generated code";
@@ -75,6 +76,9 @@ fn alarmSignalHandler(_: i32) callconv(.c) void {
 }
 
 fn installCrashSignalHandlers() void {
+    const native_os = @import("builtin").os.tag;
+    if (comptime native_os == .windows) return;
+
     const sa = std.posix.Sigaction{
         .handler = .{ .handler = &crashSignalHandler },
         .mask = std.posix.sigemptyset(),
