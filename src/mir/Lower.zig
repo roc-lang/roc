@@ -369,9 +369,17 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
             } }, monotype, region);
         },
 
-        // --- Nominal (strip wrapper) ---
-        .e_nominal => |nom| try self.lowerExpr(nom.backing_expr),
-        .e_nominal_external => |nom_ext| try self.lowerExpr(nom_ext.backing_expr),
+        // --- Nominal (strip wrapper, keep nominal monotype) ---
+        .e_nominal => |nom| {
+            const result = try self.lowerExpr(nom.backing_expr);
+            self.store.type_map.items[@intFromEnum(result)] = monotype;
+            return result;
+        },
+        .e_nominal_external => |nom_ext| {
+            const result = try self.lowerExpr(nom_ext.backing_expr);
+            self.store.type_map.items[@intFromEnum(result)] = monotype;
+            return result;
+        },
 
         // --- Type var dispatch (resolved to call) ---
         .e_type_var_dispatch => |tvd| {

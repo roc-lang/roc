@@ -1390,3 +1390,181 @@ test "cross-module: string inequality lowers without error" {
     const result = env.mir_store.getExpr(expr);
     try testing.expect(result != .runtime_err_type);
 }
+
+// --- Bool diagnostic MIR tests ---
+// These tests verify MIR lowering of Bool expressions from failing REPL snapshots.
+// If all pass, the Bool inversion bug is in LIR lowering or codegen, not MIR.
+
+test "Bool diagnostic MIR: Bool.True lowers to tag with prim.bool" {
+    var env = try MirTestEnv.initExpr("Bool.True");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    // Bool.True should lower to a .tag expression
+    try testing.expect(result == .tag);
+    try testing.expectEqual(@as(u16, 0), result.tag.args.len);
+    // Check the tag name is "True"
+    const tag_name = env.module_env.getIdent(result.tag.name);
+    try testing.expectEqualStrings("True", tag_name);
+    // Monotype should be prim.bool
+    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
+    try testing.expect(monotype == .prim);
+    try testing.expectEqual(Monotype.Prim.bool, monotype.prim);
+}
+
+test "Bool diagnostic MIR: Bool.False lowers to tag with prim.bool" {
+    var env = try MirTestEnv.initExpr("Bool.False");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .tag);
+    try testing.expectEqual(@as(u16, 0), result.tag.args.len);
+    const tag_name = env.module_env.getIdent(result.tag.name);
+    try testing.expectEqualStrings("False", tag_name);
+    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
+    try testing.expect(monotype == .prim);
+    try testing.expectEqual(Monotype.Prim.bool, monotype.prim);
+}
+
+test "Bool diagnostic MIR: Bool.not(True) lowers with prim.bool type" {
+    var env = try MirTestEnv.initExpr("Bool.not(True)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    // Bool.not may lower as a cross-module call or inlined match
+    try testing.expect(result != .runtime_err_type);
+    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
+    try testing.expect(monotype == .prim);
+    try testing.expectEqual(Monotype.Prim.bool, monotype.prim);
+}
+
+test "Bool diagnostic MIR: Bool.not(False) lowers with prim.bool type" {
+    var env = try MirTestEnv.initExpr("Bool.not(False)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
+    try testing.expect(monotype == .prim);
+    try testing.expectEqual(Monotype.Prim.bool, monotype.prim);
+}
+
+test "Bool diagnostic MIR: !Bool.True lowers to match_expr with prim.bool" {
+    var env = try MirTestEnv.initFull("Test",
+        \\main : Bool
+        \\main = !Bool.True
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    // !Bool.True desugars via negBool to a match expression
+    try testing.expect(env.mir_store.getExpr(expr) == .match_expr);
+    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
+    try testing.expect(monotype == .prim);
+    try testing.expectEqual(Monotype.Prim.bool, monotype.prim);
+}
+
+test "Bool diagnostic MIR: !Bool.False lowers to match_expr with prim.bool" {
+    var env = try MirTestEnv.initFull("Test",
+        \\main : Bool
+        \\main = !Bool.False
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    try testing.expect(env.mir_store.getExpr(expr) == .match_expr);
+    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
+    try testing.expect(monotype == .prim);
+    try testing.expectEqual(Monotype.Prim.bool, monotype.prim);
+}
+
+test "Bool diagnostic MIR: Bool.True and Bool.False lowers to match_expr with prim.bool" {
+    var env = try MirTestEnv.initExpr("Bool.True and Bool.False");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    // `and` short-circuit desugars to a match expression
+    try testing.expect(result == .match_expr);
+    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
+    try testing.expect(monotype == .prim);
+    try testing.expectEqual(Monotype.Prim.bool, monotype.prim);
+}
+
+test "Bool diagnostic MIR: !Bool.True or !Bool.True lowers with prim.bool" {
+    var env = try MirTestEnv.initFull("Test",
+        \\main : Bool
+        \\main = !Bool.True or !Bool.True
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    // `or` short-circuit desugars to a match expression
+    try testing.expect(result == .match_expr);
+    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
+    try testing.expect(monotype == .prim);
+    try testing.expectEqual(Monotype.Prim.bool, monotype.prim);
+}
+
+test "Bool diagnostic MIR: lambda negation applied to Bool.True lowers with prim.bool" {
+    var env = try MirTestEnv.initExpr("(|x| !x)(Bool.True)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    // A lambda call should produce a .call expression
+    try testing.expect(result != .runtime_err_type);
+    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
+    try testing.expect(monotype == .prim);
+    try testing.expectEqual(Monotype.Prim.bool, monotype.prim);
+}
+
+// --- Nominal Bool vs structural tag union MIR tests ---
+// CRITICAL DISTINCTION: Bare tags like `True` and `False` without a Bool annotation
+// must lower to `.tag_union` monotype, NOT `prim.bool`. Only nominal `Bool` (via
+// qualified `Bool.True` or explicit `: Bool` annotation) gets `prim.bool`.
+// See also: corresponding type-checking tests in type_checking_integration.zig.
+
+test "Nominal Bool MIR: annotated True lowers with prim.bool" {
+    var env = try MirTestEnv.initFull("Test",
+        \\main : Bool
+        \\main = True
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
+    try testing.expect(monotype == .prim);
+    try testing.expectEqual(Monotype.Prim.bool, monotype.prim);
+}
+
+test "Nominal Bool MIR: annotated False lowers with prim.bool" {
+    var env = try MirTestEnv.initFull("Test",
+        \\main : Bool
+        \\main = False
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
+    try testing.expect(monotype == .prim);
+    try testing.expectEqual(Monotype.Prim.bool, monotype.prim);
+}
+
+test "Structural tag MIR: bare True lowers as tag_union not prim.bool" {
+    var env = try MirTestEnv.initExpr("True");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
+    try testing.expect(monotype == .tag_union);
+}
+
+test "Structural tag MIR: bare False lowers as tag_union not prim.bool" {
+    var env = try MirTestEnv.initExpr("False");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
+    try testing.expect(monotype == .tag_union);
+}
+
+test "Structural tag MIR: if True True else False lowers as tag_union not prim.bool" {
+    var env = try MirTestEnv.initExpr("if True True else False");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
+    try testing.expect(monotype == .tag_union);
+}

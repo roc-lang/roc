@@ -3482,6 +3482,98 @@ test "check type - static dispatch method type mismatch - REGRESSION TEST" {
     try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
 }
 
+// --- Bool diagnostic tests ---
+// These tests verify type-checking of Bool expressions from failing REPL snapshots.
+// If all pass, the Bool inversion bug is in LIR lowering or codegen, not type-checking.
+
+test "check type - bool diagnostic - Bool.True" {
+    try checkTypesExpr("Bool.True", .pass, "Bool");
+}
+
+test "check type - bool diagnostic - Bool.False" {
+    try checkTypesExpr("Bool.False", .pass, "Bool");
+}
+
+test "check type - bool diagnostic - Bool.not(True)" {
+    try checkTypesExpr("Bool.not(True)", .pass, "Bool");
+}
+
+test "check type - bool diagnostic - Bool.not(False)" {
+    try checkTypesExpr("Bool.not(False)", .pass, "Bool");
+}
+
+test "check type - bool diagnostic - !Bool.True" {
+    const source =
+        \\x = !Bool.True
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - bool diagnostic - !Bool.False" {
+    const source =
+        \\x = !Bool.False
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - bool diagnostic - Bool.True and Bool.False" {
+    try checkTypesExpr("Bool.True and Bool.False", .pass, "Bool");
+}
+
+test "check type - bool diagnostic - !Bool.True or !Bool.True" {
+    const source =
+        \\x = !Bool.True or !Bool.True
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - bool diagnostic - lambda negation applied to Bool.True" {
+    try checkTypesExpr("(|x| !x)(Bool.True)", .pass, "Bool");
+}
+
+// --- Nominal Bool vs structural tag union tests ---
+// CRITICAL DISTINCTION: In Roc, bare tags like `True` and `False` are structural tag unions,
+// NOT Bool primitives. They only become nominal `Bool` when unified with a Bool annotation
+// or a qualified reference like `Bool.True`. This is by design.
+// See also: corresponding MIR tests in lower_test.zig.
+
+test "check type - nominal Bool - annotated True is Bool" {
+    const source =
+        \\x : Bool
+        \\x = True
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - nominal Bool - annotated False is Bool" {
+    const source =
+        \\x : Bool
+        \\x = False
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - structural tag - bare True is open tag union" {
+    const source =
+        \\x = True
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[True, ..]");
+}
+
+test "check type - structural tag - bare False is open tag union" {
+    const source =
+        \\x = False
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[False, ..]");
+}
+
+test "check type - structural tag - if True True else False is open tag union" {
+    const source =
+        \\x = if True True else False
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[True, False, ..]");
+}
+
 // helpers - module //
 
 const ModuleExpectation = union(enum) {

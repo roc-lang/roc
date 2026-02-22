@@ -473,6 +473,9 @@ pub const Store = struct {
             // Bool/Str: unqualified idents from source declarations
             if (ident == common_idents.str) return self.primIdx(.str);
             if (ident == common_idents.bool) return self.primIdx(.bool);
+        }
+
+        if (origin == common_idents.builtin_module) {
 
             // List: unqualified ident from mkListContent
             if (ident == common_idents.list) {

@@ -583,6 +583,30 @@ test "Repl - multi-arg lambda function renders as <function>" {
     try testing.expectEqualStrings("<function>", result);
 }
 
+test "Repl dev backend - Bool.True" {
+    var test_env = TestEnv.init(interpreter_allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.initWithBackend(interpreter_allocator, test_env.get_ops(), null, .dev);
+    defer repl.deinit();
+
+    const result = try repl.step("Bool.True");
+    defer interpreter_allocator.free(result);
+    try testing.expectEqualStrings("True", result);
+}
+
+test "Repl dev backend - Bool.not(False)" {
+    var test_env = TestEnv.init(interpreter_allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.initWithBackend(interpreter_allocator, test_env.get_ops(), null, .dev);
+    defer repl.deinit();
+
+    const result = try repl.step("Bool.not(False)");
+    defer interpreter_allocator.free(result);
+    try testing.expectEqualStrings("True", result);
+}
+
 test "Repl dev backend - U8.from_str result format" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
