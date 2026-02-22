@@ -590,12 +590,18 @@ fn lowerPattern(self: *Self, module_env: *const ModuleEnv, pattern_idx: CIR.Patt
             } }, monotype);
         },
         .nominal => |nom| {
-            // Strip nominal wrapper — lower the backing pattern
-            return try self.lowerPattern(module_env, nom.backing_pattern);
+            // Strip nominal wrapper, but keep the nominal monotype
+            // (same pattern as e_nominal expression lowering).
+            const result = try self.lowerPattern(module_env, nom.backing_pattern);
+            self.store.pattern_type_map.items[@intFromEnum(result)] = monotype;
+            return result;
         },
         .nominal_external => |nom_ext| {
-            // Strip nominal wrapper — lower the backing pattern
-            return try self.lowerPattern(module_env, nom_ext.backing_pattern);
+            // Strip nominal wrapper, but keep the nominal monotype
+            // (same pattern as e_nominal_external expression lowering).
+            const result = try self.lowerPattern(module_env, nom_ext.backing_pattern);
+            self.store.pattern_type_map.items[@intFromEnum(result)] = monotype;
+            return result;
         },
         .num_literal => |nl| try self.store.addPattern(self.allocator, .{ .int_literal = .{ .value = nl.value } }, monotype),
         .str_literal => |sl| try self.store.addPattern(self.allocator, .{ .str_literal = sl.literal }, monotype),
