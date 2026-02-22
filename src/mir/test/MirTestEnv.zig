@@ -74,8 +74,8 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .external_decls = serialized_ptr.external_decls.deserializeInto(base_ptr),
         .imports = try serialized_ptr.imports.deserializeInto(base_ptr, gpa),
         .module_name = module_name,
-        .display_module_name_idx = base.Ident.Idx.NONE,
-        .qualified_module_ident = base.Ident.Idx.NONE,
+        .display_module_name_idx = ModuleEnv.CommonIdents.find(&common).builtin_module,
+        .qualified_module_ident = ModuleEnv.CommonIdents.find(&common).builtin_module,
         .diagnostics = serialized_ptr.diagnostics,
         .store = serialized_ptr.store.deserializeInto(base_ptr, gpa),
         .evaluation_order = null,
@@ -235,7 +235,6 @@ pub fn initFull(module_name: []const u8, source: []const u8) !MirTestEnv {
         mir_store,
         @as([]const *ModuleEnv, all_module_envs_slice),
         &module_env.types,
-        builtin_indices,
         1, // current_module_idx = test module (Builtin is at index 0)
         null,
     );
@@ -432,7 +431,6 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         mir_store,
         @as([]const *ModuleEnv, all_module_envs_slice),
         &module_env.types,
-        builtin_indices,
         2, // current_module_idx = this module
         null,
     );

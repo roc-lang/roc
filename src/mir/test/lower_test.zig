@@ -12,7 +12,6 @@ const Monotype = @import("../Monotype.zig");
 const Lower = @import("../Lower.zig");
 const MirTestEnv = @import("MirTestEnv.zig");
 
-const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 const Region = base.Region;
 const Ident = base.Ident;
@@ -391,7 +390,6 @@ test "Lower: init and deinit" {
         &store,
         @as([]const *ModuleEnv, &all_module_envs),
         &module_env.types,
-        std.mem.zeroes(CIR.BuiltinIndices),
         0,
         null,
     );
@@ -573,7 +571,7 @@ test "fromTypeVar: string resolves to valid monotype" {
     try testing.expect(!type_idx.isNone());
 }
 
-test "fromTypeVar: list resolves to valid monotype" {
+test "fromTypeVar: list resolves to list monotype" {
     var env = try MirTestEnv.initExpr("[1.I64, 2.I64, 3.I64]");
     defer env.deinit();
     const expr = try env.lowerFirstDef();
@@ -581,9 +579,12 @@ test "fromTypeVar: list resolves to valid monotype" {
     const result = env.mir_store.getExpr(expr);
     try testing.expect(result == .list);
     try testing.expectEqual(@as(u16, 3), result.list.elems.len);
-    // The monotype should be resolved (not unit placeholder)
-    const type_idx = env.mir_store.typeOf(expr);
-    try testing.expect(!type_idx.isNone());
+    // The monotype must be .list (not .tag_union or anything else).
+    // This catches the cross-module ident mismatch bug where
+    // fromNominalType fails to recognize List because the Builtin
+    // module's Ident.Idx for "List" differs from the current module's.
+    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
+    try testing.expect(monotype == .list);
 }
 
 test "fromTypeVar: record resolves to record with fields" {
@@ -964,4 +965,428 @@ test "lowerExternalDef: mutually recursive defs get monotypes patched (not left 
     const odd_mono = env.mir_store.monotype_store.getMonotype(odd_type);
     try testing.expect(even_mono == .func);
     try testing.expect(odd_mono == .func);
+}
+
+// --- Cross-module builtin call lowering ---
+//
+// These tests verify that calls to Builtin module functions (List.map, List.get,
+// Num.to, etc.) lower correctly through MIR. Each test corresponds to one or more
+// snapshot failures where the dev backend panics with "generateLookupCall: symbol
+// not found" or "index out of bounds: index 268435454" — both symptoms of
+// cross-module resolution failing during MIR lowering.
+
+// -- List.map (snapshot: list_map.md, list_map_empty.md) --
+
+test "cross-module: List.map lowers without error" {
+    var env = try MirTestEnv.initExpr("List.map([2.I64, 4.I64, 6.I64], |val| val * 2)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: List.map on empty list lowers without error" {
+    var env = try MirTestEnv.initExpr("List.map([], |_| 0)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+// -- List.keep_if / List.drop_if (snapshots: list_keep_if*.md, list_drop_if.md) --
+
+test "cross-module: List.keep_if lowers without error" {
+    var env = try MirTestEnv.initExpr("List.keep_if([1.I64, 2.I64, 3.I64, 4.I64, 5.I64], |x| x > 2)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: List.keep_if with always-false predicate lowers without error" {
+    var env = try MirTestEnv.initExpr("List.keep_if([1.I64, 2.I64, 3.I64], |_| Bool.False)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: List.drop_if lowers without error" {
+    var env = try MirTestEnv.initExpr("List.drop_if([1.I64, 2.I64, 3.I64, 4.I64, 5.I64], |x| x > 2)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+// -- List.count_if (snapshots: list_count_if*.md) --
+
+test "cross-module: List.count_if lowers without error" {
+    var env = try MirTestEnv.initExpr("List.count_if([1.I64, 2.I64, 3.I64, 4.I64, 5.I64], |x| x > 2)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: List.count_if on empty list lowers without error" {
+    var env = try MirTestEnv.initExpr("List.count_if([], |x| x > 2.I64)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+// -- List.get (snapshot: list_get.md) --
+
+test "cross-module: List.get lowers without error" {
+    var env = try MirTestEnv.initExpr("List.get([1.I64, 2.I64, 3.I64], 0)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+// -- List.first (snapshots: list_first.md, double_question_list_first.md) --
+
+test "cross-module: List.first lowers without error" {
+    var env = try MirTestEnv.initExpr("List.first([1.I64, 2.I64, 3.I64])");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+// -- List.last (snapshot: list_last.md) --
+
+test "cross-module: List.last lowers without error" {
+    var env = try MirTestEnv.initExpr("List.last([1.I64, 2.I64, 3.I64])");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+// -- List.repeat (snapshot: list_repeat.md) --
+
+test "cross-module: List.repeat lowers without error" {
+    var env = try MirTestEnv.initExpr("List.repeat(4.I64, 7)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+// -- List.sublist (snapshots: list_sublist_nested.md, list_tags.md) --
+
+test "cross-module: List.sublist lowers without error" {
+    var env = try MirTestEnv.initExpr("List.sublist([1.I64, 2.I64, 3.I64, 4.I64], {start: 1, len: 2})");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+// -- List.fold_rev (snapshots: list_fold_rev_basic.md, list_fold_rev_subtract.md, list_fold_rev_empty.md) --
+
+test "cross-module: List.fold_rev lowers without error" {
+    var env = try MirTestEnv.initExpr("List.fold_rev([1.I64, 2.I64, 3.I64], 0.I64, |x, acc| acc * 10 + x)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: List.fold_rev on empty list lowers without error" {
+    var env = try MirTestEnv.initExpr("List.fold_rev([], 42.I64, |x, acc| x + acc)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+// -- List.join_with (snapshot: list_join_with.md) --
+
+test "cross-module: List.join_with lowers without error" {
+    var env = try MirTestEnv.initExpr(
+        \\List.join_with(["hello", "world"], " ")
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+// -- List.sort_with (snapshot: list_sort_with.md) --
+
+test "cross-module: List.sort_with lowers without error" {
+    var env = try MirTestEnv.initExpr("List.sort_with([3.I64, 1.I64, 2.I64], |a, b| if a < b LT else if a > b GT else EQ)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+// -- Num.to / Num.until range methods (snapshots: *_range_to.md, *_range_until.md) --
+// All numeric range methods exercise the same cross-module dispatch path.
+// We test representative types: U8, I64, U64, Dec.
+
+test "cross-module: I64.to range method lowers without error" {
+    var env = try MirTestEnv.initExpr("1.I64.to(5.I64)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: I64.until range method lowers without error" {
+    var env = try MirTestEnv.initExpr("1.I64.until(5.I64)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: U8.to range method lowers without error" {
+    var env = try MirTestEnv.initExpr("1.U8.to(5.U8)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: U8.until range method lowers without error" {
+    var env = try MirTestEnv.initExpr("0.U8.until(3.U8)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: U16.to range method lowers without error" {
+    var env = try MirTestEnv.initExpr("1.U16.to(5.U16)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: U16.until range method lowers without error" {
+    var env = try MirTestEnv.initExpr("0.U16.until(3.U16)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: I16.to range method lowers without error" {
+    var env = try MirTestEnv.initExpr("1.I16.to(5.I16)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: I16.until range method lowers without error" {
+    var env = try MirTestEnv.initExpr("0.I16.until(3.I16)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: U32.to range method lowers without error" {
+    var env = try MirTestEnv.initExpr("1.U32.to(5.U32)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: U32.until range method lowers without error" {
+    var env = try MirTestEnv.initExpr("0.U32.until(3.U32)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: I32.to range method lowers without error" {
+    var env = try MirTestEnv.initExpr("1.I32.to(5.I32)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: I32.until range method lowers without error" {
+    var env = try MirTestEnv.initExpr("0.I32.until(3.I32)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: U64.to range method lowers without error" {
+    var env = try MirTestEnv.initExpr("1.U64.to(5.U64)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: U64.until range method lowers without error" {
+    var env = try MirTestEnv.initExpr("0.U64.until(3.U64)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: I128.to range method lowers without error" {
+    var env = try MirTestEnv.initExpr("1.I128.to(5.I128)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: I128.until range method lowers without error" {
+    var env = try MirTestEnv.initExpr("0.I128.until(3.I128)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: U128.to range method lowers without error" {
+    var env = try MirTestEnv.initExpr("1.U128.to(5.U128)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: U128.until range method lowers without error" {
+    var env = try MirTestEnv.initExpr("0.U128.until(3.U128)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: I8.to range method lowers without error" {
+    var env = try MirTestEnv.initExpr("1.I8.to(5.I8)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: I8.until range method lowers without error" {
+    var env = try MirTestEnv.initExpr("0.I8.until(3.I8)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: Dec.to range method lowers without error" {
+    var env = try MirTestEnv.initFull("Test",
+        \\main = 0.5.to(2.5)
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: Dec.until range method lowers without error" {
+    var env = try MirTestEnv.initFull("Test",
+        \\main = 0.5.until(3.5)
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+// -- Method on literal (snapshots: method_on_int_literal.md, method_on_float_literal.md) --
+
+test "cross-module: method call on int literal lowers without error" {
+    var env = try MirTestEnv.initExpr("35.abs()");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: method call on float literal lowers without error" {
+    var env = try MirTestEnv.initExpr("12.34.abs()");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+// -- Try.is_eq / equality on Result (snapshot: try_is_eq.md) --
+
+test "cross-module: Try equality lowers without error" {
+    var env = try MirTestEnv.initFull("Test",
+        \\main : Bool
+        \\main = Try.Ok(1) == Try.Ok(1)
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+// -- Deeply nested polymorphic functions (snapshot: deeply_nested_polymorphic_functions.md) --
+
+test "cross-module: deeply nested polymorphic HOF lowers without error" {
+    var env = try MirTestEnv.initExpr("(|twice, identity| { a: twice(identity, 42.I64), b: twice(|x| x + 1, 100.I64) })(|f, val| f(f(val)), |x| x)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+// -- Fibonacci / recursive with cross-module numeric ops (snapshot: fibonacci.md) --
+
+test "cross-module: recursive fibonacci with numeric ops lowers without error" {
+    var env = try MirTestEnv.initFull("Test",
+        \\fib : I64 -> I64
+        \\fib = |n| if n <= 1 n else fib(n - 1) + fib(n - 2)
+        \\
+        \\main = fib(5)
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+// -- String equality (snapshot: string_equality_basic.md) --
+
+test "cross-module: string equality lowers without error" {
+    var env = try MirTestEnv.initFull("Test",
+        \\main : Bool
+        \\main = "hello" == "hello"
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: string inequality lowers without error" {
+    var env = try MirTestEnv.initFull("Test",
+        \\main : Bool
+        \\main = "hello" != "world"
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
 }
