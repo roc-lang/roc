@@ -26,7 +26,9 @@ const LoadedModule = builtin_loading.LoadedModule;
 const DevEvaluator = eval_mod.DevEvaluator;
 const LlvmEvaluator = eval_mod.LlvmEvaluator;
 
-pub const Backend = @import("backend").EvalBackend;
+const backend_mod = @import("backend");
+pub const Backend = backend_mod.EvalBackend;
+const ExecutableMemory = backend_mod.ExecutableMemory;
 const CommonEnv = base.CommonEnv;
 
 /// Render a parse diagnostic for REPL output (without source context for cleaner display).
@@ -734,6 +736,7 @@ pub const Repl = struct {
                     module_env,
                     final_expr_idx,
                     all_module_envs,
+                    self.builtin_module.env,
                 ) catch {
                     return self.evaluateWithInterpreter(
                         module_env,
@@ -744,7 +747,7 @@ pub const Repl = struct {
                 };
                 defer code_result.deinit();
 
-                var jit = eval_mod.JitCode.initWithEntryOffset(
+                var jit = ExecutableMemory.initWithEntryOffset(
                     code_result.code,
                     code_result.entry_offset,
                 ) catch {
