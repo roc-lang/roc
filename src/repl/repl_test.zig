@@ -595,6 +595,18 @@ test "Repl dev backend - Bool.True" {
     try testing.expectEqualStrings("True", result);
 }
 
+test "Repl dev backend - Bool.False" {
+    var test_env = TestEnv.init(interpreter_allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.initWithBackend(interpreter_allocator, test_env.get_ops(), null, .dev);
+    defer repl.deinit();
+
+    const result = try repl.step("Bool.False");
+    defer interpreter_allocator.free(result);
+    try testing.expectEqualStrings("False", result);
+}
+
 test "Repl dev backend - Bool.not(False)" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
@@ -603,6 +615,79 @@ test "Repl dev backend - Bool.not(False)" {
     defer repl.deinit();
 
     const result = try repl.step("Bool.not(False)");
+    defer interpreter_allocator.free(result);
+    try testing.expectEqualStrings("True", result);
+}
+
+test "Repl dev backend - Bool.not(Bool.True) returns False" {
+    var test_env = TestEnv.init(interpreter_allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.initWithBackend(interpreter_allocator, test_env.get_ops(), null, .dev);
+    defer repl.deinit();
+
+    const result = try repl.step("Bool.not(Bool.True)");
+    defer interpreter_allocator.free(result);
+    try testing.expectEqualStrings("False", result);
+}
+
+test "Repl dev backend - Bool.not(Bool.False) returns True" {
+    var test_env = TestEnv.init(interpreter_allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.initWithBackend(interpreter_allocator, test_env.get_ops(), null, .dev);
+    defer repl.deinit();
+
+    const result = try repl.step("Bool.not(Bool.False)");
+    defer interpreter_allocator.free(result);
+    try testing.expectEqualStrings("True", result);
+}
+
+test "Repl dev backend - !Bool.True returns False" {
+    var test_env = TestEnv.init(interpreter_allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.initWithBackend(interpreter_allocator, test_env.get_ops(), null, .dev);
+    defer repl.deinit();
+
+    const result = try repl.step("!Bool.True");
+    defer interpreter_allocator.free(result);
+    try testing.expectEqualStrings("False", result);
+}
+
+test "Repl dev backend - !Bool.False returns True" {
+    var test_env = TestEnv.init(interpreter_allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.initWithBackend(interpreter_allocator, test_env.get_ops(), null, .dev);
+    defer repl.deinit();
+
+    const result = try repl.step("!Bool.False");
+    defer interpreter_allocator.free(result);
+    try testing.expectEqualStrings("True", result);
+}
+
+test "Repl interpreter backend - Bool.not(False) returns True" {
+    var test_env = TestEnv.init(interpreter_allocator);
+    defer test_env.deinit();
+
+    // Use default backend (interpreter)
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
+    defer repl.deinit();
+
+    const result = try repl.step("Bool.not(False)");
+    defer interpreter_allocator.free(result);
+    try testing.expectEqualStrings("True", result);
+}
+
+test "Repl interpreter backend - Bool.not(Bool.False) returns True" {
+    var test_env = TestEnv.init(interpreter_allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
+    defer repl.deinit();
+
+    const result = try repl.step("Bool.not(Bool.False)");
     defer interpreter_allocator.free(result);
     try testing.expectEqualStrings("True", result);
 }
