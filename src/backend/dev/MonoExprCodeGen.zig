@@ -79,7 +79,6 @@ const strWithAsciiUppercased = builtins.str.strWithAsciiUppercased;
 const strFromUtf8Lossy = builtins.str.fromUtf8Lossy;
 const strFromUtf8C = builtins.str.fromUtf8C;
 const FromUtf8Try = builtins.str.FromUtf8Try;
-const UpdateMode = builtins.utils.UpdateMode;
 
 const Relocation = @import("Relocation.zig").Relocation;
 const StaticDataInterner = @import("StaticDataInterner.zig");
@@ -454,7 +453,7 @@ fn wrapStrFromUtf8Lossy(out: *RocStr, list_bytes: ?[*]u8, list_len: usize, list_
 fn wrapStrFromUtf8(out: [*]u8, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, roc_ops: *RocOps) callconv(.c) void {
     const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     const result = strFromUtf8C(list, .Immutable, roc_ops);
-    @as(*FromUtf8Try, @alignCast(@ptrCast(out))).* = result;
+    @as(*FromUtf8Try, @ptrCast(@alignCast(out))).* = result;
 }
 
 /// Wrapper: escape special characters and wrap in double quotes for Str.inspect
@@ -4391,8 +4390,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
             if (is_float) {
                 return self.generateFloatBinop(binop.op, lhs_loc, rhs_loc);
-            } else if (operands_are_i128
-                or binop.operand_layout == .i128 or binop.operand_layout == .u128 or binop.operand_layout == .dec) {
+            } else if (operands_are_i128 or binop.operand_layout == .i128 or binop.operand_layout == .u128 or binop.operand_layout == .dec) {
                 // Use i128 path for Dec/i128 operands (even for comparisons that return bool)
                 // Convert .stack locations to .stack_i128 for Dec operations, since Dec values are 16 bytes
                 // but may be stored with .stack location type (e.g., mutable variables)
@@ -4450,14 +4448,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condEqual());
                 },
                 .neq => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condNotEqual()),
-                .lt => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg,
-                    if (is_unsigned) condBelow() else condLess()),
-                .lte => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg,
-                    if (is_unsigned) condBelowOrEqual() else condLessOrEqual()),
-                .gt => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg,
-                    if (is_unsigned) condAbove() else condGreater()),
-                .gte => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg,
-                    if (is_unsigned) condAboveOrEqual() else condGreaterOrEqual()),
+                .lt => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, if (is_unsigned) condBelow() else condLess()),
+                .lte => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, if (is_unsigned) condBelowOrEqual() else condLessOrEqual()),
+                .gt => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, if (is_unsigned) condAbove() else condGreater()),
+                .gte => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, if (is_unsigned) condAboveOrEqual() else condGreaterOrEqual()),
                 // Boolean operations - AND/OR two values
                 // Boolean values in Roc are represented as 0 (false) or 1 (true).
                 // Bitwise AND/OR work correctly for single-bit boolean values.
@@ -10039,16 +10033,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        /// Emit a correctly-sized store to the stack.
-        fn emitSizedStoreStack(self: *Self, offset: i32, reg: GeneralReg, size: ValueSize) Allocator.Error!void {
-            switch (size) {
-                .byte => try self.emitStoreStackW8(offset, reg),
-                .word => try self.emitStoreStackW16(offset, reg),
-                .dword => try self.codegen.emitStoreStack(.w32, offset, reg),
-                .qword => try self.codegen.emitStoreStack(.w64, offset, reg),
-            }
-        }
-
         /// Emit a correctly-sized load from memory (arbitrary base register + offset),
         /// zero-extending sub-word values to 64 bits.
         fn emitSizedLoadMem(self: *Self, dst: GeneralReg, base_reg: GeneralReg, offset: i32, size: ValueSize) Allocator.Error!void {
@@ -14486,8 +14470,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             }
                         }
                     },
-                    .int_literal, .float_literal, .str_literal, .tag,
-                    .record, .tuple, .list, .as_pattern => unreachable, // Join point params must be simple bindings or wildcards
+                    .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => unreachable, // Join point params must be simple bindings or wildcards
                 }
             }
         }
@@ -14529,8 +14512,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         try temp_infos.append(self.allocator, .{ .offset = 0, .size = 0 });
                         continue;
                     },
-                    .int_literal, .float_literal, .str_literal, .tag,
-                    .record, .tuple, .list, .as_pattern => unreachable,
+                    .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => unreachable,
                 }
 
                 const dst_loc = self.symbol_locations.get(switch (pattern) {
@@ -14587,8 +14569,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     .list_stack => |ls_info| ls_info.struct_offset,
                     .stack_i128 => |off| off,
                     .stack_str => |off| off,
-                    .general_reg, .float_reg, .immediate_i64, .immediate_i128,
-                    .immediate_f64, .closure_value, .lambda_code => unreachable,
+                    .general_reg, .float_reg, .immediate_i64, .immediate_i128, .immediate_f64, .closure_value, .lambda_code => unreachable,
                     .noreturn => unreachable,
                 };
 
@@ -14659,8 +14640,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 const symbol_key: u64 = switch (pattern) {
                     .bind => |bind| @bitCast(bind.symbol),
                     .wildcard => continue,
-                    .int_literal, .float_literal, .str_literal, .tag,
-                    .record, .tuple, .list, .as_pattern => unreachable,
+                    .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => unreachable,
                 };
 
                 const dst_loc = self.symbol_locations.get(symbol_key) orelse continue;
@@ -14687,8 +14667,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     .list_stack => |ls_info| ls_info.struct_offset,
                     .stack_i128 => |off| off,
                     .stack_str => |off| off,
-                    .general_reg, .float_reg, .immediate_i64, .immediate_i128,
-                    .immediate_f64, .closure_value, .lambda_code => unreachable,
+                    .general_reg, .float_reg, .immediate_i64, .immediate_i128, .immediate_f64, .closure_value, .lambda_code => unreachable,
                     .noreturn => unreachable,
                 };
 
