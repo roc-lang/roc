@@ -861,6 +861,47 @@ fn lowerLowLevel(self: *Self, ll: anytype, mono_idx: Monotype.Idx, region: Regio
         } }, region);
     }
 
+    // *_to_str → typed int_to_str / float_to_str / dec_to_str expressions
+    switch (ll.op) {
+        .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str => {
+            const args_slice = self.lir_store.getExprSpan(lir_args);
+            const precision: @import("types").Int.Precision = switch (ll.op) {
+                .u8_to_str => .u8,
+                .i8_to_str => .i8,
+                .u16_to_str => .u16,
+                .i16_to_str => .i16,
+                .u32_to_str => .u32,
+                .i32_to_str => .i32,
+                .u64_to_str => .u64,
+                .i64_to_str => .i64,
+                .u128_to_str => .u128,
+                .i128_to_str => .i128,
+                else => unreachable,
+            };
+            return self.lir_store.addExpr(.{ .int_to_str = .{
+                .value = args_slice[0],
+                .int_precision = precision,
+            } }, region);
+        },
+        .f32_to_str, .f64_to_str => {
+            const args_slice = self.lir_store.getExprSpan(lir_args);
+            const precision: @import("types").Frac.Precision = switch (ll.op) {
+                .f32_to_str => .f32,
+                .f64_to_str => .f64,
+                else => unreachable,
+            };
+            return self.lir_store.addExpr(.{ .float_to_str = .{
+                .value = args_slice[0],
+                .float_precision = precision,
+            } }, region);
+        },
+        .dec_to_str => {
+            const args_slice = self.lir_store.getExprSpan(lir_args);
+            return self.lir_store.addExpr(.{ .dec_to_str = args_slice[0] }, region);
+        },
+        else => {},
+    }
+
     const lir_op = mapLowLevel(ll.op) orelse {
         std.debug.panic("MirToLir: unmapped CIR low-level op: {s}", .{@tagName(ll.op)});
     };

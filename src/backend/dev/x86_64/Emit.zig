@@ -1049,6 +1049,15 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.append(self.allocator, modRM(0b11, a.enc(), b.enc()));
         }
 
+        /// ANDPD xmm, xmm (AND packed double - used for clearing sign bit / abs)
+        pub fn andpdRegReg(self: *Self, dst: FloatReg, src: FloatReg) !void {
+            try self.buf.append(self.allocator, 0x66);
+            try self.emitFloatRex(dst, src);
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0x54);
+            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+        }
+
         /// XORPD xmm, xmm (XOR packed double - used for zeroing)
         pub fn xorpdRegReg(self: *Self, dst: FloatReg, src: FloatReg) !void {
             try self.buf.append(self.allocator, 0x66);

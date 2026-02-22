@@ -660,6 +660,17 @@ pub fn CodeGen(comptime target: RocTarget) type {
             try self.emit.xorpdRegReg(dst, src);
         }
 
+        pub fn emitAbsF64(self: *Self, dst: FloatReg, src: FloatReg) !void {
+            // Load abs mask (0x7FFF_FFFF_FFFF_FFFF) into dst
+            // Then AND with src to clear the sign bit
+            const abs_mask: i64 = @bitCast(@as(u64, 0x7FFF_FFFF_FFFF_FFFF));
+            const stack_offset: i32 = -16; // Temporary stack location
+            try self.emit.movRegImm64(.R11, abs_mask);
+            try self.emit.movMemReg(.w64, .RBP, stack_offset, .R11);
+            try self.emit.movsdRegMem(dst, .RBP, stack_offset);
+            try self.emit.andpdRegReg(dst, src);
+        }
+
         /// Emit float32 addition: dst = a + b
         pub fn emitAddF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
             if (dst != a) {

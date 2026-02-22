@@ -591,6 +591,10 @@ pub fn CodeGen(comptime target: RocTarget) type {
             try self.emit.fnegRegReg(.double, dst, src);
         }
 
+        pub fn emitAbsF64(self: *Self, dst: FloatReg, src: FloatReg) !void {
+            try self.emit.fabsRegReg(.double, dst, src);
+        }
+
         /// Emit float32 addition: dst = a + b
         pub fn emitAddF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
             try self.emit.faddRegRegReg(.single, dst, a, b);

@@ -3213,6 +3213,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const record_loc = try self.generateExpr(args[1]);
                     return try self.callListSublistFromRecord(ll, list_loc, record_loc);
                 },
+                .num_abs => {
+                    // Absolute value: for signed types, negate if negative; unsigned is no-op
+                    const val_loc = try self.generateExpr(args[0]);
+                    return try self.generateNumAbs(val_loc, ll.ret_layout);
+                },
+                .num_abs_diff => {
+                    // |a - b|: compare and subtract in the correct order to avoid wrap/overflow
+                    const a_loc = try self.generateExpr(args[0]);
+                    const b_loc = try self.generateExpr(args[1]);
+                    return try self.generateAbsDiff(a_loc, b_loc, ll.ret_layout);
+                },
 
                 // ── Generic numeric operations (not emitted by LIR lowering) ──
                 // The LIR lowering phase resolves these to type-specific operations
@@ -3223,7 +3234,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_div,
                 .num_mod,
                 .num_neg,
-                .num_abs,
                 .num_pow,
                 .num_sqrt,
                 .num_log,
@@ -3233,7 +3243,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_to_str,
                 .num_from_numeral,
                 .num_is_zero,
-                .num_abs_diff,
                 .num_shift_left_by,
                 .num_shift_right_by,
                 .num_shift_right_zf_by,
@@ -5109,16 +5118,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const ls = self.layout_store orelse unreachable;
             const ret_layout_val = ls.getLayout(ll.ret_layout);
-            std.debug.assert(ret_layout_val.tag == .tag_union);
+            if (ret_layout_val.tag != .tag_union) {
+                std.debug.panic("generateNumFromStr: expected tag_union layout, got {s}", .{@tagName(ret_layout_val.tag)});
+            }
             const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
             const result_offset = self.codegen.allocStackSlot(tu_data.size);
             try self.zeroStackArea(result_offset, tu_data.size);
             const disc_offset: u32 = tu_data.discriminant_offset;
 
             // Find the Ok variant's payload layout to determine the target numeric type.
-            // Tags are sorted alphabetically: Err=0, Ok=1
+            // The Ok variant has the numeric payload; the Err variant has ZST.
             const variants = ls.getTagUnionVariants(tu_data);
-            const payload_idx = if (variants.len > 1) variants.get(1).payload_layout else variants.get(0).payload_layout;
+            var payload_idx: layout.Idx = .zst;
+            for (0..variants.len) |i| {
+                const v_payload = variants.get(@intCast(i)).payload_layout;
+                if (v_payload != .zst) {
+                    payload_idx = v_payload;
+                    break;
+                }
+            }
 
             const base_reg = frame_ptr;
 
@@ -5148,11 +5166,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .u16, .i16 => 2,
                     .u32, .i32 => 4,
                     .u64, .i64 => 8,
+                    .u128, .i128 => 16,
                     else => unreachable,
                 };
                 const is_signed: bool = switch (payload_idx) {
-                    .i8, .i16, .i32, .i64 => true,
-                    .u8, .u16, .u32, .u64 => false,
+                    .i8, .i16, .i32, .i64, .i128 => true,
+                    .u8, .u16, .u32, .u64, .u128 => false,
                     else => unreachable,
                 };
                 const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_int_from_str);
@@ -6960,6 +6979,271 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.freeGeneral(reg);
                 return .{ .general_reg = result_reg };
             }
+        }
+
+        /// Generate absolute value for a numeric type
+        fn generateNumAbs(self: *Self, val_loc: ValueLocation, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
+            const is_signed = switch (ret_layout) {
+                .i8, .i16, .i32, .i64 => true,
+                .u8, .u16, .u32, .u64 => false,
+                .i128, .dec => true,
+                .u128 => false,
+                .f32, .f64 => return self.generateFloatAbs(val_loc),
+                else => return val_loc, // unknown layout — pass through
+            };
+
+            if (!is_signed) {
+                // Unsigned types: abs is identity
+                return val_loc;
+            }
+
+            if (ret_layout == .i128 or ret_layout == .dec) {
+                // 128-bit: negate, then select original or negated based on sign
+                const parts = try self.getI128Parts(val_loc, .signed);
+                const neg_low = try self.allocTempGeneral();
+                const neg_high = try self.allocTempGeneral();
+
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.subsRegRegReg(.w64, neg_low, .ZRSP, parts.low);
+                    try self.codegen.emit.sbcRegRegReg(.w64, neg_high, .ZRSP, parts.high);
+                    // If original was negative (signed < 0), use negated
+                    try self.codegen.emit.cmpRegImm12(.w64, parts.high, 0);
+                    // CSEL: if lt (negative), pick negated; else pick original
+                    try self.codegen.emit.csel(.w64, neg_low, neg_low, parts.low, .lt);
+                    try self.codegen.emit.csel(.w64, neg_high, neg_high, parts.high, .lt);
+                } else {
+                    try self.codegen.emitLoadImm(neg_low, 0);
+                    try self.codegen.emit.subRegReg(.w64, neg_low, parts.low);
+                    try self.codegen.emitLoadImm(neg_high, 0);
+                    try self.codegen.emit.sbbRegReg(.w64, neg_high, parts.high);
+                    // If original was non-negative, overwrite negated with original
+                    try self.codegen.emit.testRegReg(.w64, parts.high, parts.high);
+                    try self.codegen.emit.cmovcc(.not_sign, .w64, neg_low, parts.low);
+                    try self.codegen.emit.cmovcc(.not_sign, .w64, neg_high, parts.high);
+                }
+
+                self.codegen.freeGeneral(parts.low);
+                self.codegen.freeGeneral(parts.high);
+
+                const stack_offset = self.codegen.allocStackSlot(16);
+                try self.codegen.emitStoreStack(.w64, stack_offset, neg_low);
+                try self.codegen.emitStoreStack(.w64, stack_offset + 8, neg_high);
+                self.codegen.freeGeneral(neg_low);
+                self.codegen.freeGeneral(neg_high);
+                return .{ .stack_i128 = stack_offset };
+            }
+
+            // Signed 64-bit or smaller: negate and conditionally select
+            const reg = try self.ensureInGeneralReg(val_loc);
+            const neg_reg = try self.allocTempGeneral();
+            try self.codegen.emitNeg(.w64, neg_reg, reg);
+
+            if (comptime target.toCpuArch() == .aarch64) {
+                // CMP reg, #0; CSEL result, neg_reg, reg, LT
+                try self.codegen.emit.cmpRegImm12(.w64, reg, 0);
+                try self.codegen.emit.csel(.w64, neg_reg, neg_reg, reg, .lt);
+            } else {
+                // TEST reg, reg; CMOVNS neg_reg, reg (if non-negative, use original)
+                try self.codegen.emit.testRegReg(.w64, reg, reg);
+                try self.codegen.emit.cmovcc(.not_sign, .w64, neg_reg, reg);
+            }
+
+            self.codegen.freeGeneral(reg);
+            return .{ .general_reg = neg_reg };
+        }
+
+        /// Generate float absolute value
+        fn generateFloatAbs(self: *Self, val_loc: ValueLocation) Allocator.Error!ValueLocation {
+            const src_reg = try self.ensureInFloatReg(val_loc);
+            const result_reg = try self.codegen.allocFloatFor(0);
+            try self.codegen.emitAbsF64(result_reg, src_reg);
+            self.codegen.freeFloat(src_reg);
+            return .{ .float_reg = result_reg };
+        }
+
+        /// Generate subtraction for num_abs_diff
+        fn generateBinopSub(self: *Self, a_loc: ValueLocation, b_loc: ValueLocation, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
+            if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec) {
+                // 128-bit subtraction
+                const a_parts = try self.getI128Parts(a_loc, .signed);
+                const b_parts = try self.getI128Parts(b_loc, .signed);
+
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.subsRegRegReg(.w64, a_parts.low, a_parts.low, b_parts.low);
+                    try self.codegen.emit.sbcRegRegReg(.w64, a_parts.high, a_parts.high, b_parts.high);
+                } else {
+                    try self.codegen.emit.subRegReg(.w64, a_parts.low, b_parts.low);
+                    try self.codegen.emit.sbbRegReg(.w64, a_parts.high, b_parts.high);
+                }
+
+                self.codegen.freeGeneral(b_parts.low);
+                self.codegen.freeGeneral(b_parts.high);
+
+                const stack_offset = self.codegen.allocStackSlot(16);
+                try self.codegen.emitStoreStack(.w64, stack_offset, a_parts.low);
+                try self.codegen.emitStoreStack(.w64, stack_offset + 8, a_parts.high);
+                self.codegen.freeGeneral(a_parts.low);
+                self.codegen.freeGeneral(a_parts.high);
+                return .{ .stack_i128 = stack_offset };
+            }
+
+            if (ret_layout == .f32 or ret_layout == .f64) {
+                const a_reg = try self.ensureInFloatReg(a_loc);
+                const b_reg = try self.ensureInFloatReg(b_loc);
+                try self.codegen.emitSubF64(a_reg, a_reg, b_reg);
+                self.codegen.freeFloat(b_reg);
+                return .{ .float_reg = a_reg };
+            }
+
+            // Integer subtraction
+            const a_reg = try self.ensureInGeneralReg(a_loc);
+            const b_reg = try self.ensureInGeneralReg(b_loc);
+            const result_reg = try self.allocTempGeneral();
+
+            if (comptime target.toCpuArch() == .aarch64) {
+                try self.codegen.emit.subRegRegReg(.w64, result_reg, a_reg, b_reg);
+            } else {
+                try self.emitMovRegReg(result_reg, a_reg);
+                try self.codegen.emit.subRegReg(.w64, result_reg, b_reg);
+            }
+
+            self.codegen.freeGeneral(a_reg);
+            self.codegen.freeGeneral(b_reg);
+            return .{ .general_reg = result_reg };
+        }
+
+        /// Generate |a - b| correctly for all integer types.
+        /// For floats, uses float sub + float abs.
+        /// For integers: compares a and b, then subtracts the smaller from the larger.
+        /// This avoids wrapping/overflow issues that abs(a - b) would cause.
+        fn generateAbsDiff(self: *Self, a_loc: ValueLocation, b_loc: ValueLocation, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
+            // Float: subtract then take float absolute value
+            if (ret_layout == .f32 or ret_layout == .f64) {
+                const a_reg = try self.ensureInFloatReg(a_loc);
+                const b_reg = try self.ensureInFloatReg(b_loc);
+                try self.codegen.emitSubF64(a_reg, a_reg, b_reg);
+                self.codegen.freeFloat(b_reg);
+                const result_reg = try self.codegen.allocFloatFor(0);
+                try self.codegen.emitAbsF64(result_reg, a_reg);
+                self.codegen.freeFloat(a_reg);
+                return .{ .float_reg = result_reg };
+            }
+
+            // 128-bit (I128, U128, Dec)
+            if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec) {
+                return try self.generateAbsDiff128(a_loc, b_loc, ret_layout);
+            }
+
+            // 64-bit or smaller integers: CMP, compute both a-b and b-a, CSEL/CMOV
+            const is_signed = switch (ret_layout) {
+                .i8, .i16, .i32, .i64 => true,
+                .u8, .u16, .u32, .u64 => false,
+                else => false,
+            };
+
+            const a_reg = try self.ensureInGeneralReg(a_loc);
+            const b_reg = try self.ensureInGeneralReg(b_loc);
+            const diff_reg = try self.allocTempGeneral();
+            const neg_reg = try self.allocTempGeneral();
+
+            if (comptime target.toCpuArch() == .aarch64) {
+                // CMP a, b
+                try self.codegen.emit.cmpRegReg(.w64, a_reg, b_reg);
+                // diff = a - b
+                try self.codegen.emit.subRegRegReg(.w64, diff_reg, a_reg, b_reg);
+                // neg = b - a
+                try self.codegen.emit.subRegRegReg(.w64, neg_reg, b_reg, a_reg);
+                // CSEL: if a >= b, use diff; else use neg
+                try self.codegen.emit.csel(.w64, diff_reg, diff_reg, neg_reg, if (is_signed) .ge else .cs);
+            } else {
+                // diff = a - b
+                try self.emitMovRegReg(diff_reg, a_reg);
+                try self.codegen.emit.subRegReg(.w64, diff_reg, b_reg);
+                // neg = b - a
+                try self.emitMovRegReg(neg_reg, b_reg);
+                try self.codegen.emit.subRegReg(.w64, neg_reg, a_reg);
+                // CMP a, b
+                try self.codegen.emit.cmpRegReg(.w64, a_reg, b_reg);
+                // CMOV: if a < b, use neg
+                try self.codegen.emit.cmovcc(if (is_signed) .less else .below, .w64, diff_reg, neg_reg);
+            }
+
+            self.codegen.freeGeneral(a_reg);
+            self.codegen.freeGeneral(b_reg);
+            self.codegen.freeGeneral(neg_reg);
+            return .{ .general_reg = diff_reg };
+        }
+
+        /// Generate 128-bit |a - b| using SUBS/SBCS for comparison flags.
+        fn generateAbsDiff128(self: *Self, a_loc: ValueLocation, b_loc: ValueLocation, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
+            const is_signed = (ret_layout == .i128 or ret_layout == .dec);
+
+            const a_parts = try self.getI128Parts(a_loc, if (is_signed) .signed else .unsigned);
+            const b_parts = try self.getI128Parts(b_loc, if (is_signed) .signed else .unsigned);
+
+            // Allocate registers for both a-b and b-a results
+            const diff_lo = try self.allocTempGeneral();
+            const diff_hi = try self.allocTempGeneral();
+            const bma_lo = try self.allocTempGeneral();
+            const bma_hi = try self.allocTempGeneral();
+            const flag_reg = try self.allocTempGeneral();
+
+            if (comptime target.toCpuArch() == .aarch64) {
+                // Compute a - b with flags (SUBS + SBCS gives correct 128-bit comparison)
+                try self.codegen.emit.subsRegRegReg(.w64, diff_lo, a_parts.low, b_parts.low);
+                try self.codegen.emit.sbcsRegRegReg(.w64, diff_hi, a_parts.high, b_parts.high);
+
+                // Save comparison result: flag = 1 if a >= b
+                try self.codegen.emit.cset(.w64, flag_reg, if (is_signed) .ge else .cs);
+
+                // Compute b - a
+                try self.codegen.emit.subsRegRegReg(.w64, bma_lo, b_parts.low, a_parts.low);
+                try self.codegen.emit.sbcRegRegReg(.w64, bma_hi, b_parts.high, a_parts.high);
+
+                // Select based on saved flag
+                try self.codegen.emit.cmpRegImm12(.w64, flag_reg, 1);
+                try self.codegen.emit.csel(.w64, diff_lo, diff_lo, bma_lo, .eq);
+                try self.codegen.emit.csel(.w64, diff_hi, diff_hi, bma_hi, .eq);
+            } else {
+                // Compute a - b (128-bit) — SBB sets flags for 128-bit comparison
+                try self.emitMovRegReg(diff_lo, a_parts.low);
+                try self.codegen.emit.subRegReg(.w64, diff_lo, b_parts.low);
+                try self.emitMovRegReg(diff_hi, a_parts.high);
+                try self.codegen.emit.sbbRegReg(.w64, diff_hi, b_parts.high);
+
+                // Save comparison result before clobbering flags
+                // Zero the flag register first so SETCC only needs to set the low byte
+                try self.codegen.emitLoadImm(flag_reg, 0);
+                try self.codegen.emit.setcc(if (is_signed) .greater_or_equal else .above_or_equal, flag_reg);
+
+                // Compute b - a
+                try self.emitMovRegReg(bma_lo, b_parts.low);
+                try self.codegen.emit.subRegReg(.w64, bma_lo, a_parts.low);
+                try self.emitMovRegReg(bma_hi, b_parts.high);
+                try self.codegen.emit.sbbRegReg(.w64, bma_hi, a_parts.high);
+
+                // Select based on saved flag: if a < b (flag == 0), use bma
+                try self.codegen.emit.testRegReg(.w64, flag_reg, flag_reg);
+                try self.codegen.emit.cmovcc(.equal, .w64, diff_lo, bma_lo);
+                try self.codegen.emit.cmovcc(.equal, .w64, diff_hi, bma_hi);
+            }
+
+            // Free temporaries
+            self.codegen.freeGeneral(a_parts.low);
+            self.codegen.freeGeneral(a_parts.high);
+            self.codegen.freeGeneral(b_parts.low);
+            self.codegen.freeGeneral(b_parts.high);
+            self.codegen.freeGeneral(bma_lo);
+            self.codegen.freeGeneral(bma_hi);
+            self.codegen.freeGeneral(flag_reg);
+
+            // Store result to stack
+            const stack_offset = self.codegen.allocStackSlot(16);
+            try self.codegen.emitStoreStack(.w64, stack_offset, diff_lo);
+            try self.codegen.emitStoreStack(.w64, stack_offset + 8, diff_hi);
+            self.codegen.freeGeneral(diff_lo);
+            self.codegen.freeGeneral(diff_hi);
+            return .{ .stack_i128 = stack_offset };
         }
 
         /// Generate code for unary not
