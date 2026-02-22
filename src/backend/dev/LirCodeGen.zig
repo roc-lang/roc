@@ -3206,6 +3206,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_from_str => {
                     return try self.generateNumFromStr(ll, args);
                 },
+                .list_sublist => {
+                    // list_sublist(list, {start, len}) -> List
+                    if (args.len != 2) unreachable;
+                    const list_loc = try self.generateExpr(args[0]);
+                    const record_loc = try self.generateExpr(args[1]);
+                    return try self.callListSublistFromRecord(ll, list_loc, record_loc);
+                },
+
+                // ── Generic numeric operations (not emitted by LIR lowering) ──
+                // The LIR lowering phase resolves these to type-specific operations
+                // (int_add_wrap, dec_add, float_add, etc.) before code generation.
                 .num_add,
                 .num_sub,
                 .num_mul,
@@ -3227,19 +3238,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_shift_right_by,
                 .num_shift_right_zf_by,
                 .str_inspekt,
-                .list_sublist => {
-                    // list_sublist(list, {start, len}) -> List
-                    if (args.len != 2) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
-                    const record_loc = try self.generateExpr(args[1]);
-                    return try self.callListSublistFromRecord(ll, list_loc, record_loc);
-                },
                 .list_sort_with,
                 .list_drop_at,
                 .compare,
                 => {
-                    if (std.debug.runtime_safety) unreachable;
-                    unreachable;
+                    std.debug.panic("UNIMPLEMENTED low-level op: {s}", .{@tagName(ll.op)});
                 },
                 .box_box,
                 .box_unbox,

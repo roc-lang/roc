@@ -91,7 +91,6 @@ const CacheConfig = compile.CacheConfig;
 const serialize_modules = compile.serialize_modules;
 const TestRunner = eval.TestRunner;
 const backend = @import("backend");
-const mono = @import("mono");
 const layout = @import("layout");
 const Allocators = base.Allocators;
 
@@ -3759,7 +3758,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     };
     defer mir_store.deinit(ctx.gpa);
 
-    var mir_lower = mir.Lower.init(ctx.gpa, &mir_store, all_module_envs, platform_types, build_env.builtin_modules.builtin_indices, platform_module_idx, app_module_idx) catch {
+    var mir_lower = mir.Lower.init(ctx.gpa, &mir_store, all_module_envs, platform_types, platform_module_idx, app_module_idx) catch {
         std.log.err("Failed to create MIR lowerer", .{});
         return error.OutOfMemory;
     };

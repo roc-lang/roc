@@ -725,7 +725,6 @@ pub const DevEvaluator = struct {
             &mir_store,
             all_module_envs,
             &module_env.types,
-            self.builtin_indices,
             module_idx,
             null, // app_module_idx - not used for JIT evaluation
         ) catch return error.OutOfMemory;

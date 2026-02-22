@@ -271,7 +271,7 @@ pub const ModuleTest = struct {
 /// unnamed wrappers) so callers can correct the reported totals.
 pub const ModuleTestsResult = struct {
     /// Compile/run steps for each module's tests, in creation order.
-    tests: [26]ModuleTest,
+    tests: [25]ModuleTest,
     /// Number of synthetic passes the summary must subtract when filters were injected.
     /// Includes aggregator ensures and unconditional wrapper tests.
     forced_passes: usize,
@@ -306,7 +306,6 @@ pub const ModuleType = enum {
     backend,
     mir,
     lir,
-    mono,
     roc_target,
     sljmp,
 
@@ -327,7 +326,7 @@ pub const ModuleType = enum {
             .check => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting },
             .layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
             .values => &.{ .collections, .base, .builtins, .layout },
-            .eval => &.{ .tracy, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .values, .build_options, .reporting, .backend, .mono, .mir, .lir, .roc_target, .sljmp },
+            .eval => &.{ .tracy, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .values, .build_options, .reporting, .backend, .mir, .lir, .roc_target, .sljmp },
             .compile => &.{ .tracy, .build_options, .fs, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle, .roc_target },
             .ipc => &.{},
             .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .values, .eval, .backend, .roc_target },
@@ -337,10 +336,9 @@ pub const ModuleType = enum {
             .unbundle => &.{ .base, .collections, .base58 },
             .base58 => &.{},
             .lsp => &.{ .compile, .reporting, .build_options, .fs, .base, .parse, .can, .types, .fmt, .roc_target },
-            .backend => &.{ .base, .layout, .builtins, .can, .mono, .lir, .roc_target },
+            .backend => &.{ .base, .layout, .builtins, .can, .lir, .roc_target },
             .mir => &.{ .base, .can, .types, .builtins, .parse, .check, .collections, .reporting, .build_options, .tracy },
             .lir => &.{ .base, .layout, .types, .mir, .can },
-            .mono => &.{ .base, .layout, .can, .types, .mir },
             .roc_target => &.{.base},
             .sljmp => &.{},
         };
@@ -376,7 +374,6 @@ pub const RocModules = struct {
     backend: *Module,
     mir: *Module,
     lir: *Module,
-    mono: *Module,
     roc_target: *Module,
     sljmp: *Module,
 
@@ -415,7 +412,6 @@ pub const RocModules = struct {
             .backend = b.addModule("backend", .{ .root_source_file = b.path("src/backend/mod.zig") }),
             .mir = b.addModule("mir", .{ .root_source_file = b.path("src/mir/mod.zig") }),
             .lir = b.addModule("lir", .{ .root_source_file = b.path("src/lir/mod.zig") }),
-            .mono = b.addModule("mono", .{ .root_source_file = b.path("src/mono/mod.zig") }),
             .roc_target = b.addModule("roc_target", .{ .root_source_file = b.path("src/target/mod.zig") }),
             .sljmp = b.addModule("sljmp", .{ .root_source_file = b.path("src/sljmp/mod.zig") }),
         };
@@ -460,7 +456,6 @@ pub const RocModules = struct {
             .backend,
             .mir,
             .lir,
-            .mono,
             .roc_target,
             .sljmp,
         };
@@ -502,7 +497,6 @@ pub const RocModules = struct {
         step.root_module.addImport("backend", self.backend);
         step.root_module.addImport("mir", self.mir);
         step.root_module.addImport("lir", self.lir);
-        step.root_module.addImport("mono", self.mono);
         step.root_module.addImport("sljmp", self.sljmp);
 
         // Don't add thread-dependent modules for WASM targets (threads not supported)
@@ -550,7 +544,6 @@ pub const RocModules = struct {
             .backend => self.backend,
             .mir => self.mir,
             .lir => self.lir,
-            .mono => self.mono,
             .roc_target => self.roc_target,
             .sljmp => self.sljmp,
         };
@@ -598,7 +591,6 @@ pub const RocModules = struct {
             .backend,
             .mir,
             .lir,
-            .mono,
             .sljmp,
         };
 

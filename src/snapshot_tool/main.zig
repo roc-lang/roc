@@ -32,14 +32,11 @@ threadlocal var panic_msg: ?[]const u8 = null;
 fn panicHandler(msg: []const u8, ret_addr: ?usize) noreturn {
     if (panic_jmp) |jmp| {
         panic_msg = msg;
-        // Print stack trace before longjmp so we can identify the unreachable location
         if (verbose_log) {
             std.debug.print("  PANIC TRACE: {s}\n", .{msg});
             if (ret_addr) |addr| {
                 std.debug.print("  return address: 0x{x}\n", .{addr});
             }
-            const trace = @returnAddress();
-            std.debug.print("  handler address: 0x{x}\n", .{trace});
             std.debug.dumpCurrentStackTrace(ret_addr);
         }
         panic_jmp = null; // prevent re-entry
@@ -3978,7 +3975,7 @@ fn processDevObjectSnapshot(
     };
     defer mir_store.deinit(allocator);
 
-    var mir_lower = mir_mod.Lower.init(allocator, &mir_store, all_module_envs, platform_types, config.builtin_indices, platform_module_idx, app_module_idx) catch {
+    var mir_lower = mir_mod.Lower.init(allocator, &mir_store, all_module_envs, platform_types, platform_module_idx, app_module_idx) catch {
         std.log.err("Failed to create MIR lowerer", .{});
         return false;
     };
