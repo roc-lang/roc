@@ -3446,6 +3446,177 @@ test "MIR small i128 value emits i128_literal not i64_literal" {
     try testing.expectEqual(@as(i128, 42), lir_expr.i128_literal);
 }
 
+// --- Bool.not LIR structural tests ---
+// Verify that a prim.bool match (like negBool produces) gets correct discriminants:
+// True pattern → discriminant 1, False body → discriminant 0.
+
+test "LIR Bool match: True pattern gets discriminant 1, False body gets discriminant 0" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const bool_mono = env.mir_store.monotype_store.primIdx(.bool);
+    const true_tag = env.module_env.idents.true_tag;
+    const false_tag = env.module_env.idents.false_tag;
+
+    // Build MIR: match <scrutinee> { True => False, _ => True }
+    // This is exactly what negBool produces.
+
+    // Scrutinee: Bool.True tag with prim.bool monotype
+    const scrutinee = try env.mir_store.addExpr(allocator, .{ .tag = .{
+        .name = true_tag,
+        .args = MIR.ExprSpan.empty(),
+    } }, bool_mono, Region.zero());
+
+    // Branch 0 body: Bool.False
+    const false_expr = try env.mir_store.addExpr(allocator, .{ .tag = .{
+        .name = false_tag,
+        .args = MIR.ExprSpan.empty(),
+    } }, bool_mono, Region.zero());
+
+    // Branch 1 body: Bool.True
+    const true_expr = try env.mir_store.addExpr(allocator, .{ .tag = .{
+        .name = true_tag,
+        .args = MIR.ExprSpan.empty(),
+    } }, bool_mono, Region.zero());
+
+    // Branch 0 pattern: True tag
+    const true_pat = try env.mir_store.addPattern(allocator, .{ .tag = .{
+        .name = true_tag,
+        .args = MIR.PatternSpan.empty(),
+    } }, bool_mono);
+
+    // Branch 1 pattern: wildcard
+    const wildcard_pat = try env.mir_store.addPattern(allocator, .wildcard, bool_mono);
+
+    const bp0 = try env.mir_store.addBranchPatterns(allocator, &.{.{ .pattern = true_pat, .degenerate = false }});
+    const bp1 = try env.mir_store.addBranchPatterns(allocator, &.{.{ .pattern = wildcard_pat, .degenerate = false }});
+
+    const branches = try env.mir_store.addBranches(allocator, &.{
+        .{ .patterns = bp0, .body = false_expr, .guard = MIR.ExprId.none },
+        .{ .patterns = bp1, .body = true_expr, .guard = MIR.ExprId.none },
+    });
+
+    const match_expr = try env.mir_store.addExpr(allocator, .{ .match_expr = .{
+        .cond = scrutinee,
+        .branches = branches,
+    } }, bool_mono, Region.zero());
+
+    // Lower MIR → LIR
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(match_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+    try testing.expect(lir_expr == .match_expr);
+
+    const lir_branches = env.lir_store.getMatchBranches(lir_expr.match_expr.branches);
+    try testing.expectEqual(@as(usize, 2), lir_branches.len);
+
+    // Branch 0: True pattern → discriminant must be 1
+    const lir_pat0 = env.lir_store.getPattern(lir_branches[0].pattern);
+    try testing.expect(lir_pat0 == .tag);
+    try testing.expectEqual(@as(u16, 1), lir_pat0.tag.discriminant);
+
+    // Branch 0 body: False → discriminant must be 0
+    const lir_body0 = env.lir_store.getExpr(lir_branches[0].body);
+    try testing.expect(lir_body0 == .zero_arg_tag);
+    try testing.expectEqual(@as(u16, 0), lir_body0.zero_arg_tag.discriminant);
+
+    // Branch 1: wildcard pattern
+    const lir_pat1 = env.lir_store.getPattern(lir_branches[1].pattern);
+    try testing.expect(lir_pat1 == .wildcard);
+
+    // Branch 1 body: True → discriminant must be 1
+    const lir_body1 = env.lir_store.getExpr(lir_branches[1].body);
+    try testing.expect(lir_body1 == .zero_arg_tag);
+    try testing.expectEqual(@as(u16, 1), lir_body1.zero_arg_tag.discriminant);
+
+    // Scrutinee should be True with discriminant 1
+    const lir_scrutinee = env.lir_store.getExpr(lir_expr.match_expr.value);
+    try testing.expect(lir_scrutinee == .zero_arg_tag);
+    try testing.expectEqual(@as(u16, 1), lir_scrutinee.zero_arg_tag.discriminant);
+}
+
+test "LIR Bool match: False scrutinee gets discriminant 0" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const bool_mono = env.mir_store.monotype_store.primIdx(.bool);
+    const true_tag = env.module_env.idents.true_tag;
+    const false_tag = env.module_env.idents.false_tag;
+
+    // Build: match False { True => False, _ => True }
+    const scrutinee = try env.mir_store.addExpr(allocator, .{ .tag = .{
+        .name = false_tag,
+        .args = MIR.ExprSpan.empty(),
+    } }, bool_mono, Region.zero());
+
+    const false_expr = try env.mir_store.addExpr(allocator, .{ .tag = .{
+        .name = false_tag,
+        .args = MIR.ExprSpan.empty(),
+    } }, bool_mono, Region.zero());
+
+    const true_expr = try env.mir_store.addExpr(allocator, .{ .tag = .{
+        .name = true_tag,
+        .args = MIR.ExprSpan.empty(),
+    } }, bool_mono, Region.zero());
+
+    const true_pat = try env.mir_store.addPattern(allocator, .{ .tag = .{
+        .name = true_tag,
+        .args = MIR.PatternSpan.empty(),
+    } }, bool_mono);
+    const wildcard_pat = try env.mir_store.addPattern(allocator, .wildcard, bool_mono);
+
+    const bp0 = try env.mir_store.addBranchPatterns(allocator, &.{.{ .pattern = true_pat, .degenerate = false }});
+    const bp1 = try env.mir_store.addBranchPatterns(allocator, &.{.{ .pattern = wildcard_pat, .degenerate = false }});
+
+    const branches = try env.mir_store.addBranches(allocator, &.{
+        .{ .patterns = bp0, .body = false_expr, .guard = MIR.ExprId.none },
+        .{ .patterns = bp1, .body = true_expr, .guard = MIR.ExprId.none },
+    });
+
+    const match_expr = try env.mir_store.addExpr(allocator, .{ .match_expr = .{
+        .cond = scrutinee,
+        .branches = branches,
+    } }, bool_mono, Region.zero());
+
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(match_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+    try testing.expect(lir_expr == .match_expr);
+
+    // Scrutinee: False → discriminant 0
+    const lir_scrutinee = env.lir_store.getExpr(lir_expr.match_expr.value);
+    try testing.expect(lir_scrutinee == .zero_arg_tag);
+    try testing.expectEqual(@as(u16, 0), lir_scrutinee.zero_arg_tag.discriminant);
+
+    // Branch 0: True pattern → discriminant 1
+    const lir_branches = env.lir_store.getMatchBranches(lir_expr.match_expr.branches);
+    const lir_pat0 = env.lir_store.getPattern(lir_branches[0].pattern);
+    try testing.expect(lir_pat0 == .tag);
+    try testing.expectEqual(@as(u16, 1), lir_pat0.tag.discriminant);
+
+    // Body 0: False → discriminant 0
+    const lir_body0 = env.lir_store.getExpr(lir_branches[0].body);
+    try testing.expect(lir_body0 == .zero_arg_tag);
+    try testing.expectEqual(@as(u16, 0), lir_body0.zero_arg_tag.discriminant);
+
+    // Body 1: True → discriminant 1
+    const lir_body1 = env.lir_store.getExpr(lir_branches[1].body);
+    try testing.expect(lir_body1 == .zero_arg_tag);
+    try testing.expectEqual(@as(u16, 1), lir_body1.zero_arg_tag.discriminant);
+}
+
 test "MIR small u128 value emits i128_literal not i64_literal" {
     const allocator = testing.allocator;
 

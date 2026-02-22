@@ -1515,6 +1515,144 @@ test "Bool diagnostic MIR: lambda negation applied to Bool.True lowers with prim
     try testing.expectEqual(Monotype.Prim.bool, monotype.prim);
 }
 
+// --- Bool.not structural tests ---
+// Verify the MIR match structure produced by negBool and Bool.not calls.
+
+test "Bool.not MIR: !Bool.True match has True pattern -> False body, wildcard -> True body" {
+    var env = try MirTestEnv.initFull("Test",
+        \\main : Bool
+        \\main = !Bool.True
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    // !Bool.True desugars to: match Bool.True { True => False, _ => True }
+    try testing.expect(result == .match_expr);
+
+    // Check the condition is a tag expression (Bool.True)
+    const cond = env.mir_store.getExpr(result.match_expr.cond);
+    try testing.expect(cond == .tag);
+    const cond_tag_name = env.module_env.getIdent(cond.tag.name);
+    try testing.expectEqualStrings("True", cond_tag_name);
+
+    // Check condition monotype is prim.bool
+    const cond_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(result.match_expr.cond));
+    try testing.expect(cond_mono == .prim);
+    try testing.expectEqual(Monotype.Prim.bool, cond_mono.prim);
+
+    // Check there are 2 branches
+    const branches = env.mir_store.getBranches(result.match_expr.branches);
+    try testing.expectEqual(@as(usize, 2), branches.len);
+
+    // Branch 0: True => False
+    const bp0 = env.mir_store.getBranchPatterns(branches[0].patterns);
+    try testing.expectEqual(@as(usize, 1), bp0.len);
+    const pat0 = env.mir_store.getPattern(bp0[0].pattern);
+    try testing.expect(pat0 == .tag);
+    const pat0_name = env.module_env.getIdent(pat0.tag.name);
+    try testing.expectEqualStrings("True", pat0_name);
+    // Pattern monotype should be prim.bool
+    const pat0_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.patternTypeOf(bp0[0].pattern));
+    try testing.expect(pat0_mono == .prim);
+    try testing.expectEqual(Monotype.Prim.bool, pat0_mono.prim);
+    // Body should be False tag
+    const body0 = env.mir_store.getExpr(branches[0].body);
+    try testing.expect(body0 == .tag);
+    const body0_name = env.module_env.getIdent(body0.tag.name);
+    try testing.expectEqualStrings("False", body0_name);
+
+    // Branch 1: _ => True
+    const bp1 = env.mir_store.getBranchPatterns(branches[1].patterns);
+    try testing.expectEqual(@as(usize, 1), bp1.len);
+    const pat1 = env.mir_store.getPattern(bp1[0].pattern);
+    try testing.expect(pat1 == .wildcard);
+    // Body should be True tag
+    const body1 = env.mir_store.getExpr(branches[1].body);
+    try testing.expect(body1 == .tag);
+    const body1_name = env.module_env.getIdent(body1.tag.name);
+    try testing.expectEqualStrings("True", body1_name);
+}
+
+test "Bool.not MIR: !Bool.False match has True pattern -> False body, wildcard -> True body" {
+    var env = try MirTestEnv.initFull("Test",
+        \\main : Bool
+        \\main = !Bool.False
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .match_expr);
+
+    // Condition should be Bool.False
+    const cond = env.mir_store.getExpr(result.match_expr.cond);
+    try testing.expect(cond == .tag);
+    const cond_tag_name = env.module_env.getIdent(cond.tag.name);
+    try testing.expectEqualStrings("False", cond_tag_name);
+    const cond_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(result.match_expr.cond));
+    try testing.expect(cond_mono == .prim);
+    try testing.expectEqual(Monotype.Prim.bool, cond_mono.prim);
+
+    // Branch structure should be identical: True => False, _ => True
+    const branches = env.mir_store.getBranches(result.match_expr.branches);
+    try testing.expectEqual(@as(usize, 2), branches.len);
+
+    const bp0 = env.mir_store.getBranchPatterns(branches[0].patterns);
+    const pat0 = env.mir_store.getPattern(bp0[0].pattern);
+    try testing.expect(pat0 == .tag);
+    try testing.expectEqualStrings("True", env.module_env.getIdent(pat0.tag.name));
+    const body0 = env.mir_store.getExpr(branches[0].body);
+    try testing.expect(body0 == .tag);
+    try testing.expectEqualStrings("False", env.module_env.getIdent(body0.tag.name));
+
+    const bp1 = env.mir_store.getBranchPatterns(branches[1].patterns);
+    const pat1 = env.mir_store.getPattern(bp1[0].pattern);
+    try testing.expect(pat1 == .wildcard);
+    const body1 = env.mir_store.getExpr(branches[1].body);
+    try testing.expect(body1 == .tag);
+    try testing.expectEqualStrings("True", env.module_env.getIdent(body1.tag.name));
+}
+
+test "Bool.not MIR: Bool.not(True) is a call with prim.bool return type" {
+    var env = try MirTestEnv.initExpr("Bool.not(True)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    // Bool.not(True) should be a call expression (cross-module method call)
+    try testing.expect(result == .call);
+    // Return type should be prim.bool
+    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
+    try testing.expect(monotype == .prim);
+    try testing.expectEqual(Monotype.Prim.bool, monotype.prim);
+    // The argument should be a tag (True) with prim.bool type
+    const args = env.mir_store.getExprSpan(result.call.args);
+    try testing.expectEqual(@as(usize, 1), args.len);
+    const arg = env.mir_store.getExpr(args[0]);
+    try testing.expect(arg == .tag);
+    try testing.expectEqualStrings("True", env.module_env.getIdent(arg.tag.name));
+    const arg_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(args[0]));
+    try testing.expect(arg_mono == .prim);
+    try testing.expectEqual(Monotype.Prim.bool, arg_mono.prim);
+}
+
+test "Bool.not MIR: Bool.not(False) is a call with prim.bool return type" {
+    var env = try MirTestEnv.initExpr("Bool.not(False)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .call);
+    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
+    try testing.expect(monotype == .prim);
+    try testing.expectEqual(Monotype.Prim.bool, monotype.prim);
+    const args = env.mir_store.getExprSpan(result.call.args);
+    try testing.expectEqual(@as(usize, 1), args.len);
+    const arg = env.mir_store.getExpr(args[0]);
+    try testing.expect(arg == .tag);
+    try testing.expectEqualStrings("False", env.module_env.getIdent(arg.tag.name));
+    const arg_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(args[0]));
+    try testing.expect(arg_mono == .prim);
+    try testing.expectEqual(Monotype.Prim.bool, arg_mono.prim);
+}
+
 // --- Nominal Bool vs structural tag union MIR tests ---
 // CRITICAL DISTINCTION: Bare tags like `True` and `False` without a Bool annotation
 // must lower to `.tag_union` monotype, NOT `prim.bool`. Only nominal `Bool` (via
