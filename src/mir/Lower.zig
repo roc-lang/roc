@@ -279,6 +279,12 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                 for (defs) |def_idx| {
                     const def = module_env.store.getDef(def_idx);
                     if (def.pattern == lookup.pattern_idx) {
+                        // Seed the definition's type vars from the call-site
+                        // monotype. The definition has its own type scheme
+                        // (e.g. range_to's `b`) separate from the caller's
+                        // instantiated copy (e.g. `a` in `to`), so we seed
+                        // before lowering to connect them.
+                        self.seedTypeVarSeen(ModuleEnv.varFrom(def.expr), monotype);
                         _ = try self.lowerExternalDef(symbol, def.expr);
                         break;
                     }
@@ -304,7 +310,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                 if (target_env.store.isDefNode(ext.target_node_idx)) {
                     const def_idx: CIR.Def.Idx = @enumFromInt(ext.target_node_idx);
                     const def = target_env.store.getDef(def_idx);
-                    _ = try self.lowerExternalDef(symbol, def.expr);
+                    _ = try self.lowerExternalDefWithType(symbol, def.expr, monotype);
                 }
             }
 
@@ -332,7 +338,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                     .assign => |assign| {
                         if (std.mem.eql(u8, app_env.getIdent(assign.ident), required_name)) {
                             const symbol = MIR.Symbol{ .module_idx = app_idx, .ident_idx = assign.ident };
-                            _ = try self.lowerExternalDef(symbol, def.expr);
+                            _ = try self.lowerExternalDefWithType(symbol, def.expr, monotype);
                             return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, monotype, region);
                         }
                     },
@@ -1001,12 +1007,13 @@ fn lowerBinop(self: *Self, binop: CIR.Expr.Binop, monotype: Monotype.Idx, region
                 return result;
             };
 
-            // Ensure the method body is lowered so codegen can find it.
-            try self.ensureMethodLowered(method_symbol);
-
             const lhs_monotype = try self.resolveMonotype(binop.lhs);
             const rhs_monotype = try self.resolveMonotype(binop.rhs);
             const func_monotype = try self.buildFuncMonotype(&.{ lhs_monotype, rhs_monotype }, monotype, false);
+
+            // Ensure the method body is lowered so codegen can find it.
+            try self.ensureMethodLowered(method_symbol, func_monotype);
+
             const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = method_symbol }, func_monotype, region);
 
             const args = try self.store.addExprSpan(self.allocator, &.{ lhs, rhs });
@@ -1073,11 +1080,12 @@ fn lowerUnaryMinus(self: *Self, um: CIR.Expr.UnaryMinus, monotype: Monotype.Idx,
         } }, monotype, region);
     };
 
-    // Ensure the method body is lowered so codegen can find it.
-    try self.ensureMethodLowered(method_symbol);
-
     const inner_monotype = try self.resolveMonotype(um.expr);
     const func_monotype = try self.buildFuncMonotype(&.{inner_monotype}, monotype, false);
+
+    // Ensure the method body is lowered so codegen can find it.
+    try self.ensureMethodLowered(method_symbol, func_monotype);
+
     const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = method_symbol }, func_monotype, region);
     const args = try self.store.addExprSpan(self.allocator, &.{inner});
     return try self.store.addExpr(self.allocator, .{ .call = .{
@@ -1156,9 +1164,6 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, da: anytype, monoty
             .ident_idx = da.field_name,
         };
 
-        // Ensure the method body is lowered so codegen can find it.
-        try self.ensureMethodLowered(method_symbol);
-
         // Build args as [receiver] ++ explicit_args
         // e.g. list.map(fn) → List.map(list, fn)
         const explicit_args = module_env.store.sliceExpr(args_span);
@@ -1171,6 +1176,9 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, da: anytype, monoty
             try self.mono_scratches.idxs.append(try self.resolveMonotype(arg_idx));
         }
         const func_monotype = try self.buildFuncMonotype(self.mono_scratches.idxs.sliceFromStart(mono_top), monotype, false);
+
+        // Ensure the method body is lowered so codegen can find it.
+        try self.ensureMethodLowered(method_symbol, func_monotype);
 
         const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = method_symbol }, func_monotype, region);
 
@@ -1240,9 +1248,6 @@ fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, tvd: anytype,
         .ident_idx = tvd.method_name,
     };
 
-    // Ensure the method body is lowered so codegen can find it.
-    try self.ensureMethodLowered(method_symbol);
-
     const cir_args = module_env.store.sliceExpr(tvd.args);
     const mono_top = self.mono_scratches.idxs.top();
     defer self.mono_scratches.idxs.clearFrom(mono_top);
@@ -1250,6 +1255,9 @@ fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, tvd: anytype,
         try self.mono_scratches.idxs.append(try self.resolveMonotype(arg_idx));
     }
     const func_monotype = try self.buildFuncMonotype(self.mono_scratches.idxs.sliceFromStart(mono_top), monotype, false);
+
+    // Ensure the method body is lowered so codegen can find it.
+    try self.ensureMethodLowered(method_symbol, func_monotype);
 
     const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = method_symbol }, func_monotype, region);
     const args = try self.lowerExprSpan(module_env, tvd.args);
@@ -1337,7 +1345,7 @@ fn resolveMethodForTypeVar(
 }
 
 /// Ensure a method definition is lowered (for cross-module binop dispatch).
-fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol) Allocator.Error!void {
+fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?Monotype.Idx) Allocator.Error!void {
     const symbol_key: u64 = @bitCast(symbol);
     if (self.lowered_symbols.contains(symbol_key)) return;
 
@@ -1349,7 +1357,7 @@ fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol) Allocator.Error!void {
         switch (pat) {
             .assign => |assign| {
                 if (@as(u32, @bitCast(assign.ident)) == @as(u32, @bitCast(symbol.ident_idx))) {
-                    _ = try self.lowerExternalDef(symbol, def.expr);
+                    _ = try self.lowerExternalDefWithType(symbol, def.expr, caller_func_monotype);
                     return;
                 }
             },
@@ -1363,6 +1371,14 @@ fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol) Allocator.Error!void {
 
 /// Lower an external definition by symbol, caching the result.
 pub fn lowerExternalDef(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId {
+    return self.lowerExternalDefWithType(symbol, cir_expr_idx, null);
+}
+
+/// Lower an external definition, with an optional caller monotype for
+/// cross-module polymorphism resolution. When the caller provides a concrete
+/// monotype, flex type variables in the target module are pre-seeded so they
+/// resolve to the caller's concrete types instead of unit/ZST.
+fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.Expr.Idx, caller_monotype: ?Monotype.Idx) Allocator.Error!MIR.ExprId {
     const symbol_key: u64 = @bitCast(symbol);
 
     // Check cache
@@ -1396,6 +1412,17 @@ pub fn lowerExternalDef(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.Expr.
         self.current_module_idx = symbol.module_idx;
         self.types_store = &self.all_module_envs[symbol.module_idx].types;
         self.type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+
+        // Pre-seed type_var_seen with the caller's concrete types so that
+        // flex vars in the definition resolve to concrete monotypes instead
+        // of unit. Each definition has its own type vars (not unified with
+        // the caller's instantiated copies), so they must be seeded here.
+        if (caller_monotype) |cmt| {
+            if (!cmt.isNone()) {
+                const target_type_var = ModuleEnv.varFrom(cir_expr_idx);
+                self.seedTypeVarSeen(target_type_var, cmt);
+            }
+        }
     }
     defer if (switching_module) {
         self.type_var_seen.deinit();
@@ -1425,4 +1452,155 @@ pub fn lowerExternalDef(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.Expr.
     _ = self.in_progress_defs.remove(symbol_key);
 
     return result;
+}
+
+/// Walk a polymorphic type variable from the target module's type store in
+/// parallel with a concrete monotype from the MIR monotype store. For each
+/// flex/rigid var encountered, record it in type_var_seen so that subsequent
+/// fromTypeVar calls resolve it to the concrete monotype instead of unit.
+fn seedTypeVarSeen(self: *Self, type_var: types.Var, monotype: Monotype.Idx) void {
+    if (monotype.isNone()) return;
+
+    const resolved = self.types_store.resolveVar(type_var);
+
+    if (self.type_var_seen.contains(resolved.var_)) return;
+
+    switch (resolved.desc.content) {
+        .flex, .rigid => {
+            self.type_var_seen.put(resolved.var_, monotype) catch return;
+        },
+        .alias => |alias| {
+            const backing_var = self.types_store.getAliasBackingVar(alias);
+            self.seedTypeVarSeen(backing_var, monotype);
+        },
+        .structure => |flat_type| {
+            self.seedTypeVarSeenStructure(flat_type, monotype);
+        },
+        .err => {},
+    }
+}
+
+fn seedTypeVarSeenStructure(self: *Self, flat_type: types.FlatType, monotype: Monotype.Idx) void {
+    if (monotype.isNone()) return;
+    const mono = self.store.monotype_store.getMonotype(monotype);
+
+    switch (flat_type) {
+        .fn_pure, .fn_effectful, .fn_unbound => |func| {
+            switch (mono) {
+                .func => |mfunc| {
+                    const type_args = self.types_store.sliceVars(func.args);
+                    const mono_args = self.store.monotype_store.getIdxSpan(mfunc.args);
+                    const min_len = @min(type_args.len, mono_args.len);
+                    for (type_args[0..min_len], mono_args[0..min_len]) |ta, ma| {
+                        self.seedTypeVarSeen(ta, ma);
+                    }
+                    self.seedTypeVarSeen(func.ret, mfunc.ret);
+                },
+                else => {},
+            }
+        },
+        .nominal_type => |nominal| {
+            const common = self.currentCommonIdents();
+            const ident = nominal.ident.ident_idx;
+            const origin = nominal.origin_module;
+
+            if (origin == common.builtin_module) {
+                if (ident == common.list) {
+                    switch (mono) {
+                        .list => |mlist| {
+                            const type_args = self.types_store.sliceNominalArgs(nominal);
+                            if (type_args.len > 0) {
+                                self.seedTypeVarSeen(type_args[0], mlist.elem);
+                            }
+                        },
+                        else => {},
+                    }
+                    return;
+                }
+                if (ident == common.box) {
+                    switch (mono) {
+                        .box => |mbox| {
+                            const type_args = self.types_store.sliceNominalArgs(nominal);
+                            if (type_args.len > 0) {
+                                self.seedTypeVarSeen(type_args[0], mbox.inner);
+                            }
+                        },
+                        else => {},
+                    }
+                    return;
+                }
+            }
+
+            // For other nominal types, follow the backing type
+            const backing_var = self.types_store.getNominalBackingVar(nominal);
+            self.seedTypeVarSeen(backing_var, monotype);
+        },
+        .record => |record| {
+            switch (mono) {
+                .record => |mrec| {
+                    const fields_slice = self.types_store.getRecordFieldsSlice(record.fields);
+                    const field_vars = fields_slice.items(.var_);
+                    const mono_fields = self.store.monotype_store.getFields(mrec.fields);
+                    const min_len = @min(field_vars.len, mono_fields.len);
+                    for (field_vars[0..min_len], mono_fields[0..min_len]) |fv, mf| {
+                        self.seedTypeVarSeen(fv, mf.type_idx);
+                    }
+                },
+                else => {},
+            }
+        },
+        .record_unbound => |fields_range| {
+            switch (mono) {
+                .record => |mrec| {
+                    const fields_slice = self.types_store.getRecordFieldsSlice(fields_range);
+                    const field_vars = fields_slice.items(.var_);
+                    const mono_fields = self.store.monotype_store.getFields(mrec.fields);
+                    const min_len = @min(field_vars.len, mono_fields.len);
+                    for (field_vars[0..min_len], mono_fields[0..min_len]) |fv, mf| {
+                        self.seedTypeVarSeen(fv, mf.type_idx);
+                    }
+                },
+                else => {},
+            }
+        },
+        .tuple => |tuple| {
+            switch (mono) {
+                .tuple => |mtuple| {
+                    const elem_vars = self.types_store.sliceVars(tuple.elems);
+                    const mono_elems = self.store.monotype_store.getIdxSpan(mtuple.elems);
+                    const min_len = @min(elem_vars.len, mono_elems.len);
+                    for (elem_vars[0..min_len], mono_elems[0..min_len]) |ev, me| {
+                        self.seedTypeVarSeen(ev, me);
+                    }
+                },
+                else => {},
+            }
+        },
+        .tag_union => |tag_union| {
+            switch (mono) {
+                .tag_union => |mtu| {
+                    const type_tags = self.types_store.getTagsSlice(tag_union.tags);
+                    const type_tag_names = type_tags.items(.name);
+                    const type_tag_args = type_tags.items(.args);
+                    const mono_tags = self.store.monotype_store.getTags(mtu.tags);
+
+                    for (type_tag_names, type_tag_args) |tname, targs| {
+                        for (mono_tags) |mtag| {
+                            if (tname == mtag.name) {
+                                const targ_vars = self.types_store.sliceVars(targs);
+                                const marg_idxs = self.store.monotype_store.getIdxSpan(mtag.payloads);
+                                const n = @min(targ_vars.len, marg_idxs.len);
+                                for (targ_vars[0..n], marg_idxs[0..n]) |tv, mi| {
+                                    self.seedTypeVarSeen(tv, mi);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                },
+                else => {},
+            }
+        },
+        .empty_record, .empty_tag_union => {},
+    }
 }

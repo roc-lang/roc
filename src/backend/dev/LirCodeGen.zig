@@ -3209,9 +3209,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_sublist => {
                     // list_sublist(list, {start, len}) -> List
                     if (args.len != 2) unreachable;
+                    const record_layout_idx = self.getExprLayout(args[1]);
                     const list_loc = try self.generateExpr(args[0]);
                     const record_loc = try self.generateExpr(args[1]);
-                    return try self.callListSublistFromRecord(ll, list_loc, record_loc);
+                    return try self.callListSublistFromRecord(ll, list_loc, record_loc, record_layout_idx);
                 },
                 .num_abs => {
                     // Absolute value: for signed types, negate if negative; unsigned is no-op
@@ -3480,8 +3481,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// list_sublist(list, {start, len}) -> List
-        /// The record {start: U64, len: U64} has fields at offsets determined by the layout store.
-        fn callListSublistFromRecord(self: *Self, ll: anytype, list_loc: ValueLocation, record_loc: ValueLocation) Allocator.Error!ValueLocation {
+        fn callListSublistFromRecord(self: *Self, ll: anytype, list_loc: ValueLocation, record_loc: ValueLocation, record_layout_idx: ?layout.Idx) Allocator.Error!ValueLocation {
             const ls = self.layout_store orelse unreachable;
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
@@ -3494,9 +3494,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 };
             };
 
+            // Look up field offsets by name from the record layout
+            const record_layout = ls.getLayout(record_layout_idx orelse unreachable);
+            const record_idx = record_layout.data.record.idx;
+            const record_size = ls.getRecordData(record_idx).size;
+            const start_field_off: i32 = @intCast(ls.getRecordFieldOffsetByNameStr(record_idx, "start") orelse unreachable);
+            const len_field_off: i32 = @intCast(ls.getRecordFieldOffsetByNameStr(record_idx, "len") orelse unreachable);
+
             const list_off = try self.ensureOnStack(list_loc, roc_list_size);
-            // The record is {start: U64, len: U64} = 16 bytes
-            const record_off = try self.ensureOnStack(record_loc, 16);
+            const record_off = try self.ensureOnStack(record_loc, record_size);
 
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
             const alignment_bytes = elem_size_align.alignment.toByteUnits();
@@ -3512,9 +3518,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addMemArg(base_reg, list_off + 16);
                 try builder.addImmArg(@intCast(alignment_bytes));
                 try builder.addImmArg(@intCast(elem_size_align.size));
-                // Record fields: {start: U64, len: U64} — start at offset 0, len at offset 8
-                try builder.addMemArg(base_reg, record_off);
-                try builder.addMemArg(base_reg, record_off + 8);
+                try builder.addMemArg(base_reg, record_off + start_field_off);
+                try builder.addMemArg(base_reg, record_off + len_field_off);
                 try builder.addRegArg(roc_ops_reg);
                 try self.callBuiltin(&builder, fn_addr, .list_sublist);
             }

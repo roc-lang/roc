@@ -1706,3 +1706,47 @@ test "Structural tag MIR: if True True else False lowers as tag_union not prim.b
     const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
     try testing.expect(monotype == .tag_union);
 }
+
+// --- Cross-module type resolution: method dispatch resolves concrete types ---
+
+test "cross-module type resolution: U32.to dispatches with concrete U32 function type" {
+    // `1.U32.to(5.U32)` dispatches to Builtin's `to` method.
+    // The lowered call's function must have monotype `func(U32, U32) -> List(U32)`,
+    // NOT `func(unit, unit) -> List(unit)` (which would happen if flex vars in the
+    // Builtin module resolve to unit instead of the caller's concrete types).
+    var env = try MirTestEnv.initExpr("1.U32.to(5.U32)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+
+    // The top-level expression should be a call
+    const top = env.mir_store.getExpr(expr);
+    try testing.expect(top == .call);
+
+    // The call's function should be a lookup whose monotype is a func
+    const func_expr = env.mir_store.getExpr(top.call.func);
+    try testing.expect(func_expr == .lookup);
+
+    const func_monotype_idx = env.mir_store.typeOf(top.call.func);
+    const func_mono = env.mir_store.monotype_store.getMonotype(func_monotype_idx);
+    try testing.expect(func_mono == .func);
+
+    // The function's return type must be List(U32), not List(unit)
+    const ret_mono = env.mir_store.monotype_store.getMonotype(func_mono.func.ret);
+    try testing.expect(ret_mono == .list);
+
+    const elem_mono = env.mir_store.monotype_store.getMonotype(ret_mono.list.elem);
+    try testing.expectEqual(Monotype.Monotype{ .prim = .u32 }, elem_mono);
+
+    // Verify the function DEFINITION body was also lowered with concrete types.
+    const method_symbol = func_expr.lookup;
+    const sym_key: u64 = @bitCast(method_symbol);
+    const def_expr_id = env.mir_store.symbol_defs.get(sym_key) orelse
+        return error.TestUnexpectedResult;
+    const def_mono_idx = env.mir_store.typeOf(def_expr_id);
+    const def_mono = env.mir_store.monotype_store.getMonotype(def_mono_idx);
+    try testing.expect(def_mono == .func);
+    const def_ret_mono = env.mir_store.monotype_store.getMonotype(def_mono.func.ret);
+    try testing.expect(def_ret_mono == .list);
+    const def_elem = env.mir_store.monotype_store.getMonotype(def_ret_mono.list.elem);
+    try testing.expectEqual(Monotype.Monotype{ .prim = .u32 }, def_elem);
+}
