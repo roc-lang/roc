@@ -934,7 +934,7 @@ fn formatWithTypes(
         else => {},
     };
 
-    // Fall back to layout-only formatting for scalars and other types
+    // Use layout-only formatting for scalars and other types
     const roc_val = RocValue{ .ptr = ptr, .lay = lay };
     const fmt_ctx = RocValue.FormatContext{
         .layout_store = layout_store,
@@ -1123,7 +1123,6 @@ fn formatRecord(
     layout_store: *const layout_mod.Store,
 ) FormatError![]u8 {
     const types_store = &module_env.types;
-    const ident_store = module_env.getIdentStoreConst();
     const rec_data = layout_store.getRecordData(lay.data.record.idx);
 
     if (rec_data.fields.count == 0) {
@@ -1141,7 +1140,7 @@ fn formatRecord(
     for (0..count) |i| {
         const l_fld = layout_fields.get(i);
         const t_fld = type_fields.get(i);
-        const name_text = ident_store.getText(l_fld.name);
+        const name_text = module_env.getIdent(l_fld.name);
         try out.appendSlice(name_text);
         try out.appendSlice(": ");
 

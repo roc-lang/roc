@@ -28,9 +28,6 @@ const eval_mod = @import("mod.zig");
 
 const RocEnv = @import("roc_env.zig").RocEnv;
 const createRocOps = @import("roc_env.zig").createRocOps;
-const layout_resolve = @import("layout_resolve.zig");
-const getExprLayoutWithTypeEnv = layout_resolve.getExprLayoutWithTypeEnv;
-const codegen_prepare = @import("codegen_prepare.zig");
 
 const types = @import("types");
 
@@ -63,7 +60,7 @@ fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoEx
     return switch (expr) {
         .block => |b| monoExprResultLayout(store, b.final_expr),
         .if_then_else => |ite| ite.result_layout,
-        .when => |w| w.result_layout,
+        .match_expr => |m| m.result_layout,
         .dbg => |d| d.result_layout,
         .expect => |e| e.result_layout,
         .binop => |b| b.result_layout,
@@ -224,23 +221,12 @@ pub const LlvmEvaluator = struct {
         all_module_envs: []const *ModuleEnv,
         builtin_module_env: ?*const ModuleEnv,
     ) Error!CodeResult {
-        // 1. Run pre-codegen transforms
-        var mutable_envs = [_]*ModuleEnv{module_env};
-        const inference = codegen_prepare.prepareModulesForCodegen(
-            self.allocator,
-            &mutable_envs,
-        ) catch return error.OutOfMemory;
-        defer {
-            inference.deinit();
-            self.allocator.destroy(inference);
-        }
-
-        // 2. Create Mono IR store and lower
+        // 1. Create Mono IR store and lower
         var mono_store = MonoExprStore.init(self.allocator);
         defer mono_store.deinit();
 
         // Find the module index for this module
-        var module_idx: u16 = 0;
+        var module_idx: u32 = 0;
         for (all_module_envs, 0..) |env, i| {
             if (env == module_env) {
                 module_idx = @intCast(i);
@@ -251,38 +237,67 @@ pub const LlvmEvaluator = struct {
         // Get or create the global layout store
         const layout_store_ptr = try self.ensureGlobalLayoutStore(all_module_envs, builtin_module_env);
 
+        // In REPL sessions, module type stores get fresh type variables on each evaluation,
+        // but the global layout store persists. Clear stale cached layouts.
+        layout_store_ptr.resetModuleCache(all_module_envs);
+
         // Create the lowerer with the layout store
         var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, layout_store_ptr, null, null);
         defer lowerer.deinit();
 
-        // Lower the CIR expression to Mono IR
-        const mono_expr_id = try lowerer.lowerExpr(module_idx, expr_idx);
+        // Lower CIR expression to Mono IR
+        const lowered_expr_id = lowerer.lowerExpr(module_idx, expr_idx) catch {
+            return error.CompilationFailed;
+        };
 
-        // 3. Determine result layout from Mono IR expression.
-        // Prefer the layout embedded in the Mono expression because the CIR
-        // type variable can have Content.err for expressions involving the `?`
-        // operator at top level (where the Err branch desugars to runtime_error).
+        // 2. Lambda lifting: lift nested lambdas to top-level after monomorphization
+        var lambda_lifter = mono.LambdaLift.init(
+            self.allocator,
+            &mono_store,
+            all_module_envs,
+            null, // app_module_idx - not used for JIT evaluation
+            layout_store_ptr,
+            null, // type_store - optional for validation
+        );
+        defer lambda_lifter.deinit();
+        lambda_lifter.liftAllLambdas() catch {
+            return error.CompilationFailed;
+        };
+
+        // 3. RC insertion pass on the Mono IR
+        var rc_pass = mono.RcInsert.RcInsertPass.init(self.allocator, &mono_store, layout_store_ptr) catch return error.OutOfMemory;
+        defer rc_pass.deinit();
+        const mono_expr_id = rc_pass.insertRcOps(lowered_expr_id) catch lowered_expr_id;
+
+        // Run RC insertion on all function definitions (symbol_defs)
+        {
+            var def_iter = mono_store.symbol_defs.iterator();
+            while (def_iter.next()) |entry| {
+                var fn_rc = mono.RcInsert.RcInsertPass.init(
+                    self.allocator,
+                    &mono_store,
+                    layout_store_ptr,
+                ) catch continue;
+                defer fn_rc.deinit();
+                entry.value_ptr.* = fn_rc.insertRcOps(entry.value_ptr.*) catch entry.value_ptr.*;
+            }
+        }
+
+        // 4. Determine result layout from Mono IR expression.
         const result_layout = monoExprResultLayout(&mono_store, mono_expr_id) orelse blk: {
             // Fallback: resolve from the CIR type variable
             const type_var = can.ModuleEnv.varFrom(expr_idx);
             var type_scope = types.TypeScope.init(self.allocator);
             defer type_scope.deinit();
-            break :blk layout_store_ptr.fromTypeVar(module_idx, type_var, &type_scope, null) catch |e| switch (e) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.NotImplemented => unreachable,
-            };
+            break :blk layout_store_ptr.fromTypeVar(module_idx, type_var, &type_scope, null) catch return error.OutOfMemory;
         };
 
-        // 4. Generate LLVM bitcode
+        // 5. Generate LLVM bitcode
         const llvm_compile = @import("llvm_compile");
         const MonoLlvmCodeGen = llvm_compile.MonoLlvmCodeGen;
 
         var codegen = MonoLlvmCodeGen.init(self.allocator, &mono_store);
         defer codegen.deinit();
-
-        // Builtins are now called directly via LLVM function declarations.
-        // builtins.bc is linked into the LLVM module during compilation,
-        // so all builtin functions are available by name — no function pointers needed.
 
         // Provide layout store for composite types (records, tuples)
         codegen.layout_store = layout_store_ptr;
@@ -293,7 +308,7 @@ pub const LlvmEvaluator = struct {
         };
         defer gen_result.deinit();
 
-        // 5. Compile bitcode to object file
+        // 6. Compile bitcode to object file
         // Use optimizations in release builds (CI), no optimizations in debug builds.
         const opt_level: llvm_compile.bindings.CodeGenOptLevel = if (builtin.mode == .Debug) .None else .Default;
         const object_bytes = llvm_compile.compileToObject(
@@ -303,7 +318,7 @@ pub const LlvmEvaluator = struct {
         ) catch return error.CompilationFailed;
         defer self.allocator.free(object_bytes);
 
-        // 6. Extract code, apply ELF relocations, and find entry point
+        // 7. Extract code, apply ELF relocations, and find entry point
         const object_reader = backend.dev.object_reader;
         const relocated = object_reader.extractAndRelocateElf(self.allocator, object_bytes) catch return error.CompilationFailed;
         const code_copy = relocated.code;

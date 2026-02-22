@@ -22,7 +22,6 @@ const Interpreter = eval_mod.Interpreter;
 const BuiltinTypes = eval_mod.BuiltinTypes;
 
 const Emitter = can.RocEmitter;
-const Monomorphizer = can.Monomorphizer;
 
 const testing = std.testing;
 // Use interpreter_allocator for interpreter tests (doesn't track leaks)
@@ -147,21 +146,9 @@ test "end-to-end: emit block with let binding" {
     try testing.expect(std.mem.indexOf(u8, output, "x") != null);
 }
 
-// Monomorphization infrastructure tests
+// Emitter tests
 
-test "monomorphizer: can be initialized with parsed/type-checked code" {
-    const resources = try helpers.parseAndCanonicalizeExpr(test_allocator, "42");
-    defer helpers.cleanupParseAndCanonical(test_allocator, resources);
-
-    // Initialize monomorphizer with the module environment and types
-    var mono = Monomorphizer.init(test_allocator, resources.module_env, &resources.module_env.types);
-    defer mono.deinit();
-
-    // Basic sanity check - monomorphizer should be ready
-    try testing.expectEqual(@as(u32, 0), mono.specialization_counter);
-}
-
-test "monomorphizer: identity function is polymorphic before type checking" {
+test "emitter: identity function is polymorphic before type checking" {
     // This test parses an identity lambda and checks it can be emitted
     const output = try emitFromSource(test_allocator, "|x| x");
     defer test_allocator.free(output);
@@ -170,7 +157,7 @@ test "monomorphizer: identity function is polymorphic before type checking" {
     try testing.expectEqualStrings("|x| x", output);
 }
 
-test "monomorphizer: can emit identity function applied to integer" {
+test "emitter: can emit identity function applied to integer" {
     // Test that we can parse and emit a block with identity function application
     const source =
         \\{

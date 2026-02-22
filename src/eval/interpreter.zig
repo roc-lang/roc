@@ -626,20 +626,24 @@ pub const Interpreter = struct {
         errdefer translated_module_envs.deinit(allocator);
         const mutable_env_for_idents = result.runtime_layout_store.getMutableEnv().?;
 
-        // Helper to check if a module has a valid module_name_idx
+        // Ensure the mutable env's interner supports insertions (it may be deserialized/read-only
+        // when loaded from the module cache).
+        try mutable_env_for_idents.common.idents.interner.enableRuntimeInserts(allocator);
+
+        // Helper to check if a module has a valid qualified_module_ident
         // (handles both unset NONE and corrupted undefined values from deserialized data)
         const hasValidModuleName = struct {
             fn check(mod_env: *const can.ModuleEnv) bool {
-                if (mod_env.module_name_idx.isNone()) return false;
+                if (mod_env.qualified_module_ident.isNone()) return false;
                 const ident_store_size = mod_env.common.idents.interner.bytes.items.items.len;
-                const idx_val = mod_env.module_name_idx.idx;
+                const idx_val = mod_env.qualified_module_ident.idx;
                 return idx_val < ident_store_size;
             }
         }.check;
 
-        // Add current/root module (skip if module_name_idx is unset, e.g., in tests)
+        // Add current/root module (skip if qualified_module_ident is unset, e.g., in tests)
         if (hasValidModuleName(env)) {
-            const current_name_str = env.getIdent(env.module_name_idx);
+            const current_name_str = env.getIdent(env.qualified_module_ident);
             const translated_current = try mutable_env_for_idents.insertIdent(base_pkg.Ident.for_text(current_name_str));
             try translated_module_envs.put(allocator, translated_current, env);
         }
@@ -647,7 +651,7 @@ pub const Interpreter = struct {
         // Add app module if different from env
         if (app_env) |a_env| {
             if (a_env != env and hasValidModuleName(a_env)) {
-                const app_name_str = a_env.getIdent(a_env.module_name_idx);
+                const app_name_str = a_env.getIdent(a_env.qualified_module_ident);
                 const translated_app = try mutable_env_for_idents.insertIdent(base_pkg.Ident.for_text(app_name_str));
                 try translated_module_envs.put(allocator, translated_app, a_env);
             }
@@ -656,7 +660,7 @@ pub const Interpreter = struct {
         // Add builtin module
         if (builtin_module_env) |bme| {
             if (hasValidModuleName(bme)) {
-                const builtin_name_str = bme.getIdent(bme.module_name_idx);
+                const builtin_name_str = bme.getIdent(bme.qualified_module_ident);
                 const translated_builtin = try mutable_env_for_idents.insertIdent(base_pkg.Ident.for_text(builtin_name_str));
                 try translated_module_envs.put(allocator, translated_builtin, bme);
             }
@@ -665,7 +669,7 @@ pub const Interpreter = struct {
         // Add all other modules
         for (all_module_envs) |mod_env| {
             if (hasValidModuleName(mod_env)) {
-                const mod_name_str = mod_env.getIdent(mod_env.module_name_idx);
+                const mod_name_str = mod_env.getIdent(mod_env.qualified_module_ident);
                 const translated_mod = try mutable_env_for_idents.insertIdent(base_pkg.Ident.for_text(mod_name_str));
                 // Use put to handle potential duplicates (same module might be in multiple places)
                 try translated_module_envs.put(allocator, translated_mod, mod_env);
@@ -680,14 +684,14 @@ pub const Interpreter = struct {
 
         // Translate env's module name
         if (hasValidModuleName(env)) {
-            const env_name_str = env.getIdent(env.module_name_idx);
+            const env_name_str = env.getIdent(env.qualified_module_ident);
             result.translated_env_module = try mutable_env_for_idents.insertIdent(base_pkg.Ident.for_text(env_name_str));
         }
 
         // Translate app's module name
         if (app_env) |a_env| {
             if (a_env != env and hasValidModuleName(a_env)) {
-                const app_name_str = a_env.getIdent(a_env.module_name_idx);
+                const app_name_str = a_env.getIdent(a_env.qualified_module_ident);
                 result.translated_app_module = try mutable_env_for_idents.insertIdent(base_pkg.Ident.for_text(app_name_str));
             }
         }
@@ -1936,11 +1940,11 @@ pub const Interpreter = struct {
                         var dest = try self.pushRaw(result_layout, 0, result_rt_var);
                         var acc = try dest.asRecord(&self.runtime_layout_store);
 
-                        const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse {
+                        const tag_field_idx = acc.findFieldIndex(self.env.getIdent(self.env.idents.tag)) orelse {
                             self.triggerCrash("str_from_utf8: tag field not found", false, roc_ops);
                             return error.Crash;
                         };
-                        const payload_field_idx = acc.findFieldIndex(self.env.idents.payload) orelse {
+                        const payload_field_idx = acc.findFieldIndex(self.env.getIdent(self.env.idents.payload)) orelse {
                             self.triggerCrash("str_from_utf8: payload field not found", false, roc_ops);
                             return error.Crash;
                         };
@@ -2017,7 +2021,7 @@ pub const Interpreter = struct {
                             if (inner_payload.layout.tag == .record) {
                                 var inner_acc = try inner_payload.asRecord(&self.runtime_layout_store);
                                 // Set problem field (tag union represented as u8)
-                                if (inner_acc.findFieldIndex(self.env.idents.problem)) |problem_idx| {
+                                if (inner_acc.findFieldIndex(self.env.getIdent(self.env.idents.problem))) |problem_idx| {
                                     const problem_rt = try self.runtime_types.fresh();
                                     const problem_field = try inner_acc.getFieldByIndex(problem_idx, problem_rt);
                                     if (problem_field.ptr) |ptr| {
@@ -2025,7 +2029,7 @@ pub const Interpreter = struct {
                                     }
                                 }
                                 // Set index field (U64)
-                                if (inner_acc.findFieldIndex(self.env.idents.index)) |index_idx| {
+                                if (inner_acc.findFieldIndex(self.env.getIdent(self.env.idents.index))) |index_idx| {
                                     const index_rt = try self.runtime_types.fresh();
                                     const index_field = try inner_acc.getFieldByIndex(index_idx, index_rt);
                                     if (index_field.ptr) |ptr| {
@@ -2044,7 +2048,7 @@ pub const Interpreter = struct {
                         } else if (payload_field.layout.tag == .record) {
                             // Payload is a record with tag and payload for BadUtf8
                             var err_rec = try payload_field.asRecord(&self.runtime_layout_store);
-                            if (err_rec.findFieldIndex(self.env.idents.tag)) |tag_idx| {
+                            if (err_rec.findFieldIndex(self.env.getIdent(self.env.idents.tag))) |tag_idx| {
                                 const field_rt = try self.runtime_types.fresh();
                                 const inner_tag = try err_rec.getFieldByIndex(tag_idx, field_rt);
                                 if (inner_tag.layout.tag == .scalar and inner_tag.layout.data.scalar.tag == .int) {
@@ -2053,19 +2057,19 @@ pub const Interpreter = struct {
                                     try tmp.setInt(0); // BadUtf8 is index 0
                                 }
                             }
-                            if (err_rec.findFieldIndex(self.env.idents.payload)) |inner_payload_idx| {
+                            if (err_rec.findFieldIndex(self.env.getIdent(self.env.idents.payload))) |inner_payload_idx| {
                                 const field_rt = try self.runtime_types.fresh();
                                 const inner_payload = try err_rec.getFieldByIndex(inner_payload_idx, field_rt);
                                 if (inner_payload.layout.tag == .record) {
                                     var inner_acc = try inner_payload.asRecord(&self.runtime_layout_store);
-                                    if (inner_acc.findFieldIndex(self.env.idents.problem)) |problem_idx| {
+                                    if (inner_acc.findFieldIndex(self.env.getIdent(self.env.idents.problem))) |problem_idx| {
                                         const field_rt2 = try self.runtime_types.fresh();
                                         const problem_field = try inner_acc.getFieldByIndex(problem_idx, field_rt2);
                                         if (problem_field.ptr) |ptr| {
                                             builtins.utils.writeAs(u8, ptr, @intFromEnum(result.problem_code), @src());
                                         }
                                     }
-                                    if (inner_acc.findFieldIndex(self.env.idents.index)) |index_idx| {
+                                    if (inner_acc.findFieldIndex(self.env.getIdent(self.env.idents.index))) |index_idx| {
                                         const field_rt2 = try self.runtime_types.fresh();
                                         const index_field = try inner_acc.getFieldByIndex(index_idx, field_rt2);
                                         if (index_field.ptr) |ptr| {
@@ -2083,11 +2087,11 @@ pub const Interpreter = struct {
                         var dest = try self.pushRaw(result_layout, 0, result_rt_var);
                         var acc = try dest.asRecord(&self.runtime_layout_store);
 
-                        const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse {
+                        const tag_field_idx = acc.findFieldIndex(self.env.getIdent(self.env.idents.tag)) orelse {
                             self.triggerCrash("str_from_utf8: tag field not found", false, roc_ops);
                             return error.Crash;
                         };
-                        const payload_field_idx = acc.findFieldIndex(self.env.idents.payload) orelse {
+                        const payload_field_idx = acc.findFieldIndex(self.env.getIdent(self.env.idents.payload)) orelse {
                             self.triggerCrash("str_from_utf8: payload field not found", false, roc_ops);
                             return error.Crash;
                         };
@@ -2110,14 +2114,14 @@ pub const Interpreter = struct {
                             const inner_payload = try err_tuple.getElement(0, inner_rt_var);
                             if (inner_payload.layout.tag == .record) {
                                 var inner_acc = try inner_payload.asRecord(&self.runtime_layout_store);
-                                if (inner_acc.findFieldIndex(self.env.idents.problem)) |problem_idx| {
+                                if (inner_acc.findFieldIndex(self.env.getIdent(self.env.idents.problem))) |problem_idx| {
                                     const field_rt2 = try self.runtime_types.fresh();
                                     const problem_field = try inner_acc.getFieldByIndex(problem_idx, field_rt2);
                                     if (problem_field.ptr) |ptr| {
                                         builtins.utils.writeAs(u8, ptr, @intFromEnum(result.problem_code), @src());
                                     }
                                 }
-                                if (inner_acc.findFieldIndex(self.env.idents.index)) |index_idx| {
+                                if (inner_acc.findFieldIndex(self.env.getIdent(self.env.idents.index))) |index_idx| {
                                     const field_rt2 = try self.runtime_types.fresh();
                                     const index_field = try inner_acc.getFieldByIndex(index_idx, field_rt2);
                                     if (index_field.ptr) |ptr| {
@@ -2134,7 +2138,7 @@ pub const Interpreter = struct {
                             }
                         } else if (outer_payload.layout.tag == .record) {
                             var err_rec = try outer_payload.asRecord(&self.runtime_layout_store);
-                            if (err_rec.findFieldIndex(self.env.idents.tag)) |inner_tag_idx| {
+                            if (err_rec.findFieldIndex(self.env.getIdent(self.env.idents.tag))) |inner_tag_idx| {
                                 const field_rt2 = try self.runtime_types.fresh();
                                 const inner_tag = try err_rec.getFieldByIndex(inner_tag_idx, field_rt2);
                                 if (inner_tag.layout.tag == .scalar and inner_tag.layout.data.scalar.tag == .int) {
@@ -2143,19 +2147,19 @@ pub const Interpreter = struct {
                                     try tmp.setInt(0);
                                 }
                             }
-                            if (err_rec.findFieldIndex(self.env.idents.payload)) |inner_payload_idx| {
+                            if (err_rec.findFieldIndex(self.env.getIdent(self.env.idents.payload))) |inner_payload_idx| {
                                 const field_rt2 = try self.runtime_types.fresh();
                                 const inner_payload = try err_rec.getFieldByIndex(inner_payload_idx, field_rt2);
                                 if (inner_payload.layout.tag == .record) {
                                     var inner_acc = try inner_payload.asRecord(&self.runtime_layout_store);
-                                    if (inner_acc.findFieldIndex(self.env.idents.problem)) |problem_idx| {
+                                    if (inner_acc.findFieldIndex(self.env.getIdent(self.env.idents.problem))) |problem_idx| {
                                         const field_rt3 = try self.runtime_types.fresh();
                                         const problem_field = try inner_acc.getFieldByIndex(problem_idx, field_rt3);
                                         if (problem_field.ptr) |ptr| {
                                             builtins.utils.writeAs(u8, ptr, @intFromEnum(result.problem_code), @src());
                                         }
                                     }
-                                    if (inner_acc.findFieldIndex(self.env.idents.index)) |index_idx| {
+                                    if (inner_acc.findFieldIndex(self.env.getIdent(self.env.idents.index))) |index_idx| {
                                         const field_rt3 = try self.runtime_types.fresh();
                                         const index_field = try inner_acc.getFieldByIndex(index_idx, field_rt3);
                                         if (index_field.ptr) |ptr| {
@@ -2341,14 +2345,13 @@ pub const Interpreter = struct {
                     const closure_header = method_func.asClosure().?;
                     const lambda_expr = closure_header.source_env.store.getExpr(closure_header.lambda_expr_idx);
 
-                    if (lambda_expr == .e_low_level_lambda) {
+                    if (extractLowLevelOp(lambda_expr, closure_header.source_env.store)) |ll_op| {
                         // The to_inspect method is a low-level op - call it directly
-                        const low_level = lambda_expr.e_low_level_lambda;
                         var inner_args = [1]StackValue{value};
-                        const result = try self.callLowLevelBuiltin(low_level.op, &inner_args, roc_ops, null);
+                        const result = try self.callLowLevelBuiltin(ll_op, &inner_args, roc_ops, null);
 
                         // Decref based on ownership semantics
-                        const arg_ownership = low_level.op.getArgOwnership();
+                        const arg_ownership = ll_op.getArgOwnership();
                         if (arg_ownership.len > 0 and arg_ownership[0] == .borrow) {
                             // Don't decref the value - it's borrowed
                         }
@@ -3926,18 +3929,18 @@ pub const Interpreter = struct {
                 // Use runtime_layout_store.getEnv() for field lookups since the record was built with that env's idents
                 const layout_env = self.runtime_layout_store.getEnv();
                 // Field lookups should succeed - missing fields is a compiler bug
-                const is_neg_idx = acc.findFieldIndex(layout_env.idents.is_negative) orelse debugUnreachable(roc_ops, "is_negative field not found in Numeral record", @src());
+                const is_neg_idx = acc.findFieldIndex(layout_env.getIdent(layout_env.idents.is_negative)) orelse debugUnreachable(roc_ops, "is_negative field not found in Numeral record", @src());
                 const field_rt = try self.runtime_types.fresh();
                 const is_neg_field = acc.getFieldByIndex(is_neg_idx, field_rt) catch debugUnreachable(roc_ops, "failed to get is_negative field from Numeral record", @src());
                 const is_negative = getRuntimeU8(is_neg_field) != 0;
 
                 // Get digits_before_pt field (List(U8))
-                const before_idx = acc.findFieldIndex(layout_env.idents.digits_before_pt) orelse debugUnreachable(roc_ops, "digits_before_pt field not found in Numeral record", @src());
+                const before_idx = acc.findFieldIndex(layout_env.getIdent(layout_env.idents.digits_before_pt)) orelse debugUnreachable(roc_ops, "digits_before_pt field not found in Numeral record", @src());
                 const field_rt2 = try self.runtime_types.fresh();
                 const before_field = acc.getFieldByIndex(before_idx, field_rt2) catch debugUnreachable(roc_ops, "failed to get digits_before_pt field from Numeral record", @src());
 
                 // Get digits_after_pt field (List(U8))
-                const after_idx = acc.findFieldIndex(layout_env.idents.digits_after_pt) orelse debugUnreachable(roc_ops, "digits_after_pt field not found in Numeral record", @src());
+                const after_idx = acc.findFieldIndex(layout_env.getIdent(layout_env.idents.digits_after_pt)) orelse debugUnreachable(roc_ops, "digits_after_pt field not found in Numeral record", @src());
                 const field_rt3 = try self.runtime_types.fresh();
                 const after_field = acc.getFieldByIndex(after_idx, field_rt3) catch debugUnreachable(roc_ops, "failed to get digits_after_pt field from Numeral record", @src());
 
@@ -4152,8 +4155,8 @@ pub const Interpreter = struct {
                     var result_acc = try dest.asRecord(&self.runtime_layout_store);
                     // Use layout_env for field lookups since record fields use layout store's env idents
                     // Layout should guarantee tag and payload fields exist - if not, it's a compiler bug
-                    const tag_field_idx = result_acc.findFieldIndex(layout_env.idents.tag) orelse debugUnreachable(roc_ops, "tag field not found in Try result record for num_from_numeral", @src());
-                    const payload_field_idx = result_acc.findFieldIndex(layout_env.idents.payload) orelse debugUnreachable(roc_ops, "payload field not found in Try result record for num_from_numeral", @src());
+                    const tag_field_idx = result_acc.findFieldIndex(layout_env.getIdent(layout_env.idents.tag)) orelse debugUnreachable(roc_ops, "tag field not found in Try result record for num_from_numeral", @src());
+                    const payload_field_idx = result_acc.findFieldIndex(layout_env.getIdent(layout_env.idents.payload)) orelse debugUnreachable(roc_ops, "payload field not found in Try result record for num_from_numeral", @src());
 
                     // Write tag discriminant
                     const tag_rt = try self.runtime_types.fresh();
@@ -4320,7 +4323,7 @@ pub const Interpreter = struct {
 
                                     // Set the tag to InvalidNumeral (index 0, assuming it's the first/only tag)
                                     // Use layout store's env for field lookup to match comptime_evaluator
-                                    if (err_acc.findFieldIndex(layout_env.idents.tag)) |inner_tag_idx| {
+                                    if (err_acc.findFieldIndex(layout_env.getIdent(layout_env.idents.tag))) |inner_tag_idx| {
                                         const inner_tag_rt = try self.runtime_types.fresh();
                                         const inner_tag_field = try err_acc.getFieldByIndex(inner_tag_idx, inner_tag_rt);
                                         if (inner_tag_field.layout.tag == .scalar and inner_tag_field.layout.data.scalar.tag == .int) {
@@ -4331,7 +4334,7 @@ pub const Interpreter = struct {
                                     }
 
                                     // Set the payload to the Str
-                                    if (err_acc.findFieldIndex(layout_env.idents.payload)) |inner_payload_idx| {
+                                    if (err_acc.findFieldIndex(layout_env.getIdent(layout_env.idents.payload))) |inner_payload_idx| {
                                         const inner_payload_rt = try self.runtime_types.fresh();
                                         const inner_payload_field = try err_acc.getFieldByIndex(inner_payload_idx, inner_payload_rt);
                                         if (inner_payload_field.ptr != null) {
@@ -5128,8 +5131,8 @@ pub const Interpreter = struct {
             var dest = try self.pushRaw(result_layout, 0, result_rt_var);
             var acc = try dest.asRecord(&self.runtime_layout_store);
             // Layout should guarantee tag and payload fields exist - if not, it's a compiler bug
-            const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse debugUnreachable(null, "tag field not found in intConvertTry result record", @src());
-            const payload_field_idx = acc.findFieldIndex(self.env.idents.payload) orelse debugUnreachable(null, "payload field not found in intConvertTry result record", @src());
+            const tag_field_idx = acc.findFieldIndex(self.env.getIdent(self.env.idents.tag)) orelse debugUnreachable(null, "tag field not found in intConvertTry result record", @src());
+            const payload_field_idx = acc.findFieldIndex(self.env.getIdent(self.env.idents.payload)) orelse debugUnreachable(null, "payload field not found in intConvertTry result record", @src());
 
             // Write tag discriminant
             const field_rt = try self.runtime_types.fresh();
@@ -5771,8 +5774,8 @@ pub const Interpreter = struct {
             var dest = try self.pushRaw(result_layout, 0, result_rt_var);
             var result_acc = try dest.asRecord(&self.runtime_layout_store);
             const layout_env = self.runtime_layout_store.getEnv();
-            const tag_field_idx = result_acc.findFieldIndex(layout_env.idents.tag) orelse debugUnreachable(null, "tag field not found in buildTryResultWithValue record", @src());
-            const payload_field_idx = result_acc.findFieldIndex(layout_env.idents.payload) orelse debugUnreachable(null, "payload field not found in buildTryResultWithValue record", @src());
+            const tag_field_idx = result_acc.findFieldIndex(layout_env.getIdent(layout_env.idents.tag)) orelse debugUnreachable(null, "tag field not found in buildTryResultWithValue record", @src());
+            const payload_field_idx = result_acc.findFieldIndex(layout_env.getIdent(layout_env.idents.payload)) orelse debugUnreachable(null, "payload field not found in buildTryResultWithValue record", @src());
 
             // Write tag discriminant
             const field_rt = try self.runtime_types.fresh();
@@ -6782,11 +6785,10 @@ pub const Interpreter = struct {
         const closure_header = method_func.asClosure().?;
         const lambda_expr = closure_header.source_env.store.getExpr(closure_header.lambda_expr_idx);
 
-        if (lambda_expr == .e_low_level_lambda) {
+        if (extractLowLevelOp(lambda_expr, closure_header.source_env.store)) |ll_op| {
             // Low-level builtin is_eq (e.g., for simple types)
-            const low_level = lambda_expr.e_low_level_lambda;
             var args = [2]StackValue{ lhs, rhs };
-            const result = self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null) catch {
+            const result = self.callLowLevelBuiltin(ll_op, &args, roc_ops, null) catch {
                 return error.NotImplemented;
             };
             defer result.decref(&self.runtime_layout_store, roc_ops);
@@ -7021,7 +7023,7 @@ pub const Interpreter = struct {
             },
             .record => {
                 var acc = try value.asRecord(&self.runtime_layout_store);
-                const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse return error.TypeMismatch;
+                const tag_field_idx = acc.findFieldIndex(self.env.getIdent(self.env.idents.tag)) orelse return error.TypeMismatch;
                 const disc_rt_var = try self.runtime_types.fresh();
                 const tag_field = try acc.getFieldByIndex(tag_field_idx, disc_rt_var);
                 var tag_index: usize = undefined;
@@ -7031,7 +7033,7 @@ pub const Interpreter = struct {
                 } else return error.TypeMismatch;
 
                 var payload_value: ?StackValue = null;
-                if (acc.findFieldIndex(self.env.idents.payload)) |payload_idx| {
+                if (acc.findFieldIndex(self.env.getIdent(self.env.idents.payload))) |payload_idx| {
                     const payload_rt_var = try self.runtime_types.fresh();
                     payload_value = try acc.getFieldByIndex(payload_idx, payload_rt_var);
                     if (payload_value) |field_value| {
@@ -8091,7 +8093,7 @@ pub const Interpreter = struct {
                     // Translate field name from pattern's ident store to runtime layout store's ident store
                     const pattern_label_str = self.env.getIdent(destruct.label);
                     const runtime_label = self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(pattern_label_str)) catch return error.Crash;
-                    const field_index = accessor.findFieldIndex(runtime_label) orelse {
+                    const field_index = accessor.findFieldIndex(pattern_label_str) orelse {
                         self.triggerCrash("record_destructure: field not found in record", false, roc_ops);
                         return error.Crash;
                     };
@@ -8369,7 +8371,7 @@ pub const Interpreter = struct {
         if (!self.translated_env_module.isNone() and origin_module.idx == self.translated_env_module.idx) {
             return self.root_env;
         }
-        if (self.root_env.module_name_idx == origin_module) {
+        if (self.root_env.qualified_module_ident == origin_module) {
             return self.root_env;
         }
 
@@ -8378,7 +8380,7 @@ pub const Interpreter = struct {
             if (!self.translated_app_module.isNone() and origin_module.idx == self.translated_app_module.idx) {
                 return a_env;
             }
-            if (a_env.module_name_idx == origin_module) {
+            if (a_env.qualified_module_ident == origin_module) {
                 return a_env;
             }
         }
@@ -8397,7 +8399,7 @@ pub const Interpreter = struct {
     /// Returns current_module_id (always 0) for the current module, otherwise looks it up in the module ID map.
     fn getModuleIdForOrigin(self: *const Interpreter, origin_module: base_pkg.Ident.Idx) u32 {
         // Check if it's the current module
-        if (self.env.module_name_idx == origin_module) {
+        if (self.env.qualified_module_ident == origin_module) {
             return self.current_module_id;
         }
         // Look up in imported modules (should always exist if getModuleEnvForOrigin succeeded)
@@ -11255,6 +11257,26 @@ pub const Interpreter = struct {
 
         const expr = self.env.store.getExpr(expr_idx);
 
+        // If the type checker flagged this expression as a type error (.err content),
+        // crash at runtime. This catches type mismatches that the checker detected
+        // but that weren't converted to e_runtime_error nodes in the CIR.
+        //
+        // We only check specific expression types (binops, calls, unary ops) here.
+        // For e_match/e_if, failed unification poisons ALL connected branch body
+        // vars via union-find, making .err checks on them unreliable. Instead,
+        // branch-level errors are handled via the erroneous_exprs side-table,
+        // checked in the match_branches, match_guard, and if_branch continuations.
+        switch (expr) {
+            .e_binop, .e_call, .e_unary_minus, .e_unary_not => {
+                const expr_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const expr_ct_resolved = self.env.types.resolveVar(expr_ct_var);
+                if (expr_ct_resolved.desc.content == .err) {
+                    return error.Crash;
+                }
+            },
+            else => {},
+        }
+
         // WASM-compatible tracing for expression evaluation
         traceDbg(roc_ops, "scheduleExprEval: expr_idx={d} tag={s} module=\"{s}\"", .{ @intFromEnum(expr_idx), @tagName(expr), self.env.module_name });
 
@@ -11357,9 +11379,48 @@ pub const Interpreter = struct {
                 try value_stack.push(value);
             },
 
-            .e_low_level_lambda => |lam| {
-                const value = try self.evalLowLevelLambda(expr_idx, expected_rt_var, lam);
-                try value_stack.push(value);
+            .e_run_low_level => |run_ll| {
+                // Evaluate each argument expression (these are e_lookup_local to bound params)
+                const arg_indices = self.env.store.exprSlice(run_ll.args);
+                var args = try self.allocator.alloc(StackValue, arg_indices.len);
+                defer self.allocator.free(args);
+                for (arg_indices, 0..) |arg_idx, i| {
+                    args[i] = try self.eval(arg_idx, roc_ops);
+                }
+
+                // list_sort_with needs continuation-based evaluation
+                if (run_ll.op == .list_sort_with) {
+                    std.debug.assert(args.len == 2);
+                    const list_arg = args[0];
+                    const compare_fn = args[1];
+
+                    switch (try self.setupSortWith(list_arg, compare_fn, null, null, roc_ops, work_stack)) {
+                        .already_sorted => |result_list| {
+                            compare_fn.decref(&self.runtime_layout_store, roc_ops);
+                            try value_stack.push(result_list);
+                        },
+                        .sorting_started => {},
+                    }
+                } else {
+                    // Get return type
+                    const return_rt_var: ?types.Var = blk: {
+                        const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                        break :blk self.translateTypeVar(self.env, ct_var) catch null;
+                    };
+
+                    // Call the low-level builtin
+                    const result = try self.callLowLevelBuiltin(run_ll.op, args, roc_ops, return_rt_var);
+
+                    // Handle ownership: decref borrowed args
+                    const arg_ownership = run_ll.op.getArgOwnership();
+                    for (args, 0..) |arg, i| {
+                        if (i < arg_ownership.len and arg_ownership[i] == .borrow) {
+                            arg.decref(&self.runtime_layout_store, roc_ops);
+                        }
+                    }
+
+                    try value_stack.push(result);
+                }
             },
 
             .e_hosted_lambda => |hosted| {
@@ -11609,12 +11670,11 @@ pub const Interpreter = struct {
 
                     // Check if low-level lambda
                     const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
-                    if (lambda_expr == .e_low_level_lambda) {
-                        const low_level = lambda_expr.e_low_level_lambda;
+                    if (extractLowLevelOp(lambda_expr, self.env.store)) |ll_op| {
                         var no_args = [0]StackValue{};
                         const return_ct_var = can.ModuleEnv.varFrom(expr_idx);
                         const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
-                        const result = try self.callLowLevelBuiltin(low_level.op, &no_args, roc_ops, return_rt_var);
+                        const result = try self.callLowLevelBuiltin(ll_op, &no_args, roc_ops, return_rt_var);
 
                         method_func.decref(&self.runtime_layout_store, roc_ops);
                         self.env = saved_env;
@@ -13715,7 +13775,7 @@ pub const Interpreter = struct {
             // Record { tag: Discriminant, payload: ZST }
             var dest = try self.pushRaw(layout_val, 0, rt_var);
             var acc = try dest.asRecord(&self.runtime_layout_store);
-            const tag_idx = acc.findFieldIndex(self.env.idents.tag) orelse {
+            const tag_idx = acc.findFieldIndex(self.env.getIdent(self.env.idents.tag)) orelse {
                 self.triggerCrash("e_zero_argument_tag: tag field not found", false, roc_ops);
                 return error.Crash;
             };
@@ -13803,7 +13863,7 @@ pub const Interpreter = struct {
         if (layout_val.tag == .record) {
             var dest = try self.pushRaw(layout_val, 0, rt_var);
             var acc = try dest.asRecord(&self.runtime_layout_store);
-            const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse {
+            const tag_field_idx = acc.findFieldIndex(self.env.getIdent(self.env.idents.tag)) orelse {
                 self.triggerCrash("e_tag: tag field not found", false, roc_ops);
                 return error.Crash;
             };
@@ -13924,33 +13984,14 @@ pub const Interpreter = struct {
         return value;
     }
 
-    /// Evaluate a low-level lambda expression (e_low_level_lambda) - creates a closure for builtins
-    fn evalLowLevelLambda(
-        self: *Interpreter,
-        expr_idx: can.CIR.Expr.Idx,
-        expected_rt_var: ?types.Var,
-        lam: @TypeOf(@as(can.CIR.Expr, undefined).e_low_level_lambda),
-    ) Error!StackValue {
-        const rt_var = if (expected_rt_var) |provided_var|
-            provided_var
-        else blk: {
-            const ct_var = can.ModuleEnv.varFrom(expr_idx);
-            break :blk try self.translateTypeVar(self.env, ct_var);
-        };
-        const closure_layout = try self.getRuntimeLayout(rt_var);
-        const value = try self.pushRaw(closure_layout, 0, rt_var);
-        self.registerDefValue(expr_idx, value);
-        if (value.ptr) |ptr| {
-            builtins.utils.writeAs(layout.Closure, ptr, .{
-                .body_idx = lam.body,
-                .params = lam.args,
-                .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
-                .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
-                .lambda_expr_idx = expr_idx,
-                .source_env = self.env,
-            }, @src());
+    /// Extract the LowLevel op from an e_lambda whose body is e_run_low_level.
+    /// Returns the low-level op if found, null otherwise.
+    fn extractLowLevelOp(lambda_expr: can.CIR.Expr, store: anytype) ?can.CIR.Expr.LowLevel {
+        if (lambda_expr == .e_lambda) {
+            const body = store.getExpr(lambda_expr.e_lambda.body);
+            if (body == .e_run_low_level) return body.e_run_low_level.op;
         }
-        return value;
+        return null;
     }
 
     /// Evaluate a hosted lambda expression (e_hosted_lambda) - creates a closure for host dispatch
@@ -14015,14 +14056,23 @@ pub const Interpreter = struct {
         var capture_values = try self.allocator.alloc(StackValue, caps.len);
         defer self.allocator.free(capture_values);
 
+        // Get the mutable env used by the runtime layout store for field name lookups.
+        // We must re-intern capture names into this env so that the Ident.Idx values
+        // stored in the record are valid when getFieldName looks them up later.
+        const layout_mutable_env = self.runtime_layout_store.getMutableEnv().?;
+
         for (caps, 0..) |cap_idx, i| {
             const cap = self.env.store.getCapture(cap_idx);
-            // Use cap.name directly - it's already valid in self.env
-            field_names[i] = cap.name;
+
+            // Translate cap.name from self.env's interner to mutable_env's interner
+            const name_text = self.env.getIdent(cap.name);
+            field_names[i] = layout_mutable_env.insertIdent(base_pkg.Ident.for_text(name_text)) catch {
+                self.triggerCrash("e_closure: failed to intern capture name", false, roc_ops);
+                return error.Crash;
+            };
 
             const cap_val = self.resolveCapture(cap, roc_ops) orelse {
                 // Include capture name, module, expr_idx, and pattern_idx in error for debugging
-                const name_text = self.env.getIdent(cap.name);
                 var buf: [512]u8 = undefined;
                 const module_name = self.env.module_name;
                 const msg = std.fmt.bufPrint(&buf, "e_closure(expr={d}): failed to resolve capture '{s}' (pattern_idx={d}) in module '{s}', bindings.len={d}", .{ @intFromEnum(expr_idx), name_text, @intFromEnum(cap.pattern_idx), module_name, self.bindings.items.len }) catch "e_closure: failed to resolve capture value";
@@ -14033,8 +14083,8 @@ pub const Interpreter = struct {
             field_layouts[i] = cap_val.layout;
         }
 
-        // Use self.env for putRecord since field_names are valid in self.env's interner
-        const captures_layout_idx = try self.runtime_layout_store.putRecord(self.env, field_layouts, field_names);
+        // Use layout_mutable_env for putRecord since field_names have been re-interned into it
+        const captures_layout_idx = try self.runtime_layout_store.putRecord(layout_mutable_env, field_layouts, field_names);
         const captures_layout = self.runtime_layout_store.getLayout(captures_layout_idx);
         const closure_layout = Layout.closure(captures_layout_idx);
         // Get rt_var for the closure
@@ -14063,7 +14113,7 @@ pub const Interpreter = struct {
             for (caps, 0..) |_, cap_i| {
                 const cap_val = capture_values[cap_i];
                 const translated_name = field_names[cap_i];
-                const idx_opt = accessor.findFieldIndex(translated_name) orelse {
+                const idx_opt = accessor.findFieldIndex(layout_mutable_env.getIdent(translated_name)) orelse {
                     self.triggerCrash("e_closure: capture field not found in record", false, roc_ops);
                     return error.Crash;
                 };
@@ -14084,11 +14134,7 @@ pub const Interpreter = struct {
         }
         // Next try ALL active closure captures in reverse order
         if (self.active_closures.items.len > 0) {
-            // Pre-translate the capture name for matching against runtime_layout_store idents.
-            // Capture field names are stored using runtime_layout_store.getEnv() idents during
-            // closure creation, so we need to translate the lookup ident to match.
             const cap_name_text = self.env.getIdent(cap.name);
-            const translated_cap_name = self.runtime_layout_store.getEnv().common.idents.lookup(base_pkg.Ident.for_text(cap_name_text));
 
             var closure_idx: usize = self.active_closures.items.len;
             while (closure_idx > 0) {
@@ -14104,20 +14150,10 @@ pub const Interpreter = struct {
                     // Use the closure's rt_var for the captures record
                     const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true, .rt_var = cls_val.rt_var };
                     var rec_acc = (rec_val.asRecord(&self.runtime_layout_store)) catch continue;
-                    // First try the original module ident
-                    if (rec_acc.findFieldIndex(cap.name)) |fidx| {
+                    if (rec_acc.findFieldIndex(cap_name_text)) |fidx| {
                         const field_rt_var = self.runtime_types.fresh() catch continue;
                         if (rec_acc.getFieldByIndex(fidx, field_rt_var) catch null) |field_val| {
                             return field_val;
-                        }
-                    }
-                    // If not found, try the translated ident
-                    if (translated_cap_name) |tcn| {
-                        if (rec_acc.findFieldIndex(tcn)) |fidx| {
-                            const field_rt_var = self.runtime_types.fresh() catch continue;
-                            if (rec_acc.getFieldByIndex(fidx, field_rt_var) catch null) |field_val| {
-                                return field_val;
-                            }
                         }
                     }
                 }
@@ -14200,7 +14236,7 @@ pub const Interpreter = struct {
 
             // Check both pattern_idx AND source module to avoid cross-module collisions.
             const same_module = (b.source_env == self.env) or
-                (b.source_env.module_name_idx == self.env.module_name_idx);
+                (b.source_env.qualified_module_ident == self.env.qualified_module_ident);
             if (b.pattern_idx == lookup.pattern_idx and same_module) {
                 // Check if this binding came from an e_anno_only expression
                 if (b.expr_idx) |expr_idx| {
@@ -14327,12 +14363,10 @@ pub const Interpreter = struct {
                                     // Capture field names are stored using runtime_layout_store.getEnv() idents,
                                     // so we need to translate the ident to match.
                                     const var_ident_text = self.env.getIdent(var_ident);
-                                    if (self.runtime_layout_store.getEnv().common.idents.lookup(base_pkg.Ident.for_text(var_ident_text))) |translated_ident| {
-                                        if (accessor.findFieldIndex(translated_ident)) |fidx| {
-                                            const field_rt = try self.runtime_types.fresh();
-                                            const field_val = try accessor.getFieldByIndex(fidx, field_rt);
-                                            return try self.pushCopy(field_val, roc_ops);
-                                        }
+                                    if (accessor.findFieldIndex(var_ident_text)) |fidx| {
+                                        const field_rt = try self.runtime_types.fresh();
+                                        const field_val = try accessor.getFieldByIndex(fidx, field_rt);
+                                        return try self.pushCopy(field_val, roc_ops);
                                     }
                                 }
                             }
@@ -14847,7 +14881,12 @@ pub const Interpreter = struct {
                 const is_true = self.boolValueEquals(true, cond, roc_ops);
 
                 if (is_true) {
-                    // Condition is true, evaluate the body
+                    // Condition is true, evaluate the body.
+                    // Check if the type checker flagged this branch body as erroneous.
+                    if (self.env.store.erroneous_exprs.contains(@intFromEnum(ib.body))) {
+                        self.triggerCrash("This branch has a type mismatch - the body type is incompatible with the expected return type.", false, roc_ops);
+                        return error.Crash;
+                    }
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = ib.body,
                         .expected_rt_var = ib.expected_rt_var,
@@ -14868,7 +14907,12 @@ pub const Interpreter = struct {
                         .expected_rt_var = null,
                     } });
                 } else {
-                    // No more branches, evaluate final else
+                    // No more branches, evaluate final else.
+                    // Check if the type checker flagged the else body as erroneous.
+                    if (self.env.store.erroneous_exprs.contains(@intFromEnum(ib.final_else))) {
+                        self.triggerCrash("This branch has a type mismatch - the body type is incompatible with the expected return type.", false, roc_ops);
+                        return error.Crash;
+                    }
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = ib.final_else,
                         .expected_rt_var = ib.expected_rt_var,
@@ -15483,13 +15527,15 @@ pub const Interpreter = struct {
                         while (idx < base_accessor.getFieldCount()) : (idx += 1) {
                             const info = base_accessor.field_layouts.get(idx);
                             const field_layout = self.runtime_layout_store.getLayout(info.layout);
-                            const key: u32 = @bitCast(info.name);
+                            const field_name_str = self.runtime_layout_store.getFieldName(info.name);
+                            const translated_name = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(field_name_str));
+                            const key: u32 = @bitCast(translated_name);
                             if (union_indices.get(key)) |idx_ptr| {
                                 union_layouts.items[idx_ptr] = field_layout;
-                                union_names.items[idx_ptr] = info.name;
+                                union_names.items[idx_ptr] = translated_name;
                             } else {
                                 try union_layouts.append(field_layout);
-                                try union_names.append(info.name);
+                                try union_names.append(translated_name);
                                 try union_indices.put(key, union_layouts.items.len - 1);
                             }
                         }
@@ -15538,7 +15584,7 @@ pub const Interpreter = struct {
                         var idx: usize = 0;
                         while (idx < base_accessor.getFieldCount()) : (idx += 1) {
                             const info = base_accessor.field_layouts.get(idx);
-                            const dest_field_idx = accessor.findFieldIndex(info.name) orelse return error.TypeMismatch;
+                            const dest_field_idx = accessor.findFieldIndex(self.runtime_layout_store.getFieldName(info.name)) orelse return error.TypeMismatch;
                             const field_rt = try self.runtime_types.fresh();
                             const base_field_value = try base_accessor.getFieldByIndex(idx, field_rt);
                             try accessor.setFieldByIndex(dest_field_idx, base_field_value, roc_ops);
@@ -15548,16 +15594,15 @@ pub const Interpreter = struct {
                     // Set explicit field values (overwriting base values if needed)
                     for (rc.all_fields, 0..) |field_idx_enum, explicit_index| {
                         const f = self.env.store.getRecordField(field_idx_enum);
-                        // Translate field name to runtime layout store's identifier space for lookup
+                        // Translate field name to string for lookup
                         const field_name_str = self.env.getIdent(f.name);
-                        const translated_name = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(field_name_str));
-                        const dest_field_idx = accessor.findFieldIndex(translated_name) orelse return error.TypeMismatch;
+                        const dest_field_idx = accessor.findFieldIndex(field_name_str) orelse return error.TypeMismatch;
                         const val = field_values[explicit_index];
 
                         // If overwriting a base field, decref the existing value
                         if (base_value_opt) |base_value| {
                             var base_accessor = try base_value.asRecord(&self.runtime_layout_store);
-                            if (base_accessor.findFieldIndex(translated_name) != null) {
+                            if (base_accessor.findFieldIndex(field_name_str) != null) {
                                 const field_rt = try self.runtime_types.fresh();
                                 const existing = try accessor.getFieldByIndex(dest_field_idx, field_rt);
                                 existing.decref(&self.runtime_layout_store, roc_ops);
@@ -15745,12 +15790,12 @@ pub const Interpreter = struct {
                         // (original type) for the value's type so printing works correctly.
                         var dest = try self.pushRaw(layout_val, 0, tc.rt_var);
                         var acc = try dest.asRecord(&self.runtime_layout_store);
-                        const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse {
+                        const tag_field_idx = acc.findFieldIndex(self.env.getIdent(self.env.idents.tag)) orelse {
                             for (values) |v| v.decref(&self.runtime_layout_store, roc_ops);
                             self.triggerCrash("e_tag: tag field not found", false, roc_ops);
                             return error.Crash;
                         };
-                        const payload_field_idx = acc.findFieldIndex(self.env.idents.payload) orelse {
+                        const payload_field_idx = acc.findFieldIndex(self.env.getIdent(self.env.idents.payload)) orelse {
                             for (values) |v| v.decref(&self.runtime_layout_store, roc_ops);
                             self.triggerCrash("e_tag: payload field not found", false, roc_ops);
                             return error.Crash;
@@ -15785,7 +15830,7 @@ pub const Interpreter = struct {
                                     var proper_acc = try proper_dest.asRecord(&self.runtime_layout_store);
 
                                     // Write tag discriminant
-                                    const proper_tag_field_idx = proper_acc.findFieldIndex(self.env.idents.tag) orelse unreachable;
+                                    const proper_tag_field_idx = proper_acc.findFieldIndex(self.env.getIdent(self.env.idents.tag)) orelse unreachable;
                                     const proper_field_rt = try self.runtime_types.fresh();
                                     const proper_tag_field = try proper_acc.getFieldByIndex(proper_tag_field_idx, proper_field_rt);
                                     if (proper_tag_field.layout.tag == .scalar and proper_tag_field.layout.data.scalar.tag == .int) {
@@ -15795,7 +15840,7 @@ pub const Interpreter = struct {
                                     }
 
                                     // Write payload
-                                    const proper_payload_field_idx = proper_acc.findFieldIndex(self.env.idents.payload) orelse unreachable;
+                                    const proper_payload_field_idx = proper_acc.findFieldIndex(self.env.getIdent(self.env.idents.payload)) orelse unreachable;
                                     const proper_field_rt2 = try self.runtime_types.fresh();
                                     const proper_payload_field = try proper_acc.getFieldByIndex(proper_payload_field_idx, proper_field_rt2);
                                     if (proper_payload_field.ptr) |proper_payload_ptr| {
@@ -15837,7 +15882,7 @@ pub const Interpreter = struct {
                                     var proper_acc = try proper_dest.asRecord(&self.runtime_layout_store);
 
                                     // Write tag discriminant
-                                    const proper_tag_field_idx = proper_acc.findFieldIndex(self.env.idents.tag) orelse unreachable;
+                                    const proper_tag_field_idx = proper_acc.findFieldIndex(self.env.getIdent(self.env.idents.tag)) orelse unreachable;
                                     const proper_field_rt = try self.runtime_types.fresh();
                                     const proper_tag_field = try proper_acc.getFieldByIndex(proper_tag_field_idx, proper_field_rt);
                                     if (proper_tag_field.layout.tag == .scalar and proper_tag_field.layout.data.scalar.tag == .int) {
@@ -15847,7 +15892,7 @@ pub const Interpreter = struct {
                                     }
 
                                     // Write tuple payload
-                                    const proper_payload_field_idx = proper_acc.findFieldIndex(self.env.idents.payload) orelse unreachable;
+                                    const proper_payload_field_idx = proper_acc.findFieldIndex(self.env.getIdent(self.env.idents.payload)) orelse unreachable;
                                     const proper_field_rt2 = try self.runtime_types.fresh();
                                     const proper_payload_field = try proper_acc.getFieldByIndex(proper_payload_field_idx, proper_field_rt2);
                                     if (proper_payload_field.ptr) |proper_payload_ptr| {
@@ -16240,7 +16285,7 @@ pub const Interpreter = struct {
                             if (backing_layout.tag == .record) {
                                 var inner_dest = try self.pushRaw(backing_layout, 0, tc.rt_var);
                                 var acc = try inner_dest.asRecord(&self.runtime_layout_store);
-                                const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse {
+                                const tag_field_idx = acc.findFieldIndex(self.env.getIdent(self.env.idents.tag)) orelse {
                                     for (values) |v| v.decref(&self.runtime_layout_store, roc_ops);
                                     self.triggerCrash("boxed e_tag: tag field not found", false, roc_ops);
                                     return error.Crash;
@@ -16256,7 +16301,7 @@ pub const Interpreter = struct {
                                 }
 
                                 // Write payload
-                                if (acc.findFieldIndex(self.env.idents.payload)) |payload_field_idx| {
+                                if (acc.findFieldIndex(self.env.getIdent(self.env.idents.payload))) |payload_field_idx| {
                                     const field_rt2 = try self.runtime_types.fresh();
                                     const payload_field = try acc.getFieldByIndex(payload_field_idx, field_rt2);
                                     if (payload_field.ptr) |payload_ptr| {
@@ -16431,6 +16476,15 @@ pub const Interpreter = struct {
                         // No guard - evaluate body directly
                         scrutinee.decref(&self.runtime_layout_store, roc_ops);
 
+                        // Check if the type checker flagged this branch body as having a
+                        // type error (body type incompatible with expected return type).
+                        // Only crash when the erroneous branch is actually taken.
+                        if (self.env.store.erroneous_exprs.contains(@intFromEnum(br.value))) {
+                            self.trimBindingList(&self.bindings, start_len, roc_ops);
+                            self.triggerCrash("This branch has a type mismatch - the body type is incompatible with the expected return type.", false, roc_ops);
+                            return error.Crash;
+                        }
+
                         try work_stack.push(.{ .apply_continuation = .{ .match_cleanup = .{
                             .bindings_start = start_len,
                         } } });
@@ -16475,6 +16529,13 @@ pub const Interpreter = struct {
                     // Scrutinee is still on value stack - pop and decref it
                     const scrutinee = value_stack.pop() orelse return error.Crash;
                     scrutinee.decref(&self.runtime_layout_store, roc_ops);
+
+                    // Check if the type checker flagged this branch body as erroneous
+                    if (self.env.store.erroneous_exprs.contains(@intFromEnum(mg.branch_body))) {
+                        self.trimBindingList(&self.bindings, mg.bindings_start, roc_ops);
+                        self.triggerCrash("This branch has a type mismatch - the body type is incompatible with the expected return type.", false, roc_ops);
+                        return error.Crash;
+                    }
 
                     try work_stack.push(.{ .apply_continuation = .{ .match_cleanup = .{
                         .bindings_start = mg.bindings_start,
@@ -16785,9 +16846,7 @@ pub const Interpreter = struct {
 
                     // Check if this is a low-level lambda
                     const lambda_expr = self.env.store.getExpr(header.lambda_expr_idx);
-                    if (lambda_expr == .e_low_level_lambda) {
-                        const low_level = lambda_expr.e_low_level_lambda;
-
+                    if (extractLowLevelOp(lambda_expr, self.env.store)) |ll_op| {
                         // Determine the return type for this low-level builtin call.
                         //
                         // There are two cases to consider:
@@ -16843,7 +16902,7 @@ pub const Interpreter = struct {
                         };
 
                         // Special handling for list_sort_with which requires continuation-based evaluation
-                        if (low_level.op == .list_sort_with) {
+                        if (ll_op == .list_sort_with) {
                             std.debug.assert(arg_values.len == 2);
                             const list_arg = arg_values[0];
                             const compare_fn = arg_values[1];
@@ -16865,7 +16924,7 @@ pub const Interpreter = struct {
                         }
 
                         // Call the builtin
-                        const result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops, ret_rt_var);
+                        const result = try self.callLowLevelBuiltin(ll_op, arg_values, roc_ops, ret_rt_var);
 
                         // Decref arguments based on ownership semantics.
                         // See src/builtins/OWNERSHIP.md for detailed documentation.
@@ -16873,7 +16932,7 @@ pub const Interpreter = struct {
                         // Simple rule:
                         // - Borrow: decref (we release our copy, builtin didn't take ownership)
                         // - Consume: don't decref (ownership transferred to builtin)
-                        const arg_ownership = low_level.op.getArgOwnership();
+                        const arg_ownership = ll_op.getArgOwnership();
                         for (arg_values, 0..) |arg, arg_idx| {
                             // Only decref borrowed arguments. Consumed arguments have ownership
                             // transferred to the builtin (it handles cleanup or returns the value).
@@ -17259,10 +17318,9 @@ pub const Interpreter = struct {
 
                 // Check if this is a low-level lambda
                 const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
-                if (lambda_expr == .e_low_level_lambda) {
-                    const low_level = lambda_expr.e_low_level_lambda;
+                if (extractLowLevelOp(lambda_expr, self.env.store)) |ll_op| {
                     var args = [1]StackValue{operand};
-                    const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+                    const result = try self.callLowLevelBuiltin(ll_op, &args, roc_ops, null);
 
                     // Note: We do NOT decref the operand here.
                     // The defer statement at the top of unary_op_apply already handles decrefing.
@@ -17651,10 +17709,9 @@ pub const Interpreter = struct {
 
                 // Check if this is a low-level lambda
                 const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
-                if (lambda_expr == .e_low_level_lambda) {
-                    const low_level = lambda_expr.e_low_level_lambda;
+                if (extractLowLevelOp(lambda_expr, self.env.store)) |ll_op| {
                     var args = [2]StackValue{ lhs, rhs };
-                    var result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+                    var result = try self.callLowLevelBuiltin(ll_op, &args, roc_ops, null);
 
                     // Note: We do NOT decref arguments here for borrow semantics.
                     // The defer statements at the top of binop_apply already handle decrefing
@@ -17904,7 +17961,7 @@ pub const Interpreter = struct {
                     const rt_field_name = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(ct_field_name_str));
 
                     var accessor = try receiver_value.asRecord(&self.runtime_layout_store);
-                    const field_idx = accessor.findFieldIndex(rt_field_name) orelse {
+                    const field_idx = accessor.findFieldIndex(ct_field_name_str) orelse {
                         return error.TypeMismatch;
                     };
 
@@ -18058,7 +18115,7 @@ pub const Interpreter = struct {
                                 const rt_field_name = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(ct_field_name_str));
 
                                 var accessor = try receiver_value.asRecord(&self.runtime_layout_store);
-                                if (accessor.findFieldIndex(rt_field_name)) |field_idx| {
+                                if (accessor.findFieldIndex(ct_field_name_str)) |field_idx| {
                                     // Get the field's rt_var from the receiver's record type
                                     const fields_range = switch (s) {
                                         .record => |rec| rec.fields,
@@ -18420,18 +18477,17 @@ pub const Interpreter = struct {
 
                     // Check if low-level lambda
                     const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
-                    if (lambda_expr == .e_low_level_lambda) {
-                        const low_level = lambda_expr.e_low_level_lambda;
+                    if (extractLowLevelOp(lambda_expr, self.env.store)) |ll_op| {
                         var args = [1]StackValue{receiver_value};
                         // Get return type from the dot access expression for low-level builtins that need it.
                         // Use saved_env (the caller's module) since da.expr_idx is from that module,
                         // not from self.env which has been switched to the closure's source module.
                         const return_ct_var = can.ModuleEnv.varFrom(da.expr_idx);
                         const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
-                        const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, return_rt_var);
+                        const result = try self.callLowLevelBuiltin(ll_op, &args, roc_ops, return_rt_var);
 
                         // Decref based on ownership semantics
-                        const arg_ownership = low_level.op.getArgOwnership();
+                        const arg_ownership = ll_op.getArgOwnership();
                         if (arg_ownership.len > 0 and arg_ownership[0] == .borrow) {
                             receiver_value.decref(&self.runtime_layout_store, roc_ops);
                         }
@@ -18723,11 +18779,9 @@ pub const Interpreter = struct {
 
                 // Check if low-level lambda
                 const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
-                if (lambda_expr == .e_low_level_lambda) {
-                    const low_level = lambda_expr.e_low_level_lambda;
-
+                if (extractLowLevelOp(lambda_expr, self.env.store)) |ll_op| {
                     // Special handling for list_sort_with which requires continuation-based evaluation
-                    if (low_level.op == .list_sort_with) {
+                    if (ll_op == .list_sort_with) {
                         std.debug.assert(total_args == 1);
                         const list_arg = receiver_value;
                         const compare_fn = arg_values[0];
@@ -18816,10 +18870,10 @@ pub const Interpreter = struct {
                         break :blk try self.translateTypeVar(saved_env, return_ct_var);
                     };
 
-                    const result = try self.callLowLevelBuiltin(low_level.op, all_args, roc_ops, return_rt_var);
+                    const result = try self.callLowLevelBuiltin(ll_op, all_args, roc_ops, return_rt_var);
 
                     // Decref arguments based on ownership semantics
-                    const arg_ownership = low_level.op.getArgOwnership();
+                    const arg_ownership = ll_op.getArgOwnership();
                     for (all_args, 0..) |arg, arg_idx| {
                         const ownership = if (arg_idx < arg_ownership.len) arg_ownership[arg_idx] else .borrow;
                         if (ownership == .borrow) {
@@ -19085,14 +19139,13 @@ pub const Interpreter = struct {
 
                 // Check if low-level lambda
                 const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
-                if (lambda_expr == .e_low_level_lambda) {
-                    const low_level = lambda_expr.e_low_level_lambda;
+                if (extractLowLevelOp(lambda_expr, self.env.store)) |ll_op| {
                     const return_ct_var = can.ModuleEnv.varFrom(tvdi.expr_idx);
                     const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
-                    const result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops, return_rt_var);
+                    const result = try self.callLowLevelBuiltin(ll_op, arg_values, roc_ops, return_rt_var);
 
                     // Decref based on ownership semantics
-                    const arg_ownership = low_level.op.getArgOwnership();
+                    const arg_ownership = ll_op.getArgOwnership();
                     for (arg_values, 0..) |arg, idx| {
                         if (idx < arg_ownership.len and arg_ownership[idx] == .borrow) {
                             arg.decref(&self.runtime_layout_store, roc_ops);
@@ -20426,7 +20479,7 @@ test "interpreter: cross-module method resolution should find methods in origin 
     // Verify we can retrieve module A's environment
     const found_env = interp.getModuleEnvForOrigin(module_a_ident);
     try std.testing.expect(found_env != null);
-    try std.testing.expectEqual(module_a.module_name_idx, found_env.?.module_name_idx);
+    try std.testing.expectEqual(module_a.qualified_module_ident, found_env.?.qualified_module_ident);
 
     // Verify we can retrieve module A's ID
     const found_id = interp.getModuleIdForOrigin(module_a_ident);
@@ -20489,8 +20542,8 @@ test "interpreter: transitive module method resolution (A imports B imports C)" 
     try interp.import_envs.put(interp.allocator, second_import_idx, &module_c);
 
     // Verify we can retrieve all module environments
-    try std.testing.expectEqual(module_b.module_name_idx, interp.getModuleEnvForOrigin(module_b_ident).?.module_name_idx);
-    try std.testing.expectEqual(module_c.module_name_idx, interp.getModuleEnvForOrigin(module_c_ident).?.module_name_idx);
+    try std.testing.expectEqual(module_b.qualified_module_ident, interp.getModuleEnvForOrigin(module_b_ident).?.qualified_module_ident);
+    try std.testing.expectEqual(module_c.qualified_module_ident, interp.getModuleEnvForOrigin(module_c_ident).?.qualified_module_ident);
 
     // Verify we can retrieve all module IDs
     try std.testing.expectEqual(module_b_id, interp.getModuleIdForOrigin(module_b_ident));

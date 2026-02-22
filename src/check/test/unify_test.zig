@@ -151,7 +151,7 @@ const TestEnv = struct {
             try self.mkTypeIdent(name),
             backing_var,
             args,
-            self.module_env.module_name_idx, // Use actual module name idx for proper canLiftInner check
+            self.module_env.qualified_module_ident, // Use qualified module ident for proper canLiftInner check
             false, // Use nominal for tests
         );
     }
@@ -161,7 +161,7 @@ const TestEnv = struct {
             try self.mkTypeIdent(name),
             backing_var,
             args,
-            self.module_env.module_name_idx, // Use actual module name idx for proper canLiftInner check
+            self.module_env.qualified_module_ident, // Use qualified module ident for proper canLiftInner check
             true, // Opaque type
         );
     }

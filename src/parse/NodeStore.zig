@@ -873,7 +873,7 @@ pub fn addRecordField(store: *NodeStore, field: AST.RecordField) std.mem.Allocat
 pub fn addMatchBranch(store: *NodeStore, branch: AST.MatchBranch) std.mem.Allocator.Error!AST.MatchBranch.Idx {
     const node = Node{
         .tag = .branch,
-        .main_token = 0,
+        .main_token = if (branch.guard) |g| @intFromEnum(g) + 1 else 0,
         .data = .{
             .lhs = @intFromEnum(branch.pattern),
             .rhs = @intFromEnum(branch.body),
@@ -1872,13 +1872,14 @@ pub fn getRecordField(store: *const NodeStore, field_idx: AST.RecordField.Idx) A
     };
 }
 
-/// Retrieves when branch data from a stored when branch node.
+/// Retrieves match branch data from a stored match branch node.
 pub fn getBranch(store: *const NodeStore, branch_idx: AST.MatchBranch.Idx) AST.MatchBranch {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(branch_idx)));
     return .{
         .region = node.region,
         .pattern = @enumFromInt(node.data.lhs),
         .body = @enumFromInt(node.data.rhs),
+        .guard = if (node.main_token == 0) null else @enumFromInt(node.main_token - 1),
     };
 }
 
@@ -2193,6 +2194,7 @@ pub fn clearScratchPatternsFrom(store: *NodeStore, start: u32) void {
 
 /// Creates a slice corresponding to a span.
 pub fn sliceFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) []T {
+    if (span.len == 0) return &.{};
     return @ptrCast(store.extra_data.items[span.start..][0..span.len]);
 }
 

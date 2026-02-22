@@ -1609,6 +1609,21 @@ pub const Coordinator = struct {
         // Note: The module_env stores a reference to source, so we do NOT free source here.
         // The source will be freed when the module is deinitialized.
         mod.env = cache_result.hit.module_env;
+
+        // Override qualified_module_ident for cache correctness.
+        // The cache is keyed by file content, so the serialized value may be
+        // from a different package alias (e.g., "pf.Color" vs "platform.Color").
+        if (mod.env) |env| {
+            // Enable runtime inserts on the deserialized interner so we can add the qualified name.
+            env.common.idents.interner.enableRuntimeInserts(self.gpa) catch {};
+            var qualified_buf: [256]u8 = undefined;
+            if (std.fmt.bufPrint(&qualified_buf, "{s}.{s}", .{ pkg.name, mod.name })) |qname| {
+                env.qualified_module_ident = env.insertIdent(base.Ident.for_text(qname)) catch env.display_module_name_idx;
+            } else |_| {
+                env.qualified_module_ident = env.display_module_name_idx;
+            }
+        }
+
         mod.was_cache_hit = true;
         mod.phase = .Done;
         mod.visit_color = .black;
@@ -2057,6 +2072,20 @@ pub const Coordinator = struct {
         else
             task.module_name;
         env.initCIRFields(module_name_for_env) catch {};
+
+        // Set qualified_module_ident to a package-qualified identifier (e.g., "app.main", "pf.Stdout")
+        // to ensure module identity is unique across packages. Without this, two modules with
+        // the same filename in different packages (e.g., app's main.roc and platform's main.roc)
+        // get the same identity, causing nominal type origin_module collisions.
+        // display_module_name_idx stays as the bare name (for type module validation, error messages, etc.)
+        {
+            var qualified_buf: [256]u8 = undefined;
+            if (std.fmt.bufPrint(&qualified_buf, "{s}.{s}", .{ task.package_name, task.module_name })) |qname| {
+                env.qualified_module_ident = env.insertIdent(base.Ident.for_text(qname)) catch env.display_module_name_idx;
+            } else |_| {
+                env.qualified_module_ident = env.display_module_name_idx;
+            }
+        }
         env.common.calcLineStarts(module_alloc) catch {};
 
         // Parse

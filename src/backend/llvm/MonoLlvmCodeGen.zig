@@ -23,7 +23,7 @@ const LlvmBuilder = std.zig.llvm.Builder;
 const MonoExprStore = mono.MonoExprStore;
 const MonoExprId = mono.MonoExprId;
 const MonoPatternId = mono.MonoPatternId;
-const MonoSymbol = mono.MonoSymbol;
+const MonoSymbol = mono.Symbol;
 const MonoProc = mono.MonoProc;
 const CFStmtId = mono.CFStmtId;
 
@@ -84,10 +84,10 @@ pub const MonoLlvmCodeGen = struct {
     store: *const MonoExprStore,
 
     /// Map from MonoSymbol to LLVM value
-    symbol_values: std.AutoHashMap(u48, LlvmBuilder.Value),
+    symbol_values: std.AutoHashMap(u64, LlvmBuilder.Value),
 
     /// Registry of compiled procedures (symbol -> function index)
-    proc_registry: std.AutoHashMap(u48, LlvmBuilder.Function.Index),
+    proc_registry: std.AutoHashMap(u64, LlvmBuilder.Function.Index),
 
     /// Join point blocks (join point id -> block index)
     join_points: std.AutoHashMap(u32, LlvmBuilder.Function.Block.Index),
@@ -142,7 +142,7 @@ pub const MonoLlvmCodeGen = struct {
     /// its value is stored to an alloca so that post-loop code can load
     /// the final value (avoiding SSA domination issues).
     /// Stores both the alloca pointer and the element type for correct loads.
-    loop_var_allocas: std.AutoHashMap(u48, LoopVarAlloca),
+    loop_var_allocas: std.AutoHashMap(u64, LoopVarAlloca),
 
     /// Cache of compiled lambda LLVM functions.
     /// Key = (expr_id << 32) | ret_layout — same strategy as dev backend.
@@ -151,7 +151,7 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Tracks closure metadata for symbols bound to lambda/closure values.
     /// Needed because symbol_values only stores LlvmBuilder.Value (loses dispatch info).
-    closure_bindings: std.AutoHashMap(u48, ClosureMeta),
+    closure_bindings: std.AutoHashMap(u64, ClosureMeta),
 
     const LoopVarAlloca = struct {
         alloca_ptr: LlvmBuilder.Value,
@@ -189,15 +189,15 @@ pub const MonoLlvmCodeGen = struct {
         return .{
             .allocator = allocator,
             .store = store,
-            .symbol_values = std.AutoHashMap(u48, LlvmBuilder.Value).init(allocator),
-            .proc_registry = std.AutoHashMap(u48, LlvmBuilder.Function.Index).init(allocator),
+            .symbol_values = std.AutoHashMap(u64, LlvmBuilder.Value).init(allocator),
+            .proc_registry = std.AutoHashMap(u64, LlvmBuilder.Function.Index).init(allocator),
             .join_points = std.AutoHashMap(u32, LlvmBuilder.Function.Block.Index).init(allocator),
             .join_point_params = std.AutoHashMap(u32, []MonoPatternId).init(allocator),
             .join_param_allocas = std.AutoHashMap(u32, []LlvmBuilder.Value).init(allocator),
             .join_param_types = std.AutoHashMap(u32, []LlvmBuilder.Type).init(allocator),
-            .loop_var_allocas = std.AutoHashMap(u48, LoopVarAlloca).init(allocator),
+            .loop_var_allocas = std.AutoHashMap(u64, LoopVarAlloca).init(allocator),
             .compiled_lambdas = std.AutoHashMap(u64, LlvmBuilder.Function.Index).init(allocator),
-            .closure_bindings = std.AutoHashMap(u48, ClosureMeta).init(allocator),
+            .closure_bindings = std.AutoHashMap(u64, ClosureMeta).init(allocator),
             .builtin_functions = std.StringHashMap(LlvmBuilder.Function.Index).init(allocator),
         };
     }
@@ -508,7 +508,7 @@ pub const MonoLlvmCodeGen = struct {
         const fn_type = builder.fnType(ret_type, param_types.items, .normal) catch return error.OutOfMemory;
 
         // Create a unique function name from the symbol
-        const key: u48 = @bitCast(proc.name);
+        const key: u64 = @bitCast(proc.name);
         var name_buf: [64]u8 = undefined;
         const name_str = std.fmt.bufPrint(&name_buf, "roc_proc_{d}", .{key}) catch return error.OutOfMemory;
         const fn_name = builder.strtabString(name_str) catch return error.OutOfMemory;
@@ -720,6 +720,57 @@ pub const MonoLlvmCodeGen = struct {
                 _ = try self.generateExpr(e.value);
                 try self.generateStmt(e.next);
             },
+            .match_stmt => |ms| {
+                // Pattern match statement (when in tail position of a proc)
+                // Similar to match_expr but each branch is a statement, not an expression.
+                const scrutinee = try self.generateExpr(ms.value);
+                const branches = self.store.getCFMatchBranches(ms.branches);
+                std.debug.assert(branches.len != 0);
+
+                for (branches, 0..) |branch, i| {
+                    const pattern = self.store.getPattern(branch.pattern);
+                    const is_last = (i == branches.len - 1);
+
+                    switch (pattern) {
+                        .wildcard, .bind => {
+                            if (pattern == .bind) {
+                                const bind = pattern.bind;
+                                const symbol_key: u64 = @bitCast(bind.symbol);
+                                self.symbol_values.put(symbol_key, scrutinee) catch return error.OutOfMemory;
+                            }
+                            try self.generateStmt(branch.body);
+                            break;
+                        },
+                        .int_literal => |int_pat| {
+                            const wip = self.wip orelse return error.CompilationFailed;
+                            const builder = self.builder orelse return error.CompilationFailed;
+                            const pat_type = layoutToLlvmType(int_pat.layout_idx);
+                            const pat_val = builder.intValue(pat_type, @as(u64, @truncate(@as(u128, @bitCast(int_pat.value))))) catch return error.OutOfMemory;
+                            const cmp_scrutinee = if (scrutinee.typeOfWip(wip) == pat_type)
+                                scrutinee
+                            else
+                                wip.conv(.unsigned, scrutinee, pat_type, "") catch return error.CompilationFailed;
+                            const cmp = wip.icmp(.eq, cmp_scrutinee, pat_val, "") catch return error.OutOfMemory;
+
+                            if (is_last) {
+                                try self.generateStmt(branch.body);
+                            } else {
+                                const then_block = wip.block(1, "match_then") catch return error.OutOfMemory;
+                                const else_block = wip.block(1, "match_else") catch return error.OutOfMemory;
+                                _ = wip.brCond(cmp, then_block, else_block, .none) catch return error.CompilationFailed;
+                                wip.cursor = .{ .block = then_block };
+                                try self.generateStmt(branch.body);
+                                wip.cursor = .{ .block = else_block };
+                            }
+                        },
+                        else => {
+                            // For other patterns, just generate the branch body (best effort)
+                            try self.generateStmt(branch.body);
+                            break;
+                        },
+                    }
+                }
+            },
         }
     }
 
@@ -826,7 +877,7 @@ pub const MonoLlvmCodeGen = struct {
             .nominal => |nom| self.generateExpr(nom.backing_expr),
 
             // Pattern matching
-            .when => |w| self.generateWhen(w),
+            .match_expr => |m| self.generateMatchExpr(m),
 
             // Debug and expect — just evaluate the inner expression
             .dbg => |d| self.generateExpr(d.expr),
@@ -901,7 +952,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn generateLookup(self: *MonoLlvmCodeGen, symbol: MonoSymbol, _: layout.Idx) Error!LlvmBuilder.Value {
-        const symbol_key: u48 = @bitCast(symbol);
+        const symbol_key: u64 = @bitCast(symbol);
 
         // Check if we have a value for this symbol
         if (self.symbol_values.get(symbol_key)) |val| {
@@ -1061,7 +1112,7 @@ pub const MonoLlvmCodeGen = struct {
             else
                 wip.bin(.udiv, lhs, rhs, "") catch return error.CompilationFailed,
 
-            .mod => if (is_float)
+            .rem => if (is_float)
                 wip.bin(.frem, lhs, rhs, "") catch return error.CompilationFailed
             else if (isSigned(binop.result_layout))
                 wip.bin(.srem, lhs, rhs, "") catch return error.CompilationFailed
@@ -1925,7 +1976,7 @@ pub const MonoLlvmCodeGen = struct {
 
         // Promote existing symbol bindings to allocas for SSA correctness
         // (same as for_loop — loop body mutations must be visible after exit)
-        var promoted_keys: std.ArrayList(u48) = .{};
+        var promoted_keys: std.ArrayList(u64) = .{};
         defer promoted_keys.deinit(self.allocator);
         {
             var sym_it = self.symbol_values.iterator();
@@ -2024,7 +2075,7 @@ pub const MonoLlvmCodeGen = struct {
         // mutations are visible after the loop exit (SSA domination fix).
         // The loop body may rebind variables via let_stmts; without allocas,
         // the new SSA values from the body block don't dominate the exit block.
-        var promoted_keys: std.ArrayList(u48) = .{};
+        var promoted_keys: std.ArrayList(u64) = .{};
         defer promoted_keys.deinit(self.allocator);
         {
             var sym_it = self.symbol_values.iterator();
@@ -2116,7 +2167,7 @@ pub const MonoLlvmCodeGen = struct {
     // Pattern matching
     // ---------------------------------------------------------------
 
-    fn generateWhen(self: *MonoLlvmCodeGen, w: anytype) Error!LlvmBuilder.Value {
+    fn generateMatchExpr(self: *MonoLlvmCodeGen, w: anytype) Error!LlvmBuilder.Value {
         const saved_out_ptr = self.out_ptr;
         self.out_ptr = null;
         defer self.out_ptr = saved_out_ptr;
@@ -2128,7 +2179,7 @@ pub const MonoLlvmCodeGen = struct {
         const scrutinee = try self.generateExpr(w.value);
 
         // Get branches
-        const branches = self.store.getWhenBranches(w.branches);
+        const branches = self.store.getMatchBranches(w.branches);
         std.debug.assert(branches.len != 0);
 
         // Compute the incoming count for the merge block by scanning patterns.
@@ -2166,7 +2217,7 @@ pub const MonoLlvmCodeGen = struct {
 
                 .bind => |bind| {
                     // Always matches, bind the scrutinee to the symbol
-                    const symbol_key: u48 = @bitCast(bind.symbol);
+                    const symbol_key: u64 = @bitCast(bind.symbol);
                     self.symbol_values.put(symbol_key, scrutinee) catch return error.OutOfMemory;
                     const body_val = try self.generateExpr(branch.body);
                     _ = wip.br(merge_block) catch return error.OutOfMemory;
@@ -2399,7 +2450,7 @@ pub const MonoLlvmCodeGen = struct {
                         const alignment = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(sa.alignment.toByteUnits(), 1)));
                         break :blk wip.load(.normal, field_type, field_ptr, alignment, "") catch return error.CompilationFailed;
                     };
-                    const symbol_key: u48 = @bitCast(bind.symbol);
+                    const symbol_key: u64 = @bitCast(bind.symbol);
                     self.symbol_values.put(symbol_key, field_val) catch return error.OutOfMemory;
                 },
                 .wildcard => {
@@ -4773,7 +4824,7 @@ pub const MonoLlvmCodeGen = struct {
             .zero_arg_tag => |zat| zat.union_layout,
             .tag => |t| t.union_layout,
             .discriminant_switch => |ds| ds.union_layout,
-            .when => |w| w.result_layout,
+            .match_expr => |m| m.result_layout,
             .dbg => |d| d.result_layout,
             .expect => |e| e.result_layout,
             .early_return => |er| er.ret_layout,
@@ -4980,7 +5031,7 @@ pub const MonoLlvmCodeGen = struct {
                     // Track closure metadata for the bound symbol
                     const pattern = self.store.getPattern(stmt.pattern);
                     if (pattern == .bind) {
-                        const key: u48 = @bitCast(pattern.bind.symbol);
+                        const key: u64 = @bitCast(pattern.bind.symbol);
                         self.closure_bindings.put(key, .{
                             .representation = .{ .direct_call = {} },
                             .lambda = stmt.expr,
@@ -4996,7 +5047,7 @@ pub const MonoLlvmCodeGen = struct {
                     // Track closure metadata for the bound symbol
                     const pattern = self.store.getPattern(stmt.pattern);
                     if (pattern == .bind) {
-                        const key: u48 = @bitCast(pattern.bind.symbol);
+                        const key: u64 = @bitCast(pattern.bind.symbol);
                         self.closure_bindings.put(key, .{
                             .representation = closure.representation,
                             .lambda = closure.lambda,
@@ -5062,7 +5113,7 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Generate a call through a lookup: check proc_registry, closure_bindings, and top-level defs.
     fn generateLookupCall(self: *MonoLlvmCodeGen, lookup: anytype, args_span: anytype, ret_layout: layout.Idx) Error!LlvmBuilder.Value {
-        const symbol_key: u48 = @bitCast(lookup.symbol);
+        const symbol_key: u64 = @bitCast(lookup.symbol);
 
         if (self.proc_registry.get(symbol_key)) |func_index| {
             return self.generateCallToCompiledProc(func_index, args_span, ret_layout);
@@ -5187,7 +5238,7 @@ pub const MonoLlvmCodeGen = struct {
 
         // Save and clear symbol_values — LLVM functions are isolated
         const outer_symbols_1 = self.symbol_values;
-        self.symbol_values = std.AutoHashMap(u48, LlvmBuilder.Value).init(self.allocator);
+        self.symbol_values = std.AutoHashMap(u64, LlvmBuilder.Value).init(self.allocator);
         defer {
             self.symbol_values.deinit();
             self.symbol_values = outer_symbols_1;
@@ -5195,7 +5246,7 @@ pub const MonoLlvmCodeGen = struct {
 
         // Save and clear closure_bindings (they belong to outer scope)
         const outer_closure_bindings_1 = self.closure_bindings;
-        self.closure_bindings = std.AutoHashMap(u48, ClosureMeta).init(self.allocator);
+        self.closure_bindings = std.AutoHashMap(u64, ClosureMeta).init(self.allocator);
         defer {
             self.closure_bindings.deinit();
             self.closure_bindings = outer_closure_bindings_1;
@@ -5312,14 +5363,14 @@ pub const MonoLlvmCodeGen = struct {
         self.fn_out_ptr = null;
 
         const outer_symbols_2 = self.symbol_values;
-        self.symbol_values = std.AutoHashMap(u48, LlvmBuilder.Value).init(self.allocator);
+        self.symbol_values = std.AutoHashMap(u64, LlvmBuilder.Value).init(self.allocator);
         defer {
             self.symbol_values.deinit();
             self.symbol_values = outer_symbols_2;
         }
 
         const outer_closure_bindings_2 = self.closure_bindings;
-        self.closure_bindings = std.AutoHashMap(u48, ClosureMeta).init(self.allocator);
+        self.closure_bindings = std.AutoHashMap(u64, ClosureMeta).init(self.allocator);
         defer {
             self.closure_bindings.deinit();
             self.closure_bindings = outer_closure_bindings_2;
@@ -5380,7 +5431,7 @@ pub const MonoLlvmCodeGen = struct {
                 // Single capture — the closure data IS the capture value
                 if (capture_list.len >= 1) {
                     const cap = capture_list[0];
-                    const key: u48 = @bitCast(cap.symbol);
+                    const key: u64 = @bitCast(cap.symbol);
                     self.symbol_values.put(key, closure_data) catch return error.OutOfMemory;
                 }
             },
@@ -5389,7 +5440,7 @@ pub const MonoLlvmCodeGen = struct {
                 const wip = self.wip orelse return error.CompilationFailed;
                 for (capture_list, 0..) |cap, i| {
                     const field_val = wip.extractValue(closure_data, &.{@as(u32, @intCast(i))}, "") catch return error.CompilationFailed;
-                    const key: u48 = @bitCast(cap.symbol);
+                    const key: u64 = @bitCast(cap.symbol);
                     self.symbol_values.put(key, field_val) catch return error.OutOfMemory;
                 }
             },
@@ -5400,13 +5451,13 @@ pub const MonoLlvmCodeGen = struct {
                 if (member_captures.len == 0) return;
                 if (member_captures.len == 1) {
                     const cap = member_captures[0];
-                    const key: u48 = @bitCast(cap.symbol);
+                    const key: u64 = @bitCast(cap.symbol);
                     self.symbol_values.put(key, closure_data) catch return error.OutOfMemory;
                 } else {
                     const wip = self.wip orelse return error.CompilationFailed;
                     for (member_captures, 0..) |cap, i| {
                         const field_val = wip.extractValue(closure_data, &.{@as(u32, @intCast(i))}, "") catch return error.CompilationFailed;
-                        const key: u48 = @bitCast(cap.symbol);
+                        const key: u64 = @bitCast(cap.symbol);
                         self.symbol_values.put(key, field_val) catch return error.OutOfMemory;
                     }
                 }
@@ -5446,7 +5497,7 @@ pub const MonoLlvmCodeGen = struct {
                 const capture_list = self.store.getCaptures(closure.captures);
                 if (capture_list.len == 0) return builder.intValue(.i8, 0) catch return error.OutOfMemory;
                 const cap = capture_list[0];
-                const cap_key: u48 = @bitCast(cap.symbol);
+                const cap_key: u64 = @bitCast(cap.symbol);
                 if (self.symbol_values.get(cap_key)) |val| return val;
                 // Try to look up via symbol def
                 if (self.store.getSymbolDef(cap.symbol)) |def_id| {
@@ -5465,7 +5516,7 @@ pub const MonoLlvmCodeGen = struct {
 
                 var field_values: [32]LlvmBuilder.Value = undefined;
                 for (capture_list, 0..) |cap, i| {
-                    const cap_key: u48 = @bitCast(cap.symbol);
+                    const cap_key: u64 = @bitCast(cap.symbol);
                     if (self.symbol_values.get(cap_key)) |val| {
                         field_values[i] = val;
                     } else if (self.store.getSymbolDef(cap.symbol)) |def_id| {
@@ -5520,7 +5571,7 @@ pub const MonoLlvmCodeGen = struct {
                 const capture_list = self.store.getCaptures(closure.captures);
                 std.debug.assert(capture_list.len != 0);
                 const cap = capture_list[0];
-                const cap_key: u48 = @bitCast(cap.symbol);
+                const cap_key: u64 = @bitCast(cap.symbol);
                 const capture_val = self.symbol_values.get(cap_key) orelse blk: {
                     if (self.store.getSymbolDef(cap.symbol)) |def_id| {
                         const val = try self.generateExpr(def_id);
@@ -5552,7 +5603,7 @@ pub const MonoLlvmCodeGen = struct {
 
                 var field_values: [32]LlvmBuilder.Value = undefined;
                 for (capture_list, 0..) |cap, i| {
-                    const cap_key: u48 = @bitCast(cap.symbol);
+                    const cap_key: u64 = @bitCast(cap.symbol);
                     if (self.symbol_values.get(cap_key)) |val| {
                         field_values[i] = val;
                     } else if (self.store.getSymbolDef(cap.symbol)) |def_id| {
@@ -5649,7 +5700,7 @@ pub const MonoLlvmCodeGen = struct {
                         const capture_list = self.store.getCaptures(meta.captures);
                         std.debug.assert(capture_list.len != 0);
                         const cap = capture_list[0];
-                        const cap_key: u48 = @bitCast(cap.symbol);
+                        const cap_key: u64 = @bitCast(cap.symbol);
                         const capture_val = self.symbol_values.get(cap_key) orelse unreachable;
                         const func_idx = try self.compileLambdaWithCaptures(
                             meta.lambda,
@@ -5669,7 +5720,7 @@ pub const MonoLlvmCodeGen = struct {
 
                         var field_values: [32]LlvmBuilder.Value = undefined;
                         for (capture_list, 0..) |cap, i| {
-                            const cap_key: u48 = @bitCast(cap.symbol);
+                            const cap_key: u64 = @bitCast(cap.symbol);
                             field_values[i] = self.symbol_values.get(cap_key) orelse unreachable;
                         }
                         const struct_type = try buildStructTypeFromValues(builder, wip, field_values[0..capture_list.len]);
@@ -5828,7 +5879,7 @@ pub const MonoLlvmCodeGen = struct {
                 }
             },
             .lookup => |lookup| {
-                const symbol_key: u48 = @bitCast(lookup.symbol);
+                const symbol_key: u64 = @bitCast(lookup.symbol);
                 if (self.closure_bindings.get(symbol_key)) |meta| {
                     return meta;
                 }
@@ -5940,7 +5991,7 @@ pub const MonoLlvmCodeGen = struct {
             );
             // Get the capture value
             const cap_val = blk: {
-                const cap_key: u48 = @bitCast(member_captures[0].symbol);
+                const cap_key: u64 = @bitCast(member_captures[0].symbol);
                 if (self.symbol_values.get(cap_key)) |v| break :blk v;
                 break :blk (self.builder orelse return error.CompilationFailed).intValue(.i8, 0) catch return error.OutOfMemory;
             };
@@ -6107,7 +6158,7 @@ pub const MonoLlvmCodeGen = struct {
         const pattern = self.store.getPattern(pattern_id);
         switch (pattern) {
             .bind => |bind| {
-                const key: u48 = @bitCast(bind.symbol);
+                const key: u64 = @bitCast(bind.symbol);
                 self.symbol_values.put(key, value) catch return error.OutOfMemory;
 
                 // If this symbol has a loop variable alloca, store the updated value

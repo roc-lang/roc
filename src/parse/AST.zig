@@ -3111,6 +3111,7 @@ pub const IfElse = struct {
 pub const MatchBranch = struct {
     pattern: Pattern.Idx,
     body: Expr.Idx,
+    guard: ?Expr.Idx,
     region: TokenizedRegion,
 
     pub const Idx = enum(u32) { _ };
@@ -3123,6 +3124,13 @@ pub const MatchBranch = struct {
         const attrs = tree.beginNode();
 
         try ast.store.getPattern(self.pattern).pushToSExprTree(gpa, env, ast, tree);
+        if (self.guard) |guard| {
+            const guard_begin = tree.beginNode();
+            try tree.pushStaticAtom("guard");
+            const guard_attrs = tree.beginNode();
+            try ast.store.getExpr(guard).pushToSExprTree(gpa, env, ast, tree);
+            try tree.endNode(guard_begin, guard_attrs);
+        }
         try ast.store.getExpr(self.body).pushToSExprTree(gpa, env, ast, tree);
 
         try tree.endNode(begin, attrs);

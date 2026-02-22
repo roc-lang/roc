@@ -1419,6 +1419,10 @@ const Formatter = struct {
                     try fmt.ensureNewline();
                     try fmt.pushIndent();
                     const pattern_region = try fmt.formatPattern(branch.pattern);
+                    if (branch.guard) |guard| {
+                        try fmt.pushAll(" if ");
+                        _ = try fmt.formatExpr(guard);
+                    }
                     var flushed = try fmt.flushCommentsBefore(pattern_region.end);
                     if (flushed) {
                         fmt.curr_indent += 1;

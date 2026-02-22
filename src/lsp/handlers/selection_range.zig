@@ -431,6 +431,9 @@ fn collectContainingRegionsFromExpr(
             const branches = ast.store.matchBranchSlice(m.branches);
             for (branches) |branch_idx| {
                 const branch = ast.store.getBranch(branch_idx);
+                if (branch.guard) |guard| {
+                    try collectContainingRegionsFromExpr(allocator, ast, guard, target_offset, regions);
+                }
                 try collectContainingRegionsFromExpr(allocator, ast, branch.body, target_offset, regions);
             }
         },

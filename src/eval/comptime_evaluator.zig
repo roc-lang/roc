@@ -239,7 +239,7 @@ pub const ComptimeEvaluator = struct {
         const expr = self.env.store.getExpr(expr_idx);
 
         const is_lambda = switch (expr) {
-            .e_lambda, .e_closure, .e_low_level_lambda => true,
+            .e_lambda, .e_closure => true,
             .e_runtime_error => return EvalResult{
                 .crash = .{
                     .message = "Runtime error in expression",
@@ -1350,7 +1350,7 @@ pub const ComptimeEvaluator = struct {
                 // For user-defined types, use interpreter's module lookup
                 break :blk self.interpreter.module_envs.get(origin_module_ident) orelse {
                     // Module not found - might be current module
-                    if (origin_module_ident == self.env.module_name_idx) {
+                    if (origin_module_ident == self.env.qualified_module_ident) {
                         break :blk self.env;
                     }
                     // Unknown module - skip for now
@@ -1676,13 +1676,18 @@ pub const ComptimeEvaluator = struct {
             return false;
         }
 
-        // Check if this is a low-level lambda (builtin type) or a user-defined function
+        // Check if this is a low-level operation (builtin type) or a user-defined function
         const lambda_expr = origin_env.store.getExpr(closure_header.lambda_expr_idx);
 
+        // Extract low-level op from e_lambda whose body is e_run_low_level
+        const ll_op: ?CIR.Expr.LowLevel = if (lambda_expr == .e_lambda) blk: {
+            const body = origin_env.store.getExpr(lambda_expr.e_lambda.body);
+            break :blk if (body == .e_run_low_level) body.e_run_low_level.op else null;
+        } else null;
+
         var result: eval_mod.StackValue = undefined;
-        if (lambda_expr == .e_low_level_lambda) {
+        if (ll_op) |low_level_op| {
             // Builtin type: dispatch directly to low-level implementation
-            const low_level = lambda_expr.e_low_level_lambda;
 
             // Get return type for low-level builtin
             // We need to translate the type variable for the result type
@@ -1713,7 +1718,7 @@ pub const ComptimeEvaluator = struct {
 
             // Call the low-level builtin with our Numeral argument and target type
             var args = [_]eval_mod.StackValue{num_literal_record};
-            result = self.interpreter.callLowLevelBuiltinWithTargetType(low_level.op, &args, roc_ops, return_rt_var, target_rt_var) catch |err| {
+            result = self.interpreter.callLowLevelBuiltinWithTargetType(low_level_op, &args, roc_ops, return_rt_var, target_rt_var) catch |err| {
                 // Include crash message if available for better debugging
                 const crash_msg = self.crash.crashMessage() orelse "no crash message";
                 const error_msg = try self.problems.putFmtExtraString(
@@ -1849,13 +1854,13 @@ pub const ComptimeEvaluator = struct {
         var accessor = try dest.asRecord(&self.interpreter.runtime_layout_store);
 
         // Use self.env for field lookups since the record was built with self.env's idents
-        const is_neg_idx = accessor.findFieldIndex(self.env.idents.is_negative) orelse return error.OutOfMemory;
+        const is_neg_idx = accessor.findFieldIndex(self.env.getIdent(self.env.idents.is_negative)) orelse return error.OutOfMemory;
         try accessor.setFieldByIndex(is_neg_idx, is_negative, roc_ops);
 
-        const before_pt_idx = accessor.findFieldIndex(self.env.idents.digits_before_pt) orelse return error.OutOfMemory;
+        const before_pt_idx = accessor.findFieldIndex(self.env.getIdent(self.env.idents.digits_before_pt)) orelse return error.OutOfMemory;
         try accessor.setFieldByIndex(before_pt_idx, digits_before_pt, roc_ops);
 
-        const after_pt_idx = accessor.findFieldIndex(self.env.idents.digits_after_pt) orelse return error.OutOfMemory;
+        const after_pt_idx = accessor.findFieldIndex(self.env.getIdent(self.env.idents.digits_after_pt)) orelse return error.OutOfMemory;
         try accessor.setFieldByIndex(after_pt_idx, digits_after_pt, roc_ops);
 
         return dest;
@@ -1914,7 +1919,7 @@ pub const ComptimeEvaluator = struct {
             var accessor = result.asRecord(&self.interpreter.runtime_layout_store) catch return true;
             // Use layout store's env for field lookups since records use that env's idents
             const layout_env = self.interpreter.runtime_layout_store.getEnv();
-            const tag_idx = accessor.findFieldIndex(layout_env.idents.tag) orelse return true;
+            const tag_idx = accessor.findFieldIndex(layout_env.getIdent(layout_env.idents.tag)) orelse return true;
             const tag_rt_var = self.interpreter.runtime_types.fresh() catch return true;
             const tag_field = accessor.getFieldByIndex(tag_idx, tag_rt_var) catch return true;
 
@@ -1991,7 +1996,7 @@ pub const ComptimeEvaluator = struct {
         // Get the payload field from the Try record
         // Use layout store's env for field lookups
         const layout_env = self.interpreter.runtime_layout_store.getEnv();
-        const payload_idx = try_accessor.findFieldIndex(layout_env.idents.payload) orelse {
+        const payload_idx = try_accessor.findFieldIndex(layout_env.getIdent(layout_env.idents.payload)) orelse {
             // This should never happen - Try type must have a payload field
             return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral returned malformed Try value (missing payload field)", .{});
         };
@@ -2012,7 +2017,7 @@ pub const ComptimeEvaluator = struct {
 
             // Check if this has a payload field (for the Str)
             // Single-tag unions might not have a "tag" field, so we look for payload first
-            if (err_accessor.findFieldIndex(layout_env.idents.payload)) |err_payload_idx| {
+            if (err_accessor.findFieldIndex(layout_env.getIdent(layout_env.idents.payload))) |err_payload_idx| {
                 const err_payload_rt_var = self.interpreter.runtime_types.fresh() catch {
                     return try std.fmt.allocPrint(self.allocator, "Internal error: could not create rt_var for InvalidNumeral payload", .{});
                 };

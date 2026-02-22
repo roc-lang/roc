@@ -801,7 +801,9 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
             // Dec is i128 stored in linear memory. The function returned an i32 pointer.
             const ptr: u32 = @bitCast(returns[0].I32);
             const mem_slice = module_instance.memoryAll();
-            if (ptr > mem_slice.len or mem_slice.len - ptr < 16) return error.WasmExecFailed;
+            if (ptr > mem_slice.len or mem_slice.len - ptr < 16) {
+                return error.WasmExecFailed;
+            }
             const low: i64 = @bitCast(mem_slice[ptr..][0..8].*);
             const high: i64 = @bitCast(mem_slice[ptr + 8 ..][0..8].*);
             const val: i128 = @as(i128, high) << 64 | @as(i128, @as(u64, @bitCast(low)));
@@ -2683,7 +2685,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
         var i: u32 = 0;
         while (i < sorted_fields.len) : (i += 1) {
             const sorted_field = sorted_fields.get(i);
-            const field_name = resources.module_env.getIdent(sorted_field.name);
+            const field_name = layout_cache.getFieldName(sorted_field.name);
             if (std.mem.eql(u8, field_name, expected_field.name)) {
                 found = true;
                 const field_layout = layout_cache.getLayout(sorted_field.layout);

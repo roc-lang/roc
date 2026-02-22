@@ -22,8 +22,6 @@ pub const DependencyGraph = @import("DependencyGraph.zig");
 pub const HostedCompiler = @import("HostedCompiler.zig");
 /// Roc code emitter - converts CIR to valid Roc source code
 pub const RocEmitter = @import("RocEmitter.zig");
-/// Monomorphizer - specializes polymorphic functions to concrete types
-pub const Monomorphizer = @import("Monomorphizer.zig");
 /// Closure Transformer - transforms closures with captures into tagged values
 pub const ClosureTransformer = @import("ClosureTransformer.zig");
 /// Lambda Lifter - extracts closure bodies to top-level function definitions
@@ -117,7 +115,6 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/roc_emitter_test.zig"));
 
     // Monomorphization
-    std.testing.refAllDecls(@import("Monomorphizer.zig"));
     std.testing.refAllDecls(@import("ClosureTransformer.zig"));
     std.testing.refAllDecls(@import("LambdaLifter.zig"));
     std.testing.refAllDecls(@import("LambdaSetInference.zig"));

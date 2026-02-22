@@ -672,7 +672,7 @@ const Unifier = struct {
                     },
                     .empty_tag_union => {
                         // If this nominal is opaque and we're not in the origin module, error
-                        if (!a_type.canLiftInner(self.module_env.module_name_idx)) {
+                        if (!a_type.canLiftInner(self.module_env.qualified_module_ident)) {
                             return error.TypeMismatch;
                         }
 
@@ -694,7 +694,7 @@ const Unifier = struct {
                     },
                     .empty_record => {
                         // If this nominal is opaque and we're not in the origin module, error
-                        if (!a_type.canLiftInner(self.module_env.module_name_idx)) {
+                        if (!a_type.canLiftInner(self.module_env.qualified_module_ident)) {
                             return error.TypeMismatch;
                         }
 
@@ -794,7 +794,7 @@ const Unifier = struct {
                     },
                     .nominal_type => |b_type| {
                         // If this nominal is opaque and we're not in the origin module, error
-                        if (!b_type.canLiftInner(self.module_env.module_name_idx)) {
+                        if (!b_type.canLiftInner(self.module_env.qualified_module_ident)) {
                             return error.TypeMismatch;
                         }
 
@@ -840,7 +840,7 @@ const Unifier = struct {
                     },
                     .nominal_type => |b_type| {
                         // If this nominal is opaque and we're not in the origin module, error
-                        if (!b_type.canLiftInner(self.module_env.module_name_idx)) {
+                        if (!b_type.canLiftInner(self.module_env.qualified_module_ident)) {
                             return error.TypeMismatch;
                         }
 
@@ -921,7 +921,7 @@ const Unifier = struct {
                     },
                     .nominal_type => |b_type| {
                         // If this nominal is opaque and we're not in the origin module, error
-                        if (!b_type.canLiftInner(self.module_env.module_name_idx)) {
+                        if (!b_type.canLiftInner(self.module_env.qualified_module_ident)) {
                             return error.TypeMismatch;
                         }
 
@@ -1061,7 +1061,7 @@ const Unifier = struct {
         defer trace.end();
 
         // If this nominal is opaque and we're not in the origin module, error
-        if (!nominal_type.canLiftInner(self.module_env.module_name_idx)) {
+        if (!nominal_type.canLiftInner(self.module_env.qualified_module_ident)) {
             return error.TypeMismatch;
         }
 
@@ -1162,7 +1162,7 @@ const Unifier = struct {
         defer trace.end();
 
         // If this nominal is opaque and we're not in the origin module, error
-        if (!nominal_type.canLiftInner(self.module_env.module_name_idx)) {
+        if (!nominal_type.canLiftInner(self.module_env.qualified_module_ident)) {
             return error.TypeMismatch;
         }
 

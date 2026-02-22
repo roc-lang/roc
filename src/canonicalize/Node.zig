@@ -100,6 +100,7 @@ pub const Tag = enum {
     expr_anno_only,
     expr_hosted_lambda,
     expr_low_level,
+    expr_run_low_level,
     expr_expect,
     expr_for,
     expr_record_builder,
@@ -292,6 +293,7 @@ pub const Payload = extern union {
     expr_field_access: ExprFieldAccess,
     expr_hosted_lambda: ExprHostedLambda,
     expr_low_level: ExprLowLevel,
+    expr_run_low_level: ExprRunLowLevel,
     expr_zero_argument_tag: ExprZeroArgumentTag,
     expr_for: ExprFor,
     expr_expect: ExprExpect,
@@ -615,6 +617,12 @@ pub const Payload = extern union {
     pub const ExprLowLevel = extern struct {
         op: u32,
         args_body_idx: u32, // Index into span_with_node_data: (args.start, args.len, body)
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
+    };
+
+    pub const ExprRunLowLevel = extern struct {
+        op: u32,
+        args_span2_idx: u32, // Index into span2_data: (args.start, args.len)
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 

@@ -256,7 +256,11 @@ pub const CacheManager = struct {
     pub fn getCacheFilePath(self: *Self, cache_key: [32]u8) ![]u8 {
         const entries_dir = try self.config.getCacheEntriesDir(self.allocator);
         defer self.allocator.free(entries_dir);
+        return self.computeCacheFilePath(cache_key, entries_dir);
+    }
 
+    /// Compute a cache file path for a given cache key within a specific entries directory.
+    pub fn computeCacheFilePath(self: *Self, cache_key: [32]u8, entries_dir: []const u8) ![]u8 {
         // Split key: first 2 chars for subdirectory, rest for filename
         var subdir_buf: [2]u8 = undefined;
         _ = std.fmt.bufPrint(&subdir_buf, "{x}", .{cache_key[0..1]}) catch unreachable;
@@ -276,7 +280,11 @@ pub const CacheManager = struct {
     fn ensureCacheSubdir(self: *Self, cache_key: [32]u8) !void {
         const entries_dir = try self.config.getCacheEntriesDir(self.allocator);
         defer self.allocator.free(entries_dir);
+        return self.ensureCacheSubdirIn(cache_key, entries_dir);
+    }
 
+    /// Ensure the cache subdirectory exists for the given cache key within a specific entries directory.
+    pub fn ensureCacheSubdirIn(self: *Self, cache_key: [32]u8, entries_dir: []const u8) !void {
         // Print the hex of the first byte into a fixed-size buffer for the subdir
         var subdir_buf: [2]u8 = undefined;
         _ = std.fmt.bufPrint(&subdir_buf, "{x}", .{cache_key[0..1]}) catch unreachable;
@@ -289,6 +297,85 @@ pub const CacheManager = struct {
             error.PathAlreadyExists => {}, // OK
             else => return err,
         };
+    }
+
+    /// Store raw bytes at a cache path determined by cache_key + entries_dir.
+    /// Atomic write (temp file + rename). Failures are silent (recorded in stats).
+    pub fn storeRawBytes(self: *Self, cache_key: [32]u8, data: []const u8, entries_dir: []const u8) void {
+        if (!self.config.enabled) return;
+
+        // Ensure cache subdirectory exists
+        self.ensureCacheSubdirIn(cache_key, entries_dir) catch |err| {
+            if (self.config.verbose) {
+                std.log.debug("Failed to create cache subdirectory: {}", .{err});
+            }
+            self.stats.recordStoreFailure();
+            return;
+        };
+
+        // Get cache file path
+        const cache_path = self.computeCacheFilePath(cache_key, entries_dir) catch {
+            self.stats.recordStoreFailure();
+            return;
+        };
+        defer self.allocator.free(cache_path);
+
+        // Write to temporary file first, then rename for atomicity
+        const temp_path = std.fmt.allocPrint(self.allocator, "{s}.tmp", .{cache_path}) catch {
+            self.stats.recordStoreFailure();
+            return;
+        };
+        defer self.allocator.free(temp_path);
+
+        // Write to temp file
+        self.filesystem.writeFile(temp_path, data) catch |err| {
+            if (self.config.verbose) {
+                std.log.debug("Failed to write cache temp file {s}: {}", .{ temp_path, err });
+            }
+            self.stats.recordStoreFailure();
+            return;
+        };
+
+        // Move temp file to final location (atomic operation)
+        self.filesystem.rename(temp_path, cache_path) catch |err| {
+            if (self.config.verbose) {
+                std.log.debug("Failed to rename cache file {s} -> {s}: {}", .{ temp_path, cache_path, err });
+            }
+            self.stats.recordStoreFailure();
+            return;
+        };
+
+        self.stats.recordStore(data.len);
+    }
+
+    /// Load raw bytes from cache. Returns owned slice or null on miss.
+    pub fn loadRawBytes(self: *Self, cache_key: [32]u8, entries_dir: []const u8) ?[]const u8 {
+        if (!self.config.enabled) return null;
+
+        const cache_path = self.computeCacheFilePath(cache_key, entries_dir) catch {
+            self.stats.recordMiss();
+            return null;
+        };
+        defer self.allocator.free(cache_path);
+
+        // Check if cache file exists
+        const exists = self.filesystem.fileExists(cache_path) catch false;
+        if (!exists) {
+            self.stats.recordMiss();
+            return null;
+        }
+
+        // Read cache data
+        const data = self.filesystem.readFile(cache_path, self.allocator) catch |err| {
+            if (self.config.verbose) {
+                std.log.debug("Failed to read cache file {s}: {}", .{ cache_path, err });
+            }
+            self.stats.recordMiss();
+            return null;
+        };
+
+        self.stats.recordHit(data.len);
+        return data;
     }
 
     /// Get cache statistics.

@@ -3966,7 +3966,7 @@ fn processDevObjectSnapshot(
     defer layout_store.deinit();
 
     // 8. Find app module index and lower to Mono IR
-    var app_module_idx: ?u16 = null;
+    var app_module_idx: ?u32 = null;
     for (modules, 0..) |mod, i| {
         if (mod.is_app) {
             app_module_idx = @intCast(i + 1);
@@ -4033,7 +4033,7 @@ fn processDevObjectSnapshot(
     }
 
     // 9. RC insertion
-    var rc_pass = mono.RcInsert.RcInsertPass.init(allocator, &mono_store, &layout_store);
+    var rc_pass = try mono.RcInsert.RcInsertPass.init(allocator, &mono_store, &layout_store);
     defer rc_pass.deinit();
 
     for (entrypoints.items) |*ep| {

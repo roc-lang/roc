@@ -4,7 +4,7 @@
 //! It solves cross-module index collisions by using globally unique symbols.
 //!
 //! Key components:
-//! - `MonoIR`: Core types (MonoExpr, MonoPattern, MonoSymbol)
+//! - `MonoIR`: Core types (MonoExpr, MonoPattern, Symbol)
 //! - `MonoExprStore`: Flat storage for all lowered expressions
 //! - `Lower`: CIR → Mono IR lowering pass
 //!
@@ -31,14 +31,20 @@
 
 const std = @import("std");
 
-/// Core IR types: MonoExpr, MonoPattern, MonoSymbol, etc.
+/// Core IR types: MonoExpr, MonoPattern, Symbol, etc.
 pub const MonoIR = @import("MonoIR.zig");
 
 /// Flat storage for expressions and patterns
 pub const MonoExprStore = @import("MonoExprStore.zig");
 
+/// Polymorphic let-binding instantiation (before monomorphization)
+pub const Instantiate = @import("Instantiate.zig");
+
 /// CIR → Mono IR lowering pass
 pub const Lower = @import("Lower.zig");
+
+/// Lambda lifting pass (after monomorphization)
+pub const LambdaLift = @import("LambdaLift.zig");
 
 /// Tail recursion detection and transformation
 pub const TailRecursion = @import("TailRecursion.zig");
@@ -51,7 +57,7 @@ pub const MonoExpr = MonoIR.MonoExpr;
 /// Re-export pattern type
 pub const MonoPattern = MonoIR.MonoPattern;
 /// Re-export symbol type
-pub const MonoSymbol = MonoIR.MonoSymbol;
+pub const Symbol = MonoIR.Symbol;
 /// Re-export expression ID type
 pub const MonoExprId = MonoIR.MonoExprId;
 /// Re-export pattern ID type
@@ -83,6 +89,10 @@ pub const CFStmtId = MonoIR.CFStmtId;
 pub const CFSwitchBranch = MonoIR.CFSwitchBranch;
 /// Control flow switch branch span type
 pub const CFSwitchBranchSpan = MonoIR.CFSwitchBranchSpan;
+/// Control flow match branch type
+pub const CFMatchBranch = MonoIR.CFMatchBranch;
+/// Control flow match branch span type
+pub const CFMatchBranchSpan = MonoIR.CFMatchBranchSpan;
 /// Layout index span type
 pub const LayoutIdxSpan = MonoIR.LayoutIdxSpan;
 /// Monomorphized procedure type
@@ -92,7 +102,12 @@ test "mono tests" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(MonoIR);
     std.testing.refAllDecls(MonoExprStore);
+    std.testing.refAllDecls(Instantiate);
     std.testing.refAllDecls(Lower);
+    std.testing.refAllDecls(LambdaLift);
     std.testing.refAllDecls(TailRecursion);
     std.testing.refAllDecls(RcInsert);
+    std.testing.refAllDecls(@import("test/lambda_lift_test.zig"));
+    std.testing.refAllDecls(@import("test/specialization_test.zig"));
+    //std.testing.refAllDecls(@import("test/instantiate_test.zig"));
 }

@@ -55,6 +55,18 @@ pub const Relocation = union(enum) {
         };
     }
 
+    /// Adjust the offset of this relocation by the given amount
+    pub fn adjustOffset(self: *Relocation, delta: u64) void {
+        switch (self.*) {
+            .local_data => |*r| r.offset += delta,
+            .linked_function => |*r| r.offset += delta,
+            .linked_data => |*r| r.offset += delta,
+            .jmp_to_return => |*r| {
+                r.inst_loc += delta;
+                r.offset += delta;
+            },
+        }
+    }
 };
 
 /// Function that resolves a symbol name to its address.

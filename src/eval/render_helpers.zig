@@ -392,7 +392,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                 }
             } else if (value.layout.tag == .record) {
                 var acc = try value.asRecord(ctx.layout_store);
-                if (acc.findFieldIndex(ctx.env.idents.tag)) |idx| {
+                if (acc.findFieldIndex(ctx.env.getIdent(ctx.env.idents.tag))) |idx| {
                     const field_rt = try ctx.runtime_types.fresh();
                     const tag_field = try acc.getFieldByIndex(idx, field_rt);
                     if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
@@ -411,7 +411,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                         var out = std.array_list.AlignedManaged(u8, null).init(gpa);
                         errdefer out.deinit();
                         try out.appendSlice(tag_name);
-                        if (acc.findFieldIndex(ctx.env.idents.payload)) |pidx| {
+                        if (acc.findFieldIndex(ctx.env.getIdent(ctx.env.idents.payload))) |pidx| {
                             const field_rt = try ctx.runtime_types.fresh();
                             const payload = try acc.getFieldByIndex(pidx, field_rt);
                             const arg_vars = ctx.runtime_types.sliceVars(toVarRange(sorted_tag.args));
@@ -657,7 +657,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                     const name_text = ctx.env.getIdent(f.name);
                     try out.appendSlice(name_text);
                     try out.appendSlice(": ");
-                    const idx = acc.findFieldIndex(f.name) orelse {
+                    const idx = acc.findFieldIndex(name_text) orelse {
                         std.debug.panic("Record field not found in layout: type says field '{s}' exists but layout doesn't have it", .{name_text});
                     };
                     const field_rt = try ctx.runtime_types.fresh();

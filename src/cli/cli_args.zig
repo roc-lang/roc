@@ -17,6 +17,7 @@ pub const CliArgs = union(enum) {
     bundle: BundleArgs,
     unbundle: UnbundleArgs,
     repl: ReplArgs,
+    glue: GlueArgs,
     version,
     docs: DocsArgs,
     experimental_lsp: ExperimentalLspArgs,
@@ -106,6 +107,7 @@ pub const BuildArgs = struct {
 pub const TestArgs = struct {
     path: []const u8, // the path to the file to be tested
     opt: OptLevel, // the optimization level to be used for test execution
+    backend: Backend = .interpreter, // evaluation backend (interpreter or dev)
     main: ?[]const u8, // the path to a roc file with an app header to be used to resolve dependencies
     verbose: bool = false, // enable verbose output showing individual test results
     no_cache: bool = false, // disable compilation caching, force re-run all tests
@@ -155,6 +157,13 @@ pub const ReplArgs = struct {
     backend: Backend = .interpreter,
 };
 
+/// Arguments for `roc experimental-glue`
+pub const GlueArgs = struct {
+    glue_spec: []const u8, // path to the glue spec .roc file (REQUIRED)
+    output_dir: []const u8, // path to the output directory for generated glue files (REQUIRED)
+    platform_path: []const u8, // path to the platform .roc file (default: main.roc)
+};
+
 /// Parse a list of arguments.
 pub fn parse(alloc: mem.Allocator, args: []const []const u8) !CliArgs {
     if (args.len == 0) return try parseRun(alloc, args);
@@ -171,6 +180,7 @@ pub fn parse(alloc: mem.Allocator, args: []const []const u8) !CliArgs {
     if (mem.eql(u8, args[0], "fmt")) return try parseFormat(alloc, args[1..]);
     if (mem.eql(u8, args[0], "test")) return parseTest(args[1..]);
     if (mem.eql(u8, args[0], "repl")) return parseRepl(args[1..]);
+    if (mem.eql(u8, args[0], "experimental-glue")) return parseGlue(args[1..]);
     if (mem.eql(u8, args[0], "version")) return parseVersion(args[1..]);
     if (mem.eql(u8, args[0], "docs")) return parseDocs(args[1..]);
     if (mem.eql(u8, args[0], "experimental-lsp")) return parseExperimentalLsp(args[1..]);
@@ -194,6 +204,7 @@ const main_help =
     \\  test             Run all top-level `expect`s in a main module and any modules it imports
     \\  repl             Launch the interactive Read Eval Print Loop (REPL)
     \\  fmt              Format a .roc file or the .roc files contained in a directory using standard Roc formatting
+    \\  experimental-glue Generate native glue code from a Roc platform using a language-specific glue spec
     \\  version          Print the Roc compiler's version
     \\  check            Check the code for problems, but don't build or run it
     \\  docs             Generate documentation for a Roc package or platform
@@ -610,6 +621,7 @@ fn parseFormat(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator
 fn parseTest(args: []const []const u8) CliArgs {
     var path: ?[]const u8 = null;
     var opt: OptLevel = .dev;
+    var backend: Backend = .interpreter;
     var main: ?[]const u8 = null;
     var verbose: bool = false;
     var no_cache: bool = false;
@@ -625,14 +637,24 @@ fn parseTest(args: []const []const u8) CliArgs {
             \\  [ROC_FILE] The .roc file to test [default: main.roc]
             \\
             \\Options:
-            \\      --opt=<size|speed|dev>  Optimize the build process for binary size, execution speed, or compilation speed. Defaults to compilation speed (dev)
-            \\      --main <main>           The .roc file of the main app/package module to resolve dependencies from
-            \\      --verbose               Enable verbose output showing individual test results
-            \\      --no-cache              Disable compilation caching, force re-run all tests
-            \\  -j, --jobs=<N>              Max worker threads for parallel compilation (default: auto-detect CPU count)
-            \\  -h, --help                  Print help
+            \\      --opt=<size|speed|dev>          Optimize the build process for binary size, execution speed, or compilation speed. Defaults to compilation speed (dev)
+            \\      --backend=<interpreter|dev>     Evaluation backend (default: interpreter)
+            \\      --main <main>                   The .roc file of the main app/package module to resolve dependencies from
+            \\      --verbose                       Enable verbose output showing individual test results
+            \\      --no-cache                      Disable compilation caching, force re-run all tests
+            \\  -j, --jobs=<N>                      Max worker threads for parallel compilation (default: auto-detect CPU count)
+            \\  -h, --help                          Print help
             \\
         };
+        } else if (mem.startsWith(u8, arg, "--backend=")) {
+            const value = arg["--backend=".len..];
+            backend = Backend.fromString(value) orelse {
+                return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{
+                    .value = value,
+                    .flag = "--backend",
+                    .valid_options = "interpreter, dev",
+                } } };
+            };
         } else if (mem.startsWith(u8, arg, "--main")) {
             if (getFlagValue(arg)) |value| {
                 main = value;
@@ -677,7 +699,7 @@ fn parseTest(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .test_cmd = TestArgs{ .path = path orelse "main.roc", .opt = opt, .main = main, .verbose = verbose, .no_cache = no_cache, .max_threads = max_threads } };
+    return CliArgs{ .test_cmd = TestArgs{ .path = path orelse "main.roc", .opt = opt, .backend = backend, .main = main, .verbose = verbose, .no_cache = no_cache, .max_threads = max_threads } };
 }
 
 fn parseRepl(args: []const []const u8) CliArgs {
@@ -709,6 +731,87 @@ fn parseRepl(args: []const []const u8) CliArgs {
         }
     }
     return CliArgs{ .repl = .{ .backend = backend } };
+}
+
+fn parseGlue(args: []const []const u8) CliArgs {
+    var glue_spec: ?[]const u8 = null;
+    var output_dir: ?[]const u8 = null;
+    var platform_path: ?[]const u8 = null;
+
+    for (args) |arg| {
+        if (isHelpFlag(arg)) {
+            return CliArgs{ .help = 
+            \\Generate glue code from a platform using a glue spec
+            \\
+            \\Usage: roc experimental-glue [OPTIONS] <GLUE_SPEC> <GLUE_DIR> [ROC_FILE]
+            \\
+            \\Arguments:
+            \\  <GLUE_SPEC>  The glue spec .roc file that defines how to generate glue code
+            \\  <GLUE_DIR>   The output directory for generated glue files
+            \\  [ROC_FILE]   The platform .roc file to analyze [default: main.roc]
+            \\
+            \\Options:
+            \\  -h, --help  Print help
+            \\
+        };
+        } else {
+            if (glue_spec == null) {
+                glue_spec = arg;
+            } else if (output_dir == null) {
+                output_dir = arg;
+            } else if (platform_path == null) {
+                platform_path = arg;
+            } else {
+                return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "experimental-glue", .arg = arg } } };
+            }
+        }
+    }
+
+    // glue_spec is required
+    if (glue_spec == null) {
+        return CliArgs{ .help = 
+        \\Error: Missing required argument <GLUE_SPEC>
+        \\
+        \\Generate glue code from a platform using a glue spec
+        \\
+        \\Usage: roc experimental-glue [OPTIONS] <GLUE_SPEC> <GLUE_DIR> [ROC_FILE]
+        \\
+        \\Arguments:
+        \\  <GLUE_SPEC>  The glue spec .roc file that defines how to generate glue code
+        \\  <GLUE_DIR>   The output directory for generated glue files
+        \\  [ROC_FILE]   The platform .roc file to analyze [default: main.roc]
+        \\
+        \\Options:
+        \\  -h, --help  Print help
+        \\
+    };
+    }
+
+    // output_dir is required
+    if (output_dir == null) {
+        return CliArgs{ .help = 
+        \\Error: Missing required argument <GLUE_DIR>
+        \\
+        \\Generate glue code from a platform using a glue spec
+        \\
+        \\Usage: roc experimental-glue [OPTIONS] <GLUE_SPEC> <GLUE_DIR> [ROC_FILE]
+        \\
+        \\Arguments:
+        \\  <GLUE_SPEC>  The glue spec .roc file that defines how to generate glue code
+        \\  <GLUE_DIR>   The output directory for generated glue files
+        \\  [ROC_FILE]   The platform .roc file to analyze [default: main.roc]
+        \\
+        \\Options:
+        \\  -h, --help  Print help
+        \\
+    };
+    }
+
+    return CliArgs{ .glue = GlueArgs{
+        .glue_spec = glue_spec.?,
+        .output_dir = output_dir.?,
+        .platform_path = platform_path orelse "main.roc",
+    } };
 }
 
 fn parseVersion(args: []const []const u8) CliArgs {
