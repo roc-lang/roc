@@ -137,14 +137,16 @@ fn copyStringToLir(self: *Self, cir_str_idx: StringLiteral.Idx) Allocator.Error!
     const idx_u32: u32 = @intCast(@intFromEnum(cir_str_idx));
 
     // Try the source module env first (most common case)
-    if (idx_u32 < self.source_env.common.strings.buffer.len()) {
+    // Use <= because an empty string's Idx equals the buffer length
+    // (the data region is zero bytes, starting right at the end of the buffer)
+    if (idx_u32 <= self.source_env.common.strings.buffer.len()) {
         const str_bytes = self.source_env.getString(cir_str_idx);
         return self.lir_store.strings.insert(self.allocator, str_bytes);
     }
 
     // Fall back to other module envs for cross-module string literals
     for (self.all_module_envs) |env| {
-        if (idx_u32 < env.common.strings.buffer.len()) {
+        if (idx_u32 <= env.common.strings.buffer.len()) {
             const str_bytes = env.getString(cir_str_idx);
             return self.lir_store.strings.insert(self.allocator, str_bytes);
         }
