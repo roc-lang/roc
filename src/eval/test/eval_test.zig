@@ -36,6 +36,7 @@ const runExpectListZst = helpers.runExpectListZst;
 const runExpectDec = helpers.runExpectDec;
 const runExpectTypeMismatchAndCrash = helpers.runExpectTypeMismatchAndCrash;
 const ExpectedField = helpers.ExpectedField;
+const runDevOnlyExpectStr = helpers.runDevOnlyExpectStr;
 
 const TraceWriterState = struct {
     buffer: [256]u8 = undefined,
@@ -3568,6 +3569,38 @@ test "!Bool.True returns False" {
 
 test "!Bool.False returns True" {
     try runExpectBool("!Bool.False", true, .no_trace);
+}
+
+// --- Dev backend only Bool.not tests ---
+// These directly test the dev evaluator's formatted string output,
+// bypassing the known-divergence workaround that masks Bool formatting issues.
+
+test "dev only: Bool.True formats as True" {
+    try runDevOnlyExpectStr("Bool.True", "True");
+}
+
+test "dev only: Bool.False formats as False" {
+    try runDevOnlyExpectStr("Bool.False", "False");
+}
+
+test "dev only: Bool.not(Bool.True) formats as False" {
+    try runDevOnlyExpectStr("Bool.not(Bool.True)", "False");
+}
+
+test "dev only: Bool.not(Bool.False) formats as True" {
+    try runDevOnlyExpectStr("Bool.not(Bool.False)", "True");
+}
+
+test "dev only: Bool.not(False) formats as True" {
+    try runDevOnlyExpectStr("Bool.not(False)", "True");
+}
+
+test "dev only: !Bool.True formats as False" {
+    try runDevOnlyExpectStr("!Bool.True", "False");
+}
+
+test "dev only: !Bool.False formats as True" {
+    try runDevOnlyExpectStr("!Bool.False", "True");
 }
 
 test "Str.trim" {

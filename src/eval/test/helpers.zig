@@ -2785,6 +2785,26 @@ pub fn runExpectUnit(src: []const u8, should_trace: enum { trace, no_trace }) !v
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
+/// Run an expression through the dev evaluator only and assert on the string output.
+/// Unlike runExpectBool which uses the interpreter + cross-check, this directly tests
+/// the dev backend's formatted output string, catching formatting bugs that the
+/// cross-check workarounds might mask.
+pub fn runDevOnlyExpectStr(src: []const u8, expected_str: []const u8) !void {
+    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    const dev_str = devEvaluatorStr(test_allocator, resources.module_env, resources.expr_idx, resources.builtin_module.env) catch |err| {
+        std.debug.print("\nDev evaluator failed for '{s}': {}\n", .{ src, err });
+        return err;
+    };
+    defer test_allocator.free(dev_str);
+
+    std.testing.expectEqualStrings(expected_str, dev_str) catch |err| {
+        std.debug.print("\nDev evaluator output mismatch for '{s}':\n  expected: {s}\n  got:      {s}\n", .{ src, expected_str, dev_str });
+        return err;
+    };
+}
+
 /// Parse and canonicalize an expression.
 /// Rewrite deferred numeric literals to match their inferred types
 /// This is similar to what ComptimeEvaluator does but for test expressions
