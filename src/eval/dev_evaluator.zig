@@ -169,7 +169,6 @@ const RocDbg = builtins.host_abi.RocDbg;
 const RocExpectFailed = builtins.host_abi.RocExpectFailed;
 const RocCrashed = builtins.host_abi.RocCrashed;
 
-
 // Static data interner for string literals
 const StaticDataInterner = backend.StaticDataInterner;
 const MemoryBackend = StaticDataInterner.MemoryBackend;

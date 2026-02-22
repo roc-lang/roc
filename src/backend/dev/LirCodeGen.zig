@@ -7062,56 +7062,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate subtraction for num_abs_diff
-        fn generateBinopSub(self: *Self, a_loc: ValueLocation, b_loc: ValueLocation, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
-            if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec) {
-                // 128-bit subtraction
-                const a_parts = try self.getI128Parts(a_loc, .signed);
-                const b_parts = try self.getI128Parts(b_loc, .signed);
-
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.subsRegRegReg(.w64, a_parts.low, a_parts.low, b_parts.low);
-                    try self.codegen.emit.sbcRegRegReg(.w64, a_parts.high, a_parts.high, b_parts.high);
-                } else {
-                    try self.codegen.emit.subRegReg(.w64, a_parts.low, b_parts.low);
-                    try self.codegen.emit.sbbRegReg(.w64, a_parts.high, b_parts.high);
-                }
-
-                self.codegen.freeGeneral(b_parts.low);
-                self.codegen.freeGeneral(b_parts.high);
-
-                const stack_offset = self.codegen.allocStackSlot(16);
-                try self.codegen.emitStoreStack(.w64, stack_offset, a_parts.low);
-                try self.codegen.emitStoreStack(.w64, stack_offset + 8, a_parts.high);
-                self.codegen.freeGeneral(a_parts.low);
-                self.codegen.freeGeneral(a_parts.high);
-                return .{ .stack_i128 = stack_offset };
-            }
-
-            if (ret_layout == .f32 or ret_layout == .f64) {
-                const a_reg = try self.ensureInFloatReg(a_loc);
-                const b_reg = try self.ensureInFloatReg(b_loc);
-                try self.codegen.emitSubF64(a_reg, a_reg, b_reg);
-                self.codegen.freeFloat(b_reg);
-                return .{ .float_reg = a_reg };
-            }
-
-            // Integer subtraction
-            const a_reg = try self.ensureInGeneralReg(a_loc);
-            const b_reg = try self.ensureInGeneralReg(b_loc);
-            const result_reg = try self.allocTempGeneral();
-
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.subRegRegReg(.w64, result_reg, a_reg, b_reg);
-            } else {
-                try self.emitMovRegReg(result_reg, a_reg);
-                try self.codegen.emit.subRegReg(.w64, result_reg, b_reg);
-            }
-
-            self.codegen.freeGeneral(a_reg);
-            self.codegen.freeGeneral(b_reg);
-            return .{ .general_reg = result_reg };
-        }
-
         /// Generate |a - b| correctly for all integer types.
         /// For floats, uses float sub + float abs.
         /// For integers: compares a and b, then subtracts the smaller from the larger.
