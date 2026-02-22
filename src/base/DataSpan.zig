@@ -7,7 +7,7 @@ pub const DataSpan = extern struct {
 
     /// Creates an empty DataSpan with zero length.
     pub fn empty() DataSpan {
-        return DataSpan{ .start = undefined, .len = 0 };
+        return DataSpan{ .start = 0, .len = 0 };
     }
 
     /// Creates a DataSpan with the specified start position and length.

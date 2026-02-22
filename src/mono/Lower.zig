@@ -40,7 +40,7 @@ const MonoFieldNameSpan = ir.MonoFieldNameSpan;
 const Symbol = ir.Symbol;
 const MonoCapture = ir.MonoCapture;
 const MonoCaptureSpan = ir.MonoCaptureSpan;
-const MonoWhenBranch = ir.MonoWhenBranch;
+const MonoMatchBranch = ir.MonoMatchBranch;
 const ClosureRepresentation = ir.ClosureRepresentation;
 const Recursive = ir.Recursive;
 const SelfRecursive = ir.SelfRecursive;
@@ -51,6 +51,7 @@ const MonoStmt = ir.MonoStmt;
 // Control flow statement types (for tail recursion)
 const CFStmtId = ir.CFStmtId;
 const CFSwitchBranch = ir.CFSwitchBranch;
+const CFMatchBranch = ir.CFMatchBranch;
 const LayoutIdxSpan = ir.LayoutIdxSpan;
 const MonoProc = ir.MonoProc;
 
@@ -3090,9 +3091,9 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
         .e_match => |match_expr| blk: {
             const cond = try self.lowerExprFromIdx(module_env, match_expr.cond);
-            const branches = try self.lowerWhenBranches(module_env, match_expr.branches);
+            const branches = try self.lowerMatchBranches(module_env, match_expr.branches);
             break :blk .{
-                .when = .{
+                .match_expr = .{
                     .value = cond,
                     .value_layout = self.getExprLayoutFromIdx(module_env, match_expr.cond),
                     .branches = branches,
@@ -3130,6 +3131,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 .lhs = lhs,
                 .rhs = rhs,
                 .result_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
+                .operand_layout = self.getExprLayoutFromIdx(module_env, binop.lhs),
             } };
         },
 
@@ -4329,23 +4331,18 @@ fn computeUnionLayout(self: *Self, ls: *LayoutStore, members: []const ir.LambdaS
     return try ls.putCaptureUnion(S.variants_buf[0..variant_count]);
 }
 
-/// Lower when/match branches
-fn lowerWhenBranches(self: *Self, module_env: *ModuleEnv, branches: CIR.Expr.Match.Branch.Span) Allocator.Error!ir.MonoWhenBranchSpan {
+/// Lower match branches
+fn lowerMatchBranches(self: *Self, module_env: *ModuleEnv, branches: CIR.Expr.Match.Branch.Span) Allocator.Error!ir.MonoMatchBranchSpan {
     const branch_indices = module_env.store.sliceMatchBranches(branches);
 
-    var lowered = std.ArrayList(MonoWhenBranch).empty;
+    var lowered = std.ArrayList(MonoMatchBranch).empty;
     defer lowered.deinit(self.allocator);
 
     for (branch_indices) |branch_idx| {
         const branch = module_env.store.getMatchBranch(branch_idx);
 
-        // Match branches can have multiple patterns (for or-patterns like `A | B => ...`)
-        // For now, we lower just the first pattern
         const pattern_indices = module_env.store.sliceMatchBranchPatterns(branch.patterns);
         if (pattern_indices.len == 0) continue;
-
-        const first_bp = module_env.store.getMatchBranchPattern(pattern_indices[0]);
-        const pattern = try self.lowerPattern(module_env, first_bp.pattern);
 
         const guard = if (branch.guard) |guard_idx|
             try self.lowerExprFromIdx(module_env, guard_idx)
@@ -4353,14 +4350,18 @@ fn lowerWhenBranches(self: *Self, module_env: *ModuleEnv, branches: CIR.Expr.Mat
             MonoExprId.none;
         const body = try self.lowerExprFromIdx(module_env, branch.value);
 
-        try lowered.append(self.allocator, .{
-            .pattern = pattern,
-            .guard = guard,
-            .body = body,
-        });
+        for (pattern_indices) |pat_idx| {
+            const bp = module_env.store.getMatchBranchPattern(pat_idx);
+            const pattern = try self.lowerPattern(module_env, bp.pattern);
+            try lowered.append(self.allocator, .{
+                .pattern = pattern,
+                .guard = guard,
+                .body = body,
+            });
+        }
     }
 
-    return self.store.addWhenBranches(lowered.items);
+    return self.store.addMatchBranches(lowered.items);
 }
 
 /// Lower statements in a block
@@ -4522,7 +4523,7 @@ fn cirBinopToMonoBinop(op: CIR.Expr.Binop.Op) MonoExpr.BinOp {
         .sub => .sub,
         .mul => .mul,
         .div => .div,
-        .rem => .mod,
+        .rem => .rem,
         .eq => .eq,
         .ne => .neq,
         .lt => .lt,
@@ -5148,6 +5149,7 @@ fn lowerExprToStmt(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, 
     return switch (expr) {
         .e_block => |block| try self.lowerBlockToStmt(module_env, block, ret_layout),
         .e_if => |ite| try self.lowerIfToSwitchStmt(module_env, ite, ret_layout),
+        .e_match => |match_expr| try self.lowerMatchToStmt(module_env, match_expr, ret_layout, expr_idx),
         else => {
             // For other expressions, wrap in a return statement
             const expr_id = try self.lowerExprInner(module_env, expr, region, expr_idx);
@@ -5268,6 +5270,83 @@ fn lowerIfToSwitchStmt(self: *Self, module_env: *ModuleEnv, ite: anytype, ret_la
     }
 
     return else_stmt;
+}
+
+/// Lower a match expression to a match control flow statement.
+/// Each branch body is lowered as a statement (not an expression), so tail calls
+/// inside `when` branches can be detected and optimized.
+fn lowerMatchToStmt(self: *Self, module_env: *ModuleEnv, match_expr: anytype, ret_layout: LayoutIdx, expr_idx: CIR.Expr.Idx) Allocator.Error!CFStmtId {
+    // Lower the scrutinee
+    const cond = try self.lowerExprFromIdx(module_env, match_expr.cond);
+    const value_layout = self.getExprLayoutFromIdx(module_env, match_expr.cond);
+    const result_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
+
+    // Lower branches — each body is lowered as a CF statement
+    const branch_indices = module_env.store.sliceMatchBranches(match_expr.branches);
+
+    var lowered = std.ArrayList(CFMatchBranch).empty;
+    defer lowered.deinit(self.allocator);
+
+    var has_complex_pattern = false;
+
+    for (branch_indices) |branch_idx| {
+        const branch = module_env.store.getMatchBranch(branch_idx);
+
+        const pattern_indices = module_env.store.sliceMatchBranchPatterns(branch.patterns);
+        if (pattern_indices.len == 0) continue;
+
+        const guard = if (branch.guard) |guard_idx|
+            try self.lowerExprFromIdx(module_env, guard_idx)
+        else
+            MonoExprId.none;
+
+        // Key difference from lowerMatchBranches: lower body as statement, not expression
+        const body = try self.lowerExprToStmt(module_env, branch.value, ret_layout);
+
+        // Flatten OR patterns (one CFMatchBranch per pattern)
+        for (pattern_indices) |pat_idx| {
+            const bp = module_env.store.getMatchBranchPattern(pat_idx);
+            const pattern = try self.lowerPattern(module_env, bp.pattern);
+
+            // Check if this pattern type is supported in CFStmt match_stmt.
+            // Complex patterns (record, tuple, list, as_pattern, str_literal, float_literal)
+            // require full expression-level match handling.
+            switch (self.store.getPattern(pattern)) {
+                .bind, .wildcard, .int_literal, .tag => {},
+                .record, .tuple, .list, .as_pattern, .str_literal, .float_literal => {
+                    has_complex_pattern = true;
+                },
+            }
+
+            try lowered.append(self.allocator, .{
+                .pattern = pattern,
+                .guard = guard,
+                .body = body,
+            });
+        }
+    }
+
+    // If any patterns are complex types not supported by the WASM backend's
+    // generateCFMatchBranches, fall back to expression-level match wrapped in ret.
+    if (has_complex_pattern) {
+        const expr = module_env.store.getExpr(expr_idx);
+        const region = module_env.store.getExprRegion(expr_idx);
+        const expr_id = try self.lowerExprInner(module_env, expr, region, expr_idx);
+        return try self.store.addCFStmt(.{
+            .ret = .{ .value = expr_id },
+        });
+    }
+
+    const branches = try self.store.addCFMatchBranches(lowered.items);
+
+    return try self.store.addCFStmt(.{
+        .match_stmt = .{
+            .value = cond,
+            .value_layout = value_layout,
+            .branches = branches,
+            .ret_layout = result_layout,
+        },
+    });
 }
 
 /// Lower a closure to a complete procedure (MonoProc).

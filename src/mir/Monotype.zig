@@ -35,7 +35,7 @@ pub const Span = extern struct {
     len: u16,
 
     pub fn empty() Span {
-        return .{ .start = undefined, .len = 0 };
+        return .{ .start = 0, .len = 0 };
     }
 
     pub fn isEmpty(self: Span) bool {
@@ -116,7 +116,7 @@ pub const TagSpan = extern struct {
     len: u16,
 
     pub fn empty() TagSpan {
-        return .{ .start = undefined, .len = 0 };
+        return .{ .start = 0, .len = 0 };
     }
 
     pub fn isEmpty(self: TagSpan) bool {
@@ -136,7 +136,7 @@ pub const FieldSpan = extern struct {
     len: u16,
 
     pub fn empty() FieldSpan {
-        return .{ .start = undefined, .len = 0 };
+        return .{ .start = 0, .len = 0 };
     }
 
     pub fn isEmpty(self: FieldSpan) bool {

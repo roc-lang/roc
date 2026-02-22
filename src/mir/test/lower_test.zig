@@ -393,6 +393,7 @@ test "Lower: init and deinit" {
         &module_env.types,
         std.mem.zeroes(CIR.BuiltinIndices),
         0,
+        null,
     );
     defer lower.deinit();
 
@@ -475,16 +476,30 @@ test "lowerExpr: if-else desugars to match" {
     try testing.expect(env.mir_store.getExpr(expr) == .match_expr);
 }
 
-test "lowerExpr: binop callee lookup has function monotype" {
+test "lowerExpr: binop on defaulted numeral dispatches to method call" {
     var env = try MirTestEnv.initExpr("1 + 2");
     defer env.deinit();
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
-    // Binop desugars to a call
+    // Numeric literals default to Dec, so binop dispatches to Dec.plus
     try testing.expect(result == .call);
-    // The callee lookup must have a function monotype, not the call's result type
-    const func_monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(result.call.func));
-    try testing.expect(func_monotype == .func);
+}
+
+test "lowerExpr: unary minus on defaulted numeral dispatches to method call" {
+    // Use a block so that `-x` produces an e_unary_minus (bare `-1` is parsed as a negative literal)
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    x = 1
+        \\    -x
+        \\}
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    // The block's final expression should be the lowered unary minus
+    const block = env.mir_store.getExpr(expr).block;
+    const result = env.mir_store.getExpr(block.final_expr);
+    // Numeric literals default to Dec, so unary minus dispatches to Dec.negate
+    try testing.expect(result == .call);
 }
 
 test "lowerExpr: block with decl_const" {
@@ -651,7 +666,7 @@ test "lowerExternalDef: recursion guard returns lookup placeholder" {
     );
     defer env.deinit();
     const def_info = try env.getDefExprByName("my_val");
-    const symbol = MIR.Symbol{ .module_idx = 0, .ident_idx = def_info.ident_idx };
+    const symbol = MIR.Symbol{ .module_idx = 1, .ident_idx = def_info.ident_idx };
 
     // Manually insert the symbol into in_progress_defs to simulate recursion
     const symbol_key: u64 = @bitCast(symbol);
@@ -661,7 +676,8 @@ test "lowerExternalDef: recursion guard returns lookup placeholder" {
     const expr = env.mir_store.getExpr(result);
     // The recursion guard should return a lookup placeholder
     try testing.expect(expr == .lookup);
-    // The type should be unit_idx (the guard behavior)
+    // Initially unit_idx; in real usage, lowerExternalDef patches this to the
+    // resolved monotype after lowerExpr completes.
     try testing.expectEqual(env.mir_store.monotype_store.unit_idx, env.mir_store.typeOf(result));
 }
 
@@ -671,7 +687,7 @@ test "lowerExternalDef: caching returns same ExprId on second call" {
     );
     defer env.deinit();
     const def_info = try env.getDefExprByName("my_val");
-    const symbol = MIR.Symbol{ .module_idx = 0, .ident_idx = def_info.ident_idx };
+    const symbol = MIR.Symbol{ .module_idx = 1, .ident_idx = def_info.ident_idx };
 
     const first = try env.lower.lowerExternalDef(symbol, def_info.expr_idx);
     const second = try env.lower.lowerExternalDef(symbol, def_info.expr_idx);
@@ -726,4 +742,226 @@ test "cross-module: type module method call lowers successfully" {
     // The expression should lower successfully (not be a runtime error)
     const result = env_b.mir_store.getExpr(expr);
     try testing.expect(result != .runtime_err_type);
+}
+
+// --- Additional Lower code path tests ---
+
+test "lowerExpr: unary not desugars to match" {
+    var env = try MirTestEnv.initFull("Test",
+        \\main : Bool
+        \\main = !True
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    // !True desugars via negBool to: match True { True => False, _ => True }
+    try testing.expect(env.mir_store.getExpr(expr) == .match_expr);
+}
+
+test "lowerExpr: Bool.or short-circuit desugars to match" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    x = True
+        \\    y = False
+        \\    x or y
+        \\}
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .block);
+    try testing.expect(env.mir_store.getExpr(result.block.final_expr) == .match_expr);
+}
+
+test "lowerExpr: != desugars through negBool to match" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    x = 1
+        \\    y = 2
+        \\    x != y
+        \\}
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .block);
+    try testing.expect(env.mir_store.getExpr(result.block.final_expr) == .match_expr);
+}
+
+test "lowerExpr: for loop" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    var $x = 0.I64
+        \\    for item in [1.I64, 2.I64, 3.I64] {
+        \\        $x = item
+        \\    }
+        \\    $x
+        \\}
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .block);
+    // The block should contain a for_loop in its statements
+    // (expression stmts are lowered as `_ = expr`, i.e. decl_const with wildcard)
+    const stmts = env.mir_store.getStmts(result.block.stmts);
+    var found_for = false;
+    for (stmts) |stmt| {
+        switch (stmt) {
+            .decl_const => |dc| {
+                if (env.mir_store.getExpr(dc.expr) == .for_loop) found_for = true;
+            },
+            else => {},
+        }
+    }
+    try testing.expect(found_for);
+}
+
+test "lowerExpr: multi-segment string interpolation produces str_concat" {
+    var env = try MirTestEnv.initFull("Test",
+        \\main = {
+        \\    x = "world"
+        \\    "hello ${x}!"
+        \\}
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .block);
+    // The final expression should be a run_low_level(str_concat, ...) from the left-fold
+    try testing.expect(env.mir_store.getExpr(result.block.final_expr) == .run_low_level);
+}
+
+test "lowerExpr: record destructure pattern in match" {
+    var env = try MirTestEnv.initExpr(
+        \\match { x: 1, y: 2 } { { x, y } => x, _ => 0 }
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    try testing.expect(env.mir_store.getExpr(expr) == .match_expr);
+}
+
+test "lowerExpr: tuple destructure pattern in match" {
+    var env = try MirTestEnv.initExpr(
+        \\match (1, 2) { (a, b) => a, _ => 0 }
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    try testing.expect(env.mir_store.getExpr(expr) == .match_expr);
+}
+
+test "lowerExpr: list destructure pattern in match" {
+    var env = try MirTestEnv.initExpr(
+        \\match [1, 2, 3] { [a, b, c] => a, _ => 0 }
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    try testing.expect(env.mir_store.getExpr(expr) == .match_expr);
+}
+
+test "lowerExpr: match with pattern alternatives preserves all patterns" {
+    var env = try MirTestEnv.initExpr(
+        \\match Ok(1) { Ok(x) | Err(x) => x, _ => 0 }
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .match_expr);
+
+    // The first branch should have 2 patterns (Ok(x) and Err(x))
+    const branches = env.mir_store.getBranches(result.match_expr.branches);
+    try testing.expect(branches.len >= 1);
+    const first_branch_patterns = env.mir_store.getBranchPatterns(branches[0].patterns);
+    try testing.expect(first_branch_patterns.len >= 2);
+}
+
+test "lowerExpr: tuple access" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    t = (1, 2)
+        \\    t.0
+        \\}
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .block);
+    try testing.expect(env.mir_store.getExpr(result.block.final_expr) == .tuple_access);
+}
+
+test "lowerExpr: typed F64 fractional via dot syntax" {
+    var env = try MirTestEnv.initExpr("3.14.F64");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    try testing.expect(env.mir_store.getExpr(expr) == .frac_f64);
+}
+
+test "cross-module: dot-access method call ensures method is lowered" {
+    // Module A defines a nominal type with a method
+    var env_a = try MirTestEnv.initModule("A",
+        \\A := [A(U64)].{
+        \\  get_value : A -> U64
+        \\  get_value = |A.A(val)| val
+        \\}
+    );
+    defer env_a.deinit();
+
+    // Module B imports A and calls a method via dot-access syntax
+    // This exercises lowerDotAccess (not lowerBinop) which was missing ensureMethodLowered
+    var env_b = try MirTestEnv.initWithImport("B",
+        \\import A
+        \\
+        \\main = A.A(42).get_value()
+    , "A", &env_a);
+    defer env_b.deinit();
+
+    const expr = try env_b.lowerFirstDef();
+    const result = env_b.mir_store.getExpr(expr);
+
+    // Should lower successfully (not a runtime error)
+    try testing.expect(result != .runtime_err_type);
+
+    // The result should be a call to a cross-module method
+    try testing.expect(result == .call);
+    const func = env_b.mir_store.getExpr(result.call.func);
+    try testing.expect(func == .lookup);
+    const method_sym = func.lookup;
+
+    // The method is from module A (idx 1), not module B (idx 2)
+    try testing.expect(method_sym.module_idx != 2);
+
+    // The cross-module method body must have been lowered into the MIR store
+    try testing.expect(env_b.mir_store.getSymbolDef(method_sym) != null);
+}
+
+// --- Gap #10: Recursive symbol monotype patching ---
+
+test "lowerExternalDef: mutually recursive defs get monotypes patched (not left as unit)" {
+    var env = try MirTestEnv.initModule("Test",
+        \\is_even : U64 -> Bool
+        \\is_even = |n| if n == 0 True else is_odd(n - 1)
+        \\
+        \\is_odd : U64 -> Bool
+        \\is_odd = |n| if n == 0 False else is_even(n - 1)
+    );
+    defer env.deinit();
+
+    // Lower both defs
+    const even_expr = try env.lowerNamedDef("is_even");
+    const odd_expr = try env.lowerNamedDef("is_odd");
+
+    // Both should lower successfully (not be runtime errors)
+    try testing.expect(env.mir_store.getExpr(even_expr) != .runtime_err_type);
+    try testing.expect(env.mir_store.getExpr(odd_expr) != .runtime_err_type);
+
+    // The monotypes should NOT be left as unit (the recursion placeholder default)
+    const even_type = env.mir_store.typeOf(even_expr);
+    const odd_type = env.mir_store.typeOf(odd_expr);
+    try testing.expect(even_type != env.mir_store.monotype_store.unit_idx);
+    try testing.expect(odd_type != env.mir_store.monotype_store.unit_idx);
+
+    // Both should resolve to func types (U64 -> Bool)
+    const even_mono = env.mir_store.monotype_store.getMonotype(even_type);
+    const odd_mono = env.mir_store.monotype_store.getMonotype(odd_type);
+    try testing.expect(even_mono == .func);
+    try testing.expect(odd_mono == .func);
 }

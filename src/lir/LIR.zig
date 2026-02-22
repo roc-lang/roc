@@ -1,4 +1,4 @@
-//! Monomorphized Intermediate Representation (Mono IR)
+//! Low-level Intermediate Representation (LIR)
 //!
 //! This module defines the IR used after monomorphization and lambda set inference,
 //! before code generation. The key innovation is that all symbol references are
@@ -9,10 +9,10 @@
 //! CIR -> Monomorphization -> Lambda Lifting -> Lambda Set Inference -> ClosureTransformer
 //!                                                                           |
 //!                                                                           v
-//!                                                                   Mono IR Lowering
+//!                                                                      LIR Lowering
 //!                                                                           |
 //!                                                                           v
-//!                                                                       Mono IR
+//!                                                                         LIR
 //!                                                                           |
 //!                                                     +---------------------+---------------------+
 //!                                                     |                                           |
@@ -24,7 +24,7 @@
 //! Key properties:
 //! - All lookups use global Symbol (module_idx + ident_idx) - never module-local indices
 //! - Every expression has concrete type info via layout.Idx - no type variables
-//! - Flat storage in MonoExprStore with MonoExprId indices
+//! - Flat storage in LirExprStore with LirExprId indices
 //! - No scope/bindings system - all references are global symbols
 
 const std = @import("std");
@@ -39,74 +39,85 @@ const CalledVia = base.CalledVia;
 
 pub const Symbol = mir.Symbol;
 
-/// Index into MonoExprStore.exprs
-pub const MonoExprId = enum(u32) {
+/// Index into LirExprStore.exprs
+pub const LirExprId = enum(u32) {
     _,
 
-    pub const none: MonoExprId = @enumFromInt(std.math.maxInt(u32));
+    pub const none: LirExprId = @enumFromInt(std.math.maxInt(u32));
 
-    pub fn isNone(self: MonoExprId) bool {
+    pub fn isNone(self: LirExprId) bool {
         return self == none;
     }
 };
 
-/// Index into MonoExprStore.patterns
-pub const MonoPatternId = enum(u32) {
+/// Index into LirExprStore.closure_data
+pub const ClosureDataId = enum(u32) {
     _,
 
-    pub const none: MonoPatternId = @enumFromInt(std.math.maxInt(u32));
+    pub const none: ClosureDataId = @enumFromInt(std.math.maxInt(u32));
 
-    pub fn isNone(self: MonoPatternId) bool {
+    pub fn isNone(self: ClosureDataId) bool {
+        return self == none;
+    }
+};
+
+/// Index into LirExprStore.patterns
+pub const LirPatternId = enum(u32) {
+    _,
+
+    pub const none: LirPatternId = @enumFromInt(std.math.maxInt(u32));
+
+    pub fn isNone(self: LirPatternId) bool {
         return self == none;
     }
 };
 
 /// Span of expression IDs (for arg lists, record fields, list elements, etc.)
-pub const MonoExprSpan = extern struct {
-    /// Starting index into extra_data where MonoExprIds are stored
+pub const LirExprSpan = extern struct {
+    /// Starting index into extra_data where LirExprIds are stored
     start: u32,
     /// Number of expressions in this span
     len: u16,
 
-    pub fn empty() MonoExprSpan {
+    pub fn empty() LirExprSpan {
         return .{ .start = 0, .len = 0 };
     }
 
-    pub fn isEmpty(self: MonoExprSpan) bool {
+    pub fn isEmpty(self: LirExprSpan) bool {
         return self.len == 0;
     }
 };
 
 /// Span of pattern IDs (for function params, destructuring, etc.)
-pub const MonoPatternSpan = extern struct {
-    /// Starting index into extra_data where MonoPatternIds are stored
+pub const LirPatternSpan = extern struct {
+    /// Starting index into extra_data where LirPatternIds are stored
     start: u32,
     /// Number of patterns in this span
     len: u16,
 
-    pub fn empty() MonoPatternSpan {
+    pub fn empty() LirPatternSpan {
         return .{ .start = 0, .len = 0 };
     }
 
-    pub fn isEmpty(self: MonoPatternSpan) bool {
+    pub fn isEmpty(self: LirPatternSpan) bool {
         return self.len == 0;
     }
 };
 
 /// Span of symbols with their layouts (for closure captures)
-pub const MonoCaptureSpan = extern struct {
+pub const LirCaptureSpan = extern struct {
     /// Starting index into extra_data where capture info is stored
     start: u32,
     /// Number of captures
     len: u16,
 
-    pub fn empty() MonoCaptureSpan {
+    pub fn empty() LirCaptureSpan {
         return .{ .start = 0, .len = 0 };
     }
 };
 
 /// A captured symbol in a closure
-pub const MonoCapture = struct {
+pub const LirCapture = struct {
     symbol: Symbol,
     layout_idx: layout.Idx,
 };
@@ -126,12 +137,12 @@ pub const ClosureRepresentation = union(enum) {
     /// Captures stored largest-alignment-first for memory efficiency.
     struct_captures: struct {
         /// Captures in alignment order (largest first)
-        captures: MonoCaptureSpan,
+        captures: LirCaptureSpan,
         /// Total layout of the capture struct
         struct_layout: layout.Idx,
     },
 
-    /// N functions, 0 captures → single byte tag.
+    /// N functions, 0 captures → small tag (Bool for 2 fns, U8 for 3+).
     /// No payload needed, just Bool (2 fns) or U8 (3+ fns).
     enum_dispatch: struct {
         /// Number of functions in the set
@@ -148,7 +159,7 @@ pub const ClosureRepresentation = union(enum) {
         /// This function's tag value
         tag: u16,
         /// Captures for this variant (may be empty)
-        captures: MonoCaptureSpan,
+        captures: LirCaptureSpan,
         /// Layout of the full union (tag + max payload)
         union_layout: layout.Idx,
         /// All members of the lambda set (for dispatch at call sites)
@@ -160,28 +171,23 @@ pub const ClosureRepresentation = union(enum) {
     direct_call: void,
 };
 
-/// Lambda set - all possible lambdas at a call site.
-/// When a function parameter or variable can hold different closures,
-/// this tracks all the possibilities for dispatch.
-pub const LambdaSet = struct {
-    /// Span into the lambda set members storage
-    members: LambdaSetMemberSpan,
-    /// The representation chosen for this lambda set
-    representation: LambdaSetRepresentation,
-};
-
-/// How a lambda set is represented at runtime
-pub const LambdaSetRepresentation = enum {
-    /// Single function, single capture - unwrapped
-    unwrapped_capture,
-    /// Single function, multiple captures - struct
-    struct_captures,
-    /// Multiple functions, no captures - enum dispatch
-    enum_dispatch,
-    /// Multiple functions, some with captures - tagged union
-    union_repr,
-    /// Direct call, no runtime representation
-    direct_call,
+/// Closure data stored in a side table (LirExprStore.closure_data) to reduce
+/// LirExpr union size. Referenced by ClosureDataId.
+pub const ClosureData = struct {
+    /// Layout of the closure type (includes captures)
+    closure_layout: layout.Idx,
+    /// The underlying lambda expression
+    lambda: LirExprId,
+    /// Captured symbols and their layouts
+    captures: LirCaptureSpan,
+    /// How this closure is represented at runtime
+    representation: ClosureRepresentation,
+    /// Whether this closure is recursive (calls itself)
+    recursion: Recursive,
+    /// Whether this closure captures itself (for recursive closures)
+    self_recursive: SelfRecursive,
+    /// Whether this closure is bound to a variable (vs. used directly as an argument).
+    is_bound_to_variable: bool,
 };
 
 /// A member of a lambda set
@@ -189,9 +195,9 @@ pub const LambdaSetMember = struct {
     /// Global symbol for this lambda (from LambdaSetInference)
     lambda_symbol: Symbol,
     /// Captures for this member
-    captures: MonoCaptureSpan,
+    captures: LirCaptureSpan,
     /// The lambda body expression
-    lambda_body: MonoExprId,
+    lambda_body: LirExprId,
     /// This member's tag in the lambda set (for dispatch)
     tag: u16,
 };
@@ -246,74 +252,86 @@ pub const SelfRecursive = union(enum) {
 };
 
 /// Span of match branches
-pub const MonoMatchBranchSpan = extern struct {
+pub const LirMatchBranchSpan = extern struct {
     start: u32,
     len: u16,
 
-    pub fn empty() MonoMatchBranchSpan {
+    pub fn empty() LirMatchBranchSpan {
         return .{ .start = 0, .len = 0 };
     }
 };
 
 /// A branch in a match expression
-pub const MonoMatchBranch = struct {
+pub const LirMatchBranch = struct {
     /// Pattern to match against
-    pattern: MonoPatternId,
+    pattern: LirPatternId,
     /// Optional guard expression (must evaluate to Bool)
-    guard: MonoExprId,
+    guard: LirExprId,
     /// Expression to evaluate if pattern matches
-    body: MonoExprId,
+    body: LirExprId,
 };
 
 /// Span of if branches
-pub const MonoIfBranchSpan = extern struct {
+pub const LirIfBranchSpan = extern struct {
     start: u32,
     len: u16,
 
-    pub fn empty() MonoIfBranchSpan {
+    pub fn empty() LirIfBranchSpan {
         return .{ .start = 0, .len = 0 };
     }
 
-    pub fn isEmpty(self: MonoIfBranchSpan) bool {
+    pub fn isEmpty(self: LirIfBranchSpan) bool {
         return self.len == 0;
     }
 };
 
 /// A branch in an if expression (condition + body)
-pub const MonoIfBranch = struct {
-    cond: MonoExprId,
-    body: MonoExprId,
+pub const LirIfBranch = struct {
+    cond: LirExprId,
+    body: LirExprId,
 };
 
 /// Span of statements in a block
-pub const MonoStmtSpan = extern struct {
+pub const LirStmtSpan = extern struct {
     start: u32,
     len: u16,
 
-    pub fn empty() MonoStmtSpan {
+    pub fn empty() LirStmtSpan {
         return .{ .start = 0, .len = 0 };
     }
 };
 
-/// A statement in a block (let binding)
-pub const MonoStmt = struct {
-    pattern: MonoPatternId,
-    expr: MonoExprId,
+/// A statement in a block — either a declaration or a mutation of an existing variable.
+/// RC insertion uses the distinction to emit a decref of the old value before mutation.
+pub const LirStmt = union(enum) {
+    decl: Binding,
+    mutate: Binding,
+
+    pub const Binding = struct {
+        pattern: LirPatternId,
+        expr: LirExprId,
+    };
+
+    pub fn binding(self: LirStmt) Binding {
+        return switch (self) {
+            .decl, .mutate => |b| b,
+        };
+    }
 };
 
 /// Span of field names (Ident.Idx) for records
-pub const MonoFieldNameSpan = extern struct {
+pub const LirFieldNameSpan = extern struct {
     start: u32,
     len: u16,
 
-    pub fn empty() MonoFieldNameSpan {
+    pub fn empty() LirFieldNameSpan {
         return .{ .start = 0, .len = 0 };
     }
 };
 
 /// Lowered expression - all types are layouts, all references are global symbols.
 /// This is the core type that backends consume for code generation.
-pub const MonoExpr = union(enum) {
+pub const LirExpr = union(enum) {
     // Layout is implied by the value type
 
     /// Integer literal that fits in i64
@@ -346,11 +364,11 @@ pub const MonoExpr = union(enum) {
     /// Function call
     call: struct {
         /// The function expression (could be a lookup, lambda, closure, etc.)
-        fn_expr: MonoExprId,
+        fn_expr: LirExprId,
         /// Layout of the function/closure type
         fn_layout: layout.Idx,
         /// Arguments to the function
-        args: MonoExprSpan,
+        args: LirExprSpan,
         /// Layout of the return type
         ret_layout: layout.Idx,
         /// How this call was made (for error messages)
@@ -362,30 +380,16 @@ pub const MonoExpr = union(enum) {
         /// Layout of the function type
         fn_layout: layout.Idx,
         /// Parameter patterns
-        params: MonoPatternSpan,
+        params: LirPatternSpan,
         /// Function body
-        body: MonoExprId,
+        body: LirExprId,
         /// Return type layout
         ret_layout: layout.Idx,
     },
 
-    /// Closure (function with captured environment)
-    closure: struct {
-        /// Layout of the closure type (includes captures)
-        closure_layout: layout.Idx,
-        /// The underlying lambda expression
-        lambda: MonoExprId,
-        /// Captured symbols and their layouts
-        captures: MonoCaptureSpan,
-        /// How this closure is represented at runtime
-        representation: ClosureRepresentation,
-        /// Whether this closure is recursive (calls itself)
-        recursion: Recursive,
-        /// Whether this closure captures itself (for recursive closures)
-        self_recursive: SelfRecursive,
-        /// Whether this closure is bound to a variable (vs. used directly as an argument).
-        is_bound_to_variable: bool,
-    },
+    /// Closure (function with captured environment).
+    /// Data stored in LirExprStore.closure_data side table to reduce LirExpr size.
+    closure: ClosureDataId,
 
     /// Empty list `[]`
     empty_list: struct {
@@ -395,7 +399,7 @@ pub const MonoExpr = union(enum) {
     /// List with elements
     list: struct {
         elem_layout: layout.Idx,
-        elems: MonoExprSpan,
+        elems: LirExprSpan,
     },
 
     /// Empty record `{}`
@@ -404,20 +408,20 @@ pub const MonoExpr = union(enum) {
     /// Record with fields (fields are in sorted order by field name)
     record: struct {
         record_layout: layout.Idx,
-        fields: MonoExprSpan,
+        fields: LirExprSpan,
         /// Field names in the same order as fields (for compile-time lookup)
-        field_names: MonoFieldNameSpan,
+        field_names: LirFieldNameSpan,
     },
 
     /// Tuple
     tuple: struct {
         tuple_layout: layout.Idx,
-        elems: MonoExprSpan,
+        elems: LirExprSpan,
     },
 
     /// Record field access by index
     field_access: struct {
-        record_expr: MonoExprId,
+        record_expr: LirExprId,
         record_layout: layout.Idx,
         field_layout: layout.Idx,
         /// Field index within the record layout (for runtime access)
@@ -428,7 +432,7 @@ pub const MonoExpr = union(enum) {
 
     /// Tuple element access by index
     tuple_access: struct {
-        tuple_expr: MonoExprId,
+        tuple_expr: LirExprId,
         tuple_layout: layout.Idx,
         elem_layout: layout.Idx,
         /// Element index (0-based)
@@ -445,77 +449,80 @@ pub const MonoExpr = union(enum) {
     tag: struct {
         discriminant: u16,
         union_layout: layout.Idx,
-        args: MonoExprSpan,
+        args: LirExprSpan,
     },
 
     /// If-then-else expression
     if_then_else: struct {
-        branches: MonoIfBranchSpan,
-        final_else: MonoExprId,
+        branches: LirIfBranchSpan,
+        final_else: LirExprId,
         result_layout: layout.Idx,
     },
 
     /// Match expression
     match_expr: struct {
         /// Value being matched
-        value: MonoExprId,
+        value: LirExprId,
         value_layout: layout.Idx,
         /// Branches to try
-        branches: MonoMatchBranchSpan,
+        branches: LirMatchBranchSpan,
         result_layout: layout.Idx,
     },
 
     /// Block with statements and final expression
     block: struct {
-        stmts: MonoStmtSpan,
-        final_expr: MonoExprId,
+        stmts: LirStmtSpan,
+        final_expr: LirExprId,
         result_layout: layout.Idx,
     },
 
     /// Early return from a block
     early_return: struct {
-        expr: MonoExprId,
+        expr: LirExprId,
         ret_layout: layout.Idx,
     },
+
+    /// Break out of the enclosing loop (for_loop or while_loop)
+    break_expr: void,
 
     /// Binary operation (specialized, not a method call)
     binop: struct {
         op: BinOp,
-        lhs: MonoExprId,
-        rhs: MonoExprId,
+        lhs: LirExprId,
+        rhs: LirExprId,
         result_layout: layout.Idx,
         operand_layout: layout.Idx,
     },
 
     /// Unary minus/negation
     unary_minus: struct {
-        expr: MonoExprId,
+        expr: LirExprId,
         result_layout: layout.Idx,
     },
 
     /// Unary not (boolean negation)
     unary_not: struct {
-        expr: MonoExprId,
+        expr: LirExprId,
     },
 
     /// Low-level builtin operation
     low_level: struct {
         op: LowLevel,
-        args: MonoExprSpan,
+        args: LirExprSpan,
         ret_layout: layout.Idx,
     },
 
     /// Debug expression (prints and returns value)
     dbg: struct {
         msg: StringLiteral.Idx,
-        expr: MonoExprId,
+        expr: LirExprId,
         result_layout: layout.Idx,
     },
 
     /// Expect expression (assertion)
     expect: struct {
-        cond: MonoExprId,
-        body: MonoExprId,
+        cond: LirExprId,
+        body: LirExprId,
         result_layout: layout.Idx,
     },
 
@@ -529,40 +536,42 @@ pub const MonoExpr = union(enum) {
 
     /// Nominal wrapper (transparent at runtime)
     nominal: struct {
-        backing_expr: MonoExprId,
+        backing_expr: LirExprId,
         nominal_layout: layout.Idx,
     },
 
     /// Concatenate multiple strings into one
     /// Used by str_inspekt to build output strings
-    str_concat: MonoExprSpan,
+    str_concat: LirExprSpan,
 
     /// Format integer as string
     int_to_str: struct {
-        value: MonoExprId,
+        value: LirExprId,
         int_precision: types.Int.Precision,
     },
 
     /// Format float as string
     float_to_str: struct {
-        value: MonoExprId,
+        value: LirExprId,
         float_precision: types.Frac.Precision,
     },
 
     /// Format decimal as string
-    dec_to_str: MonoExprId,
+    dec_to_str: LirExprId,
 
     /// Escape and quote a string for inspect output (adds surrounding quotes, escapes special chars)
-    str_escape_and_quote: MonoExprId,
+    str_escape_and_quote: LirExprId,
 
     /// Switch on discriminant value and produce the corresponding branch result
     discriminant_switch: struct {
         /// Expression that produces the value to switch on
-        value: MonoExprId,
+        value: LirExprId,
         /// Layout of the tag union (to determine discriminant location)
         union_layout: layout.Idx,
         /// One expression per variant, indexed by discriminant value
-        branches: MonoExprSpan,
+        branches: LirExprSpan,
+        /// Layout of the result produced by each branch
+        result_layout: layout.Idx,
     },
 
     /// Extract the payload from a tag union value.
@@ -570,7 +579,7 @@ pub const MonoExpr = union(enum) {
     /// The payload is always at offset 0 in the tag union memory.
     tag_payload_access: struct {
         /// Expression that produces the tag union value
-        value: MonoExprId,
+        value: LirExprId,
         /// Layout of the tag union
         union_layout: layout.Idx,
         /// Layout of the payload to extract
@@ -582,13 +591,13 @@ pub const MonoExpr = union(enum) {
     /// Returns empty record (unit) after all iterations
     for_loop: struct {
         /// The list to iterate over
-        list_expr: MonoExprId,
+        list_expr: LirExprId,
         /// Layout of list elements
         elem_layout: layout.Idx,
         /// Pattern to bind each element to
-        elem_pattern: MonoPatternId,
+        elem_pattern: LirPatternId,
         /// Body expression to execute for each element
-        body: MonoExprId,
+        body: LirExprId,
     },
 
     /// While loop
@@ -596,16 +605,16 @@ pub const MonoExpr = union(enum) {
     /// Returns empty record (unit) after loop completes
     while_loop: struct {
         /// Condition expression (must return Bool)
-        cond: MonoExprId,
+        cond: LirExprId,
         /// Body expression (typically a block with statements and reassignments)
-        body: MonoExprId,
+        body: LirExprId,
     },
 
     /// Increment reference count of a refcounted value
     /// If the value has static refcount (isize::MIN), this is a no-op
     incref: struct {
         /// The refcounted value to increment
-        value: MonoExprId,
+        value: LirExprId,
         /// Layout of the value (to determine RC strategy)
         layout_idx: layout.Idx,
         /// Number of increments (usually 1, but can be more for multiple uses)
@@ -617,7 +626,7 @@ pub const MonoExpr = union(enum) {
     /// If the value has static refcount (isize::MIN), this is a no-op
     decref: struct {
         /// The refcounted value to decrement
-        value: MonoExprId,
+        value: LirExprId,
         /// Layout of the value (to determine RC strategy and deallocation)
         layout_idx: layout.Idx,
     },
@@ -626,7 +635,7 @@ pub const MonoExpr = union(enum) {
     /// Used by the optimizer when it can prove the value is unused
     free: struct {
         /// The value to deallocate
-        value: MonoExprId,
+        value: LirExprId,
         /// Layout of the value (to determine deallocation strategy)
         layout_idx: layout.Idx,
     },
@@ -638,7 +647,7 @@ pub const MonoExpr = union(enum) {
         /// Index into the RocOps.hosted_fns.fns array
         index: u32,
         /// Arguments to pass (marshaled to args buffer)
-        args: MonoExprSpan,
+        args: LirExprSpan,
         /// Layout of the return type
         ret_layout: layout.Idx,
     },
@@ -652,6 +661,12 @@ pub const MonoExpr = union(enum) {
         div,
         div_trunc, // Truncating division (integer division)
         rem, // Remainder (truncates toward zero, like C's %)
+        mod, // Modulo (result has sign of divisor, like Python's %)
+
+        // Bitwise shifts
+        shl, // Shift left
+        shr, // Arithmetic shift right (sign-extending)
+        shr_zf, // Logical shift right (zero-filling)
 
         // Comparison
         eq,
@@ -695,6 +710,7 @@ pub const MonoExpr = union(enum) {
         str_with_ascii_uppercased,
         str_with_prefix,
         str_from_utf8_lossy,
+        str_inspekt,
 
         // List operations
         list_len,
@@ -718,6 +734,9 @@ pub const MonoExpr = union(enum) {
         list_repeat,
         list_split_first,
         list_split_last,
+        list_sort_with,
+        list_drop_at,
+        list_sublist,
 
         // Numeric operations
         num_add,
@@ -736,6 +755,11 @@ pub const MonoExpr = union(enum) {
         num_to_str,
         num_from_str,
         num_from_numeral,
+        num_is_zero,
+        num_abs_diff,
+        num_shift_left_by,
+        num_shift_right_by,
+        num_shift_right_zf_by,
 
         // Numeric conversion operations (U8)
         u8_to_i8_wrap,
@@ -1023,7 +1047,7 @@ pub const MonoExpr = union(enum) {
 
 /// Lowered pattern - simplified for runtime matching.
 /// Unlike CIR patterns, these focus on what's needed for actual matching.
-pub const MonoPattern = union(enum) {
+pub const LirPattern = union(enum) {
     /// Bind to a symbol (always matches)
     bind: struct {
         symbol: Symbol,
@@ -1059,37 +1083,39 @@ pub const MonoPattern = union(enum) {
         discriminant: u16,
         union_layout: layout.Idx,
         /// Patterns for tag arguments (if any)
-        args: MonoPatternSpan,
+        args: LirPatternSpan,
     },
 
     /// Destructure a record
     record: struct {
         record_layout: layout.Idx,
         /// Pattern for each field, in layout order
-        fields: MonoPatternSpan,
+        fields: LirPatternSpan,
     },
 
     /// Destructure a tuple
     tuple: struct {
         tuple_layout: layout.Idx,
         /// Pattern for each element
-        elems: MonoPatternSpan,
+        elems: LirPatternSpan,
     },
 
-    /// Destructure a list with known prefix and optional rest
+    /// Destructure a list with known prefix, optional rest, and suffix
     list: struct {
         elem_layout: layout.Idx,
-        /// Patterns for known prefix elements
-        prefix: MonoPatternSpan,
+        /// Patterns for known prefix elements (before ..)
+        prefix: LirPatternSpan,
         /// Pattern for remaining elements (as a list), or none
-        rest: MonoPatternId,
+        rest: LirPatternId,
+        /// Patterns for known suffix elements (after ..)
+        suffix: LirPatternSpan,
     },
 
     /// As-pattern: bind and also match inner pattern
     as_pattern: struct {
         symbol: Symbol,
         layout_idx: layout.Idx,
-        inner: MonoPatternId,
+        inner: LirPatternId,
     },
 };
 
@@ -1145,9 +1171,9 @@ pub const CFSwitchBranchSpan = extern struct {
 /// A branch in a control flow match statement (pattern matching)
 pub const CFMatchBranch = struct {
     /// The pattern to match against
-    pattern: MonoPatternId,
-    /// Optional guard expression (MonoExprId.none if no guard)
-    guard: MonoExprId,
+    pattern: LirPatternId,
+    /// Optional guard expression (LirExprId.none if no guard)
+    guard: LirExprId,
     /// The statement body for this branch
     body: CFStmtId,
 };
@@ -1176,8 +1202,8 @@ pub const CFStmt = union(enum) {
     /// Let binding: let pattern = expr in next
     /// The fundamental statement that binds a value and continues
     let_stmt: struct {
-        pattern: MonoPatternId,
-        value: MonoExprId,
+        pattern: LirPatternId,
+        value: LirExprId,
         next: CFStmtId,
     },
 
@@ -1190,7 +1216,7 @@ pub const CFStmt = union(enum) {
         /// Unique identifier for this join point
         id: JoinPointId,
         /// Parameters that get rebound on each jump
-        params: MonoPatternSpan,
+        params: LirPatternSpan,
         /// Layout of each parameter
         param_layouts: LayoutIdxSpan,
         /// The body (executed when jumped to)
@@ -1205,24 +1231,24 @@ pub const CFStmt = union(enum) {
         /// The join point to jump to
         target: JoinPointId,
         /// Arguments to pass (will be bound to join point params)
-        args: MonoExprSpan,
+        args: LirExprSpan,
     },
 
     /// Return a value (function exit)
     ret: struct {
-        value: MonoExprId,
+        value: LirExprId,
     },
 
     /// Expression statement (for side effects or intermediate computation)
     expr_stmt: struct {
-        value: MonoExprId,
+        value: LirExprId,
         next: CFStmtId,
     },
 
     /// Switch/match statement (for conditional control flow)
     switch_stmt: struct {
         /// Condition expression to switch on
-        cond: MonoExprId,
+        cond: LirExprId,
         /// Layout of the condition
         cond_layout: layout.Idx,
         /// Branches for specific values
@@ -1236,7 +1262,7 @@ pub const CFStmt = union(enum) {
     /// Pattern match statement (for `when` expressions in tail position)
     match_stmt: struct {
         /// The value being matched
-        value: MonoExprId,
+        value: LirExprId,
         /// Layout of the value being matched
         value_layout: layout.Idx,
         /// Pattern match branches
@@ -1252,11 +1278,11 @@ pub const CFStmt = union(enum) {
 /// Key insight: procedures are compiled as complete units BEFORE any
 /// calls to them are processed. This ensures the function is fully
 /// defined (including RET instruction) before recursion can occur.
-pub const MonoProc = struct {
+pub const LirProc = struct {
     /// The symbol this procedure is bound to
     name: Symbol,
     /// Parameter patterns
-    args: MonoPatternSpan,
+    args: LirPatternSpan,
     /// Layout of each argument
     arg_layouts: LayoutIdxSpan,
     /// The procedure body as a control flow statement
@@ -1287,12 +1313,12 @@ test "Symbol equality" {
     try std.testing.expect(!sym1.eql(sym3));
 }
 
-test "MonoExprId none check" {
-    const id: MonoExprId = .none;
+test "LirExprId none check" {
+    const id: LirExprId = .none;
     try std.testing.expect(id.isNone());
 
     // Use index 1 instead of 0 to avoid lint about placeholder values
     // Any non-maxInt value is valid, so 1 works just as well as 0 for this test
-    const valid: MonoExprId = @enumFromInt(1);
+    const valid: LirExprId = @enumFromInt(1);
     try std.testing.expect(!valid.isNone());
 }

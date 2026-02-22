@@ -1872,7 +1872,7 @@ pub fn getRecordField(store: *const NodeStore, field_idx: AST.RecordField.Idx) A
     };
 }
 
-/// Retrieves when branch data from a stored when branch node.
+/// Retrieves match branch data from a stored match branch node.
 pub fn getBranch(store: *const NodeStore, branch_idx: AST.MatchBranch.Idx) AST.MatchBranch {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(branch_idx)));
     return .{

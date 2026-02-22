@@ -1,10 +1,10 @@
-//! Flat storage for Mono IR expressions and patterns.
+//! Flat storage for LIR expressions and patterns.
 //!
 //! This store is the single source of truth for all lowered expressions.
 //! Both the dev backend and LLVM backend consume it for code generation.
 //!
 //! Design principles:
-//! - Flat arrays indexed by ID types (MonoExprId, MonoPatternId)
+//! - Flat arrays indexed by ID types (LirExprId, LirPatternId)
 //! - Extra data array for variable-length spans (args, fields, captures, etc.)
 //! - Regions stored in parallel for error messages
 //! - No pointers - everything is indices for serialization safety
@@ -13,27 +13,29 @@ const std = @import("std");
 const base = @import("base");
 const layout = @import("layout");
 
-const ir = @import("MonoIR.zig");
+const ir = @import("LIR.zig");
 
 const Region = base.Region;
 const Allocator = std.mem.Allocator;
 
-const MonoExpr = ir.MonoExpr;
-const MonoPattern = ir.MonoPattern;
-const MonoExprId = ir.MonoExprId;
-const MonoPatternId = ir.MonoPatternId;
-const MonoExprSpan = ir.MonoExprSpan;
-const MonoPatternSpan = ir.MonoPatternSpan;
-const MonoCaptureSpan = ir.MonoCaptureSpan;
-const MonoCapture = ir.MonoCapture;
-const MonoMatchBranch = ir.MonoMatchBranch;
-const MonoMatchBranchSpan = ir.MonoMatchBranchSpan;
+const LirExpr = ir.LirExpr;
+const LirPattern = ir.LirPattern;
+const LirExprId = ir.LirExprId;
+const LirPatternId = ir.LirPatternId;
+const LirExprSpan = ir.LirExprSpan;
+const LirPatternSpan = ir.LirPatternSpan;
+const LirCaptureSpan = ir.LirCaptureSpan;
+const LirCapture = ir.LirCapture;
+const ClosureData = ir.ClosureData;
+const ClosureDataId = ir.ClosureDataId;
+const LirMatchBranch = ir.LirMatchBranch;
+const LirMatchBranchSpan = ir.LirMatchBranchSpan;
 const LambdaSetMember = ir.LambdaSetMember;
 const LambdaSetMemberSpan = ir.LambdaSetMemberSpan;
-const MonoIfBranch = ir.MonoIfBranch;
-const MonoIfBranchSpan = ir.MonoIfBranchSpan;
-const MonoStmt = ir.MonoStmt;
-const MonoStmtSpan = ir.MonoStmtSpan;
+const LirIfBranch = ir.LirIfBranch;
+const LirIfBranchSpan = ir.LirIfBranchSpan;
+const LirStmt = ir.LirStmt;
+const LirStmtSpan = ir.LirStmtSpan;
 const Symbol = ir.Symbol;
 
 // Control flow statement types (for tail recursion)
@@ -44,37 +46,40 @@ const CFSwitchBranchSpan = ir.CFSwitchBranchSpan;
 const CFMatchBranch = ir.CFMatchBranch;
 const CFMatchBranchSpan = ir.CFMatchBranchSpan;
 const LayoutIdxSpan = ir.LayoutIdxSpan;
-const MonoProc = ir.MonoProc;
+const LirProc = ir.LirProc;
 
 const Self = @This();
 
 /// All expressions in the store
-exprs: std.ArrayList(MonoExpr),
+exprs: std.ArrayList(LirExpr),
 
 /// Source regions for each expression (parallel to exprs, for error messages)
 expr_regions: std.ArrayList(Region),
 
 /// All patterns in the store
-patterns: std.ArrayList(MonoPattern),
+patterns: std.ArrayList(LirPattern),
 
 /// Source regions for each pattern (parallel to patterns)
 pattern_regions: std.ArrayList(Region),
 
 /// Extra data storage for variable-length spans
-/// Stores: MonoExprId[], MonoPatternId[], MonoCapture[], MonoMatchBranch[], etc.
+/// Stores: LirExprId[], LirPatternId[], LirCapture[], LirMatchBranch[], etc.
 extra_data: std.ArrayList(u32),
 
 /// Match branches (stored separately for better alignment)
-match_branches: std.ArrayList(MonoMatchBranch),
+match_branches: std.ArrayList(LirMatchBranch),
 
 /// If branches
-if_branches: std.ArrayList(MonoIfBranch),
+if_branches: std.ArrayList(LirIfBranch),
 
 /// Statements (let bindings in blocks)
-stmts: std.ArrayList(MonoStmt),
+stmts: std.ArrayList(LirStmt),
 
 /// Captures (symbols captured by closures)
-captures: std.ArrayList(MonoCapture),
+captures: std.ArrayList(LirCapture),
+
+/// Closure data (side table to reduce LirExpr union size)
+closure_data: std.ArrayList(ClosureData),
 
 /// Lambda set members (for closure dispatch)
 lambda_set_members: std.ArrayList(LambdaSetMember),
@@ -89,11 +94,11 @@ cf_switch_branches: std.ArrayList(CFSwitchBranch),
 cf_match_branches: std.ArrayList(CFMatchBranch),
 
 /// Complete procedures (for two-pass compilation)
-procs: std.ArrayList(MonoProc),
+procs: std.ArrayList(LirProc),
 
 /// Map from global symbol to its definition expression
 /// Used for looking up top-level definitions
-symbol_defs: std.AutoHashMap(u64, MonoExprId),
+symbol_defs: std.AutoHashMap(u64, LirExprId),
 
 /// String literal store for strings generated during lowering (e.g., by str_inspekt)
 /// This allows us to add new string literals without needing mutable module envs.
@@ -102,24 +107,25 @@ strings: base.StringLiteral.Store,
 /// Allocator used for this store
 allocator: Allocator,
 
-/// Initialize an empty MonoExprStore
+/// Initialize an empty LirExprStore
 pub fn init(allocator: Allocator) Self {
     return .{
-        .exprs = std.ArrayList(MonoExpr).empty,
+        .exprs = std.ArrayList(LirExpr).empty,
         .expr_regions = std.ArrayList(Region).empty,
-        .patterns = std.ArrayList(MonoPattern).empty,
+        .patterns = std.ArrayList(LirPattern).empty,
         .pattern_regions = std.ArrayList(Region).empty,
         .extra_data = std.ArrayList(u32).empty,
-        .match_branches = std.ArrayList(MonoMatchBranch).empty,
-        .if_branches = std.ArrayList(MonoIfBranch).empty,
-        .stmts = std.ArrayList(MonoStmt).empty,
-        .captures = std.ArrayList(MonoCapture).empty,
+        .match_branches = std.ArrayList(LirMatchBranch).empty,
+        .if_branches = std.ArrayList(LirIfBranch).empty,
+        .stmts = std.ArrayList(LirStmt).empty,
+        .captures = std.ArrayList(LirCapture).empty,
+        .closure_data = std.ArrayList(ClosureData).empty,
         .lambda_set_members = std.ArrayList(LambdaSetMember).empty,
         .cf_stmts = std.ArrayList(CFStmt).empty,
         .cf_switch_branches = std.ArrayList(CFSwitchBranch).empty,
         .cf_match_branches = std.ArrayList(CFMatchBranch).empty,
-        .procs = std.ArrayList(MonoProc).empty,
-        .symbol_defs = std.AutoHashMap(u64, MonoExprId).init(allocator),
+        .procs = std.ArrayList(LirProc).empty,
+        .symbol_defs = std.AutoHashMap(u64, LirExprId).init(allocator),
         .strings = base.StringLiteral.Store{},
         .allocator = allocator,
     };
@@ -148,6 +154,7 @@ pub fn deinit(self: *Self) void {
     self.if_branches.deinit(self.allocator);
     self.stmts.deinit(self.allocator);
     self.captures.deinit(self.allocator);
+    self.closure_data.deinit(self.allocator);
     self.lambda_set_members.deinit(self.allocator);
     self.cf_stmts.deinit(self.allocator);
     self.cf_switch_branches.deinit(self.allocator);
@@ -158,56 +165,66 @@ pub fn deinit(self: *Self) void {
 }
 
 /// Add an expression and return its ID
-pub fn addExpr(self: *Self, expr: MonoExpr, region: Region) Allocator.Error!MonoExprId {
+pub fn addExpr(self: *Self, expr: LirExpr, region: Region) Allocator.Error!LirExprId {
     const idx = self.exprs.items.len;
-    try self.exprs.append(self.allocator, expr);
-    try self.expr_regions.append(self.allocator, region);
+    try self.exprs.ensureUnusedCapacity(self.allocator, 1);
+    try self.expr_regions.ensureUnusedCapacity(self.allocator, 1);
+    self.exprs.appendAssumeCapacity(expr);
+    self.expr_regions.appendAssumeCapacity(region);
     return @enumFromInt(@as(u32, @intCast(idx)));
 }
 
 /// Get an expression by ID
-pub fn getExpr(self: *const Self, id: MonoExprId) MonoExpr {
+pub fn getExpr(self: *const Self, id: LirExprId) LirExpr {
+    std.debug.assert(!id.isNone());
     return self.exprs.items[@intFromEnum(id)];
 }
 
 /// Get the source region for an expression (for error messages)
-pub fn getExprRegion(self: *const Self, id: MonoExprId) Region {
+pub fn getExprRegion(self: *const Self, id: LirExprId) Region {
+    std.debug.assert(!id.isNone());
     return self.expr_regions.items[@intFromEnum(id)];
 }
 
 /// Get a mutable reference to an expression (for patching during lowering)
-pub fn getExprPtr(self: *Self, id: MonoExprId) *MonoExpr {
+pub fn getExprPtr(self: *Self, id: LirExprId) *LirExpr {
+    std.debug.assert(!id.isNone());
     return &self.exprs.items[@intFromEnum(id)];
 }
 
 /// Add a pattern and return its ID
-pub fn addPattern(self: *Self, pattern: MonoPattern, region: Region) Allocator.Error!MonoPatternId {
+pub fn addPattern(self: *Self, pattern: LirPattern, region: Region) Allocator.Error!LirPatternId {
     const idx = self.patterns.items.len;
-    try self.patterns.append(self.allocator, pattern);
-    try self.pattern_regions.append(self.allocator, region);
+    try self.patterns.ensureUnusedCapacity(self.allocator, 1);
+    try self.pattern_regions.ensureUnusedCapacity(self.allocator, 1);
+    self.patterns.appendAssumeCapacity(pattern);
+    self.pattern_regions.appendAssumeCapacity(region);
     return @enumFromInt(@as(u32, @intCast(idx)));
 }
 
 /// Get a pattern by ID
-pub fn getPattern(self: *const Self, id: MonoPatternId) MonoPattern {
+pub fn getPattern(self: *const Self, id: LirPatternId) LirPattern {
+    std.debug.assert(!id.isNone());
     return self.patterns.items[@intFromEnum(id)];
 }
 
 /// Get the source region for a pattern
-pub fn getPatternRegion(self: *const Self, id: MonoPatternId) Region {
+pub fn getPatternRegion(self: *const Self, id: LirPatternId) Region {
+    std.debug.assert(!id.isNone());
     return self.pattern_regions.items[@intFromEnum(id)];
 }
 
 /// Add a span of expression IDs and return the span descriptor
-pub fn addExprSpan(self: *Self, expr_ids: []const MonoExprId) Allocator.Error!MonoExprSpan {
+pub fn addExprSpan(self: *Self, expr_ids: []const LirExprId) Allocator.Error!LirExprSpan {
     if (expr_ids.len == 0) {
-        return MonoExprSpan.empty();
+        return LirExprSpan.empty();
     }
 
     const start = @as(u32, @intCast(self.extra_data.items.len));
 
+    try self.extra_data.ensureUnusedCapacity(self.allocator, expr_ids.len);
     for (expr_ids) |id| {
-        try self.extra_data.append(self.allocator, @intFromEnum(id));
+        self.extra_data.appendAssumeCapacity(@intFromEnum(id));
     }
 
     return .{
@@ -217,22 +234,23 @@ pub fn addExprSpan(self: *Self, expr_ids: []const MonoExprId) Allocator.Error!Mo
 }
 
 /// Get expression IDs from a span
-pub fn getExprSpan(self: *const Self, span: MonoExprSpan) []const MonoExprId {
+pub fn getExprSpan(self: *const Self, span: LirExprSpan) []const LirExprId {
     if (span.len == 0) return &.{};
     const slice = self.extra_data.items[span.start..][0..span.len];
     return @ptrCast(slice);
 }
 
 /// Add a span of pattern IDs
-pub fn addPatternSpan(self: *Self, pattern_ids: []const MonoPatternId) Allocator.Error!MonoPatternSpan {
+pub fn addPatternSpan(self: *Self, pattern_ids: []const LirPatternId) Allocator.Error!LirPatternSpan {
     if (pattern_ids.len == 0) {
-        return MonoPatternSpan.empty();
+        return LirPatternSpan.empty();
     }
 
     const start = @as(u32, @intCast(self.extra_data.items.len));
 
+    try self.extra_data.ensureUnusedCapacity(self.allocator, pattern_ids.len);
     for (pattern_ids) |id| {
-        try self.extra_data.append(self.allocator, @intFromEnum(id));
+        self.extra_data.appendAssumeCapacity(@intFromEnum(id));
     }
 
     return .{
@@ -242,22 +260,23 @@ pub fn addPatternSpan(self: *Self, pattern_ids: []const MonoPatternId) Allocator
 }
 
 /// Get pattern IDs from a span
-pub fn getPatternSpan(self: *const Self, span: MonoPatternSpan) []const MonoPatternId {
+pub fn getPatternSpan(self: *const Self, span: LirPatternSpan) []const LirPatternId {
     if (span.len == 0) return &.{};
     const slice = self.extra_data.items[span.start..][0..span.len];
     return @ptrCast(slice);
 }
 
 /// Add a span of field names (Ident.Idx)
-pub fn addFieldNameSpan(self: *Self, field_names: []const base.Ident.Idx) Allocator.Error!ir.MonoFieldNameSpan {
+pub fn addFieldNameSpan(self: *Self, field_names: []const base.Ident.Idx) Allocator.Error!ir.LirFieldNameSpan {
     if (field_names.len == 0) {
-        return ir.MonoFieldNameSpan.empty();
+        return ir.LirFieldNameSpan.empty();
     }
 
     const start = @as(u32, @intCast(self.extra_data.items.len));
 
+    try self.extra_data.ensureUnusedCapacity(self.allocator, field_names.len);
     for (field_names) |name| {
-        try self.extra_data.append(self.allocator, @bitCast(name));
+        self.extra_data.appendAssumeCapacity(@bitCast(name));
     }
 
     return .{
@@ -267,16 +286,16 @@ pub fn addFieldNameSpan(self: *Self, field_names: []const base.Ident.Idx) Alloca
 }
 
 /// Get field names from a span
-pub fn getFieldNameSpan(self: *const Self, span: ir.MonoFieldNameSpan) []const base.Ident.Idx {
+pub fn getFieldNameSpan(self: *const Self, span: ir.LirFieldNameSpan) []const base.Ident.Idx {
     if (span.len == 0) return &.{};
     const slice = self.extra_data.items[span.start..][0..span.len];
     return @ptrCast(slice);
 }
 
 /// Add match branches and return a span
-pub fn addMatchBranches(self: *Self, branches: []const MonoMatchBranch) Allocator.Error!MonoMatchBranchSpan {
+pub fn addMatchBranches(self: *Self, branches: []const LirMatchBranch) Allocator.Error!LirMatchBranchSpan {
     if (branches.len == 0) {
-        return MonoMatchBranchSpan.empty();
+        return LirMatchBranchSpan.empty();
     }
 
     const start = @as(u32, @intCast(self.match_branches.items.len));
@@ -289,15 +308,15 @@ pub fn addMatchBranches(self: *Self, branches: []const MonoMatchBranch) Allocato
 }
 
 /// Get match branches from a span
-pub fn getMatchBranches(self: *const Self, span: MonoMatchBranchSpan) []const MonoMatchBranch {
+pub fn getMatchBranches(self: *const Self, span: LirMatchBranchSpan) []const LirMatchBranch {
     if (span.len == 0) return &.{};
     return self.match_branches.items[span.start..][0..span.len];
 }
 
 /// Add if branches and return a span
-pub fn addIfBranches(self: *Self, branches: []const MonoIfBranch) Allocator.Error!MonoIfBranchSpan {
+pub fn addIfBranches(self: *Self, branches: []const LirIfBranch) Allocator.Error!LirIfBranchSpan {
     if (branches.len == 0) {
-        return MonoIfBranchSpan.empty();
+        return LirIfBranchSpan.empty();
     }
 
     const start = @as(u32, @intCast(self.if_branches.items.len));
@@ -310,15 +329,15 @@ pub fn addIfBranches(self: *Self, branches: []const MonoIfBranch) Allocator.Erro
 }
 
 /// Get if branches from a span
-pub fn getIfBranches(self: *const Self, span: MonoIfBranchSpan) []const MonoIfBranch {
+pub fn getIfBranches(self: *const Self, span: LirIfBranchSpan) []const LirIfBranch {
     if (span.len == 0) return &.{};
     return self.if_branches.items[span.start..][0..span.len];
 }
 
 /// Add statements (let bindings) and return a span
-pub fn addStmts(self: *Self, statements: []const MonoStmt) Allocator.Error!MonoStmtSpan {
+pub fn addStmts(self: *Self, statements: []const LirStmt) Allocator.Error!LirStmtSpan {
     if (statements.len == 0) {
-        return MonoStmtSpan.empty();
+        return LirStmtSpan.empty();
     }
 
     const start = @as(u32, @intCast(self.stmts.items.len));
@@ -331,15 +350,15 @@ pub fn addStmts(self: *Self, statements: []const MonoStmt) Allocator.Error!MonoS
 }
 
 /// Get statements from a span
-pub fn getStmts(self: *const Self, span: MonoStmtSpan) []const MonoStmt {
+pub fn getStmts(self: *const Self, span: LirStmtSpan) []const LirStmt {
     if (span.len == 0) return &.{};
     return self.stmts.items[span.start..][0..span.len];
 }
 
 /// Add captures and return a span
-pub fn addCaptures(self: *Self, capture_list: []const MonoCapture) Allocator.Error!MonoCaptureSpan {
+pub fn addCaptures(self: *Self, capture_list: []const LirCapture) Allocator.Error!LirCaptureSpan {
     if (capture_list.len == 0) {
-        return MonoCaptureSpan.empty();
+        return LirCaptureSpan.empty();
     }
 
     const start = @as(u32, @intCast(self.captures.items.len));
@@ -352,9 +371,22 @@ pub fn addCaptures(self: *Self, capture_list: []const MonoCapture) Allocator.Err
 }
 
 /// Get captures from a span
-pub fn getCaptures(self: *const Self, span: MonoCaptureSpan) []const MonoCapture {
+pub fn getCaptures(self: *const Self, span: LirCaptureSpan) []const LirCapture {
     if (span.len == 0) return &.{};
     return self.captures.items[span.start..][0..span.len];
+}
+
+/// Add closure data to the side table and return its ID
+pub fn addClosureData(self: *Self, data: ClosureData) Allocator.Error!ClosureDataId {
+    const idx = self.closure_data.items.len;
+    try self.closure_data.append(self.allocator, data);
+    return @enumFromInt(@as(u32, @intCast(idx)));
+}
+
+/// Get closure data by ID
+pub fn getClosureData(self: *const Self, id: ClosureDataId) ClosureData {
+    std.debug.assert(!id.isNone());
+    return self.closure_data.items[@intFromEnum(id)];
 }
 
 /// Add lambda set members and return a span
@@ -379,12 +411,13 @@ pub fn getLambdaSetMembers(self: *const Self, span: LambdaSetMemberSpan) []const
 }
 
 /// Register a top-level symbol definition
-pub fn registerSymbolDef(self: *Self, symbol: Symbol, expr_id: MonoExprId) Allocator.Error!void {
+pub fn registerSymbolDef(self: *Self, symbol: Symbol, expr_id: LirExprId) Allocator.Error!void {
+    std.debug.assert(!self.symbol_defs.contains(@bitCast(symbol)));
     try self.symbol_defs.put(@bitCast(symbol), expr_id);
 }
 
 /// Look up a top-level symbol definition
-pub fn getSymbolDef(self: *const Self, symbol: Symbol) ?MonoExprId {
+pub fn getSymbolDef(self: *const Self, symbol: Symbol) ?LirExprId {
     return self.symbol_defs.get(@bitCast(symbol));
 }
 
@@ -400,6 +433,11 @@ pub fn getString(self: *const Self, idx: base.StringLiteral.Idx) []const u8 {
 
 /// Add a control flow statement and return its ID
 pub fn addCFStmt(self: *Self, stmt: CFStmt) Allocator.Error!CFStmtId {
+    if (comptime std.debug.runtime_safety) {
+        if (stmt == .join) {
+            std.debug.assert(stmt.join.params.len == stmt.join.param_layouts.len);
+        }
+    }
     const idx = self.cf_stmts.items.len;
     try self.cf_stmts.append(self.allocator, stmt);
     return @enumFromInt(@as(u32, @intCast(idx)));
@@ -407,11 +445,13 @@ pub fn addCFStmt(self: *Self, stmt: CFStmt) Allocator.Error!CFStmtId {
 
 /// Get a control flow statement by ID
 pub fn getCFStmt(self: *const Self, id: CFStmtId) CFStmt {
+    std.debug.assert(!id.isNone());
     return self.cf_stmts.items[@intFromEnum(id)];
 }
 
 /// Get a mutable reference to a control flow statement (for patching)
 pub fn getCFStmtPtr(self: *Self, id: CFStmtId) *CFStmt {
+    std.debug.assert(!id.isNone());
     return &self.cf_stmts.items[@intFromEnum(id)];
 }
 
@@ -465,8 +505,9 @@ pub fn addLayoutIdxSpan(self: *Self, layouts: []const layout.Idx) Allocator.Erro
 
     const start = @as(u32, @intCast(self.extra_data.items.len));
 
+    try self.extra_data.ensureUnusedCapacity(self.allocator, layouts.len);
     for (layouts) |idx| {
-        try self.extra_data.append(self.allocator, @intFromEnum(idx));
+        self.extra_data.appendAssumeCapacity(@intFromEnum(idx));
     }
 
     return .{
@@ -483,19 +524,20 @@ pub fn getLayoutIdxSpan(self: *const Self, span: LayoutIdxSpan) []const layout.I
 }
 
 /// Add a procedure and return its index
-pub fn addProc(self: *Self, proc: MonoProc) Allocator.Error!usize {
+pub fn addProc(self: *Self, proc: LirProc) Allocator.Error!usize {
+    std.debug.assert(proc.args.len == proc.arg_layouts.len);
     const idx = self.procs.items.len;
     try self.procs.append(self.allocator, proc);
     return idx;
 }
 
 /// Get a procedure by index
-pub fn getProc(self: *const Self, idx: usize) MonoProc {
+pub fn getProc(self: *const Self, idx: usize) LirProc {
     return self.procs.items[idx];
 }
 
 /// Get all procedures
-pub fn getProcs(self: *const Self) []const MonoProc {
+pub fn getProcs(self: *const Self) []const LirProc {
     return self.procs.items;
 }
 

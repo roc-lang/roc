@@ -49,6 +49,10 @@ pub const StaticDataInterner = @import("StaticDataInterner.zig");
 // MonoExprCodeGen - parameterized by RocTarget for cross-compilation support
 const MonoExprCodeGenMod = @import("MonoExprCodeGen.zig");
 
+// LirCodeGen - LIR-based code generator parameterized by RocTarget
+/// LIR code generator parameterized by target
+pub const LirCodeGenMod = @import("LirCodeGen.zig");
+
 /// Mono IR code generator parameterized by target (use MonoExprCodeGen(target) to instantiate)
 pub const MonoExprCodeGen = MonoExprCodeGenMod.MonoExprCodeGen;
 

@@ -213,7 +213,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
                 }
             }
 
-            const reg = victim orelse return error.NoRegisterToSpill;
+            const reg = victim orelse unreachable;
             const owner = self.general_owners[@intFromEnum(reg)].?;
 
             // Allocate stack slot for the spilled value
@@ -295,7 +295,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
                 }
             }
 
-            const reg = victim orelse return error.NoRegisterToSpill;
+            const reg = victim orelse unreachable;
             const owner = self.float_owners[@intFromEnum(reg)].?;
 
             // Allocate stack slot (8 bytes for f64)
