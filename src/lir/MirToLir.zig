@@ -196,7 +196,7 @@ fn layoutFromMonotypeInner(self: *Self, monotype: Monotype.Monotype) Allocator.E
             const inner_layout = try self.layoutFromMonotype(b.inner);
             break :blk try self.layout_store.insertBox(inner_layout);
         },
-        .func => layout.Idx.named_fn,
+        .func => layout.Idx.opaque_ptr,
         .record => |r| try self.layoutFromRecord(r),
         .tuple => |t| try self.layoutFromTuple(t),
         .tag_union => |tu| try self.layoutFromTagUnion(tu),
