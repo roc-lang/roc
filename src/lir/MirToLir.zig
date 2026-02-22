@@ -327,12 +327,6 @@ fn tagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monot
                 }
             }
 
-            if (std.debug.runtime_safety) {
-                for (tags[0..tags.len -| 1], tags[1..]) |a, b| {
-                    std.debug.assert(@as(u32, @bitCast(a.name)) < @as(u32, @bitCast(b.name)));
-                }
-            }
-
             for (tags, 0..) |tag, i| {
                 if (@as(u32, @bitCast(tag.name)) == @as(u32, @bitCast(tag_name))) {
                     return @intCast(i);

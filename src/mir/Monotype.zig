@@ -408,13 +408,10 @@ pub const Store = struct {
                     try scratches.tags.append(.{ .name = name, .payloads = payloads_span });
                 }
 
-                // Sort tags alphabetically by name (required by discriminant lookup)
+                // Tags are already sorted alphabetically from the types store
+                // (Check.zig, unify.zig, and instantiate.zig all sort by name).
+                // Do NOT re-sort here — ident indices don't necessarily match alphabetical order.
                 const collected_tags = scratches.tags.sliceFromStart(tags_top);
-                std.mem.sort(Tag, collected_tags, {}, struct {
-                    fn cmp(_: void, a: Tag, b: Tag) bool {
-                        return @as(u32, @bitCast(a.name)) < @as(u32, @bitCast(b.name));
-                    }
-                }.cmp);
                 const tag_span = try self.addTags(allocator, collected_tags);
                 self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .tag_union = .{ .tags = tag_span } };
                 return placeholder_idx;

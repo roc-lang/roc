@@ -582,3 +582,15 @@ test "Repl - multi-arg lambda function renders as <function>" {
     defer interpreter_allocator.free(result);
     try testing.expectEqualStrings("<function>", result);
 }
+
+test "Repl dev backend - U8.from_str result format" {
+    var test_env = TestEnv.init(interpreter_allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.initWithBackend(interpreter_allocator, test_env.get_ops(), null, .dev);
+    defer repl.deinit();
+
+    const result = try repl.step("U8.from_str(\"42\")");
+    defer interpreter_allocator.free(result);
+    try testing.expectEqualStrings("Ok(42)", result);
+}
