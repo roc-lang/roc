@@ -987,10 +987,8 @@ fn lowerBinop(self: *Self, binop: CIR.Expr.Binop, monotype: Monotype.Idx, region
                 return result;
             };
 
-            // Ensure the method body is lowered so codegen can find it
-            if (method_symbol.module_idx != self.current_module_idx) {
-                try self.ensureMethodLowered(method_symbol);
-            }
+            // Ensure the method body is lowered so codegen can find it.
+            try self.ensureMethodLowered(method_symbol);
 
             const lhs_monotype = try self.resolveMonotype(binop.lhs);
             const rhs_monotype = try self.resolveMonotype(binop.rhs);
@@ -1061,10 +1059,8 @@ fn lowerUnaryMinus(self: *Self, um: CIR.Expr.UnaryMinus, monotype: Monotype.Idx,
         } }, monotype, region);
     };
 
-    // Ensure the method body is lowered so codegen can find it
-    if (method_symbol.module_idx != self.current_module_idx) {
-        try self.ensureMethodLowered(method_symbol);
-    }
+    // Ensure the method body is lowered so codegen can find it.
+    try self.ensureMethodLowered(method_symbol);
 
     const inner_monotype = try self.resolveMonotype(um.expr);
     const func_monotype = try self.buildFuncMonotype(&.{inner_monotype}, monotype, false);
@@ -1146,10 +1142,8 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, da: anytype, monoty
             .ident_idx = da.field_name,
         };
 
-        // Ensure the method body is lowered so codegen can find it
-        if (method_symbol.module_idx != self.current_module_idx) {
-            try self.ensureMethodLowered(method_symbol);
-        }
+        // Ensure the method body is lowered so codegen can find it.
+        try self.ensureMethodLowered(method_symbol);
 
         // Build args as [receiver] ++ explicit_args
         // e.g. list.map(fn) → List.map(list, fn)
@@ -1232,10 +1226,8 @@ fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, tvd: anytype,
         .ident_idx = tvd.method_name,
     };
 
-    // Ensure the method body is lowered so codegen can find it
-    if (method_symbol.module_idx != self.current_module_idx) {
-        try self.ensureMethodLowered(method_symbol);
-    }
+    // Ensure the method body is lowered so codegen can find it.
+    try self.ensureMethodLowered(method_symbol);
 
     const cir_args = module_env.store.sliceExpr(tvd.args);
     const mono_top = self.mono_scratches.idxs.top();
@@ -1350,7 +1342,9 @@ fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol) Allocator.Error!void {
             else => {},
         }
     }
-    unreachable; // Method must exist — type checking should have caught this
+    // Method not found in target module's defs. This can happen for same-module
+    // methods where the definition is accessible through other means (e.g., via
+    // e_lookup_local processing when the call func expression is lowered).
 }
 
 /// Lower an external definition by symbol, caching the result.
