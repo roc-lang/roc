@@ -373,7 +373,6 @@ test "TailRecursionPass: tail call is transformed to jump" {
     const allocator = std.testing.allocator;
     const base = @import("base");
 
-
     var store = LirExprStore.init(allocator);
     defer store.deinit();
 
@@ -434,7 +433,6 @@ test "TailRecursionPass: non-tail call is not transformed" {
     // result != other_symbol, so this is NOT a tail call
     const allocator = std.testing.allocator;
     const base = @import("base");
-
 
     var store = LirExprStore.init(allocator);
     defer store.deinit();
@@ -568,7 +566,6 @@ test "TailRecursionPass: tail call inside switch_stmt branch is transformed" {
     const allocator = std.testing.allocator;
     const base = @import("base");
 
-
     var store = LirExprStore.init(allocator);
     defer store.deinit();
 
@@ -653,7 +650,6 @@ test "TailRecursionPass: direct ret f(...) is transformed to jump" {
     const allocator = std.testing.allocator;
     const base = @import("base");
 
-
     var store = LirExprStore.init(allocator);
     defer store.deinit();
 
@@ -704,7 +700,6 @@ test "TailRecursionPass: call to non-target function is not detected as tail cal
     // where g is a DIFFERENT function from target_sym => should NOT be a tail call
     const allocator = std.testing.allocator;
     const base = @import("base");
-
 
     var store = LirExprStore.init(allocator);
     defer store.deinit();

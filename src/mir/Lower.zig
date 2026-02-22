@@ -30,7 +30,6 @@ const ModuleEnv = can.ModuleEnv;
 
 const Self = @This();
 
-
 // --- Fields ---
 
 allocator: Allocator,
