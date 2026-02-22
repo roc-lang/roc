@@ -43,9 +43,6 @@ all_module_envs: []const *ModuleEnv,
 /// Types store for resolving type variables
 types_store: *const types.Store,
 
-/// Builtin type indices for identifying primitives
-builtin_indices: CIR.BuiltinIndices,
-
 /// Current module being lowered
 current_module_idx: u32,
 
@@ -88,7 +85,6 @@ pub fn init(
     store: *MIR.Store,
     all_module_envs: []const *ModuleEnv,
     types_store: *const types.Store,
-    builtin_indices: CIR.BuiltinIndices,
     current_module_idx: u32,
     app_module_idx: ?u32,
 ) Allocator.Error!Self {
@@ -112,7 +108,6 @@ pub fn init(
         .store = store,
         .all_module_envs = all_module_envs,
         .types_store = types_store,
-        .builtin_indices = builtin_indices,
         .current_module_idx = current_module_idx,
         .app_module_idx = app_module_idx,
         .pattern_symbols = std.AutoHashMap(u64, MIR.Symbol).init(allocator),
@@ -489,10 +484,14 @@ fn resolveMonotype(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!Monotype
         self.allocator,
         self.types_store,
         type_var,
-        self.builtin_indices,
+        self.currentCommonIdents(),
         &self.type_var_seen,
         &self.mono_scratches,
     );
+}
+
+fn currentCommonIdents(self: *const Self) ModuleEnv.CommonIdents {
+    return self.all_module_envs[self.current_module_idx].idents;
 }
 
 /// Build a function monotype from argument types, return type, and effectfulness.
@@ -545,7 +544,7 @@ fn lowerPattern(self: *Self, module_env: *const ModuleEnv, pattern_idx: CIR.Patt
         self.allocator,
         self.types_store,
         type_var,
-        self.builtin_indices,
+        self.currentCommonIdents(),
         &self.type_var_seen,
         &self.mono_scratches,
     );
@@ -746,7 +745,21 @@ fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Clo
 }
 
 /// Lower `e_call` to MIR call.
+/// If the call target is an external lookup to a low-level builtin
+/// (e.g., List.concat, Str.concat), emit `run_low_level` instead of `call`.
 fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
+    // Check if the call target is an external low-level builtin.
+    const func_cir = module_env.store.getExpr(call.func);
+    if (func_cir == .e_lookup_external) {
+        if (self.getExternalLowLevelOp(module_env, func_cir.e_lookup_external)) |ll_op| {
+            const args = try self.lowerExprSpan(module_env, call.args);
+            return try self.store.addExpr(self.allocator, .{ .run_low_level = .{
+                .op = ll_op,
+                .args = args,
+            } }, monotype, region);
+        }
+    }
+
     const func = try self.lowerExpr(call.func);
     const args = try self.lowerExprSpan(module_env, call.args);
 
@@ -754,6 +767,23 @@ fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype:
         .func = func,
         .args = args,
     } }, monotype, region);
+}
+
+/// Check if an external definition is a low-level wrapper (e_lambda wrapping e_run_low_level).
+/// Returns the low-level op if found, null otherwise.
+fn getExternalLowLevelOp(self: *Self, caller_env: *const ModuleEnv, lookup: anytype) ?CIR.Expr.LowLevel {
+    const ext_module_idx = caller_env.imports.getResolvedModule(lookup.module_idx) orelse return null;
+    if (ext_module_idx >= self.all_module_envs.len) return null;
+    const ext_env = self.all_module_envs[ext_module_idx];
+    if (!ext_env.store.isDefNode(lookup.target_node_idx)) return null;
+    const def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
+    const def = ext_env.store.getDef(def_idx);
+    const def_expr = ext_env.store.getExpr(def.expr);
+    if (def_expr == .e_lambda) {
+        const body_expr = ext_env.store.getExpr(def_expr.e_lambda.body);
+        if (body_expr == .e_run_low_level) return body_expr.e_run_low_level.op;
+    }
+    return null;
 }
 
 /// Lower `e_block` to MIR block.
