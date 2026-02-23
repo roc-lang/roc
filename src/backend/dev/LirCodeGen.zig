@@ -1625,7 +1625,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_append_safe);
                         const alignment_bytes = elem_size_align.alignment.toByteUnits();
 
-                        // roc_builtins_list_append_safe(out, list_bytes, list_len, list_cap, element, alignment, element_width, roc_ops)
+                        // Determine if elements contain refcounted data
+                        const elements_refcounted: bool = blk: {
+                            const ret_layout_val = ls.getLayout(ll.ret_layout);
+                            if (ret_layout_val.tag == .list) {
+                                break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout_val.data.list));
+                            }
+                            break :blk false;
+                        };
+
+                        // roc_builtins_list_append_safe(out, list_bytes, list_len, list_cap, element, alignment, element_width, elements_refcounted, roc_ops)
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                         try builder.addLeaArg(base_reg, result_offset);
                         try builder.addMemArg(base_reg, list_offset);
@@ -1634,6 +1643,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addLeaArg(base_reg, elem_offset);
                         try builder.addImmArg(@intCast(alignment_bytes));
                         try builder.addImmArg(@intCast(elem_size_align.size));
+                        try builder.addImmArg(if (elements_refcounted) 1 else 0);
                         try builder.addRegArg(roc_ops_reg);
                         try self.callBuiltin(&builder, fn_addr, .list_append_safe);
                     }
@@ -12145,8 +12155,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // Inline when:
                         // 1. Args contain callables (higher-order calls)
                         // 2. Body returns callable (closure-returning functions)
-                        // 3. Polymorphic lambda with different ret_layout
-                        if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(lambda.body) or lambda.ret_layout != ret_layout) {
+                        if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(lambda.body)) {
                             return try self.callLambdaBodyDirect(lambda, args_span);
                         }
                         const offset = try self.compileLambdaAsProc(def_expr_id, lambda);
@@ -12156,7 +12165,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const closure = self.store.getClosureData(closure_id);
                         const inner = self.store.getExpr(closure.lambda);
                         if (inner == .lambda) {
-                            if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(inner.lambda.body) or inner.lambda.ret_layout != ret_layout) {
+                            if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(inner.lambda.body)) {
                                 return try self.callLambdaBodyDirect(inner.lambda, args_span);
                             }
                             const offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
@@ -12183,7 +12192,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // Unwrap nominal and retry with the inner expression
                         const inner = self.store.getExpr(nom.backing_expr);
                         if (inner == .lambda) {
-                            if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(inner.lambda.body) or inner.lambda.ret_layout != ret_layout) {
+                            if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(inner.lambda.body)) {
                                 return try self.callLambdaBodyDirect(inner.lambda, args_span);
                             }
                             const offset = try self.compileLambdaAsProc(nom.backing_expr, inner.lambda);
@@ -12193,7 +12202,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const inner_clo = self.store.getClosureData(inner.closure);
                             const closure_inner = self.store.getExpr(inner_clo.lambda);
                             if (closure_inner == .lambda) {
-                                if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(closure_inner.lambda.body) or closure_inner.lambda.ret_layout != ret_layout) {
+                                if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(closure_inner.lambda.body)) {
                                     return try self.callLambdaBodyDirect(closure_inner.lambda, args_span);
                                 }
                                 const offset = try self.compileLambdaAsProc(inner_clo.lambda, closure_inner.lambda);

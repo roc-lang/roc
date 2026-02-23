@@ -1412,16 +1412,20 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
         self.current_module_idx = symbol.module_idx;
         self.types_store = &self.all_module_envs[symbol.module_idx].types;
         self.type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+    }
 
-        // Pre-seed type_var_seen with the caller's concrete types so that
-        // flex vars in the definition resolve to concrete monotypes instead
-        // of unit. Each definition has its own type vars (not unified with
-        // the caller's instantiated copies), so they must be seeded here.
-        if (caller_monotype) |cmt| {
-            if (!cmt.isNone()) {
-                const target_type_var = ModuleEnv.varFrom(cir_expr_idx);
-                self.seedTypeVarSeen(target_type_var, cmt);
-            }
+    // Pre-seed type_var_seen with the caller's concrete types so that
+    // flex/rigid vars in the definition resolve to concrete monotypes instead
+    // of unit. Each definition has its own type vars (not unified with
+    // the caller's instantiated copies), so they must be seeded here.
+    // This must happen for BOTH cross-module AND same-module calls, because
+    // same-module polymorphic functions (e.g., List.append called from
+    // range_to within the Builtin module) have their own rigid type vars
+    // from type annotations that are not unified with the caller's vars.
+    if (caller_monotype) |cmt| {
+        if (!cmt.isNone()) {
+            const target_type_var = ModuleEnv.varFrom(cir_expr_idx);
+            self.seedTypeVarSeen(target_type_var, cmt);
         }
     }
     defer if (switching_module) {
