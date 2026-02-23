@@ -1087,6 +1087,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Store RocOps save reg for use by Dec operations
             self.roc_ops_reg = roc_ops_save_reg;
 
+            // Remove roc_ops and result_ptr registers from callee_saved_available
+            // so the register allocator never uses them as temporaries.
+            if (comptime target.toCpuArch() == .aarch64) {
+                self.codegen.callee_saved_available &= ~(@as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X20));
+                self.codegen.callee_saved_available &= ~(@as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X19));
+            } else {
+                self.codegen.callee_saved_available &= ~(@as(u32, 1) << @intFromEnum(x86_64.GeneralReg.R12));
+                self.codegen.callee_saved_available &= ~(@as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RBX));
+            }
+
             // Generate code for the expression - result ends up in a register
             const result_loc = try self.generateExpr(expr_id);
 
@@ -1503,13 +1513,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const cap_reg = try self.ensureInGeneralReg(capacity_loc);
                     const base_reg = frame_ptr;
 
-                    // roc_builtins_list_with_capacity(out, capacity, alignment, element_width, roc_ops)
+                    // Determine if elements contain refcounted data
+                    const elements_refcounted: bool = blk: {
+                        if (ret_layout.tag == .list) {
+                            break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list));
+                        }
+                        break :blk false;
+                    };
+
+                    // roc_builtins_list_with_capacity(out, capacity, alignment, element_width, elements_refcounted, roc_ops)
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                     try builder.addLeaArg(base_reg, result_offset);
                     try builder.addRegArg(cap_reg);
                     self.codegen.freeGeneral(cap_reg);
                     try builder.addImmArg(@intCast(alignment_bytes));
                     try builder.addImmArg(@intCast(elem_size_align.size));
+                    try builder.addImmArg(if (elements_refcounted) 1 else 0);
                     try builder.addRegArg(roc_ops_reg);
                     try self.callBuiltin(&builder, fn_addr, .list_with_capacity);
 
@@ -1528,7 +1547,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (args.len != 2) {
                         unreachable;
                     }
-
                     const ls = self.layout_store orelse {
                         unreachable;
                     };
@@ -2016,13 +2034,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const cap_fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_with_capacity);
                     const base_reg = frame_ptr;
 
+                    // Determine if elements contain refcounted data
+                    const elements_refcounted: bool = blk: {
+                        const ret_layout_val = ls.getLayout(ll.ret_layout);
+                        if (ret_layout_val.tag == .list) {
+                            break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout_val.data.list));
+                        }
+                        break :blk false;
+                    };
+
                     {
-                        // roc_builtins_list_with_capacity(out, capacity, alignment, element_width, roc_ops)
+                        // roc_builtins_list_with_capacity(out, capacity, alignment, element_width, elements_refcounted, roc_ops)
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                         try builder.addLeaArg(base_reg, result_offset);
                         try builder.addMemArg(base_reg, count_slot);
                         try builder.addImmArg(@intCast(alignment_bytes));
                         try builder.addImmArg(@intCast(elem_size_align.size));
+                        try builder.addImmArg(if (elements_refcounted) 1 else 0);
                         try builder.addRegArg(roc_ops_reg);
                         try self.callBuiltin(&builder, cap_fn_addr, .list_with_capacity);
                     }
@@ -2962,25 +2990,85 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return try self.callStr1RocOpsToResult(list_off, @intFromPtr(&wrapStrFromUtf8Lossy), .str_from_utf8_lossy, .str);
                 },
                 .str_from_utf8 => {
-                    // str_from_utf8(list) -> FromUtf8Try {byte_index: u64, string: RocStr, is_ok: bool, problem_code: u8}
+                    // str_from_utf8(list) -> Result Str [BadUtf8 {problem: Utf8Problem, index: U64}]
+                    // The C builtin returns FromUtf8Try {byte_index: u64, string: RocStr, is_ok: bool, problem_code: u8}
+                    // We must convert it to the Roc tag union layout.
                     if (args.len != 1) unreachable;
                     const list_loc = try self.generateExpr(args[0]);
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
 
                     const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-                    const result_size: i32 = @intCast(@sizeOf(FromUtf8Try));
-                    const result_offset = self.codegen.allocStackSlot(result_size);
+                    const raw_size: i32 = @intCast(@sizeOf(FromUtf8Try));
+                    const raw_offset = self.codegen.allocStackSlot(raw_size);
 
-                    // fn(out, list_bytes, list_len, list_cap, roc_ops) -> void
+                    // Call C builtin: fn(out, list_bytes, list_len, list_cap, roc_ops) -> void
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                    try builder.addLeaArg(frame_ptr, result_offset);
+                    try builder.addLeaArg(frame_ptr, raw_offset);
                     try builder.addMemArg(frame_ptr, list_off);
                     try builder.addMemArg(frame_ptr, list_off + 8);
                     try builder.addMemArg(frame_ptr, list_off + 16);
                     try builder.addRegArg(roc_ops_reg);
                     try self.callBuiltin(&builder, @intFromPtr(&wrapStrFromUtf8), .str_from_utf8);
 
-                    return .{ .stack = .{ .offset = result_offset } };
+                    // Now convert the C struct to a Roc tag union.
+                    // FromUtf8Try layout: byte_index(u64)@0, string(RocStr)@8, is_ok(bool)@32, problem_code(u8)@33
+                    // Result tag union: [Err [BadUtf8 {index: U64, problem: Utf8Problem}], Ok Str]
+                    //   Err(0): payload = {index: U64@0, problem: U8@8}
+                    //   Ok(1): payload = Str (24 bytes)@0
+                    //   discriminant at offset = max payload size = 24
+                    const ls = self.layout_store orelse unreachable;
+                    const ret_layout_val = ls.getLayout(ll.ret_layout);
+                    if (ret_layout_val.tag == .tag_union) {
+                        const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
+                        const tag_size = tu_data.size;
+                        const disc_offset = tu_data.discriminant_offset;
+                        const disc_size = tu_data.discriminant_size;
+
+                        const result_slot = self.codegen.allocStackSlot(tag_size);
+                        try self.zeroStackArea(result_slot, tag_size);
+
+                        // Load is_ok byte from C struct (offset 32)
+                        const ok_reg = try self.allocTempGeneral();
+                        try self.emitLoadStackW8(ok_reg, raw_offset + 32);
+                        try self.emitCmpImm(ok_reg, 0);
+                        self.codegen.freeGeneral(ok_reg);
+
+                        // Jump to Err branch if is_ok == 0
+                        const err_patch = try self.codegen.emitCondJump(condEqual());
+
+                        // === OK branch: copy string (24 bytes from raw+8 to result+0) ===
+                        {
+                            const temp_reg = try self.allocTempGeneral();
+                            try self.copyChunked(temp_reg, frame_ptr, raw_offset + 8, frame_ptr, result_slot, 24);
+                            self.codegen.freeGeneral(temp_reg);
+                        }
+                        try self.storeDiscriminant(result_slot + @as(i32, @intCast(disc_offset)), 1, disc_size);
+                        const end_patch = try self.codegen.emitJump();
+
+                        // === ERR branch ===
+                        self.codegen.patchJump(err_patch, self.codegen.currentOffset());
+                        // Copy byte_index (8 bytes from raw+0 to result+0) as the 'index' field
+                        {
+                            const temp_reg = try self.allocTempGeneral();
+                            try self.copyChunked(temp_reg, frame_ptr, raw_offset, frame_ptr, result_slot, 8);
+                            self.codegen.freeGeneral(temp_reg);
+                        }
+                        // Copy problem_code (1 byte from raw+33 to result+8) as the 'problem' field
+                        {
+                            const prob_reg = try self.allocTempGeneral();
+                            try self.emitLoadStackW8(prob_reg, raw_offset + 33);
+                            try self.emitStoreStackW8(result_slot + 8, prob_reg);
+                            self.codegen.freeGeneral(prob_reg);
+                        }
+                        try self.storeDiscriminant(result_slot + @as(i32, @intCast(disc_offset)), 0, disc_size);
+
+                        // === END ===
+                        self.codegen.patchJump(end_patch, self.codegen.currentOffset());
+                        return .{ .stack = .{ .offset = result_slot } };
+                    }
+
+                    // Fallback: return raw C struct (for contexts that don't need tag union)
+                    return .{ .stack = .{ .offset = raw_offset } };
                 },
 
                 // ── Remaining list low-level operations ──
@@ -4130,13 +4218,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const cap_fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_with_capacity);
             const base_reg = frame_ptr;
 
+            // Determine if elements contain refcounted data
+            const elements_refcounted: bool = blk: {
+                const ret_layout_val = ls.getLayout(ll.ret_layout);
+                if (ret_layout_val.tag == .list) {
+                    break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout_val.data.list));
+                }
+                break :blk false;
+            };
+
             {
-                // roc_builtins_list_with_capacity(out, capacity, alignment, element_width, roc_ops)
+                // roc_builtins_list_with_capacity(out, capacity, alignment, element_width, elements_refcounted, roc_ops)
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 try builder.addLeaArg(base_reg, result_offset);
                 try builder.addMemArg(base_reg, list_off + 8); // capacity = input length
                 try builder.addImmArg(@intCast(alignment_bytes));
                 try builder.addImmArg(@intCast(elem_size_align.size));
+                try builder.addImmArg(if (elements_refcounted) 1 else 0);
                 try builder.addRegArg(roc_ops_reg);
                 try self.callBuiltin(&builder, cap_fn_addr, .list_with_capacity);
             }
@@ -9859,8 +9957,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_break_patches_len = self.loop_break_patches.items.len;
 
             // Execute the body (result is discarded)
-            // NOTE: This may call C functions which clobber all caller-saved registers
-            // The body may contain reassignments that update mutable variables
             _ = try self.generateExpr(while_loop.body);
 
             // Jump back to loop start (to re-evaluate condition)
@@ -10632,6 +10728,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Process each statement
             for (stmts) |stmt| {
                 const b = stmt.binding();
+
                 // Generate code for the expression
                 const expr_loc = try self.generateExpr(b.expr);
                 // Get the expression's layout (for mutable variable binding with correct size)
@@ -11345,9 +11442,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             return switch (fn_expr) {
                 // Direct lambda call: inline the body in the current scope.
-                // Inline lambdas are defined at a single call site, cannot be
-                // recursive, and may return closures whose capture data must
-                // remain on the current stack frame.
                 .lambda => |lambda| {
                     return try self.callLambdaBodyDirect(lambda, call.args);
                 },
@@ -14035,6 +14129,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 try self.symbol_locations.put(symbol_key, .{ .stack_str = stack_offset });
                                 reg_idx += 3;
                             } else if (bind.layout_idx == .i128 or bind.layout_idx == .u128 or bind.layout_idx == .dec) {
+                                // aarch64: i128/Dec must be even-aligned in register pairs,
+                                // matching the alignment in placeCallArguments.
+                                if (comptime target.toCpuArch() == .aarch64) {
+                                    if (reg_idx % 2 != 0) {
+                                        reg_idx += 1;
+                                    }
+                                }
                                 const arg_reg0 = self.getArgumentRegister(reg_idx);
                                 const arg_reg1 = self.getArgumentRegister(reg_idx + 1);
 
@@ -14108,6 +14209,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // Skip this argument - use the layout to determine how many
                         // registers it occupies (important for correct roc_ops placement)
                         const num_regs = self.calcParamRegCount(wc.layout_idx);
+                        // aarch64: i128/Dec must be even-aligned in register pairs
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            if (num_regs == 2 and (wc.layout_idx == .i128 or wc.layout_idx == .u128 or wc.layout_idx == .dec)) {
+                                if (reg_idx % 2 != 0) reg_idx += 1;
+                            }
+                        }
                         if (param_pass_by_ptr[param_idx]) {
                             reg_idx += 1; // passed by pointer, skip 1 register
                         } else if (reg_idx + num_regs <= max_arg_regs) {

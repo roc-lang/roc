@@ -207,7 +207,10 @@ fn lirExprResultLayout(store: *const LirExprStore, expr_id: lir.LirExprId) ?layo
         .dec_literal => .dec,
         .str_literal => .str,
         .i64_literal => .i64,
-        .i128_literal => .i128,
+        // i128_literal is used for both I128 and U128 values (stored as @bitCast i128).
+        // Don't hardcode .i128 here — let the fallback resolve from the CIR type variable
+        // to get the correct layout (.i128 vs .u128).
+        .i128_literal => null,
         .unary_not => .bool,
         .list,
         .empty_list,
@@ -280,21 +283,23 @@ const DevRocEnv = struct {
         if (self.crash_message) |msg| self.allocator.free(msg);
     }
 
-    /// Shared static allocator state for alloc/realloc functions.
+    /// Per-thread static allocator state for alloc/realloc functions.
     /// WORKAROUND: Uses a static buffer instead of self.allocator.alignedAlloc.
     /// There's a mysterious crash when using allocator vtable calls from inside
     /// lambdas - it works the first time but crashes on subsequent calls from
     /// inside lambda execution contexts. The root cause appears to be related
     /// to vtable calls from C-calling-convention functions into Zig code.
     /// Using a static buffer completely avoids the vtable call.
+    /// NOTE: threadlocal is required because snapshot tests run in parallel —
+    /// without it, concurrent threads corrupt each other's allocations.
     const StaticAlloc = struct {
-        var buffer: [1024 * 1024]u8 align(16) = undefined; // 1MB static buffer
-        var offset: usize = 0;
+        threadlocal var buffer: [1024 * 1024]u8 align(16) = undefined; // 1MB static buffer
+        threadlocal var offset: usize = 0;
         // Track allocation sizes for realloc (simple array of ptr -> size pairs)
         const max_allocs = 4096;
-        var alloc_ptrs: [max_allocs]usize = [_]usize{0} ** max_allocs;
-        var alloc_sizes: [max_allocs]usize = [_]usize{0} ** max_allocs;
-        var alloc_count: usize = 0;
+        threadlocal var alloc_ptrs: [max_allocs]usize = [_]usize{0} ** max_allocs;
+        threadlocal var alloc_sizes: [max_allocs]usize = [_]usize{0} ** max_allocs;
+        threadlocal var alloc_count: usize = 0;
 
         fn recordAlloc(ptr: usize, size: usize) void {
             if (alloc_count < max_allocs) {

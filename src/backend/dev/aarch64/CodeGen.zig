@@ -401,6 +401,9 @@ pub fn CodeGen(comptime target: RocTarget) type {
             } else {
                 // Main expression frame: decrement, then return (standard downward growth)
                 self.stack_offset -= aligned_size;
+                if (self.stack_offset < -1040) {
+                    std.debug.print("DEBUG: stack_offset={} EXCEEDED -1040! size={} aligned_size={}\n", .{ self.stack_offset, size, aligned_size });
+                }
                 return self.stack_offset;
             }
         }

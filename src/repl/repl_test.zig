@@ -703,3 +703,59 @@ test "Repl dev backend - U8.from_str result format" {
     defer interpreter_allocator.free(result);
     try testing.expectEqualStrings("Ok(42)", result);
 }
+
+test "Repl dev backend - Str.from_utf8 Ok" {
+    var test_env = TestEnv.init(interpreter_allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.initWithBackend(interpreter_allocator, test_env.get_ops(), null, .dev);
+    defer repl.deinit();
+
+    const result = try repl.step("Str.from_utf8([72, 105])");
+    defer interpreter_allocator.free(result);
+    try testing.expectEqualStrings("Ok(\"Hi\")", result);
+}
+
+test "Repl dev backend - List.with_capacity" {
+    var test_env = TestEnv.init(interpreter_allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.initWithBackend(interpreter_allocator, test_env.get_ops(), null, .dev);
+    defer repl.deinit();
+
+    {
+        const result = try repl.step("List.with_capacity(10)");
+        defer interpreter_allocator.free(result);
+        try testing.expectEqualStrings("[]", result);
+    }
+    {
+        const result = try repl.step("List.first(List.with_capacity(10))");
+        defer interpreter_allocator.free(result);
+        try testing.expectEqualStrings("Err(ListWasEmpty)", result);
+    }
+}
+
+test "Repl dev backend - List.append simple" {
+    var test_env = TestEnv.init(interpreter_allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.initWithBackend(interpreter_allocator, test_env.get_ops(), null, .dev);
+    defer repl.deinit();
+
+    const result = try repl.step("List.append([1, 2], 3)");
+    defer interpreter_allocator.free(result);
+    try testing.expectEqualStrings("[1, 2, 3]", result);
+}
+
+test "Repl dev backend - range_to" {
+    var test_env = TestEnv.init(interpreter_allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.initWithBackend(interpreter_allocator, test_env.get_ops(), null, .dev);
+    defer repl.deinit();
+
+    const result = try repl.step("1.to(3)");
+    defer interpreter_allocator.free(result);
+    try testing.expectEqualStrings("[1, 2, 3]", result);
+}
+

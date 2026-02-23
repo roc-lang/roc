@@ -4359,6 +4359,9 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
             }
 
             // Set a 10-second timeout to catch infinite loops in generated code.
+            // Note: alarm() is process-wide — in parallel mode, SIGALRM may be
+            // delivered to the wrong thread. The handler checks threadlocal panic_jmp,
+            // so it's harmless if the receiving thread isn't evaluating.
             _ = std.c.alarm(10);
             defer _ = std.c.alarm(0);
 

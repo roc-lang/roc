@@ -122,7 +122,11 @@ pub fn init(
         .scratch_branch_patterns = try base.Scratch(MIR.BranchPattern).init(allocator),
         .scratch_stmts = try base.Scratch(MIR.Stmt).init(allocator),
         .scratch_captures = try base.Scratch(MIR.Capture).init(allocator),
-        .mono_scratches = try Monotype.Store.Scratches.init(allocator),
+        .mono_scratches = blk: {
+            var ms = try Monotype.Store.Scratches.init(allocator);
+            ms.ident_store = all_module_envs[current_module_idx].getIdentStoreConst();
+            break :blk ms;
+        },
     };
 }
 
@@ -1408,10 +1412,12 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
     const saved_module_idx = self.current_module_idx;
     const saved_types_store = self.types_store;
     const saved_type_var_seen = self.type_var_seen;
+    const saved_ident_store = self.mono_scratches.ident_store;
     if (switching_module) {
         self.current_module_idx = symbol.module_idx;
         self.types_store = &self.all_module_envs[symbol.module_idx].types;
         self.type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+        self.mono_scratches.ident_store = self.all_module_envs[symbol.module_idx].getIdentStoreConst();
     }
 
     // Pre-seed type_var_seen with the caller's concrete types so that
@@ -1433,6 +1439,7 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
         self.type_var_seen = saved_type_var_seen;
         self.types_store = saved_types_store;
         self.current_module_idx = saved_module_idx;
+        self.mono_scratches.ident_store = saved_ident_store;
     };
 
     const result = try self.lowerExpr(cir_expr_idx);
@@ -1580,25 +1587,44 @@ fn seedTypeVarSeenStructure(self: *Self, flat_type: types.FlatType, monotype: Mo
                 else => {},
             }
         },
-        .tag_union => |tag_union| {
+        .tag_union => |tag_union_row| {
             switch (mono) {
                 .tag_union => |mtu| {
-                    const type_tags = self.types_store.getTagsSlice(tag_union.tags);
-                    const type_tag_names = type_tags.items(.name);
-                    const type_tag_args = type_tags.items(.args);
                     const mono_tags = self.store.monotype_store.getTags(mtu.tags);
 
-                    for (type_tag_names, type_tag_args) |tname, targs| {
-                        for (mono_tags) |mtag| {
-                            if (tname == mtag.name) {
-                                const targ_vars = self.types_store.sliceVars(targs);
-                                const marg_idxs = self.store.monotype_store.getIdxSpan(mtag.payloads);
-                                const n = @min(targ_vars.len, marg_idxs.len);
-                                for (targ_vars[0..n], marg_idxs[0..n]) |tv, mi| {
-                                    self.seedTypeVarSeen(tv, mi);
+                    // Follow the tag union extension chain to match ALL tags.
+                    var current_row = tag_union_row;
+                    while (true) {
+                        const type_tags = self.types_store.getTagsSlice(current_row.tags);
+                        const type_tag_names = type_tags.items(.name);
+                        const type_tag_args = type_tags.items(.args);
+
+                        for (type_tag_names, type_tag_args) |tname, targs| {
+                            for (mono_tags) |mtag| {
+                                if (tname == mtag.name) {
+                                    const targ_vars = self.types_store.sliceVars(targs);
+                                    const marg_idxs = self.store.monotype_store.getIdxSpan(mtag.payloads);
+                                    const n = @min(targ_vars.len, marg_idxs.len);
+                                    for (targ_vars[0..n], marg_idxs[0..n]) |tv, mi| {
+                                        self.seedTypeVarSeen(tv, mi);
+                                    }
+                                    break;
                                 }
-                                break;
                             }
+                        }
+
+                        // Follow extension variable
+                        const ext_resolved = self.types_store.resolveVar(current_row.ext);
+                        switch (ext_resolved.desc.content) {
+                            .structure => |ext_flat| switch (ext_flat) {
+                                .tag_union => |next_row| {
+                                    current_row = next_row;
+                                    continue;
+                                },
+                                .empty_tag_union => break,
+                                else => break,
+                            },
+                            else => break,
                         }
                     }
                 },

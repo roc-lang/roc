@@ -123,6 +123,16 @@ pub const Tag = struct {
     name: Ident.Idx,
     /// Span of Monotype.Idx for payload types
     payloads: Span,
+
+    pub fn sortByNameAsc(ident_store: *const Ident.Store, a: Tag, b: Tag) bool {
+        return orderByName(ident_store, a, b) == .lt;
+    }
+
+    fn orderByName(ident_store: *const Ident.Store, a: Tag, b: Tag) std.math.Order {
+        const a_text = ident_store.getText(a.name);
+        const b_text = ident_store.getText(b.name);
+        return std.mem.order(u8, a_text, b_text);
+    }
 };
 
 /// Span of Tags stored in the tags array.
@@ -178,6 +188,9 @@ pub const Store = struct {
         fields: base.Scratch(Field),
         tags: base.Scratch(Tag),
         idxs: base.Scratch(Idx),
+        /// Ident store for sorting tag names alphabetically.
+        /// Updated when switching modules during cross-module lowering.
+        ident_store: ?*const Ident.Store = null,
 
         pub fn init(allocator: Allocator) Allocator.Error!Scratches {
             return .{
@@ -403,35 +416,57 @@ pub const Store = struct {
                 self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .tuple = .{ .elems = elem_span } };
                 return placeholder_idx;
             },
-            .tag_union => |tag_union| {
+            .tag_union => |tag_union_row| {
                 const placeholder_idx = try self.addMonotype(allocator, .unit);
                 try seen.put(var_, placeholder_idx);
-
-                const tags_slice = types_store.getTagsSlice(tag_union.tags);
-                const tag_names = tags_slice.items(.name);
-                const tag_args = tags_slice.items(.args);
 
                 const tags_top = scratches.tags.top();
                 defer scratches.tags.clearFrom(tags_top);
 
-                for (tag_names, tag_args) |name, args_range| {
-                    const arg_vars = types_store.sliceVars(args_range);
-                    const idxs_top = scratches.idxs.top();
-                    defer scratches.idxs.clearFrom(idxs_top);
+                // Follow the tag union extension chain to collect ALL tags.
+                // Roc's type system represents tag unions as linked rows:
+                // [Ok a | ext] where ext -> [Err b | ext2] where ext2 -> empty_tag_union
+                var current_row = tag_union_row;
+                while (true) {
+                    const tags_slice = types_store.getTagsSlice(current_row.tags);
+                    const tag_names = tags_slice.items(.name);
+                    const tag_args = tags_slice.items(.args);
 
-                    for (arg_vars) |arg_var| {
-                        const payload_type = try self.fromTypeVar(allocator, types_store, arg_var, common_idents, seen, scratches);
-                        try scratches.idxs.append(payload_type);
+                    for (tag_names, tag_args) |name, args_range| {
+                        const arg_vars = types_store.sliceVars(args_range);
+                        const idxs_top = scratches.idxs.top();
+                        defer scratches.idxs.clearFrom(idxs_top);
+
+                        for (arg_vars) |arg_var| {
+                            const payload_type = try self.fromTypeVar(allocator, types_store, arg_var, common_idents, seen, scratches);
+                            try scratches.idxs.append(payload_type);
+                        }
+
+                        const payloads_span = try self.addIdxSpan(allocator, scratches.idxs.sliceFromStart(idxs_top));
+                        try scratches.tags.append(.{ .name = name, .payloads = payloads_span });
                     }
 
-                    const payloads_span = try self.addIdxSpan(allocator, scratches.idxs.sliceFromStart(idxs_top));
-                    try scratches.tags.append(.{ .name = name, .payloads = payloads_span });
+                    // Follow extension variable to find more tags
+                    const ext_resolved = types_store.resolveVar(current_row.ext);
+                    switch (ext_resolved.desc.content) {
+                        .structure => |ext_flat| switch (ext_flat) {
+                            .tag_union => |next_row| {
+                                current_row = next_row;
+                                continue;
+                            },
+                            .empty_tag_union => break,
+                            else => break,
+                        },
+                        else => break, // flex/rigid/alias/err → end of chain
+                    }
                 }
 
-                // Tags are already sorted alphabetically from the types store
-                // (Check.zig, unify.zig, and instantiate.zig all sort by name).
-                // Do NOT re-sort here — ident indices don't necessarily match alphabetical order.
                 const collected_tags = scratches.tags.sliceFromStart(tags_top);
+                // Sort tags alphabetically to match discriminant assignment order.
+                // Each ext-chain row is pre-sorted, but the concatenation may not be.
+                if (scratches.ident_store) |ident_store| {
+                    std.mem.sort(Tag, collected_tags, ident_store, Tag.sortByNameAsc);
+                }
                 const tag_span = try self.addTags(allocator, collected_tags);
                 self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .tag_union = .{ .tags = tag_span } };
                 return placeholder_idx;

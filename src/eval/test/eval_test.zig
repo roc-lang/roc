@@ -3731,3 +3731,23 @@ test "Str.join_with" {
 // Note: Str.from_utf8 returns a Result which requires match support in all evaluators.
 // It is tested indirectly via the encode/decode tests. The wasm codegen for it is implemented
 // but we don't add a standalone test here to avoid DevEvaluator limitations with Result matching.
+
+test "dev: List.last returns tag-union-wrapped result" {
+    // List.last returns Result a [ListWasEmpty]. The layout-only formatter
+    // can't show tag names, but variant=1 means Ok (Err=0, Ok=1 alphabetically).
+    try runDevOnlyExpectStr("List.last([1, 2, 3])", "<tag_union variant=1>");
+}
+
+test "dev: List.first returns tag-union-wrapped result" {
+    try runDevOnlyExpectStr("List.first([10, 20, 30])", "<tag_union variant=1>");
+}
+
+test "dev: List.first on empty list returns Err" {
+    // List.first([]) should return Err(ListWasEmpty), variant=0 alphabetically
+    try runDevOnlyExpectStr("List.first([])", "<tag_union variant=0>");
+}
+
+test "dev: Str.from_utf8 returns Ok for valid bytes" {
+    try runDevOnlyExpectStr("Str.from_utf8([72, 105])", "Ok(\"Hi\")");
+}
+
