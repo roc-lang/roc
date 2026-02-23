@@ -36,6 +36,12 @@ const DeferredBlockLambda = struct {
     module_idx: u32,
 };
 
+/// Nominal type origin info for method dispatch.
+const NominalInfo = struct {
+    origin: Ident.Idx,
+    ident: Ident.Idx,
+};
+
 // --- Fields ---
 
 allocator: Allocator,
@@ -1237,11 +1243,31 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, da: anytype, monoty
     if (da.args) |args_span| {
         // Method call: resolve via the receiver's type
         const receiver_type_var = ModuleEnv.varFrom(da.receiver);
-        const method_symbol = try self.resolveMethodForTypeVar(
+        const method_symbol_opt = try self.resolveMethodForTypeVar(
             module_env,
             receiver_type_var,
             da.field_name,
-        ) orelse MIR.Symbol{
+        );
+
+        if (method_symbol_opt == null) {
+            // No nominal method found — check if this is a known structural op
+            // (e.g. `is_eq` on a where-clause type var that resolved to a structural type like unit).
+            const common = self.currentCommonIdents();
+            if (da.field_name == common.is_eq) {
+                // Emit structural equality via run_low_level
+                const explicit_args = module_env.store.sliceExpr(args_span);
+                if (explicit_args.len == 1) {
+                    const rhs = try self.lowerExpr(explicit_args[0]);
+                    const ll_args = try self.store.addExprSpan(self.allocator, &.{ receiver, rhs });
+                    return try self.store.addExpr(self.allocator, .{ .run_low_level = .{
+                        .op = .num_is_eq,
+                        .args = ll_args,
+                    } }, monotype, region);
+                }
+            }
+        }
+
+        const method_symbol = method_symbol_opt orelse MIR.Symbol{
             .module_idx = self.current_module_idx,
             .ident_idx = da.field_name,
         };
@@ -1385,7 +1411,7 @@ fn resolveMethodForTypeVar(
     }
 
     // Check if it's a nominal type
-    const nominal_info: ?struct { origin: Ident.Idx, ident: Ident.Idx } = switch (resolved.desc.content) {
+    const nominal_info: ?NominalInfo = switch (resolved.desc.content) {
         .structure => |s| switch (s) {
             .nominal_type => |nom| .{
                 .origin = nom.origin_module,
@@ -1402,7 +1428,8 @@ fn resolveMethodForTypeVar(
             .empty_tag_union,
             => null,
         },
-        .flex, .rigid, .alias, .err => null,
+        .flex, .rigid => self.resolveFlexRigidToNominal(resolved.var_),
+        .alias, .err => null,
     };
 
     const info = nominal_info orelse return null;
@@ -1423,6 +1450,41 @@ fn resolveMethodForTypeVar(
     return MIR.Symbol{
         .module_idx = @intCast(origin_module_idx),
         .ident_idx = qualified_method,
+    };
+}
+
+/// Resolve a flex/rigid type variable to nominal info via `type_var_seen`.
+/// When a where-clause constrained type var (e.g. `ok` in `Try.is_eq`) has been
+/// seeded with a concrete monotype (e.g. Dec), this maps that monotype back to
+/// the corresponding nominal type's origin module and ident for method dispatch.
+fn resolveFlexRigidToNominal(self: *Self, var_: types.Var) ?NominalInfo {
+    const monotype = self.type_var_seen.get(var_) orelse return null;
+    if (monotype.isNone()) return null;
+
+    const mono = self.store.monotype_store.getMonotype(monotype);
+    const common = self.currentCommonIdents();
+
+    return switch (mono) {
+        .prim => |p| switch (p) {
+            .dec => .{ .origin = common.builtin_module, .ident = common.dec },
+            .str => .{ .origin = common.builtin_module, .ident = common.str },
+            .bool => .{ .origin = common.builtin_module, .ident = common.bool },
+            .u8 => .{ .origin = common.builtin_module, .ident = common.u8 },
+            .u16 => .{ .origin = common.builtin_module, .ident = common.u16 },
+            .u32 => .{ .origin = common.builtin_module, .ident = common.u32 },
+            .u64 => .{ .origin = common.builtin_module, .ident = common.u64 },
+            .u128 => .{ .origin = common.builtin_module, .ident = common.u128 },
+            .i8 => .{ .origin = common.builtin_module, .ident = common.i8 },
+            .i16 => .{ .origin = common.builtin_module, .ident = common.i16 },
+            .i32 => .{ .origin = common.builtin_module, .ident = common.i32 },
+            .i64 => .{ .origin = common.builtin_module, .ident = common.i64 },
+            .i128 => .{ .origin = common.builtin_module, .ident = common.i128 },
+            .f32 => .{ .origin = common.builtin_module, .ident = common.f32 },
+            .f64 => .{ .origin = common.builtin_module, .ident = common.f64 },
+        },
+        .list => .{ .origin = common.builtin_module, .ident = common.list },
+        // Tag unions, records, tuples etc. don't have nominal dispatch
+        else => null,
     };
 }
 
