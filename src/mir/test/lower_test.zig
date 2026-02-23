@@ -1750,3 +1750,24 @@ test "cross-module type resolution: U32.to dispatches with concrete U32 function
     const def_elem = env.mir_store.monotype_store.getMonotype(def_ret_mono.list.elem);
     try testing.expectEqual(Monotype.Monotype{ .prim = .u32 }, def_elem);
 }
+
+test "Dec.abs lowers to num_abs with Dec monotype, not unit" {
+    var env = try MirTestEnv.initExpr("(-3.14).abs()");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const top = env.mir_store.getExpr(expr);
+
+    // The result monotype must be Dec, not unit
+    const mono_idx = env.mir_store.typeOf(expr);
+    const mono = env.mir_store.monotype_store.getMonotype(mono_idx);
+    try testing.expectEqual(Monotype.Monotype{ .prim = .dec }, mono);
+
+    // If it's a call, check the function's monotype too
+    if (top == .call) {
+        const func_mono_idx = env.mir_store.typeOf(top.call.func);
+        const func_mono = env.mir_store.monotype_store.getMonotype(func_mono_idx);
+        try testing.expect(func_mono == .func);
+        const ret = env.mir_store.monotype_store.getMonotype(func_mono.func.ret);
+        try testing.expectEqual(Monotype.Monotype{ .prim = .dec }, ret);
+    }
+}

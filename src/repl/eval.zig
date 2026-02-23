@@ -655,9 +655,43 @@ pub const Repl = struct {
 
         // Check for type problems (e.g., type mismatches)
         if (checker.problems.problems.items.len > 0) {
-            // Return a generic type error message
-            // TODO: Use ReportBuilder to produce a more detailed error message
-            return .{ .type_error = try self.allocator.dupe(u8, "TYPE MISMATCH") };
+            const problem = checker.problems.problems.items[0];
+            const empty_modules: []const *const ModuleEnv = &.{};
+            var report_builder = check.ReportBuilder.init(
+                self.allocator,
+                module_env,
+                cir,
+                &checker.snapshots,
+                &checker.problems,
+                "repl",
+                empty_modules,
+                &checker.import_mapping,
+                &checker.regions,
+            ) catch {
+                return .{ .type_error = try self.allocator.dupe(u8, "TYPE MISMATCH") };
+            };
+            defer report_builder.deinit();
+
+            var report = report_builder.build(problem) catch {
+                return .{ .type_error = try self.allocator.dupe(u8, "TYPE MISMATCH") };
+            };
+            defer report.deinit();
+
+            var output = std.array_list.Managed(u8).init(self.allocator);
+            var unmanaged = output.moveToUnmanaged();
+            var writer_alloc = std.Io.Writer.Allocating.fromArrayList(self.allocator, &unmanaged);
+            report.render(&writer_alloc.writer, .markdown) catch |err| switch (err) {
+                error.WriteFailed => return error.OutOfMemory,
+                else => return err,
+            };
+            unmanaged = writer_alloc.toArrayList();
+            output = unmanaged.toManaged(self.allocator);
+            // Trim trailing whitespace from the rendered report
+            const rendered = output.items;
+            const trimmed = std.mem.trimRight(u8, rendered, " \t\r\n");
+            const result = try self.allocator.dupe(u8, trimmed);
+            output.deinit();
+            return .{ .type_error = result };
         }
 
         // Use DevEvaluator if backend is .dev and we have a DevEvaluator instance

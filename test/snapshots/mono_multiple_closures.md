@@ -166,9 +166,9 @@ EndOfFile,
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Dec, _arg -> Dec"))
+		(patt (type "Dec, Dec -> Dec"))
 		(patt (type "Dec")))
 	(expressions
-		(expr (type "Dec, _arg -> []"))
+		(expr (type "Dec, Dec -> []"))
 		(expr (type "[]"))))
 ~~~

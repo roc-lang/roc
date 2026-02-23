@@ -3221,9 +3221,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .num_abs_diff => {
                     // |a - b|: compare and subtract in the correct order to avoid wrap/overflow
+                    const arg_layout = self.getExprLayout(args[0]);
                     const a_loc = try self.generateExpr(args[0]);
                     const b_loc = try self.generateExpr(args[1]);
-                    return try self.generateAbsDiff(a_loc, b_loc, ll.ret_layout);
+                    return try self.generateAbsDiff(a_loc, b_loc, ll.ret_layout, arg_layout);
                 },
 
                 // ── Generic numeric operations (not emitted by LIR lowering) ──
@@ -4526,13 +4527,53 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emitSDiv(.w64, result_reg, lhs_reg, rhs_reg);
                     }
                 },
-                .rem, .mod => {
-                    // For integers: rem and mod differ for negative dividends.
-                    // Roc's Num module uses unsigned types, so they're equivalent here.
+                .rem => {
                     if (is_unsigned) {
                         try self.codegen.emitUMod(.w64, result_reg, lhs_reg, rhs_reg);
                     } else {
                         try self.codegen.emitSMod(.w64, result_reg, lhs_reg, rhs_reg);
+                    }
+                },
+                .mod => {
+                    if (is_unsigned) {
+                        try self.codegen.emitUMod(.w64, result_reg, lhs_reg, rhs_reg);
+                    } else {
+                        // Mathematical modulo: result has same sign as divisor.
+                        // Hardware remainder has sign of dividend; adjust when signs differ.
+                        // Algorithm: rem = a % b (hardware); adjusted = rem + b;
+                        //   use adjusted when rem != 0 AND sign(rem) != sign(b), else rem.
+                        try self.codegen.emitSMod(.w64, result_reg, lhs_reg, rhs_reg);
+
+                        const adjusted_reg = try self.allocTempGeneral();
+                        const sign_check_reg = try self.allocTempGeneral();
+
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            // adjusted = rem + b
+                            try self.codegen.emit.addRegRegReg(.w64, adjusted_reg, result_reg, rhs_reg);
+                            // sign_check = rem XOR b (negative if signs differ)
+                            try self.codegen.emit.eorRegRegReg(.w64, sign_check_reg, result_reg, rhs_reg);
+                            // Select adjusted if signs differ (sign_check < 0)
+                            try self.codegen.emit.cmpRegImm12(.w64, sign_check_reg, 0);
+                            try self.codegen.emit.csel(.w64, adjusted_reg, adjusted_reg, result_reg, .lt);
+                            // But if rem == 0, result must be 0 regardless
+                            try self.codegen.emit.cmpRegImm12(.w64, result_reg, 0);
+                            try self.codegen.emit.csel(.w64, result_reg, result_reg, adjusted_reg, .eq);
+                        } else {
+                            // adjusted = rem + b
+                            try self.emitMovRegReg(adjusted_reg, result_reg);
+                            try self.codegen.emit.addRegReg(.w64, adjusted_reg, rhs_reg);
+                            // If rem == 0, override adjusted to 0 (so CMOV below is safe)
+                            try self.codegen.emit.testRegReg(.w64, result_reg, result_reg);
+                            try self.codegen.emit.cmovcc(.equal, .w64, adjusted_reg, result_reg);
+                            // sign_check = rem XOR b (SF set if signs differ)
+                            try self.emitMovRegReg(sign_check_reg, result_reg);
+                            try self.codegen.emit.xorRegReg(.w64, sign_check_reg, rhs_reg);
+                            try self.codegen.emit.testRegReg(.w64, sign_check_reg, sign_check_reg);
+                            try self.codegen.emit.cmovcc(.sign, .w64, result_reg, adjusted_reg);
+                        }
+
+                        self.codegen.freeGeneral(sign_check_reg);
+                        self.codegen.freeGeneral(adjusted_reg);
                     }
                 },
                 .shl => try self.emitShlReg(.w64, result_reg, lhs_reg, rhs_reg),
@@ -7071,7 +7112,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// For floats, uses float sub + float abs.
         /// For integers: compares a and b, then subtracts the smaller from the larger.
         /// This avoids wrapping/overflow issues that abs(a - b) would cause.
-        fn generateAbsDiff(self: *Self, a_loc: ValueLocation, b_loc: ValueLocation, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
+        fn generateAbsDiff(self: *Self, a_loc: ValueLocation, b_loc: ValueLocation, ret_layout: layout.Idx, arg_layout: ?layout.Idx) Allocator.Error!ValueLocation {
             // Float: subtract then take float absolute value
             if (ret_layout == .f32 or ret_layout == .f64) {
                 const a_reg = try self.ensureInFloatReg(a_loc);
@@ -7086,11 +7127,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // 128-bit (I128, U128, Dec)
             if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec) {
-                return try self.generateAbsDiff128(a_loc, b_loc, ret_layout);
+                return try self.generateAbsDiff128(a_loc, b_loc, ret_layout, arg_layout);
             }
 
             // 64-bit or smaller integers: CMP, compute both a-b and b-a, CSEL/CMOV
-            const is_signed = switch (ret_layout) {
+            // Use arg_layout for signedness since abs_diff returns unsigned (e.g.
+            // I8.abs_diff returns U8), but the comparison must be signed.
+            const input_layout = arg_layout orelse ret_layout;
+            const is_signed = switch (input_layout) {
                 .i8, .i16, .i32, .i64 => true,
                 .u8, .u16, .u32, .u64 => false,
                 else => false,
@@ -7098,6 +7142,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const a_reg = try self.ensureInGeneralReg(a_loc);
             const b_reg = try self.ensureInGeneralReg(b_loc);
+
+            // For signed types smaller than 64 bits, values are zero-extended in
+            // registers. Sign-extend them so the signed comparison is correct.
+            // E.g. I8 value -5 is stored as 0xFB (251); without sign extension,
+            // a 64-bit signed compare treats it as 251 > 10 instead of -5 < 10.
+            if (is_signed) {
+                const shift_amount: u6 = switch (input_layout) {
+                    .i8 => 56,
+                    .i16 => 48,
+                    .i32 => 32,
+                    else => 0,
+                };
+                if (shift_amount > 0) {
+                    try self.emitShlImm(.w64, a_reg, a_reg, shift_amount);
+                    try self.emitAsrImm(.w64, a_reg, a_reg, shift_amount);
+                    try self.emitShlImm(.w64, b_reg, b_reg, shift_amount);
+                    try self.emitAsrImm(.w64, b_reg, b_reg, shift_amount);
+                }
+            }
+
             const diff_reg = try self.allocTempGeneral();
             const neg_reg = try self.allocTempGeneral();
 
@@ -7130,8 +7194,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate 128-bit |a - b| using SUBS/SBCS for comparison flags.
-        fn generateAbsDiff128(self: *Self, a_loc: ValueLocation, b_loc: ValueLocation, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
-            const is_signed = (ret_layout == .i128 or ret_layout == .dec);
+        fn generateAbsDiff128(self: *Self, a_loc: ValueLocation, b_loc: ValueLocation, ret_layout: layout.Idx, arg_layout: ?layout.Idx) Allocator.Error!ValueLocation {
+            const input_layout = arg_layout orelse ret_layout;
+            const is_signed = (input_layout == .i128 or input_layout == .dec);
 
             const a_parts = try self.getI128Parts(a_loc, if (is_signed) .signed else .unsigned);
             const b_parts = try self.getI128Parts(b_loc, if (is_signed) .signed else .unsigned);

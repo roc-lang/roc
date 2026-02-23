@@ -159,6 +159,9 @@ deferred_cycle_envs: std.ArrayListUnmanaged(Env),
 /// After constraint resolution, if the fn_var resolves to .err, the
 /// corresponding expression is marked as erroneous (added to erroneous_exprs).
 binop_dispatch_tracking: std.ArrayListUnmanaged(BinopDispatchEntry),
+/// True when processing dispatch constraints after numeric literal defaulting.
+/// Used to add "defaulted to Dec" context in error messages.
+in_numeric_default_pass: bool = false,
 
 /// A def + processing data
 const DefProcessed = struct {
@@ -5990,6 +5993,17 @@ fn finalizeNumericDefaultsInternal(self: *Self, env: *Env) std.mem.Allocator.Err
 
     // Process the newly created constraints from the unification
     try self.checkAllConstraints(env);
+
+    // After defaulting numeric literals to Dec, any method_call constraints
+    // that were deferred (because the dispatcher was a flex var) can now be
+    // resolved since the dispatcher is now Dec (a nominal type).
+    // checkAllConstraints only runs checkStaticDispatchConstraints when there
+    // are regular constraints, so we need an explicit extra pass.
+    if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
+        self.in_numeric_default_pass = true;
+        defer self.in_numeric_default_pass = false;
+        try self.checkStaticDispatchConstraints(env);
+    }
 }
 
 /// Process only early_return and try_operator constraints, keeping other
@@ -6063,7 +6077,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
         const deferred_constraint = env.deferred_static_dispatch_constraints.items.items[deferred_constraint_index];
         const dispatcher_resolved = self.types.resolveVar(deferred_constraint.var_);
         const dispatcher_content = dispatcher_resolved.desc.content;
-
         // Verify no recursive constraints - recursion should be handled through
         // nominal types which break the cycle naturally.
         for (self.constraint_check_stack.items) |stack_var| {
@@ -6686,6 +6699,7 @@ fn reportConstraintError(
                 .method_name = constraint.fn_name,
                 .origin = constraint.origin,
                 .num_literal = constraint.num_literal,
+                .defaulted_from_numeric_literal = self.in_numeric_default_pass,
             },
         } },
         .not_nominal => problem.Problem{ .static_dispatch = .{

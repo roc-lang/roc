@@ -3419,13 +3419,15 @@ test "check type - recursive type - anonymous recursion" {
 
 test "check type - equirecursive static dispatch" {
     // Tests that method dispatch works with numeric literals
-    // The expression (|x| x.plus(5))(7) should type-check successfully
+    // The expression (|x| x.plus(5))(7) should type-check successfully.
+    // Both 5 and 7 are from_numeral flex vars that default to Dec,
+    // and Dec.plus : Dec, Dec -> Dec, so the result is Dec.
     const source = "(|x| x.plus(5))(7)";
 
     try checkTypesExpr(
         source,
         .pass,
-        "_a",
+        "Dec",
     );
 }
 

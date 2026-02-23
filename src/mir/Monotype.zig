@@ -15,6 +15,21 @@ const types = @import("types");
 const Ident = base.Ident;
 const Allocator = std.mem.Allocator;
 const CommonIdents = can.ModuleEnv.CommonIdents;
+const StaticDispatchConstraint = types.StaticDispatchConstraint;
+
+/// Check if a constraint range contains a numeric constraint (from_numeral,
+/// desugared_binop, or desugared_unaryop). These imply the type variable is
+/// numeric and should default to Dec rather than unit.
+fn hasNumeralConstraint(types_store: *const types.Store, constraints: StaticDispatchConstraint.SafeList.Range) bool {
+    if (constraints.isEmpty()) return false;
+    for (types_store.sliceStaticDispatchConstraints(constraints)) |constraint| {
+        switch (constraint.origin) {
+            .from_numeral, .desugared_binop, .desugared_unaryop => return true,
+            .method_call, .where_clause => {},
+        }
+    }
+    return false;
+}
 
 /// Index into the Store's monotypes array.
 /// Since MIR has a 1:1 expr-to-type mapping, an Expr.Idx can be directly
@@ -289,9 +304,14 @@ pub const Store = struct {
         if (seen.get(resolved.var_)) |cached| return cached;
 
         return switch (resolved.desc.content) {
-            .flex, .rigid => {
-                // Unconstrained type variables (e.g. the element type of an empty list `[]`)
-                // have no concrete type, so they are zero-sized.
+            .flex => |flex| {
+                if (hasNumeralConstraint(types_store, flex.constraints))
+                    return self.primIdx(.dec);
+                return self.unit_idx;
+            },
+            .rigid => |rigid| {
+                if (hasNumeralConstraint(types_store, rigid.constraints))
+                    return self.primIdx(.dec);
                 return self.unit_idx;
             },
             .alias => |alias| {

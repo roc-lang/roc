@@ -1787,9 +1787,21 @@ pub const ReportBuilder = struct {
 
         try report.document.addLineBreak();
         try report.document.addLineBreak();
+
+        if (data.defaulted_from_numeric_literal) {
+            try D.renderSlice(&.{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("This numeric literal was given the type"),
+                D.bytes("Dec").withAnnotation(.emphasized),
+                D.bytes("because it was never used as any concrete number type. To use a different numeric type, add a suffix or a type annotation."),
+            }, self, &report);
+        }
+
         switch (data.dispatcher_type) {
             .nominal => {
-                if (is_from_binop) {
+                if (data.defaulted_from_numeric_literal) {
+                    // Already provided a more specific hint above
+                } else if (is_from_binop) {
                     if (mb_operator) |operator| {
                         try D.renderSlice(&.{
                             D.bytes("Hint:").withAnnotation(.emphasized),
