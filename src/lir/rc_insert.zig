@@ -558,7 +558,10 @@ pub const RcInsertPass = struct {
         result_layout: LayoutIdx,
         region: Region,
     ) Allocator.Error!LirExprId {
-        const stmts = self.store.getStmts(stmts_span);
+        // Copy stmts to avoid iterator invalidation from nested processExpr
+        // calls that may grow the stmts ArrayList.
+        const stmts = try self.allocator.dupe(LirStmt, self.store.getStmts(stmts_span));
+        defer self.allocator.free(stmts);
 
         // Save live_rc_symbols depth so nested blocks restore on exit.
         const saved_live_len = self.live_rc_symbols.items.len;
@@ -692,7 +695,10 @@ pub const RcInsertPass = struct {
         result_layout: LayoutIdx,
         region: Region,
     ) Allocator.Error!LirExprId {
-        const branches = self.store.getIfBranches(branches_span);
+        // Copy branches to avoid iterator invalidation from nested processExpr
+        // calls that may grow the if_branches ArrayList.
+        const branches = try self.allocator.dupe(LirIfBranch, self.store.getIfBranches(branches_span));
+        defer self.allocator.free(branches);
 
         // Collect symbols bound within branch bodies — these are local to their
         // defining branch and must NOT get per-branch RC ops.
@@ -780,7 +786,13 @@ pub const RcInsertPass = struct {
         result_layout: LayoutIdx,
         region: Region,
     ) Allocator.Error!LirExprId {
-        const branches = self.store.getMatchBranches(branches_span);
+        // Copy branches to a local buffer to avoid iterator invalidation.
+        // processExpr can recursively process nested match expressions, which
+        // appends to self.store.match_branches and may reallocate the backing
+        // buffer, invalidating any slices obtained from getMatchBranches.
+        const branches_slice = self.store.getMatchBranches(branches_span);
+        const branches = try self.allocator.dupe(LirMatchBranch, branches_slice);
+        defer self.allocator.free(branches);
 
         // Collect symbols bound by branch patterns — these are local to each branch
         // and must NOT get per-branch RC ops from the enclosing scope.
@@ -833,7 +845,6 @@ pub const RcInsertPass = struct {
         defer new_branches.deinit(self.allocator);
 
         for (branches) |branch| {
-            // Count body uses for setPendingBranchRcAdj
             self.scratch_uses.clearRetainingCapacity();
             try self.countUsesInto(branch.body, &self.scratch_uses);
             try self.setPendingBranchRcAdj(&self.scratch_uses, &symbols_in_any_branch);
@@ -868,7 +879,10 @@ pub const RcInsertPass = struct {
     /// Each branch is mutually exclusive, so symbols used in any branch
     /// get per-branch RC adjustments (same pattern as if_then_else/match).
     fn processDiscriminantSwitch(self: *RcInsertPass, ds: anytype, region: Region) Allocator.Error!LirExprId {
-        const branches = self.store.getExprSpan(ds.branches);
+        // Copy branches to avoid iterator invalidation from nested processExpr
+        // calls that may grow the exprs ArrayList.
+        const branches = try self.allocator.dupe(LirExprId, self.store.getExprSpan(ds.branches));
+        defer self.allocator.free(branches);
 
         // Collect symbols bound within branch bodies — these are local to their
         // defining branch and must NOT get per-branch RC ops.
