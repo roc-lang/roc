@@ -52,6 +52,7 @@ const listSublist = builtins.list.listSublist;
 const listReplace = builtins.list.listReplace;
 const listReserve = builtins.list.listReserve;
 const listReleaseExcessCapacity = builtins.list.listReleaseExcessCapacity;
+const listSortWith = builtins.list.listSortWith;
 
 // String builtins
 const strToUtf8C = builtins.str.strToUtf8C;
@@ -159,6 +160,7 @@ pub const BuiltinFn = enum {
     list_replace,
     list_reserve,
     list_release_excess_capacity,
+    list_sort_with,
 
     // Numeric operations
     dec_to_str,
@@ -240,6 +242,7 @@ pub const BuiltinFn = enum {
             .list_replace => "roc_builtins_list_replace",
             .list_reserve => "roc_builtins_list_reserve",
             .list_release_excess_capacity => "roc_builtins_list_release_excess_capacity",
+            .list_sort_with => "roc_builtins_list_sort_with",
 
             // Numeric operations
             .dec_to_str => "roc_builtins_dec_to_str",
@@ -553,6 +556,100 @@ fn wrapListReserve(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap:
 fn wrapListReleaseExcessCapacity(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, roc_ops: *RocOps) callconv(.c) void {
     const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     out.* = listReleaseExcessCapacity(list, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), .Immutable, roc_ops);
+}
+
+/// Context passed through the opaque `cmp_data` pointer to the sort comparison trampoline.
+const SortCmpContext = extern struct {
+    roc_fn_addr: usize,
+    element_width: usize,
+};
+
+/// C-callable comparison trampoline for listSortWith.
+/// Loads element values from pointers and calls the compiled Roc comparison function.
+fn sortCmpTrampoline(cmp_data: ?[*]u8, a_ptr: ?[*]u8, b_ptr: ?[*]u8) callconv(.c) u8 {
+    const ctx: *const SortCmpContext = @ptrCast(@alignCast(cmp_data));
+    const ew = ctx.element_width;
+
+    if (ew <= 8) {
+        const cmp_fn: *const fn (u64, u64) callconv(.c) u8 = @ptrFromInt(ctx.roc_fn_addr);
+        var a_val: u64 = 0;
+        var b_val: u64 = 0;
+        if (a_ptr) |ap| @memcpy(@as([*]u8, @ptrCast(&a_val))[0..ew], ap[0..ew]);
+        if (b_ptr) |bp| @memcpy(@as([*]u8, @ptrCast(&b_val))[0..ew], bp[0..ew]);
+        return cmp_fn(a_val, b_val);
+    } else if (ew <= 16) {
+        const cmp_fn: *const fn (u128, u128) callconv(.c) u8 = @ptrFromInt(ctx.roc_fn_addr);
+        var a_val: u128 = 0;
+        var b_val: u128 = 0;
+        if (a_ptr) |ap| @memcpy(@as([*]u8, @ptrCast(&a_val))[0..ew], ap[0..ew]);
+        if (b_ptr) |bp| @memcpy(@as([*]u8, @ptrCast(&b_val))[0..ew], bp[0..ew]);
+        return cmp_fn(a_val, b_val);
+    } else {
+        const cmp_fn: *const fn (?[*]u8, ?[*]u8) callconv(.c) u8 = @ptrFromInt(ctx.roc_fn_addr);
+        return cmp_fn(a_ptr, b_ptr);
+    }
+}
+
+/// Wrapper: listSortWith — sorts a list using a compiled Roc comparison function.
+/// Uses a simple insertion sort to avoid ABI complexities with fluxsort.
+fn wrapListSortWith(
+    out: *RocList,
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    cmp_fn_addr: usize,
+    alignment: u32,
+    element_width: usize,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    if (list_len < 2) {
+        out.* = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+        return;
+    }
+
+    // Allocate a new list for the sorted result
+    const total_bytes = list_len * element_width;
+    const sorted_bytes = allocateWithRefcountC(total_bytes, alignment, false, roc_ops);
+    if (list_bytes) |src| {
+        @memcpy(sorted_bytes[0..total_bytes], src[0..total_bytes]);
+    }
+
+    // Insertion sort using the comparison trampoline
+    const cmp_ctx = SortCmpContext{
+        .roc_fn_addr = cmp_fn_addr,
+        .element_width = element_width,
+    };
+
+    var temp_buf: [256]u8 align(16) = undefined;
+
+    var i: usize = 1;
+    while (i < list_len) : (i += 1) {
+        // Save element[i] to temp
+        const elem_i = sorted_bytes + i * element_width;
+        @memcpy(temp_buf[0..element_width], elem_i[0..element_width]);
+
+        // Shift elements right until we find the insertion point
+        var j: usize = i;
+        while (j > 0) {
+            const elem_j_minus_1 = sorted_bytes + (j - 1) * element_width;
+            // Compare temp (element being inserted) with element[j-1]
+            const cmp_result = sortCmpTrampoline(@constCast(@ptrCast(&cmp_ctx)), &temp_buf, elem_j_minus_1);
+            if (cmp_result != 2) break; // not LT, stop shifting (EQ=0, GT=1)
+            // Shift element[j-1] to element[j]
+            const elem_j = sorted_bytes + j * element_width;
+            @memcpy(elem_j[0..element_width], elem_j_minus_1[0..element_width]);
+            j -= 1;
+        }
+        // Insert temp at position j
+        const insert_pos = sorted_bytes + j * element_width;
+        @memcpy(insert_pos[0..element_width], temp_buf[0..element_width]);
+    }
+
+    out.* = RocList{
+        .bytes = sorted_bytes,
+        .length = list_len,
+        .capacity_or_alloc_ptr = list_len,
+    };
 }
 
 const LirProc = lir.LirProc;
@@ -3347,11 +3444,93 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_shift_right_by,
                 .num_shift_right_zf_by,
                 .str_inspekt,
-                .list_sort_with,
                 .list_drop_at,
                 .compare,
                 => {
                     std.debug.panic("UNIMPLEMENTED low-level op: {s}", .{@tagName(ll.op)});
+                },
+                .list_sort_with => {
+                    // list_sort_with(list, comparator) -> List
+                    if (args.len != 2) unreachable;
+                    const list_loc = try self.generateExpr(args[0]);
+                    const cmp_loc = try self.generateExpr(args[1]);
+
+                    const ls = self.layout_store orelse unreachable;
+                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+
+                    const elem_size_align: layout.SizeAlign = blk: {
+                        const ret_layout = ls.getLayout(ll.ret_layout);
+                        break :blk switch (ret_layout.tag) {
+                            .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
+                            .list_of_zst => .{ .size = 0, .alignment = .@"1" },
+                            else => unreachable,
+                        };
+                    };
+
+                    // Get the comparison function code offset from the lambda/closure
+                    const cmp_code_offset: usize = switch (cmp_loc) {
+                        .lambda_code => |lc| lc.code_offset,
+                        .closure_value => |cv| blk: {
+                            // Compile the closure's lambda body as a proc
+                            const inner = self.store.getExpr(cv.lambda);
+                            switch (inner) {
+                                .lambda => |lam| break :blk try self.compileLambdaAsProc(cv.lambda, lam),
+                                else => unreachable,
+                            }
+                        },
+                        else => unreachable, // comparator must be a lambda or closure
+                    };
+
+                    // Compute the absolute address of the lambda at runtime using
+                    // PC-relative addressing: emit LEA/ADR that resolves to the
+                    // lambda's code address when the instruction executes.
+                    const cmp_addr_slot = self.codegen.allocStackSlot(8);
+                    {
+                        const current = self.codegen.currentOffset();
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            // ADR X9, (target - current)
+                            const rel: i21 = @intCast(@as(i64, @intCast(cmp_code_offset)) - @as(i64, @intCast(current)));
+                            try self.codegen.emit.adr(.X9, rel);
+                            try self.codegen.emitStoreStack(.w64, cmp_addr_slot, .X9);
+                        } else {
+                            // LEA RAX, [RIP + (target - current - 7)]
+                            // 7 = size of the LEA instruction itself (REX + opcode + modrm + disp32)
+                            const rel: i32 = @intCast(@as(i64, @intCast(cmp_code_offset)) - @as(i64, @intCast(current)) - 7);
+                            try self.codegen.emit.leaRegRipRel(.RAX, rel);
+                            try self.codegen.emitStoreStack(.w64, cmp_addr_slot, .RAX);
+                        }
+
+                        // Record this as an internal address patch so compileLambdaAsProc
+                        // body shifts can update it.
+                        try self.internal_addr_patches.append(self.allocator, .{
+                            .instr_offset = current,
+                            .target_offset = cmp_code_offset,
+                        });
+                    }
+
+                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+                    const result_offset = self.codegen.allocStackSlot(roc_list_size);
+                    const alignment_bytes = elem_size_align.alignment.toByteUnits();
+                    const fn_addr: usize = @intFromPtr(&wrapListSortWith);
+
+                    {
+                        // wrapListSortWith(out, list_bytes, list_len, list_cap, cmp_fn_addr, alignment, element_width, roc_ops)
+                        const base_reg = frame_ptr;
+                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+
+                        try builder.addLeaArg(base_reg, result_offset);
+                        try builder.addMemArg(base_reg, list_off);
+                        try builder.addMemArg(base_reg, list_off + 8);
+                        try builder.addMemArg(base_reg, list_off + 16);
+                        try builder.addMemArg(base_reg, cmp_addr_slot);
+                        try builder.addImmArg(@intCast(alignment_bytes));
+                        try builder.addImmArg(@intCast(elem_size_align.size));
+                        try builder.addRegArg(roc_ops_reg);
+
+                        try self.callBuiltin(&builder, fn_addr, .list_sort_with);
+                    }
+
+                    return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
                 },
                 .box_box,
                 .box_unbox,
