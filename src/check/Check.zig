@@ -1787,7 +1787,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     try self.setVarRank(ptrn_var, env);
 
     // Check the pattern
-    try self.checkPattern(def.pattern, env);
+    try self.checkPattern(def.pattern, .bound, env);
 
     // Extract function name from the pattern (for better error messages)
     const saved_func_name = self.enclosing_func_name;
@@ -2721,19 +2721,23 @@ const Expected = union(enum) {
 
 // pattern //
 
+const PatternCtx = enum { bound, fn_arg, for_, match_branch };
+
 /// Check the types for the provided pattern, saving the type in-place
 fn checkPattern(
     self: *Self,
     pattern_idx: CIR.Pattern.Idx,
+    ctx: PatternCtx,
     env: *Env,
 ) std.mem.Allocator.Error!void {
-    _ = try self.checkPatternHelp(pattern_idx, env, .in_place);
+    _ = try self.checkPatternHelp(pattern_idx, ctx, env, .in_place);
 }
 
 /// Check the types for the provided pattern, either as fresh var or in-place
 fn checkPatternHelp(
     self: *Self,
     pattern_idx: CIR.Pattern.Idx,
+    ctx: PatternCtx,
     env: *Env,
     comptime out_var: OutVar,
 ) std.mem.Allocator.Error!Var {
@@ -2767,7 +2771,7 @@ fn checkPatternHelp(
         },
         // as //
         .as => |p| {
-            const var_ = try self.checkPatternHelp(p.pattern, env, out_var);
+            const var_ = try self.checkPatternHelp(p.pattern, ctx, env, out_var);
             _ = try self.unify(var_, pattern_var, env);
         },
         // tuple //
@@ -2781,7 +2785,7 @@ fn checkPatternHelp(
                         // Check tuple elements
                         const elems_slice = self.cir.store.slicePatterns(tuple.patterns);
                         for (elems_slice) |single_elem_ptrn_idx| {
-                            const elem_var = try self.checkPatternHelp(single_elem_ptrn_idx, env, out_var);
+                            const elem_var = try self.checkPatternHelp(single_elem_ptrn_idx, ctx, env, out_var);
                             try self.scratch_vars.append(elem_var);
                         }
 
@@ -2792,7 +2796,7 @@ fn checkPatternHelp(
                         // Check tuple elements
                         const elems_slice = self.cir.store.slicePatterns(tuple.patterns);
                         for (elems_slice) |single_elem_ptrn_idx| {
-                            _ = try self.checkPatternHelp(single_elem_ptrn_idx, env, out_var);
+                            _ = try self.checkPatternHelp(single_elem_ptrn_idx, ctx, env, out_var);
                         }
 
                         // Add to types store
@@ -2821,12 +2825,12 @@ fn checkPatternHelp(
                 // constrain the rest of the list
 
                 // Check the first elem
-                const elem_var = try self.checkPatternHelp(elems[0], env, out_var);
+                const elem_var = try self.checkPatternHelp(elems[0], ctx, env, out_var);
 
                 // Iterate over the remaining elements
                 var last_elem_ptrn_idx = elems[0];
                 for (elems[1..], 1..) |elem_ptrn_idx, i| {
-                    const cur_elem_var = try self.checkPatternHelp(elem_ptrn_idx, env, out_var);
+                    const cur_elem_var = try self.checkPatternHelp(elem_ptrn_idx, ctx, env, out_var);
 
                     // Unify each element's var with the list's elem var
                     const result = try self.unifyInContext(elem_var, cur_elem_var, env, .{ .list_entry = .{
@@ -2839,7 +2843,7 @@ fn checkPatternHelp(
                     // to the elem_var to catch their individual errors
                     if (!result.isOk()) {
                         for (elems[i + 1 ..]) |remaining_elem_expr_idx| {
-                            _ = try self.checkPatternHelp(remaining_elem_expr_idx, env, out_var);
+                            _ = try self.checkPatternHelp(remaining_elem_expr_idx, ctx, env, out_var);
                         }
 
                         // Break to avoid cascading errors
@@ -2857,7 +2861,7 @@ fn checkPatternHelp(
                 // This is if the pattern is like `.. as x`
                 if (list.rest_info) |rest_info| {
                     if (rest_info.pattern) |rest_pattern_idx| {
-                        const rest_pattern_var = try self.checkPatternHelp(rest_pattern_idx, env, out_var);
+                        const rest_pattern_var = try self.checkPatternHelp(rest_pattern_idx, ctx, env, out_var);
 
                         _ = try self.unify(pattern_var, rest_pattern_var, env);
                     }
@@ -2877,7 +2881,7 @@ fn checkPatternHelp(
                         // Check tuple elements
                         const arg_ptrn_idx_slice = self.cir.store.slicePatterns(applied_tag.args);
                         for (arg_ptrn_idx_slice) |arg_expr_idx| {
-                            const arg_var = try self.checkPatternHelp(arg_expr_idx, env, out_var);
+                            const arg_var = try self.checkPatternHelp(arg_expr_idx, ctx, env, out_var);
                             try self.scratch_vars.append(arg_var);
                         }
 
@@ -2889,7 +2893,7 @@ fn checkPatternHelp(
                         // Process each tag arg
                         const arg_ptrn_idx_slice = self.cir.store.slicePatterns(applied_tag.args);
                         for (arg_ptrn_idx_slice) |arg_expr_idx| {
-                            _ = try self.checkPatternHelp(arg_expr_idx, env, out_var);
+                            _ = try self.checkPatternHelp(arg_expr_idx, ctx, env, out_var);
                         }
 
                         // Add to types store
@@ -2911,7 +2915,7 @@ fn checkPatternHelp(
         // nominal //
         .nominal => |nominal| {
             // Check the backing pattern first
-            const actual_backing_var = try self.checkPatternHelp(nominal.backing_pattern, env, out_var);
+            const actual_backing_var = try self.checkPatternHelp(nominal.backing_pattern, ctx, env, out_var);
 
             // Use shared nominal type checking logic
             _ = try self.checkNominalTypeUsage(
@@ -2925,7 +2929,7 @@ fn checkPatternHelp(
         },
         .nominal_external => |nominal| {
             // Check the backing pattern first
-            const actual_backing_var = try self.checkPatternHelp(nominal.backing_pattern, env, out_var);
+            const actual_backing_var = try self.checkPatternHelp(nominal.backing_pattern, ctx, env, out_var);
 
             // Resolve the external type declaration
             if (try self.resolveVarFromExternal(nominal.module_idx, nominal.target_node_idx)) |ext_ref| {
@@ -2958,10 +2962,10 @@ fn checkPatternHelp(
                 const field_pattern_var = blk: {
                     switch (destruct.kind) {
                         .Required => |sub_pattern_idx| {
-                            break :blk try self.checkPatternHelp(sub_pattern_idx, env, out_var);
+                            break :blk try self.checkPatternHelp(sub_pattern_idx, ctx, env, out_var);
                         },
                         .SubPattern => |sub_pattern_idx| {
-                            break :blk try self.checkPatternHelp(sub_pattern_idx, env, out_var);
+                            break :blk try self.checkPatternHelp(sub_pattern_idx, ctx, env, out_var);
                         },
                         .Rest => |sub_pattern_idx| {
                             // If this pattern is rest pattern:
@@ -2969,7 +2973,7 @@ fn checkPatternHelp(
                             //               ^^^^
                             //
                             // Then capture this as the ext var, then  continue
-                            const ext_var = try self.checkPatternHelp(sub_pattern_idx, env, out_var);
+                            const ext_var = try self.checkPatternHelp(sub_pattern_idx, ctx, env, out_var);
                             _ = try self.unify(destruct_var, ext_var, env);
                             mb_ext_var = ext_var;
 
@@ -3922,7 +3926,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // all the pattern types are inferred
             const arg_pattern_idxs = self.cir.store.slicePatterns(lambda.args);
             for (arg_pattern_idxs) |pattern_idx| {
-                try self.checkPattern(pattern_idx, env);
+                try self.checkPattern(pattern_idx, .fn_arg, env);
             }
 
             // Now, check if we have an expected function to validate against
@@ -4401,7 +4405,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_for => |for_expr| {
             // Check the pattern
-            try self.checkPattern(for_expr.patt, env);
+            try self.checkPattern(for_expr.patt, .for_, env);
             const for_ptrn_var: Var = ModuleEnv.varFrom(for_expr.patt);
 
             // Check the list expression
@@ -4696,7 +4700,7 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 const decl_pattern_var: Var = ModuleEnv.varFrom(decl_stmt.pattern);
 
                 // Check the pattern
-                try self.checkPattern(decl_stmt.pattern, env);
+                try self.checkPattern(decl_stmt.pattern, .bound, env);
 
                 // Extract function name from the pattern (for better error messages)
                 const saved_func_name = self.enclosing_func_name;
@@ -4719,7 +4723,7 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
             },
             .s_var => |var_stmt| {
                 // Check the pattern
-                try self.checkPattern(var_stmt.pattern_idx, env);
+                try self.checkPattern(var_stmt.pattern_idx, .bound, env);
                 const var_pattern_var: Var = ModuleEnv.varFrom(var_stmt.pattern_idx);
 
                 // Check the annotation, if it exists
@@ -4761,7 +4765,7 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 // Check the pattern
                 // for item in [1,2,3] {
                 //     ^^^^
-                try self.checkPattern(for_stmt.patt, env);
+                try self.checkPattern(for_stmt.patt, .for_, env);
                 const for_ptrn_var: Var = ModuleEnv.varFrom(for_stmt.patt);
 
                 // Check the expr
@@ -5045,7 +5049,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
     // This prevents confusing cascading errors about pattern incompatibility
     for (first_branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
         const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
-        try self.checkPattern(branch_ptrn.pattern, env);
+        try self.checkPattern(branch_ptrn.pattern, .match_branch, env);
         const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
 
         const ptrn_result = try self.unifyInContext(cond_var, branch_ptrn_var, env, .{ .match_pattern = .{
@@ -5079,7 +5083,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
         for (branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
             // Check the pattern's sub types
             const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
-            try self.checkPattern(branch_ptrn.pattern, env);
+            try self.checkPattern(branch_ptrn.pattern, .match_branch, env);
 
             // Check the pattern against the cond
             const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
@@ -5120,7 +5124,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
                 for (other_branch_ptrn_idxs, 0..) |other_branch_ptrn_idx, other_cur_ptrn_index| {
                     // Check the pattern's sub types
                     const other_branch_ptrn = self.cir.store.getMatchBranchPattern(other_branch_ptrn_idx);
-                    try self.checkPattern(other_branch_ptrn.pattern, env);
+                    try self.checkPattern(other_branch_ptrn.pattern, .match_branch, env);
 
                     // Check the pattern against the cond
                     const other_branch_ptrn_var = ModuleEnv.varFrom(other_branch_ptrn.pattern);
