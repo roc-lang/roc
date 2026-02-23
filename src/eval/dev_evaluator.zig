@@ -375,11 +375,13 @@ const DevRocEnv = struct {
         StaticAlloc.recordAlloc(@intFromPtr(new_ptr), roc_realloc.new_length);
 
         // Copy old data to new location (only copy the old size, not new size)
+        // Use @memmove because in a bump allocator the old and new regions
+        // can be adjacent/overlapping when the old alloc was the most recent.
         const old_ptr: [*]u8 = @ptrCast(@alignCast(roc_realloc.answer));
         const old_size = StaticAlloc.getAllocSize(@intFromPtr(old_ptr));
         const copy_len = @min(old_size, roc_realloc.new_length);
         if (copy_len > 0) {
-            @memcpy(new_ptr[0..copy_len], old_ptr[0..copy_len]);
+            @memmove(new_ptr[0..copy_len], old_ptr[0..copy_len]);
         }
 
         // Return the new pointer
