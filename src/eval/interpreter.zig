@@ -2436,7 +2436,7 @@ pub const Interpreter = struct {
                         if (is_builtin_primitive) {
                             break :blk try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
                         }
-                        break :blk try self.allocator.dupe(u8, "<opaque>");
+                        unreachable;
                     } else {
                         // Special case: Bool should render as just "True" or "False", not "Bool.True"
                         // Check if this is the Builtin.Bool type

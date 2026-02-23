@@ -307,7 +307,7 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
                 defer allocator.free(rendered);
                 try out.appendSlice(rendered);
             } else {
-                try out.appendSlice("<null>");
+                unreachable;
             }
         } else {
             const elem_val = RocValue.zst(elem_layout);
@@ -326,18 +326,7 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
 
     // --- Tag union ---
     if (self.lay.tag == .tag_union) {
-        const tu_idx = self.lay.data.tag_union.idx;
-        const tu_data = ctx.layout_store.getTagUnionData(tu_idx);
-        const disc_offset = ctx.layout_store.getTagUnionDiscriminantOffset(tu_idx);
-        var out = std.array_list.AlignedManaged(u8, null).init(allocator);
-        errdefer out.deinit();
-        if (self.ptr) |ptr| {
-            const discriminant = tu_data.readDiscriminantFromPtr(ptr + disc_offset);
-            try std.fmt.format(out.writer(), "<tag_union variant={d}>", .{discriminant});
-        } else {
-            try out.appendSlice("<tag_union>");
-        }
-        return out.toOwnedSlice();
+        unreachable; // tag unions must be formatted via formatTagUnion with type info
     }
 
     // --- ZST ---
@@ -345,7 +334,7 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
         return try allocator.dupe(u8, "{}");
     }
 
-    return try allocator.dupe(u8, "<unsupported>");
+    unreachable; // all layout types must be handled
 }
 
 /// Compare two RocValues for structural equality.

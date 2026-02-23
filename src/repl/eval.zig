@@ -888,7 +888,7 @@ fn formatTagUnion(
         if (sorted_tag) |tags| {
             defer allocator.free(tags);
             if (lay.data.scalar.tag == .int) {
-                const raw = ptr orelse return try allocator.dupe(u8, "<null>");
+                const raw = ptr orelse unreachable;
                 const disc: usize = switch (lay.data.scalar.data.int) {
                     .u8 => raw[0],
                     .u16 => @as(u16, raw[0]) | (@as(u16, raw[1]) << 8),
@@ -921,7 +921,7 @@ fn formatTagUnion(
         const tu_data = layout_store.getTagUnionData(tu_idx);
         const disc_offset = layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
-        const raw = ptr orelse return try allocator.dupe(u8, "<tag_union>");
+        const raw = ptr orelse unreachable;
         const discriminant = tu_data.readDiscriminantFromPtr(raw + disc_offset);
 
         if (sorted_tag) |tags| {
@@ -960,8 +960,7 @@ fn formatTagUnion(
             }
         }
 
-        // Fallback: no type info
-        return try std.fmt.allocPrint(allocator, "<tag_union variant={d}>", .{discriminant});
+        unreachable; // sorted_tag must resolve for all tag unions
     }
 
     // Unknown layout for tag union type — use layout-only formatting
@@ -985,7 +984,7 @@ fn formatList(
 ) FormatError![]u8 {
     const types_store = &module_env.types;
     const arg_vars = types_store.sliceNominalArgs(nt);
-    const elem_type_var = if (arg_vars.len == 1) arg_vars[0] else return try allocator.dupe(u8, "<list>");
+    const elem_type_var = if (arg_vars.len == 1) arg_vars[0] else unreachable;
 
     var out = std.array_list.AlignedManaged(u8, null).init(allocator);
     errdefer out.deinit();

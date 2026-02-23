@@ -199,15 +199,14 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                                         defer gpa.free(rendered_payload);
                                         try out.appendSlice(rendered_payload);
                                     } else {
-                                        try out.appendSlice("<null>");
+                                        unreachable;
                                     }
                                 } else {
-                                    try out.appendSlice("<unsupported>");
+                                    unreachable;
                                 }
                             },
                             else => {
-                                // Fallback - render as unsupported
-                                try out.appendSlice("<unsupported>");
+                                unreachable;
                             },
                         }
 
