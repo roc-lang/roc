@@ -211,6 +211,174 @@ test "glue command generated C header compiles with zig cc" {
     }
 }
 
+test "glue command with ZigGlue generates expected Zig interface" {
+    const allocator = std.testing.allocator;
+
+    // Create temp directory for output
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const tmp_path = tmp_dir.dir.realpathAlloc(allocator, ".") catch unreachable;
+    defer allocator.free(tmp_path);
+
+    // Run: roc experimental-glue src/glue/src/ZigGlue.roc <tmp_path> test/fx/platform/main.roc
+    const result = try util.runRocCommand(allocator, &.{
+        "experimental-glue",
+        "src/glue/src/ZigGlue.roc",
+        tmp_path,
+        "test/fx/platform/main.roc",
+    });
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    // Should not panic
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "PANIC") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "unreachable") == null);
+
+    // Should complete successfully
+    if (result.term != .Exited or result.term.Exited != 0) {
+        std.debug.print("\nZigGlue command failed!\nstderr:\n{s}\nstdout:\n{s}\n", .{ result.stderr, result.stdout });
+        try std.testing.expect(false);
+    }
+
+    // Read the generated Zig file
+    const generated_path = std.fs.path.join(allocator, &.{ tmp_path, "roc_platform_abi.zig" }) catch unreachable;
+    defer allocator.free(generated_path);
+
+    const generated_content = std.fs.cwd().readFileAlloc(allocator, generated_path, 1024 * 1024) catch |err| {
+        std.debug.print("\nFailed to read generated file '{s}': {}\n", .{ generated_path, err });
+        try std.testing.expect(false);
+        unreachable;
+    };
+    defer allocator.free(generated_content);
+
+    // Read the expected Zig file
+    const expected_content = std.fs.cwd().readFileAlloc(allocator, "test/glue/fx_platform_zigglue_expected.zig", 1024 * 1024) catch |err| {
+        std.debug.print("\nFailed to read expected file: {}\n", .{err});
+        try std.testing.expect(false);
+        unreachable;
+    };
+    defer allocator.free(expected_content);
+
+    // Compare generated vs expected
+    if (!std.mem.eql(u8, generated_content, expected_content)) {
+        std.debug.print("\n\nGenerated Zig interface does not match expected!\n", .{});
+        std.debug.print("\n--- Expected ({d} bytes) ---\n{s}\n", .{ expected_content.len, expected_content });
+        std.debug.print("\n--- Generated ({d} bytes) ---\n{s}\n", .{ generated_content.len, generated_content });
+
+        // Find first difference for easier debugging
+        var i: usize = 0;
+        while (i < @min(expected_content.len, generated_content.len)) : (i += 1) {
+            if (expected_content[i] != generated_content[i]) {
+                const start = if (i > 20) i - 20 else 0;
+                const end_expected = @min(i + 20, expected_content.len);
+                const end_generated = @min(i + 20, generated_content.len);
+                std.debug.print("\nFirst difference at byte {d}:\n", .{i});
+                std.debug.print("  Expected:  ...{s}...\n", .{expected_content[start..end_expected]});
+                std.debug.print("  Generated: ...{s}...\n", .{generated_content[start..end_generated]});
+                break;
+            }
+        }
+
+        try std.testing.expect(false);
+    }
+}
+
+test "glue command generated Zig interface compiles with zig build-obj" {
+    const allocator = std.testing.allocator;
+
+    // Create temp directory for output
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const tmp_path = tmp_dir.dir.realpathAlloc(allocator, ".") catch unreachable;
+    defer allocator.free(tmp_path);
+
+    // Run: roc experimental-glue src/glue/src/ZigGlue.roc <tmp_path> test/fx/platform/main.roc
+    const glue_result = try util.runRocCommand(allocator, &.{
+        "experimental-glue",
+        "src/glue/src/ZigGlue.roc",
+        tmp_path,
+        "test/fx/platform/main.roc",
+    });
+    defer allocator.free(glue_result.stdout);
+    defer allocator.free(glue_result.stderr);
+
+    // Should complete successfully
+    if (glue_result.term != .Exited or glue_result.term.Exited != 0) {
+        std.debug.print("\nZigGlue command failed!\nstderr:\n{s}\nstdout:\n{s}\n", .{ glue_result.stderr, glue_result.stdout });
+        try std.testing.expect(false);
+    }
+
+    // Write a minimal Zig file that imports the generated interface and instantiates types
+    const test_zig_content =
+        \\const abi = @import("roc_platform_abi.zig");
+        \\
+        \\export fn testTypes() void {
+        \\    _ = abi.RocStr{ .bytes = null, .len = 0, .capacity = 0 };
+        \\    _ = abi.RocList{ .elements = null, .len = 0, .capacity = 0 };
+        \\    _ = abi.hosted_idx_stdout_line;
+        \\    _ = abi.StdoutLineArgs{ .arg0 = abi.RocStr{ .bytes = null, .len = 0, .capacity = 0 } };
+        \\}
+    ;
+
+    const test_zig_path = std.fs.path.join(allocator, &.{ tmp_path, "test_import.zig" }) catch unreachable;
+    defer allocator.free(test_zig_path);
+
+    std.fs.cwd().writeFile(.{
+        .sub_path = test_zig_path,
+        .data = test_zig_content,
+    }) catch |err| {
+        std.debug.print("\nFailed to write test Zig file: {}\n", .{err});
+        try std.testing.expect(false);
+        unreachable;
+    };
+
+    const test_o_path = std.fs.path.join(allocator, &.{ tmp_path, "test_import.o" }) catch unreachable;
+    defer allocator.free(test_o_path);
+
+    const abi_path = std.fs.path.join(allocator, &.{ tmp_path, "roc_platform_abi.zig" }) catch unreachable;
+    defer allocator.free(abi_path);
+
+    // Build module args for zig build-obj:
+    //   zig build-obj --dep roc_platform_abi -Mroot=<test.zig> -Mroc_platform_abi=<abi.zig> -femit-bin=<out.o>
+    const root_mod_arg = std.fmt.allocPrint(allocator, "-Mroot={s}", .{test_zig_path}) catch unreachable;
+    defer allocator.free(root_mod_arg);
+    const dep_mod_arg = std.fmt.allocPrint(allocator, "-Mroc_platform_abi={s}", .{abi_path}) catch unreachable;
+    defer allocator.free(dep_mod_arg);
+    const emit_arg = std.fmt.allocPrint(allocator, "-femit-bin={s}", .{test_o_path}) catch unreachable;
+    defer allocator.free(emit_arg);
+
+    const cc_result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &.{
+            "zig",
+            "build-obj",
+            "--dep",
+            "roc_platform_abi",
+            root_mod_arg,
+            dep_mod_arg,
+            emit_arg,
+        },
+    }) catch |err| {
+        std.debug.print("\nFailed to run zig build-obj: {}\n", .{err});
+        try std.testing.expect(false);
+        unreachable;
+    };
+    defer allocator.free(cc_result.stdout);
+    defer allocator.free(cc_result.stderr);
+
+    // Check compilation succeeded
+    if (cc_result.term != .Exited or cc_result.term.Exited != 0) {
+        const zig_content = std.fs.cwd().readFileAlloc(allocator, abi_path, 1024 * 1024) catch "<failed to read zig file>";
+        defer if (zig_content.ptr != "<failed to read zig file>".ptr) allocator.free(zig_content);
+
+        std.debug.print("\nzig build-obj compilation failed!\n", .{});
+        std.debug.print("\n--- Compiler stderr ---\n{s}\n", .{cc_result.stderr});
+        std.debug.print("\n--- Generated Zig interface ---\n{s}\n", .{zig_content});
+
+        try std.testing.expect(false);
+    }
+}
+
 test "CGlue.roc expect tests pass" {
     const allocator = std.testing.allocator;
 
@@ -233,6 +401,33 @@ test "CGlue.roc expect tests pass" {
     // Should complete successfully
     if (result.term != .Exited or result.term.Exited != 0) {
         std.debug.print("\nroc test CGlue.roc failed!\nstderr:\n{s}\nstdout:\n{s}\n", .{ result.stderr, result.stdout });
+        std.debug.print("Exit term: {}\n", .{result.term});
+        try std.testing.expect(false);
+    }
+}
+
+test "ZigGlue.roc expect tests pass" {
+    const allocator = std.testing.allocator;
+
+    // Run: roc test src/glue/src/ZigGlue.roc
+    // --no-cache avoids a cache interaction bug where the module cache
+    // populated by earlier glue tests (roc build) is incompatible with
+    // what roc test's interpreter expects, causing a .ty_tag_union panic.
+    const result = try util.runRocCommand(allocator, &.{
+        "test",
+        "--no-cache",
+        "src/glue/src/ZigGlue.roc",
+    });
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    // Should not panic
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "PANIC") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "unreachable") == null);
+
+    // Should complete successfully
+    if (result.term != .Exited or result.term.Exited != 0) {
+        std.debug.print("\nroc test ZigGlue.roc failed!\nstderr:\n{s}\nstdout:\n{s}\n", .{ result.stderr, result.stdout });
         std.debug.print("Exit term: {}\n", .{result.term});
         try std.testing.expect(false);
     }
