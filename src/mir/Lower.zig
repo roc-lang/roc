@@ -30,6 +30,12 @@ const ModuleEnv = can.ModuleEnv;
 
 const Self = @This();
 
+const DeferredBlockLambda = struct {
+    cir_expr: CIR.Expr.Idx,
+    scratch_stmt_idx: u32,
+    module_idx: u32,
+};
+
 // --- Fields ---
 
 allocator: Allocator,
@@ -62,6 +68,12 @@ lowered_symbols: std.AutoHashMap(u64, MIR.ExprId),
 
 /// Tracks symbols currently being lowered (recursion guard).
 in_progress_defs: std.AutoHashMap(u64, void),
+
+/// Block-local polymorphic lambda defs waiting for call-site type information.
+/// Key is CIR Pattern.Idx (as u32). Value holds the CIR expression to lower and
+/// the index into `scratch_stmts` where the decl_const placeholder was emitted.
+/// Populated by `lowerBlock`, consumed by `e_lookup_local`.
+deferred_block_lambdas: std.AutoHashMap(u32, DeferredBlockLambda),
 
 /// Pre-built lookup for findModuleForOrigin: (module_idx, import_ident) → resolved module index.
 /// Key is (module_idx << 32 | @bitCast(import_ident)), value is resolved module u32.
@@ -114,6 +126,7 @@ pub fn init(
         .type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
         .lowered_symbols = std.AutoHashMap(u64, MIR.ExprId).init(allocator),
         .in_progress_defs = std.AutoHashMap(u64, void).init(allocator),
+        .deferred_block_lambdas = std.AutoHashMap(u32, DeferredBlockLambda).init(allocator),
         .origin_lookup = origin_lookup,
         .scratch_expr_ids = try base.Scratch(MIR.ExprId).init(allocator),
         .scratch_pattern_ids = try base.Scratch(MIR.PatternId).init(allocator),
@@ -161,6 +174,7 @@ pub fn deinit(self: *Self) void {
     self.type_var_seen.deinit();
     self.lowered_symbols.deinit();
     self.in_progress_defs.deinit();
+    self.deferred_block_lambdas.deinit();
     self.origin_lookup.deinit();
     self.scratch_expr_ids.deinit();
     self.scratch_pattern_ids.deinit();
@@ -272,6 +286,26 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
         // --- Lookups ---
         .e_lookup_local => |lookup| {
             const symbol = try self.patternToSymbol(lookup.pattern_idx);
+
+            // Check for a deferred block-local polymorphic lambda. If found,
+            // seed the definition's type vars from the call-site monotype and
+            // lower with concrete types, patching the block's placeholder stmt.
+            if (self.deferred_block_lambdas.get(@intFromEnum(lookup.pattern_idx))) |deferred| {
+                // Use a fresh type_var_seen scope so the call-site's concrete
+                // types aren't shadowed by stale Dec/unit entries from the
+                // pattern lowering that happened when the block processed the
+                // s_decl statement.
+                const saved_type_var_seen = self.type_var_seen;
+                self.type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+                defer {
+                    self.type_var_seen.deinit();
+                    self.type_var_seen = saved_type_var_seen;
+                }
+                self.seedTypeVarSeen(ModuleEnv.varFrom(deferred.cir_expr), monotype);
+                const lowered = try self.lowerExpr(deferred.cir_expr);
+                self.scratch_stmts.items.items[deferred.scratch_stmt_idx].decl_const.expr = lowered;
+                _ = self.deferred_block_lambdas.remove(@intFromEnum(lookup.pattern_idx));
+            }
 
             // Ensure the local definition is lowered if it's a top-level def.
             // This is needed so that cross-module lowering (via lowerExternalDef)
@@ -821,8 +855,28 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
         switch (cir_stmt) {
             .s_decl => |decl| {
                 const pat = try self.lowerPattern(module_env, decl.pattern);
-                const expr = try self.lowerExpr(decl.expr);
-                try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = pat, .expr = expr } });
+
+                // Polymorphic lambda/closure: defer lowering until a call site
+                // provides concrete type information. This prevents flex type
+                // vars from prematurely defaulting to Dec.
+                const cir_expr = module_env.store.getExpr(decl.expr);
+                const is_lambda = cir_expr == .e_lambda or cir_expr == .e_closure;
+                const needs_inst = if (is_lambda) self.types_store.needsInstantiation(ModuleEnv.varFrom(decl.expr)) else false;
+                if (is_lambda and needs_inst)
+                {
+                    const scratch_idx: u32 = @intCast(self.scratch_stmts.items.items.len);
+                    // Emit a placeholder decl_const — the expr will be filled in
+                    // when a call site triggers lowering via e_lookup_local.
+                    try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = pat, .expr = MIR.ExprId.none } });
+                    try self.deferred_block_lambdas.put(@intFromEnum(decl.pattern), .{
+                        .cir_expr = decl.expr,
+                        .scratch_stmt_idx = scratch_idx,
+                        .module_idx = self.current_module_idx,
+                    });
+                } else {
+                    const expr = try self.lowerExpr(decl.expr);
+                    try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = pat, .expr = expr } });
+                }
             },
             .s_var => |var_decl| {
                 const pat = try self.lowerPattern(module_env, var_decl.pattern_idx);
@@ -911,8 +965,32 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
         }
     }
 
-    const stmt_span = try self.store.addStmts(self.allocator, self.scratch_stmts.sliceFromStart(stmts_top));
+    // Lower the final expression BEFORE committing stmts. Call sites in the
+    // final expression (and in subsequent stmts) trigger deferred lambda
+    // lowering via e_lookup_local, which patches the placeholder stmts.
     const final_expr = try self.lowerExpr(block.final_expr);
+
+    // Lower any remaining deferred lambdas from THIS block that weren't
+    // referenced by a call site. Only process lambdas whose scratch_stmt_idx
+    // falls within this block's range (>= stmts_top) and whose module matches
+    // the current module. This prevents cross-module contamination when inner
+    // blocks from different modules are lowered during the final expression.
+    {
+        const stmts_top_idx: u32 = @intCast(stmts_top);
+        var deferred_iter = self.deferred_block_lambdas.iterator();
+        while (deferred_iter.next()) |entry| {
+            const deferred = entry.value_ptr.*;
+            if (deferred.module_idx != self.current_module_idx or deferred.scratch_stmt_idx < stmts_top_idx) continue;
+            if (self.scratch_stmts.items.items[deferred.scratch_stmt_idx].decl_const.expr == MIR.ExprId.none) {
+                const expr = try self.lowerExpr(deferred.cir_expr);
+                self.scratch_stmts.items.items[deferred.scratch_stmt_idx].decl_const.expr = expr;
+            }
+            // Remove this entry since the block is done
+            self.deferred_block_lambdas.removeByPtr(entry.key_ptr);
+        }
+    }
+
+    const stmt_span = try self.store.addStmts(self.allocator, self.scratch_stmts.sliceFromStart(stmts_top));
 
     return try self.store.addExpr(self.allocator, .{ .block = .{
         .stmts = stmt_span,
@@ -1485,6 +1563,11 @@ fn seedTypeVarSeen(self: *Self, type_var: types.Var, monotype: Monotype.Idx) voi
             self.seedTypeVarSeen(backing_var, monotype);
         },
         .structure => |flat_type| {
+            // Seed this structure var so that any expression whose type var
+            // resolves to this same root (e.g. a numeric literal inside a
+            // polymorphic lambda body) will find the concrete monotype
+            // instead of falling through to the default Dec/unit.
+            self.type_var_seen.put(resolved.var_, monotype) catch return;
             self.seedTypeVarSeenStructure(flat_type, monotype);
         },
         .err => {},

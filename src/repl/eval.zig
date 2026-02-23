@@ -960,10 +960,46 @@ fn formatTagUnion(
             }
         }
 
-        unreachable; // sorted_tag must resolve for all tag unions
+        unreachable; // sorted_tag must resolve for all tag unions with tag_union layout
     }
 
-    // Unknown layout for tag union type — use layout-only formatting
+    // Single-variant tag union with unwrapped payload layout.
+    // When a tag union has exactly one variant, the layout optimizer removes the
+    // discriminant and uses the payload's layout directly (record, tuple, scalar, etc.).
+    // We still need to display the tag name wrapping the payload.
+    if (sorted_tag) |tags| {
+        defer allocator.free(tags);
+        if (tags.len == 1) {
+            const tag = tags[0];
+            const tag_name = ident_store.getText(tag.name);
+            const arg_vars = types_store.sliceVars(toVarRange(tag.args));
+
+            var out = std.array_list.AlignedManaged(u8, null).init(allocator);
+            errdefer out.deinit();
+            try out.appendSlice(tag_name);
+
+            if (arg_vars.len > 0) {
+                try out.append('(');
+                if (arg_vars.len == 1) {
+                    const rendered = try formatWithTypes(allocator, ptr, lay, arg_vars[0], module_env, layout_store);
+                    defer allocator.free(rendered);
+                    try out.appendSlice(rendered);
+                } else {
+                    // Multi-arg: the payload layout is a tuple
+                    for (arg_vars, 0..) |arg_var, i| {
+                        const rendered = try formatWithTypes(allocator, ptr, lay, arg_var, module_env, layout_store);
+                        defer allocator.free(rendered);
+                        try out.appendSlice(rendered);
+                        if (i + 1 < arg_vars.len) try out.appendSlice(", ");
+                    }
+                }
+                try out.append(')');
+            }
+            return out.toOwnedSlice();
+        }
+    }
+
+    // Fallback: use layout-only formatting for unresolvable tag unions
     const roc_val = RocValue{ .ptr = ptr, .lay = lay };
     const fmt_ctx = RocValue.FormatContext{
         .layout_store = layout_store,
@@ -1026,6 +1062,10 @@ fn formatList(
 }
 
 /// Format a record using type info for field names and recursive field formatting.
+/// Fields are displayed in type-field order (alphabetical), matching the user's
+/// mental model. The layout fields may be in a different order (sorted by
+/// alignment/size for memory efficiency), so we iterate type fields and look up
+/// the corresponding layout field by name to get the correct physical offset.
 fn formatRecord(
     allocator: Allocator,
     ptr: ?[*]const u8,
@@ -1049,21 +1089,34 @@ fn formatRecord(
     const type_fields = types_store.getRecordFieldsSlice(rec.fields);
     const count = @min(layout_fields.len, type_fields.len);
 
-    for (0..count) |i| {
-        const l_fld = layout_fields.get(i);
-        const t_fld = type_fields.get(i);
-        const name_text = module_env.getIdent(l_fld.name);
+    // Iterate in type-field order (alphabetical) for display
+    for (0..count) |ti| {
+        const t_fld = type_fields.get(ti);
+
+        // Find the matching layout field by name
+        const layout_idx = blk: {
+            for (0..layout_fields.len) |li| {
+                if (@as(u32, @bitCast(layout_fields.get(li).name)) == @as(u32, @bitCast(t_fld.name))) {
+                    break :blk li;
+                }
+            }
+            // Fallback: if no match by name, use the same index
+            break :blk ti;
+        };
+        const l_fld = layout_fields.get(layout_idx);
+
+        const name_text = module_env.getIdent(t_fld.name);
         try out.appendSlice(name_text);
         try out.appendSlice(": ");
 
-        const offset = layout_store.getRecordFieldOffset(lay.data.record.idx, @intCast(i));
+        const offset = layout_store.getRecordFieldOffset(lay.data.record.idx, @intCast(layout_idx));
         const field_layout = layout_store.getLayout(l_fld.layout);
         const base_ptr = ptr.?;
         const field_ptr = base_ptr + offset;
         const rendered = try formatWithTypes(allocator, field_ptr, field_layout, t_fld.var_, module_env, layout_store);
         defer allocator.free(rendered);
         try out.appendSlice(rendered);
-        if (i + 1 < count) try out.appendSlice(", ");
+        if (ti + 1 < count) try out.appendSlice(", ");
     }
 
     try out.appendSlice(" }");

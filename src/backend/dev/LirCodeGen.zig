@@ -11421,17 +11421,59 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Check if any early returns were generated
             if (self.early_return_patches.items.len > saved_early_return_patches_len) {
-                // Patch early return jumps to the current position (merge point)
+                // When a lambda body has early returns (e.g., `return True` inside a
+                // for loop), generateEarlyReturn moves the value to the return register
+                // and emits a jump. The normal path produces its result in `result_loc`.
+                // We must consolidate both paths so the caller gets the correct value
+                // regardless of which path was taken at runtime.
+                //
+                // Strategy: both paths write to a shared stack slot.
+                // Normal path: move result_loc to the slot, then jump past the merge landing.
+                // Early return: jumps to merge landing, which moves from return register to slot.
+                const ls = self.layout_store orelse unreachable;
+                const ret_layout_val = ls.getLayout(lambda.ret_layout);
+                const ret_sa = ls.layoutSizeAlign(ret_layout_val);
+
+                if (ret_sa.size == 0) {
+                    // ZST return — no actual data to consolidate
+                    const merge_point = self.codegen.currentOffset();
+                    for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
+                        self.codegen.patchJump(patch, merge_point);
+                    }
+                    self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
+                    self.early_return_ret_layout = saved_early_return_ret_layout;
+                    return .{ .immediate_i64 = 0 };
+                }
+
+                const result_slot = self.codegen.allocStackSlot(@intCast(ret_sa.size));
+
+                // Normal path: store result_loc to the shared slot
+                try self.moveToReturnRegisterWithLayout(result_loc, lambda.ret_layout);
+                try self.storeReturnRegisterToStack(lambda.ret_layout, result_slot);
+
+                // Jump past the early-return landing
+                const normal_path_jump = try self.codegen.emitJump();
+
+                // Early-return landing: generateEarlyReturn already put the value
+                // in the return register; store it to the shared slot.
                 const merge_point = self.codegen.currentOffset();
+                try self.storeReturnRegisterToStack(lambda.ret_layout, result_slot);
+
+                // Patch early return jumps to the merge point
                 for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
                     self.codegen.patchJump(patch, merge_point);
                 }
                 self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
+
+                // Both paths converge here
+                self.codegen.patchJump(normal_path_jump, self.codegen.currentOffset());
+
+                self.early_return_ret_layout = saved_early_return_ret_layout;
+                return self.stackLocationForLayout(lambda.ret_layout, result_slot);
             }
 
-            // Restore early return state
+            // No early returns — return the normal-path result directly
             self.early_return_ret_layout = saved_early_return_ret_layout;
-
             return result_loc;
         }
 
@@ -11439,6 +11481,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn generateCall(self: *Self, call: anytype) Allocator.Error!ValueLocation {
             // Get the function expression
             const fn_expr = self.store.getExpr(call.fn_expr);
+
 
             return switch (fn_expr) {
                 // Direct lambda call: inline the body in the current scope.
@@ -14437,6 +14480,52 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Fall back to regular handling
             return self.moveToReturnRegister(loc);
+        }
+
+        /// Store the value currently in the return register(s) to a stack slot.
+        /// This is the inverse of moveToReturnRegisterWithLayout: it reads from
+        /// the return registers (X0/X1/X2 on aarch64, RAX/RDX/RCX on x86_64)
+        /// and writes to the given stack offset.
+        fn storeReturnRegisterToStack(self: *Self, ret_layout: layout.Idx, stack_offset: i32) Allocator.Error!void {
+            if (self.layout_store) |ls| {
+                const layout_val = ls.getLayout(ret_layout);
+
+                // Lists and strings: 24 bytes in 3 registers
+                if (layout_val.tag == .list or layout_val.tag == .list_of_zst) {
+                    try self.codegen.emitStoreStack(.w64, stack_offset, ret_reg_0);
+                    try self.codegen.emitStoreStack(.w64, stack_offset + 8, ret_reg_1);
+                    try self.codegen.emitStoreStack(.w64, stack_offset + 16, ret_reg_2);
+                    return;
+                }
+
+                if (layout_val.tag == .record or layout_val.tag == .tag_union or layout_val.tag == .tuple) {
+                    const size_align = ls.layoutSizeAlign(layout_val);
+                    if (size_align.size > 8) {
+                        const num_regs = (size_align.size + 7) / 8;
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            const regs = [_]@TypeOf(GeneralReg.X0){ .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7, .XR, .X9, .X10, .X11, .X12, .X13, .X14, .X15 };
+                            for (0..@min(num_regs, regs.len)) |i| {
+                                try self.codegen.emitStoreStack(.w64, stack_offset + @as(i32, @intCast(i * 8)), regs[i]);
+                            }
+                        } else {
+                            const regs = [_]@TypeOf(GeneralReg.RAX){ .RAX, .RDX, .RCX, .R8, .R9, .R10, .R11, .RDI, .RSI };
+                            for (0..@min(num_regs, regs.len)) |i| {
+                                try self.codegen.emitStoreStack(.w64, stack_offset + @as(i32, @intCast(i * 8)), regs[i]);
+                            }
+                        }
+                        return;
+                    }
+                }
+            }
+            // i128/u128/Dec: 2 registers
+            if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec) {
+                try self.codegen.emitStoreStack(.w64, stack_offset, ret_reg_0);
+                try self.codegen.emitStoreStack(.w64, stack_offset + 8, ret_reg_1);
+                return;
+            }
+
+            // Default: single register (≤ 8 bytes)
+            try self.codegen.emitStoreStack(.w64, stack_offset, ret_reg_0);
         }
 
         /// Copy a result value to the hidden return pointer buffer.

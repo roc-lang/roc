@@ -1751,6 +1751,129 @@ test "cross-module type resolution: U32.to dispatches with concrete U32 function
     try testing.expectEqual(Monotype.Monotype{ .prim = .u32 }, def_elem);
 }
 
+// --- Polymorphic numeric specialization tests ---
+// These tests verify that polymorphic lambdas in blocks get the correct
+// monotype when called with concrete numeric types (not defaulting to Dec).
+
+test "polymorphic lambda in block: sum called with U64 gets U64 monotype, not Dec" {
+    // This is the core polymorphic numeric specialization bug:
+    // `sum = |a, b| a + b + 0` is polymorphic (Num * => * -> * -> *)
+    // When called as `sum(240.U64, 20.U64)`, the call and its args must be U64.
+    // BUG: The lambda body gets lowered first with Dec-defaulted types,
+    // then the call reuses the Dec-typed version.
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    sum = |a, b| a + b + 0
+        \\    sum(240.U64, 20.U64)
+        \\}
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .block);
+
+    // The final expression is `sum(240.U64, 20.U64)` — a call
+    const final_expr = env.mir_store.getExpr(result.block.final_expr);
+    try testing.expect(final_expr == .call);
+
+    // The call's return type must be U64, not Dec
+    const call_monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(result.block.final_expr));
+    try testing.expectEqual(Monotype.Prim.u64, call_monotype.prim);
+
+    // The call's arguments must be U64
+    const args = env.mir_store.getExprSpan(final_expr.call.args);
+    for (args) |arg| {
+        const arg_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(arg));
+        try testing.expect(arg_mono == .prim);
+        try testing.expectEqual(Monotype.Prim.u64, arg_mono.prim);
+    }
+
+    // The lambda itself (first stmt's expr) should have params typed as U64
+    const stmts = env.mir_store.getStmts(result.block.stmts);
+    try testing.expect(stmts.len >= 1);
+    const decl_expr = env.mir_store.getExpr(stmts[0].decl_const.expr);
+    try testing.expect(decl_expr == .lambda);
+    const lambda_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(stmts[0].decl_const.expr));
+    try testing.expect(lambda_mono == .func);
+    // Return type of the lambda must be U64
+    const ret_mono = env.mir_store.monotype_store.getMonotype(lambda_mono.func.ret);
+    try testing.expect(ret_mono == .prim);
+    try testing.expectEqual(Monotype.Prim.u64, ret_mono.prim);
+}
+
+test "polymorphic lambda in block: fn called via arrow syntax gets correct type" {
+    // `fn1 = |a, b| a + b`, `10.U64->fn1(20.U64)` should dispatch as U64
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    fn1 = |a, b| a + b
+        \\    fn1(10.U64, 20.U64)
+        \\}
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .block);
+
+    // The final expression's return type must be U64
+    const call_monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(result.block.final_expr));
+    try testing.expect(call_monotype == .prim);
+    try testing.expectEqual(Monotype.Prim.u64, call_monotype.prim);
+}
+
+test "polymorphic lambda with literal in body: a + b + 0 called with U64" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    sum = |a, b| a + b + 0
+        \\    sum(240.U64, 20.U64)
+        \\}
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .block);
+
+    // The call's return type must be U64
+    const call_monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(result.block.final_expr));
+    try testing.expectEqual(Monotype.Prim.u64, call_monotype.prim);
+
+    // Check the lambda body
+    const stmts = env.mir_store.getStmts(result.block.stmts);
+    try testing.expect(stmts.len >= 1);
+    const decl_expr = env.mir_store.getExpr(stmts[0].decl_const.expr);
+    try testing.expect(decl_expr == .lambda);
+
+    // Lambda return must be U64
+    const lambda_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(stmts[0].decl_const.expr));
+    try testing.expect(lambda_mono == .func);
+    const ret_mono = env.mir_store.monotype_store.getMonotype(lambda_mono.func.ret);
+    try testing.expectEqual(Monotype.Prim.u64, ret_mono.prim);
+
+    // Check that the lambda body's subexpressions are all U64, not Dec
+    // The body is `a + b + 0` which desugars to `(a + b) + 0`
+    // The body is either a call or run_low_level for the outer `+`
+    const body = env.mir_store.getExpr(decl_expr.lambda.body);
+    const body_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(decl_expr.lambda.body));
+    try testing.expectEqual(Monotype.Prim.u64, body_mono.prim);
+
+    // The outer `+` has args: (a + b) and 0
+    // Check that the 0 literal has U64 monotype
+    if (body == .run_low_level) {
+        const ll_args = env.mir_store.getExprSpan(body.run_low_level.args);
+        if (ll_args.len == 2) {
+            const zero_expr = env.mir_store.getExpr(ll_args[1]);
+            try testing.expect(zero_expr == .int);
+            const zero_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(ll_args[1]));
+            try testing.expectEqual(Monotype.Prim.u64, zero_mono.prim);
+        }
+    } else if (body == .call) {
+        const call_args = env.mir_store.getExprSpan(body.call.args);
+        if (call_args.len == 2) {
+            const zero_expr = env.mir_store.getExpr(call_args[1]);
+            try testing.expect(zero_expr == .int);
+        }
+    }
+}
+
 test "Dec.abs lowers to num_abs with Dec monotype, not unit" {
     var env = try MirTestEnv.initExpr("(-3.14).abs()");
     defer env.deinit();

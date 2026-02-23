@@ -3748,3 +3748,62 @@ test "dev: Str.from_utf8 returns Ok for valid bytes" {
     try runDevOnlyExpectStr("Str.from_utf8([72, 105])", "Ok(\"Hi\")");
 }
 
+test "dev: polymorphic sum in block called with U64" {
+    try runDevOnlyExpectStr(
+        \\{
+        \\    sum = |a, b| a + b + 0
+        \\    U64.to_str(sum(240, 20))
+        \\}
+    , "\"260\"");
+}
+
+test "dev: List.contains with integer literals" {
+    try runDevOnlyExpectStr("List.contains([1, 2, 3, 4, 5], 3)", "True");
+}
+
+test "dev: List.any with inline predicate" {
+    try runDevOnlyExpectStr("List.any([1, 2, 3], |x| x == 2)", "True");
+}
+
+test "dev: List.any with inline predicate negative" {
+    try runDevOnlyExpectStr("List.any([1, 2, 3], |x| x == 5)", "False");
+}
+
+test "dev: List.any always true predicate" {
+    try runDevOnlyExpectStr("List.any([1, 2, 3], |_x| True)", "True");
+}
+
+test "dev: List.any with typed elements" {
+    try runDevOnlyExpectStr("List.any([1i64, 2i64, 3i64], |_x| True)", "True");
+}
+
+test "dev: polymorphic predicate with comparison in block" {
+    try runDevOnlyExpectStr(
+        \\{
+        \\    is_positive = |x| x > 0
+        \\    List.any([-1, 0, 1], is_positive)
+        \\}
+    , "True");
+}
+
+test "dev: polymorphic comparison lambda called directly" {
+    try runDevOnlyExpectStr(
+        \\{
+        \\    is_positive = |x| x > 0
+        \\    is_positive(5)
+        \\}
+    , "True");
+}
+
+test "dev: polymorphic comparison lambda passed to List.any" {
+    try runDevOnlyExpectStr(
+        \\{
+        \\    gt_zero = |x| x > 0
+        \\    List.any([1, 2, 3], gt_zero)
+        \\}
+    , "True");
+}
+
+test "dev: List.any with inline lambda" {
+    try runDevOnlyExpectStr("List.any([1, 2, 3], |x| x > 0)", "True");
+}
