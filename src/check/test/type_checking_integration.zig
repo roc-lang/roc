@@ -3429,7 +3429,7 @@ test "check type - recursive type - anonymous recursion" {
         \\
         \\Here is the type I'm inferring. You will see `<RecursiveType>` for parts of the type that repeat.
         \\
-        \\    [Cons(_a, <RecursiveType>), Nil, ..]
+        \\    [Cons(_a, <RecursiveType>), Nil]
         \\
         \\**Hint:** Recursive types are only allowed through nominal types. If you need a recursive data structure, define a nominal type using `:=`.
         \\
@@ -4961,6 +4961,187 @@ test "check type - exhaustive match is inferred as closed" {
         source,
         &.{
             .{ .def = "test", .expected = "[Red] -> Try([Red], err)" },
+        },
+    );
+}
+
+test "check type - exhaustive match with nested payload is inferred as closed" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok(Red) => "red"
+        \\    Ok(Blue) => "blue"
+        \\    Err(msg) => msg
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Ok([Red, Blue]), Err(Str)] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match with nested payload with wildcard is inferred as open" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok(Red) => "red"
+        \\    Ok(Blue) => "blue"
+        \\    Ok(_) => "unknown"
+        \\    Err(msg) => msg
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Ok([Red, Blue, ..]), Err(Str)] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match with multiple tags is inferred as closed" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Red => "red"
+        \\    Blue => "blue"
+        \\    Green => "green"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Blue, Red, Green] -> Str" },
+        },
+    );
+}
+
+test "check type - match with underscore binding is inferred as open" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Red => "red"
+        \\    _ => "not red"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Red, ..] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match with deeply nested tags is inferred as closed" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Outer(Inner(Leaf)) => "leaf"
+        \\    Outer(Inner(Node)) => "node"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Outer([Inner([Leaf, Node])])] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match mixed nested closure" {
+    // Outer is closed (Ok + Err exhaustive), inner Ok payload is closed (A + B),
+    // inner Err payload stays open (variable binding)
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok(A) => "a"
+        \\    Ok(B) => "b"
+        \\    Err(e) => e
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Ok([A, B]), Err(Str)] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match with multi-arg tag mixed open closed" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Pair(Red, _y) => "red"
+        \\    Pair(Blue, _y) => "blue"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            // First arg: Red, Blue (no wildcard -> closed)
+            // Second arg: _y, _y (variable bindings -> open)
+            .{ .def = "test", .expected = "[Pair([Red, Blue], _a)] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match nested wildcard keeps inner open" {
+    // Inner wildcard means inner tag union stays open, but outer is still closed
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Wrapper(Red) => "red"
+        \\    Wrapper(_) => "other"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Wrapper([Red, ..])] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match single tag no payload is closed" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Done => "done"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Done] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match with tag and underscore branch stays open" {
+    // Even one underscore at top level keeps it open
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    A => "a"
+        \\    B => "b"
+        \\    _ => "other"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[A, B, ..] -> Str" },
         },
     );
 }

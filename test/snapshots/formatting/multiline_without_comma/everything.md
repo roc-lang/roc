@@ -1341,6 +1341,44 @@ The unused variable is declared here:
 	^^
 
 
+**NON-EXHAUSTIVE MATCH**
+This `match` expression doesn't cover all possible cases:
+**everything.md:84:2:107:3:**
+```roc
+	match x {
+		Z1(
+			(
+				a,
+				b
+			)
+		) => a
+		Z2(
+			a,
+			b
+		) => a
+		Z3(
+			{
+				a,
+				b
+			}
+		) => a
+		Z4(
+			[
+				a,
+				b
+			]
+		) => a
+	}
+```
+
+The value being matched on has type:
+        _[Z1((c, _field)), Z2(c, _d), Z3({ .., a: c, b: _field }), Z4(List(c))]_
+
+Missing patterns:
+        Z4 []
+
+Hint: Add branches to handle these cases, or use `_` to match anything.
+
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,KwExposing,OpenSquare,
@@ -1901,7 +1939,7 @@ h = |x, y| {
 (inferred-types
 	(defs
 		(patt (type "e -> e"))
-		(patt (type "[Z1((c, d)), Z2(c, f), Z3({ ..i, a: c, b: j }), Z4(List(c)), ..k], [Z1((c, d)), Z2(c, f), Z3({ ..i, a: c, b: j }), Z4(List(c)), ..k] -> c")))
+		(patt (type "[Z1((c, d)), Z2(c, f), Z3({ ..i, a: c, b: j }), Z4(List(c))], [Z1((c, d)), Z2(c, f), Z3({ ..i, a: c, b: j }), Z4(List(c))] -> c")))
 	(type_decls
 		(alias (type "A(a)")
 			(ty-header (name "A")
@@ -1918,5 +1956,5 @@ h = |x, y| {
 			(ty-header (name "F"))))
 	(expressions
 		(expr (type "e -> e"))
-		(expr (type "[Z1((c, d)), Z2(c, f), Z3({ ..i, a: c, b: j }), Z4(List(c)), ..k], [Z1((c, d)), Z2(c, f), Z3({ ..i, a: c, b: j }), Z4(List(c)), ..k] -> c"))))
+		(expr (type "[Z1((c, d)), Z2(c, f), Z3({ ..i, a: c, b: j }), Z4(List(c))], [Z1((c, d)), Z2(c, f), Z3({ ..i, a: c, b: j }), Z4(List(c))] -> c"))))
 ~~~
