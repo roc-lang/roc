@@ -49,6 +49,7 @@ UNUSED VARIABLE - everything.md:20:2:20:4
 UNUSED VARIABLE - everything.md:21:2:21:4
 UNSUPPORTED WHERE CLAUSE - everything.md:14:19:14:22
 UNSUPPORTED WHERE CLAUSE - everything.md:14:24:14:27
+NON-EXHAUSTIVE MATCH - everything.md:23:2:28:3
 # PROBLEMS
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
 You cannot define a `where` clause inside a type declaration.
@@ -199,6 +200,26 @@ g : e -> e where [e.A, e.B,]
                        ^^^
 
 This syntax was used for abilities, which have been removed from Roc. Use method constraints like `where [a.methodName(args) -> ret]` instead.
+
+**NON-EXHAUSTIVE MATCH**
+This `match` expression doesn't cover all possible cases:
+**everything.md:23:2:28:3:**
+```roc
+	match x {
+		Z1((a, b,)) => a
+		Z2(a, b,) => a
+		Z3({ a, b, }) => a
+		Z4([a, b,]) => a
+	}
+```
+
+The value being matched on has type:
+        _[Z1((c, _field)), Z2(c, _d), Z3({ a: c, b: _field, .. }), Z4(List(c))]_
+
+Missing patterns:
+        Z4 []
+
+Hint: Add branches to handle these cases, or use `_` to match anything.
 
 # TOKENS
 ~~~zig
@@ -633,7 +654,7 @@ h = |x, y| {
 (inferred-types
 	(defs
 		(patt (type "e -> e"))
-		(patt (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i, ..j }), Z4(List(c)), ..k], [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i, ..j }), Z4(List(c)), ..k] -> c")))
+		(patt (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i, ..j }), Z4(List(c))], [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i, ..j }), Z4(List(c))] -> c")))
 	(type_decls
 		(alias (type "A(a)")
 			(ty-header (name "A")
@@ -659,5 +680,5 @@ h = |x, y| {
 			(ty-header (name "F"))))
 	(expressions
 		(expr (type "e -> e"))
-		(expr (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i, ..j }), Z4(List(c)), ..k], [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i, ..j }), Z4(List(c)), ..k] -> c"))))
+		(expr (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i, ..j }), Z4(List(c))], [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i, ..j }), Z4(List(c))] -> c"))))
 ~~~

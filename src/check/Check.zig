@@ -5587,6 +5587,25 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
     // Unify the root expr with the match value
     _ = try self.unify(ModuleEnv.varFrom(expr_idx), val_var, env);
 
+    // Close tag union ext vars where patterns exhaustively list all tags.
+    // This must happen after pattern unification (so tags accumulate across branches)
+    // but before exhaustiveness checking (which inspects ext vars).
+    if (!had_type_error and !has_invalid_try) {
+        var all_top_patterns: std.ArrayList(CIR.Pattern.Idx) = .empty;
+        defer all_top_patterns.deinit(self.gpa);
+
+        for (branch_idxs) |branch_idx| {
+            const branch = self.cir.store.getMatchBranch(branch_idx);
+            const ptrn_idxs = self.cir.store.sliceMatchBranchPatterns(branch.patterns);
+            for (ptrn_idxs) |ptrn_idx| {
+                const ptrn = self.cir.store.getMatchBranchPattern(ptrn_idx);
+                try all_top_patterns.append(self.gpa, ptrn.pattern);
+            }
+        }
+
+        try self.closeExhaustiveTagUnions(cond_var, all_top_patterns.items);
+    }
+
     // Perform exhaustiveness and redundancy checking
     // Only do this if there were no type errors - type errors can lead to invalid types
     // that confuse the exhaustiveness checker
@@ -5678,6 +5697,94 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
     }
 
     return does_fx;
+}
+
+/// Unwrap `.as` patterns to get the inner pattern index.
+/// For example, `Red as x` unwraps to the `Red` pattern.
+fn unwrapAsPatternIdx(self: *Self, pat_idx: CIR.Pattern.Idx) CIR.Pattern.Idx {
+    var idx = pat_idx;
+    while (true) {
+        const pat = self.cir.store.getPattern(idx);
+        switch (pat) {
+            .as => |p| {
+                idx = p.pattern;
+            },
+            else => return idx,
+        }
+    }
+}
+
+/// After all match branch patterns have been unified, recursively close tag union
+/// ext vars where no catch-all pattern exists. This turns `[Red, ..a]` into `[Red]`
+/// for exhaustive matches, while leaving open unions for wildcard matches.
+fn closeExhaustiveTagUnions(
+    self: *Self,
+    type_var: Var,
+    patterns: []const CIR.Pattern.Idx,
+) Allocator.Error!void {
+    // Resolve the type var — only process tag unions
+    const resolved = self.types.resolveVar(type_var);
+    const tag_union = switch (resolved.desc.content) {
+        .structure => |ft| switch (ft) {
+            .tag_union => |tu| tu,
+            else => return,
+        },
+        else => return,
+    };
+
+    // Check if any pattern at this level is a catch-all.
+    // If so: don't close this level, AND don't recurse (catch-all covers
+    // all nested positions too).
+    for (patterns) |pat_idx| {
+        const inner_idx = self.unwrapAsPatternIdx(pat_idx);
+        const pat = self.cir.store.getPattern(inner_idx);
+        switch (pat) {
+            .underscore, .assign => return,
+            else => {},
+        }
+    }
+
+    // No catch-all: close the ext var if it's still a flex var
+    const resolved_ext = self.types.resolveVar(tag_union.ext);
+    if (resolved_ext.desc.content == .flex) {
+        try self.types.setVarContent(tag_union.ext, .{ .structure = .empty_tag_union });
+    }
+
+    // Recurse into each tag's payload types
+    const tags_slice = self.types.getTagsSlice(tag_union.tags);
+    const tag_names = tags_slice.items(.name);
+    const tag_args_ranges = tags_slice.items(.args);
+
+    for (tag_names, tag_args_ranges) |tag_name, args_range| {
+        const arg_vars = self.types.sliceVars(args_range);
+        if (arg_vars.len == 0) continue;
+
+        for (arg_vars, 0..) |arg_var, arg_idx| {
+            // Collect payload patterns at this position from matching branches
+            var payload_patterns: std.ArrayList(CIR.Pattern.Idx) = .empty;
+            defer payload_patterns.deinit(self.gpa);
+
+            for (patterns) |pat_idx| {
+                const inner_idx = self.unwrapAsPatternIdx(pat_idx);
+                const pat = self.cir.store.getPattern(inner_idx);
+                switch (pat) {
+                    .applied_tag => |applied_tag| {
+                        if (applied_tag.name == tag_name) {
+                            const arg_ptrns = self.cir.store.slicePatterns(applied_tag.args);
+                            if (arg_idx < arg_ptrns.len) {
+                                try payload_patterns.append(self.gpa, arg_ptrns[arg_idx]);
+                            }
+                        }
+                    },
+                    else => {},
+                }
+            }
+
+            if (payload_patterns.items.len > 0) {
+                try self.closeExhaustiveTagUnions(arg_var, payload_patterns.items);
+            }
+        }
+    }
 }
 
 // unary minus //
