@@ -10902,6 +10902,45 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (stmts) |stmt| {
                 const b = stmt.binding();
 
+                // For self-recursive closures (e.g., `factorial = |n| ... factorial(n-1) ...`):
+                // The closure captures itself, but the self-capture is only used for recursive
+                // calls. We compile the lambda as a standalone procedure and bind the symbol
+                // to the compiled code directly. This avoids the closure dispatch overhead and
+                // the impossible task of materializing a self-referential capture struct.
+                // Within the compiled procedure, recursive calls find themselves via
+                // current_binding_symbol which is registered in the lambda's own scope.
+                const expr = self.store.getExpr(b.expr);
+                if (expr == .closure) {
+                    const pattern = self.store.getPattern(b.pattern);
+                    if (pattern == .bind) {
+                        const closure = self.store.getClosureData(expr.closure);
+                        const bind_key: u64 = @bitCast(pattern.bind.symbol);
+                        const captures = self.store.getCaptures(closure.captures);
+                        var is_self_recursive = false;
+                        for (captures) |cap| {
+                            if (@as(u64, @bitCast(cap.symbol)) == bind_key) {
+                                is_self_recursive = true;
+                                break;
+                            }
+                        }
+                        if (is_self_recursive) {
+                            self.current_binding_symbol = pattern.bind.symbol;
+                            const inner = self.store.getExpr(closure.lambda);
+                            if (inner == .lambda) {
+                                const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
+                                try self.symbol_locations.put(bind_key, .{ .lambda_code = .{
+                                    .code_offset = code_offset,
+                                    .ret_layout = inner.lambda.ret_layout,
+                                } });
+                            }
+                            self.current_binding_symbol = null;
+                            // Skip generateExpr/bindPattern — the lambda_code entry in
+                            // symbol_locations is all subsequent code needs.
+                            continue;
+                        }
+                    }
+                }
+
                 // Generate code for the expression
                 const expr_loc = try self.generateExpr(b.expr);
                 // Get the expression's layout (for mutable variable binding with correct size)
@@ -13671,6 +13710,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Register before generating (for potential recursive calls)
             // Use body_start as temporary; will be updated after prologue prepend
             try self.compiled_lambdas.put(key, body_start);
+
+            // For self-recursive closures in blocks: register the binding symbol
+            // in the lambda's own symbol_locations scope so that recursive calls
+            // within the body can find this procedure via generateLookupCall.
+            if (self.current_binding_symbol) |bind_sym| {
+                const bind_key: u64 = @bitCast(bind_sym);
+                try self.symbol_locations.put(bind_key, .{ .lambda_code = .{
+                    .code_offset = body_start,
+                    .ret_layout = lambda.ret_layout,
+                } });
+                self.current_binding_symbol = null;
+            }
 
             // Restore state on error
             errdefer {

@@ -308,13 +308,19 @@ fn tagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monot
         .tag_union => |tu| {
             const tags = self.mir_store.monotype_store.getTags(tu.tags);
 
-            // Bool-like tag_union: 2 tags, both zero-payload.
-            // Use the same convention as prim.bool: False=0, True=1.
+            // Bool tag_union (True/False): use the same convention as prim.bool.
+            // Only apply this to actual Bool, not arbitrary 2-tag zero-payload unions
+            // like Ok/Err — those must use the general sorted-tag-order discriminant.
             if (tags.len == 2) {
                 const p0 = self.mir_store.monotype_store.getIdxSpan(tags[0].payloads);
                 const p1 = self.mir_store.monotype_store.getIdxSpan(tags[1].payloads);
                 if (p0.len == 0 and p1.len == 0) {
-                    return if (@as(u32, @bitCast(tag_name)) == @as(u32, @bitCast(self.true_tag))) 1 else 0;
+                    const true_u32: u32 = @bitCast(self.true_tag);
+                    if (@as(u32, @bitCast(tags[0].name)) == true_u32 or
+                        @as(u32, @bitCast(tags[1].name)) == true_u32)
+                    {
+                        return if (@as(u32, @bitCast(tag_name)) == true_u32) 1 else 0;
+                    }
                 }
             }
 
