@@ -56,6 +56,7 @@ static_dispatch_constraints: std.array_list.Managed(ConstraintWithDispatcher),
 static_dispatch_constraints_tmp: std.array_list.Managed(StaticDispatchTmp),
 buf_tmp: std.array_list.Managed(u8),
 scratch_record_fields: std.array_list.Managed(types_mod.RecordField),
+scratch_tags: std.array_list.Managed(types_mod.Tag),
 /// Mapping from fully-qualified type identifiers to their display names based on top-level imports.
 /// This allows error messages to show "Str" instead of "Builtin.Str" for auto-imported types,
 /// "Bar" instead of "Foo.Bar" for nested imports, and aliases like "Baz" instead of "Foo".
@@ -133,6 +134,7 @@ pub fn initFromParts(
         .static_dispatch_constraints_tmp = try std.array_list.Managed(StaticDispatchTmp).initCapacity(gpa, 32),
         .buf_tmp = try std.array_list.Managed(u8).initCapacity(gpa, 32),
         .scratch_record_fields = try std.array_list.Managed(types_mod.RecordField).initCapacity(gpa, 32),
+        .scratch_tags = try std.array_list.Managed(types_mod.Tag).initCapacity(gpa, 32),
         .import_mapping = import_mapping,
         .gpa = gpa,
     };
@@ -149,6 +151,7 @@ pub fn deinit(self: *TypeWriter) void {
     self.static_dispatch_constraints_tmp.deinit();
     self.buf_tmp.deinit();
     self.scratch_record_fields.deinit();
+    self.scratch_tags.deinit();
     // import_mapping is borrowed, not owned, so don't deinit it
 }
 
@@ -175,6 +178,7 @@ pub fn reset(self: *TypeWriter) void {
     self.static_dispatch_constraints_tmp.clearRetainingCapacity();
     self.buf_tmp.clearRetainingCapacity();
     self.scratch_record_fields.clearRetainingCapacity();
+    self.scratch_tags.clearRetainingCapacity();
 
     self.next_name_index = 0;
     self.name_counters = std.EnumMap(TypeContext, u32).init(.{});
@@ -713,6 +717,55 @@ fn gatherRecordFields(self: *TypeWriter, fields: RecordField.SafeMultiList.Range
     }
 }
 
+/// Recursively unwrap all tag union tags, following ext var chains
+fn gatherTags(self: *TypeWriter, tags: Tag.SafeMultiList.Range, initial_ext: Var) std.mem.Allocator.Error!union(enum) {
+    flex: struct { var_: Var, payload: types_mod.Flex },
+    rigid: types_mod.Rigid,
+    empty_tag_union,
+    err,
+    alias: Var,
+    invalid,
+} {
+    const slice = self.types.getTagsSlice(tags);
+    try self.scratch_tags.ensureUnusedCapacity(tags.len());
+    for (slice.items(.name), slice.items(.args)) |name, args| {
+        self.scratch_tags.appendAssumeCapacity(.{ .name = name, .args = args });
+    }
+
+    var ext = initial_ext;
+    var guard = debug.IterationGuard.init("TypeWriter.gatherTags");
+    while (true) {
+        guard.tick();
+        const resolved = self.types.resolveVar(ext);
+        switch (resolved.desc.content) {
+            .flex => |flex| {
+                return .{ .flex = .{ .var_ = resolved.var_, .payload = flex } };
+            },
+            .rigid => |rigid| {
+                return .{ .rigid = rigid };
+            },
+            .alias => |alias| {
+                ext = self.types.getAliasBackingVar(alias);
+            },
+            .structure => |flat_type| {
+                switch (flat_type) {
+                    .tag_union => |ext_tu| {
+                        const ext_slice = self.types.getTagsSlice(ext_tu.tags);
+                        try self.scratch_tags.ensureUnusedCapacity(ext_tu.tags.len());
+                        for (ext_slice.items(.name), ext_slice.items(.args)) |name, args| {
+                            self.scratch_tags.appendAssumeCapacity(.{ .name = name, .args = args });
+                        }
+                        ext = ext_tu.ext;
+                    },
+                    .empty_tag_union => return .empty_tag_union,
+                    else => return .invalid,
+                }
+            },
+            .err => return .err,
+        }
+    }
+}
+
 /// Write an unbound record
 ///
 /// Note that an unbound record is semantically the same as a record with a
@@ -757,89 +810,67 @@ fn writeRecordUnbound(self: *TypeWriter, writer: *ByteWrite, fields: RecordField
 
 /// Write a tag union type
 fn writeTagUnion(self: *TypeWriter, writer: *ByteWrite, tag_union: TagUnion, root_var: Var) std.mem.Allocator.Error!void {
-    _ = try writer.write("[");
-
     // Bounds check the tags range before iterating
     const tags_start_idx = @intFromEnum(tag_union.tags.start);
     const tags_len = self.types.tags.len();
     if (tags_start_idx >= tags_len or tags_start_idx + tag_union.tags.count > tags_len) {
-        // Tags range is out of bounds - return error indicator
-        _ = try writer.write("Error]");
+        _ = try writer.write("[Error]");
         return;
     }
 
-    // TODO: Gather tags, like we gather record fields
+    const scratch_tags_top = self.scratch_tags.items.len;
+    defer self.scratch_tags.shrinkRetainingCapacity(scratch_tags_top);
 
-    var iter = tag_union.tags.iterIndices();
-    while (iter.next()) |tag_idx| {
-        if (@intFromEnum(tag_idx) > @intFromEnum(tag_union.tags.start)) {
-            _ = try writer.write(", ");
-        }
+    const ext = try self.gatherTags(tag_union.tags, tag_union.ext);
+    const gathered_tags = self.scratch_tags.items[scratch_tags_top..];
+    const num_tags = gathered_tags.len;
 
-        const tag = self.types.tags.get(tag_idx);
+    std.mem.sort(types_mod.Tag, gathered_tags, self.idents, comptime types_mod.Tag.sortByNameAsc);
+
+    _ = try writer.write("[");
+
+    for (gathered_tags, 0..) |tag, i| {
         try self.writeTag(writer, tag, root_var);
+        if (i != gathered_tags.len - 1) _ = try writer.write(", ");
     }
 
-    // Write extension variable inside the brackets with ".." prefix
-    const ext_resolved = self.types.resolveVar(tag_union.ext);
-    const has_tags = tag_union.tags.count > 0;
-
-    switch (ext_resolved.desc.content) {
+    switch (ext) {
         .flex => |flex| {
-            if (has_tags) _ = try writer.write(", ");
+            if (num_tags > 0) _ = try writer.write(", ");
             _ = try writer.write("..");
 
-            if (flex.name) |ident_idx| {
+            if (flex.payload.name) |ident_idx| {
                 _ = try writer.write(self.getIdent(ident_idx));
             } else if (true) {
                 // TODO: ^ here, we should consider polarity
-                const occurrences = try self.countVarOccurrences(ext_resolved.var_, root_var);
+                const occurrences = try self.countVarOccurrences(flex.var_, root_var);
                 if (occurrences > 1) {
-                    try self.writeFlexVarName(writer, tag_union.ext, .TagUnionExtension, root_var);
+                    try self.writeFlexVarName(writer, flex.var_, .TagUnionExtension, root_var);
                 }
             }
 
-            _ = try writer.write("]");
-
-            for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
-                try self.appendStaticDispatchConstraint(tag_union.ext, constraint);
+            for (self.types.sliceStaticDispatchConstraints(flex.payload.constraints)) |constraint| {
+                try self.appendStaticDispatchConstraint(flex.var_, constraint);
             }
         },
-        .structure => |flat_type| switch (flat_type) {
-            .empty_tag_union => {
-                // Closed union - just close the bracket
-                _ = try writer.write("]");
-            },
-            else => {
-                // Extension is a non-empty structure (e.g., another tag union)
-                if (has_tags) _ = try writer.write(", ");
-                _ = try writer.write("..");
-                try self.writeVarWithContext(writer, tag_union.ext, .TagUnionExtension, root_var);
-                _ = try writer.write("]");
-            },
-        },
         .rigid => |rigid| {
-            if (has_tags) _ = try writer.write(", ");
+            if (num_tags > 0) _ = try writer.write(", ");
             _ = try writer.write("..");
             _ = try writer.write(self.getIdent(rigid.name));
-            _ = try writer.write("]");
 
             for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
                 try self.appendStaticDispatchConstraint(tag_union.ext, constraint);
             }
         },
-        .err => {
-            // Extension resolved to error - write error indicator
-            if (has_tags) _ = try writer.write(", ");
-            _ = try writer.write("..Error]");
-        },
-        .alias => {
-            if (has_tags) _ = try writer.write(", ");
+        .empty_tag_union, .err, .invalid => {},
+        .alias => |alias_var| {
+            if (num_tags > 0) _ = try writer.write(", ");
             _ = try writer.write("..");
-            try self.writeVarWithContext(writer, tag_union.ext, .TagUnionExtension, root_var);
-            _ = try writer.write("]");
+            try self.writeVarWithContext(writer, alias_var, .TagUnionExtension, root_var);
         },
     }
+
+    _ = try writer.write("]");
 }
 
 /// Write a single tag
