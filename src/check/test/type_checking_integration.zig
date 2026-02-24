@@ -5146,6 +5146,25 @@ test "check type - exhaustive match with tag and underscore branch stays open" {
     );
 }
 
+test "check type - exhaustive match with underscore-as keeps tag union open" {
+    // `_ as x` should unwrap to `_` via unwrapAsPatternIdx,
+    // triggering the catch-all early return and keeping the union open.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Red => Red
+        \\    _ as other => other
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Red, ..a] -> [Red, ..a]" },
+        },
+    );
+}
+
 test "check type - exhaustive match closes tag union inside tuple element" {
     // The tag union [Red, Blue] lives inside the first tuple element.
     // Closure must traverse through the tuple pattern to find and close it.
