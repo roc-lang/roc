@@ -5530,8 +5530,8 @@ test "check type - exhaustive match closes tag union through record then tuple" 
 
 test "check type - exhaustive match with different payload structures per tag" {
     // Ok has a record payload, Err has a plain tag payload.
-    // The outer tag union ends up as a chained extension rather than flat,
-    // so closure doesn't fully close it. This tests the current behavior.
+    // The outer tag union ends up as a chained extension due to different payload types,
+    // but the closure logic follows the ext var chain to close all levels.
     const source =
         \\test = |x| {
         \\  match(x) {
@@ -5545,7 +5545,29 @@ test "check type - exhaustive match with different payload structures per tag" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err([Critical, Warning]), ..[Ok({ .., level: [High, Low, ..] }), ..]] -> Str" },
+            .{ .def = "test", .expected = "[Err([Critical, Warning]), ..[Ok({ .., level: [High, Low] })]] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match with different payload structures per tag, mixed" {
+    // Ok has a record payload, Err has a plain tag payload.
+    // The outer tag union ends up as a chained extension due to different payload types,
+    // but the closure logic follows the ext var chain to close all levels.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok({ level: High }) => "ok-high"
+        \\    Ok({ level: _ }) => "ok-low"
+        \\    Err(Critical) => "err-crit"
+        \\    Err(_) => "err-warn"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Err([Critical, ..]), ..[Ok({ .., level: [High, ..] })]] -> Str" },
         },
     );
 }

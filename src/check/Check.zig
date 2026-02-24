@@ -5754,45 +5754,61 @@ fn closeExhaustiveTagUnion(
     tag_union: types_mod.TagUnion,
     patterns: []const CIR.Pattern.Idx,
 ) Allocator.Error!void {
-    // Close the ext var if it's still a flex var
-    const resolved_ext = self.types.resolveVar(tag_union.ext);
-    if (resolved_ext.desc.content == .flex) {
-        try self.types.setVarContent(tag_union.ext, .{ .structure = .empty_tag_union });
-    }
+    // Process tags in this tag union, then follow ext var chain
+    var current_tu = tag_union;
+    while (true) {
+        // Recurse into each tag's payload types
+        const tags_slice = self.types.getTagsSlice(current_tu.tags);
+        const tag_names = tags_slice.items(.name);
+        const tag_args_ranges = tags_slice.items(.args);
 
-    // Recurse into each tag's payload types
-    const tags_slice = self.types.getTagsSlice(tag_union.tags);
-    const tag_names = tags_slice.items(.name);
-    const tag_args_ranges = tags_slice.items(.args);
+        for (tag_names, tag_args_ranges) |tag_name, args_range| {
+            const arg_vars = self.types.sliceVars(args_range);
+            if (arg_vars.len == 0) continue;
 
-    for (tag_names, tag_args_ranges) |tag_name, args_range| {
-        const arg_vars = self.types.sliceVars(args_range);
-        if (arg_vars.len == 0) continue;
+            for (arg_vars, 0..) |arg_var, arg_idx| {
+                // Collect payload patterns at this position from matching branches
+                var payload_patterns: std.ArrayList(CIR.Pattern.Idx) = .empty;
+                defer payload_patterns.deinit(self.gpa);
 
-        for (arg_vars, 0..) |arg_var, arg_idx| {
-            // Collect payload patterns at this position from matching branches
-            var payload_patterns: std.ArrayList(CIR.Pattern.Idx) = .empty;
-            defer payload_patterns.deinit(self.gpa);
-
-            for (patterns) |pat_idx| {
-                const inner_idx = self.unwrapAsPatternIdx(pat_idx);
-                const pat = self.cir.store.getPattern(inner_idx);
-                switch (pat) {
-                    .applied_tag => |applied_tag| {
-                        if (applied_tag.name == tag_name) {
-                            const arg_ptrns = self.cir.store.slicePatterns(applied_tag.args);
-                            if (arg_idx < arg_ptrns.len) {
-                                try payload_patterns.append(self.gpa, arg_ptrns[arg_idx]);
+                for (patterns) |pat_idx| {
+                    const inner_idx = self.unwrapAsPatternIdx(pat_idx);
+                    const pat = self.cir.store.getPattern(inner_idx);
+                    switch (pat) {
+                        .applied_tag => |applied_tag| {
+                            if (applied_tag.name == tag_name) {
+                                const arg_ptrns = self.cir.store.slicePatterns(applied_tag.args);
+                                if (arg_idx < arg_ptrns.len) {
+                                    try payload_patterns.append(self.gpa, arg_ptrns[arg_idx]);
+                                }
                             }
-                        }
-                    },
-                    else => {},
+                        },
+                        else => {},
+                    }
+                }
+
+                if (payload_patterns.items.len > 0) {
+                    try self.closeExhaustiveTagUnions(arg_var, payload_patterns.items);
                 }
             }
+        }
 
-            if (payload_patterns.items.len > 0) {
-                try self.closeExhaustiveTagUnions(arg_var, payload_patterns.items);
-            }
+        // Follow ext var chain: if ext resolves to another tag union, continue
+        const resolved_ext = self.types.resolveVar(current_tu.ext);
+        switch (resolved_ext.desc.content) {
+            .flex => {
+                // End of chain — close it
+                try self.types.setVarContent(current_tu.ext, .{ .structure = .empty_tag_union });
+                break;
+            },
+            .structure => |ft| switch (ft) {
+                .tag_union => |next_tu| {
+                    current_tu = next_tu;
+                },
+                .empty_tag_union => break, // Already closed
+                else => break,
+            },
+            else => break,
         }
     }
 }
