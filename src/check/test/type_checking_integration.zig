@@ -3790,6 +3790,42 @@ test "check type - record extension - mismatch should fail" {
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
+test "check type - record ext - arg inferred as open" {
+    const source =
+        \\main! = |_args| {
+        \\    rec = create_record()
+        \\    use_record(rec)
+        \\}
+        \\create_record = || {
+        \\    {foo: "bar"}
+        \\}
+        \\use_record = |rec| {
+        \\    Str.is_empty(rec.blah)
+        \\}
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The first argument being passed to this function has the wrong type:
+        \\**test:3:5:**
+        \\```roc
+        \\    use_record(rec)
+        \\```
+        \\               ^^^
+        \\
+        \\This argument has the type:
+        \\
+        \\    { foo: Str }
+        \\
+        \\But `use_record` needs the first argument to be:
+        \\
+        \\    { .., blah: Str }
+        \\
+        \\**Hint:** This record is missing the field: `blah`
+        \\
+        \\
+    );
+}
+
 // List method syntax tests
 
 test "check type - List.get method syntax" {
@@ -4870,40 +4906,61 @@ test "check type - mutually recursive functions - inner let-def lambda inside cy
     );
 }
 
-// repros //
+// polarity //
 
-test "check type - zulip repro" {
+test "check type - polarity - output is inferred as open" {
     const source =
-        \\main! = |_args| {
-        \\    rec = create_record()
-        \\    use_record(rec)
-        \\}
-        \\create_record = || {
-        \\    {foo: "bar"}
-        \\}
-        \\use_record = |rec| {
-        \\    Str.is_empty(rec.blah)
+        \\mk_my_tag = || MyTag
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "mk_my_tag", .expected = "({}) -> [MyTag, ..]" },
+        },
+    );
+}
+
+test "check type - polarity - input is inferred as closed" {
+    const source =
+        \\mk_my_tag = |MyTag as a| a
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "mk_my_tag", .expected = "[MyTag] -> [MyTag]" },
+        },
+    );
+}
+
+test "check type - wildcard match is inferred as open" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Red => Try.Ok(x)
+        \\    _ => Try.Err("Not red")
+        \\  }
         \\}
     ;
-    try checkTypesModule(source, .fail_with,
-        \\**TYPE MISMATCH**
-        \\The first argument being passed to this function has the wrong type:
-        \\**test:3:5:**
-        \\```roc
-        \\    use_record(rec)
-        \\```
-        \\               ^^^
-        \\
-        \\This argument has the type:
-        \\
-        \\    { foo: Str }
-        \\
-        \\But `use_record` needs the first argument to be:
-        \\
-        \\    { .., blah: Str }
-        \\
-        \\**Hint:** This record is missing the field: `blah`
-        \\
-        \\
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Red, ..a] -> Try([Red, ..a], Str)" },
+        },
+    );
+}
+
+test "check type - exhaustive match is inferred as closed" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Red => Try.Ok(x)
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Red] -> Try([Red], err)" },
+        },
     );
 }

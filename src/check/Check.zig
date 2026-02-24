@@ -2721,7 +2721,25 @@ const Expected = union(enum) {
 
 // pattern //
 
-const PatternCtx = enum { bound, fn_arg, for_, match_branch };
+/// The "polarity" of a tag union or record
+const Polarity = enum { open, closed };
+
+/// The context that this pattern is being called in
+/// This determines if, for tag unions & records, they should be inferred
+/// as open or closed
+const PatternCtx = enum {
+    bound,
+    fn_arg,
+    for_,
+    match_branch,
+
+    fn toPolarity(self: PatternCtx) Polarity {
+        return switch (self) {
+            .bound, .fn_arg => .closed,
+            .for_, .match_branch => .open,
+        };
+    }
+};
 
 /// Check the types for the provided pattern, saving the type in-place
 fn checkPattern(
@@ -2904,7 +2922,10 @@ fn checkPatternHelp(
             };
 
             // Create the type
-            const ext_var = try self.fresh(env, pattern_region);
+            const ext_var = switch (ctx.toPolarity()) {
+                .open => try self.fresh(env, pattern_region),
+                .closed => try self.freshFromContent(.{ .structure = .empty_tag_union }, env, pattern_region),
+            };
 
             const tag = types_mod.Tag{ .name = applied_tag.name, .args = arg_vars_slice };
             const tag_union_content = try self.types.mkTagUnion(&[_]types_mod.Tag{tag}, ext_var);
