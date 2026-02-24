@@ -245,7 +245,7 @@ const CheckTypeCheckerPatternsStep = struct {
         // Record field lookup by name in store.zig requires string comparison
         // because FieldNameIdx values come from a module-independent interner
         // but callers may pass raw field name strings from different modules
-        .{ .file = "store.zig", .start = 945, .end = 955 },
+        .{ .file = "store.zig", .start = 945, .end = 965 },
         .{ .file = "StackValue.zig", .start = 1254, .end = 1264 },
     };
 

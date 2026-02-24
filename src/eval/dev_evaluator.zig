@@ -186,8 +186,6 @@ fn lirExprResultLayout(store: *const LirExprStore, expr_id: lir.LirExprId) ?layo
         .match_expr => |w| w.result_layout,
         .dbg => |d| d.result_layout,
         .expect => |e| e.result_layout,
-        .binop => |b| b.result_layout,
-        .unary_minus => |um| um.result_layout,
         .call => |c| c.ret_layout,
         .low_level => |ll| ll.ret_layout,
         .early_return => |er| er.ret_layout,
@@ -211,7 +209,6 @@ fn lirExprResultLayout(store: *const LirExprStore, expr_id: lir.LirExprId) ?layo
         // Don't hardcode .i128 here — let the fallback resolve from the CIR type variable
         // to get the correct layout (.i128 vs .u128).
         .i128_literal => null,
-        .unary_not => .bool,
         .list,
         .empty_list,
         .empty_record,
@@ -744,7 +741,7 @@ pub const DevEvaluator = struct {
         var lir_store = LirExprStore.init(self.allocator);
         defer lir_store.deinit();
 
-        var mir_to_lir = lir.MirToLir.init(self.allocator, &mir_store, &lir_store, layout_store_ptr, module_env, all_module_envs, module_env.idents.true_tag);
+        var mir_to_lir = lir.MirToLir.init(self.allocator, &mir_store, &lir_store, layout_store_ptr, all_module_envs, module_env.idents.true_tag);
         defer mir_to_lir.deinit();
 
         const lir_expr_id = mir_to_lir.lower(mir_expr_id) catch {

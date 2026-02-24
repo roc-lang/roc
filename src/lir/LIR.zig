@@ -485,26 +485,6 @@ pub const LirExpr = union(enum) {
     /// Break out of the enclosing loop (for_loop or while_loop)
     break_expr: void,
 
-    /// Binary operation (specialized, not a method call)
-    binop: struct {
-        op: BinOp,
-        lhs: LirExprId,
-        rhs: LirExprId,
-        result_layout: layout.Idx,
-        operand_layout: layout.Idx,
-    },
-
-    /// Unary minus/negation
-    unary_minus: struct {
-        expr: LirExprId,
-        result_layout: layout.Idx,
-    },
-
-    /// Unary not (boolean negation)
-    unary_not: struct {
-        expr: LirExprId,
-    },
-
     /// Low-level builtin operation
     low_level: struct {
         op: LowLevel,
@@ -652,35 +632,6 @@ pub const LirExpr = union(enum) {
         ret_layout: layout.Idx,
     },
 
-    /// Binary operation types
-    pub const BinOp = enum {
-        // Arithmetic
-        add,
-        sub,
-        mul,
-        div,
-        div_trunc, // Truncating division (integer division)
-        rem, // Remainder (truncates toward zero, like C's %)
-        mod, // Modulo (result has sign of divisor, like Python's %)
-
-        // Bitwise shifts
-        shl, // Shift left
-        shr, // Arithmetic shift right (sign-extending)
-        shr_zf, // Logical shift right (zero-filling)
-
-        // Comparison
-        eq,
-        neq,
-        lt,
-        lte,
-        gt,
-        gte,
-
-        // Boolean
-        @"and",
-        @"or",
-    };
-
     /// Low-level operations (subset of CIR.Expr.LowLevel that we need)
     /// These are operations implemented directly by the backend.
     pub const LowLevel = enum {
@@ -743,6 +694,8 @@ pub const LirExpr = union(enum) {
         num_sub,
         num_mul,
         num_div,
+        num_div_trunc,
+        num_rem,
         num_mod,
         num_neg,
         num_abs,
@@ -760,6 +713,17 @@ pub const LirExpr = union(enum) {
         num_shift_left_by,
         num_shift_right_by,
         num_shift_right_zf_by,
+
+        // Numeric comparison operations
+        num_is_eq,
+        num_is_gt,
+        num_is_gte,
+        num_is_lt,
+        num_is_lte,
+
+        // Boolean operations
+        bool_is_eq,
+        bool_not,
 
         // Numeric conversion operations (U8)
         u8_to_i8_wrap,

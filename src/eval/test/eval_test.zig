@@ -221,8 +221,11 @@ test "operator associativity - edge cases" {
     // ((((1000 - 100) - 50) - 25) - 10) - 5 = 810
 
     // Complex nested expressions
-    try runExpectI64("(100 - 50) - (30 - 10)", 30, .no_trace); // 50 - 20 = 30
+    try runExpectI64("(100 - 50)", 50, .no_trace);
+    try runExpectI64("(30 - 10)", 20, .no_trace);
+    try runExpectI64("50 - 20", 30, .no_trace);
     try runExpectI64("100 - (50 - 30) - 10", 70, .no_trace); // 100 - 20 - 10 = 70
+    try runExpectI64("(100 - 50) - (30 - 10)", 30, .no_trace); // 50 - 20 = 30
 
     // Division chains that would overflow if right-associative
     // Using very small numbers to avoid Dec overflow with chained divisions
@@ -467,7 +470,6 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
 
 test "integer type evaluation" {
     // Test integer types to verify basic evaluation works
-    // This should help us debug why 255u8 shows as 42 in REPL
     try runExpectI64("255u8", 255, .no_trace);
     try runExpectI64("42i32", 42, .no_trace);
     try runExpectI64("123i64", 123, .no_trace);
@@ -3806,4 +3808,99 @@ test "dev: polymorphic comparison lambda passed to List.any" {
 
 test "dev: List.any with inline lambda" {
     try runDevOnlyExpectStr("List.any([1, 2, 3], |x| x > 0)", "True");
+}
+
+test "polymorphic function called with two list types" {
+    // Simplest case: polymorphic function called with two different list types.
+    const code =
+        \\{
+        \\    my_len = |list| list.len()
+        \\    a : List(I64)
+        \\    a = [1, 2, 3]
+        \\    b : List(Str)
+        \\    b = ["x", "y"]
+        \\    my_len(a) + my_len(b)
+        \\}
+    ;
+    try runExpectI64(code, 5, .no_trace);
+}
+
+test "direct List.contains I64" {
+    const code =
+        \\{
+        \\    a : List(I64)
+        \\    a = [1, 2, 3]
+        \\    if a.contains(2) { 1 } else { 0 }
+        \\}
+    ;
+    try runExpectI64(code, 1, .no_trace);
+}
+
+test "polymorphic function single call I64" {
+    const code =
+        \\{
+        \\    has = |list, item| list.contains(item)
+        \\    a : List(I64)
+        \\    a = [1, 2, 3]
+        \\    if has(a, 2) { 1 } else { 0 }
+        \\}
+    ;
+    try runExpectI64(code, 1, .no_trace);
+}
+
+test "polymorphic function single call Str" {
+    const code =
+        \\{
+        \\    has = |list, item| list.contains(item)
+        \\    b : List(Str)
+        \\    b = ["x", "y"]
+        \\    if has(b, "x") { 1 } else { 0 }
+        \\}
+    ;
+    try runExpectI64(code, 1, .no_trace);
+}
+
+test "polymorphic function with List.contains called with two types" {
+    // Test that re-specialization produces correct code for both calls
+    const code =
+        \\{
+        \\    has = |list, item| list.contains(item)
+        \\    a : List(I64)
+        \\    a = [1, 2, 3]
+        \\    b : List(Str)
+        \\    b = ["x", "y"]
+        \\    r1 = has(a, 2)
+        \\    r2 = has(b, "x")
+        \\    if r1 and r2 { 1 } else { 0 }
+        \\}
+    ;
+    try runExpectI64(code, 1, .no_trace);
+}
+
+test "polymorphic function with List.contains called with multiple types" {
+    // Regression test: a polymorphic function using List.contains must produce
+    // separate specializations when called with different element types.
+    // Previously, the second call reused the first specialization's code,
+    // causing a crash when element sizes differed (U64 vs (U64, U64)).
+    const code =
+        \\{
+        \\    dedup = |list| {
+        \\        var $out = []
+        \\        for item in list {
+        \\            if !$out.contains(item) {
+        \\                $out = $out.append(item)
+        \\            }
+        \\        }
+        \\        $out
+        \\    }
+        \\    nums : List(I64)
+        \\    nums = [1, 2, 3, 2, 1]
+        \\    u1 = dedup(nums)
+        \\    strs : List(Str)
+        \\    strs = ["a", "b", "a"]
+        \\    u2 = dedup(strs)
+        \\    u1.len() + u2.len()
+        \\}
+    ;
+    try runExpectI64(code, 5, .no_trace);
 }

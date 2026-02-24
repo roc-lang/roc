@@ -323,16 +323,6 @@ pub const RcInsertPass = struct {
             .tuple_access => |ta| {
                 try self.countUsesInto(ta.tuple_expr, target);
             },
-            .binop => |b| {
-                try self.countUsesInto(b.lhs, target);
-                try self.countUsesInto(b.rhs, target);
-            },
-            .unary_minus => |u| {
-                try self.countUsesInto(u.expr, target);
-            },
-            .unary_not => |u| {
-                try self.countUsesInto(u.expr, target);
-            },
             .nominal => |n| {
                 try self.countUsesInto(n.backing_expr, target);
             },
@@ -525,9 +515,6 @@ pub const RcInsertPass = struct {
             .zero_arg_tag,
             .tag,
             .break_expr,
-            .binop,
-            .unary_minus,
-            .unary_not,
             .low_level,
             .dbg,
             .expect,
@@ -1215,12 +1202,6 @@ pub const RcInsertPass = struct {
             },
             .field_access => |fa| try self.collectExprBoundSymbols(fa.record_expr, set),
             .tuple_access => |ta| try self.collectExprBoundSymbols(ta.tuple_expr, set),
-            .binop => |b| {
-                try self.collectExprBoundSymbols(b.lhs, set);
-                try self.collectExprBoundSymbols(b.rhs, set);
-            },
-            .unary_minus => |u| try self.collectExprBoundSymbols(u.expr, set),
-            .unary_not => |u| try self.collectExprBoundSymbols(u.expr, set),
             .nominal => |n| try self.collectExprBoundSymbols(n.backing_expr, set),
             .early_return => |ret| try self.collectExprBoundSymbols(ret.expr, set),
             .dbg => |d| try self.collectExprBoundSymbols(d.expr, set),
@@ -1811,9 +1792,6 @@ fn countRcOps(store: *const LirExprStore, expr_id: LirExprId) RcOpCounts {
         .tag,
         .early_return,
         .break_expr,
-        .binop,
-        .unary_minus,
-        .unary_not,
         .low_level,
         .dbg,
         .expect,
@@ -1977,20 +1955,19 @@ test "RC branch-aware: symbol used twice in one branch — incref in that branch
     const lookup_s2 = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
     const int_42 = try env.lir_store.addExpr(.{ .i64_literal = 42 }, Region.zero());
 
-    // True branch body: binop(s, s) — uses s twice
-    const binop_expr = try env.lir_store.addExpr(.{ .binop = .{
-        .lhs = lookup_s1,
-        .rhs = lookup_s2,
-        .op = .add,
-        .result_layout = str_layout,
-        .operand_layout = str_layout,
+    // True branch body: low_level num_add(s, s) — uses s twice
+    const ll_args = try env.lir_store.addExprSpan(&.{ lookup_s1, lookup_s2 });
+    const ll_expr = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .num_add,
+        .args = ll_args,
+        .ret_layout = str_layout,
     } }, Region.zero());
 
     const wild_pat1 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = i64_layout } }, Region.zero());
     const wild_pat2 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = i64_layout } }, Region.zero());
 
     const match_branches = try env.lir_store.addMatchBranches(&.{
-        .{ .pattern = wild_pat1, .guard = LirExprId.none, .body = binop_expr },
+        .{ .pattern = wild_pat1, .guard = LirExprId.none, .body = ll_expr },
         .{ .pattern = wild_pat2, .guard = LirExprId.none, .body = int_42 },
     });
 
@@ -2148,24 +2125,23 @@ test "RC lambda: refcounted param used twice gets incref" {
     const str_layout: LayoutIdx = .str;
     const sym_s = makeSymbol(1);
 
-    // Build lambda body: binop(s, s)
+    // Build lambda body: low_level num_add(s, s)
     const lookup_s1 = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
     const lookup_s2 = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
-    const binop_expr = try env.lir_store.addExpr(.{ .binop = .{
-        .lhs = lookup_s1,
-        .rhs = lookup_s2,
-        .op = .add,
-        .result_layout = str_layout,
-        .operand_layout = str_layout,
+    const ll_args = try env.lir_store.addExprSpan(&.{ lookup_s1, lookup_s2 });
+    const ll_expr = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .num_add,
+        .args = ll_args,
+        .ret_layout = str_layout,
     } }, Region.zero());
 
-    // Build lambda: |s| binop(s, s)
+    // Build lambda: |s| low_level(s, s)
     const pat_s = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
     const params = try env.lir_store.addPatternSpan(&.{pat_s});
     const lambda_expr = try env.lir_store.addExpr(.{ .lambda = .{
         .fn_layout = str_layout,
         .params = params,
-        .body = binop_expr,
+        .body = ll_expr,
         .ret_layout = str_layout,
     } }, Region.zero());
 

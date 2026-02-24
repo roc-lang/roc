@@ -494,6 +494,11 @@ pub const Store = struct {
     /// Map from global symbol key (u64 bitcast) to its definition ExprId
     symbol_defs: std.AutoHashMapUnmanaged(u64, ExprId),
 
+    /// String literals copied from CIR during lowering.
+    /// MIR owns its own string data so downstream passes (LIR, codegen)
+    /// never need to reach back into CIR module envs.
+    strings: StringLiteral.Store,
+
     pub fn init(allocator: Allocator) Allocator.Error!Store {
         return .{
             .exprs = .empty,
@@ -508,6 +513,7 @@ pub const Store = struct {
             .captures = .empty,
             .monotype_store = try Monotype.Store.init(allocator),
             .symbol_defs = .empty,
+            .strings = .{},
         };
     }
 
@@ -524,6 +530,7 @@ pub const Store = struct {
         self.captures.deinit(allocator);
         self.monotype_store.deinit(allocator);
         self.symbol_defs.deinit(allocator);
+        self.strings.deinit(allocator);
     }
 
     /// Add an expression with its monotype and region. Returns the ExprId.
@@ -551,6 +558,11 @@ pub const Store = struct {
     /// Get the region of an expression.
     pub fn getRegion(self: *const Store, id: ExprId) Region {
         return self.expr_regions.items[@intFromEnum(id)];
+    }
+
+    /// Get a string literal by its index.
+    pub fn getString(self: *const Store, idx: StringLiteral.Idx) []const u8 {
+        return self.strings.get(idx);
     }
 
     /// Add a pattern with its monotype. Returns the PatternId.

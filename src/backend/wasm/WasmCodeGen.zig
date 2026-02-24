@@ -7,6 +7,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const layout = @import("layout");
+
 const lir = @import("lir");
 const LIR = lir.LIR;
 const LirExprStore = lir.LirExprStore;
@@ -590,177 +591,6 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
 
             // Push pointer to the 16-byte value
             try self.emitFpOffset(base_offset);
-        },
-        .binop => |b| {
-            // Check for composite types (Dec, i128, records, etc.)
-            if (self.isCompositeExpr(b.lhs)) {
-                if (b.op == .eq or b.op == .neq) {
-                    try self.generateStructuralEq(b.lhs, b.rhs, b.op == .neq);
-                } else {
-                    try self.generateCompositeI128BinOp(b.lhs, b.rhs, b.op, b.result_layout);
-                }
-            } else {
-                try self.generateExpr(b.lhs);
-                try self.generateExpr(b.rhs);
-
-                // For arithmetic ops, use the result type. For comparison ops,
-                // use the operand type (comparisons return bool/i32 regardless
-                // of whether operands are i32, i64, f32, or f64).
-                const is_comparison = switch (b.op) {
-                    .eq, .neq, .lt, .lte, .gt, .gte => true,
-                    else => false,
-                };
-                const vt = if (is_comparison)
-                    self.exprValType(b.lhs)
-                else
-                    self.resolveValType(b.result_layout);
-
-                // For signedness, use the operand layout for comparisons,
-                // the result layout for arithmetic.
-                const signedness_layout = if (is_comparison)
-                    self.exprLayoutIdx(b.lhs)
-                else
-                    b.result_layout;
-                const is_unsigned = if (signedness_layout) |lay| isUnsignedLayout(lay) else false;
-
-                const op: u8 = switch (b.op) {
-                    .add => switch (vt) {
-                        .i32 => Op.i32_add,
-                        .i64 => Op.i64_add,
-                        .f32 => Op.f32_add,
-                        .f64 => Op.f64_add,
-                    },
-                    .sub => switch (vt) {
-                        .i32 => Op.i32_sub,
-                        .i64 => Op.i64_sub,
-                        .f32 => Op.f32_sub,
-                        .f64 => Op.f64_sub,
-                    },
-                    .mul => switch (vt) {
-                        .i32 => Op.i32_mul,
-                        .i64 => Op.i64_mul,
-                        .f32 => Op.f32_mul,
-                        .f64 => Op.f64_mul,
-                    },
-                    .div => switch (vt) {
-                        .i32 => if (is_unsigned) Op.i32_div_u else Op.i32_div_s,
-                        .i64 => if (is_unsigned) Op.i64_div_u else Op.i64_div_s,
-                        .f32 => Op.f32_div,
-                        .f64 => Op.f64_div,
-                    },
-                    .div_trunc => switch (vt) {
-                        .i32 => if (is_unsigned) Op.i32_div_u else Op.i32_div_s,
-                        .i64 => if (is_unsigned) Op.i64_div_u else Op.i64_div_s,
-                        .f32 => Op.f32_div,
-                        .f64 => Op.f64_div,
-                    },
-                    .rem => switch (vt) {
-                        .i32 => if (is_unsigned) Op.i32_rem_u else Op.i32_rem_s,
-                        .i64 => if (is_unsigned) Op.i64_rem_u else Op.i64_rem_s,
-                        .f32, .f64 => {
-                            try self.emitFloatMod(vt);
-                            return; // multi-instruction, skip the single-op emit below
-                        },
-                    },
-                    .eq => switch (vt) {
-                        .i32 => Op.i32_eq,
-                        .i64 => Op.i64_eq,
-                        .f32 => Op.f32_eq,
-                        .f64 => Op.f64_eq,
-                    },
-                    .neq => switch (vt) {
-                        .i32 => Op.i32_ne,
-                        .i64 => Op.i64_ne,
-                        .f32 => Op.f32_ne,
-                        .f64 => Op.f64_ne,
-                    },
-                    .lt => switch (vt) {
-                        .i32 => if (is_unsigned) Op.i32_lt_u else Op.i32_lt_s,
-                        .i64 => if (is_unsigned) Op.i64_lt_u else Op.i64_lt_s,
-                        .f32 => Op.f32_lt,
-                        .f64 => Op.f64_lt,
-                    },
-                    .lte => switch (vt) {
-                        .i32 => if (is_unsigned) Op.i32_le_u else Op.i32_le_s,
-                        .i64 => if (is_unsigned) Op.i64_le_u else Op.i64_le_s,
-                        .f32 => Op.f32_le,
-                        .f64 => Op.f64_le,
-                    },
-                    .gt => switch (vt) {
-                        .i32 => if (is_unsigned) Op.i32_gt_u else Op.i32_gt_s,
-                        .i64 => if (is_unsigned) Op.i64_gt_u else Op.i64_gt_s,
-                        .f32 => Op.f32_gt,
-                        .f64 => Op.f64_gt,
-                    },
-                    .gte => switch (vt) {
-                        .i32 => if (is_unsigned) Op.i32_ge_u else Op.i32_ge_s,
-                        .i64 => if (is_unsigned) Op.i64_ge_u else Op.i64_ge_s,
-                        .f32 => Op.f32_ge,
-                        .f64 => Op.f64_ge,
-                    },
-                    .mod => switch (vt) {
-                        // mod (Python-style): for integers, same as rem for now
-                        .i32 => if (is_unsigned) Op.i32_rem_u else Op.i32_rem_s,
-                        .i64 => if (is_unsigned) Op.i64_rem_u else Op.i64_rem_s,
-                        .f32, .f64 => {
-                            try self.emitFloatMod(vt);
-                            return;
-                        },
-                    },
-                    .shl => switch (vt) {
-                        .i32 => Op.i32_shl,
-                        .i64 => Op.i64_shl,
-                        .f32, .f64 => unreachable,
-                    },
-                    .shr => switch (vt) {
-                        .i32 => Op.i32_shr_s,
-                        .i64 => Op.i64_shr_s,
-                        .f32, .f64 => unreachable,
-                    },
-                    .shr_zf => switch (vt) {
-                        .i32 => Op.i32_shr_u,
-                        .i64 => Op.i64_shr_u,
-                        .f32, .f64 => unreachable,
-                    },
-                    .@"and" => Op.i32_and,
-                    .@"or" => Op.i32_or,
-                };
-                self.body.append(self.allocator, op) catch return error.OutOfMemory;
-            }
-        },
-        .unary_minus => |u| {
-            // Composite types (Dec, i128) can't be negated with scalar ops
-            if (self.isCompositeLayout(u.result_layout)) {
-                try self.generateCompositeI128Negate(u.expr, u.result_layout);
-                return;
-            }
-            const vt = self.resolveValType(u.result_layout);
-            switch (vt) {
-                .i32 => {
-                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-                    try self.generateExpr(u.expr);
-                    self.body.append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
-                },
-                .i64 => {
-                    self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteI64(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-                    try self.generateExpr(u.expr);
-                    self.body.append(self.allocator, Op.i64_sub) catch return error.OutOfMemory;
-                },
-                .f32 => {
-                    try self.generateExpr(u.expr);
-                    self.body.append(self.allocator, Op.f32_neg) catch return error.OutOfMemory;
-                },
-                .f64 => {
-                    try self.generateExpr(u.expr);
-                    self.body.append(self.allocator, Op.f64_neg) catch return error.OutOfMemory;
-                },
-            }
-        },
-        .unary_not => |u| {
-            try self.generateExpr(u.expr);
-            self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
         },
         .block => |b| {
             // Process statements (let bindings)
@@ -1872,9 +1702,6 @@ fn valTypeToBlockType(vt: ValType) BlockType {
 fn exprLayoutIdx(self: *Self, expr_id: LirExprId) ?layout.Idx {
     const expr = self.store.getExpr(expr_id);
     return switch (expr) {
-        .binop => |b| b.result_layout,
-        .unary_minus => |u| u.result_layout,
-        .unary_not => layout.Idx.bool,
         .block => |b| b.result_layout,
         .lookup => |l| l.layout_idx,
         .if_then_else => |ite| ite.result_layout,
@@ -1920,9 +1747,6 @@ fn exprValType(self: *Self, expr_id: LirExprId) ValType {
         .f32_literal => .f32,
         .bool_literal => .i32,
         .i128_literal, .dec_literal => .i32, // pointer to stack memory
-        .binop => |b| self.resolveValType(b.result_layout),
-        .unary_minus => |u| self.resolveValType(u.result_layout),
-        .unary_not => .i32,
         .block => |b| self.exprValType(b.final_expr),
         .lookup => |l| self.resolveValType(l.layout_idx),
         .if_then_else => |ite| self.resolveValType(ite.result_layout),
@@ -2010,9 +1834,6 @@ fn isCompositeExpr(self: *const Self, expr_id: LirExprId) bool {
         .low_level => |ll| self.isCompositeLayout(ll.ret_layout),
         .dbg => |d| self.isCompositeLayout(d.result_layout),
         .expect => |e| self.isCompositeLayout(e.result_layout),
-        .binop => |b| self.isCompositeLayout(b.result_layout),
-        .unary_minus => |u| self.isCompositeLayout(u.result_layout),
-        .unary_not => false, // always bool (i32)
         .tag_payload_access => |tpa| self.isCompositeLayout(tpa.payload_layout),
         .incref => |inc| self.isCompositeExpr(inc.value),
         .decref => |dec| self.isCompositeExpr(dec.value),
@@ -2809,96 +2630,95 @@ fn stabilizeCompositeResult(self: *Self, size: u32) Allocator.Error!u32 {
     return buf_local;
 }
 
-/// Generate i128/Dec binary operations (add, sub, comparisons).
+/// Generate composite (i128/Dec) numeric operations via LowLevel ops.
 /// Both operands are i32 pointers to 16-byte values in linear memory.
-fn generateCompositeI128BinOp(self: *Self, lhs: LirExprId, rhs: LirExprId, op: anytype, result_layout: layout.Idx) Allocator.Error!void {
-    // Generate operand pointers.
-    // After generating each operand, copy the 16-byte value to a caller-owned
-    // buffer. This prevents stack use-after-free when operands are function
-    // calls: the first call's result lives in the callee's stack frame, which
-    // is overwritten when the second call allocates its own stack frame at the
-    // same address.
-    try self.generateExpr(lhs);
+fn generateCompositeNumericOp(self: *Self, op: anytype, args: []const LirExprId, ret_layout: layout.Idx, operand_layout: layout.Idx) Allocator.Error!void {
+    // For comparison ops like num_is_eq, check for structural equality first
+    if (op == .num_is_eq) {
+        try self.generateStructuralEq(args[0], args[1], false);
+        return;
+    }
+
+    // Generate operand pointers and stabilize them
+    try self.generateExpr(args[0]);
     const lhs_local = try self.stabilizeCompositeResult(16);
 
-    try self.generateExpr(rhs);
-    const rhs_local = try self.stabilizeCompositeResult(16);
+    if (args.len > 1) {
+        try self.generateExpr(args[1]);
+        const rhs_local = try self.stabilizeCompositeResult(16);
 
-    switch (op) {
-        .add => try self.emitI128Add(lhs_local, rhs_local),
-        .sub => try self.emitI128Sub(lhs_local, rhs_local),
-        .mul => {
-            if (result_layout == .dec) {
-                // Dec multiply: call imported host function roc_dec_mul(lhs_ptr, rhs_ptr, result_ptr)
-                const import_idx = self.dec_mul_import orelse unreachable;
-                const result_offset = try self.allocStackMemory(16, 8);
-                const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-                try self.emitFpOffset(result_offset);
-                self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-                WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
-                // Push args: lhs_ptr, rhs_ptr, result_ptr
-                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-                WasmModule.leb128WriteU32(self.allocator, &self.body, lhs_local) catch return error.OutOfMemory;
-                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-                WasmModule.leb128WriteU32(self.allocator, &self.body, rhs_local) catch return error.OutOfMemory;
-                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-                WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
-                self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
-                WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
-                // Push result pointer
-                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-                WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
-                return;
-            }
-            // i128 × i128 → i128 (truncating multiply, keeping lower 128 bits)
-            try self.emitI128Mul(lhs_local, rhs_local);
-        },
-        .div => {
-            if (result_layout == .dec) {
-                // Dec division: (lhs * 10^18) / rhs — uses special host function
-                const import_idx = self.dec_div_import orelse unreachable;
-                try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx);
-            } else {
-                // i128/u128 raw division
-                const is_signed = result_layout == .i128;
-                const import_idx = if (is_signed) self.i128_div_s_import else self.u128_div_import;
+        switch (op) {
+            .num_add => try self.emitI128Add(lhs_local, rhs_local),
+            .num_sub => try self.emitI128Sub(lhs_local, rhs_local),
+            .num_mul => {
+                if (operand_layout == .dec) {
+                    const import_idx = self.dec_mul_import orelse unreachable;
+                    const result_offset = try self.allocStackMemory(16, 8);
+                    const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                    try self.emitFpOffset(result_offset);
+                    self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, lhs_local) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, rhs_local) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
+                    return;
+                }
+                try self.emitI128Mul(lhs_local, rhs_local);
+            },
+            .num_div => {
+                if (operand_layout == .dec) {
+                    const import_idx = self.dec_div_import orelse unreachable;
+                    try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx);
+                } else {
+                    const is_signed = operand_layout == .i128;
+                    const import_idx = if (is_signed) self.i128_div_s_import else self.u128_div_import;
+                    try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx orelse unreachable);
+                }
+            },
+            .num_div_trunc => {
+                if (operand_layout == .dec) {
+                    const import_idx = self.dec_div_trunc_import orelse unreachable;
+                    try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx);
+                } else {
+                    const is_signed = operand_layout == .i128;
+                    const import_idx = if (is_signed) self.i128_div_s_import else self.u128_div_import;
+                    try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx orelse unreachable);
+                }
+            },
+            .num_rem => {
+                const is_signed = operand_layout == .i128 or operand_layout == .dec;
+                const import_idx = if (is_signed) self.i128_mod_s_import else self.u128_mod_import;
                 try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx orelse unreachable);
-            }
-        },
-        .div_trunc => {
-            if (result_layout == .dec) {
-                // Dec truncating division: (lhs / rhs) * 10^18 — result scaled as Dec
-                const import_idx = self.dec_div_trunc_import orelse unreachable;
-                try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx);
-            } else {
-                // i128/u128 raw truncating division
-                const is_signed = result_layout == .i128;
-                const import_idx = if (is_signed) self.i128_div_s_import else self.u128_div_import;
+            },
+            .num_mod => {
+                const is_signed = operand_layout == .i128 or operand_layout == .dec;
+                const import_idx = if (is_signed) self.i128_mod_s_import else self.u128_mod_import;
                 try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx orelse unreachable);
-            }
-        },
-        .rem => {
-            // i128/u128 remainder via host function
-            const is_signed = result_layout == .i128 or result_layout == .dec;
-            const import_idx = if (is_signed) self.i128_mod_s_import else self.u128_mod_import;
-            try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx orelse unreachable);
-        },
-        .lt => try self.emitI128Compare(lhs_local, rhs_local, .lt),
-        .lte => try self.emitI128Compare(lhs_local, rhs_local, .lte),
-        .gt => try self.emitI128Compare(lhs_local, rhs_local, .gt),
-        .gte => try self.emitI128Compare(lhs_local, rhs_local, .gte),
-        .mod => {
-            // mod (Python-style) for i128 via host function
-            const is_signed = result_layout == .i128 or result_layout == .dec;
-            const import_idx = if (is_signed) self.i128_mod_s_import else self.u128_mod_import;
-            try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx orelse unreachable);
-        },
-        // Shift ops for i128 via host function
-        .shl, .shr, .shr_zf => unreachable, // TODO: i128 shifts not yet implemented for wasm
-        // eq/neq are handled by generateStructuralEq before reaching here
-        .eq, .neq => unreachable,
-        // Boolean ops don't apply to i128
-        .@"and", .@"or" => unreachable,
+            },
+            .num_is_gt => try self.emitI128Compare(lhs_local, rhs_local, .gt),
+            .num_is_gte => try self.emitI128Compare(lhs_local, rhs_local, .gte),
+            .num_is_lt => try self.emitI128Compare(lhs_local, rhs_local, .lt),
+            .num_is_lte => try self.emitI128Compare(lhs_local, rhs_local, .lte),
+            else => unreachable,
+        }
+    } else {
+        // Unary composite op (num_neg handled before calling this function)
+        switch (op) {
+            .num_neg => try self.generateCompositeI128Negate(args[0], ret_layout),
+            .num_abs => {
+                // i128/Dec abs: compare with 0, negate if negative
+                // For now, treat as unimplemented for composite types
+                unreachable;
+            },
+            else => unreachable,
+        }
     }
 }
 
@@ -6520,8 +6340,26 @@ fn emitCall(self: *Self, func_idx: u32) Allocator.Error!void {
 /// Generate call arguments (helper to avoid duplication).
 fn generateCallArgs(self: *Self, args: LIR.LirExprSpan) Allocator.Error!void {
     const arg_exprs = self.store.getExprSpan(args);
-    for (arg_exprs) |arg_id| {
+    for (arg_exprs, 0..) |arg_id, i| {
         try self.generateExpr(arg_id);
+        // When there are multiple args and this one returns a composite value
+        // (pointer to stack memory), stabilize it by copying into the caller's
+        // stack frame. Otherwise a subsequent arg's call can deallocate the
+        // callee's stack frame and reuse the memory, clobbering this result.
+        if (arg_exprs.len > 1 and i < arg_exprs.len - 1 and self.isCompositeExpr(arg_id)) {
+            const layout_idx = self.exprLayoutIdx(arg_id) orelse continue;
+            const repr = if (self.layout_store) |ls|
+                WasmLayout.wasmReprWithStore(layout_idx, ls)
+            else
+                WasmLayout.wasmRepr(layout_idx);
+            switch (repr) {
+                .stack_memory => |size| if (size > 0) {
+                    const stabilized = try self.stabilizeCompositeResult(size);
+                    try self.emitLocalGet(stabilized);
+                },
+                .primitive => {},
+            }
+        }
     }
 }
 
@@ -6931,10 +6769,7 @@ fn dispatchClosureCall(
             try self.emitForwardedCaptures(func_idx);
 
             // Generate arguments and call
-            const arg_exprs = self.store.getExprSpan(args);
-            for (arg_exprs) |arg_id| {
-                try self.generateExpr(arg_id);
-            }
+            try self.generateCallArgs(args);
             try self.emitCall(func_idx);
         },
     }
@@ -7126,10 +6961,7 @@ fn compileLambdaSetMemberAndCall(
     try self.emitForwardedCaptures(func_idx);
 
     // Push arguments
-    const arg_exprs = self.store.getExprSpan(args);
-    for (arg_exprs) |arg_id| {
-        try self.generateExpr(arg_id);
-    }
+    try self.generateCallArgs(args);
 
     // Call
     try self.emitCall(func_idx);
@@ -8363,9 +8195,33 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
     const args = self.store.getExprSpan(ll.args);
 
     switch (ll.op) {
-        // Numeric arithmetic (same as binop equivalents)
-        .num_add, .num_sub, .num_mul, .num_div, .num_neg, .num_abs => {
+        // Numeric operations (arithmetic, comparisons, shifts)
+        .num_add,
+        .num_sub,
+        .num_mul,
+        .num_div,
+        .num_div_trunc,
+        .num_rem,
+        .num_neg,
+        .num_abs,
+        .num_is_eq,
+        .num_is_gt,
+        .num_is_gte,
+        .num_is_lt,
+        .num_is_lte,
+        => {
             return self.generateNumericLowLevel(ll.op, args, ll.ret_layout);
+        },
+
+        .bool_is_eq => {
+            try self.generateExpr(args[0]);
+            try self.generateExpr(args[1]);
+            self.body.append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
+        },
+
+        .bool_not => {
+            try self.generateExpr(args[0]);
+            self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
         },
 
         // Safe integer widenings (no-op or single instruction)
@@ -11378,8 +11234,26 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 }
 
 /// Generate numeric low-level operations (num_add, num_sub, etc.)
+/// Handles both scalar and composite (i128/Dec) types.
 fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LirExprId, ret_layout: layout.Idx) Allocator.Error!void {
-    const vt = self.resolveValType(ret_layout);
+    // For comparison ops, the operand type determines composite-ness, not ret_layout (which is bool)
+    const is_comparison = switch (op) {
+        .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte => true,
+        else => false,
+    };
+
+    // Check for composite types (i128/Dec)
+    const check_layout = if (is_comparison) self.exprLayoutIdx(args[0]) orelse ret_layout else ret_layout;
+    if (self.isCompositeExpr(args[0]) or self.isCompositeLayout(check_layout)) {
+        return self.generateCompositeNumericOp(op, args, ret_layout, check_layout);
+    }
+
+    // For neg, also check composite via ret_layout
+    if (op == .num_neg and self.isCompositeLayout(ret_layout)) {
+        return self.generateCompositeI128Negate(args[0], ret_layout);
+    }
+
+    const vt = if (is_comparison) self.exprValType(args[0]) else self.resolveValType(ret_layout);
 
     switch (op) {
         .num_add => {
@@ -11418,13 +11292,36 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LirExprId, re
         .num_div => {
             try self.generateExpr(args[0]);
             try self.generateExpr(args[1]);
+            const is_unsigned = isUnsignedLayout(ret_layout);
             const wasm_op: u8 = switch (vt) {
-                .i32 => Op.i32_div_s,
-                .i64 => Op.i64_div_s,
+                .i32 => if (is_unsigned) Op.i32_div_u else Op.i32_div_s,
+                .i64 => if (is_unsigned) Op.i64_div_u else Op.i64_div_s,
                 .f32 => Op.f32_div,
                 .f64 => Op.f64_div,
             };
             self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
+        },
+        .num_div_trunc => {
+            try self.generateExpr(args[0]);
+            try self.generateExpr(args[1]);
+            const is_unsigned = isUnsignedLayout(ret_layout);
+            const wasm_op: u8 = switch (vt) {
+                .i32 => if (is_unsigned) Op.i32_div_u else Op.i32_div_s,
+                .i64 => if (is_unsigned) Op.i64_div_u else Op.i64_div_s,
+                .f32 => Op.f32_div,
+                .f64 => Op.f64_div,
+            };
+            self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
+        },
+        .num_rem => {
+            try self.generateExpr(args[0]);
+            try self.generateExpr(args[1]);
+            const is_unsigned = isUnsignedLayout(ret_layout);
+            switch (vt) {
+                .i32 => self.body.append(self.allocator, if (is_unsigned) Op.i32_rem_u else Op.i32_rem_s) catch return error.OutOfMemory,
+                .i64 => self.body.append(self.allocator, if (is_unsigned) Op.i64_rem_u else Op.i64_rem_s) catch return error.OutOfMemory,
+                .f32, .f64 => try self.emitFloatMod(vt),
+            }
         },
         .num_neg => {
             switch (vt) {
@@ -11449,6 +11346,72 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LirExprId, re
                     self.body.append(self.allocator, Op.f64_neg) catch return error.OutOfMemory;
                 },
             }
+        },
+        .num_is_eq => {
+            // Check for structural equality (strings, lists, records, etc.)
+            if (self.exprLayoutIdx(args[0])) |lay_idx| {
+                if (lay_idx == .str or (self.layout_store != null and self.getLayoutStore().getLayout(lay_idx).tag == .list)) {
+                    try self.generateStructuralEq(args[0], args[1], false);
+                    return;
+                }
+            }
+            try self.generateExpr(args[0]);
+            try self.generateExpr(args[1]);
+            const wasm_op: u8 = switch (vt) {
+                .i32 => Op.i32_eq,
+                .i64 => Op.i64_eq,
+                .f32 => Op.f32_eq,
+                .f64 => Op.f64_eq,
+            };
+            self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
+        },
+        .num_is_gt => {
+            try self.generateExpr(args[0]);
+            try self.generateExpr(args[1]);
+            const is_unsigned = if (self.exprLayoutIdx(args[0])) |lay| isUnsignedLayout(lay) else false;
+            const wasm_op: u8 = switch (vt) {
+                .i32 => if (is_unsigned) Op.i32_gt_u else Op.i32_gt_s,
+                .i64 => if (is_unsigned) Op.i64_gt_u else Op.i64_gt_s,
+                .f32 => Op.f32_gt,
+                .f64 => Op.f64_gt,
+            };
+            self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
+        },
+        .num_is_gte => {
+            try self.generateExpr(args[0]);
+            try self.generateExpr(args[1]);
+            const is_unsigned = if (self.exprLayoutIdx(args[0])) |lay| isUnsignedLayout(lay) else false;
+            const wasm_op: u8 = switch (vt) {
+                .i32 => if (is_unsigned) Op.i32_ge_u else Op.i32_ge_s,
+                .i64 => if (is_unsigned) Op.i64_ge_u else Op.i64_ge_s,
+                .f32 => Op.f32_ge,
+                .f64 => Op.f64_ge,
+            };
+            self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
+        },
+        .num_is_lt => {
+            try self.generateExpr(args[0]);
+            try self.generateExpr(args[1]);
+            const is_unsigned = if (self.exprLayoutIdx(args[0])) |lay| isUnsignedLayout(lay) else false;
+            const wasm_op: u8 = switch (vt) {
+                .i32 => if (is_unsigned) Op.i32_lt_u else Op.i32_lt_s,
+                .i64 => if (is_unsigned) Op.i64_lt_u else Op.i64_lt_s,
+                .f32 => Op.f32_lt,
+                .f64 => Op.f64_lt,
+            };
+            self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
+        },
+        .num_is_lte => {
+            try self.generateExpr(args[0]);
+            try self.generateExpr(args[1]);
+            const is_unsigned = if (self.exprLayoutIdx(args[0])) |lay| isUnsignedLayout(lay) else false;
+            const wasm_op: u8 = switch (vt) {
+                .i32 => if (is_unsigned) Op.i32_le_u else Op.i32_le_s,
+                .i64 => if (is_unsigned) Op.i64_le_u else Op.i64_le_s,
+                .f32 => Op.f32_le,
+                .f64 => Op.f64_le,
+            };
+            self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
         },
         .num_abs => {
             switch (vt) {

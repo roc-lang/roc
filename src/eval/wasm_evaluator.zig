@@ -43,8 +43,6 @@ fn lirExprResultLayout(store: *const LirExprStore, expr_id: LirExprId) ?layout.I
         .match_expr => |w| w.result_layout,
         .dbg => |d| d.result_layout,
         .expect => |e| e.result_layout,
-        .binop => |b| b.result_layout,
-        .unary_minus => |um| um.result_layout,
         .call => |c| c.ret_layout,
         .low_level => |ll| ll.ret_layout,
         .early_return => |er| er.ret_layout,
@@ -65,7 +63,6 @@ fn lirExprResultLayout(store: *const LirExprStore, expr_id: LirExprId) ?layout.I
         .str_literal => .str,
         .i64_literal => .i64,
         .i128_literal => .i128,
-        .unary_not => .bool,
         .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote => .str,
         .tag_payload_access => |tpa| tpa.payload_layout,
         .for_loop, .while_loop => null, // loops don't have a result layout
@@ -208,7 +205,7 @@ pub const WasmEvaluator = struct {
         defer lir_store.deinit();
 
         const all_envs_const: []const *const ModuleEnv = @ptrCast(all_module_envs);
-        var mir_to_lir = lir.MirToLir.init(self.allocator, &mir_store, &lir_store, layout_store_ptr, module_env, all_envs_const, module_env.idents.true_tag);
+        var mir_to_lir = lir.MirToLir.init(self.allocator, &mir_store, &lir_store, layout_store_ptr, all_envs_const, module_env.idents.true_tag);
         defer mir_to_lir.deinit();
 
         const lir_expr_id = mir_to_lir.lower(mir_expr_id) catch {

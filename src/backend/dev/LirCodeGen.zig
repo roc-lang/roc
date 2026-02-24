@@ -1319,8 +1319,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .tag => |tag| tag.union_layout,
                 .lookup => |lookup| lookup.layout_idx,
                 .field_access => |fa| fa.field_layout,
-                .binop => |binop| binop.result_layout,
-                .unary_minus => |um| um.result_layout,
                 .call => |call| call.ret_layout,
                 .low_level => |ll| ll.ret_layout,
                 .hosted_call => |hc| hc.ret_layout,
@@ -1396,13 +1394,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 // Lookups
                 .lookup => |lookup| try self.generateLookup(lookup.symbol, lookup.layout_idx),
-
-                // Binary operations
-                .binop => |binop| try self.generateBinop(binop),
-
-                // Unary operations
-                .unary_minus => |unary| try self.generateUnaryMinus(unary),
-                .unary_not => |unary| try self.generateUnaryNot(unary),
 
                 // Control flow
                 .if_then_else => |ite| try self.generateIfThenElse(ite),
@@ -3421,15 +3412,200 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return try self.generateAbsDiff(a_loc, b_loc, ll.ret_layout, arg_layout);
                 },
 
-                // ── Generic numeric operations (not emitted by LIR lowering) ──
-                // The LIR lowering phase resolves these to type-specific operations
-                // (int_add_wrap, dec_add, float_add, etc.) before code generation.
+                // Numeric arithmetic and comparison ops — route to existing binop helpers
                 .num_add,
                 .num_sub,
                 .num_mul,
                 .num_div,
+                .num_div_trunc,
+                .num_rem,
                 .num_mod,
-                .num_neg,
+                .num_shift_left_by,
+                .num_shift_right_by,
+                .num_shift_right_zf_by,
+                .num_is_eq,
+                .num_is_gt,
+                .num_is_gte,
+                .num_is_lt,
+                .num_is_lte,
+                => {
+                    const lhs_loc = try self.generateExpr(args[0]);
+                    const rhs_loc = try self.generateExpr(args[1]);
+
+                    // Determine operand layout from the first argument
+                    const operand_layout = self.getExprLayout(args[0]) orelse ll.ret_layout;
+
+                    // Check for structural comparison (records/tuples/lists/tags)
+                    if (ll.op == .num_is_eq) {
+                        const lhs_expr = self.store.getExpr(args[0]);
+                        const rhs_expr = self.store.getExpr(args[1]);
+
+                        if (lhs_expr == .record) {
+                            if (self.layout_store != null) {
+                                return self.generateRecordComparisonByLayout(lhs_loc, rhs_loc, lhs_expr.record.record_layout, .num_is_eq);
+                            }
+                            return self.generateStructuralComparison(lhs_loc, rhs_loc, lhs_expr, .num_is_eq);
+                        }
+                        if (rhs_expr == .record) {
+                            if (self.layout_store != null) {
+                                return self.generateRecordComparisonByLayout(lhs_loc, rhs_loc, rhs_expr.record.record_layout, .num_is_eq);
+                            }
+                            return self.generateStructuralComparison(lhs_loc, rhs_loc, rhs_expr, .num_is_eq);
+                        }
+                        if (lhs_expr == .tuple) {
+                            if (self.layout_store != null) {
+                                return self.generateTupleComparisonByLayout(lhs_loc, rhs_loc, lhs_expr.tuple.tuple_layout, .num_is_eq);
+                            }
+                            return self.generateStructuralComparison(lhs_loc, rhs_loc, lhs_expr, .num_is_eq);
+                        }
+                        if (rhs_expr == .tuple) {
+                            if (self.layout_store != null) {
+                                return self.generateTupleComparisonByLayout(lhs_loc, rhs_loc, rhs_expr.tuple.tuple_layout, .num_is_eq);
+                            }
+                            return self.generateStructuralComparison(lhs_loc, rhs_loc, rhs_expr, .num_is_eq);
+                        }
+                        if (lhs_expr == .list) {
+                            return self.generateListComparison(lhs_loc, rhs_loc, lhs_expr, .num_is_eq);
+                        }
+                        if (rhs_expr == .list) {
+                            return self.generateListComparison(lhs_loc, rhs_loc, rhs_expr, .num_is_eq);
+                        }
+                        if (lhs_expr == .tag or lhs_expr == .zero_arg_tag) {
+                            if (self.layout_store) |ls| {
+                                const tu_layout = switch (lhs_expr) {
+                                    .tag => |t| t.union_layout,
+                                    .zero_arg_tag => |t| t.union_layout,
+                                    else => unreachable,
+                                };
+                                if (ls.getLayout(tu_layout).tag == .tag_union) {
+                                    return self.generateTagUnionComparisonByLayout(lhs_loc, rhs_loc, tu_layout, .num_is_eq);
+                                }
+                            }
+                        }
+                        if (rhs_expr == .tag or rhs_expr == .zero_arg_tag) {
+                            if (self.layout_store) |ls| {
+                                const tu_layout = switch (rhs_expr) {
+                                    .tag => |t| t.union_layout,
+                                    .zero_arg_tag => |t| t.union_layout,
+                                    else => unreachable,
+                                };
+                                if (ls.getLayout(tu_layout).tag == .tag_union) {
+                                    return self.generateTagUnionComparisonByLayout(lhs_loc, rhs_loc, tu_layout, .num_is_eq);
+                                }
+                            }
+                        }
+                        // For calls/lookups/blocks, check layout for composite types
+                        if (self.layout_store) |ls| {
+                            const op_layout: ?layout.Idx = switch (lhs_expr) {
+                                .call => |call| call.ret_layout,
+                                .lookup => |lookup| lookup.layout_idx,
+                                .block => |block| block.result_layout,
+                                else => switch (rhs_expr) {
+                                    .call => |call| call.ret_layout,
+                                    .lookup => |lookup| lookup.layout_idx,
+                                    .block => |block| block.result_layout,
+                                    else => null,
+                                },
+                            };
+                            if (op_layout) |ol| {
+                                const stored_layout = ls.getLayout(ol);
+                                if (stored_layout.tag == .record)
+                                    return self.generateRecordComparisonByLayout(lhs_loc, rhs_loc, ol, .num_is_eq);
+                                if (stored_layout.tag == .tuple)
+                                    return self.generateTupleComparisonByLayout(lhs_loc, rhs_loc, ol, .num_is_eq);
+                                if (stored_layout.tag == .list)
+                                    return self.generateListComparisonByLayout(lhs_loc, rhs_loc, ol, .num_is_eq);
+                                if (stored_layout.tag == .tag_union)
+                                    return self.generateTagUnionComparisonByLayout(lhs_loc, rhs_loc, ol, .num_is_eq);
+                            }
+                        }
+                    }
+
+                    // Check for i128/Dec operands
+                    const operands_are_i128 = switch (lhs_loc) {
+                        .immediate_i128, .stack_i128 => true,
+                        else => switch (rhs_loc) {
+                            .immediate_i128, .stack_i128 => true,
+                            else => false,
+                        },
+                    };
+
+                    const is_float = operand_layout == .f32 or operand_layout == .f64;
+
+                    if (is_float) {
+                        return self.generateFloatBinop(ll.op, lhs_loc, rhs_loc);
+                    } else if (operands_are_i128 or operand_layout == .i128 or operand_layout == .u128 or operand_layout == .dec) {
+                        const is_i128_op = operand_layout == .dec or operand_layout == .i128 or operand_layout == .u128;
+                        const adj_lhs = if (is_i128_op and lhs_loc == .stack) ValueLocation{ .stack_i128 = lhs_loc.stack.offset } else lhs_loc;
+                        const adj_rhs = if (is_i128_op and rhs_loc == .stack) ValueLocation{ .stack_i128 = rhs_loc.stack.offset } else rhs_loc;
+                        return self.generateI128Binop(ll.op, adj_lhs, adj_rhs, operand_layout);
+                    } else {
+                        return self.generateIntBinop(ll.op, lhs_loc, rhs_loc, operand_layout);
+                    }
+                },
+
+                .num_neg => {
+                    const inner_loc = try self.generateExpr(args[0]);
+                    const is_float = ll.ret_layout == .f32 or ll.ret_layout == .f64;
+                    const is_i128 = ll.ret_layout == .i128 or ll.ret_layout == .u128 or ll.ret_layout == .dec;
+
+                    if (is_float) {
+                        const float_reg = try self.ensureInFloatReg(inner_loc);
+                        const result_reg = try self.codegen.allocFloatFor(0);
+                        try self.codegen.emitNegF64(result_reg, float_reg);
+                        self.codegen.freeFloat(float_reg);
+                        return .{ .float_reg = result_reg };
+                    } else if (is_i128) {
+                        const parts = try self.getI128Parts(inner_loc, .signed);
+                        const result_low = try self.allocTempGeneral();
+                        const result_high = try self.allocTempGeneral();
+
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            try self.codegen.emit.subsRegRegReg(.w64, result_low, .ZRSP, parts.low);
+                            try self.codegen.emit.sbcRegRegReg(.w64, result_high, .ZRSP, parts.high);
+                        } else {
+                            try self.codegen.emitLoadImm(result_low, 0);
+                            try self.codegen.emit.subRegReg(.w64, result_low, parts.low);
+                            try self.codegen.emitLoadImm(result_high, 0);
+                            try self.codegen.emit.sbbRegReg(.w64, result_high, parts.high);
+                        }
+
+                        self.codegen.freeGeneral(parts.low);
+                        self.codegen.freeGeneral(parts.high);
+
+                        const stack_offset = self.codegen.allocStackSlot(16);
+                        try self.codegen.emitStoreStack(.w64, stack_offset, result_low);
+                        try self.codegen.emitStoreStack(.w64, stack_offset + 8, result_high);
+
+                        self.codegen.freeGeneral(result_low);
+                        self.codegen.freeGeneral(result_high);
+
+                        return .{ .stack_i128 = stack_offset };
+                    } else {
+                        const src_reg = try self.ensureInGeneralReg(inner_loc);
+                        const result_reg = try self.allocTempGeneral();
+                        try self.codegen.emitNeg(.w64, result_reg, src_reg);
+                        self.codegen.freeGeneral(src_reg);
+                        return .{ .general_reg = result_reg };
+                    }
+                },
+
+                .bool_is_eq => {
+                    const lhs_loc = try self.generateExpr(args[0]);
+                    const rhs_loc = try self.generateExpr(args[1]);
+                    return self.generateIntBinop(.num_is_eq, lhs_loc, rhs_loc, .i64);
+                },
+
+                .bool_not => {
+                    const inner_loc = try self.generateExpr(args[0]);
+                    const src_reg = try self.ensureInGeneralReg(inner_loc);
+                    const result_reg = try self.allocTempGeneral();
+                    try self.codegen.emitXorImm(.w64, result_reg, src_reg, 1);
+                    self.codegen.freeGeneral(src_reg);
+                    return .{ .general_reg = result_reg };
+                },
+
+                // Unimplemented ops
                 .num_pow,
                 .num_sqrt,
                 .num_log,
@@ -3439,9 +3615,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_to_str,
                 .num_from_numeral,
                 .num_is_zero,
-                .num_shift_left_by,
-                .num_shift_right_by,
-                .num_shift_right_zf_by,
                 .str_inspekt,
                 .list_drop_at,
                 .compare,
@@ -3531,10 +3704,76 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
                 },
-                .box_box,
-                .box_unbox,
-                => {
-                    unreachable;
+                .box_box => {
+                    // Box.box(value) -> Box(value): heap-allocate and copy value
+                    const ls = self.layout_store orelse unreachable;
+                    const ret_layout_data = ls.getLayout(ll.ret_layout);
+                    const box_info = ls.getBoxInfo(ret_layout_data);
+                    const elem_size: u32 = box_info.elem_size;
+                    const elem_alignment: u32 = box_info.elem_alignment;
+
+                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+
+                    // Allocate heap memory via allocateWithRefcountC
+                    const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
+                    {
+                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        try builder.addImmArg(@intCast(elem_size));
+                        try builder.addImmArg(@intCast(elem_alignment));
+                        try builder.addImmArg(if (box_info.contains_refcounted) 1 else 0);
+                        try builder.addRegArg(roc_ops_reg);
+                        try self.callBuiltin(&builder, @intFromPtr(&allocateWithRefcountC), .allocate_with_refcount);
+                    }
+                    // Save heap pointer to stack (generating the value expression may clobber registers)
+                    try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
+
+                    // Generate the value expression
+                    const value_loc = try self.generateExpr(args[0]);
+
+                    // Copy value to heap
+                    const heap_ptr = try self.allocTempGeneral();
+                    try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
+
+                    const value_offset = try self.ensureOnStack(value_loc, elem_size);
+                    const temp_reg = try self.allocTempGeneral();
+                    try self.copyChunked(temp_reg, frame_ptr, value_offset, heap_ptr, 0, elem_size);
+                    self.codegen.freeGeneral(temp_reg);
+
+                    // Return the heap pointer (which IS the Box value)
+                    return .{ .general_reg = heap_ptr };
+                },
+                .box_unbox => {
+                    // Box.unbox(box) -> value: dereference the box pointer
+                    const ls = self.layout_store orelse unreachable;
+                    // The argument is the Box — get its layout to find element info
+                    const box_arg_layout = self.getExprLayout(args[0]) orelse unreachable;
+                    const box_layout_data = ls.getLayout(box_arg_layout);
+                    const box_info = ls.getBoxInfo(box_layout_data);
+                    const elem_size: u32 = box_info.elem_size;
+                    const elem_layout_idx = box_info.elem_layout_idx;
+                    const elem_layout_data = box_info.elem_layout;
+
+                    // Generate the box pointer expression
+                    const box_loc = try self.generateExpr(args[0]);
+                    const box_reg = try self.ensureInGeneralReg(box_loc);
+
+                    // Copy from heap to stack
+                    const result_offset = self.codegen.allocStackSlot(elem_size);
+                    const temp_reg = try self.allocTempGeneral();
+                    try self.copyChunked(temp_reg, box_reg, 0, frame_ptr, result_offset, elem_size);
+                    self.codegen.freeGeneral(temp_reg);
+                    self.codegen.freeGeneral(box_reg);
+
+                    // Return with appropriate value location based on element type
+                    if (elem_layout_idx == .i128 or elem_layout_idx == .u128 or elem_layout_idx == .dec) {
+                        return .{ .stack_i128 = result_offset };
+                    } else if (elem_layout_idx == .str) {
+                        return .{ .stack_str = result_offset };
+                    } else if (elem_layout_data.tag == .list or elem_layout_data.tag == .list_of_zst) {
+                        return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
+                    } else {
+                        return .{ .stack = .{ .offset = result_offset, .size = ValueSize.fromByteCount(elem_size) } };
+                    }
                 },
                 .crash => {
                     // Runtime crash: call roc_crashed via RocOps.
@@ -4645,145 +4884,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             unreachable;
         }
 
-        /// Generate code for a binary operation
-        fn generateBinop(self: *Self, binop: anytype) Allocator.Error!ValueLocation {
-            // Generate code for LHS first (always stable due to generateExpr wrapper)
-            const lhs_loc = try self.generateExpr(binop.lhs);
-
-            // Evaluate RHS (safe — LHS is in a stable location, never a bare register)
-            const rhs_loc = try self.generateExpr(binop.rhs);
-
-            // Check if this is a structural comparison (records/tuples/lists)
-            // We need to check the layout, not the expression type, since the LHS
-            // might be a function call that returns a record/tuple/list
-            if (binop.op == .eq or binop.op == .neq) {
-                const lhs_expr = self.store.getExpr(binop.lhs);
-                const rhs_expr = self.store.getExpr(binop.rhs);
-
-                // First try expression-based detection for direct literals (on either side).
-                // Use layout-aware comparison when layout_store is available, since
-                // bytewise comparison is incorrect for heap-allocated fields (strings, lists).
-                if (lhs_expr == .record) {
-                    if (self.layout_store != null) {
-                        return self.generateRecordComparisonByLayout(lhs_loc, rhs_loc, lhs_expr.record.record_layout, binop.op);
-                    }
-                    return self.generateStructuralComparison(lhs_loc, rhs_loc, lhs_expr, binop.op);
-                }
-                if (rhs_expr == .record) {
-                    if (self.layout_store != null) {
-                        return self.generateRecordComparisonByLayout(lhs_loc, rhs_loc, rhs_expr.record.record_layout, binop.op);
-                    }
-                    return self.generateStructuralComparison(lhs_loc, rhs_loc, rhs_expr, binop.op);
-                }
-                if (lhs_expr == .tuple) {
-                    if (self.layout_store != null) {
-                        return self.generateTupleComparisonByLayout(lhs_loc, rhs_loc, lhs_expr.tuple.tuple_layout, binop.op);
-                    }
-                    return self.generateStructuralComparison(lhs_loc, rhs_loc, lhs_expr, binop.op);
-                }
-                if (rhs_expr == .tuple) {
-                    if (self.layout_store != null) {
-                        return self.generateTupleComparisonByLayout(lhs_loc, rhs_loc, rhs_expr.tuple.tuple_layout, binop.op);
-                    }
-                    return self.generateStructuralComparison(lhs_loc, rhs_loc, rhs_expr, binop.op);
-                }
-                if (lhs_expr == .list) {
-                    return self.generateListComparison(lhs_loc, rhs_loc, lhs_expr, binop.op);
-                }
-                if (rhs_expr == .list) {
-                    return self.generateListComparison(lhs_loc, rhs_loc, rhs_expr, binop.op);
-                }
-                // Tag union literals - use layout-based comparison only for
-                // actual tag_union layouts (not scalar enums which compare as integers)
-                if (lhs_expr == .tag or lhs_expr == .zero_arg_tag) {
-                    if (self.layout_store) |ls| {
-                        const tu_layout = switch (lhs_expr) {
-                            .tag => |t| t.union_layout,
-                            .zero_arg_tag => |t| t.union_layout,
-                            else => unreachable,
-                        };
-                        if (ls.getLayout(tu_layout).tag == .tag_union) {
-                            return self.generateTagUnionComparisonByLayout(lhs_loc, rhs_loc, tu_layout, binop.op);
-                        }
-                    }
-                }
-                if (rhs_expr == .tag or rhs_expr == .zero_arg_tag) {
-                    if (self.layout_store) |ls| {
-                        const tu_layout = switch (rhs_expr) {
-                            .tag => |t| t.union_layout,
-                            .zero_arg_tag => |t| t.union_layout,
-                            else => unreachable,
-                        };
-                        if (ls.getLayout(tu_layout).tag == .tag_union) {
-                            return self.generateTagUnionComparisonByLayout(lhs_loc, rhs_loc, tu_layout, binop.op);
-                        }
-                    }
-                }
-
-                // For calls/lookups/blocks, check the layout to detect composite types
-                if (self.layout_store) |ls| {
-                    // Try to get layout from LHS first, then RHS
-                    const operand_layout: ?layout.Idx = switch (lhs_expr) {
-                        .call => |call| call.ret_layout,
-                        .lookup => |lookup| lookup.layout_idx,
-                        .block => |block| block.result_layout,
-                        else => switch (rhs_expr) {
-                            .call => |call| call.ret_layout,
-                            .lookup => |lookup| lookup.layout_idx,
-                            .block => |block| block.result_layout,
-                            else => null,
-                        },
-                    };
-
-                    if (operand_layout) |op_layout| {
-                        // Always check the layout tag to detect composite types
-                        const stored_layout = ls.getLayout(op_layout);
-                        if (stored_layout.tag == .record) {
-                            return self.generateRecordComparisonByLayout(lhs_loc, rhs_loc, op_layout, binop.op);
-                        } else if (stored_layout.tag == .tuple) {
-                            return self.generateTupleComparisonByLayout(lhs_loc, rhs_loc, op_layout, binop.op);
-                        } else if (stored_layout.tag == .list) {
-                            return self.generateListComparisonByLayout(lhs_loc, rhs_loc, op_layout, binop.op);
-                        } else if (stored_layout.tag == .tag_union) {
-                            return self.generateTagUnionComparisonByLayout(lhs_loc, rhs_loc, op_layout, binop.op);
-                        }
-                    }
-                }
-            }
-
-            // Check if operands are i128/Dec (need special handling even for comparisons that return bool)
-            const operands_are_i128 = switch (lhs_loc) {
-                .immediate_i128, .stack_i128 => true,
-                else => switch (rhs_loc) {
-                    .immediate_i128, .stack_i128 => true,
-                    else => false,
-                },
-            };
-
-            // Determine if this is an integer or float operation.
-            // Use operand_layout which reliably carries the operand type,
-            // even for comparisons where result_layout is .bool.
-            const is_float = binop.operand_layout == .f32 or binop.operand_layout == .f64;
-
-            if (is_float) {
-                return self.generateFloatBinop(binop.op, lhs_loc, rhs_loc);
-            } else if (operands_are_i128 or binop.operand_layout == .i128 or binop.operand_layout == .u128 or binop.operand_layout == .dec) {
-                // Use i128 path for Dec/i128 operands (even for comparisons that return bool)
-                // Convert .stack locations to .stack_i128 for Dec operations, since Dec values are 16 bytes
-                // but may be stored with .stack location type (e.g., mutable variables)
-                const is_i128_op = binop.operand_layout == .dec or binop.operand_layout == .i128 or binop.operand_layout == .u128;
-                const adj_lhs = if (is_i128_op and lhs_loc == .stack) ValueLocation{ .stack_i128 = lhs_loc.stack.offset } else lhs_loc;
-                const adj_rhs = if (is_i128_op and rhs_loc == .stack) ValueLocation{ .stack_i128 = rhs_loc.stack.offset } else rhs_loc;
-                return self.generateI128Binop(binop.op, adj_lhs, adj_rhs, binop.operand_layout);
-            } else {
-                return self.generateIntBinop(binop.op, lhs_loc, rhs_loc, binop.operand_layout);
-            }
-        }
-
         /// Generate integer binary operation
         fn generateIntBinop(
             self: *Self,
-            op: LirExpr.BinOp,
+            op: LirExpr.LowLevel,
             lhs_loc: ValueLocation,
             rhs_loc: ValueLocation,
             operand_layout: layout.Idx,
@@ -4802,10 +4906,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
 
             switch (op) {
-                .add => try self.codegen.emitAdd(.w64, result_reg, lhs_reg, rhs_reg),
-                .sub => try self.codegen.emitSub(.w64, result_reg, lhs_reg, rhs_reg),
-                .mul => try self.codegen.emitMul(.w64, result_reg, lhs_reg, rhs_reg),
-                .div, .div_trunc => {
+                .num_add => try self.codegen.emitAdd(.w64, result_reg, lhs_reg, rhs_reg),
+                .num_sub => try self.codegen.emitSub(.w64, result_reg, lhs_reg, rhs_reg),
+                .num_mul => try self.codegen.emitMul(.w64, result_reg, lhs_reg, rhs_reg),
+                .num_div, .num_div_trunc => {
                     // For integers, div and div_trunc are the same (integer division truncates)
                     if (is_unsigned) {
                         try self.codegen.emitUDiv(.w64, result_reg, lhs_reg, rhs_reg);
@@ -4813,14 +4917,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emitSDiv(.w64, result_reg, lhs_reg, rhs_reg);
                     }
                 },
-                .rem => {
+                .num_rem => {
                     if (is_unsigned) {
                         try self.codegen.emitUMod(.w64, result_reg, lhs_reg, rhs_reg);
                     } else {
                         try self.codegen.emitSMod(.w64, result_reg, lhs_reg, rhs_reg);
                     }
                 },
-                .mod => {
+                .num_mod => {
                     if (is_unsigned) {
                         try self.codegen.emitUMod(.w64, result_reg, lhs_reg, rhs_reg);
                     } else {
@@ -4862,23 +4966,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         self.codegen.freeGeneral(adjusted_reg);
                     }
                 },
-                .shl => try self.emitShlReg(.w64, result_reg, lhs_reg, rhs_reg),
-                .shr => try self.emitAsrReg(.w64, result_reg, lhs_reg, rhs_reg),
-                .shr_zf => try self.emitLsrReg(.w64, result_reg, lhs_reg, rhs_reg),
+                .num_shift_left_by => try self.emitShlReg(.w64, result_reg, lhs_reg, rhs_reg),
+                .num_shift_right_by => try self.emitAsrReg(.w64, result_reg, lhs_reg, rhs_reg),
+                .num_shift_right_zf_by => try self.emitLsrReg(.w64, result_reg, lhs_reg, rhs_reg),
                 // Comparison operations
-                .eq => {
+                .num_is_eq, .bool_is_eq => {
                     try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condEqual());
                 },
-                .neq => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condNotEqual()),
-                .lt => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, if (is_unsigned) condBelow() else condLess()),
-                .lte => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, if (is_unsigned) condBelowOrEqual() else condLessOrEqual()),
-                .gt => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, if (is_unsigned) condAbove() else condGreater()),
-                .gte => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, if (is_unsigned) condAboveOrEqual() else condGreaterOrEqual()),
-                // Boolean operations - AND/OR two values
-                // Boolean values in Roc are represented as 0 (false) or 1 (true).
-                // Bitwise AND/OR work correctly for single-bit boolean values.
-                .@"and" => try self.codegen.emitAnd(.w64, result_reg, lhs_reg, rhs_reg),
-                .@"or" => try self.codegen.emitOr(.w64, result_reg, lhs_reg, rhs_reg),
+                .num_is_lt => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, if (is_unsigned) condBelow() else condLess()),
+                .num_is_lte => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, if (is_unsigned) condBelowOrEqual() else condLessOrEqual()),
+                .num_is_gt => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, if (is_unsigned) condAbove() else condGreater()),
+                .num_is_gte => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, if (is_unsigned) condAboveOrEqual() else condGreaterOrEqual()),
+                else => unreachable,
             }
 
             // Free operand registers if they were temporary
@@ -4934,7 +5033,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate 128-bit integer binary operation
         fn generateI128Binop(
             self: *Self,
-            op: LirExpr.BinOp,
+            op: LirExpr.LowLevel,
             lhs_loc: ValueLocation,
             rhs_loc: ValueLocation,
             operand_layout: layout.Idx,
@@ -4954,7 +5053,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const is_unsigned = operand_layout == .u128;
 
             switch (op) {
-                .add => {
+                .num_add => {
                     // 128-bit add: low = lhs_low + rhs_low, high = lhs_high + rhs_high + carry
                     if (comptime target.toCpuArch() == .aarch64) {
                         // ADDS sets carry flag, ADC adds with carry
@@ -4968,7 +5067,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emit.adcRegReg(.w64, result_high, rhs_parts.high);
                     }
                 },
-                .sub => {
+                .num_sub => {
                     // 128-bit sub: low = lhs_low - rhs_low, high = lhs_high - rhs_high - borrow
                     if (comptime target.toCpuArch() == .aarch64) {
                         // SUBS sets borrow flag, SBC subtracts with borrow
@@ -4982,7 +5081,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emit.sbbRegReg(.w64, result_high, rhs_parts.high);
                     }
                 },
-                .mul => {
+                .num_mul => {
                     if (operand_layout == .dec) {
                         // Dec multiplication: call builtin function
                         // mulSaturatedC(RocDec, RocDec) -> RocDec
@@ -5091,7 +5190,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                     }
                 },
-                .div => {
+                .num_div => {
                     if (operand_layout == .dec) {
                         // Dec division: call builtin function
                         // divC(RocDec, RocDec, *RocOps) -> i128
@@ -5101,7 +5200,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.callI128DivRem(lhs_parts, rhs_parts, result_low, result_high, is_unsigned, false);
                     }
                 },
-                .div_trunc => {
+                .num_div_trunc => {
                     if (operand_layout == .dec) {
                         // Dec truncating division: divide and truncate to whole number
                         // divTruncC(RocDec, RocDec, *RocOps) -> i128
@@ -5111,15 +5210,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.callI128DivRem(lhs_parts, rhs_parts, result_low, result_high, is_unsigned, false);
                     }
                 },
-                .rem, .mod => {
+                .num_rem, .num_mod => {
                     // 128-bit integer remainder/modulo: call builtin function
                     try self.callI128DivRem(lhs_parts, rhs_parts, result_low, result_high, is_unsigned, true);
                 },
                 // Comparison operations for i128/Dec
-                .eq, .neq => {
+                .num_is_eq => {
                     // Compare both low and high parts
                     const result_reg = try self.allocTempGeneral();
-                    try self.generateI128Equality(lhs_parts, rhs_parts, result_reg, op == .eq);
+                    try self.generateI128Equality(lhs_parts, rhs_parts, result_reg, true);
 
                     // Free the extra result_high we allocated
                     self.codegen.freeGeneral(result_high);
@@ -5131,7 +5230,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     return .{ .general_reg = result_reg };
                 },
-                .lt, .lte, .gt, .gte => {
+                .num_is_lt, .num_is_lte, .num_is_gt, .num_is_gte => {
                     // i128 comparison: compare high parts first, if equal compare low parts
                     const result_reg = try self.allocTempGeneral();
                     try self.generateI128Comparison(lhs_parts, rhs_parts, result_reg, op, is_unsigned);
@@ -5919,7 +6018,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             lhs_parts: I128Parts,
             rhs_parts: I128Parts,
             result_reg: GeneralReg,
-            op: LirExpr.BinOp,
+            op: LirExpr.LowLevel,
             is_unsigned: bool,
         ) Allocator.Error!void {
             // Strategy: compare high parts (signed for signed, unsigned for unsigned)
@@ -5933,19 +6032,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Get signed/unsigned condition for high part
                 // aarch64: cc = unsigned <, cs = unsigned >=, hi = unsigned >, ls = unsigned <=
                 const high_cond: Condition = switch (op) {
-                    .lt => if (is_unsigned) .cc else .lt,
-                    .lte => if (is_unsigned) .ls else .le,
-                    .gt => if (is_unsigned) .hi else .gt,
-                    .gte => if (is_unsigned) .cs else .ge,
+                    .num_is_lt => if (is_unsigned) .cc else .lt,
+                    .num_is_lte => if (is_unsigned) .ls else .le,
+                    .num_is_gt => if (is_unsigned) .hi else .gt,
+                    .num_is_gte => if (is_unsigned) .cs else .ge,
                     else => unreachable,
                 };
 
                 // Get unsigned condition for low part (low parts are always unsigned)
                 const low_cond: Condition = switch (op) {
-                    .lt => .cc,
-                    .lte => .ls,
-                    .gt => .hi,
-                    .gte => .cs,
+                    .num_is_lt => .cc,
+                    .num_is_lte => .ls,
+                    .num_is_gt => .hi,
+                    .num_is_gte => .cs,
                     else => unreachable,
                 };
 
@@ -5978,10 +6077,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 // Get signed/unsigned condition for high part
                 const high_true_cond: Condition = switch (op) {
-                    .lt => if (is_unsigned) .below else .less,
-                    .lte => if (is_unsigned) .below_or_equal else .less_or_equal,
-                    .gt => if (is_unsigned) .above else .greater,
-                    .gte => if (is_unsigned) .above_or_equal else .greater_or_equal,
+                    .num_is_lt => if (is_unsigned) .below else .less,
+                    .num_is_lte => if (is_unsigned) .below_or_equal else .less_or_equal,
+                    .num_is_gt => if (is_unsigned) .above else .greater,
+                    .num_is_gte => if (is_unsigned) .above_or_equal else .greater_or_equal,
                     else => unreachable,
                 };
 
@@ -6005,10 +6104,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.codegen.emit.cmpRegReg(.w64, lhs_parts.low, rhs_parts.low);
 
                 const low_true_cond: Condition = switch (op) {
-                    .lt => .below,
-                    .lte => .below_or_equal,
-                    .gt => .above,
-                    .gte => .above_or_equal,
+                    .num_is_lt => .below,
+                    .num_is_lte => .below_or_equal,
+                    .num_is_gt => .above,
+                    .num_is_gte => .above_or_equal,
                     else => unreachable,
                 };
 
@@ -6035,7 +6134,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             lhs_loc: ValueLocation,
             rhs_loc: ValueLocation,
             lhs_expr: LirExpr,
-            op: LirExpr.BinOp,
+            op: anytype,
         ) Allocator.Error!ValueLocation {
             // Get element expressions to determine sizes for nested structures
             const elem_exprs: []const LirExprId = switch (lhs_expr) {
@@ -6046,7 +6145,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             if (elem_exprs.len == 0) {
                 // Empty records/tuples are always equal
-                return .{ .immediate_i64 = if (op == .eq) 1 else 0 };
+                return .{ .immediate_i64 = if (op == .num_is_eq) 1 else 0 };
             }
 
             const result_reg = try self.allocTempGeneral();
@@ -6225,7 +6324,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(temp_rhs);
 
             // If neq, invert the result
-            if (op == .neq) {
+            if (op != .num_is_eq) {
                 try self.emitXorImm(.w64, result_reg, result_reg, 1);
             }
 
@@ -6243,7 +6342,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             lhs_loc: ValueLocation,
             rhs_loc: ValueLocation,
             tu_layout_idx: layout.Idx,
-            op: LirExpr.BinOp,
+            op: anytype,
         ) Allocator.Error!ValueLocation {
             const ls = self.layout_store orelse unreachable;
             const stored_layout = ls.getLayout(tu_layout_idx);
@@ -6254,7 +6353,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const total_size = tu_data.size;
 
             if (total_size == 0) {
-                return .{ .immediate_i64 = if (op == .eq) 1 else 0 };
+                return .{ .immediate_i64 = if (op == .num_is_eq) 1 else 0 };
             }
 
             const lhs_base = try self.ensureRecordOnStack(lhs_loc, total_size);
@@ -6371,7 +6470,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const done_offset = self.codegen.currentOffset();
             self.codegen.patchJump(disc_ne_patch, done_offset);
 
-            if (op == .neq) {
+            if (op != .num_is_eq) {
                 try self.emitXorImm(.w64, result_reg, result_reg, 1);
             }
 
@@ -6384,7 +6483,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             lhs_base: i32,
             rhs_base: i32,
             total_size: u32,
-            op: LirExpr.BinOp,
+            op: anytype,
         ) Allocator.Error!ValueLocation {
             const result_reg = try self.allocTempGeneral();
             try self.codegen.emitLoadImm(result_reg, 1);
@@ -6427,7 +6526,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(tmp_a);
             self.codegen.freeGeneral(tmp_b);
 
-            if (op == .neq) {
+            if (op != .num_is_eq) {
                 try self.emitXorImm(.w64, result_reg, result_reg, 1);
             }
 
@@ -6440,7 +6539,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             lhs_loc: ValueLocation,
             rhs_loc: ValueLocation,
             lhs_expr: LirExpr,
-            op: LirExpr.BinOp,
+            op: anytype,
         ) Allocator.Error!ValueLocation {
             // Get list elements for element-by-element comparison
             const lhs_list = switch (lhs_expr) {
@@ -6479,7 +6578,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             if (lhs_elems.len == 0) {
                 // Empty lists are equal
-                try self.codegen.emitLoadImm(result_reg, if (op == .eq) 1 else 0);
+                try self.codegen.emitLoadImm(result_reg, if (op == .num_is_eq) 1 else 0);
                 return .{ .general_reg = result_reg };
             }
 
@@ -6632,7 +6731,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(rhs_ptr_reg);
 
             // If neq, invert the result
-            if (op == .neq) {
+            if (op != .num_is_eq) {
                 try self.emitXorImm(.w64, result_reg, result_reg, 1);
             }
 
@@ -6772,7 +6871,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             lhs_loc: ValueLocation,
             rhs_loc: ValueLocation,
             record_layout_idx: layout.Idx,
-            op: LirExpr.BinOp,
+            op: anytype,
         ) Allocator.Error!ValueLocation {
             const ls = self.layout_store orelse unreachable;
             const stored_layout = ls.getLayout(record_layout_idx);
@@ -6782,7 +6881,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const record_data = ls.getRecordData(record_idx);
             const field_count = record_data.fields.count;
             if (field_count == 0) {
-                return .{ .immediate_i64 = if (op == .eq) 1 else 0 };
+                return .{ .immediate_i64 = if (op == .num_is_eq) 1 else 0 };
             }
 
             const lhs_base = try self.ensureRecordOnStack(lhs_loc, ls.layoutSizeAlign(stored_layout).size);
@@ -6825,7 +6924,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_reg = try self.allocTempGeneral();
             try self.codegen.emitLoadStack(.w64, result_reg, result_slot);
 
-            if (op == .neq) {
+            if (op != .num_is_eq) {
                 const one_reg = try self.allocTempGeneral();
                 try self.codegen.emitLoadImm(one_reg, 1);
                 if (comptime target.toCpuArch() == .aarch64) {
@@ -6867,7 +6966,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             lhs_loc: ValueLocation,
             rhs_loc: ValueLocation,
             tuple_layout_idx: layout.Idx,
-            op: LirExpr.BinOp,
+            op: anytype,
         ) Allocator.Error!ValueLocation {
             const ls = self.layout_store orelse unreachable;
             const stored_layout = ls.getLayout(tuple_layout_idx);
@@ -6877,7 +6976,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const tuple_data = ls.getTupleData(tuple_idx);
             const elem_count = tuple_data.fields.count;
             if (elem_count == 0) {
-                return .{ .immediate_i64 = if (op == .eq) 1 else 0 };
+                return .{ .immediate_i64 = if (op == .num_is_eq) 1 else 0 };
             }
 
             const lhs_base = try self.ensureRecordOnStack(lhs_loc, ls.layoutSizeAlign(stored_layout).size);
@@ -6917,7 +7016,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_reg = try self.allocTempGeneral();
             try self.codegen.emitLoadStack(.w64, result_reg, result_slot);
 
-            if (op == .neq) {
+            if (op != .num_is_eq) {
                 const one_reg = try self.allocTempGeneral();
                 try self.codegen.emitLoadImm(one_reg, 1);
                 if (comptime target.toCpuArch() == .aarch64) {
@@ -6939,7 +7038,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             lhs_loc: ValueLocation,
             rhs_loc: ValueLocation,
             list_layout_idx: layout.Idx,
-            op: LirExpr.BinOp,
+            op: anytype,
         ) Allocator.Error!ValueLocation {
             const ls = self.layout_store orelse unreachable;
             const list_layout = ls.getLayout(list_layout_idx);
@@ -7103,7 +7202,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.patchJump(len_ne_patch, self.codegen.currentOffset());
             self.codegen.patchJump(empty_patch, self.codegen.currentOffset());
 
-            if (op == .neq) {
+            if (op != .num_is_eq) {
                 try self.emitXorImm(.w64, result_reg, result_reg, 1);
             }
 
@@ -7113,7 +7212,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate floating-point binary operation
         fn generateFloatBinop(
             self: *Self,
-            op: LirExpr.BinOp,
+            op: LirExpr.LowLevel,
             lhs_loc: ValueLocation,
             rhs_loc: ValueLocation,
         ) Allocator.Error!ValueLocation {
@@ -7128,7 +7227,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // need special handling to produce correct results when either operand is NaN.
             if (comptime target.toCpuArch() == .x86_64) {
                 switch (op) {
-                    .eq => {
+                    .num_is_eq => {
                         // NaN-safe eq: (ZF=1) AND (PF=0) → sete + setnp + and
                         const result_reg = try self.codegen.allocGeneralFor(0);
                         const tmp_reg = try self.codegen.allocGeneralFor(0);
@@ -7142,21 +7241,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         self.codegen.freeFloat(rhs_reg);
                         return .{ .general_reg = result_reg };
                     },
-                    .neq => {
-                        // NaN-safe neq: (ZF=0) OR (PF=1) → setne + setp + or
-                        const result_reg = try self.codegen.allocGeneralFor(0);
-                        const tmp_reg = try self.codegen.allocGeneralFor(0);
-                        try self.codegen.emit.ucomisdRegReg(lhs_reg, rhs_reg);
-                        try self.codegen.emit.setcc(.not_equal, result_reg);
-                        try self.codegen.emit.setcc(.parity_even, tmp_reg);
-                        try self.codegen.emit.orRegReg(.w64, result_reg, tmp_reg);
-                        try self.codegen.emit.andRegImm8(result_reg, 1);
-                        self.codegen.freeGeneral(tmp_reg);
-                        self.codegen.freeFloat(lhs_reg);
-                        self.codegen.freeFloat(rhs_reg);
-                        return .{ .general_reg = result_reg };
-                    },
-                    .lt => {
+                    .num_is_lt => {
                         // NaN-safe lt: swap operands, use "above" (CF=0 AND ZF=0)
                         const result_reg = try self.codegen.allocGeneralFor(0);
                         try self.codegen.emitCmpF64(result_reg, rhs_reg, lhs_reg, .above);
@@ -7164,7 +7249,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         self.codegen.freeFloat(rhs_reg);
                         return .{ .general_reg = result_reg };
                     },
-                    .lte => {
+                    .num_is_lte => {
                         // NaN-safe lte: swap operands, use "above_or_equal" (CF=0)
                         const result_reg = try self.codegen.allocGeneralFor(0);
                         try self.codegen.emitCmpF64(result_reg, rhs_reg, lhs_reg, .above_or_equal);
@@ -7172,7 +7257,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         self.codegen.freeFloat(rhs_reg);
                         return .{ .general_reg = result_reg };
                     },
-                    .gt, .gte => {
+                    .num_is_gt, .num_is_gte => {
                         // gt/gte are already NaN-safe on x86_64 (above/above_or_equal return false for NaN)
                         const float_cond = floatCondition(op).?;
                         const result_reg = try self.codegen.allocGeneralFor(0);
@@ -7198,10 +7283,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_reg = try self.codegen.allocFloatFor(0);
 
             switch (op) {
-                .add => try self.codegen.emitAddF64(result_reg, lhs_reg, rhs_reg),
-                .sub => try self.codegen.emitSubF64(result_reg, lhs_reg, rhs_reg),
-                .mul => try self.codegen.emitMulF64(result_reg, lhs_reg, rhs_reg),
-                .div => try self.codegen.emitDivF64(result_reg, lhs_reg, rhs_reg),
+                .num_add => try self.codegen.emitAddF64(result_reg, lhs_reg, rhs_reg),
+                .num_sub => try self.codegen.emitSubF64(result_reg, lhs_reg, rhs_reg),
+                .num_mul => try self.codegen.emitMulF64(result_reg, lhs_reg, rhs_reg),
+                .num_div, .num_div_trunc => try self.codegen.emitDivF64(result_reg, lhs_reg, rhs_reg),
                 else => unreachable,
             }
 
@@ -7212,105 +7297,31 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .float_reg = result_reg };
         }
 
-        /// Map a BinOp comparison to the appropriate float condition code.
+        /// Map a LowLevel comparison to the appropriate float condition code.
         /// Returns null for non-comparison ops (arithmetic).
         /// AArch64 FCMP and x86_64 UCOMISD set flags differently from integer CMP,
         /// so float comparisons use unsigned/specific conditions rather than signed ones.
-        fn floatCondition(op: LirExpr.BinOp) ?Condition {
+        fn floatCondition(op: LirExpr.LowLevel) ?Condition {
             return switch (op) {
-                .eq => condEqual(),
-                .neq => condNotEqual(),
-                .lt => if (comptime target.toCpuArch() == .aarch64)
-                    // After FCMP: N=1 only when a < b
+                .num_is_eq => condEqual(),
+                .num_is_lt => if (comptime target.toCpuArch() == .aarch64)
                     @as(Condition, .mi)
                 else
-                    // After UCOMISD: CF=1 when a < b
                     @as(Condition, .below),
-                .lte => if (comptime target.toCpuArch() == .aarch64)
-                    // After FCMP: (C=0 or Z=1) for a <= b
+                .num_is_lte => if (comptime target.toCpuArch() == .aarch64)
                     @as(Condition, .ls)
                 else
-                    // After UCOMISD: (CF=1 or ZF=1) for a <= b
                     @as(Condition, .below_or_equal),
-                .gt => if (comptime target.toCpuArch() == .aarch64)
-                    // After FCMP: (Z=0 and N=V) for a > b
+                .num_is_gt => if (comptime target.toCpuArch() == .aarch64)
                     @as(Condition, .gt)
                 else
-                    // After UCOMISD: (CF=0 and ZF=0) for a > b
                     @as(Condition, .above),
-                .gte => if (comptime target.toCpuArch() == .aarch64)
-                    // After FCMP: N=V for a >= b
+                .num_is_gte => if (comptime target.toCpuArch() == .aarch64)
                     @as(Condition, .ge)
                 else
-                    // After UCOMISD: CF=0 for a >= b
                     @as(Condition, .above_or_equal),
                 else => null,
             };
-        }
-
-        /// Generate code for unary minus
-        fn generateUnaryMinus(self: *Self, unary: anytype) Allocator.Error!ValueLocation {
-            const inner_loc = try self.generateExpr(unary.expr);
-
-            // Check if float
-            const is_float = switch (unary.result_layout) {
-                .f32, .f64 => true,
-                else => false,
-            };
-
-            // Check if 128-bit type
-            const is_i128 = switch (unary.result_layout) {
-                .i128, .u128, .dec => true,
-                else => false,
-            };
-
-            if (is_float) {
-                const src_reg = try self.ensureInFloatReg(inner_loc);
-                const result_reg = try self.codegen.allocFloatFor(0);
-                try self.codegen.emitNegF64(result_reg, src_reg);
-                self.codegen.freeFloat(src_reg);
-                return .{ .float_reg = result_reg };
-            } else if (is_i128) {
-                // 128-bit negation: result = 0 - value (using SUBS/SBC or SUB/SBB)
-                const parts = try self.getI128Parts(inner_loc, .signed); // negation is signed
-
-                const result_low = try self.allocTempGeneral();
-                const result_high = try self.allocTempGeneral();
-
-                if (comptime target.toCpuArch() == .aarch64) {
-                    // Negate using NEGS (NEG with flags) and NGC (negate with carry)
-                    // NEGS is actually SUBS with XZR as first operand
-                    try self.codegen.emit.subsRegRegReg(.w64, result_low, .ZRSP, parts.low);
-                    // NGC is SBC with XZR as first operand
-                    try self.codegen.emit.sbcRegRegReg(.w64, result_high, .ZRSP, parts.high);
-                } else {
-                    // x86_64: Load 0, then subtract
-                    try self.codegen.emitLoadImm(result_low, 0);
-                    try self.codegen.emit.subRegReg(.w64, result_low, parts.low);
-                    try self.codegen.emitLoadImm(result_high, 0);
-                    try self.codegen.emit.sbbRegReg(.w64, result_high, parts.high);
-                }
-
-                self.codegen.freeGeneral(parts.low);
-                self.codegen.freeGeneral(parts.high);
-
-                // Store result to stack
-                const stack_offset = self.codegen.allocStackSlot(16);
-                try self.codegen.emitStoreStack(.w64, stack_offset, result_low);
-                try self.codegen.emitStoreStack(.w64, stack_offset + 8, result_high);
-
-                self.codegen.freeGeneral(result_low);
-                self.codegen.freeGeneral(result_high);
-
-                return .{ .stack_i128 = stack_offset };
-            } else {
-                // For 64-bit integers, use NEG
-                const reg = try self.ensureInGeneralReg(inner_loc);
-                const result_reg = try self.allocTempGeneral();
-                try self.codegen.emitNeg(.w64, result_reg, reg);
-                self.codegen.freeGeneral(reg);
-                return .{ .general_reg = result_reg };
-            }
         }
 
         /// Generate absolute value for a numeric type
@@ -7550,22 +7561,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(diff_lo);
             self.codegen.freeGeneral(diff_hi);
             return .{ .stack_i128 = stack_offset };
-        }
-
-        /// Generate code for unary not
-        fn generateUnaryNot(self: *Self, unary: anytype) Allocator.Error!ValueLocation {
-            const inner_loc = try self.generateExpr(unary.expr);
-
-            const reg = try self.ensureInGeneralReg(inner_loc);
-            const result_reg = try self.allocTempGeneral();
-
-            // Boolean NOT: XOR with 1 to flip 0↔1
-            // 0 XOR 1 = 1 (False -> True)
-            // 1 XOR 1 = 0 (True -> False)
-            try self.codegen.emitXorImm(.w64, result_reg, reg, 1);
-
-            self.codegen.freeGeneral(reg);
-            return .{ .general_reg = result_reg };
         }
 
         /// Generate code for if-then-else
@@ -17061,12 +17056,11 @@ test "generate addition" {
     // Create: 1 + 2
     const lhs_id = try store.addExpr(.{ .i64_literal = 1 }, base.Region.zero());
     const rhs_id = try store.addExpr(.{ .i64_literal = 2 }, base.Region.zero());
-    const add_id = try store.addExpr(.{ .binop = .{
-        .op = .add,
-        .lhs = lhs_id,
-        .rhs = rhs_id,
-        .result_layout = .i64,
-        .operand_layout = .i64,
+    const ll_args = try store.addExprSpan(&.{ lhs_id, rhs_id });
+    const add_id = try store.addExpr(.{ .low_level = .{
+        .op = .num_add,
+        .args = ll_args,
+        .ret_layout = .i64,
     } }, base.Region.zero());
 
     var codegen = try HostLirCodeGen.init(allocator, &store, null, null);
@@ -17143,12 +17137,11 @@ test "record equality uses layout-aware comparison" {
     } }, base.Region.zero());
 
     // LHS record == RHS record
-    const eq_expr = try store.addExpr(.{ .binop = .{
-        .op = .eq,
-        .lhs = lhs_record,
-        .rhs = rhs_record,
-        .result_layout = .bool,
-        .operand_layout = .bool,
+    const eq_args = try store.addExprSpan(&.{ lhs_record, rhs_record });
+    const eq_expr = try store.addExpr(.{ .low_level = .{
+        .op = .num_is_eq,
+        .args = eq_args,
+        .ret_layout = .bool,
     } }, base.Region.zero());
 
     // With layout_store: should use generateRecordComparisonByLayout (no crash)
@@ -17173,12 +17166,11 @@ test "generate modulo" {
     // Create: 10 % 3
     const lhs = try store.addExpr(.{ .i64_literal = 10 }, base.Region.zero());
     const rhs = try store.addExpr(.{ .i64_literal = 3 }, base.Region.zero());
-    const expr_id = try store.addExpr(.{ .binop = .{
-        .op = .mod,
-        .lhs = lhs,
-        .rhs = rhs,
-        .result_layout = .i64,
-        .operand_layout = .i64,
+    const ll_args = try store.addExprSpan(&.{ lhs, rhs });
+    const expr_id = try store.addExpr(.{ .low_level = .{
+        .op = .num_mod,
+        .args = ll_args,
+        .ret_layout = .i64,
     } }, base.Region.zero());
 
     var codegen = try HostLirCodeGen.init(allocator, &store, null, null);
@@ -17202,12 +17194,11 @@ test "generate shift left" {
     // Create: 1 << 4
     const lhs = try store.addExpr(.{ .i64_literal = 1 }, base.Region.zero());
     const rhs = try store.addExpr(.{ .i64_literal = 4 }, base.Region.zero());
-    const expr_id = try store.addExpr(.{ .binop = .{
-        .op = .shl,
-        .lhs = lhs,
-        .rhs = rhs,
-        .result_layout = .i64,
-        .operand_layout = .i64,
+    const ll_args = try store.addExprSpan(&.{ lhs, rhs });
+    const expr_id = try store.addExpr(.{ .low_level = .{
+        .op = .num_shift_left_by,
+        .args = ll_args,
+        .ret_layout = .i64,
     } }, base.Region.zero());
 
     var codegen = try HostLirCodeGen.init(allocator, &store, null, null);
@@ -17231,12 +17222,11 @@ test "generate shift right" {
     // Create: 64 >> 2 (arithmetic shift right, sign-extending)
     const lhs = try store.addExpr(.{ .i64_literal = 64 }, base.Region.zero());
     const rhs = try store.addExpr(.{ .i64_literal = 2 }, base.Region.zero());
-    const expr_id = try store.addExpr(.{ .binop = .{
-        .op = .shr,
-        .lhs = lhs,
-        .rhs = rhs,
-        .result_layout = .i64,
-        .operand_layout = .i64,
+    const ll_args = try store.addExprSpan(&.{ lhs, rhs });
+    const expr_id = try store.addExpr(.{ .low_level = .{
+        .op = .num_shift_right_by,
+        .args = ll_args,
+        .ret_layout = .i64,
     } }, base.Region.zero());
 
     var codegen = try HostLirCodeGen.init(allocator, &store, null, null);
@@ -17260,12 +17250,11 @@ test "generate shift right zero-fill" {
     // Create: 64 >>> 2 (logical shift right, zero-filling)
     const lhs = try store.addExpr(.{ .i64_literal = 64 }, base.Region.zero());
     const rhs = try store.addExpr(.{ .i64_literal = 2 }, base.Region.zero());
-    const expr_id = try store.addExpr(.{ .binop = .{
-        .op = .shr_zf,
-        .lhs = lhs,
-        .rhs = rhs,
-        .result_layout = .i64,
-        .operand_layout = .i64,
+    const ll_args = try store.addExprSpan(&.{ lhs, rhs });
+    const expr_id = try store.addExpr(.{ .low_level = .{
+        .op = .num_shift_right_zf_by,
+        .args = ll_args,
+        .ret_layout = .i64,
     } }, base.Region.zero());
 
     var codegen = try HostLirCodeGen.init(allocator, &store, null, null);
@@ -17288,9 +17277,11 @@ test "generate unary minus" {
 
     // Create: -42
     const inner = try store.addExpr(.{ .i64_literal = 42 }, base.Region.zero());
-    const neg = try store.addExpr(.{ .unary_minus = .{
-        .expr = inner,
-        .result_layout = .i64,
+    const neg_args = try store.addExprSpan(&.{inner});
+    const neg = try store.addExpr(.{ .low_level = .{
+        .op = .num_neg,
+        .args = neg_args,
+        .ret_layout = .i64,
     } }, base.Region.zero());
 
     var codegen = try HostLirCodeGen.init(allocator, &store, null, null);
