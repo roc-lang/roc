@@ -5741,3 +5741,159 @@ test "check type - exhaustive match same tuple position at multiple nesting leve
         },
     );
 }
+
+test "check type - exhaustive match does not over-close static dispatch return type" {
+    // A static dispatch method returns a tag (inferred as open tag union).
+    // The caller pattern matches it exhaustively without wildcards.
+    // Each call site gets a fresh instantiation, so closing at one site
+    // should not affect the type at another.
+    const source =
+        \\Maker := {}.{
+        \\  get = |_maker| Red
+        \\}
+        \\
+        \\narrow = {
+        \\  val = Maker.get(Maker)
+        \\  match val {
+        \\    Red => "red"
+        \\  }
+        \\}
+        \\
+        \\broad = {
+        \\  val = Maker.get(Maker)
+        \\  match val {
+        \\    Red => "red"
+        \\    Blue => "blue"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Maker.get", .expected = "_arg -> [Red, ..]" },
+            .{ .def = "narrow", .expected = "Str" },
+            .{ .def = "broad", .expected = "Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match close does not leak through shared variable" {
+    // A value is returned from a match AND also used after the match.
+    // The match closes the tag union, but the value is the same variable
+    // used in both places. This tests that closing at the match site
+    // doesn't prevent the value from being used at a broader type.
+    const source =
+        \\Maker := {}.{
+        \\  get = |_maker| Red
+        \\}
+        \\
+        \\test = {
+        \\  val = Maker.get(Maker)
+        \\  matched = match val {
+        \\    Red => "red"
+        \\  }
+        \\  matched
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Maker.get", .expected = "_arg -> [Red, ..]" },
+            .{ .def = "test", .expected = "Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match close with value reuse after match" {
+    // The match condition variable is used both in the match and passed
+    // to a function that expects a broader union type.
+    //
+    // Exhaustively matching `val` without a wildcard closes its tag union
+    // to [Red]. When `val` is then passed to `accept_broad` (which expects
+    // [Blue, Red]), the closed [Red] can't unify with [Blue, Red].
+    // This is the correct Roc semantics (confirmed by the Rust compiler).
+    const source =
+        \\Maker := {}.{
+        \\  get = |_maker| Red
+        \\}
+        \\
+        \\accept_broad = |color| {
+        \\  match color {
+        \\    Red => "red"
+        \\    Blue => "blue"
+        \\  }
+        \\}
+        \\
+        \\test = {
+        \\  val = Maker.get(Maker)
+        \\  _narrow_result = match val {
+        \\    Red => "red"
+        \\  }
+        \\  broad_result = accept_broad(val)
+        \\  broad_result
+        \\}
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The first argument being passed to this function has the wrong type:
+        \\**test:17:18:**
+        \\```roc
+        \\  broad_result = accept_broad(val)
+        \\```
+        \\                              ^^^
+        \\
+        \\This argument has the type:
+        \\
+        \\    [Red]
+        \\
+        \\But `accept_broad` needs the first argument to be:
+        \\
+        \\    [Blue, Red]
+        \\
+        \\
+    );
+}
+
+test "check type - exhaustive match close with value reuse - no static dispatch" {
+    // Same closing behavior as above, without static dispatch.
+    // Exhaustively matching without a wildcard closes the tag union,
+    // preventing it from unifying with a broader type afterward.
+    const source =
+        \\make = |{}| Red
+        \\
+        \\accept_broad = |color| {
+        \\  match color {
+        \\    Red => "red"
+        \\    Blue => "blue"
+        \\  }
+        \\}
+        \\
+        \\test = {
+        \\  val = make({})
+        \\  _narrow_result = match val {
+        \\    Red => "red"
+        \\  }
+        \\  broad_result = accept_broad(val)
+        \\  broad_result
+        \\}
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The first argument being passed to this function has the wrong type:
+        \\**test:15:18:**
+        \\```roc
+        \\  broad_result = accept_broad(val)
+        \\```
+        \\                              ^^^
+        \\
+        \\This argument has the type:
+        \\
+        \\    [Red]
+        \\
+        \\But `accept_broad` needs the first argument to be:
+        \\
+        \\    [Blue, Red]
+        \\
+        \\
+    );
+}

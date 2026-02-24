@@ -104,8 +104,6 @@ scratch_record_fields: base.Scratch(types_mod.RecordField),
 scratch_static_dispatch_constraints: base.Scratch(ScratchStaticDispatchConstraint),
 /// scratch deferred static dispatch constraints
 scratch_deferred_static_dispatch_constraints: base.Scratch(DeferredConstraintCheck),
-/// scratch pattern indices used as a shared buffer in the tag union closing pass
-scratch_pattern_idxs: base.Scratch(CIR.Pattern.Idx),
 /// Stack of type variables currently being constraint-checked, used to detect recursive constraints
 /// When a var appears in this stack while we're checking its constraints, we've detected recursion
 constraint_check_stack: std.ArrayList(Var),
@@ -302,7 +300,6 @@ fn initAssumePrepared(
         .scratch_record_fields = try base.Scratch(types_mod.RecordField).init(gpa),
         .scratch_static_dispatch_constraints = try base.Scratch(ScratchStaticDispatchConstraint).init(gpa),
         .scratch_deferred_static_dispatch_constraints = try base.Scratch(DeferredConstraintCheck).init(gpa),
-        .scratch_pattern_idxs = try base.Scratch(CIR.Pattern.Idx).init(gpa),
         .constraint_check_stack = try std.ArrayList(Var).initCapacity(gpa, 0),
         .import_cache = ImportCache{},
         .bool_var = undefined, // Will be initialized in copyBuiltinTypes()
@@ -350,7 +347,6 @@ pub fn deinit(self: *Self) void {
     self.scratch_record_fields.deinit();
     self.scratch_static_dispatch_constraints.deinit();
     self.scratch_deferred_static_dispatch_constraints.deinit();
-    self.scratch_pattern_idxs.deinit();
     self.constraint_check_stack.deinit(self.gpa);
     self.import_cache.deinit(self.gpa);
     self.ident_to_var_map.deinit();
@@ -5591,25 +5587,6 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
     // Unify the root expr with the match value
     _ = try self.unify(ModuleEnv.varFrom(expr_idx), val_var, env);
 
-    // Close tag union ext vars where patterns exhaustively list all tags.
-    // This must happen after pattern unification (so tags accumulate across branches)
-    // but before exhaustiveness checking (which inspects ext vars for nested types).
-    if (!had_type_error and !has_invalid_try) {
-        const scratch_top = self.scratch_pattern_idxs.top();
-        defer self.scratch_pattern_idxs.clearFrom(scratch_top);
-
-        for (branch_idxs) |branch_idx| {
-            const branch = self.cir.store.getMatchBranch(branch_idx);
-            const ptrn_idxs = self.cir.store.sliceMatchBranchPatterns(branch.patterns);
-            for (ptrn_idxs) |ptrn_idx| {
-                const ptrn = self.cir.store.getMatchBranchPattern(ptrn_idx);
-                try self.scratch_pattern_idxs.append(ptrn.pattern);
-            }
-        }
-
-        try self.closeExhaustiveTagUnions(cond_var, self.scratch_pattern_idxs.sliceFromStart(scratch_top));
-    }
-
     // Perform exhaustiveness and redundancy checking
     // Only do this if there were no type errors - type errors can lead to invalid types
     // that confuse the exhaustiveness checker
@@ -5656,6 +5633,14 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
         };
         defer result.deinit(self.cir.gpa);
 
+        // Close ext vars identified by exhaustiveness checker via proper unification.
+        // These are tag union positions where all constructors were exhaustively
+        // covered without wildcards (open unions that should become closed).
+        for (result.ext_vars_to_close) |ext_var| {
+            const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, match_region);
+            _ = try self.unify(ext_var, empty_tu_var, env);
+        }
+
         // Report non-exhaustive match if any patterns are missing
         if (!result.is_exhaustive) {
             const condition_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, cond_var);
@@ -5701,209 +5686,6 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
     }
 
     return does_fx;
-}
-
-/// Unwrap `.as` patterns to get the inner pattern index.
-/// For example, `Red as x` unwraps to the `Red` pattern.
-fn unwrapAsPatternIdx(self: *Self, pat_idx: CIR.Pattern.Idx) CIR.Pattern.Idx {
-    var idx = pat_idx;
-    while (true) {
-        const pat = self.cir.store.getPattern(idx);
-        switch (pat) {
-            .as => |p| {
-                idx = p.pattern;
-            },
-            else => return idx,
-        }
-    }
-}
-
-/// After all match branch patterns have been unified, recursively close tag union
-/// ext vars where no catch-all pattern exists. This turns `[Red, ..a]` into `[Red]`
-/// for exhaustive matches, while leaving open unions for wildcard matches.
-/// Also recurses through tuples and records to find nested tag unions.
-fn closeExhaustiveTagUnions(
-    self: *Self,
-    type_var: Var,
-    patterns: []const CIR.Pattern.Idx,
-) Allocator.Error!void {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    // Check if any pattern at this level is a catch-all.
-    // If so: don't close this level, AND don't recurse (catch-all covers
-    // all nested positions too).
-    for (patterns) |pat_idx| {
-        const inner_idx = self.unwrapAsPatternIdx(pat_idx);
-        const pat = self.cir.store.getPattern(inner_idx);
-        switch (pat) {
-            .underscore, .assign => return,
-            else => {},
-        }
-    }
-
-    // Resolve the type var and dispatch based on structure
-    const resolved = self.types.resolveVar(type_var);
-    switch (resolved.desc.content) {
-        .structure => |ft| switch (ft) {
-            .tag_union => |tu| try self.closeExhaustiveTagUnion(tu, patterns),
-            .tuple => |tuple| try self.closeExhaustiveTuple(tuple, patterns),
-            .record => |record| try self.closeExhaustiveRecord(record, patterns),
-            else => {},
-        },
-        else => {},
-    }
-}
-
-/// Close tag union ext var and recurse into tag payload types.
-fn closeExhaustiveTagUnion(
-    self: *Self,
-    tag_union: types_mod.TagUnion,
-    patterns: []const CIR.Pattern.Idx,
-) Allocator.Error!void {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    // Process tags in this tag union, then follow ext var chain
-    var current_tu = tag_union;
-    while (true) {
-        // Recurse into each tag's payload types
-        const tags_slice = self.types.getTagsSlice(current_tu.tags);
-        const tag_names = tags_slice.items(.name);
-        const tag_args_ranges = tags_slice.items(.args);
-
-        for (tag_names, tag_args_ranges) |tag_name, args_range| {
-            const arg_vars = self.types.sliceVars(args_range);
-            if (arg_vars.len == 0) continue;
-
-            for (arg_vars, 0..) |arg_var, arg_idx| {
-                // Collect payload patterns at this position from matching branches
-                const scratch_top = self.scratch_pattern_idxs.top();
-                defer self.scratch_pattern_idxs.clearFrom(scratch_top);
-
-                for (patterns) |pat_idx| {
-                    const inner_idx = self.unwrapAsPatternIdx(pat_idx);
-                    const pat = self.cir.store.getPattern(inner_idx);
-                    switch (pat) {
-                        .applied_tag => |applied_tag| {
-                            if (applied_tag.name == tag_name) {
-                                const arg_ptrns = self.cir.store.slicePatterns(applied_tag.args);
-                                if (arg_idx < arg_ptrns.len) {
-                                    try self.scratch_pattern_idxs.append(arg_ptrns[arg_idx]);
-                                }
-                            }
-                        },
-                        else => {},
-                    }
-                }
-
-                const payload_patterns = self.scratch_pattern_idxs.sliceFromStart(scratch_top);
-                if (payload_patterns.len > 0) {
-                    try self.closeExhaustiveTagUnions(arg_var, payload_patterns);
-                }
-            }
-        }
-
-        // Follow ext var chain: if ext resolves to another tag union, continue
-        const resolved_ext = self.types.resolveVar(current_tu.ext);
-        switch (resolved_ext.desc.content) {
-            .flex => {
-                // End of chain — close it
-                try self.types.setVarContent(current_tu.ext, .{ .structure = .empty_tag_union });
-                break;
-            },
-            .structure => |ft| switch (ft) {
-                .tag_union => |next_tu| {
-                    current_tu = next_tu;
-                },
-                .empty_tag_union => break, // Already closed
-                else => break,
-            },
-            else => break,
-        }
-    }
-}
-
-/// Recurse through tuple elements to find nested tag unions to close.
-fn closeExhaustiveTuple(
-    self: *Self,
-    tuple: types_mod.Tuple,
-    patterns: []const CIR.Pattern.Idx,
-) Allocator.Error!void {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    const elem_vars = self.types.sliceVars(tuple.elems);
-    if (elem_vars.len == 0) return;
-
-    for (elem_vars, 0..) |elem_var, elem_idx| {
-        const scratch_top = self.scratch_pattern_idxs.top();
-        defer self.scratch_pattern_idxs.clearFrom(scratch_top);
-
-        for (patterns) |pat_idx| {
-            const inner_idx = self.unwrapAsPatternIdx(pat_idx);
-            const pat = self.cir.store.getPattern(inner_idx);
-            switch (pat) {
-                .tuple => |tup| {
-                    const tup_ptrns = self.cir.store.slicePatterns(tup.patterns);
-                    if (elem_idx < tup_ptrns.len) {
-                        try self.scratch_pattern_idxs.append(tup_ptrns[elem_idx]);
-                    }
-                },
-                else => {},
-            }
-        }
-
-        const elem_patterns = self.scratch_pattern_idxs.sliceFromStart(scratch_top);
-        if (elem_patterns.len > 0) {
-            try self.closeExhaustiveTagUnions(elem_var, elem_patterns);
-        }
-    }
-}
-
-/// Recurse through record fields to find nested tag unions to close.
-fn closeExhaustiveRecord(
-    self: *Self,
-    record: types_mod.Record,
-    patterns: []const CIR.Pattern.Idx,
-) Allocator.Error!void {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    const fields_slice = self.types.getRecordFieldsSlice(record.fields);
-    const field_names = fields_slice.items(.name);
-    const field_vars = fields_slice.items(.var_);
-
-    for (field_names, field_vars) |field_name, field_var| {
-        const scratch_top = self.scratch_pattern_idxs.top();
-        defer self.scratch_pattern_idxs.clearFrom(scratch_top);
-
-        for (patterns) |pat_idx| {
-            const inner_idx = self.unwrapAsPatternIdx(pat_idx);
-            const pat = self.cir.store.getPattern(inner_idx);
-            switch (pat) {
-                .record_destructure => |rd| {
-                    const destruct_idxs = self.cir.store.sliceRecordDestructs(rd.destructs);
-                    for (destruct_idxs) |destruct_idx| {
-                        const destruct = self.cir.store.getRecordDestruct(destruct_idx);
-                        if (destruct.label == field_name) {
-                            switch (destruct.kind) {
-                                .Required => |sub_pat| try self.scratch_pattern_idxs.append(sub_pat),
-                                .SubPattern => |sub_pat| try self.scratch_pattern_idxs.append(sub_pat),
-                                else => {},
-                            }
-                        }
-                    }
-                },
-                else => {},
-            }
-        }
-
-        const field_patterns = self.scratch_pattern_idxs.sliceFromStart(scratch_top);
-        if (field_patterns.len > 0) {
-            try self.closeExhaustiveTagUnions(field_var, field_patterns);
-        }
-    }
 }
 
 // unary minus //
