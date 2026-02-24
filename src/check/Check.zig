@@ -5717,21 +5717,12 @@ fn unwrapAsPatternIdx(self: *Self, pat_idx: CIR.Pattern.Idx) CIR.Pattern.Idx {
 /// After all match branch patterns have been unified, recursively close tag union
 /// ext vars where no catch-all pattern exists. This turns `[Red, ..a]` into `[Red]`
 /// for exhaustive matches, while leaving open unions for wildcard matches.
+/// Also recurses through tuples and records to find nested tag unions.
 fn closeExhaustiveTagUnions(
     self: *Self,
     type_var: Var,
     patterns: []const CIR.Pattern.Idx,
 ) Allocator.Error!void {
-    // Resolve the type var — only process tag unions
-    const resolved = self.types.resolveVar(type_var);
-    const tag_union = switch (resolved.desc.content) {
-        .structure => |ft| switch (ft) {
-            .tag_union => |tu| tu,
-            else => return,
-        },
-        else => return,
-    };
-
     // Check if any pattern at this level is a catch-all.
     // If so: don't close this level, AND don't recurse (catch-all covers
     // all nested positions too).
@@ -5744,7 +5735,26 @@ fn closeExhaustiveTagUnions(
         }
     }
 
-    // No catch-all: close the ext var if it's still a flex var
+    // Resolve the type var and dispatch based on structure
+    const resolved = self.types.resolveVar(type_var);
+    switch (resolved.desc.content) {
+        .structure => |ft| switch (ft) {
+            .tag_union => |tu| try self.closeExhaustiveTagUnion(tu, patterns),
+            .tuple => |tuple| try self.closeExhaustiveTuple(tuple, patterns),
+            .record => |record| try self.closeExhaustiveRecord(record, patterns),
+            else => {},
+        },
+        else => {},
+    }
+}
+
+/// Close tag union ext var and recurse into tag payload types.
+fn closeExhaustiveTagUnion(
+    self: *Self,
+    tag_union: types_mod.TagUnion,
+    patterns: []const CIR.Pattern.Idx,
+) Allocator.Error!void {
+    // Close the ext var if it's still a flex var
     const resolved_ext = self.types.resolveVar(tag_union.ext);
     if (resolved_ext.desc.content == .flex) {
         try self.types.setVarContent(tag_union.ext, .{ .structure = .empty_tag_union });
@@ -5783,6 +5793,80 @@ fn closeExhaustiveTagUnions(
             if (payload_patterns.items.len > 0) {
                 try self.closeExhaustiveTagUnions(arg_var, payload_patterns.items);
             }
+        }
+    }
+}
+
+/// Recurse through tuple elements to find nested tag unions to close.
+fn closeExhaustiveTuple(
+    self: *Self,
+    tuple: types_mod.Tuple,
+    patterns: []const CIR.Pattern.Idx,
+) Allocator.Error!void {
+    const elem_vars = self.types.sliceVars(tuple.elems);
+    if (elem_vars.len == 0) return;
+
+    for (elem_vars, 0..) |elem_var, elem_idx| {
+        var elem_patterns: std.ArrayList(CIR.Pattern.Idx) = .empty;
+        defer elem_patterns.deinit(self.gpa);
+
+        for (patterns) |pat_idx| {
+            const inner_idx = self.unwrapAsPatternIdx(pat_idx);
+            const pat = self.cir.store.getPattern(inner_idx);
+            switch (pat) {
+                .tuple => |tup| {
+                    const tup_ptrns = self.cir.store.slicePatterns(tup.patterns);
+                    if (elem_idx < tup_ptrns.len) {
+                        try elem_patterns.append(self.gpa, tup_ptrns[elem_idx]);
+                    }
+                },
+                else => {},
+            }
+        }
+
+        if (elem_patterns.items.len > 0) {
+            try self.closeExhaustiveTagUnions(elem_var, elem_patterns.items);
+        }
+    }
+}
+
+/// Recurse through record fields to find nested tag unions to close.
+fn closeExhaustiveRecord(
+    self: *Self,
+    record: types_mod.Record,
+    patterns: []const CIR.Pattern.Idx,
+) Allocator.Error!void {
+    const fields_slice = self.types.getRecordFieldsSlice(record.fields);
+    const field_names = fields_slice.items(.name);
+    const field_vars = fields_slice.items(.var_);
+
+    for (field_names, field_vars) |field_name, field_var| {
+        var field_patterns: std.ArrayList(CIR.Pattern.Idx) = .empty;
+        defer field_patterns.deinit(self.gpa);
+
+        for (patterns) |pat_idx| {
+            const inner_idx = self.unwrapAsPatternIdx(pat_idx);
+            const pat = self.cir.store.getPattern(inner_idx);
+            switch (pat) {
+                .record_destructure => |rd| {
+                    const destruct_idxs = self.cir.store.sliceRecordDestructs(rd.destructs);
+                    for (destruct_idxs) |destruct_idx| {
+                        const destruct = self.cir.store.getRecordDestruct(destruct_idx);
+                        if (destruct.label == field_name) {
+                            switch (destruct.kind) {
+                                .Required => |sub_pat| try field_patterns.append(self.gpa, sub_pat),
+                                .SubPattern => |sub_pat| try field_patterns.append(self.gpa, sub_pat),
+                                else => {},
+                            }
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+
+        if (field_patterns.items.len > 0) {
+            try self.closeExhaustiveTagUnions(field_var, field_patterns.items);
         }
     }
 }

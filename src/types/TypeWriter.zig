@@ -768,6 +768,8 @@ fn writeTagUnion(self: *TypeWriter, writer: *ByteWrite, tag_union: TagUnion, roo
         return;
     }
 
+    // TODO: Gather tags, like we gather record fields
+
     var iter = tag_union.tags.iterIndices();
     while (iter.next()) |tag_idx| {
         if (@intFromEnum(tag_idx) > @intFromEnum(tag_union.tags.start)) {
