@@ -5145,3 +5145,222 @@ test "check type - exhaustive match with tag and underscore branch stays open" {
         },
     );
 }
+
+test "check type - exhaustive match closes tag union inside tuple element" {
+    // The tag union [Red, Blue] lives inside the first tuple element.
+    // Closure must traverse through the tuple pattern to find and close it.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    (Red, _) => "r"
+        \\    (Blue, _) => "b"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "([Red, Blue], _field) -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match closes tag union inside record field" {
+    // The tag union [Active, Inactive] lives inside the record's `status` field.
+    // Closure must traverse through the record destructure to find and close it.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    { status: Active } => "active"
+        \\    { status: Inactive } => "inactive"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "{ .., status: [Active, Inactive] } -> Str" },
+        },
+    );
+}
+
+test "check type - wildcard in record field keeps nested tag union open" {
+    // Same structure as above but with a wildcard — the traversal through the
+    // record finds the wildcard and correctly keeps the tag union open.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    { status: Active } => "active"
+        \\    { status: _ } => "other"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "{ .., status: [Active, ..] } -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match closes tag union through tag then tuple" {
+    // Path to closure: tag payload (Ok/Err) -> tuple element -> tag union (Red/Blue).
+    // Tests that closure traverses tag -> tuple -> tag union correctly.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok((Red, _a)) => "ok-red"
+        \\    Ok((Blue, _a)) => "ok-blue"
+        \\    Err(_e) => "err"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Ok(([Red, Blue], _field)), Err(_a)] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match closes tag union through tag then record" {
+    // Path to closure: tag payload (Ok/Err) -> record field (status) -> tag union (On/Off).
+    // Tests that closure traverses tag -> record -> tag union correctly.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok({ status: On }) => "ok-on"
+        \\    Ok({ status: Off }) => "ok-off"
+        \\    Err(_e) => "err"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Ok({ .., status: [On, Off] }), Err(_a)] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match opens and closes tag unions through tag then record then tuple" {
+    // Two record fields inside Ok's payload: `status` is exhaustively matched (On/Off)
+    // so it should be closed, while `mode` always has a wildcard so it stays open.
+    // Tests that closure traverses tag -> record -> field independently per field.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok({ status: On, mode: (Big, Fast) }) => "ok-on"
+        \\    Ok({ status: Off, mode: (Big, _) }) => "ok-off"
+        \\    Err(_e) => "err"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Ok({ .., mode: ([Big], [Fast, ..]), status: [On, Off] }), Err(_a)] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match closes tag union through tuple then record" {
+    // Path: tuple element -> record field -> tag union.
+    // First tuple element is a record whose `color` field has an exhaustive tag union.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    ({ color: Red }, _) => "r"
+        \\    ({ color: Blue }, _) => "b"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "({ .., color: [Red, Blue] }, _field) -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match closes tag union through record then tuple" {
+    // Path: record field -> tuple -> tag union.
+    // The record's `pair` field is a tuple, and the tag union inside the first
+    // tuple element should be closed.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    { pair: (On, _) } => "on"
+        \\    { pair: (Off, _) } => "off"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "{ .., pair: ([On, Off], _field) } -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match with different payload structures per tag" {
+    // Ok has a record payload, Err has a plain tag payload.
+    // The outer tag union ends up as a chained extension rather than flat,
+    // so closure doesn't fully close it. This tests the current behavior.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok({ level: High }) => "ok-high"
+        \\    Ok({ level: Low }) => "ok-low"
+        \\    Err(Critical) => "err-crit"
+        \\    Err(Warning) => "err-warn"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Err([Critical, Warning]), ..[Ok({ .., level: [High, Low, ..] }), ..]] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match deeply nested 3 levels mixed open closed" {
+    // 3 levels of tags: outer closed, one middle branch closed, one middle open
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    L1a(L2a(L3a)) => "aaa"
+        \\    L1a(L2a(L3b)) => "aab"
+        \\    L1a(L2b(_y)) => "ab"
+        \\    L1b => "b"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            // Outer [L1a, L1b]: closed
+            // Middle [L2a, L2b]: closed
+            // L2a's payload [L3a, L3b]: closed (both listed)
+            // L2b's payload _y: open (variable binding)
+            .{ .def = "test", .expected = "[L1a([L2a([L3a, L3b]), L2b(_a)]), L1b] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match 4 levels deep all closed" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    W(X(Y(Z))) => "wxyz"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[W([X([Y([Z])])])] -> Str" },
+        },
+    );
+}
