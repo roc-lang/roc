@@ -303,6 +303,22 @@ fn isSingleTagUnion(self: *const Self, mono_idx: Monotype.Idx) bool {
     };
 }
 
+/// Resolve an Ident.Idx to its text by searching all module ident stores.
+/// Each ident store uses null-terminated strings, so a valid string start
+/// either has offset 0 or is preceded by a null terminator byte.
+fn getIdentText(self: *const Self, ident_idx: Ident.Idx) ?[]const u8 {
+    const byte_offset: u32 = ident_idx.idx;
+
+    for (self.all_module_envs) |env| {
+        const bytes = env.getIdentStoreConst().interner.bytes.items.items;
+        if (byte_offset < bytes.len and (byte_offset == 0 or bytes[byte_offset - 1] == 0)) {
+            return std.mem.sliceTo(bytes[byte_offset..], 0);
+        }
+    }
+
+    return null;
+}
+
 /// Given a tag name and the monotype of the containing tag union,
 /// return the discriminant (sorted index of the tag name).
 fn tagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monotype.Idx) u16 {
@@ -327,11 +343,26 @@ fn tagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monot
                 }
             }
 
+            // Fast path: direct bitcast comparison (same module)
             for (tags, 0..) |tag, i| {
                 if (@as(u32, @bitCast(tag.name)) == @as(u32, @bitCast(tag_name))) {
                     return @intCast(i);
                 }
             }
+
+            // Slow path: cross-module comparison by text.
+            // Tag names may have different Ident.Idx values when they come from
+            // different modules' ident stores.
+            if (self.getIdentText(tag_name)) |name_text| {
+                for (tags, 0..) |tag, i| {
+                    if (self.getIdentText(tag.name)) |tag_text| {
+                        if (std.mem.eql(u8, name_text, tag_text)) {
+                            return @intCast(i);
+                        }
+                    }
+                }
+            }
+
             unreachable; // compiler bug: tag name not in tag union
         },
         else => unreachable, // compiler bug: expected tag_union monotype

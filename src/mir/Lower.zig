@@ -297,6 +297,17 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
             // seed the definition's type vars from the call-site monotype and
             // lower with concrete types, patching the block's placeholder stmt.
             if (self.deferred_block_lambdas.get(@intFromEnum(lookup.pattern_idx))) |deferred| {
+                // Remove from deferred BEFORE lowering to prevent infinite
+                // recursion: if the lambda's body references itself (e.g.,
+                // recursive fib), the nested lookup must not re-enter this
+                // deferred path. Mark as in-progress so recursive references
+                // get placeholder lookups via lowerExternalDefWithType's guard.
+                const saved_deferred = deferred;
+                _ = self.deferred_block_lambdas.remove(@intFromEnum(lookup.pattern_idx));
+
+                const symbol_key_deferred: u64 = @bitCast(symbol);
+                try self.in_progress_defs.put(symbol_key_deferred, {});
+
                 // Use a fresh type_var_seen scope so the call-site's concrete
                 // types aren't shadowed by stale Dec/unit entries from the
                 // pattern lowering that happened when the block processed the
@@ -307,10 +318,21 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                     self.type_var_seen.deinit();
                     self.type_var_seen = saved_type_var_seen;
                 }
-                self.seedTypeVarSeen(ModuleEnv.varFrom(deferred.cir_expr), monotype);
-                const lowered = try self.lowerExpr(deferred.cir_expr);
-                self.scratch_stmts.items.items[deferred.scratch_stmt_idx].decl_const.expr = lowered;
-                _ = self.deferred_block_lambdas.remove(@intFromEnum(lookup.pattern_idx));
+                self.seedTypeVarSeen(ModuleEnv.varFrom(saved_deferred.cir_expr), monotype);
+                const lowered = try self.lowerExpr(saved_deferred.cir_expr);
+                self.scratch_stmts.items.items[saved_deferred.scratch_stmt_idx].decl_const.expr = lowered;
+
+                _ = self.in_progress_defs.remove(symbol_key_deferred);
+
+                // Patch any recursion placeholders with the correct monotype.
+                const resolved_monotype = self.store.typeOf(lowered);
+                if (self.recursion_placeholders.getPtr(symbol_key_deferred)) |expr_list| {
+                    for (expr_list.items) |expr_id| {
+                        self.store.type_map.items[@intFromEnum(expr_id)] = resolved_monotype;
+                    }
+                    expr_list.deinit(self.allocator);
+                    _ = self.recursion_placeholders.remove(symbol_key_deferred);
+                }
             }
 
             // Ensure the local definition is lowered if it's a top-level def.
@@ -868,8 +890,7 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                 const cir_expr = module_env.store.getExpr(decl.expr);
                 const is_lambda = cir_expr == .e_lambda or cir_expr == .e_closure;
                 const needs_inst = if (is_lambda) self.types_store.needsInstantiation(ModuleEnv.varFrom(decl.expr)) else false;
-                if (is_lambda and needs_inst)
-                {
+                if (is_lambda and needs_inst) {
                     const scratch_idx: u32 = @intCast(self.scratch_stmts.items.items.len);
                     // Emit a placeholder decl_const — the expr will be filled in
                     // when a call site triggers lowering via e_lookup_local.

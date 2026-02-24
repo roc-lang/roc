@@ -52,7 +52,6 @@ const listSublist = builtins.list.listSublist;
 const listReplace = builtins.list.listReplace;
 const listReserve = builtins.list.listReserve;
 const listReleaseExcessCapacity = builtins.list.listReleaseExcessCapacity;
-const listSortWith = builtins.list.listSortWith;
 
 // String builtins
 const strToUtf8C = builtins.str.strToUtf8C;
@@ -633,7 +632,7 @@ fn wrapListSortWith(
         while (j > 0) {
             const elem_j_minus_1 = sorted_bytes + (j - 1) * element_width;
             // Compare temp (element being inserted) with element[j-1]
-            const cmp_result = sortCmpTrampoline(@constCast(@ptrCast(&cmp_ctx)), &temp_buf, elem_j_minus_1);
+            const cmp_result = sortCmpTrampoline(@ptrCast(@constCast(&cmp_ctx)), &temp_buf, elem_j_minus_1);
             if (cmp_result != 2) break; // not LT, stop shifting (EQ=0, GT=1)
             // Shift element[j-1] to element[j]
             const elem_j = sorted_bytes + j * element_width;
@@ -11660,7 +11659,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn generateCall(self: *Self, call: anytype) Allocator.Error!ValueLocation {
             // Get the function expression
             const fn_expr = self.store.getExpr(call.fn_expr);
-
 
             return switch (fn_expr) {
                 // Direct lambda call: inline the body in the current scope.
