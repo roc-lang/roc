@@ -104,6 +104,8 @@ scratch_record_fields: base.Scratch(types_mod.RecordField),
 scratch_static_dispatch_constraints: base.Scratch(ScratchStaticDispatchConstraint),
 /// scratch deferred static dispatch constraints
 scratch_deferred_static_dispatch_constraints: base.Scratch(DeferredConstraintCheck),
+/// scratch pattern indices used as a shared buffer in the tag union closing pass
+scratch_pattern_idxs: base.Scratch(CIR.Pattern.Idx),
 /// Stack of type variables currently being constraint-checked, used to detect recursive constraints
 /// When a var appears in this stack while we're checking its constraints, we've detected recursion
 constraint_check_stack: std.ArrayList(Var),
@@ -300,6 +302,7 @@ fn initAssumePrepared(
         .scratch_record_fields = try base.Scratch(types_mod.RecordField).init(gpa),
         .scratch_static_dispatch_constraints = try base.Scratch(ScratchStaticDispatchConstraint).init(gpa),
         .scratch_deferred_static_dispatch_constraints = try base.Scratch(DeferredConstraintCheck).init(gpa),
+        .scratch_pattern_idxs = try base.Scratch(CIR.Pattern.Idx).init(gpa),
         .constraint_check_stack = try std.ArrayList(Var).initCapacity(gpa, 0),
         .import_cache = ImportCache{},
         .bool_var = undefined, // Will be initialized in copyBuiltinTypes()
@@ -347,6 +350,7 @@ pub fn deinit(self: *Self) void {
     self.scratch_record_fields.deinit();
     self.scratch_static_dispatch_constraints.deinit();
     self.scratch_deferred_static_dispatch_constraints.deinit();
+    self.scratch_pattern_idxs.deinit();
     self.constraint_check_stack.deinit(self.gpa);
     self.import_cache.deinit(self.gpa);
     self.ident_to_var_map.deinit();
@@ -2930,8 +2934,8 @@ const PatternCtx = enum {
 
     fn toPolarity(self: PatternCtx) Polarity {
         return switch (self) {
-            .bound, .fn_arg => .closed,
-            .for_, .match_branch => .open,
+            .bound, .fn_arg, .for_ => .closed,
+            .match_branch => .open,
         };
     }
 };
@@ -5589,21 +5593,21 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
 
     // Close tag union ext vars where patterns exhaustively list all tags.
     // This must happen after pattern unification (so tags accumulate across branches)
-    // but before exhaustiveness checking (which inspects ext vars).
+    // but before exhaustiveness checking (which inspects ext vars for nested types).
     if (!had_type_error and !has_invalid_try) {
-        var all_top_patterns: std.ArrayList(CIR.Pattern.Idx) = .empty;
-        defer all_top_patterns.deinit(self.gpa);
+        const scratch_top = self.scratch_pattern_idxs.top();
+        defer self.scratch_pattern_idxs.clearFrom(scratch_top);
 
         for (branch_idxs) |branch_idx| {
             const branch = self.cir.store.getMatchBranch(branch_idx);
             const ptrn_idxs = self.cir.store.sliceMatchBranchPatterns(branch.patterns);
             for (ptrn_idxs) |ptrn_idx| {
                 const ptrn = self.cir.store.getMatchBranchPattern(ptrn_idx);
-                try all_top_patterns.append(self.gpa, ptrn.pattern);
+                try self.scratch_pattern_idxs.append(ptrn.pattern);
             }
         }
 
-        try self.closeExhaustiveTagUnions(cond_var, all_top_patterns.items);
+        try self.closeExhaustiveTagUnions(cond_var, self.scratch_pattern_idxs.sliceFromStart(scratch_top));
     }
 
     // Perform exhaustiveness and redundancy checking
@@ -5768,8 +5772,8 @@ fn closeExhaustiveTagUnion(
 
             for (arg_vars, 0..) |arg_var, arg_idx| {
                 // Collect payload patterns at this position from matching branches
-                var payload_patterns: std.ArrayList(CIR.Pattern.Idx) = .empty;
-                defer payload_patterns.deinit(self.gpa);
+                const scratch_top = self.scratch_pattern_idxs.top();
+                defer self.scratch_pattern_idxs.clearFrom(scratch_top);
 
                 for (patterns) |pat_idx| {
                     const inner_idx = self.unwrapAsPatternIdx(pat_idx);
@@ -5779,7 +5783,7 @@ fn closeExhaustiveTagUnion(
                             if (applied_tag.name == tag_name) {
                                 const arg_ptrns = self.cir.store.slicePatterns(applied_tag.args);
                                 if (arg_idx < arg_ptrns.len) {
-                                    try payload_patterns.append(self.gpa, arg_ptrns[arg_idx]);
+                                    try self.scratch_pattern_idxs.append(arg_ptrns[arg_idx]);
                                 }
                             }
                         },
@@ -5787,8 +5791,9 @@ fn closeExhaustiveTagUnion(
                     }
                 }
 
-                if (payload_patterns.items.len > 0) {
-                    try self.closeExhaustiveTagUnions(arg_var, payload_patterns.items);
+                const payload_patterns = self.scratch_pattern_idxs.sliceFromStart(scratch_top);
+                if (payload_patterns.len > 0) {
+                    try self.closeExhaustiveTagUnions(arg_var, payload_patterns);
                 }
             }
         }
@@ -5823,8 +5828,8 @@ fn closeExhaustiveTuple(
     if (elem_vars.len == 0) return;
 
     for (elem_vars, 0..) |elem_var, elem_idx| {
-        var elem_patterns: std.ArrayList(CIR.Pattern.Idx) = .empty;
-        defer elem_patterns.deinit(self.gpa);
+        const scratch_top = self.scratch_pattern_idxs.top();
+        defer self.scratch_pattern_idxs.clearFrom(scratch_top);
 
         for (patterns) |pat_idx| {
             const inner_idx = self.unwrapAsPatternIdx(pat_idx);
@@ -5833,15 +5838,16 @@ fn closeExhaustiveTuple(
                 .tuple => |tup| {
                     const tup_ptrns = self.cir.store.slicePatterns(tup.patterns);
                     if (elem_idx < tup_ptrns.len) {
-                        try elem_patterns.append(self.gpa, tup_ptrns[elem_idx]);
+                        try self.scratch_pattern_idxs.append(tup_ptrns[elem_idx]);
                     }
                 },
                 else => {},
             }
         }
 
-        if (elem_patterns.items.len > 0) {
-            try self.closeExhaustiveTagUnions(elem_var, elem_patterns.items);
+        const elem_patterns = self.scratch_pattern_idxs.sliceFromStart(scratch_top);
+        if (elem_patterns.len > 0) {
+            try self.closeExhaustiveTagUnions(elem_var, elem_patterns);
         }
     }
 }
@@ -5857,8 +5863,8 @@ fn closeExhaustiveRecord(
     const field_vars = fields_slice.items(.var_);
 
     for (field_names, field_vars) |field_name, field_var| {
-        var field_patterns: std.ArrayList(CIR.Pattern.Idx) = .empty;
-        defer field_patterns.deinit(self.gpa);
+        const scratch_top = self.scratch_pattern_idxs.top();
+        defer self.scratch_pattern_idxs.clearFrom(scratch_top);
 
         for (patterns) |pat_idx| {
             const inner_idx = self.unwrapAsPatternIdx(pat_idx);
@@ -5870,8 +5876,8 @@ fn closeExhaustiveRecord(
                         const destruct = self.cir.store.getRecordDestruct(destruct_idx);
                         if (destruct.label == field_name) {
                             switch (destruct.kind) {
-                                .Required => |sub_pat| try field_patterns.append(self.gpa, sub_pat),
-                                .SubPattern => |sub_pat| try field_patterns.append(self.gpa, sub_pat),
+                                .Required => |sub_pat| try self.scratch_pattern_idxs.append(sub_pat),
+                                .SubPattern => |sub_pat| try self.scratch_pattern_idxs.append(sub_pat),
                                 else => {},
                             }
                         }
@@ -5881,8 +5887,9 @@ fn closeExhaustiveRecord(
             }
         }
 
-        if (field_patterns.items.len > 0) {
-            try self.closeExhaustiveTagUnions(field_var, field_patterns.items);
+        const field_patterns = self.scratch_pattern_idxs.sliceFromStart(scratch_top);
+        if (field_patterns.len > 0) {
+            try self.closeExhaustiveTagUnions(field_var, field_patterns);
         }
     }
 }
