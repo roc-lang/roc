@@ -5311,6 +5311,9 @@ fn closeExhaustiveTagUnions(
     type_var: Var,
     patterns: []const CIR.Pattern.Idx,
 ) Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // Check if any pattern at this level is a catch-all.
     // If so: don't close this level, AND don't recurse (catch-all covers
     // all nested positions too).
@@ -5342,6 +5345,9 @@ fn closeExhaustiveTagUnion(
     tag_union: types_mod.TagUnion,
     patterns: []const CIR.Pattern.Idx,
 ) Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // Process tags in this tag union, then follow ext var chain
     var current_tu = tag_union;
     while (true) {
@@ -5408,6 +5414,9 @@ fn closeExhaustiveTuple(
     tuple: types_mod.Tuple,
     patterns: []const CIR.Pattern.Idx,
 ) Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const elem_vars = self.types.sliceVars(tuple.elems);
     if (elem_vars.len == 0) return;
 
@@ -5442,6 +5451,9 @@ fn closeExhaustiveRecord(
     record: types_mod.Record,
     patterns: []const CIR.Pattern.Idx,
 ) Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const fields_slice = self.types.getRecordFieldsSlice(record.fields);
     const field_names = fields_slice.items(.name);
     const field_vars = fields_slice.items(.var_);
