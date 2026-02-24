@@ -211,6 +211,7 @@ UNUSED VARIABLE - everything.md:67:2:67:4
 UNUSED VARIABLE - everything.md:71:2:71:4
 UNUSED VARIABLE - everything.md:75:2:75:4
 UNUSED VARIABLE - everything.md:79:2:79:4
+NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 # PROBLEMS
 **WHERE CLAUSE ERROR**
 Expected an opening bracket **[** after `where`.

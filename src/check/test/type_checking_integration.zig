@@ -4978,7 +4978,7 @@ test "check type - exhaustive match with nested payload is inferred as closed" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Ok([Red, Blue]), Err(Str)] -> Str" },
+            .{ .def = "test", .expected = "[Err(Str), Ok([Blue, Red])] -> Str" },
         },
     );
 }
@@ -4997,7 +4997,7 @@ test "check type - exhaustive match with nested payload with wildcard is inferre
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Ok([Red, Blue, ..]), Err(Str)] -> Str" },
+            .{ .def = "test", .expected = "[Err(Str), Ok([Blue, Red, ..])] -> Str" },
         },
     );
 }
@@ -5015,7 +5015,7 @@ test "check type - exhaustive match with multiple tags is inferred as closed" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Blue, Red, Green] -> Str" },
+            .{ .def = "test", .expected = "[Blue, Green, Red] -> Str" },
         },
     );
 }
@@ -5069,7 +5069,7 @@ test "check type - exhaustive match mixed nested closure" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Ok([A, B]), Err(Str)] -> Str" },
+            .{ .def = "test", .expected = "[Err(Str), Ok([A, B])] -> Str" },
         },
     );
 }
@@ -5088,7 +5088,7 @@ test "check type - exhaustive match with multi-arg tag mixed open closed" {
         &.{
             // First arg: Red, Blue (no wildcard -> closed)
             // Second arg: _y, _y (variable bindings -> open)
-            .{ .def = "test", .expected = "[Pair([Red, Blue], _a)] -> Str" },
+            .{ .def = "test", .expected = "[Pair([Blue, Red], _a)] -> Str" },
         },
     );
 }
@@ -5160,7 +5160,7 @@ test "check type - exhaustive match closes tag union inside tuple element" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "([Red, Blue], _field) -> Str" },
+            .{ .def = "test", .expected = "([Blue, Red], _field) -> Str" },
         },
     );
 }
@@ -5218,7 +5218,7 @@ test "check type - exhaustive match closes tag union through tag then tuple" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Ok(([Red, Blue], _field)), Err(_a)] -> Str" },
+            .{ .def = "test", .expected = "[Err(_a), Ok(([Blue, Red], _field))] -> Str" },
         },
     );
 }
@@ -5238,7 +5238,7 @@ test "check type - exhaustive match closes tag union through tag then record" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Ok({ .., status: [On, Off] }), Err(_a)] -> Str" },
+            .{ .def = "test", .expected = "[Err(_a), Ok({ .., status: [Off, On] })] -> Str" },
         },
     );
 }
@@ -5259,7 +5259,7 @@ test "check type - exhaustive match opens and closes tag unions through tag then
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Ok({ .., mode: ([Big], [Fast, ..]), status: [On, Off] }), Err(_a)] -> Str" },
+            .{ .def = "test", .expected = "[Err(_a), Ok({ .., mode: ([Big], [Fast, ..]), status: [Off, On] })] -> Str" },
         },
     );
 }
@@ -5278,7 +5278,7 @@ test "check type - exhaustive match closes tag union through tuple then record" 
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "({ .., color: [Red, Blue] }, _field) -> Str" },
+            .{ .def = "test", .expected = "({ .., color: [Blue, Red] }, _field) -> Str" },
         },
     );
 }
@@ -5298,7 +5298,7 @@ test "check type - exhaustive match closes tag union through record then tuple" 
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "{ .., pair: ([On, Off], _field) } -> Str" },
+            .{ .def = "test", .expected = "{ .., pair: ([Off, On], _field) } -> Str" },
         },
     );
 }
@@ -5320,7 +5320,7 @@ test "check type - exhaustive match with different payload structures per tag" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err([Critical, Warning]), ..[Ok({ .., level: [High, Low] })]] -> Str" },
+            .{ .def = "test", .expected = "[Err([Critical, Warning]), Ok({ .., level: [High, Low] })] -> Str" },
         },
     );
 }
@@ -5342,7 +5342,7 @@ test "check type - exhaustive match with different payload structures per tag, m
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err([Critical, ..]), ..[Ok({ .., level: [High, ..] })]] -> Str" },
+            .{ .def = "test", .expected = "[Err([Critical, ..]), Ok({ .., level: [High, ..] })] -> Str" },
         },
     );
 }
@@ -5362,7 +5362,7 @@ test "check type - exhaustive match with different payload structures per tag, m
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err([Critical, ..]), ..[Ok({ .., level: [High, ..] })]] -> Str" },
+            .{ .def = "test", .expected = "[Err([Critical, ..]), Ok({ .., level: [High, ..] })] -> Str" },
         },
     );
 }
@@ -5418,7 +5418,7 @@ test "check type - exhaustive match 4 levels deep all but top closed" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[W([X([Y([Z])]), A])] -> Str" },
+            .{ .def = "test", .expected = "[W([A, X([Y([Z])])])] -> Str" },
         },
     );
 }
@@ -5449,7 +5449,7 @@ test "check type - exhaustive match same tag name at multiple nesting levels" {
             // Err's payload [Ok, Err]: closed
             // Err>Ok payload [E]: closed (only one tag but exhaustive)
             // Err>Err payload _: open (catch-all)
-            .{ .def = "test", .expected = "[Err([Ok([E]), Err(_a)]), ..[Ok([Err([C, D]), ..[Ok([A, B])]])]] -> Str" },
+            .{ .def = "test", .expected = "[Err([Err(_a), Ok([E])]), Ok([Err([C, D]), Ok([A, B])])] -> Str" },
         },
     );
 }
@@ -5469,7 +5469,7 @@ test "check type - exhaustive match same record field at multiple nesting levels
         source,
         &.{
             // Inner "a" field's tag union [Red, Blue]: closed
-            .{ .def = "test", .expected = "{ .., a: { .., a: [Red, Blue] } } -> Str" },
+            .{ .def = "test", .expected = "{ .., a: { .., a: [Blue, Red] } } -> Str" },
         },
     );
 }
@@ -5493,7 +5493,7 @@ test "check type - exhaustive match same tuple position at multiple nesting leve
         &.{
             // Inner tuple pos 0: [Red, Blue] closed, pos 1: [On, Off] closed
             // Outer tuple pos 1: single-element tuple with [A] closed
-            .{ .def = "test", .expected = "(([Blue, ..[Red]], [Off, ..[On]]), ([A], [B])) -> Str" },
+            .{ .def = "test", .expected = "(([Blue, Red], [Off, On]), ([A], [B])) -> Str" },
         },
     );
 }

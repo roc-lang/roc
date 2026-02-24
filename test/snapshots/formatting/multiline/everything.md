@@ -136,6 +136,7 @@ UNUSED VARIABLE - everything.md:81:2:81:4
 UNUSED VARIABLE - everything.md:85:2:85:4
 UNSUPPORTED WHERE CLAUSE - everything.md:60:3:60:6
 UNSUPPORTED WHERE CLAUSE - everything.md:61:3:61:6
+NON-EXHAUSTIVE MATCH - everything.md:90:2:113:3
 # PROBLEMS
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
 You cannot define a `where` clause inside a type declaration.
