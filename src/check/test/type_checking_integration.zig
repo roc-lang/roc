@@ -5572,6 +5572,26 @@ test "check type - exhaustive match with different payload structures per tag, m
     );
 }
 
+test "check type - exhaustive match with different payload structures per tag, mixed, with same branches" {
+    // Ok has a record payload, Err has a plain tag payload.
+    // The outer tag union ends up as a chained extension due to different payload types,
+    // but the closure logic follows the ext var chain to close all levels.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok({ level: High }) | Ok({ level: _ }) => "ok"
+        \\    Err(Critical) | Err(_) => "err"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Err([Critical, ..]), ..[Ok({ .., level: [High, ..] })]] -> Str" },
+        },
+    );
+}
+
 test "check type - exhaustive match deeply nested 3 levels mixed open closed" {
     // 3 levels of tags: outer closed, one middle branch closed, one middle open
     const source =
@@ -5608,6 +5628,97 @@ test "check type - exhaustive match 4 levels deep all closed" {
         source,
         &.{
             .{ .def = "test", .expected = "[W([X([Y([Z])])])] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match 4 levels deep all but top closed" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    W(X(Y(Z))) | W(A) => "wxyz"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[W([X([Y([Z])]), A])] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match same tag name at multiple nesting levels" {
+    // "Ok" appears at both level 1 and level 2.
+    // The closure logic must not confuse the two — each level filters
+    // only the patterns passed to it by the parent.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok(Ok(A)) => "ok-ok-a"
+        \\    Ok(Ok(B)) => "ok-ok-b"
+        \\    Ok(Err(C)) => "ok-err-c"
+        \\    Ok(Err(D)) => "ok-err-d"
+        \\    Err(Ok(E)) => "err-ok-e"
+        \\    Err(Err(_)) => "err-err"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            // Outer [Ok, Err]: closed (both listed, no catch-all)
+            // Ok's payload [Ok, Err]: closed
+            // Ok>Ok payload [A, B]: closed
+            // Ok>Err payload [C, D]: closed
+            // Err's payload [Ok, Err]: closed
+            // Err>Ok payload [E]: closed (only one tag but exhaustive)
+            // Err>Err payload _: open (catch-all)
+            .{ .def = "test", .expected = "[Err([Ok([E]), Err(_a)]), ..[Ok([Err([C, D]), ..[Ok([A, B])]])]] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match same record field at multiple nesting levels" {
+    // Field "a" appears in both outer and inner record destructures.
+    // Each level should independently close the tag union in its own "a" field.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    { a: { a: Red } } => "red"
+        \\    { a: { a: Blue } } => "blue"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            // Inner "a" field's tag union [Red, Blue]: closed
+            .{ .def = "test", .expected = "{ .., a: { .., a: [Red, Blue] } } -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match same tuple position at multiple nesting levels" {
+    // Position 0 used at both outer and inner tuple levels.
+    // Each level independently closes tag unions at its own position.
+    // All branches destructure both levels so closure can recurse through.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    ((Red, On), (A, B)) => "1"
+        \\    ((Red, Off), (A, B)) => "2"
+        \\    ((Blue, On), (A, B)) => "3"
+        \\    ((Blue, Off), (A, B)) => "4"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            // Inner tuple pos 0: [Red, Blue] closed, pos 1: [On, Off] closed
+            // Outer tuple pos 1: single-element tuple with [A] closed
+            .{ .def = "test", .expected = "(([Blue, ..[Red]], [Off, ..[On]]), ([A], [B])) -> Str" },
         },
     );
 }
