@@ -1,1 +1,3 @@
 package [Parser] {}
+
+import Parser

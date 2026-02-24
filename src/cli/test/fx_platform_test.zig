@@ -274,6 +274,7 @@ test "fx platform all_syntax_test.roc prints expected output" {
         "\"12345.0\"\n" ++
         "\"Foo with 42 and hello\"\n" ++
         "\"other color\"\n" ++
+        "\"Names: Alice, Bob, Charlie\"\n" ++
         "\"A\"\n" ++
         "\"other letter\"\n";
 

@@ -5730,13 +5730,24 @@ pub fn canonicalizeExpr(
                     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span };
                 },
                 else => {
-                    // Unexpected expression type on right side of arrow
-                    const feature = try self.env.insertString("arrow with complex expression");
-                    const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
-                        .feature = feature,
-                        .region = region,
-                    } });
-                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+                    // Generic case: expr->(any_expression)
+                    // Desugar to (any_expression)(left)
+                    const can_fn_expr = try self.canonicalizeExpr(local_dispatch.right) orelse return null;
+
+                    const scratch_top = self.env.store.scratchExprTop();
+                    try self.env.store.addScratchExpr(can_first_arg.idx);
+                    const args_span = try self.env.store.exprSpanFrom(scratch_top);
+
+                    const expr_idx = try self.env.addExpr(CIR.Expr{
+                        .e_call = .{
+                            .func = can_fn_expr.idx,
+                            .args = args_span,
+                            .called_via = CalledVia.apply,
+                        },
+                    }, region);
+
+                    const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span };
                 },
             }
         },

@@ -1135,9 +1135,14 @@ const Formatter = struct {
                     // Plain identifier: add () after it
                     _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
                     try fmt.pushAll("()");
-                } else {
-                    // Already has parens (apply) or other expr: format normally
+                } else if (right_expr == .apply or right_expr == .tag) {
+                    // Already has parens (apply) or tag: format normally
                     _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
+                } else {
+                    // Lambda or other expression: wrap in parens for round-trip safety
+                    try fmt.push('(');
+                    _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
+                    try fmt.push(')');
                 }
             },
             .int => |i| {

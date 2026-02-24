@@ -32,6 +32,7 @@ pub const ServerCapabilities = struct {
     foldingRangeProvider: bool = false,
     selectionRangeProvider: bool = false,
     documentHighlightProvider: bool = false,
+    completionProvider: ?CompletionOptions = null,
 
     pub const TextDocumentSyncOptions = struct {
         openClose: bool = false,
@@ -53,6 +54,11 @@ pub const ServerCapabilities = struct {
     pub const SemanticTokensLegend = struct {
         tokenTypes: []const []const u8,
         tokenModifiers: []const []const u8,
+    };
+
+    pub const CompletionOptions = struct {
+        triggerCharacters: []const []const u8 = &.{ ".", ":" },
+        resolveProvider: bool = false,
     };
 };
 
@@ -77,5 +83,6 @@ pub fn buildCapabilities() ServerCapabilities {
         .foldingRangeProvider = true,
         .selectionRangeProvider = true,
         .documentHighlightProvider = true,
+        .completionProvider = .{},
     };
 }
