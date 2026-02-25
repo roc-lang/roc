@@ -6696,20 +6696,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     for (0..inner_elem_count) |j| {
                         const inner_offset: i32 = @as(i32, @intCast(j)) * inner_elem_size;
 
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.ldrRegMemSoff(.w64, inner_temp_lhs, temp_lhs, inner_offset);
-                            try self.codegen.emit.ldrRegMemSoff(.w64, inner_temp_rhs, temp_rhs, inner_offset);
-                            try self.codegen.emit.cmp(.w64, inner_temp_lhs, inner_temp_rhs);
-                            try self.codegen.emit.csel(.w64, result_reg, result_reg, .ZRSP, .eq);
-                        } else {
-                            try self.codegen.emit.movRegMem(.w64, inner_temp_lhs, temp_lhs, inner_offset);
-                            try self.codegen.emit.movRegMem(.w64, inner_temp_rhs, temp_rhs, inner_offset);
-                            try self.codegen.emit.cmpRegReg(.w64, inner_temp_lhs, inner_temp_rhs);
-                            const zero_reg2 = try self.allocTempGeneral();
-                            try self.codegen.emitLoadImm(zero_reg2, 0);
-                            try self.codegen.emit.cmovcc(.not_equal, .w64, result_reg, zero_reg2);
-                            self.codegen.freeGeneral(zero_reg2);
-                        }
+                        try self.emitCompareAndClearOnNeq(inner_temp_lhs, inner_temp_rhs, temp_lhs, temp_rhs, inner_offset, inner_elem_size, result_reg);
                     }
                     self.codegen.freeGeneral(inner_temp_lhs);
                     self.codegen.freeGeneral(inner_temp_rhs);
@@ -6721,24 +6708,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 for (0..lhs_elems.len) |i| {
                     const offset: i32 = @as(i32, @intCast(i)) * elem_size;
 
-                    // Load lhs element: [lhs_ptr + offset]
-                    try self.emitLoad(.w64, temp_lhs, lhs_ptr_reg, offset);
-
-                    // Load rhs element: [rhs_ptr + offset]
-                    try self.emitLoad(.w64, temp_rhs, rhs_ptr_reg, offset);
-
-                    // Compare elements: if not equal, set result to 0
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.cmp(.w64, temp_lhs, temp_rhs);
-                        try self.codegen.emit.csel(.w64, result_reg, result_reg, .ZRSP, .eq);
-                    } else {
-                        try self.codegen.emit.cmpRegReg(.w64, temp_lhs, temp_rhs);
-                        // Use CMOV to set result to 0 if not equal
-                        const zero_reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(zero_reg, 0);
-                        try self.codegen.emit.cmovcc(.not_equal, .w64, result_reg, zero_reg);
-                        self.codegen.freeGeneral(zero_reg);
-                    }
+                    try self.emitCompareAndClearOnNeq(temp_lhs, temp_rhs, lhs_ptr_reg, rhs_ptr_reg, offset, elem_size, result_reg);
                 }
             }
 
@@ -6757,6 +6727,64 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Generate record comparison using layout information.
         /// Compares records field-by-field using the correct comparison method
+        /// Compare memory at [lhs_base + offset] vs [rhs_base + offset] for `size` bytes,
+        /// clearing result_reg to 0 if not equal. Handles 128-bit elements by comparing
+        /// both 64-bit halves. Uses temp_lhs and temp_rhs as scratch registers.
+        fn emitCompareAndClearOnNeq(
+            self: *Self,
+            temp_lhs: GeneralReg,
+            temp_rhs: GeneralReg,
+            lhs_base: GeneralReg,
+            rhs_base: GeneralReg,
+            offset: i32,
+            elem_size: i32,
+            result_reg: GeneralReg,
+        ) Allocator.Error!void {
+            if (elem_size == 16) {
+                // 128-bit element (Dec, i128, u128): compare both 64-bit halves
+                // Compare low 64 bits
+                try self.emitLoad(.w64, temp_lhs, lhs_base, offset);
+                try self.emitLoad(.w64, temp_rhs, rhs_base, offset);
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.cmp(.w64, temp_lhs, temp_rhs);
+                    try self.codegen.emit.csel(.w64, result_reg, result_reg, .ZRSP, .eq);
+                } else {
+                    try self.codegen.emit.cmpRegReg(.w64, temp_lhs, temp_rhs);
+                    const zero_reg = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(zero_reg, 0);
+                    try self.codegen.emit.cmovcc(.not_equal, .w64, result_reg, zero_reg);
+                    self.codegen.freeGeneral(zero_reg);
+                }
+                // Compare high 64 bits
+                try self.emitLoad(.w64, temp_lhs, lhs_base, offset + 8);
+                try self.emitLoad(.w64, temp_rhs, rhs_base, offset + 8);
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.cmp(.w64, temp_lhs, temp_rhs);
+                    try self.codegen.emit.csel(.w64, result_reg, result_reg, .ZRSP, .eq);
+                } else {
+                    try self.codegen.emit.cmpRegReg(.w64, temp_lhs, temp_rhs);
+                    const zero_reg = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(zero_reg, 0);
+                    try self.codegen.emit.cmovcc(.not_equal, .w64, result_reg, zero_reg);
+                    self.codegen.freeGeneral(zero_reg);
+                }
+            } else {
+                // Elements fit in 64 bits or less
+                try self.emitLoad(.w64, temp_lhs, lhs_base, offset);
+                try self.emitLoad(.w64, temp_rhs, rhs_base, offset);
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.cmp(.w64, temp_lhs, temp_rhs);
+                    try self.codegen.emit.csel(.w64, result_reg, result_reg, .ZRSP, .eq);
+                } else {
+                    try self.codegen.emit.cmpRegReg(.w64, temp_lhs, temp_rhs);
+                    const zero_reg = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(zero_reg, 0);
+                    try self.codegen.emit.cmovcc(.not_equal, .w64, result_reg, zero_reg);
+                    self.codegen.freeGeneral(zero_reg);
+                }
+            }
+        }
+
         /// for each field type (i128 for Dec fields, i64 for smaller fields, etc.)
         /// Compare a single field/element by its layout type, writing 1 (equal) or 0 (not equal)
         /// into result_reg. Dispatches on layout type rather than byte size to correctly
