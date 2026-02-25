@@ -3904,3 +3904,88 @@ test "polymorphic function with List.contains called with multiple types" {
     ;
     try runExpectI64(code, 5, .no_trace);
 }
+
+// Focused reproductions of the 10 known dev-backend failures.
+// Same expressions as the originals to ensure the bugs reproduce.
+
+test "focused: fold single-field record" {
+    const expected = [_]ExpectedField{.{ .name = "total", .value = 10 }};
+    try runExpectRecord(
+        "List.fold([1, 2, 3, 4], {total: 0}, |acc, item| {total: acc.total + item})",
+        &expected,
+        .no_trace,
+    );
+}
+
+test "focused: fold record partial update" {
+    const expected = [_]ExpectedField{
+        .{ .name = "sum", .value = 10 },
+        .{ .name = "multiplier", .value = 2 },
+    };
+    try runExpectRecord(
+        "List.fold([1, 2, 3, 4], {sum: 0, multiplier: 2}, |acc, item| {..acc, sum: acc.sum + item})",
+        &expected,
+        .no_trace,
+    );
+}
+
+test "focused: fold record nested field access" {
+    const expected = [_]ExpectedField{.{ .name = "value", .value = 6 }};
+    try runExpectRecord(
+        "List.fold([1, 2, 3], {value: 0}, |acc, item| {value: acc.value + item})",
+        &expected,
+        .no_trace,
+    );
+}
+
+test "focused: fold record over string list" {
+    const expected = [_]ExpectedField{.{ .name = "count", .value = 3 }};
+    try runExpectRecord(
+        "List.fold([\"a\", \"bb\", \"ccc\"], {count: 0}, |acc, _| {count: acc.count + 1})",
+        &expected,
+        .no_trace,
+    );
+}
+
+test "focused: fold multi-field record equality" {
+    try runExpectBool(
+        "List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1}) == {sum: 6, count: 3}",
+        true,
+        .no_trace,
+    );
+}
+
+test "focused: fold partial record destructuring" {
+    const expected = [_]ExpectedField{.{ .name = "sum", .value = 6 }};
+    try runExpectRecord(
+        "List.fold([{a: 1, b: 100}, {a: 2, b: 200}, {a: 3, b: 300}], {sum: 0}, |acc, {a}| {sum: acc.sum + a})",
+        &expected,
+        .no_trace,
+    );
+}
+
+test "focused: fold single-field record destructuring" {
+    const expected = [_]ExpectedField{.{ .name = "total", .value = 10 }};
+    try runExpectRecord(
+        "List.fold([{val: 1}, {val: 2}, {val: 3}, {val: 4}], {total: 0}, |acc, {val}| {total: acc.total + val})",
+        &expected,
+        .no_trace,
+    );
+}
+
+test "focused: fold exact list pattern" {
+    const expected = [_]ExpectedField{.{ .name = "total", .value = 21 }};
+    try runExpectRecord(
+        "List.fold([[1, 2], [3, 4], [5, 6]], {total: 0}, |acc, [a, b]| {total: acc.total + a + b})",
+        &expected,
+        .no_trace,
+    );
+}
+
+test "focused: list append zst" {
+    try runExpectListZst("List.append([{}], {})", 2, .no_trace);
+}
+
+test "focused: nested list equality" {
+    try runExpectBool("[[1, 2]] == [[1, 2]]", true, .no_trace);
+}
