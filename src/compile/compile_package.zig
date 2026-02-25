@@ -1465,7 +1465,7 @@ pub const PackageEnv = struct {
                     // stored in module_name_tok. Check if it contains a dot.
                     return std.mem.indexOfScalar(u8, module_name, '.') != null;
                 },
-                else => {},
+                .s_decl, .s_var, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => {},
             }
         }
         return false;

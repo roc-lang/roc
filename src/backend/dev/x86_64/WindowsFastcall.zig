@@ -88,7 +88,7 @@ pub const RED_ZONE_SIZE: u8 = 0;
 pub fn isCalleeSaved(reg: GeneralReg) bool {
     return switch (reg) {
         .RBX, .RBP, .RSI, .RDI, .R12, .R13, .R14, .R15 => true,
-        else => false,
+        .RAX, .RCX, .RDX, .RSP, .R8, .R9, .R10, .R11 => false,
     };
 }
 
@@ -96,7 +96,7 @@ pub fn isCalleeSaved(reg: GeneralReg) bool {
 pub fn isFloatCalleeSaved(reg: FloatReg) bool {
     return switch (reg) {
         .XMM6, .XMM7, .XMM8, .XMM9, .XMM10, .XMM11, .XMM12, .XMM13, .XMM14, .XMM15 => true,
-        else => false,
+        .XMM0, .XMM1, .XMM2, .XMM3, .XMM4, .XMM5 => false,
     };
 }
 

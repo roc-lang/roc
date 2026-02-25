@@ -624,7 +624,7 @@ pub const DevEvaluator = struct {
                         .s_decl => |decl| {
                             top_level_patterns.put(decl.pattern, {}) catch {};
                         },
-                        else => {},
+                        .s_var, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno => {},
                     }
                 }
 
@@ -899,7 +899,7 @@ pub const DevEvaluator = struct {
                     break :blk EvalResult{ .str_val = str_copy };
                 }
             },
-            else => return error.UnsupportedType,
+            .bool, .opaque_ptr, .zst, _ => return error.UnsupportedType,
         };
     }
 };

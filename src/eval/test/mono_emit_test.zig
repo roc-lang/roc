@@ -379,7 +379,7 @@ fn checkForCapturesRecursive(module_env: *can.ModuleEnv, expr_idx: can.CIR.Expr.
                             return true;
                         }
                     },
-                    else => {},
+                    .s_var, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno => {},
                 }
             }
             // Check final expression
@@ -413,7 +413,7 @@ fn checkForCapturesRecursive(module_env: *can.ModuleEnv, expr_idx: can.CIR.Expr.
             return checkForCapturesRecursive(module_env, binop.lhs) or
                 checkForCapturesRecursive(module_env, binop.rhs);
         },
-        else => return false,
+        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_record, .e_empty_record, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => return false,
     }
 }
 

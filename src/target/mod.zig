@@ -64,10 +64,10 @@ pub const RocTarget = enum {
                         return switch (abi) {
                             .musl, .musleabi, .musleabihf => .x64musl,
                             .gnu, .gnueabi, .gnueabihf, .gnux32 => .x64glibc,
-                            else => .x64musl, // Default to musl for static linking
+                            .none, .gnuabin32, .gnuabi64, .gnuf32, .gnusf, .code16, .eabi, .eabihf, .ilp32, .android, .androideabi, .muslabin32, .muslabi64, .muslf32, .muslsf, .muslx32, .msvc, .itanium, .cygnus, .simulator, .macabi, .ohos, .ohoseabi => .x64musl, // Default to musl for static linking
                         };
                     },
-                    else => return .x64elf, // Generic fallback
+                    .freestanding, .other, .contiki, .fuchsia, .hermit, .aix, .haiku, .hurd, .plan9, .rtems, .serenity, .zos, .dragonfly, .driverkit, .ios, .tvos, .visionos, .watchos, .illumos, .solaris, .uefi, .ps3, .ps4, .ps5, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => return .x64elf, // Generic fallback
                 }
             },
             .aarch64, .aarch64_be => {
@@ -78,26 +78,26 @@ pub const RocTarget = enum {
                         return switch (abi) {
                             .musl, .musleabi, .musleabihf => .arm64musl,
                             .gnu, .gnueabi, .gnueabihf => .arm64glibc,
-                            else => .arm64musl, // Default to musl for static linking
+                            .none, .gnuabin32, .gnuabi64, .gnuf32, .gnusf, .gnux32, .code16, .eabi, .eabihf, .ilp32, .android, .androideabi, .muslabin32, .muslabi64, .muslf32, .muslsf, .muslx32, .msvc, .itanium, .cygnus, .simulator, .macabi, .ohos, .ohoseabi => .arm64musl, // Default to musl for static linking
                         };
                     },
-                    else => return .arm64linux, // Generic ARM64 Linux
+                    .freestanding, .other, .contiki, .fuchsia, .hermit, .aix, .haiku, .hurd, .plan9, .rtems, .serenity, .zos, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .tvos, .visionos, .watchos, .illumos, .solaris, .uefi, .ps3, .ps4, .ps5, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => return .arm64linux, // Generic ARM64 Linux
                 }
             },
             .arm => {
                 switch (os) {
                     .linux => return .arm32musl, // Default to musl for static linking
-                    else => return .arm32linux, // Generic ARM32 Linux
+                    .freestanding, .other, .contiki, .fuchsia, .hermit, .aix, .haiku, .hurd, .plan9, .rtems, .serenity, .zos, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .macos, .tvos, .visionos, .watchos, .illumos, .solaris, .windows, .uefi, .ps3, .ps4, .ps5, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => return .arm32linux, // Generic ARM32 Linux
                 }
             },
             .wasm32 => return .wasm32,
-            else => {
+            .amdgcn, .arc, .armeb, .thumb, .thumbeb, .avr, .bpfel, .bpfeb, .csky, .hexagon, .kalimba, .lanai, .loongarch32, .loongarch64, .m68k, .mips, .mipsel, .mips64, .mips64el, .msp430, .or1k, .nvptx, .nvptx64, .powerpc, .powerpcle, .powerpc64, .powerpc64le, .propeller, .riscv32, .riscv64, .s390x, .sparc, .sparc64, .spirv32, .spirv64, .ve, .wasm64, .x86, .xcore, .xtensa => {
                 // Default fallback based on OS
                 switch (os) {
                     .macos => return .x64mac,
                     .windows => return .x64win,
                     .linux => return .x64musl, // Default to musl
-                    else => return .x64elf,
+                    .freestanding, .other, .contiki, .fuchsia, .hermit, .aix, .haiku, .hurd, .plan9, .rtems, .serenity, .zos, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .tvos, .visionos, .watchos, .illumos, .solaris, .uefi, .ps3, .ps4, .ps5, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => return .x64elf,
                 }
             },
         }
@@ -177,7 +177,7 @@ pub const RocTarget = enum {
     pub fn isDynamic(self: RocTarget) bool {
         return switch (self) {
             .x64glibc, .arm64glibc, .x64linux, .arm64linux, .arm32linux => true,
-            else => false,
+            .x64mac, .x64win, .x64freebsd, .x64openbsd, .x64netbsd, .x64musl, .x64elf, .arm64mac, .arm64win, .arm64musl, .arm32musl, .wasm32 => false,
         };
     }
 
@@ -185,7 +185,7 @@ pub const RocTarget = enum {
     pub fn isStatic(self: RocTarget) bool {
         return switch (self) {
             .x64musl, .arm64musl, .arm32musl => true,
-            else => false,
+            .x64mac, .x64win, .x64freebsd, .x64openbsd, .x64netbsd, .x64glibc, .x64linux, .x64elf, .arm64mac, .arm64win, .arm64linux, .arm64glibc, .arm32linux, .wasm32 => false,
         };
     }
 
@@ -193,7 +193,7 @@ pub const RocTarget = enum {
     pub fn isMacOS(self: RocTarget) bool {
         return switch (self) {
             .x64mac, .arm64mac => true,
-            else => false,
+            .x64win, .x64freebsd, .x64openbsd, .x64netbsd, .x64musl, .x64glibc, .x64linux, .x64elf, .arm64win, .arm64linux, .arm64musl, .arm64glibc, .arm32linux, .arm32musl, .wasm32 => false,
         };
     }
 
@@ -201,7 +201,7 @@ pub const RocTarget = enum {
     pub fn isWindows(self: RocTarget) bool {
         return switch (self) {
             .x64win, .arm64win => true,
-            else => false,
+            .x64mac, .x64freebsd, .x64openbsd, .x64netbsd, .x64musl, .x64glibc, .x64linux, .x64elf, .arm64mac, .arm64linux, .arm64musl, .arm64glibc, .arm32linux, .arm32musl, .wasm32 => false,
         };
     }
 
@@ -209,7 +209,7 @@ pub const RocTarget = enum {
     pub fn isLinux(self: RocTarget) bool {
         return switch (self) {
             .x64musl, .x64glibc, .x64linux, .arm64musl, .arm64glibc, .arm64linux, .arm32musl, .arm32linux => true,
-            else => false,
+            .x64mac, .x64win, .x64freebsd, .x64openbsd, .x64netbsd, .x64elf, .arm64mac, .arm64win, .wasm32 => false,
         };
     }
 
@@ -218,7 +218,7 @@ pub const RocTarget = enum {
         return switch (self.toCpuArch()) {
             .x86_64, .aarch64, .aarch64_be => 64,
             .arm, .wasm32 => 32,
-            else => 64, // Default to 64-bit
+            .amdgcn, .arc, .armeb, .thumb, .thumbeb, .avr, .bpfel, .bpfeb, .csky, .hexagon, .kalimba, .lanai, .loongarch32, .loongarch64, .m68k, .mips, .mipsel, .mips64, .mips64el, .msp430, .or1k, .nvptx, .nvptx64, .powerpc, .powerpcle, .powerpc64, .powerpc64le, .propeller, .riscv32, .riscv64, .s390x, .sparc, .sparc64, .spirv32, .spirv64, .ve, .wasm64, .x86, .xcore, .xtensa => 64, // Default to 64-bit
         };
     }
 

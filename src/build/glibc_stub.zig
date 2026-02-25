@@ -9,7 +9,7 @@ pub fn generateComprehensiveStub(
 ) !void {
     const ptr_width: u32 = switch (target_arch) {
         .x86_64, .aarch64 => 8,
-        else => 4,
+        .amdgcn, .arc, .arm, .armeb, .thumb, .thumbeb, .aarch64_be, .avr, .bpfel, .bpfeb, .csky, .hexagon, .kalimba, .lanai, .loongarch32, .loongarch64, .m68k, .mips, .mipsel, .mips64, .mips64el, .msp430, .or1k, .nvptx, .nvptx64, .powerpc, .powerpcle, .powerpc64, .powerpc64le, .propeller, .riscv32, .riscv64, .s390x, .sparc, .sparc64, .spirv32, .spirv64, .ve, .wasm32, .wasm64, .x86, .xcore, .xtensa => 4,
     };
 
     try writer.writeAll(".text\n");
@@ -19,7 +19,7 @@ pub fn generateComprehensiveStub(
     switch (target_arch) {
         .x86_64 => try writer.writeAll("    xor %rax, %rax\n    ret\n\n"),
         .aarch64 => try writer.writeAll("    mov x0, #0\n    ret\n\n"),
-        else => try writer.writeAll("    ret\n\n"),
+        .amdgcn, .arc, .arm, .armeb, .thumb, .thumbeb, .aarch64_be, .avr, .bpfel, .bpfeb, .csky, .hexagon, .kalimba, .lanai, .loongarch32, .loongarch64, .m68k, .mips, .mipsel, .mips64, .mips64el, .msp430, .or1k, .nvptx, .nvptx64, .powerpc, .powerpcle, .powerpc64, .powerpc64le, .propeller, .riscv32, .riscv64, .s390x, .sparc, .sparc64, .spirv32, .spirv64, .ve, .wasm32, .wasm64, .x86, .xcore, .xtensa => try writer.writeAll("    ret\n\n"),
     }
 
     // Essential libc symbols that must be present for linking
@@ -87,14 +87,14 @@ pub fn generateComprehensiveStub(
             switch (target_arch) {
                 .x86_64 => try writer.writeAll("    mov $1, %rdi\n    mov $60, %rax\n    syscall\n\n"),
                 .aarch64 => try writer.writeAll("    mov x0, #1\n    mov x8, #93\n    svc #0\n\n"),
-                else => try writer.writeAll("    ret\n\n"),
+                .amdgcn, .arc, .arm, .armeb, .thumb, .thumbeb, .aarch64_be, .avr, .bpfel, .bpfeb, .csky, .hexagon, .kalimba, .lanai, .loongarch32, .loongarch64, .m68k, .mips, .mipsel, .mips64, .mips64el, .msp430, .or1k, .nvptx, .nvptx64, .powerpc, .powerpcle, .powerpc64, .powerpc64le, .propeller, .riscv32, .riscv64, .s390x, .sparc, .sparc64, .spirv32, .spirv64, .ve, .wasm32, .wasm64, .x86, .xcore, .xtensa => try writer.writeAll("    ret\n\n"),
             }
         } else {
             // Other symbols return 0 or are no-ops (resolved at runtime)
             switch (target_arch) {
                 .x86_64 => try writer.writeAll("    xor %rax, %rax\n    ret\n\n"),
                 .aarch64 => try writer.writeAll("    mov x0, #0\n    ret\n\n"),
-                else => try writer.writeAll("    ret\n\n"),
+                .amdgcn, .arc, .arm, .armeb, .thumb, .thumbeb, .aarch64_be, .avr, .bpfel, .bpfeb, .csky, .hexagon, .kalimba, .lanai, .loongarch32, .loongarch64, .m68k, .mips, .mipsel, .mips64, .mips64el, .msp430, .or1k, .nvptx, .nvptx64, .powerpc, .powerpcle, .powerpc64, .powerpc64le, .propeller, .riscv32, .riscv64, .s390x, .sparc, .sparc64, .spirv32, .spirv64, .ve, .wasm32, .wasm64, .x86, .xcore, .xtensa => try writer.writeAll("    ret\n\n"),
             }
         }
     }

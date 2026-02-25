@@ -97,7 +97,7 @@ pub fn isCalleeSaved(reg: GeneralReg) bool {
     return switch (reg) {
         .X19, .X20, .X21, .X22, .X23, .X24, .X25, .X26, .X27, .X28 => true,
         .FP, .LR => true, // Frame pointer and link register are also preserved
-        else => false,
+        .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7, .XR, .X9, .X10, .X11, .X12, .X13, .X14, .X15, .IP0, .IP1, .PR, .ZRSP => false,
     };
 }
 
@@ -106,7 +106,7 @@ pub fn isCalleeSaved(reg: GeneralReg) bool {
 pub fn isFloatCalleeSaved(reg: FloatReg) bool {
     return switch (reg) {
         .V8, .V9, .V10, .V11, .V12, .V13, .V14, .V15 => true,
-        else => false,
+        .V0, .V1, .V2, .V3, .V4, .V5, .V6, .V7, .V16, .V17, .V18, .V19, .V20, .V21, .V22, .V23, .V24, .V25, .V26, .V27, .V28, .V29, .V30, .V31 => false,
     };
 }
 

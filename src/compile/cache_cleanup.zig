@@ -289,7 +289,7 @@ fn cleanupLegacyTempDirs(allocator: Allocator, maybe_stats: ?*CleanupStats) void
         .windows => std.process.getEnvVarOwned(allocator, "TEMP") catch
             std.process.getEnvVarOwned(allocator, "TMP") catch
             return,
-        else => std.process.getEnvVarOwned(allocator, "TMPDIR") catch
+        .freestanding, .other, .contiki, .fuchsia, .hermit, .aix, .haiku, .hurd, .linux, .plan9, .rtems, .serenity, .zos, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .macos, .tvos, .visionos, .watchos, .illumos, .solaris, .uefi, .ps3, .ps4, .ps5, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => std.process.getEnvVarOwned(allocator, "TMPDIR") catch
             allocator.dupe(u8, "/tmp") catch return,
     };
     defer allocator.free(temp_base);

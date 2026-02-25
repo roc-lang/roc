@@ -38,7 +38,7 @@ fn aggregatorFilters(module_type: ModuleType) []const []const u8 {
         .repl => &.{"repl tests"},
         .fmt => &.{"fmt tests"},
         .mir => &.{"mir tests"},
-        else => &.{},
+        .roc_src, .types, .reporting, .tracy, .fs, .build_options, .watch, .bundle, .unbundle, .base58, .lsp, .backend, .lir, .mono, .roc_target, .sljmp => &.{},
     };
 }
 

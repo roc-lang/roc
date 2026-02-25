@@ -1296,7 +1296,7 @@ pub const ComptimeEvaluator = struct {
             const nominal_type = switch (content) {
                 .structure => |flat_type| switch (flat_type) {
                     .nominal_type => |nom| nom,
-                    else => {
+                    .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => {
                         // Non-nominal types (e.g., records, tuples, functions) don't have from_numeral
                         // This is a type error - numeric literal can't be used as this type
                         const error_msg = try self.problems.putExtraString(
@@ -1314,7 +1314,7 @@ pub const ComptimeEvaluator = struct {
                         continue;
                     },
                 },
-                else => {
+                .flex, .rigid, .alias, .err => {
                     // Non-structure types (flex, rigid, alias, etc.)
                     // If still flex, type checking didn't fully resolve it - this is OK, may resolve later
                     // If rigid/alias, it doesn't support from_numeral
@@ -1478,7 +1478,7 @@ pub const ComptimeEvaluator = struct {
                 }
                 break :blk numerator / divisor;
             },
-            else => {
+            .e_num, .e_frac_f32, .e_frac_f64, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => {
                 // Not a dec literal - nothing to rewrite
                 return;
             },
@@ -1704,7 +1704,7 @@ pub const ComptimeEvaluator = struct {
                             .fn_pure => |f| f,
                             .fn_effectful => |f| f,
                             .fn_unbound => |f| f,
-                            else => unreachable,
+                            .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => unreachable,
                         };
                         break :blk func.ret;
                     }

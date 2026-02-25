@@ -37,7 +37,7 @@ pub const ObjectFormat = enum {
             .linux, .freebsd, .openbsd, .netbsd => .elf,
             .macos, .ios, .tvos, .watchos => .macho,
             .windows => .coff,
-            else => .elf, // Default to ELF
+            .freestanding, .other, .contiki, .fuchsia, .hermit, .aix, .haiku, .hurd, .plan9, .rtems, .serenity, .zos, .dragonfly, .driverkit, .illumos, .solaris, .uefi, .ps3, .ps4, .ps5, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan, .visionos => .elf, // Default to ELF
         };
     }
 };

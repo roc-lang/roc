@@ -52,7 +52,7 @@ pub const CacheConfig = struct {
             // Fall back to platform defaults
             const home_env = switch (builtin.target.os.tag) {
                 .windows => "APPDATA",
-                else => "HOME",
+                .freestanding, .other, .contiki, .fuchsia, .hermit, .aix, .haiku, .hurd, .linux, .plan9, .rtems, .serenity, .zos, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .macos, .tvos, .visionos, .watchos, .illumos, .solaris, .uefi, .ps3, .ps4, .ps5, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => "HOME",
             };
 
             const home_dir = std.process.getEnvVarOwned(allocator, home_env) catch {
@@ -64,7 +64,7 @@ pub const CacheConfig = struct {
                 .linux => try std.fs.path.join(allocator, &[_][]const u8{ home_dir, ".cache", getCacheDirName() }),
                 .macos => try std.fs.path.join(allocator, &[_][]const u8{ home_dir, "Library", "Caches", getCacheDirName() }),
                 .windows => try std.fs.path.join(allocator, &[_][]const u8{ home_dir, getCacheDirName() }),
-                else => try std.fs.path.join(allocator, &[_][]const u8{ home_dir, ".cache", getCacheDirName() }),
+                .freestanding, .other, .contiki, .fuchsia, .hermit, .aix, .haiku, .hurd, .plan9, .rtems, .serenity, .zos, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .tvos, .visionos, .watchos, .illumos, .solaris, .uefi, .ps3, .ps4, .ps5, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => try std.fs.path.join(allocator, &[_][]const u8{ home_dir, ".cache", getCacheDirName() }),
             };
 
             return cache_path;
@@ -130,7 +130,7 @@ pub const CacheConfig = struct {
             .windows => std.process.getEnvVarOwned(allocator, "TEMP") catch
                 std.process.getEnvVarOwned(allocator, "TMP") catch
                 try allocator.dupe(u8, "C:\\Windows\\Temp"),
-            else => std.process.getEnvVarOwned(allocator, "TMPDIR") catch
+            .freestanding, .other, .contiki, .fuchsia, .hermit, .aix, .haiku, .hurd, .linux, .plan9, .rtems, .serenity, .zos, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .macos, .tvos, .visionos, .watchos, .illumos, .solaris, .uefi, .ps3, .ps4, .ps5, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => std.process.getEnvVarOwned(allocator, "TMPDIR") catch
                 try allocator.dupe(u8, "/tmp"),
         };
         defer allocator.free(temp_base);
@@ -220,7 +220,7 @@ pub const CacheStats = struct {
 pub fn getCacheDirName() []const u8 {
     return switch (builtin.target.os.tag) {
         .windows => "Roc",
-        else => "roc",
+        .freestanding, .other, .contiki, .fuchsia, .hermit, .aix, .haiku, .hurd, .linux, .plan9, .rtems, .serenity, .zos, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .macos, .tvos, .visionos, .watchos, .illumos, .solaris, .uefi, .ps3, .ps4, .ps5, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => "roc",
     };
 }
 

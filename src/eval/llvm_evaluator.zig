@@ -48,7 +48,7 @@ fn getLlvmTriple() []const u8 {
         .wasm64 => "wasm64",
         .riscv32 => "riscv32",
         .riscv64 => "riscv64",
-        else => "unknown",
+        .amdgcn, .arc, .aarch64_be, .avr, .bpfel, .bpfeb, .csky, .hexagon, .kalimba, .lanai, .loongarch32, .loongarch64, .m68k, .mips, .mipsel, .mips64, .mips64el, .msp430, .or1k, .nvptx, .nvptx64, .powerpc, .powerpcle, .powerpc64, .powerpc64le, .propeller, .s390x, .sparc, .sparc64, .spirv32, .spirv64, .ve, .xcore, .xtensa => "unknown",
     };
 
     const vendor_os = switch (builtin.os.tag) {
@@ -62,7 +62,7 @@ fn getLlvmTriple() []const u8 {
         .netbsd => "-unknown-netbsd",
         .freestanding => "-unknown-unknown",
         .wasi => "-wasi",
-        else => "-unknown-unknown",
+        .other, .contiki, .fuchsia, .hermit, .aix, .haiku, .hurd, .plan9, .rtems, .serenity, .zos, .dragonfly, .driverkit, .tvos, .visionos, .watchos, .illumos, .solaris, .uefi, .ps3, .ps4, .ps5, .emscripten, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => "-unknown-unknown",
     };
 
     // ABI suffix - Zig's LLVM on Windows uses GNU (mingw), not MSVC!
@@ -76,10 +76,10 @@ fn getLlvmTriple() []const u8 {
             .musl => "-musl",
             .gnu => "-gnu",
             .android => "-android",
-            else => "-gnu",
+            .none, .gnuabin32, .gnuabi64, .gnuf32, .gnusf, .gnux32, .code16, .eabi, .eabihf, .ilp32, .androideabi, .muslabin32, .muslabi64, .muslf32, .muslsf, .muslx32, .msvc, .itanium, .cygnus, .simulator, .macabi, .ohos, .ohoseabi => "-gnu",
         },
         .freestanding, .wasi => "",
-        else => "", // macOS, iOS, BSDs don't need ABI suffix
+        .other, .contiki, .fuchsia, .hermit, .aix, .haiku, .hurd, .plan9, .rtems, .serenity, .zos, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .macos, .tvos, .visionos, .watchos, .illumos, .solaris, .uefi, .ps3, .ps4, .ps5, .emscripten, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => "", // macOS, iOS, BSDs don't need ABI suffix
     };
 
     return arch ++ vendor_os ++ abi;
@@ -376,7 +376,7 @@ pub const LlvmEvaluator = struct {
             .e_frac_f32 => .float,
             .e_frac_f64 => .double,
             .e_dec, .e_dec_small => .i128, // Dec is stored as i128 (scaled by 10^18)
-            else => try builder.ptrType(.default), // For complex types, use pointer
+            .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => try builder.ptrType(.default), // For complex types, use pointer
         };
     }
 
@@ -395,7 +395,7 @@ pub const LlvmEvaluator = struct {
                 return switch (num.kind) {
                     .f32 => builder.floatConst(i128h.i128_to_f32(int_value)) catch return error.CompilationFailed,
                     .f64 => builder.doubleConst(i128h.i128_to_f64(int_value)) catch return error.CompilationFailed,
-                    else => blk: {
+                    .num_unbound, .int_unbound, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec => blk: {
                         const llvm_type = try self.getExprLlvmType(builder, expr);
                         break :blk builder.intConst(llvm_type, int_value) catch return error.CompilationFailed;
                     },
@@ -419,7 +419,7 @@ pub const LlvmEvaluator = struct {
                 const scaled_value = @as(i128, dec.value.numerator) * scale_factor;
                 return builder.intConst(.i128, scaled_value) catch return error.CompilationFailed;
             },
-            else => return error.UnsupportedType,
+            .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => return error.UnsupportedType,
         };
     }
 
@@ -494,7 +494,7 @@ pub const LlvmEvaluator = struct {
             .i64 => 8,
             .i128 => 16,
             .double => 8,
-            else => 0, // default
+            .void, .half, .bfloat, .float, .fp128, .x86_fp80, .ppc_fp128, .x86_amx, .x86_mmx, .label, .token, .metadata, .i1, .i8, .i16, .i29, .i32, .i80, .ptr, .@"ptr addrspace(4)", .none, _ => 0, // default
         });
         _ = try wip.store(.normal, store_value, out_ptr, alignment);
         _ = try wip.retVoid();

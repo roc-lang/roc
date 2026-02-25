@@ -1113,13 +1113,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             if (inner == .lambda) break :inner inner.lambda;
                             unreachable;
                         },
-                        else => unreachable,
+                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
                     };
                     actual_ret_layout = lambda.ret_layout;
                     const empty_span = mono.MonoIR.MonoExprSpan.empty();
                     break :blk try self.generateClosureDispatch(cv, empty_span, actual_ret_layout);
                 },
-                else => result_loc,
+                .general_reg, .float_reg, .stack, .stack_i128, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .noreturn => result_loc,
             };
 
             // Store result to the saved result pointer - but only if return type is non-zero-sized
@@ -1228,7 +1228,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .str_escape_and_quote => .str,
                 .discriminant_switch => .str,
                 // For other expressions, no layout available
-                else => null,
+                .lambda, .closure, .empty_list, .list, .empty_record, .tuple_access, .zero_arg_tag, .unary_not, .crash, .runtime_error, .nominal, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free => null,
             };
 
             if (raw_layout) |layout_idx| {
@@ -1259,7 +1259,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeFloat(reg);
                     return .{ .stack = .{ .offset = slot } };
                 },
-                else => loc,
+                .stack, .stack_i128, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => loc,
             };
         }
 
@@ -1403,7 +1403,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             }
                             unreachable;
                         },
-                        else => unreachable,
+                        .general_reg, .float_reg, .stack_i128, .stack_str, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => unreachable,
                     };
 
                     // Length is at offset 8 in the list struct
@@ -1426,7 +1426,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             }
                             unreachable;
                         },
-                        else => unreachable,
+                        .general_reg, .float_reg, .stack_i128, .stack_str, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => unreachable,
                     };
 
                     {
@@ -1474,7 +1474,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             break :blk ls.layoutSizeAlign(elem_layout);
                         },
                         .list_of_zst => .{ .size = 0, .alignment = .@"1" },
-                        else => unreachable, // list_with_capacity must return a list
+                        .scalar, .box, .box_of_zst, .record, .tuple, .closure, .zst, .tag_union => unreachable, // list_with_capacity must return a list
                     };
 
                     const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_with_capacity);
@@ -1576,7 +1576,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             self.codegen.freeGeneral(temp);
                             break :blk slot;
                         },
-                        else => {
+                        .general_reg, .float_reg, .stack_i128, .stack_str, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
                             unreachable;
                         },
                     };
@@ -1649,7 +1649,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const list_base: i32 = switch (list_loc) {
                         .stack => |s| s.offset,
                         .list_stack => |ls_info| ls_info.struct_offset,
-                        else => unreachable,
+                        .general_reg, .float_reg, .stack_i128, .stack_str, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => unreachable,
                     };
 
                     const ls = self.layout_store orelse unreachable;
@@ -1712,7 +1712,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             const low: u64 = @truncate(@as(u128, @bitCast(val)));
                             try self.codegen.emitLoadImm(index_reg, @bitCast(low));
                         },
-                        else => unreachable,
+                        .float_reg, .stack_str, .list_stack, .immediate_f64, .lambda_code, .closure_value, .noreturn => unreachable,
                     }
 
                     if (is_safe_get) {
@@ -1855,7 +1855,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         break :blk switch (ret_layout.tag) {
                             .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
                             .list_of_zst => .{ .size = 0, .alignment = .@"1" },
-                            else => unreachable,
+                            .scalar, .box, .box_of_zst, .record, .tuple, .closure, .zst, .tag_union => unreachable,
                         };
                     };
 
@@ -1900,7 +1900,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         break :blk switch (ret_layout.tag) {
                             .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
                             .list_of_zst => .{ .size = 0, .alignment = .@"1" },
-                            else => unreachable,
+                            .scalar, .box, .box_of_zst, .record, .tuple, .closure, .zst, .tag_union => unreachable,
                         };
                     };
 
@@ -1972,7 +1972,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         break :blk switch (ret_layout.tag) {
                             .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
                             .list_of_zst => .{ .size = 0, .alignment = .@"1" },
-                            else => unreachable,
+                            .scalar, .box, .box_of_zst, .record, .tuple, .closure, .zst, .tag_union => unreachable,
                         };
                     };
 
@@ -2079,7 +2079,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         .i8_to_i16, .i8_to_i32, .i8_to_i64 => 8,
                         .i16_to_i32, .i16_to_i64 => 16,
                         .i32_to_i64 => 32,
-                        else => unreachable,
+                        .str_is_empty, .str_is_eq, .str_concat, .str_contains, .str_starts_with, .str_ends_with, .str_count_utf8_bytes, .str_caseless_ascii_equals, .str_to_utf8, .str_from_utf8, .str_repeat, .str_trim, .str_trim_start, .str_trim_end, .str_split, .str_join_with, .str_reserve, .str_release_excess_capacity, .str_with_capacity, .str_drop_prefix, .str_drop_suffix, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_with_prefix, .str_from_utf8_lossy, .list_len, .list_is_empty, .list_get, .list_set, .list_append, .list_prepend, .list_concat, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_contains, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_with_capacity, .list_repeat, .list_split_first, .list_split_last, .num_add, .num_sub, .num_mul, .num_div, .num_mod, .num_neg, .num_abs, .num_pow, .num_sqrt, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .num_from_str, .num_from_numeral, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_i128_try_unsafe, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .compare, .crash => unreachable,
                     };
                     const shift_amount: u8 = 64 - src_bits;
                     try self.emitShlImm(.w64, src_reg, src_reg, shift_amount);
@@ -2109,7 +2109,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_u16, .u8_to_u32, .u8_to_u64 => 8,
                         .u16_to_i32, .u16_to_i64, .u16_to_u32, .u16_to_u64 => 16,
                         .u32_to_i64, .u32_to_u64 => 32,
-                        else => unreachable,
+                        .str_is_empty, .str_is_eq, .str_concat, .str_contains, .str_starts_with, .str_ends_with, .str_count_utf8_bytes, .str_caseless_ascii_equals, .str_to_utf8, .str_from_utf8, .str_repeat, .str_trim, .str_trim_start, .str_trim_end, .str_split, .str_join_with, .str_reserve, .str_release_excess_capacity, .str_with_capacity, .str_drop_prefix, .str_drop_suffix, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_with_prefix, .str_from_utf8_lossy, .list_len, .list_is_empty, .list_get, .list_set, .list_append, .list_prepend, .list_concat, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_contains, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_with_capacity, .list_repeat, .list_split_first, .list_split_last, .num_add, .num_sub, .num_mul, .num_div, .num_mod, .num_neg, .num_abs, .num_pow, .num_sqrt, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .num_from_str, .num_from_numeral, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i128, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_i128_try_unsafe, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .compare, .crash => unreachable,
                     };
                     const shift_amount: u8 = 64 - src_bits;
                     try self.emitShlImm(.w64, src_reg, src_reg, shift_amount);
@@ -2166,7 +2166,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         .u16_to_i16_wrap, .i8_to_u16_wrap, .i16_to_u16_wrap, .u32_to_i16_wrap, .u32_to_u16_wrap, .i32_to_i16_wrap, .i32_to_u16_wrap, .u64_to_i16_wrap, .u64_to_u16_wrap, .i64_to_i16_wrap, .i64_to_u16_wrap => 16,
                         .u32_to_i32_wrap, .i8_to_u32_wrap, .i16_to_u32_wrap, .i32_to_u32_wrap, .u64_to_i32_wrap, .u64_to_u32_wrap, .i64_to_i32_wrap, .i64_to_u32_wrap => 32,
                         .i8_to_u64_wrap, .i16_to_u64_wrap, .i32_to_u64_wrap, .u64_to_i64_wrap, .i64_to_u64_wrap => 64,
-                        else => unreachable,
+                        .str_is_empty, .str_is_eq, .str_concat, .str_contains, .str_starts_with, .str_ends_with, .str_count_utf8_bytes, .str_caseless_ascii_equals, .str_to_utf8, .str_from_utf8, .str_repeat, .str_trim, .str_trim_start, .str_trim_end, .str_split, .str_join_with, .str_reserve, .str_release_excess_capacity, .str_with_capacity, .str_drop_prefix, .str_drop_suffix, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_with_prefix, .str_from_utf8_lossy, .list_len, .list_is_empty, .list_get, .list_set, .list_append, .list_prepend, .list_concat, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_contains, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_with_capacity, .list_repeat, .list_split_first, .list_split_last, .num_add, .num_sub, .num_mul, .num_div, .num_mod, .num_neg, .num_abs, .num_pow, .num_sqrt, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .num_from_str, .num_from_numeral, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_try, .i8_to_u16_try, .i8_to_u32_try, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_try, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_try, .i16_to_u16_try, .i16_to_u32_try, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_try, .u32_to_i16_try, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_try, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_try, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_try, .i32_to_u16_try, .i32_to_u32_try, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_try, .u64_to_i16_try, .u64_to_i32_try, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_try, .u64_to_u16_try, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_try, .i64_to_i16_try, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_try, .i64_to_u16_try, .i64_to_u32_try, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_i128_try_unsafe, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .compare, .crash => unreachable,
                     };
                     if (dst_bits < 64) {
                         const shift_amount: u8 = 64 - dst_bits;
@@ -2200,7 +2200,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         .i16_to_f32, .i16_to_f64 => 16,
                         .i32_to_f32, .i32_to_f64 => 32,
                         .i64_to_f32, .i64_to_f64 => 64,
-                        else => unreachable,
+                        .str_is_empty, .str_is_eq, .str_concat, .str_contains, .str_starts_with, .str_ends_with, .str_count_utf8_bytes, .str_caseless_ascii_equals, .str_to_utf8, .str_from_utf8, .str_repeat, .str_trim, .str_trim_start, .str_trim_end, .str_split, .str_join_with, .str_reserve, .str_release_excess_capacity, .str_with_capacity, .str_drop_prefix, .str_drop_suffix, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_with_prefix, .str_from_utf8_lossy, .list_len, .list_is_empty, .list_get, .list_set, .list_append, .list_prepend, .list_concat, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_contains, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_with_capacity, .list_repeat, .list_split_first, .list_split_last, .num_add, .num_sub, .num_mul, .num_div, .num_mod, .num_neg, .num_abs, .num_pow, .num_sqrt, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .num_from_str, .num_from_numeral, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_i128_try_unsafe, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .compare, .crash => unreachable,
                     };
                     if (src_bits < 64) {
                         const shift_amount: u8 = 64 - src_bits;
@@ -2238,7 +2238,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         .u8_to_f32, .u8_to_f64 => 8,
                         .u16_to_f32, .u16_to_f64 => 16,
                         .u32_to_f32, .u32_to_f64 => 32,
-                        else => unreachable,
+                        .str_is_empty, .str_is_eq, .str_concat, .str_contains, .str_starts_with, .str_ends_with, .str_count_utf8_bytes, .str_caseless_ascii_equals, .str_to_utf8, .str_from_utf8, .str_repeat, .str_trim, .str_trim_start, .str_trim_end, .str_split, .str_join_with, .str_reserve, .str_release_excess_capacity, .str_with_capacity, .str_drop_prefix, .str_drop_suffix, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_with_prefix, .str_from_utf8_lossy, .list_len, .list_is_empty, .list_get, .list_set, .list_append, .list_prepend, .list_concat, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_contains, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_with_capacity, .list_repeat, .list_split_first, .list_split_last, .num_add, .num_sub, .num_mul, .num_div, .num_mod, .num_neg, .num_abs, .num_pow, .num_sqrt, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .num_from_str, .num_from_numeral, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_i128_try_unsafe, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .compare, .crash => unreachable,
                     };
                     const shift_amount: u8 = 64 - src_bits;
                     try self.emitShlImm(.w64, src_reg, src_reg, shift_amount);
@@ -2366,7 +2366,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         .f32_to_i16_trunc, .f64_to_i16_trunc => 16,
                         .f32_to_i32_trunc, .f64_to_i32_trunc => 32,
                         .f32_to_i64_trunc, .f64_to_i64_trunc => 64,
-                        else => unreachable,
+                        .str_is_empty, .str_is_eq, .str_concat, .str_contains, .str_starts_with, .str_ends_with, .str_count_utf8_bytes, .str_caseless_ascii_equals, .str_to_utf8, .str_from_utf8, .str_repeat, .str_trim, .str_trim_start, .str_trim_end, .str_split, .str_join_with, .str_reserve, .str_release_excess_capacity, .str_with_capacity, .str_drop_prefix, .str_drop_suffix, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_with_prefix, .str_from_utf8_lossy, .list_len, .list_is_empty, .list_get, .list_set, .list_append, .list_prepend, .list_concat, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_contains, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_with_capacity, .list_repeat, .list_split_first, .list_split_last, .num_add, .num_sub, .num_mul, .num_div, .num_mod, .num_neg, .num_abs, .num_pow, .num_sqrt, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .num_from_str, .num_from_numeral, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_try_unsafe, .f32_to_i16_try_unsafe, .f32_to_i32_try_unsafe, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_try_unsafe, .f64_to_i16_try_unsafe, .f64_to_i32_try_unsafe, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_i128_try_unsafe, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .compare, .crash => unreachable,
                     };
                     if (dst_bits < 64) {
                         // Sign-extend to normalize the value in the register
@@ -2409,7 +2409,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         .f32_to_u16_trunc, .f64_to_u16_trunc => 16,
                         .f32_to_u32_trunc, .f64_to_u32_trunc => 32,
                         .f32_to_u64_trunc, .f64_to_u64_trunc => 64,
-                        else => unreachable,
+                        .str_is_empty, .str_is_eq, .str_concat, .str_contains, .str_starts_with, .str_ends_with, .str_count_utf8_bytes, .str_caseless_ascii_equals, .str_to_utf8, .str_from_utf8, .str_repeat, .str_trim, .str_trim_start, .str_trim_end, .str_split, .str_join_with, .str_reserve, .str_release_excess_capacity, .str_with_capacity, .str_drop_prefix, .str_drop_suffix, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_with_prefix, .str_from_utf8_lossy, .list_len, .list_is_empty, .list_get, .list_set, .list_append, .list_prepend, .list_concat, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_contains, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_with_capacity, .list_repeat, .list_split_first, .list_split_last, .num_add, .num_sub, .num_mul, .num_div, .num_mod, .num_neg, .num_abs, .num_pow, .num_sqrt, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .num_from_str, .num_from_numeral, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_try_unsafe, .f32_to_u16_try_unsafe, .f32_to_u32_try_unsafe, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_try_unsafe, .f64_to_u16_try_unsafe, .f64_to_u32_try_unsafe, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_i128_try_unsafe, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .compare, .crash => unreachable,
                     };
                     if (dst_bits < 64) {
                         const shift_amount: u8 = 64 - dst_bits;
@@ -2454,14 +2454,14 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         .i32_to_u128_wrap,
                         .i64_to_u128_wrap,
                         => true,
-                        else => false,
+                        .str_is_empty, .str_is_eq, .str_concat, .str_contains, .str_starts_with, .str_ends_with, .str_count_utf8_bytes, .str_caseless_ascii_equals, .str_to_utf8, .str_from_utf8, .str_repeat, .str_trim, .str_trim_start, .str_trim_end, .str_split, .str_join_with, .str_reserve, .str_release_excess_capacity, .str_with_capacity, .str_drop_prefix, .str_drop_suffix, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_with_prefix, .str_from_utf8_lossy, .list_len, .list_is_empty, .list_get, .list_set, .list_append, .list_prepend, .list_concat, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_contains, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_with_capacity, .list_repeat, .list_split_first, .list_split_last, .num_add, .num_sub, .num_mul, .num_div, .num_mod, .num_neg, .num_abs, .num_pow, .num_sqrt, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .num_from_str, .num_from_numeral, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_i128_try_unsafe, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .compare, .crash => false,
                     };
                     const src_bits: u8 = switch (ll.op) {
                         .u8_to_u128, .u8_to_i128, .i8_to_i128, .i8_to_u128_wrap => 8,
                         .u16_to_u128, .u16_to_i128, .i16_to_i128, .i16_to_u128_wrap => 16,
                         .u32_to_u128, .u32_to_i128, .i32_to_i128, .i32_to_u128_wrap => 32,
                         .u64_to_u128, .u64_to_i128, .i64_to_i128, .i64_to_u128_wrap => 64,
-                        else => unreachable,
+                        .str_is_empty, .str_is_eq, .str_concat, .str_contains, .str_starts_with, .str_ends_with, .str_count_utf8_bytes, .str_caseless_ascii_equals, .str_to_utf8, .str_from_utf8, .str_repeat, .str_trim, .str_trim_start, .str_trim_end, .str_split, .str_join_with, .str_reserve, .str_release_excess_capacity, .str_with_capacity, .str_drop_prefix, .str_drop_suffix, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_with_prefix, .str_from_utf8_lossy, .list_len, .list_is_empty, .list_get, .list_set, .list_append, .list_prepend, .list_concat, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_contains, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_with_capacity, .list_repeat, .list_split_first, .list_split_last, .num_add, .num_sub, .num_mul, .num_div, .num_mod, .num_neg, .num_abs, .num_pow, .num_sqrt, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .num_from_str, .num_from_numeral, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_i128_try_unsafe, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .compare, .crash => unreachable,
                     };
 
                     // Sign/zero extend source to 64 bits
@@ -2517,7 +2517,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const src_loc = try self.generateExpr(args[0]);
                     const src_signedness: std.builtin.Signedness = switch (ll.op) {
                         .i128_to_i8_wrap, .i128_to_i16_wrap, .i128_to_i32_wrap, .i128_to_i64_wrap, .i128_to_u8_wrap, .i128_to_u16_wrap, .i128_to_u32_wrap, .i128_to_u64_wrap, .i128_to_u128_wrap => .signed,
-                        else => .unsigned,
+                        .str_is_empty, .str_is_eq, .str_concat, .str_contains, .str_starts_with, .str_ends_with, .str_count_utf8_bytes, .str_caseless_ascii_equals, .str_to_utf8, .str_from_utf8, .str_repeat, .str_trim, .str_trim_start, .str_trim_end, .str_split, .str_join_with, .str_reserve, .str_release_excess_capacity, .str_with_capacity, .str_drop_prefix, .str_drop_suffix, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_with_prefix, .str_from_utf8_lossy, .list_len, .list_is_empty, .list_get, .list_set, .list_append, .list_prepend, .list_concat, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_contains, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_with_capacity, .list_repeat, .list_split_first, .list_split_last, .num_add, .num_sub, .num_mul, .num_div, .num_mod, .num_neg, .num_abs, .num_pow, .num_sqrt, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .num_from_str, .num_from_numeral, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_try, .i128_to_i16_try, .i128_to_i32_try, .i128_to_i64_try, .i128_to_u8_try, .i128_to_u16_try, .i128_to_u32_try, .i128_to_u64_try, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_i128_try_unsafe, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .compare, .crash => .unsigned,
                     };
                     const parts = try self.getI128Parts(src_loc, src_signedness);
 
@@ -2527,7 +2527,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         .u128_to_i32_wrap, .u128_to_u32_wrap, .i128_to_i32_wrap, .i128_to_u32_wrap => 32,
                         .u128_to_i64_wrap, .u128_to_u64_wrap, .i128_to_i64_wrap, .i128_to_u64_wrap => 64,
                         .u128_to_i128_wrap, .i128_to_u128_wrap => 128,
-                        else => unreachable,
+                        .str_is_empty, .str_is_eq, .str_concat, .str_contains, .str_starts_with, .str_ends_with, .str_count_utf8_bytes, .str_caseless_ascii_equals, .str_to_utf8, .str_from_utf8, .str_repeat, .str_trim, .str_trim_start, .str_trim_end, .str_split, .str_join_with, .str_reserve, .str_release_excess_capacity, .str_with_capacity, .str_drop_prefix, .str_drop_suffix, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_with_prefix, .str_from_utf8_lossy, .list_len, .list_is_empty, .list_get, .list_set, .list_append, .list_prepend, .list_concat, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_contains, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_with_capacity, .list_repeat, .list_split_first, .list_split_last, .num_add, .num_sub, .num_mul, .num_div, .num_mod, .num_neg, .num_abs, .num_pow, .num_sqrt, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .num_from_str, .num_from_numeral, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_try, .u128_to_i16_try, .u128_to_i32_try, .u128_to_i64_try, .u128_to_i128_try, .u128_to_u8_try, .u128_to_u16_try, .u128_to_u32_try, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_try, .i128_to_i16_try, .i128_to_i32_try, .i128_to_i64_try, .i128_to_u8_try, .i128_to_u16_try, .i128_to_u32_try, .i128_to_u64_try, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_i128_try_unsafe, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .compare, .crash => unreachable,
                     };
 
                     if (dst_bits == 128) {
@@ -2568,7 +2568,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         .u16_to_dec => 16,
                         .u32_to_dec => 32,
                         .u64_to_dec => 64,
-                        else => unreachable,
+                        .str_is_empty, .str_is_eq, .str_concat, .str_contains, .str_starts_with, .str_ends_with, .str_count_utf8_bytes, .str_caseless_ascii_equals, .str_to_utf8, .str_from_utf8, .str_repeat, .str_trim, .str_trim_start, .str_trim_end, .str_split, .str_join_with, .str_reserve, .str_release_excess_capacity, .str_with_capacity, .str_drop_prefix, .str_drop_suffix, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_with_prefix, .str_from_utf8_lossy, .list_len, .list_is_empty, .list_get, .list_set, .list_append, .list_prepend, .list_concat, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_contains, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_with_capacity, .list_repeat, .list_split_first, .list_split_last, .num_add, .num_sub, .num_mul, .num_div, .num_mod, .num_neg, .num_abs, .num_pow, .num_sqrt, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .num_from_str, .num_from_numeral, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_i128_try_unsafe, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .compare, .crash => unreachable,
                     };
                     if (src_bits < 64) {
                         const shift_amount: u8 = 64 - src_bits;
@@ -2595,7 +2595,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         .i16_to_dec => 16,
                         .i32_to_dec => 32,
                         .i64_to_dec => 64,
-                        else => unreachable,
+                        .str_is_empty, .str_is_eq, .str_concat, .str_contains, .str_starts_with, .str_ends_with, .str_count_utf8_bytes, .str_caseless_ascii_equals, .str_to_utf8, .str_from_utf8, .str_repeat, .str_trim, .str_trim_start, .str_trim_end, .str_split, .str_join_with, .str_reserve, .str_release_excess_capacity, .str_with_capacity, .str_drop_prefix, .str_drop_suffix, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_with_prefix, .str_from_utf8_lossy, .list_len, .list_is_empty, .list_get, .list_set, .list_append, .list_prepend, .list_concat, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_contains, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_with_capacity, .list_repeat, .list_split_first, .list_split_last, .num_add, .num_sub, .num_mul, .num_div, .num_mod, .num_neg, .num_abs, .num_pow, .num_sqrt, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .num_from_str, .num_from_numeral, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_i128_try_unsafe, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .compare, .crash => unreachable,
                     };
                     if (src_bits < 64) {
                         const shift_amount: u8 = 64 - src_bits;
@@ -2641,7 +2641,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         .dec_to_i16_trunc, .dec_to_u16_trunc => 16,
                         .dec_to_i32_trunc, .dec_to_u32_trunc => 32,
                         .dec_to_i64_trunc, .dec_to_u64_trunc => 64,
-                        else => unreachable,
+                        .str_is_empty, .str_is_eq, .str_concat, .str_contains, .str_starts_with, .str_ends_with, .str_count_utf8_bytes, .str_caseless_ascii_equals, .str_to_utf8, .str_from_utf8, .str_repeat, .str_trim, .str_trim_start, .str_trim_end, .str_split, .str_join_with, .str_reserve, .str_release_excess_capacity, .str_with_capacity, .str_drop_prefix, .str_drop_suffix, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_with_prefix, .str_from_utf8_lossy, .list_len, .list_is_empty, .list_get, .list_set, .list_append, .list_prepend, .list_concat, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_contains, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_with_capacity, .list_repeat, .list_split_first, .list_split_last, .num_add, .num_sub, .num_mul, .num_div, .num_mod, .num_neg, .num_abs, .num_pow, .num_sqrt, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .num_from_str, .num_from_numeral, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_try_unsafe, .dec_to_i16_try_unsafe, .dec_to_i32_try_unsafe, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_i128_try_unsafe, .dec_to_u8_try_unsafe, .dec_to_u16_try_unsafe, .dec_to_u32_try_unsafe, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .compare, .crash => unreachable,
                     };
                     if (dst_bits < 64) {
                         const shift_amount: u8 = 64 - dst_bits;
@@ -2975,7 +2975,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         break :blk switch (ret_layout.tag) {
                             .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
                             .list_of_zst => .{ .size = 0, .alignment = .@"1" },
-                            else => unreachable,
+                            .scalar, .box, .box_of_zst, .record, .tuple, .closure, .zst, .tag_union => unreachable,
                         };
                     };
 
@@ -3039,7 +3039,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             _ = try self.generateExpr(args[1]);
                             return try self.generateZstListContains(list_loc);
                         },
-                        else => unreachable,
+                        .scalar, .box, .box_of_zst, .record, .tuple, .closure, .zst, .tag_union => unreachable,
                     }
                 },
                 .list_reverse => {
@@ -3354,7 +3354,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 break :blk switch (ret_layout.tag) {
                     .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
                     .list_of_zst => .{ .size = 0, .alignment = .@"1" },
-                    else => unreachable,
+                    .scalar, .box, .box_of_zst, .record, .tuple, .closure, .zst, .tag_union => unreachable,
                 };
             };
 
@@ -3568,7 +3568,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const list_base: i32 = switch (list_loc) {
                 .stack => |s| s.offset,
                 .list_stack => |ls_info| ls_info.struct_offset,
-                else => unreachable,
+                .general_reg, .float_reg, .stack_i128, .stack_str, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => unreachable,
             };
 
             const ls = self.layout_store orelse unreachable;
@@ -3614,7 +3614,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const list_base: i32 = switch (list_loc) {
                 .stack => |s| s.offset,
                 .list_stack => |ls_info| ls_info.struct_offset,
-                else => unreachable,
+                .general_reg, .float_reg, .stack_i128, .stack_str, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => unreachable,
             };
 
             const ls = self.layout_store orelse unreachable;
@@ -3801,7 +3801,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .list_stack => |ls_info| {
                     try self.copyStackToStack(ls_info.struct_offset, dest_offset, 24);
                 },
-                else => unreachable,
+                .float_reg, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => unreachable,
             }
         }
 
@@ -3869,7 +3869,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // Empty list: contains always returns false
                     return .{ .immediate_i64 = 0 };
                 },
-                else => unreachable,
+                .general_reg, .float_reg, .stack_i128, .stack_str, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => unreachable,
             };
 
             // Save needle to stack (handles any type/size)
@@ -3995,7 +3995,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (val != 0) unreachable;
                     return .{ .immediate_i64 = 0 };
                 },
-                else => unreachable,
+                .general_reg, .float_reg, .stack_i128, .stack_str, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => unreachable,
             };
             const len_reg = try self.allocTempGeneral();
             try self.emitLoad(.w64, len_reg, frame_ptr, list_base + 8);
@@ -4016,7 +4016,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 break :blk switch (ret_layout.tag) {
                     .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
                     .list_of_zst => .{ .size = 0, .alignment = .@"1" },
-                    else => unreachable,
+                    .scalar, .box, .box_of_zst, .record, .tuple, .closure, .zst, .tag_union => unreachable,
                 };
             };
 
@@ -4155,7 +4155,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 break :blk switch (ret_layout.tag) {
                     .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
                     .list_of_zst => .{ .size = 0, .alignment = .@"1" },
-                    else => unreachable,
+                    .scalar, .box, .box_of_zst, .record, .tuple, .closure, .zst, .tag_union => unreachable,
                 };
             };
 
@@ -4195,7 +4195,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 break :blk switch (ret_layout.tag) {
                     .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
                     .list_of_zst => .{ .size = 0, .alignment = .@"1" },
-                    else => unreachable,
+                    .scalar, .box, .box_of_zst, .record, .tuple, .closure, .zst, .tag_union => unreachable,
                 };
             };
 
@@ -4323,7 +4323,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         const tu_layout = switch (lhs_expr) {
                             .tag => |t| t.union_layout,
                             .zero_arg_tag => |t| t.union_layout,
-                            else => unreachable,
+                            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .lambda, .closure, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
                         };
                         if (ls.getLayout(tu_layout).tag == .tag_union) {
                             return self.generateTagUnionComparisonByLayout(lhs_loc, rhs_loc, tu_layout, binop.op);
@@ -4335,7 +4335,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         const tu_layout = switch (rhs_expr) {
                             .tag => |t| t.union_layout,
                             .zero_arg_tag => |t| t.union_layout,
-                            else => unreachable,
+                            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .lambda, .closure, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
                         };
                         if (ls.getLayout(tu_layout).tag == .tag_union) {
                             return self.generateTagUnionComparisonByLayout(lhs_loc, rhs_loc, tu_layout, binop.op);
@@ -4350,11 +4350,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         .call => |call| call.ret_layout,
                         .lookup => |lookup| lookup.layout_idx,
                         .block => |block| block.result_layout,
-                        else => switch (rhs_expr) {
+                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lambda, .closure, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => {
                             .call => |call| call.ret_layout,
                             .lookup => |lookup| lookup.layout_idx,
                             .block => |block| block.result_layout,
-                            else => null,
+                            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lambda, .closure, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => null,
                         },
                     };
 
@@ -4377,9 +4377,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Check if operands are i128/Dec (need special handling even for comparisons that return bool)
             const operands_are_i128 = switch (lhs_loc) {
                 .immediate_i128, .stack_i128 => true,
-                else => switch (rhs_loc) {
+                .general_reg, .float_reg, .stack, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .lambda_code, .closure_value, .noreturn => {
                     .immediate_i128, .stack_i128 => true,
-                    else => false,
+                    .general_reg, .float_reg, .stack, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .lambda_code, .closure_value, .noreturn => false,
                 },
             };
 
@@ -4724,7 +4724,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                     return .{ .general_reg = result_reg };
                 },
-                else => {
+                .@"and", .@"or" => {
                     // Boolean ops - use low 64 bits (booleans are 0 or 1)
                     self.codegen.freeGeneral(result_high);
                     self.codegen.freeGeneral(result_low);
@@ -4894,7 +4894,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .i128_to_u32_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 32, .tgt_signed = false },
                 .i128_to_u64_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 64, .tgt_signed = false },
                 .i128_to_u128_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 128, .tgt_signed = false },
-                else => unreachable,
+                .str_is_empty, .str_is_eq, .str_concat, .str_contains, .str_starts_with, .str_ends_with, .str_count_utf8_bytes, .str_caseless_ascii_equals, .str_to_utf8, .str_from_utf8, .str_repeat, .str_trim, .str_trim_start, .str_trim_end, .str_split, .str_join_with, .str_reserve, .str_release_excess_capacity, .str_with_capacity, .str_drop_prefix, .str_drop_suffix, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_with_prefix, .str_from_utf8_lossy, .list_len, .list_is_empty, .list_get, .list_set, .list_append, .list_prepend, .list_concat, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_contains, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_with_capacity, .list_repeat, .list_split_first, .list_split_last, .num_add, .num_sub, .num_mul, .num_div, .num_mod, .num_neg, .num_abs, .num_pow, .num_sqrt, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .num_from_str, .num_from_numeral, .u8_to_i8_wrap, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u16_wrap, .i8_to_u32_wrap, .i8_to_u64_wrap, .i8_to_u128_wrap, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i16_wrap, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u16_wrap, .i16_to_u32_wrap, .i16_to_u64_wrap, .i16_to_u128_wrap, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i16_wrap, .u32_to_i32_wrap, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u16_wrap, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i16_wrap, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u16_wrap, .i32_to_u32_wrap, .i32_to_u64_wrap, .i32_to_u128_wrap, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i16_wrap, .u64_to_i32_wrap, .u64_to_i64_wrap, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u16_wrap, .u64_to_u32_wrap, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i16_wrap, .i64_to_i32_wrap, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u16_wrap, .i64_to_u32_wrap, .i64_to_u64_wrap, .i64_to_u128_wrap, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i16_wrap, .u128_to_i32_wrap, .u128_to_i64_wrap, .u128_to_i128_wrap, .u128_to_u8_wrap, .u128_to_u16_wrap, .u128_to_u32_wrap, .u128_to_u64_wrap, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i16_wrap, .i128_to_i32_wrap, .i128_to_i64_wrap, .i128_to_u8_wrap, .i128_to_u16_wrap, .i128_to_u32_wrap, .i128_to_u64_wrap, .i128_to_u128_wrap, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_i128_try_unsafe, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .compare, .crash => unreachable,
             };
         }
 
@@ -5045,12 +5045,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .u16, .i16 => 2,
                 .u32, .i32 => 4,
                 .u64, .i64 => 8,
-                else => unreachable, // Non-integer num_from_str not yet supported
+                .bool, .str, .opaque_ptr, .u128, .i128, .f32, .f64, .dec, .zst => unreachable, // Non-integer num_from_str not yet supported
             };
             const is_signed: bool = switch (payload_idx) {
                 .i8, .i16, .i32, .i64 => true,
                 .u8, .u16, .u32, .u64 => false,
-                else => unreachable,
+                .bool, .str, .opaque_ptr, .u128, .i128, .f32, .f64, .dec, .zst => unreachable,
             };
 
             const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_int_from_str);
@@ -5115,7 +5115,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .dec_to_f32_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .f32, .tgt_bits = 32, .tgt_signed = true },
                 .u128_to_dec_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .dec, .tgt_bits = 128, .tgt_signed = false },
                 .i128_to_dec_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .dec, .tgt_bits = 128, .tgt_signed = true },
-                else => unreachable,
+                .str_is_empty, .str_is_eq, .str_concat, .str_contains, .str_starts_with, .str_ends_with, .str_count_utf8_bytes, .str_caseless_ascii_equals, .str_to_utf8, .str_from_utf8, .str_repeat, .str_trim, .str_trim_start, .str_trim_end, .str_split, .str_join_with, .str_reserve, .str_release_excess_capacity, .str_with_capacity, .str_drop_prefix, .str_drop_suffix, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_with_prefix, .str_from_utf8_lossy, .list_len, .list_is_empty, .list_get, .list_set, .list_append, .list_prepend, .list_concat, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_contains, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_with_capacity, .list_repeat, .list_split_first, .list_split_last, .num_add, .num_sub, .num_mul, .num_div, .num_mod, .num_neg, .num_abs, .num_pow, .num_sqrt, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .num_from_str, .num_from_numeral, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .f32_to_i8_trunc, .f32_to_i16_trunc, .f32_to_i32_trunc, .f32_to_i64_trunc, .f32_to_i128_trunc, .f32_to_u8_trunc, .f32_to_u16_trunc, .f32_to_u32_trunc, .f32_to_u64_trunc, .f32_to_u128_trunc, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i16_trunc, .f64_to_i32_trunc, .f64_to_i64_trunc, .f64_to_i128_trunc, .f64_to_u8_trunc, .f64_to_u16_trunc, .f64_to_u32_trunc, .f64_to_u64_trunc, .f64_to_u128_trunc, .f64_to_f32_wrap, .dec_to_i8_trunc, .dec_to_i16_trunc, .dec_to_i32_trunc, .dec_to_i64_trunc, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u16_trunc, .dec_to_u32_trunc, .dec_to_u64_trunc, .dec_to_u128_trunc, .dec_to_f32_wrap, .dec_to_f64, .box_box, .box_unbox, .compare, .crash => unreachable,
             };
         }
 
@@ -5386,7 +5386,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emitLoadStack(.w64, low_reg, s.offset);
                     try self.emitSignExtendHighReg(high_reg, low_reg, signedness);
                 },
-                else => {
+                .float_reg, .list_stack, .immediate_f64, .lambda_code, .closure_value, .noreturn => {
                     unreachable;
                 },
             }
@@ -5486,7 +5486,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     .lte => if (is_unsigned) .ls else .le,
                     .gt => if (is_unsigned) .hi else .gt,
                     .gte => if (is_unsigned) .cs else .ge,
-                    else => unreachable,
+                    .add, .sub, .mul, .div, .div_trunc, .rem, .eq, .neq, .@"and", .@"or" => unreachable,
                 };
 
                 // Get unsigned condition for low part (low parts are always unsigned)
@@ -5495,7 +5495,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     .lte => .ls,
                     .gt => .hi,
                     .gte => .cs,
-                    else => unreachable,
+                    .add, .sub, .mul, .div, .div_trunc, .rem, .eq, .neq, .@"and", .@"or" => unreachable,
                 };
 
                 // Result of comparing high parts (for strict inequality case)
@@ -5531,7 +5531,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     .lte => if (is_unsigned) .below_or_equal else .less_or_equal,
                     .gt => if (is_unsigned) .above else .greater,
                     .gte => if (is_unsigned) .above_or_equal else .greater_or_equal,
-                    else => unreachable,
+                    .add, .sub, .mul, .div, .div_trunc, .rem, .eq, .neq, .@"and", .@"or" => unreachable,
                 };
 
                 // Start with high comparison result
@@ -5558,7 +5558,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     .lte => .below_or_equal,
                     .gt => .above,
                     .gte => .above_or_equal,
-                    else => unreachable,
+                    .add, .sub, .mul, .div, .div_trunc, .rem, .eq, .neq, .@"and", .@"or" => unreachable,
                 };
 
                 // Get low comparison result
@@ -5590,7 +5590,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const elem_exprs: []const MonoExprId = switch (lhs_expr) {
                 .record => |r| self.store.getExprSpan(r.fields),
                 .tuple => |t| self.store.getExprSpan(t.elems),
-                else => unreachable,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .lambda, .closure, .empty_list, .list, .empty_record, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
             };
 
             if (elem_exprs.len == 0) {
@@ -5667,7 +5667,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 const elem_expr = self.store.getExpr(elem_id);
                                 const elem_slots: usize = switch (elem_expr) {
                                     .tuple => |inner_t| self.store.getExprSpan(inner_t.elems).len,
-                                    else => 1,
+                                    .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .lambda, .closure, .empty_list, .list, .empty_record, .record, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => 1,
                                 };
                                 for (0..elem_slots) |_| {
                                     try cmp_offsets.append(self.allocator, current_offset);
@@ -5683,7 +5683,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             const elem_expr = self.store.getExpr(elem_id);
                             const elem_slots: usize = switch (elem_expr) {
                                 .tuple => |inner_t| self.store.getExprSpan(inner_t.elems).len,
-                                else => 1,
+                                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .lambda, .closure, .empty_list, .list, .empty_record, .record, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => 1,
                             };
                             for (0..elem_slots) |_| {
                                 try cmp_offsets.append(self.allocator, current_offset);
@@ -5693,7 +5693,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         }
                     }
                 },
-                else => unreachable,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .lambda, .closure, .empty_list, .list, .empty_record, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
             }
 
             const temp_lhs = try self.allocTempGeneral();
@@ -5713,7 +5713,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         const base_offset = s.offset;
                         try self.emitLoad(.w64, temp_lhs, frame_ptr, base_offset + offset);
                     },
-                    else => {
+                    .general_reg, .float_reg, .stack_i128, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
                         // For single-element, the value IS the element
                         if (i == 0) {
                             const reg = try self.ensureInGeneralReg(lhs_loc);
@@ -5731,7 +5731,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         const base_offset = s.offset;
                         try self.emitLoad(.w64, temp_rhs, frame_ptr, base_offset + offset);
                     },
-                    else => {
+                    .general_reg, .float_reg, .stack_i128, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
                         // For single-element, the value IS the element
                         if (i == 0) {
                             const reg = try self.ensureInGeneralReg(rhs_loc);
@@ -5792,14 +5792,14 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Get list elements for element-by-element comparison
             const lhs_list = switch (lhs_expr) {
                 .list => |l| l,
-                else => unreachable,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .lambda, .closure, .empty_list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
             };
             const lhs_elems = self.store.getExprSpan(lhs_list.elems);
 
             // Determine element size (default to 8 bytes)
             const elem_layout = switch (lhs_expr) {
                 .list => |l| l.elem_layout,
-                else => .i64,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .lambda, .closure, .empty_list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => .i64,
             };
 
             // Check if elements are themselves lists by examining the actual elements
@@ -5819,7 +5819,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .i32, .u32, .f32 => 4,
                 .i64, .u64, .f64, .str => 8,
                 .i128, .u128, .dec => 16,
-                else => unreachable,
+                .bool, .opaque_ptr, .zst => unreachable,
             };
 
             const result_reg = try self.allocTempGeneral();
@@ -5850,7 +5850,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // Load ptr from the list struct
                     try self.emitLoad(.w64, lhs_ptr_reg, frame_ptr, list_info.struct_offset);
                 },
-                else => unreachable,
+                .general_reg, .float_reg, .stack_i128, .stack_str, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => unreachable,
             }
 
             // Load rhs ptr
@@ -5864,7 +5864,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // Load ptr from the list struct
                     try self.emitLoad(.w64, rhs_ptr_reg, frame_ptr, list_info.struct_offset);
                 },
-                else => unreachable,
+                .general_reg, .float_reg, .stack_i128, .stack_str, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => unreachable,
             }
 
             // Compare each element through the pointers
@@ -5905,11 +5905,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const inner_elem_count: usize = switch (inner_list_expr) {
                         .list => |l| self.store.getExprSpan(l.elems).len,
                         .empty_list => 0,
-                        else => 0,
+                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .lambda, .closure, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => 0,
                     };
                     const inner_elem_layout = switch (inner_list_expr) {
                         .list => |l| l.elem_layout,
-                        else => .i64,
+                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .lambda, .closure, .empty_list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => .i64,
                     };
                     const inner_elem_size: i32 = switch (inner_elem_layout) {
                         .i8, .u8 => 1,
@@ -5917,7 +5917,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         .i32, .u32, .f32 => 4,
                         .i64, .u64, .f64, .str => 8,
                         .i128, .u128, .dec => 16,
-                        else => 8,
+                        .bool, .opaque_ptr, .zst => 8,
                     };
 
                     // Compare each inner element
@@ -6074,7 +6074,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         try self.emitMovRegReg(result_reg, sub_reg);
                         self.codegen.freeGeneral(sub_reg);
                     },
-                    else => {
+                    .scalar, .box, .box_of_zst, .list, .list_of_zst, .closure, .zst => {
                         // Fallback: XOR-based byte comparison for other multi-byte fields
                         const tmp_a = try self.allocTempGeneral();
                         const tmp_b = try self.allocTempGeneral();
@@ -6208,7 +6208,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(temp);
                     break :blk slot;
                 },
-                else => unreachable,
+                .float_reg, .list_stack, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => unreachable,
             };
         }
 
@@ -6516,7 +6516,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .sub => try self.codegen.emitSubF64(result_reg, lhs_reg, rhs_reg),
                 .mul => try self.codegen.emitMulF64(result_reg, lhs_reg, rhs_reg),
                 .div => try self.codegen.emitDivF64(result_reg, lhs_reg, rhs_reg),
-                else => unreachable,
+                .div_trunc, .rem, .eq, .neq, .lt, .lte, .gt, .gte, .@"and", .@"or" => unreachable,
             }
 
             // Free operand registers
@@ -6558,7 +6558,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 else
                     // After UCOMISD: CF=0 for a >= b
                     @as(Condition, .above_or_equal),
-                else => null,
+                .add, .sub, .mul, .div, .div_trunc, .rem, .@"and", .@"or" => null,
             };
         }
 
@@ -6569,13 +6569,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Check if float
             const is_float = switch (unary.result_layout) {
                 .f32, .f64 => true,
-                else => false,
+                .bool, .str, .opaque_ptr, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .zst => false,
             };
 
             // Check if 128-bit type
             const is_i128 = switch (unary.result_layout) {
                 .i128, .u128, .dec => true,
-                else => false,
+                .bool, .str, .opaque_ptr, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .f32, .f64, .zst => false,
             };
 
             if (is_float) {
@@ -6665,7 +6665,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     is_str_result = true;
                     break :blk roc_str_size;
                 },
-                else => if (self.layout_store) |ls| blk: {
+                .opaque_ptr, .zst => {
                     const result_layout = ls.getLayout(ite.result_layout);
                     break :blk switch (result_layout.tag) {
                         .list, .list_of_zst => inner: {
@@ -6677,7 +6677,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         .tag_union => ls.getTagUnionData(result_layout.data.tag_union.idx).size,
                         .zst => 0,
                         .scalar => ls.layoutSizeAlign(result_layout).size,
-                        else => unreachable,
+                        .box, .box_of_zst, .closure => unreachable,
                     };
                 } else unreachable,
             };
@@ -6719,7 +6719,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             .stack, .stack_str, .list_stack => {
                                 result_slot = self.codegen.allocStackSlot(result_size);
                             },
-                            else => {
+                            .general_reg, .float_reg, .stack_i128, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
                                 result_reg = try self.allocTempGeneral();
                             },
                         }
@@ -6758,7 +6758,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         .stack, .stack_str, .list_stack => {
                             result_slot = self.codegen.allocStackSlot(result_size);
                         },
-                        else => {
+                        .general_reg, .float_reg, .stack_i128, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
                             result_reg = try self.allocTempGeneral();
                         },
                     }
@@ -7049,7 +7049,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 // Immediate discriminant value
                                 try self.codegen.emitLoadImm(disc_reg, val);
                             },
-                            else => {
+                            .float_reg, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
                                 self.codegen.freeGeneral(disc_reg);
                                 unreachable;
                             },
@@ -7163,7 +7163,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                                 } else .{ .stack = .{ .offset = base_offset + @as(i32, @intCast(arg_idx)) * 8 } };
                                                 try self.symbol_locations.put(symbol_key, arg_loc);
                                             },
-                                            else => {
+                                            .general_reg, .float_reg, .stack_i128, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
                                                 try self.symbol_locations.put(symbol_key, value_loc);
                                             },
                                         }
@@ -7193,11 +7193,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                                     try self.symbol_locations.put(inner_key, inner_loc);
                                                 },
                                                 .wildcard => {},
-                                                else => {},
+                                                .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => {},
                                             }
                                         }
                                     },
-                                    else => unreachable,
+                                    .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => unreachable,
                                 }
                             }
                         }
@@ -7237,7 +7237,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             .stack => |s| s.offset,
                             .stack_str => |off| off,
                             .list_stack => |list_info| list_info.struct_offset,
-                            else => unreachable,
+                            .general_reg, .float_reg, .stack_i128, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => unreachable,
                         };
 
                         // Load list length from stack (offset 8 from struct base)
@@ -7492,7 +7492,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     .list_stack => roc_list_size,
                     .stack_i128 => 16,
                     .immediate_i128 => 16,
-                    else => null,
+                    .general_reg, .float_reg, .stack, .immediate_i64, .immediate_f64, .lambda_code, .closure_value, .noreturn => null,
                 };
                 if (needed_size) |size| {
                     // Upgrade to stack mode
@@ -7680,7 +7680,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                         self.codegen.freeGeneral(temp_reg);
                     },
-                    else => {
+                    .general_reg, .float_reg, .immediate_i64, .immediate_f64, .lambda_code, .closure_value, .noreturn => {
                         // For other immediates and register values:
                         // Store 8 bytes from the register, then zero-pad to elem_size if needed
                         const elem_reg = try self.ensureInGeneralReg(elem_loc);
@@ -7784,7 +7784,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .list_stack => roc_list_size,
                 .stack_i128, .immediate_i128 => 16,
                 .immediate_i64, .general_reg, .stack, .float_reg, .immediate_f64 => 8,
-                else => 8,
+                .lambda_code, .closure_value, .noreturn => 8,
             };
         }
 
@@ -7876,7 +7876,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const shifted = val >> @intCast(field_offset * 8);
                     return .{ .immediate_i64 = shifted };
                 },
-                else => unreachable,
+                .float_reg, .list_stack, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => unreachable,
             };
         }
 
@@ -7981,7 +7981,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const shifted = val >> @intCast(elem_offset * 8);
                     return .{ .immediate_i64 = shifted };
                 },
-                else => unreachable,
+                .float_reg, .list_stack, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => unreachable,
             };
         }
 
@@ -8280,7 +8280,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(reg);
                     return;
                 },
-                else => {
+                .general_reg, .float_reg, .immediate_i64, .immediate_f64, .immediate_i128, .noreturn => {
                     // For other locations, fall through to copyValueToStackOffset
                     try self.copyValueToStackOffset(dest_offset, loc);
                     return;
@@ -8293,7 +8293,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .stack_str => |off| off,
                 .stack_i128 => |off| off,
                 .list_stack => |info| info.struct_offset,
-                else => unreachable,
+                .general_reg, .float_reg, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => unreachable,
             };
 
             // Copy in 8-byte chunks
@@ -8735,7 +8735,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .stack => |s| s.offset,
                 .stack_str => |off| off,
                 .list_stack => |list_info| list_info.struct_offset,
-                else => unreachable,
+                .general_reg, .float_reg, .stack_i128, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => unreachable,
             };
 
             // Get element layout and size.
@@ -8775,7 +8775,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     },
                     .wildcard => {}, // Fall through to use for_loop.elem_layout
                     // Other patterns not valid for for loop element
-                    else => unreachable,
+                    .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => unreachable,
                 }
                 break :blk for_loop.elem_layout;
             };
@@ -8940,7 +8940,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emit.movRegReg(.w64, reg, r);
                     break :blk reg;
                 },
-                else => unreachable,
+                .float_reg, .stack_i128, .stack_str, .list_stack, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => unreachable,
             };
 
             // While loop condition is Bool (1 byte). When loaded from a mutable
@@ -9339,7 +9339,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 const base_offset: i32 = switch (value_loc) {
                     .stack => |s| s.offset,
                     .stack_str => |off| off,
-                    else => unreachable,
+                    .general_reg, .float_reg, .stack_i128, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => unreachable,
                 };
 
                 const reg = try self.allocTempGeneral();
@@ -9496,7 +9496,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 const base_offset: i32 = switch (value_loc) {
                     .stack => |s| s.offset,
                     .stack_str => |off| off,
-                    else => unreachable,
+                    .general_reg, .float_reg, .stack_i128, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => unreachable,
                 };
                 return self.fieldLocationFromLayout(base_offset, payload_size, tpa.payload_layout);
             } else if (union_layout.tag == .box) {
@@ -9572,14 +9572,14 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .lambda_code, .closure_value => {
                     std.debug.panic("storeResultToSlot: cannot store lambda_code or closure_value directly - caller must call/dispatch and store the result", .{});
                 },
-                else => {
+                .float_reg, .stack_str, .list_stack, .immediate_f64, .noreturn => {
                     // For other types, try a generic copy using slot_size
                     var offset: u32 = 0;
                     while (offset < slot_size) : (offset += 8) {
                         const src_off = switch (loc) {
                             .stack_str => |off| off + @as(i32, @intCast(offset)),
                             .list_stack => |ls_info| ls_info.struct_offset + @as(i32, @intCast(offset)),
-                            else => break,
+                            .general_reg, .float_reg, .stack, .stack_i128, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => break,
                         };
                         try self.emitLoad(.w64, temp_reg, frame_ptr, src_off);
                         try self.emitStore(.w64, frame_ptr, slot + @as(i32, @intCast(offset)), temp_reg);
@@ -9788,7 +9788,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const base_offset: i32 = switch (value_loc) {
                         .stack => |s| s.offset,
                         .stack_str => |off| off,
-                        else => return, // Can't destructure non-stack values
+                        .general_reg, .float_reg, .stack_i128, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => return, // Can't destructure non-stack values
                     };
 
                     // Bind each field
@@ -9814,7 +9814,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const base_offset: i32 = switch (value_loc) {
                         .stack => |s| s.offset,
                         .stack_str => |off| off,
-                        else => return, // Can't destructure non-stack values
+                        .general_reg, .float_reg, .stack_i128, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => return, // Can't destructure non-stack values
                     };
 
                     // Bind each element (patterns are in source order, so use ByOriginalIndex)
@@ -9845,7 +9845,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         .stack => |s| s.offset,
                         .stack_str => |off| off,
                         .list_stack => |list_info| list_info.struct_offset,
-                        else => return,
+                        .general_reg, .float_reg, .stack_i128, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => return,
                     };
 
                     const prefix_patterns = self.store.getPatternSpan(lst.prefix);
@@ -9963,7 +9963,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const base_offset: i32 = switch (value_loc) {
                         .stack => |s| s.offset,
                         .stack_str => |off| off,
-                        else => return,
+                        .general_reg, .float_reg, .stack_i128, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => return,
                     };
 
                     // Get the variant's payload layout to determine element offsets
@@ -9998,7 +9998,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         }
                     }
                 },
-                else => {
+                .int_literal, .float_literal, .str_literal => {
                     // Literal patterns (int_literal, float_literal, str_literal) don't bind anything
                     // They are used for matching in match expressions, not for binding
                 },
@@ -10254,7 +10254,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .lambda, .closure => true,
                 .block => |block| self.bodyReturnsCallable(block.final_expr),
                 .if_then_else => |ite| self.bodyReturnsCallable(ite.final_else),
-                else => false,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .match_expr, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => false,
             };
         }
 
@@ -10272,18 +10272,18 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         if (self.symbol_locations.get(sk)) |loc| {
                             switch (loc) {
                                 .lambda_code, .closure_value => return true,
-                                else => {},
+                                .general_reg, .float_reg, .stack, .stack_i128, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .noreturn => {},
                             }
                         }
                         if (self.store.getSymbolDef(lk.symbol)) |def_id| {
                             const def = self.store.getExpr(def_id);
                             switch (def) {
                                 .lambda, .closure => return true,
-                                else => {},
+                                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => {},
                             }
                         }
                     },
-                    else => {},
+                    .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => {},
                 }
             }
             return false;
@@ -10411,13 +10411,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             },
                             // Other locations (registers, stack, immediates) fall through
                             // to generateLookupCall for function pointer handling
-                            else => {},
+                            .general_reg, .float_reg, .stack, .stack_i128, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .noreturn => {},
                         }
                     }
                     return try self.generateLookupCall(lookup, call.args, call.ret_layout);
                 },
 
-                else => unreachable,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
             };
         }
 
@@ -10619,7 +10619,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             try self.codegen.emitStoreStack(.w64, base_offset + offset, temp);
                             self.codegen.freeGeneral(temp);
                         },
-                        else => {
+                        .general_reg, .float_reg, .immediate_i64, .immediate_f64, .immediate_i128, .closure_value, .noreturn => {
                             const slot = try self.ensureOnStack(capture_loc, capture_size);
                             const temp = try self.allocTempGeneral();
                             var w: u32 = 0;
@@ -10662,7 +10662,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 try self.codegen.emitStoreStack(.w64, base_offset + offset, temp);
                                 self.codegen.freeGeneral(temp);
                             },
-                            else => {
+                            .float_reg, .stack, .stack_i128, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .closure_value, .noreturn => {
                                 const slot = try self.ensureOnStack(resolved_loc, capture_size);
                                 const temp = try self.allocTempGeneral();
                                 var w: u32 = 0;
@@ -10719,7 +10719,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             }
                             unreachable;
                         },
-                        else => unreachable,
+                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
                     }
                 },
             }
@@ -10908,7 +10908,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     }
                     unreachable;
                 },
-                else => unreachable,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
             }
         }
 
@@ -10935,7 +10935,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     }
                     unreachable;
                 },
-                else => unreachable,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
             }
         }
 
@@ -10976,7 +10976,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     }
                     unreachable;
                 },
-                else => unreachable,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
             }
         }
 
@@ -10999,7 +10999,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emitStoreStack(.w64, slot, temp);
                     self.codegen.freeGeneral(temp);
                 },
-                else => {
+                .float_reg, .stack_i128, .stack_str, .list_stack, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
                     // For other types, load to temp and store
                     const temp_slot = try self.ensureOnStack(loc, 8);
                     const temp = try self.allocTempGeneral();
@@ -11181,7 +11181,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         try self.emitTrap();
                         return .noreturn;
                     },
-                    else => unreachable,
+                    .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
                 };
             }
 
@@ -11202,7 +11202,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     .general_reg, .stack, .immediate_i64 => {
                         return try self.generateIndirectCall(loc, args_span, ret_layout);
                     },
-                    else => {},
+                    .float_reg, .stack_i128, .stack_str, .list_stack, .immediate_f64, .immediate_i128, .noreturn => {},
                 }
             }
 
@@ -11292,7 +11292,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 try self.codegen.emitLoadImm(low_reg, @bitCast(low));
                                 try self.codegen.emitLoadImm(high_reg, @bitCast(high));
                             },
-                            else => unreachable,
+                            .general_reg, .float_reg, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .lambda_code, .closure_value, .noreturn => unreachable,
                         }
                         reg_idx += 2;
                     } else if (info.num_regs == 3) {
@@ -11301,7 +11301,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             .stack => |s| s.offset,
                             .list_stack => |li| li.struct_offset,
                             .stack_str => |off| off,
-                            else => unreachable,
+                            .general_reg, .float_reg, .stack_i128, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => unreachable,
                         };
                         const reg0 = self.getArgumentRegister(reg_idx);
                         const reg1 = self.getArgumentRegister(reg_idx + 1);
@@ -11314,7 +11314,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         // Multi-register struct (record > 8 bytes)
                         const offset: i32 = switch (arg_loc) {
                             .stack => |s| s.offset,
-                            else => {
+                            .general_reg, .float_reg, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
                                 // Fall back to single register
                                 const arg_reg = self.getArgumentRegister(reg_idx);
                                 try self.moveToReg(arg_loc, arg_reg);
@@ -11548,7 +11548,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .general_reg => |reg| {
                     try self.emitStore(.w64, stack_ptr, stack_offset, reg);
                 },
-                else => {
+                .float_reg, .immediate_f64, .lambda_code, .closure_value, .noreturn => {
                     // For other types, try to move to temp register first
                     try self.moveToReg(arg_loc, temp_reg);
                     try self.emitStore(.w64, stack_ptr, stack_offset, temp_reg);
@@ -11642,7 +11642,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(temp);
                     break :blk slot;
                 },
-                else => {
+                .float_reg, .immediate_f64, .noreturn => {
                     unreachable;
                 },
             };
@@ -11798,7 +11798,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         self.codegen.freeGeneral(temp_reg);
                         return;
                     },
-                    else => {
+                    .general_reg, .float_reg, .stack_i128, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
                         // Fallback - just store the single value
                     },
                 }
@@ -11839,7 +11839,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             try self.emitStoreToMem(saved_ptr_reg, reg);
                             self.codegen.freeGeneral(reg);
                         },
-                        else => {
+                        .general_reg, .stack, .stack_i128, .stack_str, .list_stack, .immediate_i64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
                             const reg = try self.ensureInGeneralReg(loc);
                             try self.emitStoreToMem(saved_ptr_reg, reg);
                         },
@@ -11884,7 +11884,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             }
                             self.codegen.freeFloat(freg);
                         },
-                        else => {
+                        .general_reg, .stack_i128, .stack_str, .list_stack, .immediate_i64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
                             // Store 4 bytes from general register
                             const reg = try self.ensureInGeneralReg(loc);
                             try self.emitStoreToPtr(.w32, reg, saved_ptr_reg, 0);
@@ -11926,13 +11926,14 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                             self.codegen.freeGeneral(temp_reg);
                         },
-                        else => {
+                        .general_reg, .float_reg, .stack_i128, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
                             // Fallback for non-stack string location
                             const reg = try self.ensureInGeneralReg(loc);
                             try self.emitStoreToMem(saved_ptr_reg, reg);
                         },
                     }
                 },
+                .general_reg, .float_reg, .stack_i128, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
                 else => {
                     // Check if this is a composite type (record/tuple/list) via layout store
                     if (self.layout_store) |ls| {
@@ -11982,7 +11983,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 try self.copyStackToPtr(loc, saved_ptr_reg, sa.size);
                                 return;
                             },
-                            else => {
+                            .box, .box_of_zst => {
                                 unreachable;
                             },
                         }
@@ -12063,7 +12064,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                     self.codegen.freeGeneral(temp_reg);
                 },
-                else => {
+                .general_reg, .float_reg, .stack_i128, .stack_str, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
                     // Not a stack location - try to store as single value
                     const reg = try self.ensureInGeneralReg(loc);
                     try self.emitStoreToMem(ptr_reg, reg);
@@ -12150,7 +12151,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         self.codegen.freeGeneral(zero_reg);
                     }
                 },
-                else => {
+                .float_reg, .list_stack, .immediate_f64, .lambda_code, .closure_value, .noreturn => {
                     unreachable;
                 },
             }
@@ -12790,7 +12791,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             break :blk @max(1, @as(u8, @intCast((sz + 7) / 8)));
                         },
                         .list => 3,
-                        else => 1,
+                        .int_literal, .float_literal, .str_literal, .tag, .as_pattern => 1,
                     };
                     param_num_regs[pi] = nr;
                     if (pre_reg_count + nr <= max_arg_regs) {
@@ -13082,7 +13083,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             try self.bindPattern(pattern_id, .{ .stack = .{ .offset = stack_offset } });
                         }
                     },
-                    else => {
+                    .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => {
                         // For now, skip complex patterns - assume 1 register
                         if (reg_idx < max_arg_regs) {
                             reg_idx += 1;
@@ -13126,7 +13127,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const stack_offset: i32 = switch (loc) {
                         .stack => |s| s.offset,
                         .list_stack => |info| info.struct_offset,
-                        else => return self.moveToReturnRegister(loc),
+                        .general_reg, .float_reg, .stack_i128, .stack_str, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => return self.moveToReturnRegister(loc),
                     };
                     try self.codegen.emitLoadStack(.w64, ret_reg_0, stack_offset);
                     try self.codegen.emitLoadStack(.w64, ret_reg_1, stack_offset + 8);
@@ -13140,7 +13141,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         // Large struct - need to return in multiple registers
                         const stack_offset: i32 = switch (loc) {
                             .stack => |s| s.offset,
-                            else => {
+                            .general_reg, .float_reg, .stack_i128, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
                                 // For non-stack locations, fall through to regular handling
                                 return self.moveToReturnRegister(loc);
                             },
@@ -13177,7 +13178,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         return;
                     },
                     // Other locations (immediates, etc.) fall through to regular handling
-                    else => {},
+                    .general_reg, .float_reg, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {},
                 }
             }
 
@@ -13199,7 +13200,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .list_stack => |info| info.struct_offset,
                 .stack_str => |off| off,
                 .stack_i128 => |off| off,
-                else => try self.ensureOnStack(result_loc, ret_size),
+                .general_reg, .float_reg, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => try self.ensureOnStack(result_loc, ret_size),
             };
 
             // Load the return pointer from the saved stack slot
@@ -13266,7 +13267,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // which is deallocated on return.
                     unreachable;
                 },
-                else => {
+                .float_reg, .immediate_f64, .noreturn => {
                     // For other types (like float_reg), try to handle appropriately
                 },
             }
@@ -13306,7 +13307,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             const inner = self.store.getExpr(c.lambda);
                             break :blk inner.lambda;
                         },
-                        else => unreachable,
+                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
                     };
                     const cv_code_offset = try self.compileLambdaAsProc(cv.lambda, lambda);
                     arg_loc = .{ .lambda_code = .{
@@ -13442,7 +13443,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 try self.codegen.emitLoadImm(low_reg, @bitCast(low));
                                 try self.codegen.emitLoadImm(high_reg, @bitCast(high));
                             },
-                            else => unreachable,
+                            .general_reg, .float_reg, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .lambda_code, .closure_value, .noreturn => unreachable,
                         }
                         reg_idx += 2;
                         continue;
@@ -13454,7 +13455,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             .stack => |s| s.offset,
                             .list_stack => |li| li.struct_offset,
                             .stack_str => |off| off,
-                            else => unreachable,
+                            .general_reg, .float_reg, .stack_i128, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => unreachable,
                         };
                         const reg0 = self.getArgumentRegister(reg_idx);
                         const reg1 = self.getArgumentRegister(reg_idx + 1);
@@ -13467,7 +13468,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         // Multi-register struct (record > 8 bytes)
                         const offset: i32 = switch (arg_loc) {
                             .stack => |s| s.offset,
-                            else => {
+                            .general_reg, .float_reg, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
                                 const arg_reg = self.getArgumentRegister(reg_idx);
                                 try self.moveToReg(arg_loc, arg_reg);
                                 reg_idx += 1;
@@ -13519,7 +13520,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             .closure_value => |cv| {
                                 try self.codegen.emitLoadStack(.w64, arg_reg, cv.stack_offset);
                             },
-                            else => {
+                            .float_reg, .stack_i128, .stack_str, .list_stack, .immediate_f64, .immediate_i128, .noreturn => {
                                 try self.moveToReg(arg_loc, arg_reg);
                             },
                         }
@@ -13658,7 +13659,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emitStoreStack(.w64, fn_ptr_stack, temp);
                     self.codegen.freeGeneral(temp);
                 },
-                else => unreachable,
+                .float_reg, .stack_i128, .stack_str, .list_stack, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => unreachable,
             }
 
             // Generate all argument expressions
@@ -13677,7 +13678,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             const inner = self.store.getExpr(c.lambda);
                             break :blk inner.lambda;
                         },
-                        else => unreachable,
+                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
                     };
                     const cv_code_offset = try self.compileLambdaAsProc(cv.lambda, lambda);
                     arg_loc = .{ .lambda_code = .{
@@ -13782,7 +13783,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             .stack => |s| s.offset,
                             .list_stack => |li| li.struct_offset,
                             .stack_str => |off| off,
-                            else => unreachable,
+                            .general_reg, .float_reg, .stack_i128, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => unreachable,
                         };
                         const reg0 = self.getArgumentRegister(reg_idx);
                         const reg1 = self.getArgumentRegister(reg_idx + 1);
@@ -13795,7 +13796,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         const offset: i32 = switch (arg_loc) {
                             .stack => |s| s.offset,
                             .stack_i128 => |off| off,
-                            else => {
+                            .general_reg, .float_reg, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
                                 const arg_reg = self.getArgumentRegister(reg_idx);
                                 try self.moveToReg(arg_loc, arg_reg);
                                 reg_idx += 1;
@@ -13832,7 +13833,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                     try self.codegen.emit.leaRegRipRel(arg_reg, @intCast(rel - lea_size));
                                 }
                             },
-                            else => try self.moveToReg(arg_loc, arg_reg),
+                            .float_reg, .stack_i128, .stack_str, .list_stack, .immediate_f64, .immediate_i128, .closure_value, .noreturn => try self.moveToReg(arg_loc, arg_reg),
                         }
                         reg_idx += 1;
                     }
@@ -14113,7 +14114,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             reg_idx = max_arg_regs; // Mark all registers as consumed
                         }
                     },
-                    else => {
+                    .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => {
                         // Complex parameter patterns not yet supported
                         // Assume 1 register for now
                         if (reg_idx < max_arg_regs) {
@@ -14213,7 +14214,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                     try self.codegen.emitLoadImm(.X0, @bitCast(low));
                                     try self.codegen.emitLoadImm(.X1, @bitCast(high));
                                 },
-                                else => unreachable,
+                                .general_reg, .float_reg, .stack, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .lambda_code, .closure_value, .noreturn => unreachable,
                             }
                         } else {
                             // x86_64: return i128 in RAX (low), RDX (high)
@@ -14228,7 +14229,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                     try self.codegen.emitLoadImm(.RAX, @bitCast(low));
                                     try self.codegen.emitLoadImm(.RDX, @bitCast(high));
                                 },
-                                else => unreachable,
+                                .general_reg, .float_reg, .stack, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .lambda_code, .closure_value, .noreturn => unreachable,
                             }
                         }
                     } else if (value_loc == .stack_str) {
@@ -14517,7 +14518,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                 const dst_loc = self.symbol_locations.get(switch (pattern) {
                     .bind => |bind| @bitCast(bind.symbol),
-                    else => unreachable,
+                    .wildcard, .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => unreachable,
                 }) orelse {
                     try temp_infos.append(self.allocator, .{ .offset = 0, .size = 0 });
                     continue;
@@ -14560,7 +14561,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 const pattern = self.store.getPattern(pattern_ids[param_idx]);
                 const symbol_key: u64 = switch (pattern) {
                     .bind => |bind| @bitCast(bind.symbol),
-                    else => continue,
+                    .wildcard, .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => continue,
                 };
 
                 const dst_loc = self.symbol_locations.get(symbol_key) orelse continue;
@@ -14592,7 +14593,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     .stack => |s| s.offset,
                     .list_stack => |ls_info| ls_info.struct_offset,
                     .stack_str => |off| off,
-                    else => unreachable,
+                    .general_reg, .float_reg, .stack_i128, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => unreachable,
                 };
                 const temp_reg = try self.allocTempGeneral();
                 var off: i32 = 0;
@@ -14621,7 +14622,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emitStoreStack(.w64, dst_offset + 8, temp_reg);
                         self.codegen.freeGeneral(temp_reg);
                     },
-                    else => unreachable,
+                    .general_reg, .float_reg, .stack, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .lambda_code, .closure_value, .noreturn => unreachable,
                 }
             } else {
                 // 8-byte normal value
@@ -14943,7 +14944,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             .immediate_i64 => |val| {
                                 try self.codegen.emitLoadImm(disc_reg, val);
                             },
-                            else => {
+                            .float_reg, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
                                 self.codegen.freeGeneral(disc_reg);
                                 unreachable;
                             },
@@ -15044,7 +15045,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                                 } else .{ .stack = .{ .offset = base_offset + @as(i32, @intCast(arg_idx)) * 8 } };
                                                 try self.symbol_locations.put(symbol_key, arg_loc);
                                             },
-                                            else => {
+                                            .general_reg, .float_reg, .stack_i128, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
                                                 try self.symbol_locations.put(symbol_key, value_loc);
                                             },
                                         }
@@ -15067,11 +15068,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                                     try self.symbol_locations.put(inner_key, inner_loc);
                                                 },
                                                 .wildcard => {},
-                                                else => {},
+                                                .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => {},
                                             }
                                         }
                                     },
-                                    else => unreachable,
+                                    .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => unreachable,
                                 }
                             }
                         }
@@ -15101,7 +15102,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             .stack => |s| s.offset,
                             .stack_str => |off| off,
                             .list_stack => |list_info| list_info.struct_offset,
-                            else => unreachable,
+                            .general_reg, .float_reg, .stack_i128, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => unreachable,
                         };
 
                         const len_reg = try self.allocTempGeneral();
@@ -15298,7 +15299,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // Boxes are always heap-allocated
                     try self.emitBoxIncref(value_loc, rc_op.count);
                 },
-                else => {
+                .record, .tuple, .closure, .zst, .tag_union => {
                     // Records, tuples, tag unions, closures, zst don't need RC at the top level
                     // (their heap-allocated fields are handled separately)
                 },
@@ -15337,7 +15338,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // Boxes are always heap-allocated
                     try self.emitBoxDecref(value_loc);
                 },
-                else => {
+                .record, .tuple, .closure, .zst, .tag_union => {
                     // Records, tuples, tag unions, closures, zst don't need RC at the top level
                 },
             }
@@ -15372,7 +15373,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 },
                 // Other layout types (scalars, tuples, records, etc.) are not heap-allocated
                 // and don't need freeing
-                else => {},
+                .record, .tuple, .closure, .zst, .tag_union => {},
             }
 
             return value_loc;
@@ -15395,7 +15396,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .list_stack => |info| {
                     try self.emitLoad(.w64, ptr_reg, frame_ptr, info.struct_offset);
                 },
-                else => return, // Can't incref non-stack values
+                .general_reg, .float_reg, .stack_i128, .stack_str, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => return, // Can't incref non-stack values
             }
 
             // Call increfDataPtrC(ptr, count, roc_ops)
@@ -15423,7 +15424,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .list_stack => |info| {
                     try self.emitLoad(.w64, ptr_reg, frame_ptr, info.struct_offset);
                 },
-                else => return,
+                .general_reg, .float_reg, .stack_i128, .stack_str, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => return,
             }
 
             // Call decrefDataPtrC(ptr, alignment, elements_refcounted, roc_ops)
@@ -15452,7 +15453,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .list_stack => |info| {
                     try self.emitLoad(.w64, ptr_reg, frame_ptr, info.struct_offset);
                 },
-                else => return,
+                .general_reg, .float_reg, .stack_i128, .stack_str, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => return,
             }
 
             // Call freeDataPtrC(ptr, alignment, elements_refcounted, roc_ops)
@@ -15476,7 +15477,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const base_offset: i32 = switch (value_loc) {
                 .stack => |s| s.offset,
                 .stack_str => |offset| offset,
-                else => return,
+                .general_reg, .float_reg, .stack_i128, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => return,
             };
 
             // Load capacity_or_alloc_ptr to check for small string
@@ -15526,7 +15527,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const base_offset: i32 = switch (value_loc) {
                 .stack => |s| s.offset,
                 .stack_str => |offset| offset,
-                else => return,
+                .general_reg, .float_reg, .stack_i128, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => return,
             };
 
             // Load capacity_or_alloc_ptr to check for small string
@@ -15575,7 +15576,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const base_offset: i32 = switch (value_loc) {
                 .stack => |s| s.offset,
                 .stack_str => |offset| offset,
-                else => return,
+                .general_reg, .float_reg, .stack_i128, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => return,
             };
 
             // Load capacity_or_alloc_ptr to check for small string
@@ -15632,7 +15633,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .general_reg => |r| {
                     try self.codegen.emit.movRegReg(.w64, ptr_reg, r);
                 },
-                else => return,
+                .float_reg, .stack_i128, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => return,
             }
 
             // Call increfDataPtrC(ptr, count, roc_ops)
@@ -15659,7 +15660,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .general_reg => |r| {
                     try self.codegen.emit.movRegReg(.w64, ptr_reg, r);
                 },
-                else => return,
+                .float_reg, .stack_i128, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => return,
             }
 
             // Call decrefDataPtrC(ptr, alignment, elements_refcounted, roc_ops)
@@ -15688,7 +15689,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .general_reg => |r| {
                     try self.codegen.emit.movRegReg(.w64, ptr_reg, r);
                 },
-                else => return,
+                .float_reg, .stack_i128, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => return,
             }
 
             // Call freeDataPtrC(ptr, alignment, elements_refcounted, roc_ops)
@@ -15844,13 +15845,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 if (inner == .lambda) break :inner inner.lambda;
                                 unreachable;
                             },
-                            else => unreachable,
+                            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
                         };
                         actual_ret_layout = lambda.ret_layout;
                         const empty_span = mono.MonoIR.MonoExprSpan.empty();
                         break :blk try self.generateClosureDispatch(cv, empty_span, actual_ret_layout);
                     },
-                    else => result_loc,
+                    .general_reg, .float_reg, .stack, .stack_i128, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .noreturn => result_loc,
                 };
 
                 // Store result to ret_ptr (X20) - but only if return type is non-zero-sized
@@ -16006,13 +16007,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 if (inner == .lambda) break :inner inner.lambda;
                                 unreachable;
                             },
-                            else => unreachable,
+                            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
                         };
                         actual_ret_layout = lambda.ret_layout;
                         const empty_span = mono.MonoIR.MonoExprSpan.empty();
                         break :blk try self.generateClosureDispatch(cv, empty_span, actual_ret_layout);
                     },
-                    else => result_loc,
+                    .general_reg, .float_reg, .stack, .stack_i128, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .noreturn => result_loc,
                 };
 
                 // Store result to ret_ptr (RBX) - but only if return type is non-zero-sized
@@ -16069,7 +16070,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .i64, .u64, .f64 => 8,
                 .i128, .u128, .dec => 16,
                 .str => 24,
-                else => 8, // Default to 8 bytes
+                .opaque_ptr => 8, // Default to 8 bytes
             };
         }
 

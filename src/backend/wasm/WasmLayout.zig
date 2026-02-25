@@ -31,7 +31,7 @@ pub fn wasmRepr(layout_idx: layout.Idx) WasmRepr {
         .dec => .{ .stack_memory = 16 },
         .str => .{ .stack_memory = 12 }, // wasm32: ptr(4) + len(4) + cap(4)
         .opaque_ptr => .{ .primitive = .i32 }, // pointers are i32 on wasm32
-        else => .{ .stack_memory = 0 }, // composite — use wasmReprWithStore for size
+        .zst, _ => .{ .stack_memory = 0 }, // composite — use wasmReprWithStore for size
     };
 }
 

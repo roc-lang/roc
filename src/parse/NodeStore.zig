@@ -1180,7 +1180,7 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
                 .region = node.region,
             } };
         },
-        else => {
+        .root, .emit_ws, .statement, .decl, .@"var", .expr, .crash, .dbg, .expect, .@"for", .@"while", .@"break", .@"return", .import, .type_decl, .type_decl_nominal, .type_decl_opaque, .type_anno, .exposed_item_lower, .exposed_item_upper, .exposed_item_upper_star, .ty_apply, .ty_var, .ty_underscore_var, .ty_ty, .ty_mod_ty, .ty_record, .ty_tuple, .ty_union, .ty_fn, .ty_underscore, .ty_parens, .ty_record_field, .where_mod_alias, .where_mod_method, .ty_header, .ident_patt, .var_ident_patt, .tag_patt, .int_patt, .frac_patt, .string_patt, .single_quote_patt, .record_patt, .record_field_patt, .list_patt, .list_rest_patt, .tuple_patt, .underscore_patt, .alternatives_patt, .as_patt, .int, .frac, .typed_int, .typed_frac, .single_quote, .string_part, .string, .multiline_string, .list, .tuple, .record, .record_field, .tag, .lambda, .apply, .record_update, .field_access, .tuple_access, .local_dispatch, .bin_op, .suffix_single_question, .unary_op, .if_then_else, .if_without_else, .match, .ident, .record_builder, .block, .for_expr, .ellipsis, .branch, .collection_exposed, .collection_packages, .collection_record_fields, .collection_where_clause, .collection_ty_anno, .targets_section, .target_link_type, .target_entry, .target_file_string, .target_file_ident, .for_clause_type_alias, .requires_entry => {
             std.debug.panic("Expected a valid header tag, got {s}", .{@tagName(node.tag)});
         },
     }
@@ -1230,7 +1230,7 @@ pub fn getExposedItem(store: *const NodeStore, exposed_item_idx: AST.ExposedItem
                 .region = node.region,
             } };
         },
-        else => {
+        .root, .emit_ws, .app_header, .module_header, .hosted_header, .package_header, .platform_header, .type_module_header, .default_app_header, .statement, .decl, .@"var", .expr, .crash, .dbg, .expect, .@"for", .@"while", .@"break", .@"return", .import, .type_decl, .type_decl_nominal, .type_decl_opaque, .type_anno, .ty_apply, .ty_var, .ty_underscore_var, .ty_ty, .ty_mod_ty, .ty_record, .ty_tuple, .ty_union, .ty_fn, .ty_underscore, .ty_parens, .ty_record_field, .where_mod_alias, .where_mod_method, .ty_header, .ident_patt, .var_ident_patt, .tag_patt, .int_patt, .frac_patt, .string_patt, .single_quote_patt, .record_patt, .record_field_patt, .list_patt, .list_rest_patt, .tuple_patt, .underscore_patt, .alternatives_patt, .as_patt, .int, .frac, .typed_int, .typed_frac, .single_quote, .string_part, .string, .multiline_string, .list, .tuple, .record, .record_field, .tag, .lambda, .apply, .record_update, .field_access, .tuple_access, .local_dispatch, .bin_op, .suffix_single_question, .unary_op, .if_then_else, .if_without_else, .match, .ident, .record_builder, .block, .for_expr, .ellipsis, .branch, .collection_exposed, .collection_packages, .collection_record_fields, .collection_where_clause, .collection_ty_anno, .targets_section, .target_link_type, .target_entry, .target_file_string, .target_file_ident, .for_clause_type_alias, .requires_entry => {
             std.debug.panic("Expected a valid exposed item tag, got {s}", .{@tagName(node.tag)});
         },
     }

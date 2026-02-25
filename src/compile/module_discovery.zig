@@ -77,7 +77,7 @@ pub fn extractImportsFromAST(
                     try result.append(gpa, try gpa.dupe(u8, module_name));
                 }
             },
-            else => {},
+            .decl, .@"var", .expr, .crash, .dbg, .expect, .@"for", .@"while", .@"return", .@"break", .type_decl, .type_anno, .malformed => {},
         }
     }
 
@@ -137,7 +137,7 @@ pub fn extractQualifiedImportsFromAST(
                     try result.append(gpa, qualified_name);
                 }
             },
-            else => {},
+            .decl, .@"var", .expr, .crash, .dbg, .expect, .@"for", .@"while", .@"return", .@"break", .type_decl, .type_anno, .malformed => {},
         }
     }
 

@@ -76,7 +76,7 @@ pub const RED_ZONE_SIZE: u8 = 128;
 pub fn isCalleeSaved(reg: GeneralReg) bool {
     return switch (reg) {
         .RBX, .RBP, .R12, .R13, .R14, .R15 => true,
-        else => false,
+        .RAX, .RCX, .RDX, .RSP, .RSI, .RDI, .R8, .R9, .R10, .R11 => false,
     };
 }
 

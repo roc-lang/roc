@@ -75,7 +75,7 @@ pub const CallingConvention = struct {
                 .pass_by_ptr_threshold = std.math.maxInt(usize),
                 .is_windows = false,
             },
-            else => CallingConvention{
+            .amdgcn, .arc, .arm, .armeb, .thumb, .thumbeb, .avr, .bpfel, .bpfeb, .csky, .hexagon, .kalimba, .lanai, .loongarch32, .loongarch64, .m68k, .mips, .mipsel, .mips64, .mips64el, .msp430, .or1k, .nvptx, .nvptx64, .powerpc, .powerpcle, .powerpc64, .powerpc64le, .propeller, .riscv32, .riscv64, .s390x, .sparc, .sparc64, .spirv32, .spirv64, .ve, .wasm32, .wasm64, .x86, .xcore, .xtensa => CallingConvention{
                 .param_regs = &SYSV_PARAM_REGS,
                 .num_param_regs = 6,
                 .shadow_space = 0,
@@ -508,7 +508,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 if (j == i) continue;
                 const src_reg = switch (sources[j]) {
                     .from_reg => |reg| reg,
-                    else => continue, // only reg sources can form conflicts
+                    .from_imm, .from_lea, .from_mem => continue, // only reg sources can form conflicts
                 };
                 if (src_reg != dst) continue;
 

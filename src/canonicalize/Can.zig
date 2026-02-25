@@ -3624,7 +3624,7 @@ fn introduceItemsAliased(
                 if (current_scope.type_bindings.get(local_ident)) |existing_binding| {
                     const original_region = switch (existing_binding) {
                         .external_nominal => |ext| ext.origin_region,
-                        else => Region.zero(),
+                        .local_nominal, .local_alias, .associated_nominal => Region.zero(),
                     };
 
                     try self.env.pushDiagnostic(Diagnostic{
@@ -3696,7 +3696,7 @@ fn introduceItemsAliased(
                     );
                 }
             },
-            else => {},
+            .default_app, .app, .package, .platform, .hosted, .deprecated_module, .malformed => {},
         }
 
         // Validate each exposed item
@@ -3782,7 +3782,7 @@ fn introduceItemsUnaliased(
                 if (current_scope.type_bindings.get(local_ident)) |existing_binding| {
                     const original_region = switch (existing_binding) {
                         .external_nominal => |ext| ext.origin_region,
-                        else => Region.zero(),
+                        .local_nominal, .local_alias, .associated_nominal => Region.zero(),
                     };
 
                     try self.env.pushDiagnostic(Diagnostic{
@@ -5495,7 +5495,8 @@ pub fn canonicalizeExpr(
                     const pattern = self.env.store.getPattern(pattern_idx);
                     const name = switch (pattern) {
                         .assign => |a| a.ident,
-                        else => unreachable, // Should only capture simple idents
+                        // Should only capture simple idents
+                        .as, .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .underscore, .runtime_error => unreachable,
                     };
                     const capture = Expr.Capture{
                         .name = name,
@@ -5729,7 +5730,7 @@ pub fn canonicalizeExpr(
                     const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
                     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span };
                 },
-                else => {
+                .int, .frac, .typed_int, .typed_frac, .single_quote, .string_part, .string, .multiline_string, .list, .tuple, .record, .lambda, .record_updater, .field_access, .tuple_access, .local_dispatch, .bin_op, .suffix_single_question, .unary_op, .if_then_else, .if_without_else, .match, .dbg, .record_builder, .ellipsis, .block, .for_expr, .malformed => {
                     // Generic case: expr->(any_expression)
                     // Desugar to (any_expression)(left)
                     const can_fn_expr = try self.canonicalizeExpr(local_dispatch.right) orelse return null;
@@ -5790,7 +5791,7 @@ pub fn canonicalizeExpr(
                 .OpDoubleQuestion => {
                     return try self.canonicalizeDoubleQuestionOp(e, region, can_lhs, can_rhs, free_vars_start);
                 },
-                else => {
+                .EndOfFile, .Float, .StringStart, .StringEnd, .MultilineStringStart, .StringPart, .MalformedStringPart, .SingleQuote, .MalformedSingleQuote, .Int, .MalformedNumberBadSuffix, .MalformedNumberUnicodeSuffix, .MalformedNumberNoDigits, .MalformedNumberNoExponentDigits, .MalformedInvalidUnicodeEscapeSequence, .MalformedInvalidEscapeSequence, .UpperIdent, .LowerIdent, .MalformedUnicodeIdent, .Underscore, .DotLowerIdent, .DotInt, .DotUpperIdent, .NoSpaceDotInt, .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent, .MalformedDotUnicodeIdent, .MalformedNoSpaceDotUnicodeIdent, .NamedUnderscore, .MalformedNamedUnderscoreUnicode, .OpaqueName, .MalformedOpaqueNameUnicode, .MalformedOpaqueNameWithoutName, .OpenRound, .CloseRound, .OpenSquare, .CloseSquare, .OpenCurly, .CloseCurly, .OpenStringInterpolation, .CloseStringInterpolation, .NoSpaceOpenRound, .OpAssign, .OpUnaryMinus, .OpBang, .OpAmpersand, .OpQuestion, .OpBar, .OpColonEqual, .OpDoubleColon, .NoSpaceOpQuestion, .OpBackArrow, .Comma, .Dot, .DoubleDot, .TripleDot, .DotStar, .OpColon, .OpArrow, .OpFatArrow, .OpBackslash, .KwApp, .KwAs, .KwCrash, .KwDbg, .KwElse, .KwExpect, .KwExposes, .KwExposing, .KwFor, .KwGenerates, .KwHas, .KwHosted, .KwIf, .KwImplements, .KwImport, .KwImports, .KwIn, .KwInterface, .KwMatch, .KwModule, .KwPackage, .KwPackages, .KwPlatform, .KwProvides, .KwRequires, .KwReturn, .KwTargets, .KwVar, .KwWhere, .KwWhile, .KwWith, .KwBreak, .MalformedUnknownToken => {
                     // Unknown operator
                     const feature = try self.env.insertString("binop");
                     const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
@@ -5839,7 +5840,7 @@ pub fn canonicalizeExpr(
                                 }
                             }
                         },
-                        else => {},
+                        .local_nominal, .local_alias, .associated_nominal => {},
                     }
                 }
                 break :blk null;
@@ -6079,7 +6080,7 @@ pub fn canonicalizeExpr(
 
                     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = can_operand.free_vars };
                 },
-                else => {
+                .EndOfFile, .Float, .StringStart, .StringEnd, .MultilineStringStart, .StringPart, .MalformedStringPart, .SingleQuote, .MalformedSingleQuote, .Int, .MalformedNumberBadSuffix, .MalformedNumberUnicodeSuffix, .MalformedNumberNoDigits, .MalformedNumberNoExponentDigits, .MalformedInvalidUnicodeEscapeSequence, .MalformedInvalidEscapeSequence, .UpperIdent, .LowerIdent, .MalformedUnicodeIdent, .Underscore, .DotLowerIdent, .DotInt, .DotUpperIdent, .NoSpaceDotInt, .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent, .MalformedDotUnicodeIdent, .MalformedNoSpaceDotUnicodeIdent, .NamedUnderscore, .MalformedNamedUnderscoreUnicode, .OpaqueName, .MalformedOpaqueNameUnicode, .MalformedOpaqueNameWithoutName, .OpenRound, .CloseRound, .OpenSquare, .CloseSquare, .OpenCurly, .CloseCurly, .OpenStringInterpolation, .CloseStringInterpolation, .NoSpaceOpenRound, .OpPlus, .OpStar, .OpPizza, .OpAssign, .OpBinaryMinus, .OpNotEquals, .OpAnd, .OpAmpersand, .OpQuestion, .OpDoubleQuestion, .OpOr, .OpBar, .OpDoubleSlash, .OpSlash, .OpPercent, .OpCaret, .OpGreaterThanOrEq, .OpGreaterThan, .OpLessThanOrEq, .OpBackArrow, .OpLessThan, .OpEquals, .OpColonEqual, .OpDoubleColon, .NoSpaceOpQuestion, .Comma, .Dot, .DoubleDot, .TripleDot, .DotStar, .OpColon, .OpArrow, .OpFatArrow, .OpBackslash, .KwApp, .KwAs, .KwCrash, .KwDbg, .KwElse, .KwExpect, .KwExposes, .KwExposing, .KwFor, .KwGenerates, .KwHas, .KwHosted, .KwIf, .KwImplements, .KwImport, .KwImports, .KwIn, .KwInterface, .KwMatch, .KwModule, .KwPackage, .KwPackages, .KwPlatform, .KwProvides, .KwRequires, .KwReturn, .KwTargets, .KwVar, .KwWhere, .KwWhile, .KwWith, .KwBreak, .MalformedUnknownToken => {
                     // Other operators not yet implemented or malformed
                     const feature = try self.env.insertString("canonicalize unary_op expression (non-minus)");
                     const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
@@ -6350,7 +6351,7 @@ pub fn canonicalizeExpr(
                                 try self.env.store.addScratchMatchBranchPattern(branch_pattern_idx);
                             }
                         },
-                        else => {
+                        .ident, .var_ident, .tag, .int, .frac, .string, .single_quote, .record, .list, .list_rest, .tuple, .underscore, .as, .malformed => {
                             // Single pattern case
                             const pattern_region = self.parse_ir.tokenizedRegionToRegion(pattern.to_tokenized_region());
                             const pattern_idx = blk: {
@@ -6862,7 +6863,7 @@ fn canonicalizeRecordBuilder(self: *Self, rb: @TypeOf(@as(AST.Expr, undefined).r
             } });
             return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
         },
-        else => {
+        .int, .frac, .typed_int, .typed_frac, .single_quote, .string_part, .string, .multiline_string, .list, .tuple, .record, .lambda, .apply, .record_updater, .field_access, .tuple_access, .local_dispatch, .bin_op, .suffix_single_question, .unary_op, .if_then_else, .if_without_else, .match, .ident, .dbg, .record_builder, .ellipsis, .block, .for_expr, .malformed => {
             const feature = try self.env.insertString("record builder with non-type mapper");
             const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
                 .feature = feature,
@@ -7335,7 +7336,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                                             },
                                         }, region);
                                     },
-                                    else => break :blk tag_expr_idx,
+                                    .apply, .rigid_var, .rigid_var_lookup, .underscore, .lookup, .tag_union, .tuple, .record, .@"fn", .parens, .malformed => break :blk tag_expr_idx,
                                 }
                             }
                             // Non-singleton tag unions - fall back to tag_expr_idx

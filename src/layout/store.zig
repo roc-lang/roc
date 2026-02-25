@@ -1168,7 +1168,7 @@ pub const Store = struct {
         return switch (l.tag) {
             .scalar => switch (l.data.scalar.tag) {
                 .str => true,
-                else => false,
+                .opaque_ptr, .int, .frac => false,
             },
             .list, .list_of_zst => true,
             .box, .box_of_zst => true,
@@ -1254,14 +1254,14 @@ pub const Store = struct {
                             break;
                         }
                     },
-                    else => unreachable,
+                    .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => unreachable,
                 },
                 .alias => |alias| {
                     current_ext = self.getTypesStore().getAliasBackingVar(alias);
                 },
                 // flex and rigid are valid terminal extensions for open unions
                 .flex, .rigid => break,
-                else => unreachable,
+                .err => unreachable,
             }
         }
 
@@ -1321,14 +1321,14 @@ pub const Store = struct {
                         // record_unbound has no extension, so stop here
                         break;
                     },
-                    else => unreachable,
+                    .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_tag_union => unreachable,
                 },
                 .alias => |alias| {
                     current_ext = self.getTypesStore().getAliasBackingVar(alias);
                 },
                 .flex => |_| break,
                 .rigid => |_| break,
-                else => unreachable,
+                .err => unreachable,
             }
         }
 
@@ -1779,7 +1779,7 @@ pub const Store = struct {
                             layout_idx = try self.insertLayout(Layout.closure(empty_captures_idx));
                             skip_layout_computation = true;
                         },
-                        else => {},
+                        .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => {},
                     }
                 }
 
@@ -1964,9 +1964,9 @@ pub const Store = struct {
                                 const is_elem_zst = switch (elem_content) {
                                     .structure => |ft| switch (ft) {
                                         .empty_record, .empty_tag_union => true,
-                                        else => false,
+                                        .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union => false,
                                     },
-                                    else => false,
+                                    .flex, .rigid, .alias, .err => false,
                                 };
 
                                 if (is_elem_zst) {

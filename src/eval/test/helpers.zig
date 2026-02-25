@@ -30,7 +30,7 @@ const posix = std.posix;
 
 const has_fork = switch (builtin.os.tag) {
     .macos, .linux, .freebsd, .openbsd, .netbsd => true,
-    else => false,
+    .freestanding, .other, .contiki, .fuchsia, .hermit, .aix, .haiku, .hurd, .plan9, .rtems, .serenity, .zos, .dragonfly, .driverkit, .ios, .tvos, .visionos, .watchos, .illumos, .solaris, .windows, .uefi, .ps3, .ps4, .ps5, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => false,
 };
 
 const Check = check.Check;
@@ -128,7 +128,7 @@ fn resolveZstName(module_env: *ModuleEnv, expr_type_var: types.Var) []const u8 {
                 const backing = module_env.types.getAliasBackingVar(al);
                 resolved = module_env.types.resolveVar(backing);
             },
-            else => break,
+            .flex, .rigid, .structure, .err => break,
         }
     }
 
@@ -146,9 +146,9 @@ fn resolveZstName(module_env: *ModuleEnv, expr_type_var: types.Var) []const u8 {
                 return "{}";
             },
             .empty_record => return "{}",
-            else => return "{}",
+            .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_tag_union => return "{}",
         },
-        else => return "{}",
+        .flex, .rigid, .alias, .err => return "{}",
     }
 }
 
@@ -173,9 +173,9 @@ fn resolveListElemZstName(module_env: *ModuleEnv, expr_type_var: types.Var) []co
                     }
                     return "{}";
                 },
-                else => break,
+                .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => break,
             },
-            else => break,
+            .flex, .rigid, .err => break,
         }
     }
     return "{}";
