@@ -8457,11 +8457,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             return self.generateNumericLowLevel(ll.op, args, ll.ret_layout);
         },
 
-        .str_inspekt => {
-            // str_inspekt: fallback to host import
-            unreachable; // TODO: implement str_inspekt for wasm
-        },
-
         .list_sort_with => {
             // list_sort_with: requires higher-order function call
             unreachable; // TODO: implement list_sort_with for wasm

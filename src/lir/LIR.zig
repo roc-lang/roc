@@ -490,7 +490,6 @@ pub const LirExpr = union(enum) {
     },
 
     /// Concatenate multiple strings into one
-    /// Used by str_inspekt to build output strings
     str_concat: LirExprSpan,
 
     /// Format integer as string
@@ -630,7 +629,6 @@ pub const LirExpr = union(enum) {
         str_with_ascii_uppercased,
         str_with_prefix,
         str_from_utf8_lossy,
-        str_inspekt,
 
         // List operations
         list_len,

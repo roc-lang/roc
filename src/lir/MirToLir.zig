@@ -937,6 +937,13 @@ fn lowerLowLevel(self: *Self, ll: anytype, mono_idx: Monotype.Idx, region: Regio
         } }, region);
     }
 
+    // str_inspekt → type-specific inspect expansion
+    if (ll.op == .str_inspekt) {
+        const args_slice = self.lir_store.getExprSpan(lir_args);
+        const arg_mono = self.mir_store.typeOf(mir_args[0]);
+        return self.expandStrInspekt(args_slice[0], arg_mono, region);
+    }
+
     // *_to_str → typed int_to_str / float_to_str / dec_to_str expressions
     switch (ll.op) {
         .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str => {
@@ -1396,7 +1403,6 @@ fn mapLowLevel(cir_op: CIR.Expr.LowLevel) ?LirExpr.LowLevel {
         .str_from_utf8 => .str_from_utf8,
         .str_join_with => .str_join_with,
         .str_split_on => .str_split,
-        .str_inspekt => .str_inspekt,
 
         // List operations
         .list_len => .list_len,
@@ -1708,8 +1714,339 @@ fn mapLowLevel(cir_op: CIR.Expr.LowLevel) ?LirExpr.LowLevel {
         .num_is_negative,
         .num_is_positive,
         .num_is_zero,
+        .str_inspekt,
         => null,
     };
+}
+
+// --- Str.inspect expansion ---
+//
+// These methods expand a `str_inspekt` low-level op into a tree of LIR
+// expressions (str_concat, int_to_str, str_escape_and_quote, etc.) that
+// build the inspect string at compile time, based on the argument's monotype.
+
+/// Emit a string literal in LIR (allocates in the LIR string store).
+fn emitStrLiteral(self: *Self, text: []const u8, region: Region) Allocator.Error!LirExprId {
+    const str_idx = try self.lir_store.strings.insert(self.allocator, text);
+    return self.lir_store.addExpr(.{ .str_literal = str_idx }, region);
+}
+
+/// Top-level dispatch for str_inspekt expansion.
+/// Examines the argument's monotype and generates the LIR expression tree
+/// that builds the inspect string.
+fn expandStrInspekt(self: *Self, value_expr: LirExprId, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
+    const mono = self.mir_store.monotype_store.getMonotype(mono_idx);
+    return switch (mono) {
+        .prim => |p| self.inspektPrim(value_expr, p, region),
+        .record => |r| self.inspektRecord(value_expr, r, mono_idx, region),
+        .tuple => |t| self.inspektTuple(value_expr, t, mono_idx, region),
+        .tag_union => |tu| self.inspektTagUnion(value_expr, tu, mono_idx, region),
+        .list => |l| self.inspektList(value_expr, l, mono_idx, region),
+        .unit => self.emitStrLiteral("{}", region),
+        .box => |b| self.inspektBox(value_expr, b, region),
+        .func => self.emitStrLiteral("<function>", region),
+    };
+}
+
+/// Inspect a primitive value.
+fn inspektPrim(self: *Self, value_expr: LirExprId, prim: Monotype.Prim, region: Region) Allocator.Error!LirExprId {
+    return switch (prim) {
+        .str => self.lir_store.addExpr(.{ .str_escape_and_quote = value_expr }, region),
+        .bool => blk: {
+            // Bool: emit if value then "True" else "False"
+            const true_str = try self.emitStrLiteral("True", region);
+            const false_str = try self.emitStrLiteral("False", region);
+            const branch = LIR.LirIfBranch{ .cond = value_expr, .body = true_str };
+            const branches = try self.lir_store.addIfBranches(&.{branch});
+            break :blk self.lir_store.addExpr(.{ .if_then_else = .{
+                .branches = branches,
+                .final_else = false_str,
+                .result_layout = .str,
+            } }, region);
+        },
+        .u8 => self.lir_store.addExpr(.{ .int_to_str = .{ .value = value_expr, .int_precision = .u8 } }, region),
+        .i8 => self.lir_store.addExpr(.{ .int_to_str = .{ .value = value_expr, .int_precision = .i8 } }, region),
+        .u16 => self.lir_store.addExpr(.{ .int_to_str = .{ .value = value_expr, .int_precision = .u16 } }, region),
+        .i16 => self.lir_store.addExpr(.{ .int_to_str = .{ .value = value_expr, .int_precision = .i16 } }, region),
+        .u32 => self.lir_store.addExpr(.{ .int_to_str = .{ .value = value_expr, .int_precision = .u32 } }, region),
+        .i32 => self.lir_store.addExpr(.{ .int_to_str = .{ .value = value_expr, .int_precision = .i32 } }, region),
+        .u64 => self.lir_store.addExpr(.{ .int_to_str = .{ .value = value_expr, .int_precision = .u64 } }, region),
+        .i64 => self.lir_store.addExpr(.{ .int_to_str = .{ .value = value_expr, .int_precision = .i64 } }, region),
+        .u128 => self.lir_store.addExpr(.{ .int_to_str = .{ .value = value_expr, .int_precision = .u128 } }, region),
+        .i128 => self.lir_store.addExpr(.{ .int_to_str = .{ .value = value_expr, .int_precision = .i128 } }, region),
+        .f32 => self.lir_store.addExpr(.{ .float_to_str = .{ .value = value_expr, .float_precision = .f32 } }, region),
+        .f64 => self.lir_store.addExpr(.{ .float_to_str = .{ .value = value_expr, .float_precision = .f64 } }, region),
+        .dec => self.lir_store.addExpr(.{ .dec_to_str = value_expr }, region),
+    };
+}
+
+/// Inspect a record: { field1: inspect(v1), field2: inspect(v2), ... }
+fn inspektRecord(self: *Self, value_expr: LirExprId, record: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
+    const fields = self.mir_store.monotype_store.getFields(record.fields);
+    if (fields.len == 0) return self.emitStrLiteral("{}", region);
+
+    const struct_layout = try self.layoutFromMonotype(mono_idx);
+
+    // Build parts: "{ " field1_name ": " inspect(field1_value) ", " ... " }"
+    // Monotype fields are alphabetically sorted, which matches how we want to display them.
+    // Layout fields may be reordered by alignment. We use the layout's StructField.index
+    // to map from layout position back to the original (alphabetical) field order.
+    const save_exprs = self.scratch_lir_expr_ids.items.len;
+    defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
+
+    try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral("{ ", region));
+
+    for (fields, 0..) |field, i| {
+        if (i > 0) {
+            try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(", ", region));
+        }
+
+        // Emit "fieldname: "
+        const field_name = self.getIdentText(field.name) orelse "?";
+        const field_label = try std.fmt.allocPrint(self.allocator, "{s}: ", .{field_name});
+        defer self.allocator.free(field_label);
+        try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(field_label, region));
+
+        // Access the field value
+        const field_layout = try self.layoutFromMonotype(field.type_idx);
+        const field_access = try self.lir_store.addExpr(.{ .struct_access = .{
+            .struct_expr = value_expr,
+            .struct_layout = struct_layout,
+            .field_layout = field_layout,
+            .field_idx = @intCast(i),
+        } }, region);
+
+        // Recursively inspect the field value
+        const field_inspected = try self.expandStrInspekt(field_access, field.type_idx, region);
+        try self.scratch_lir_expr_ids.append(self.allocator, field_inspected);
+    }
+
+    try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(" }", region));
+
+    const parts = self.scratch_lir_expr_ids.items[save_exprs..];
+    const span = try self.lir_store.addExprSpan(parts);
+    return self.lir_store.addExpr(.{ .str_concat = span }, region);
+}
+
+/// Inspect a tuple: (inspect(v0), inspect(v1), ...)
+fn inspektTuple(self: *Self, value_expr: LirExprId, tup: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
+    const elems = self.mir_store.monotype_store.getIdxSpan(tup.elems);
+    if (elems.len == 0) return self.emitStrLiteral("()", region);
+
+    const struct_layout = try self.layoutFromMonotype(mono_idx);
+
+    const save_exprs = self.scratch_lir_expr_ids.items.len;
+    defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
+
+    try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral("(", region));
+
+    for (elems, 0..) |elem_mono, i| {
+        if (i > 0) {
+            try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(", ", region));
+        }
+
+        const elem_layout = try self.layoutFromMonotype(elem_mono);
+        const elem_access = try self.lir_store.addExpr(.{ .struct_access = .{
+            .struct_expr = value_expr,
+            .struct_layout = struct_layout,
+            .field_layout = elem_layout,
+            .field_idx = @intCast(i),
+        } }, region);
+
+        const elem_inspected = try self.expandStrInspekt(elem_access, elem_mono, region);
+        try self.scratch_lir_expr_ids.append(self.allocator, elem_inspected);
+    }
+
+    try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(")", region));
+
+    const parts = self.scratch_lir_expr_ids.items[save_exprs..];
+    const span = try self.lir_store.addExprSpan(parts);
+    return self.lir_store.addExpr(.{ .str_concat = span }, region);
+}
+
+/// Inspect a tag union: discriminant_switch on the tag, producing "TagName" or "TagName(payload)"
+fn inspektTagUnion(self: *Self, value_expr: LirExprId, tu: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
+    const tags = self.mir_store.monotype_store.getTags(tu.tags);
+    if (tags.len == 0) return self.emitStrLiteral("<empty_tag_union>", region);
+
+    const union_layout = try self.layoutFromMonotype(mono_idx);
+
+    // Single-tag union: no discriminant, directly inspect the payload
+    if (tags.len == 1) {
+        return self.inspektSingleTag(value_expr, tags[0], mono_idx, union_layout, region);
+    }
+
+    // Bool-like: exactly 2 zero-payload tags → emit if/else
+    if (tags.len == 2) {
+        const p0 = self.mir_store.monotype_store.getIdxSpan(tags[0].payloads);
+        const p1 = self.mir_store.monotype_store.getIdxSpan(tags[1].payloads);
+        if (p0.len == 0 and p1.len == 0) {
+            return self.inspektBoolLikeTagUnion(value_expr, tags, region);
+        }
+    }
+
+    // Multi-tag union: emit a discriminant_switch with one branch per tag
+    const save_exprs = self.scratch_lir_expr_ids.items.len;
+    defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
+
+    for (tags) |tag| {
+        const branch_expr = try self.inspektTagBranch(value_expr, tag, union_layout, region);
+        try self.scratch_lir_expr_ids.append(self.allocator, branch_expr);
+    }
+
+    const branches = self.scratch_lir_expr_ids.items[save_exprs..];
+    const branches_span = try self.lir_store.addExprSpan(branches);
+
+    return self.lir_store.addExpr(.{ .discriminant_switch = .{
+        .value = value_expr,
+        .union_layout = union_layout,
+        .branches = branches_span,
+        .result_layout = .str,
+    } }, region);
+}
+
+/// Inspect a single-tag union (no discriminant).
+fn inspektSingleTag(self: *Self, value_expr: LirExprId, tag: Monotype.Tag, _: Monotype.Idx, union_layout: layout.Idx, region: Region) Allocator.Error!LirExprId {
+    const tag_name = self.getIdentText(tag.name) orelse "?";
+    const payloads = self.mir_store.monotype_store.getIdxSpan(tag.payloads);
+
+    if (payloads.len == 0) {
+        return self.emitStrLiteral(tag_name, region);
+    }
+
+    // Single-tag with payload: the layout IS the payload (no tag wrapper)
+    const save_exprs = self.scratch_lir_expr_ids.items.len;
+    defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
+
+    const name_with_paren = try std.fmt.allocPrint(self.allocator, "{s}(", .{tag_name});
+    defer self.allocator.free(name_with_paren);
+    try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(name_with_paren, region));
+
+    if (payloads.len == 1) {
+        // Single payload: value_expr IS the payload value
+        const inspected = try self.expandStrInspekt(value_expr, payloads[0], region);
+        try self.scratch_lir_expr_ids.append(self.allocator, inspected);
+    } else {
+        // Multiple payloads: value_expr is a struct, access each field
+        for (payloads, 0..) |payload_mono, i| {
+            if (i > 0) {
+                try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(", ", region));
+            }
+            const payload_layout = try self.layoutFromMonotype(payload_mono);
+            const payload_access = try self.lir_store.addExpr(.{ .struct_access = .{
+                .struct_expr = value_expr,
+                .struct_layout = union_layout,
+                .field_layout = payload_layout,
+                .field_idx = @intCast(i),
+            } }, region);
+            const inspected = try self.expandStrInspekt(payload_access, payload_mono, region);
+            try self.scratch_lir_expr_ids.append(self.allocator, inspected);
+        }
+    }
+
+    try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(")", region));
+
+    const parts = self.scratch_lir_expr_ids.items[save_exprs..];
+    const span = try self.lir_store.addExprSpan(parts);
+    return self.lir_store.addExpr(.{ .str_concat = span }, region);
+}
+
+/// Inspect a bool-like tag union (exactly 2 zero-payload tags, discriminant is bool).
+/// Tags are alphabetically sorted, so discriminant 0 = first alphabetically, 1 = second.
+fn inspektBoolLikeTagUnion(self: *Self, value_expr: LirExprId, tags: []const Monotype.Tag, region: Region) Allocator.Error!LirExprId {
+    const tag0_name = self.getIdentText(tags[0].name) orelse "?";
+    const tag1_name = self.getIdentText(tags[1].name) orelse "?";
+
+    // value_expr is a bool: 0 = tag0 (alphabetically first), 1 = tag1
+    const tag1_str = try self.emitStrLiteral(tag1_name, region);
+    const tag0_str = try self.emitStrLiteral(tag0_name, region);
+
+    const branch = LIR.LirIfBranch{ .cond = value_expr, .body = tag1_str };
+    const branches = try self.lir_store.addIfBranches(&.{branch});
+    return self.lir_store.addExpr(.{ .if_then_else = .{
+        .branches = branches,
+        .final_else = tag0_str,
+        .result_layout = .str,
+    } }, region);
+}
+
+/// Generate the inspect expression for a single tag branch (used inside discriminant_switch).
+fn inspektTagBranch(self: *Self, union_value: LirExprId, tag: Monotype.Tag, union_layout: layout.Idx, region: Region) Allocator.Error!LirExprId {
+    const tag_name = self.getIdentText(tag.name) orelse "?";
+    const payloads = self.mir_store.monotype_store.getIdxSpan(tag.payloads);
+
+    if (payloads.len == 0) {
+        return self.emitStrLiteral(tag_name, region);
+    }
+
+    // Tag with payloads: emit "TagName(inspect(p0), inspect(p1), ...)"
+    const save_exprs = self.scratch_lir_expr_ids.items.len;
+    defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
+
+    const name_with_paren = try std.fmt.allocPrint(self.allocator, "{s}(", .{tag_name});
+    defer self.allocator.free(name_with_paren);
+    try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(name_with_paren, region));
+
+    // Determine the payload layout for this variant
+    const payload_layout = if (payloads.len == 1)
+        try self.layoutFromMonotype(payloads[0])
+    else blk: {
+        // Multiple payloads → tuple layout
+        const save_layouts = self.scratch_layouts.items.len;
+        defer self.scratch_layouts.shrinkRetainingCapacity(save_layouts);
+        for (payloads) |p| {
+            const p_idx = try self.layoutFromMonotype(p);
+            try self.scratch_layouts.append(self.allocator, self.layout_store.getLayout(p_idx));
+        }
+        break :blk try self.layout_store.putTuple(self.scratch_layouts.items[save_layouts..]);
+    };
+
+    // Extract the payload from the tag union
+    const payload_access = try self.lir_store.addExpr(.{ .tag_payload_access = .{
+        .value = union_value,
+        .union_layout = union_layout,
+        .payload_layout = payload_layout,
+    } }, region);
+
+    if (payloads.len == 1) {
+        const inspected = try self.expandStrInspekt(payload_access, payloads[0], region);
+        try self.scratch_lir_expr_ids.append(self.allocator, inspected);
+    } else {
+        // Multiple payloads: payload is a struct, access each field
+        for (payloads, 0..) |payload_mono, i| {
+            if (i > 0) {
+                try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(", ", region));
+            }
+            const field_layout = try self.layoutFromMonotype(payload_mono);
+            const field_access = try self.lir_store.addExpr(.{ .struct_access = .{
+                .struct_expr = payload_access,
+                .struct_layout = payload_layout,
+                .field_layout = field_layout,
+                .field_idx = @intCast(i),
+            } }, region);
+            const inspected = try self.expandStrInspekt(field_access, payload_mono, region);
+            try self.scratch_lir_expr_ids.append(self.allocator, inspected);
+        }
+    }
+
+    try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(")", region));
+
+    const parts = self.scratch_lir_expr_ids.items[save_exprs..];
+    const span = try self.lir_store.addExprSpan(parts);
+    return self.lir_store.addExpr(.{ .str_concat = span }, region);
+}
+
+/// Inspect a list. Lists require runtime iteration which needs a loop construct
+/// with mutable accumulation. Placeholder until proper while_loop support is added.
+fn inspektList(self: *Self, _: LirExprId, _: anytype, _: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
+    return self.emitStrLiteral("[<list>]", region);
+}
+
+/// Inspect a box: the inner value is behind a pointer.
+fn inspektBox(self: *Self, _: LirExprId, _: anytype, region: Region) Allocator.Error!LirExprId {
+    // Box inspection requires dereferencing, which needs pointer support.
+    // TODO: implement proper box inspection.
+    return self.emitStrLiteral("<box>", region);
 }
 
 // --- Tests ---

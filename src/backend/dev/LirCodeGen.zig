@@ -3616,7 +3616,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_to_str,
                 .num_from_numeral,
                 .num_is_zero,
-                .str_inspekt,
                 .list_drop_at,
                 .compare,
                 => {

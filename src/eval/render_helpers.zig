@@ -668,7 +668,12 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
         .fn_pure, .fn_effectful, .fn_unbound => {
             return try gpa.dupe(u8, "<function>");
         },
-        else => unreachable,
+        .empty_tag_union => {
+            return try gpa.dupe(u8, "<empty_tag_union>");
+        },
+        else => {
+            // Tuple, record_unbound, etc. — fall through to layout-based rendering
+        },
     };
 
     // Handle Dec values specially when stripping unbound numeral decimals in REPL mode.
@@ -685,7 +690,8 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
         }
     }
 
-    unreachable;
+    // Fallback: render using layout only (covers flex/rigid type vars, tuples, etc.)
+    return renderValueRoc(ctx, value);
 }
 
 /// Render `value` using only its layout (without additional type information).
