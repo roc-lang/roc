@@ -64,6 +64,9 @@ propagating_defs: std.AutoHashMap(u64, void),
 /// so captured variables can find their layout even when not in symbol_defs.
 symbol_layouts: std.AutoHashMap(u64, layout.Idx),
 
+/// Scratch buffer for ANF Let-binding accumulation
+scratch_anf_stmts: std.ArrayList(LirStmt),
+
 /// Scratch buffers for building spans
 scratch_lir_expr_ids: std.ArrayList(LirExprId),
 scratch_lir_pattern_ids: std.ArrayList(LirPatternId),
@@ -93,6 +96,7 @@ pub fn init(
         .layout_cache = std.AutoHashMap(u32, layout.Idx).init(allocator),
         .propagating_defs = std.AutoHashMap(u64, void).init(allocator),
         .symbol_layouts = std.AutoHashMap(u64, layout.Idx).init(allocator),
+        .scratch_anf_stmts = std.ArrayList(LirStmt).empty,
         .scratch_lir_expr_ids = std.ArrayList(LirExprId).empty,
         .scratch_lir_pattern_ids = std.ArrayList(LirPatternId).empty,
         .scratch_lir_stmts = std.ArrayList(LirStmt).empty,
@@ -107,6 +111,7 @@ pub fn deinit(self: *Self) void {
     self.layout_cache.deinit();
     self.propagating_defs.deinit();
     self.symbol_layouts.deinit();
+    self.scratch_anf_stmts.deinit(self.allocator);
     self.scratch_lir_expr_ids.deinit(self.allocator);
     self.scratch_lir_pattern_ids.deinit(self.allocator);
     self.scratch_lir_stmts.deinit(self.allocator);
@@ -346,8 +351,120 @@ fn tagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monot
 
             unreachable; // compiler bug: tag name not in tag union
         },
-        else => unreachable, // compiler bug: expected tag_union monotype
+        .unit, .record, .tuple, .list, .box, .func => unreachable, // compiler bug: expected tag_union monotype
     }
+}
+
+/// ANF Let-binding accumulator. Accumulates Let-bindings for compound
+/// sub-expressions, then wraps the result in a block if any bindings were needed.
+const LetAccumulator = struct {
+    parent: *Self,
+    save_len: usize,
+
+    /// If `expr_id` is atomic (lookup or literal), return it as-is.
+    /// Otherwise, Let-bind it to a fresh symbol and return a lookup to that symbol.
+    fn ensureSymbol(acc: *LetAccumulator, expr_id: LirExprId, expr_layout: layout.Idx, region: Region) Allocator.Error!LirExprId {
+        const expr = acc.parent.lir_store.getExpr(expr_id);
+        if (isAtomicExpr(expr)) return expr_id;
+
+        const bp = try acc.parent.freshBindPattern(expr_layout, false, region);
+        try acc.parent.scratch_anf_stmts.append(acc.parent.allocator, .{ .decl = .{
+            .pattern = bp.pattern,
+            .expr = expr_id,
+        } });
+
+        return acc.parent.lir_store.addExpr(.{ .lookup = .{
+            .symbol = bp.symbol,
+            .layout_idx = expr_layout,
+        } }, region);
+    }
+
+    /// Wrap `result_expr` in a block with accumulated Let-bindings, or return it directly
+    /// if no bindings were accumulated.
+    fn finish(acc: *LetAccumulator, result_expr: LirExprId, result_layout: layout.Idx, region: Region) Allocator.Error!LirExprId {
+        const stmts_slice = acc.parent.scratch_anf_stmts.items[acc.save_len..];
+        defer acc.parent.scratch_anf_stmts.shrinkRetainingCapacity(acc.save_len);
+        if (stmts_slice.len == 0) return result_expr;
+        const lir_stmts = try acc.parent.lir_store.addStmts(stmts_slice);
+        return acc.parent.lir_store.addExpr(.{ .block = .{
+            .stmts = lir_stmts,
+            .final_expr = result_expr,
+            .result_layout = result_layout,
+        } }, region);
+    }
+};
+
+fn startLetAccumulator(self: *Self) LetAccumulator {
+    return .{ .parent = self, .save_len = self.scratch_anf_stmts.items.len };
+}
+
+/// Returns true if the expression is already atomic (a lookup or literal)
+/// and doesn't need Let-binding for ANF.
+fn isAtomicExpr(expr: LirExpr) bool {
+    return switch (expr) {
+        .lookup,
+        .i64_literal,
+        .i128_literal,
+        .f64_literal,
+        .f32_literal,
+        .dec_literal,
+        .str_literal,
+        .bool_literal,
+        .zero_arg_tag,
+        .empty_list,
+        .runtime_error,
+        // Lambdas and closures are treated as atomic because generateCall
+        // handles them specially (inline body or closure dispatch). Let-binding
+        // them to symbols changes the codegen path from direct inlining to
+        // compileLambdaAsProc, which can't return closures.
+        .lambda,
+        .closure,
+        => true,
+
+        .call,
+        .list,
+        .struct_,
+        .struct_access,
+        .tag,
+        .if_then_else,
+        .match_expr,
+        .block,
+        .early_return,
+        .break_expr,
+        .low_level,
+        .dbg,
+        .expect,
+        .crash,
+        .nominal,
+        .str_concat,
+        .int_to_str,
+        .float_to_str,
+        .dec_to_str,
+        .str_escape_and_quote,
+        .discriminant_switch,
+        .tag_payload_access,
+        .for_loop,
+        .while_loop,
+        .incref,
+        .decref,
+        .free,
+        .hosted_call,
+        => false,
+    };
+}
+
+/// Lower a span of MIR expressions, ensuring each is atomic (symbol/literal) via the accumulator.
+fn lowerAnfSpan(self: *Self, acc: *LetAccumulator, mir_expr_ids: []const MIR.ExprId, region: Region) Allocator.Error!LirExprSpan {
+    const save_len = self.scratch_lir_expr_ids.items.len;
+    defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_len);
+    for (mir_expr_ids) |mir_id| {
+        const lir_id = try self.lowerExpr(mir_id);
+        const mono = self.mir_store.typeOf(mir_id);
+        const arg_layout = try self.layoutFromMonotype(mono);
+        const ensured = try acc.ensureSymbol(lir_id, arg_layout, region);
+        try self.scratch_lir_expr_ids.append(self.allocator, ensured);
+    }
+    return self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_len..]);
 }
 
 fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
@@ -432,7 +549,7 @@ fn lowerList(self: *Self, list_data: anytype, mono_idx: Monotype.Idx, region: Re
     const monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
     const elem_layout = switch (monotype) {
         .list => |l| try self.layoutFromMonotype(l.elem),
-        else => unreachable,
+        .prim, .unit, .record, .tuple, .tag_union, .box, .func => unreachable,
     };
 
     const mir_elems = self.mir_store.getExprSpan(list_data.elems);
@@ -440,8 +557,10 @@ fn lowerList(self: *Self, list_data: anytype, mono_idx: Monotype.Idx, region: Re
         return self.lir_store.addExpr(.{ .empty_list = .{ .elem_layout = elem_layout } }, region);
     }
 
-    const lir_elems = try self.lowerExprSpan(mir_elems);
-    return self.lir_store.addExpr(.{ .list = .{ .elem_layout = elem_layout, .elems = lir_elems } }, region);
+    var acc = self.startLetAccumulator();
+    const lir_elems = try self.lowerAnfSpan(&acc, mir_elems, region);
+    const list_expr = try self.lir_store.addExpr(.{ .list = .{ .elem_layout = elem_layout, .elems = lir_elems } }, region);
+    return acc.finish(list_expr, try self.layoutFromMonotype(mono_idx), region);
 }
 
 fn lowerRecord(self: *Self, rec: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
@@ -459,6 +578,8 @@ fn lowerRecord(self: *Self, rec: anytype, mono_idx: Monotype.Idx, region: Region
     const mir_field_names = self.mir_store.getFieldNameSpan(rec.field_names);
     const record_layout_val = self.layout_store.getLayout(record_layout);
 
+    var acc = self.startLetAccumulator();
+
     if (record_layout_val.tag == .struct_) {
         // MIR fields are in source/alphabetical order, but the layout store sorts
         // fields by alignment descending then alphabetically. Reorder expressions
@@ -475,7 +596,10 @@ fn lowerRecord(self: *Self, rec: anytype, mono_idx: Monotype.Idx, region: Region
             for (mir_field_names, 0..) |mir_name, mi| {
                 if (@as(u32, @bitCast(mir_name)) == @as(u32, @bitCast(layout_field_name))) {
                     const lir_expr = try self.lowerExpr(mir_fields[mi]);
-                    try self.scratch_lir_expr_ids.append(self.allocator, lir_expr);
+                    const field_mono = self.mir_store.typeOf(mir_fields[mi]);
+                    const field_layout = try self.layoutFromMonotype(field_mono);
+                    const ensured = try acc.ensureSymbol(lir_expr, field_layout, region);
+                    try self.scratch_lir_expr_ids.append(self.allocator, ensured);
                     found = true;
                     break;
                 }
@@ -485,18 +609,20 @@ fn lowerRecord(self: *Self, rec: anytype, mono_idx: Monotype.Idx, region: Region
 
         const lir_fields = try self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_exprs..]);
 
-        return self.lir_store.addExpr(.{ .struct_ = .{
+        const struct_expr = try self.lir_store.addExpr(.{ .struct_ = .{
             .struct_layout = record_layout,
             .fields = lir_fields,
         } }, region);
+        return acc.finish(struct_expr, record_layout, region);
     } else {
         // Non-struct layout (e.g. single-field optimization or ZST) — pass through directly
-        const lir_fields = try self.lowerExprSpan(mir_fields);
+        const lir_fields = try self.lowerAnfSpan(&acc, mir_fields, region);
 
-        return self.lir_store.addExpr(.{ .struct_ = .{
+        const struct_expr = try self.lir_store.addExpr(.{ .struct_ = .{
             .struct_layout = record_layout,
             .fields = lir_fields,
         } }, region);
+        return acc.finish(struct_expr, record_layout, region);
     }
 }
 
@@ -504,6 +630,8 @@ fn lowerTuple(self: *Self, tup: anytype, mono_idx: Monotype.Idx, region: Region)
     const tuple_layout = try self.layoutFromMonotype(mono_idx);
     const mir_elems = self.mir_store.getExprSpan(tup.elems);
     const tuple_layout_val = self.layout_store.getLayout(tuple_layout);
+
+    var acc = self.startLetAccumulator();
 
     if (tuple_layout_val.tag == .struct_) {
         // MIR elements are in source order (.0, .1, .2, ...) but the layout store
@@ -517,22 +645,27 @@ fn lowerTuple(self: *Self, tup: anytype, mono_idx: Monotype.Idx, region: Region)
         for (0..layout_fields.len) |li| {
             const original_index = layout_fields.get(li).index;
             const lir_expr = try self.lowerExpr(mir_elems[original_index]);
-            try self.scratch_lir_expr_ids.append(self.allocator, lir_expr);
+            const elem_mono = self.mir_store.typeOf(mir_elems[original_index]);
+            const elem_layout = try self.layoutFromMonotype(elem_mono);
+            const ensured = try acc.ensureSymbol(lir_expr, elem_layout, region);
+            try self.scratch_lir_expr_ids.append(self.allocator, ensured);
         }
 
         const lir_fields = try self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_exprs..]);
 
-        return self.lir_store.addExpr(.{ .struct_ = .{
+        const struct_expr = try self.lir_store.addExpr(.{ .struct_ = .{
             .struct_layout = tuple_layout,
             .fields = lir_fields,
         } }, region);
+        return acc.finish(struct_expr, tuple_layout, region);
     } else {
         // Non-struct layout (e.g. single-element optimization) — pass through directly
-        const lir_elems = try self.lowerExprSpan(mir_elems);
-        return self.lir_store.addExpr(.{ .struct_ = .{
+        const lir_elems = try self.lowerAnfSpan(&acc, mir_elems, region);
+        const struct_expr = try self.lir_store.addExpr(.{ .struct_ = .{
             .struct_layout = tuple_layout,
             .fields = lir_elems,
         } }, region);
+        return acc.finish(struct_expr, tuple_layout, region);
     }
 }
 
@@ -555,8 +688,10 @@ fn lowerTag(self: *Self, tag_data: anytype, mono_idx: Monotype.Idx, region: Regi
         } else {
             // Multiple payloads → layout is a struct, emit struct expression
             const struct_layout = try self.layoutFromMonotype(mono_idx);
-            const lir_elems = try self.lowerExprSpan(mir_args);
-            return self.lir_store.addExpr(.{ .struct_ = .{ .struct_layout = struct_layout, .fields = lir_elems } }, region);
+            var acc = self.startLetAccumulator();
+            const lir_elems = try self.lowerAnfSpan(&acc, mir_args, region);
+            const struct_expr = try self.lir_store.addExpr(.{ .struct_ = .{ .struct_layout = struct_layout, .fields = lir_elems } }, region);
+            return acc.finish(struct_expr, struct_layout, region);
         }
     }
 
@@ -570,12 +705,14 @@ fn lowerTag(self: *Self, tag_data: anytype, mono_idx: Monotype.Idx, region: Regi
         } }, region);
     }
 
-    const lir_args = try self.lowerExprSpan(mir_args);
-    return self.lir_store.addExpr(.{ .tag = .{
+    var acc = self.startLetAccumulator();
+    const lir_args = try self.lowerAnfSpan(&acc, mir_args, region);
+    const tag_expr = try self.lir_store.addExpr(.{ .tag = .{
         .discriminant = discriminant,
         .union_layout = union_layout,
         .args = lir_args,
     } }, region);
+    return acc.finish(tag_expr, union_layout, region);
 }
 
 fn lowerLookup(self: *Self, sym: Symbol, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
@@ -598,9 +735,11 @@ fn lowerLookup(self: *Self, sym: Symbol, mono_idx: Monotype.Idx, region: Region)
 }
 
 fn lowerMatch(self: *Self, match_data: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
-    const cond_id = try self.lowerExpr(match_data.cond);
+    var acc = self.startLetAccumulator();
+    const cond_raw = try self.lowerExpr(match_data.cond);
     const cond_mono = self.mir_store.typeOf(match_data.cond);
     const value_layout = try self.layoutFromMonotype(cond_mono);
+    const cond_id = try acc.ensureSymbol(cond_raw, value_layout, region);
     const result_layout = try self.layoutFromMonotype(mono_idx);
 
     const mir_branches = self.mir_store.getBranches(match_data.branches);
@@ -634,12 +773,13 @@ fn lowerMatch(self: *Self, match_data: anytype, mono_idx: Monotype.Idx, region: 
     }
 
     const match_branches = try self.lir_store.addMatchBranches(self.scratch_lir_match_branches.items[save_len..]);
-    return self.lir_store.addExpr(.{ .match_expr = .{
+    const match_expr = try self.lir_store.addExpr(.{ .match_expr = .{
         .value = cond_id,
         .value_layout = value_layout,
         .branches = match_branches,
         .result_layout = result_layout,
     } }, region);
+    return acc.finish(match_expr, result_layout, region);
 }
 
 fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
@@ -647,7 +787,7 @@ fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, region: Region
     const monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
     const ret_layout = switch (monotype) {
         .func => |f| try self.layoutFromMonotype(f.ret),
-        else => unreachable, // Lambda expressions always have .func monotype
+        .prim, .unit, .record, .tuple, .tag_union, .list, .box => unreachable, // Lambda expressions always have .func monotype
     };
 
     const lir_params = try self.lowerPatternSpan(self.mir_store.getPatternSpan(lam.params));
@@ -758,31 +898,36 @@ fn lowerCall(self: *Self, call_data: anytype, mono_idx: Monotype.Idx, region: Re
     // Detect them by checking if the func's symbol def is runtime_err_anno_only and the
     // return/argument monotype is .box.
     if (self.isBoxIntrinsicCall(call_data)) |box_op| {
+        var box_acc = self.startLetAccumulator();
         const ret_layout = try self.layoutFromMonotype(mono_idx);
         const mir_args = self.mir_store.getExprSpan(call_data.args);
-        const lir_args = try self.lowerExprSpan(mir_args);
-        return self.lir_store.addExpr(.{ .low_level = .{
+        const lir_args = try self.lowerAnfSpan(&box_acc, mir_args, region);
+        const result = try self.lir_store.addExpr(.{ .low_level = .{
             .op = box_op,
             .args = lir_args,
             .ret_layout = ret_layout,
         } }, region);
+        return box_acc.finish(result, ret_layout, region);
     }
 
-    const fn_expr = try self.lowerExpr(call_data.func);
+    var acc = self.startLetAccumulator();
+    const fn_expr_raw = try self.lowerExpr(call_data.func);
     const fn_mono = self.mir_store.typeOf(call_data.func);
     const fn_layout = try self.layoutFromMonotype(fn_mono);
+    const fn_expr = try acc.ensureSymbol(fn_expr_raw, fn_layout, region);
     const ret_layout = try self.layoutFromMonotype(mono_idx);
 
     const mir_args = self.mir_store.getExprSpan(call_data.args);
-    const lir_args = try self.lowerExprSpan(mir_args);
+    const lir_args = try self.lowerAnfSpan(&acc, mir_args, region);
 
-    return self.lir_store.addExpr(.{ .call = .{
+    const call_expr = try self.lir_store.addExpr(.{ .call = .{
         .fn_expr = fn_expr,
         .fn_layout = fn_layout,
         .args = lir_args,
         .ret_layout = ret_layout,
         .called_via = .apply,
     } }, region);
+    return acc.finish(call_expr, ret_layout, region);
 }
 
 /// Detect calls to Box.box or Box.unbox, which are [ProvidedByCompiler] methods
@@ -874,9 +1019,11 @@ fn lowerBlock(self: *Self, block_data: anytype, mono_idx: Monotype.Idx, region: 
 }
 
 fn lowerRecordAccess(self: *Self, ra: anytype, mir_expr_id: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
-    const lir_struct = try self.lowerExpr(ra.record);
+    var acc = self.startLetAccumulator();
+    const lir_struct_raw = try self.lowerExpr(ra.record);
     const struct_mono = self.mir_store.typeOf(ra.record);
     const struct_layout = try self.layoutFromMonotype(struct_mono);
+    const lir_struct = try acc.ensureSymbol(lir_struct_raw, struct_layout, region);
     const result_mono = self.mir_store.typeOf(mir_expr_id);
     const field_layout = try self.layoutFromMonotype(result_mono);
 
@@ -898,18 +1045,21 @@ fn lowerRecordAccess(self: *Self, ra: anytype, mir_expr_id: MIR.ExprId, region: 
         field_idx = 0;
     }
 
-    return self.lir_store.addExpr(.{ .struct_access = .{
+    const access_expr = try self.lir_store.addExpr(.{ .struct_access = .{
         .struct_expr = lir_struct,
         .struct_layout = struct_layout,
         .field_layout = field_layout,
         .field_idx = field_idx orelse unreachable,
     } }, region);
+    return acc.finish(access_expr, field_layout, region);
 }
 
 fn lowerTupleAccess(self: *Self, ta: anytype, mir_expr_id: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
-    const lir_struct = try self.lowerExpr(ta.tuple);
+    var acc = self.startLetAccumulator();
+    const lir_struct_raw = try self.lowerExpr(ta.tuple);
     const struct_mono = self.mir_store.typeOf(ta.tuple);
     const struct_layout = try self.layoutFromMonotype(struct_mono);
+    const lir_struct = try acc.ensureSymbol(lir_struct_raw, struct_layout, region);
     const result_mono = self.mir_store.typeOf(mir_expr_id);
     const field_layout = try self.layoutFromMonotype(result_mono);
 
@@ -930,18 +1080,20 @@ fn lowerTupleAccess(self: *Self, ta: anytype, mir_expr_id: MIR.ExprId, region: R
         field_idx = 0;
     }
 
-    return self.lir_store.addExpr(.{ .struct_access = .{
+    const access_expr = try self.lir_store.addExpr(.{ .struct_access = .{
         .struct_expr = lir_struct,
         .struct_layout = struct_layout,
         .field_layout = field_layout,
         .field_idx = field_idx orelse unreachable,
     } }, region);
+    return acc.finish(access_expr, field_layout, region);
 }
 
 fn lowerLowLevel(self: *Self, ll: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
     const ret_layout = try self.layoutFromMonotype(mono_idx);
     const mir_args = self.mir_store.getExprSpan(ll.args);
-    const lir_args = try self.lowerExprSpan(mir_args);
+    var acc = self.startLetAccumulator();
+    const lir_args = try self.lowerAnfSpan(&acc, mir_args, region);
 
     // num_is_negative/num_is_positive → comparison with 0
     if (ll.op == .num_is_negative or ll.op == .num_is_positive) {
@@ -949,11 +1101,12 @@ fn lowerLowLevel(self: *Self, ll: anytype, mono_idx: Monotype.Idx, region: Regio
         const zero = try self.emitZeroLiteral(mir_args[0], region);
         const lir_op: LirExpr.LowLevel = if (ll.op == .num_is_negative) .num_is_lt else .num_is_gt;
         const new_args = try self.lir_store.addExprSpan(&.{ args_slice[0], zero });
-        return self.lir_store.addExpr(.{ .low_level = .{
+        const result = try self.lir_store.addExpr(.{ .low_level = .{
             .op = lir_op,
             .args = new_args,
             .ret_layout = ret_layout,
         } }, region);
+        return acc.finish(result, ret_layout, region);
     }
 
     // num_is_zero → num_is_eq with 0
@@ -961,23 +1114,25 @@ fn lowerLowLevel(self: *Self, ll: anytype, mono_idx: Monotype.Idx, region: Regio
         const args_slice = self.lir_store.getExprSpan(lir_args);
         const zero = try self.emitZeroLiteral(mir_args[0], region);
         const new_args = try self.lir_store.addExprSpan(&.{ args_slice[0], zero });
-        return self.lir_store.addExpr(.{ .low_level = .{
+        const result = try self.lir_store.addExpr(.{ .low_level = .{
             .op = .num_is_eq,
             .args = new_args,
             .ret_layout = ret_layout,
         } }, region);
+        return acc.finish(result, ret_layout, region);
     }
 
     // str_inspekt → type-specific inspect expansion
     if (ll.op == .str_inspekt) {
         const args_slice = self.lir_store.getExprSpan(lir_args);
         const arg_mono = self.mir_store.typeOf(mir_args[0]);
-        return self.expandStrInspekt(args_slice[0], arg_mono, region);
+        const result = try self.expandStrInspekt(args_slice[0], arg_mono, region);
+        return acc.finish(result, ret_layout, region);
     }
 
     // *_to_str → typed int_to_str / float_to_str / dec_to_str expressions
-    switch (ll.op) {
-        .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str => {
+    const result = switch (ll.op) {
+        .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str => blk: {
             const args_slice = self.lir_store.getExprSpan(lir_args);
             const precision: @import("types").Int.Precision = switch (ll.op) {
                 .u8_to_str => .u8,
@@ -992,39 +1147,39 @@ fn lowerLowLevel(self: *Self, ll: anytype, mono_idx: Monotype.Idx, region: Regio
                 .i128_to_str => .i128,
                 else => unreachable,
             };
-            return self.lir_store.addExpr(.{ .int_to_str = .{
+            break :blk try self.lir_store.addExpr(.{ .int_to_str = .{
                 .value = args_slice[0],
                 .int_precision = precision,
             } }, region);
         },
-        .f32_to_str, .f64_to_str => {
+        .f32_to_str, .f64_to_str => blk: {
             const args_slice = self.lir_store.getExprSpan(lir_args);
             const precision: @import("types").Frac.Precision = switch (ll.op) {
                 .f32_to_str => .f32,
                 .f64_to_str => .f64,
                 else => unreachable,
             };
-            return self.lir_store.addExpr(.{ .float_to_str = .{
+            break :blk try self.lir_store.addExpr(.{ .float_to_str = .{
                 .value = args_slice[0],
                 .float_precision = precision,
             } }, region);
         },
-        .dec_to_str => {
+        .dec_to_str => blk: {
             const args_slice = self.lir_store.getExprSpan(lir_args);
-            return self.lir_store.addExpr(.{ .dec_to_str = args_slice[0] }, region);
+            break :blk try self.lir_store.addExpr(.{ .dec_to_str = args_slice[0] }, region);
         },
-        else => {},
-    }
-
-    const lir_op = mapLowLevel(ll.op) orelse {
-        std.debug.panic("MirToLir: unmapped CIR low-level op: {s}", .{@tagName(ll.op)});
+        else => blk: {
+            const lir_op = mapLowLevel(ll.op) orelse {
+                std.debug.panic("MirToLir: unmapped CIR low-level op: {s}", .{@tagName(ll.op)});
+            };
+            break :blk try self.lir_store.addExpr(.{ .low_level = .{
+                .op = lir_op,
+                .args = lir_args,
+                .ret_layout = ret_layout,
+            } }, region);
+        },
     };
-
-    return self.lir_store.addExpr(.{ .low_level = .{
-        .op = lir_op,
-        .args = lir_args,
-        .ret_layout = ret_layout,
-    } }, region);
+    return acc.finish(result, ret_layout, region);
 }
 
 /// Emit a zero literal matching the type of the given MIR expression.
@@ -1053,7 +1208,7 @@ fn lowerHosted(self: *Self, h: anytype, mono_idx: Monotype.Idx, region: Region) 
     const monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
     const ret_layout = switch (monotype) {
         .func => |f| try self.layoutFromMonotype(f.ret),
-        else => unreachable, // Hosted expressions always have .func monotype
+        .prim, .unit, .record, .tuple, .tag_union, .list, .box => unreachable, // Hosted expressions always have .func monotype
     };
 
     // Lower parameter patterns
@@ -1063,7 +1218,7 @@ fn lowerHosted(self: *Self, h: anytype, mono_idx: Monotype.Idx, region: Region) 
     // Build lookup args from parameters (one lookup per param)
     const func_args = switch (monotype) {
         .func => |f| self.mir_store.monotype_store.getIdxSpan(f.args),
-        else => unreachable,
+        .prim, .unit, .record, .tuple, .tag_union, .list, .box => unreachable,
     };
 
     const save_len = self.scratch_lir_expr_ids.items.len;
@@ -1074,7 +1229,7 @@ fn lowerHosted(self: *Self, h: anytype, mono_idx: Monotype.Idx, region: Region) 
         const symbol = switch (mir_pat) {
             .bind => |sym| sym,
             .wildcard => continue, // unit () params are zero-sized, skip
-            else => unreachable,
+            .tag, .int_literal, .str_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .record_destructure, .tuple_destructure, .list_destructure, .as_pattern, .runtime_error => unreachable,
         };
         const param_layout = if (i < func_args.len)
             try self.layoutFromMonotype(func_args[i])
@@ -1138,7 +1293,7 @@ fn lowerForLoop(self: *Self, f: anytype, mono_idx: Monotype.Idx, region: Region)
     const list_monotype = self.mir_store.monotype_store.getMonotype(list_mono);
     const elem_layout = switch (list_monotype) {
         .list => |l| try self.layoutFromMonotype(l.elem),
-        else => unreachable,
+        .prim, .unit, .record, .tuple, .tag_union, .box, .func => unreachable,
     };
     const lir_pat = try self.lowerPattern(f.elem_pattern);
     const lir_body = try self.lowerExpr(f.body);
@@ -1343,7 +1498,7 @@ fn lowerPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Error!LirPatte
             const list_monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
             const elem_layout = switch (list_monotype) {
                 .list => |l| try self.layoutFromMonotype(l.elem),
-                else => unreachable,
+                .prim, .unit, .record, .tuple, .tag_union, .box, .func => unreachable,
             };
             const all_patterns = self.mir_store.getPatternSpan(ld.patterns);
             const rest_pat = if (ld.rest_pattern.isNone())
@@ -1384,16 +1539,6 @@ fn lowerPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Error!LirPatte
         },
         .runtime_error => self.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = .zst } }, region),
     };
-}
-
-fn lowerExprSpan(self: *Self, mir_expr_ids: []const MIR.ExprId) Allocator.Error!LirExprSpan {
-    const save_len = self.scratch_lir_expr_ids.items.len;
-    defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_len);
-    for (mir_expr_ids) |mir_id| {
-        const lir_id = try self.lowerExpr(mir_id);
-        try self.scratch_lir_expr_ids.append(self.allocator, lir_id);
-    }
-    return self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_len..]);
 }
 
 fn lowerPatternSpan(self: *Self, mir_pat_ids: []const MIR.PatternId) Allocator.Error!LirPatternSpan {
@@ -2288,7 +2433,7 @@ fn testDeinit(self: *@TypeOf(testInit() catch unreachable)) void {
     self.module_env.deinit();
 }
 
-test "lowerExprSpan re-entrancy: list of calls preserves all elements" {
+test "ANF: list of calls Let-binds each call to a symbol" {
     const allocator = testing.allocator;
 
     var env = try testInit();
@@ -2296,10 +2441,8 @@ test "lowerExprSpan re-entrancy: list of calls preserves all elements" {
     defer testDeinit(&env);
 
     // Build MIR: a list containing two calls, each with one argument.
-    // This triggers lowerExprSpan re-entrancy:
-    //   lowerList -> lowerExprSpan([call0, call1])
-    //     for call0: lowerExpr -> lowerCall -> lowerExprSpan([arg0])  <-- re-entrant!
-    //     for call1: lowerExpr -> lowerCall -> lowerExprSpan([arg1])  <-- re-entrant!
+    // With ANF, each call should be Let-bound to a fresh symbol,
+    // and the list elements should be lookups to those symbols.
 
     const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
     const list_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .list = .{ .elem = i64_mono } });
@@ -2346,16 +2489,18 @@ test "lowerExprSpan re-entrancy: list of calls preserves all elements" {
     const lir_id = try translator.lower(list_expr);
     const lir_expr = env.lir_store.getExpr(lir_id);
 
-    // The list should have exactly 2 elements
-    try testing.expect(lir_expr == .list);
-    const elems = env.lir_store.getExprSpan(lir_expr.list.elems);
+    // ANF wraps compound sub-expressions in a block with Let-bindings
+    try testing.expect(lir_expr == .block);
+    const inner = env.lir_store.getExpr(lir_expr.block.final_expr);
+    try testing.expect(inner == .list);
+    const elems = env.lir_store.getExprSpan(inner.list.elems);
     try testing.expectEqual(@as(usize, 2), elems.len);
 
-    // Both elements should be calls
+    // Both elements should now be lookups (the calls are Let-bound)
     const elem0 = env.lir_store.getExpr(elems[0]);
     const elem1 = env.lir_store.getExpr(elems[1]);
-    try testing.expect(elem0 == .call);
-    try testing.expect(elem1 == .call);
+    try testing.expect(elem0 == .lookup);
+    try testing.expect(elem1 == .lookup);
 }
 
 test "MIR int literal lowers to LIR i64_literal" {
@@ -2833,9 +2978,12 @@ test "MIR record access finds correct field index for non-first field" {
     const lir_id = try translator.lower(access_expr);
     const lir_expr = env.lir_store.getExpr(lir_id);
 
-    try testing.expect(lir_expr == .struct_access);
+    // ANF Let-binds the struct before accessing it
+    try testing.expect(lir_expr == .block);
+    const inner = env.lir_store.getExpr(lir_expr.block.final_expr);
+    try testing.expect(inner == .struct_access);
     // Field c is at index 2 in the record's sorted field list
-    try testing.expectEqual(@as(u16, 2), lir_expr.struct_access.field_idx);
+    try testing.expectEqual(@as(u16, 2), inner.struct_access.field_idx);
 }
 
 test "MIR tuple access preserves element index" {
@@ -2880,9 +3028,12 @@ test "MIR tuple access preserves element index" {
     const lir_id = try translator.lower(access_expr);
     const lir_expr = env.lir_store.getExpr(lir_id);
 
-    try testing.expect(lir_expr == .struct_access);
+    // ANF Let-binds the struct before accessing it
+    try testing.expect(lir_expr == .block);
+    const inner = env.lir_store.getExpr(lir_expr.block.final_expr);
+    try testing.expect(inner == .struct_access);
     // Original tuple element 2 (I64) is at sorted position 1 (sorted: I64@0, I64@2, Bool@1)
-    try testing.expectEqual(@as(u16, 1), lir_expr.struct_access.field_idx);
+    try testing.expectEqual(@as(u16, 1), inner.struct_access.field_idx);
 }
 
 test "MIR lookup propagates symbol def to LIR store" {
@@ -3671,9 +3822,12 @@ test "record access uses layout field order not monotype alphabetical order" {
     const lir_id = try translator.lower(access_expr);
     const lir_expr = env.lir_store.getExpr(lir_id);
 
-    try testing.expect(lir_expr == .struct_access);
+    // ANF Let-binds the struct before accessing it
+    try testing.expect(lir_expr == .block);
+    const inner = env.lir_store.getExpr(lir_expr.block.final_expr);
+    try testing.expect(inner == .struct_access);
     // In layout order, I64 fields (name, score) come before U8 (age), so age is at index 2
-    try testing.expectEqual(@as(u16, 2), lir_expr.struct_access.field_idx);
+    try testing.expectEqual(@as(u16, 2), inner.struct_access.field_idx);
 }
 
 test "record destructure wildcard gets actual field layout not zst" {
