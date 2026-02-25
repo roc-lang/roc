@@ -454,12 +454,12 @@ fn lowerRecord(self: *Self, rec: anytype, mono_idx: Monotype.Idx, region: Region
     const mir_field_names = self.mir_store.getFieldNameSpan(rec.field_names);
     const record_layout_val = self.layout_store.getLayout(record_layout);
 
-    if (record_layout_val.tag == .record) {
+    if (record_layout_val.tag == .struct_) {
         // MIR fields are in source/alphabetical order, but the layout store sorts
         // fields by alignment descending then alphabetically. Reorder expressions
         // to match layout order so codegen can use positional field indices.
-        const record_data = self.layout_store.getRecordData(record_layout_val.data.record.idx);
-        const layout_fields = self.layout_store.record_fields.sliceRange(record_data.getFields());
+        const record_data = self.layout_store.getStructData(record_layout_val.data.struct_.idx);
+        const layout_fields = self.layout_store.struct_fields.sliceRange(record_data.getFields());
 
         const save_exprs = self.scratch_lir_expr_ids.items.len;
         defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
@@ -830,9 +830,9 @@ fn lowerRecordAccess(self: *Self, ra: anytype, mir_expr_id: MIR.ExprId, region: 
     // the correct physical offset.
     var field_idx: ?u16 = null;
     const record_layout_val = self.layout_store.getLayout(record_layout);
-    if (record_layout_val.tag == .record) {
-        const record_data = self.layout_store.getRecordData(record_layout_val.data.record.idx);
-        const layout_fields = self.layout_store.record_fields.sliceRange(record_data.getFields());
+    if (record_layout_val.tag == .struct_) {
+        const record_data = self.layout_store.getStructData(record_layout_val.data.struct_.idx);
+        const layout_fields = self.layout_store.struct_fields.sliceRange(record_data.getFields());
         for (0..layout_fields.len) |li| {
             if (@as(u32, @bitCast(layout_fields.get(li).name)) == @as(u32, @bitCast(ra.field_name))) {
                 field_idx = @intCast(li);
@@ -1185,9 +1185,9 @@ fn lowerPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Error!LirPatte
             const mir_field_names = self.mir_store.getFieldNameSpan(rd.field_names);
             const record_layout_val = self.layout_store.getLayout(record_layout);
 
-            if (record_layout_val.tag == .record) {
-                const record_data = self.layout_store.getRecordData(record_layout_val.data.record.idx);
-                const layout_fields = self.layout_store.record_fields.sliceRange(record_data.getFields());
+            if (record_layout_val.tag == .struct_) {
+                const record_data = self.layout_store.getStructData(record_layout_val.data.struct_.idx);
+                const layout_fields = self.layout_store.struct_fields.sliceRange(record_data.getFields());
 
                 // For each layout field (in alignment-sorted order), find the matching
                 // MIR pattern by field name and lower it

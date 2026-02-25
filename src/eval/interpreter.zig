@@ -162,6 +162,97 @@ fn layoutsEqual(a: Layout, b: Layout) bool {
     return a.eql(b);
 }
 
+/// Check if a struct layout represents a record-style struct (with named fields like "tag", "payload")
+/// as opposed to a tuple-style struct (with positional indices only).
+/// This distinction matters because tag unions can be represented as either:
+/// - Record-style: { tag: Discriminant, payload: Data }
+/// - Tuple-style: (Data, Discriminant) where element 0 = payload, element 1 = tag
+pub fn isRecordStyleStruct(lay: Layout, layout_store: *layout.Store) bool {
+    if (lay.tag != .struct_) return false;
+    const struct_data = layout_store.getStructData(lay.data.struct_.idx);
+    const fields = layout_store.struct_fields.sliceRange(struct_data.getFields());
+    if (fields.len == 0) return false;
+    // If the first field has a non-NONE name, it's record-style
+    return fields.get(0).name != base_pkg.Ident.Idx.NONE;
+}
+
+/// For a struct representing a tag union (record-style or tuple-style), return the
+/// tag discriminant field and the payload field.
+/// Record-style: { tag: Discriminant, payload: Data } — uses named field lookup.
+/// Tuple-style:  (Data, Discriminant) — element 0 = payload, element 1 = tag.
+fn getStructTagAndPayloadFields(self: *Interpreter, dest: *StackValue, result_layout: Layout) !struct { StackValue, StackValue } {
+    if (isRecordStyleStruct(result_layout, &self.runtime_layout_store)) {
+        var acc = try dest.asRecord(&self.runtime_layout_store);
+        const layout_env = self.runtime_layout_store.getEnv();
+        const tag_field_idx = acc.findFieldIndex(layout_env.getIdent(layout_env.idents.tag)) orelse
+            debugUnreachable(null, "tag field not found in struct tag union", @src());
+        const payload_field_idx = acc.findFieldIndex(layout_env.getIdent(layout_env.idents.payload)) orelse
+            debugUnreachable(null, "payload field not found in struct tag union", @src());
+        const tag_rt = try self.runtime_types.fresh();
+        const payload_rt = try self.runtime_types.fresh();
+        const tag_field = try acc.getFieldByIndex(tag_field_idx, tag_rt);
+        const payload_field = try acc.getFieldByIndex(payload_field_idx, payload_rt);
+        return .{ tag_field, payload_field };
+    } else {
+        var acc = try dest.asTuple(&self.runtime_layout_store);
+        const tag_rt = try self.runtime_types.fresh();
+        const payload_rt = try self.runtime_types.fresh();
+        const tag_field = try acc.getElement(1, tag_rt);
+        const payload_field = try acc.getElement(0, payload_rt);
+        return .{ tag_field, payload_field };
+    }
+}
+
+/// Get the tag discriminant field from a struct tag union, resolving the rt_var from
+/// the type system (record fields or tuple elements). Works for both record-style and
+/// tuple-style structs.
+fn getStructTagFieldWithRtVar(
+    self: *Interpreter,
+    dest: *StackValue,
+    layout_val: Layout,
+    rt_var: types.Var,
+    roc_ops: *RocOps,
+) Interpreter.Error!StackValue {
+    if (isRecordStyleStruct(layout_val, &self.runtime_layout_store)) {
+        var acc = try dest.asRecord(&self.runtime_layout_store);
+        const tag_field_idx = acc.findFieldIndex(self.env.getIdent(self.env.idents.tag)) orelse {
+            self.triggerCrash("struct tag field not found", false, roc_ops);
+            return error.Crash;
+        };
+        // Get rt_var for the tag field from the record type
+        const resolved = self.runtime_types.resolveVar(rt_var);
+        const tag_rt_var = blk: {
+            if (resolved.desc.content == .structure) {
+                const flat = resolved.desc.content.structure;
+                const fields_range = switch (flat) {
+                    .record => |rec| rec.fields,
+                    .record_unbound => |fields| fields,
+                    else => break :blk try self.runtime_types.fresh(),
+                };
+                const fields = self.runtime_types.getRecordFieldsSlice(fields_range);
+                var i: usize = 0;
+                while (i < fields.len) : (i += 1) {
+                    const f = fields.get(i);
+                    if (f.name == self.env.idents.tag) {
+                        break :blk f.var_;
+                    }
+                }
+            }
+            break :blk try self.runtime_types.fresh();
+        };
+        return acc.getFieldByIndex(tag_field_idx, tag_rt_var);
+    } else {
+        var acc = try dest.asTuple(&self.runtime_layout_store);
+        // Element 1 is the tag discriminant - get its rt_var from the tuple type
+        const resolved = self.runtime_types.resolveVar(rt_var);
+        const elem_rt_var = if (resolved.desc.content == .structure and resolved.desc.content.structure == .tuple) blk: {
+            const elem_vars = self.runtime_types.sliceVars(resolved.desc.content.structure.tuple.elems);
+            break :blk if (elem_vars.len > 1) elem_vars[1] else rt_var;
+        } else rt_var;
+        return acc.getElement(1, elem_rt_var);
+    }
+}
+
 /// Check if there's a nested layout mismatch that would cause decref issues.
 /// This specifically checks for list element layout size differences, which cause
 /// incorrect iteration during decref.
@@ -177,11 +268,11 @@ fn hasNestedLayoutMismatch(actual: Layout, expected: Layout, layout_store: *layo
             // Size mismatch means iteration will read wrong offsets
             return actual_size != expected_size;
         },
-        .tuple => {
-            const actual_data = layout_store.getTupleData(actual.data.tuple.idx);
-            const expected_data = layout_store.getTupleData(expected.data.tuple.idx);
-            const actual_fields = layout_store.tuple_fields.sliceRange(actual_data.getFields());
-            const expected_fields = layout_store.tuple_fields.sliceRange(expected_data.getFields());
+        .struct_ => {
+            const actual_data = layout_store.getStructData(actual.data.struct_.idx);
+            const expected_data = layout_store.getStructData(expected.data.struct_.idx);
+            const actual_fields = layout_store.struct_fields.sliceRange(actual_data.getFields());
+            const expected_fields = layout_store.struct_fields.sliceRange(expected_data.getFields());
             if (actual_fields.len != expected_fields.len) return true;
             for (0..actual_fields.len) |i| {
                 const actual_elem = layout_store.getLayout(actual_fields.get(i).layout);
@@ -1909,63 +2000,55 @@ pub const Interpreter = struct {
 
                 if (result.is_ok) {
                     // Return Ok(string)
-                    if (result_layout.tag == .tuple) {
-                        // Tuple (payload, tag)
+                    if (result_layout.tag == .struct_) {
                         var dest = try self.pushRaw(result_layout, 0, result_rt_var);
-                        var acc = try dest.asTuple(&self.runtime_layout_store);
+                        if (isRecordStyleStruct(result_layout, &self.runtime_layout_store)) {
+                            // Record { tag, payload }
+                            var acc = try dest.asRecord(&self.runtime_layout_store);
 
-                        // Create fresh vars for element access (payload is Str, discriminant is int)
-                        const str_rt_var = try self.getCanonicalStrRuntimeVar();
-                        const disc_rt_var = try self.runtime_types.fresh();
+                            const tag_field_idx = acc.findFieldIndex(self.env.getIdent(self.env.idents.tag)) orelse {
+                                self.triggerCrash("str_from_utf8: tag field not found", false, roc_ops);
+                                return error.Crash;
+                            };
+                            const payload_field_idx = acc.findFieldIndex(self.env.getIdent(self.env.idents.payload)) orelse {
+                                self.triggerCrash("str_from_utf8: payload field not found", false, roc_ops);
+                                return error.Crash;
+                            };
 
-                        // Element 0 is the payload - clear it first since it's a union
-                        const payload_field = try acc.getElement(0, str_rt_var);
-                        if (payload_field.ptr != null) {
-                            payload_field.clearBytes(&self.runtime_layout_store);
-                            payload_field.setRocStr(result.string);
-                        }
+                            const str_rt_var = try self.getCanonicalStrRuntimeVar();
+                            const disc_rt_var = try self.runtime_types.fresh();
 
-                        // Element 1 is the tag discriminant
-                        const tag_field = try acc.getElement(1, disc_rt_var);
-                        if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
-                            var tmp = tag_field;
-                            tmp.is_initialized = false;
-                            try tmp.setInt(@intCast(ok_index orelse 0));
-                        }
+                            const tag_field = try acc.getFieldByIndex(tag_field_idx, disc_rt_var);
+                            if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                                var tmp = tag_field;
+                                tmp.is_initialized = false;
+                                try tmp.setInt(@intCast(ok_index orelse 0));
+                            }
 
-                        dest.is_initialized = true;
-                        return dest;
-                    } else if (result_layout.tag == .record) {
-                        // Record { tag, payload }
-                        var dest = try self.pushRaw(result_layout, 0, result_rt_var);
-                        var acc = try dest.asRecord(&self.runtime_layout_store);
+                            const payload_field = try acc.getFieldByIndex(payload_field_idx, str_rt_var);
+                            if (payload_field.ptr != null) {
+                                payload_field.clearBytes(&self.runtime_layout_store);
+                                payload_field.setRocStr(result.string);
+                            }
+                        } else {
+                            // Tuple (payload, tag)
+                            var acc = try dest.asTuple(&self.runtime_layout_store);
 
-                        const tag_field_idx = acc.findFieldIndex(self.env.getIdent(self.env.idents.tag)) orelse {
-                            self.triggerCrash("str_from_utf8: tag field not found", false, roc_ops);
-                            return error.Crash;
-                        };
-                        const payload_field_idx = acc.findFieldIndex(self.env.getIdent(self.env.idents.payload)) orelse {
-                            self.triggerCrash("str_from_utf8: payload field not found", false, roc_ops);
-                            return error.Crash;
-                        };
+                            const str_rt_var = try self.getCanonicalStrRuntimeVar();
+                            const disc_rt_var = try self.runtime_types.fresh();
 
-                        // Create fresh vars for field access (payload is Str, discriminant is int)
-                        const str_rt_var = try self.getCanonicalStrRuntimeVar();
-                        const disc_rt_var = try self.runtime_types.fresh();
+                            const payload_field = try acc.getElement(0, str_rt_var);
+                            if (payload_field.ptr != null) {
+                                payload_field.clearBytes(&self.runtime_layout_store);
+                                payload_field.setRocStr(result.string);
+                            }
 
-                        // Write tag discriminant
-                        const tag_field = try acc.getFieldByIndex(tag_field_idx, disc_rt_var);
-                        if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
-                            var tmp = tag_field;
-                            tmp.is_initialized = false;
-                            try tmp.setInt(@intCast(ok_index orelse 0));
-                        }
-
-                        // Clear payload area first since it's a union
-                        const payload_field = try acc.getFieldByIndex(payload_field_idx, str_rt_var);
-                        if (payload_field.ptr != null) {
-                            payload_field.clearBytes(&self.runtime_layout_store);
-                            payload_field.setRocStr(result.string);
+                            const tag_field = try acc.getElement(1, disc_rt_var);
+                            if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                                var tmp = tag_field;
+                                tmp.is_initialized = false;
+                                try tmp.setInt(@intCast(ok_index orelse 0));
+                            }
                         }
 
                         dest.is_initialized = true;
@@ -1995,181 +2078,9 @@ pub const Interpreter = struct {
                     }
                 } else {
                     // Return Err(BadUtf8({ problem: Utf8Problem, index: U64 }))
-                    if (result_layout.tag == .tuple) {
-                        // Tuple (payload, tag)
+                    if (result_layout.tag == .struct_) {
                         var dest = try self.pushRaw(result_layout, 0, result_rt_var);
-                        var acc = try dest.asTuple(&self.runtime_layout_store);
-
-                        // Element 1 is the tag discriminant
-                        const disc_rt_var = try self.runtime_types.fresh();
-                        const tag_field = try acc.getElement(1, disc_rt_var);
-                        if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
-                            var tmp = tag_field;
-                            tmp.is_initialized = false;
-                            try tmp.setInt(@intCast(err_index orelse 1));
-                        }
-
-                        // Element 0 is the payload - need to construct BadUtf8 record
-                        const payload_rt_var = try self.runtime_types.fresh();
-                        const payload_field = try acc.getElement(0, payload_rt_var);
-                        if (payload_field.layout.tag == .tuple) {
-                            // BadUtf8 is represented as a tuple containing the error record
-                            var err_tuple = try payload_field.asTuple(&self.runtime_layout_store);
-                            // First element should be the record { problem, index }
-                            const inner_rt_var = try self.runtime_types.fresh();
-                            const inner_payload = try err_tuple.getElement(0, inner_rt_var);
-                            if (inner_payload.layout.tag == .record) {
-                                var inner_acc = try inner_payload.asRecord(&self.runtime_layout_store);
-                                // Set problem field (tag union represented as u8)
-                                if (inner_acc.findFieldIndex(self.env.getIdent(self.env.idents.problem))) |problem_idx| {
-                                    const problem_rt = try self.runtime_types.fresh();
-                                    const problem_field = try inner_acc.getFieldByIndex(problem_idx, problem_rt);
-                                    if (problem_field.ptr) |ptr| {
-                                        builtins.utils.writeAs(u8, ptr, @intFromEnum(result.problem_code), @src());
-                                    }
-                                }
-                                // Set index field (U64)
-                                if (inner_acc.findFieldIndex(self.env.getIdent(self.env.idents.index))) |index_idx| {
-                                    const index_rt = try self.runtime_types.fresh();
-                                    const index_field = try inner_acc.getFieldByIndex(index_idx, index_rt);
-                                    if (index_field.ptr) |ptr| {
-                                        builtins.utils.writeAs(u64, ptr, result.byte_index, @src());
-                                    }
-                                }
-                            }
-                            // Set BadUtf8 tag discriminant (index 0 since it's the only variant)
-                            const inner_disc_rt_var = try self.runtime_types.fresh();
-                            const err_tag = try err_tuple.getElement(1, inner_disc_rt_var);
-                            if (err_tag.layout.tag == .scalar and err_tag.layout.data.scalar.tag == .int) {
-                                var tmp = err_tag;
-                                tmp.is_initialized = false;
-                                try tmp.setInt(0);
-                            }
-                        } else if (payload_field.layout.tag == .record) {
-                            // Payload is a record with tag and payload for BadUtf8
-                            var err_rec = try payload_field.asRecord(&self.runtime_layout_store);
-                            if (err_rec.findFieldIndex(self.env.getIdent(self.env.idents.tag))) |tag_idx| {
-                                const field_rt = try self.runtime_types.fresh();
-                                const inner_tag = try err_rec.getFieldByIndex(tag_idx, field_rt);
-                                if (inner_tag.layout.tag == .scalar and inner_tag.layout.data.scalar.tag == .int) {
-                                    var tmp = inner_tag;
-                                    tmp.is_initialized = false;
-                                    try tmp.setInt(0); // BadUtf8 is index 0
-                                }
-                            }
-                            if (err_rec.findFieldIndex(self.env.getIdent(self.env.idents.payload))) |inner_payload_idx| {
-                                const field_rt = try self.runtime_types.fresh();
-                                const inner_payload = try err_rec.getFieldByIndex(inner_payload_idx, field_rt);
-                                if (inner_payload.layout.tag == .record) {
-                                    var inner_acc = try inner_payload.asRecord(&self.runtime_layout_store);
-                                    if (inner_acc.findFieldIndex(self.env.getIdent(self.env.idents.problem))) |problem_idx| {
-                                        const field_rt2 = try self.runtime_types.fresh();
-                                        const problem_field = try inner_acc.getFieldByIndex(problem_idx, field_rt2);
-                                        if (problem_field.ptr) |ptr| {
-                                            builtins.utils.writeAs(u8, ptr, @intFromEnum(result.problem_code), @src());
-                                        }
-                                    }
-                                    if (inner_acc.findFieldIndex(self.env.getIdent(self.env.idents.index))) |index_idx| {
-                                        const field_rt2 = try self.runtime_types.fresh();
-                                        const index_field = try inner_acc.getFieldByIndex(index_idx, field_rt2);
-                                        if (index_field.ptr) |ptr| {
-                                            builtins.utils.writeAs(u64, ptr, result.byte_index, @src());
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        dest.is_initialized = true;
-                        return dest;
-                    } else if (result_layout.tag == .record) {
-                        // Record { tag, payload }
-                        var dest = try self.pushRaw(result_layout, 0, result_rt_var);
-                        var acc = try dest.asRecord(&self.runtime_layout_store);
-
-                        const tag_field_idx = acc.findFieldIndex(self.env.getIdent(self.env.idents.tag)) orelse {
-                            self.triggerCrash("str_from_utf8: tag field not found", false, roc_ops);
-                            return error.Crash;
-                        };
-                        const payload_field_idx = acc.findFieldIndex(self.env.getIdent(self.env.idents.payload)) orelse {
-                            self.triggerCrash("str_from_utf8: payload field not found", false, roc_ops);
-                            return error.Crash;
-                        };
-
-                        // Write tag discriminant for Err
-                        const field_rt = try self.runtime_types.fresh();
-                        const tag_field = try acc.getFieldByIndex(tag_field_idx, field_rt);
-                        if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
-                            var tmp = tag_field;
-                            tmp.is_initialized = false;
-                            try tmp.setInt(@intCast(err_index orelse 1));
-                        }
-
-                        // Write error payload - need to construct BadUtf8({ problem, index })
-                        const payload_rt = try self.runtime_types.fresh();
-                        const outer_payload = try acc.getFieldByIndex(payload_field_idx, payload_rt);
-                        if (outer_payload.layout.tag == .tuple) {
-                            var err_tuple = try outer_payload.asTuple(&self.runtime_layout_store);
-                            const inner_rt_var = try self.runtime_types.fresh();
-                            const inner_payload = try err_tuple.getElement(0, inner_rt_var);
-                            if (inner_payload.layout.tag == .record) {
-                                var inner_acc = try inner_payload.asRecord(&self.runtime_layout_store);
-                                if (inner_acc.findFieldIndex(self.env.getIdent(self.env.idents.problem))) |problem_idx| {
-                                    const field_rt2 = try self.runtime_types.fresh();
-                                    const problem_field = try inner_acc.getFieldByIndex(problem_idx, field_rt2);
-                                    if (problem_field.ptr) |ptr| {
-                                        builtins.utils.writeAs(u8, ptr, @intFromEnum(result.problem_code), @src());
-                                    }
-                                }
-                                if (inner_acc.findFieldIndex(self.env.getIdent(self.env.idents.index))) |index_idx| {
-                                    const field_rt2 = try self.runtime_types.fresh();
-                                    const index_field = try inner_acc.getFieldByIndex(index_idx, field_rt2);
-                                    if (index_field.ptr) |ptr| {
-                                        builtins.utils.writeAs(u64, ptr, result.byte_index, @src());
-                                    }
-                                }
-                            }
-                            const err_disc_rt_var = try self.runtime_types.fresh();
-                            const err_tag = try err_tuple.getElement(1, err_disc_rt_var);
-                            if (err_tag.layout.tag == .scalar and err_tag.layout.data.scalar.tag == .int) {
-                                var tmp = err_tag;
-                                tmp.is_initialized = false;
-                                try tmp.setInt(0);
-                            }
-                        } else if (outer_payload.layout.tag == .record) {
-                            var err_rec = try outer_payload.asRecord(&self.runtime_layout_store);
-                            if (err_rec.findFieldIndex(self.env.getIdent(self.env.idents.tag))) |inner_tag_idx| {
-                                const field_rt2 = try self.runtime_types.fresh();
-                                const inner_tag = try err_rec.getFieldByIndex(inner_tag_idx, field_rt2);
-                                if (inner_tag.layout.tag == .scalar and inner_tag.layout.data.scalar.tag == .int) {
-                                    var tmp = inner_tag;
-                                    tmp.is_initialized = false;
-                                    try tmp.setInt(0);
-                                }
-                            }
-                            if (err_rec.findFieldIndex(self.env.getIdent(self.env.idents.payload))) |inner_payload_idx| {
-                                const field_rt2 = try self.runtime_types.fresh();
-                                const inner_payload = try err_rec.getFieldByIndex(inner_payload_idx, field_rt2);
-                                if (inner_payload.layout.tag == .record) {
-                                    var inner_acc = try inner_payload.asRecord(&self.runtime_layout_store);
-                                    if (inner_acc.findFieldIndex(self.env.getIdent(self.env.idents.problem))) |problem_idx| {
-                                        const field_rt3 = try self.runtime_types.fresh();
-                                        const problem_field = try inner_acc.getFieldByIndex(problem_idx, field_rt3);
-                                        if (problem_field.ptr) |ptr| {
-                                            builtins.utils.writeAs(u8, ptr, @intFromEnum(result.problem_code), @src());
-                                        }
-                                    }
-                                    if (inner_acc.findFieldIndex(self.env.getIdent(self.env.idents.index))) |index_idx| {
-                                        const field_rt3 = try self.runtime_types.fresh();
-                                        const index_field = try inner_acc.getFieldByIndex(index_idx, field_rt3);
-                                        if (index_field.ptr) |ptr| {
-                                            builtins.utils.writeAs(u64, ptr, result.byte_index, @src());
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
+                        try self.writeErrBadUtf8ToStruct(&dest, result, err_index, roc_ops);
                         dest.is_initialized = true;
                         return dest;
                     } else if (result_layout.tag == .tag_union) {
@@ -2208,22 +2119,20 @@ pub const Interpreter = struct {
                                 const inner_variants = self.runtime_layout_store.getTagUnionVariants(inner_tu_data);
                                 const record_layout = self.runtime_layout_store.getLayout(inner_variants.get(0).payload_layout);
 
-                                if (record_layout.tag == .record) {
+                                if (record_layout.tag == .struct_) {
                                     // Write problem field
-                                    if (self.runtime_layout_store.getRecordFieldOffsetByName(
-                                        record_layout.data.record.idx,
+                                    const problem_offset = self.runtime_layout_store.getRecordFieldOffsetByName(
+                                        record_layout.data.struct_.idx,
                                         self.env.idents.problem,
-                                    )) |problem_offset| {
-                                        builtins.utils.writeAs(u8, ptr_u8 + problem_offset, @intFromEnum(result.problem_code), @src());
-                                    }
+                                    );
+                                    builtins.utils.writeAs(u8, ptr_u8 + problem_offset, @intFromEnum(result.problem_code), @src());
 
                                     // Write index field
-                                    if (self.runtime_layout_store.getRecordFieldOffsetByName(
-                                        record_layout.data.record.idx,
+                                    const index_offset = self.runtime_layout_store.getRecordFieldOffsetByName(
+                                        record_layout.data.struct_.idx,
                                         self.env.idents.index,
-                                    )) |index_offset| {
-                                        builtins.utils.writeAs(u64, ptr_u8 + index_offset, result.byte_index, @src());
-                                    }
+                                    );
+                                    builtins.utils.writeAs(u64, ptr_u8 + index_offset, result.byte_index, @src());
                                 }
                             }
                         }
@@ -4150,19 +4059,12 @@ pub const Interpreter = struct {
                     try out.setInt(@intCast(tag_idx));
                     out.is_initialized = true;
                     return out;
-                } else if (result_layout.tag == .record) {
-                    // Record { tag, payload }
+                } else if (result_layout.tag == .struct_) {
+                    // Struct tag union (record-style or tuple-style)
                     var dest = try self.pushRaw(result_layout, 0, result_rt_var);
-                    var result_acc = try dest.asRecord(&self.runtime_layout_store);
-                    // Use layout_env for field lookups since record fields use layout store's env idents
-                    // Layout should guarantee tag and payload fields exist - if not, it's a compiler bug
-                    const tag_field_idx = result_acc.findFieldIndex(layout_env.getIdent(layout_env.idents.tag)) orelse debugUnreachable(roc_ops, "tag field not found in Try result record for num_from_numeral", @src());
-                    const payload_field_idx = result_acc.findFieldIndex(layout_env.getIdent(layout_env.idents.payload)) orelse debugUnreachable(roc_ops, "payload field not found in Try result record for num_from_numeral", @src());
+                    const tag_field, const payload_field = try getStructTagAndPayloadFields(self, &dest, result_layout);
 
                     // Write tag discriminant
-                    const tag_rt = try self.runtime_types.fresh();
-                    const tag_field = try result_acc.getFieldByIndex(tag_field_idx, tag_rt);
-                    // Tag field should be scalar int - if not, it's a compiler bug
                     std.debug.assert(tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int);
                     var tmp = tag_field;
                     tmp.is_initialized = false;
@@ -4170,8 +4072,6 @@ pub const Interpreter = struct {
                     try tmp.setInt(@intCast(tag_idx));
 
                     // Clear payload area
-                    const payload_rt = try self.runtime_types.fresh();
-                    const payload_field = try result_acc.getFieldByIndex(payload_field_idx, payload_rt);
                     if (payload_field.ptr) |payload_ptr| {
                         const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
                         if (payload_bytes_len > 0) {
@@ -4311,33 +4211,46 @@ pub const Interpreter = struct {
                                 // Create the RocStr for the error message
                                 const roc_str = RocStr.fromSlice(msg, roc_ops);
 
-                                if (err_payload_layout.tag == .record) {
-                                    // InvalidNumeral tag union is a record { tag, payload }
-                                    // Set is_initialized to true since we're about to write to this memory
+                                if (err_payload_layout.tag == .struct_) {
+                                    // InvalidNumeral tag union is a struct { tag, payload }
                                     var err_inner = StackValue{
                                         .ptr = outer_payload_ptr,
                                         .layout = err_payload_layout,
                                         .is_initialized = true,
                                         .rt_var = err_payload_var.?,
                                     };
-                                    var err_acc = try err_inner.asRecord(&self.runtime_layout_store);
-
-                                    // Set the tag to InvalidNumeral (index 0, assuming it's the first/only tag)
-                                    // Use layout store's env for field lookup to match comptime_evaluator
-                                    if (err_acc.findFieldIndex(layout_env.getIdent(layout_env.idents.tag))) |inner_tag_idx| {
+                                    if (isRecordStyleStruct(err_payload_layout, &self.runtime_layout_store)) {
+                                        var err_acc = try err_inner.asRecord(&self.runtime_layout_store);
+                                        // Set the tag to InvalidNumeral (index 0)
+                                        if (err_acc.findFieldIndex(layout_env.getIdent(layout_env.idents.tag))) |inner_tag_idx| {
+                                            const inner_tag_rt = try self.runtime_types.fresh();
+                                            const inner_tag_field = try err_acc.getFieldByIndex(inner_tag_idx, inner_tag_rt);
+                                            if (inner_tag_field.layout.tag == .scalar and inner_tag_field.layout.data.scalar.tag == .int) {
+                                                var inner_tmp = inner_tag_field;
+                                                inner_tmp.is_initialized = false;
+                                                try inner_tmp.setInt(0); // InvalidNumeral tag index
+                                            }
+                                        }
+                                        // Set the payload to the Str
+                                        if (err_acc.findFieldIndex(layout_env.getIdent(layout_env.idents.payload))) |inner_payload_idx| {
+                                            const inner_payload_rt = try self.runtime_types.fresh();
+                                            const inner_payload_field = try err_acc.getFieldByIndex(inner_payload_idx, inner_payload_rt);
+                                            if (inner_payload_field.ptr != null) {
+                                                inner_payload_field.setRocStr(roc_str);
+                                            }
+                                        }
+                                    } else {
+                                        var err_acc = try err_inner.asTuple(&self.runtime_layout_store);
+                                        // Tuple: element 1 = tag, element 0 = payload
                                         const inner_tag_rt = try self.runtime_types.fresh();
-                                        const inner_tag_field = try err_acc.getFieldByIndex(inner_tag_idx, inner_tag_rt);
+                                        const inner_tag_field = try err_acc.getElement(1, inner_tag_rt);
                                         if (inner_tag_field.layout.tag == .scalar and inner_tag_field.layout.data.scalar.tag == .int) {
                                             var inner_tmp = inner_tag_field;
                                             inner_tmp.is_initialized = false;
                                             try inner_tmp.setInt(0); // InvalidNumeral tag index
                                         }
-                                    }
-
-                                    // Set the payload to the Str
-                                    if (err_acc.findFieldIndex(layout_env.getIdent(layout_env.idents.payload))) |inner_payload_idx| {
                                         const inner_payload_rt = try self.runtime_types.fresh();
-                                        const inner_payload_field = try err_acc.getFieldByIndex(inner_payload_idx, inner_payload_rt);
+                                        const inner_payload_field = try err_acc.getElement(0, inner_payload_rt);
                                         if (inner_payload_field.ptr != null) {
                                             inner_payload_field.setRocStr(roc_str);
                                         }
@@ -4355,146 +4268,6 @@ pub const Interpreter = struct {
                                 // Note: Do NOT free msg here - it will be used and freed by the caller
                                 self.last_error_message = msg;
                             }
-                        }
-                    }
-
-                    return dest;
-                } else if (result_layout.tag == .tuple) {
-                    // Tuple (payload, tag) - tag unions are now represented as tuples
-                    var dest = try self.pushRaw(result_layout, 0, result_rt_var);
-                    var result_acc = try dest.asTuple(&self.runtime_layout_store);
-
-                    // Element 0 is payload, Element 1 is tag discriminant
-                    // getElement takes original index directly
-
-                    // Write tag discriminant (element 1)
-                    const tag_elem_rt_var = try self.runtime_types.fresh();
-                    const tag_field = try result_acc.getElement(1, tag_elem_rt_var);
-                    // Tag field should be scalar int - if not, it's a compiler bug
-                    std.debug.assert(tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int);
-                    var tmp = tag_field;
-                    tmp.is_initialized = false;
-                    const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
-                    try tmp.setInt(@intCast(tag_idx));
-
-                    // Clear payload area (element 0)
-                    const payload_elem_rt_var = try self.runtime_types.fresh();
-                    const payload_field = try result_acc.getElement(0, payload_elem_rt_var);
-                    if (payload_field.ptr) |payload_ptr| {
-                        const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
-                        if (payload_bytes_len > 0) {
-                            const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
-                            @memset(bytes, 0);
-                        }
-                    }
-
-                    // Write payload for Ok case
-                    if (in_range and ok_payload_var != null) {
-                        const num_layout = try self.getRuntimeLayout(ok_payload_var.?);
-                        if (payload_field.ptr) |payload_ptr| {
-                            if (num_layout.tag == .scalar and num_layout.data.scalar.tag == .int) {
-                                const int_type = num_layout.data.scalar.data.int;
-                                if (is_negative) {
-                                    // Write negative value
-                                    switch (int_type) {
-                                        .i8 => {
-                                            const neg_value: i128 = -@as(i128, @intCast(value));
-                                            builtins.utils.writeAs(i8, payload_ptr, @intCast(neg_value), @src());
-                                        },
-                                        .i16 => {
-                                            const neg_value: i128 = -@as(i128, @intCast(value));
-                                            builtins.utils.writeAs(i16, payload_ptr, @intCast(neg_value), @src());
-                                        },
-                                        .i32 => {
-                                            const neg_value: i128 = -@as(i128, @intCast(value));
-                                            builtins.utils.writeAs(i32, payload_ptr, @intCast(neg_value), @src());
-                                        },
-                                        .i64 => {
-                                            const neg_value: i128 = -@as(i128, @intCast(value));
-                                            builtins.utils.writeAs(i64, payload_ptr, @intCast(neg_value), @src());
-                                        },
-                                        .i128 => {
-                                            const as_signed: i128 = @bitCast(value);
-                                            const neg_value: i128 = -%as_signed;
-                                            builtins.utils.writeAs(i128, payload_ptr, neg_value, @src());
-                                        },
-                                        else => {}, // Unsigned types already rejected above
-                                    }
-                                } else {
-                                    // Write positive value
-                                    switch (int_type) {
-                                        .u8 => builtins.utils.writeAs(u8, payload_ptr, @intCast(value), @src()),
-                                        .i8 => builtins.utils.writeAs(i8, payload_ptr, @intCast(value), @src()),
-                                        .u16 => builtins.utils.writeAs(u16, payload_ptr, @intCast(value), @src()),
-                                        .i16 => builtins.utils.writeAs(i16, payload_ptr, @intCast(value), @src()),
-                                        .u32 => builtins.utils.writeAs(u32, payload_ptr, @intCast(value), @src()),
-                                        .i32 => builtins.utils.writeAs(i32, payload_ptr, @intCast(value), @src()),
-                                        .u64 => builtins.utils.writeAs(u64, payload_ptr, @intCast(value), @src()),
-                                        .i64 => builtins.utils.writeAs(i64, payload_ptr, @intCast(value), @src()),
-                                        .u128 => builtins.utils.writeAs(u128, payload_ptr, value, @src()),
-                                        .i128 => builtins.utils.writeAs(i128, payload_ptr, @intCast(value), @src()),
-                                    }
-                                }
-                            } else if (num_layout.tag == .scalar and num_layout.data.scalar.tag == .frac) {
-                                // Floating-point and Dec types
-                                const frac_precision = num_layout.data.scalar.data.frac;
-                                const float_value: f64 = if (is_negative)
-                                    -i128h.u128_to_f64(value)
-                                else
-                                    i128h.u128_to_f64(value);
-
-                                // Handle fractional part for floats
-                                var frac_part: f64 = 0;
-                                if (digits_after.len > 0) {
-                                    var mult: f64 = 1.0 / 256.0;
-                                    for (digits_after) |digit| {
-                                        frac_part += @as(f64, @floatFromInt(digit)) * mult;
-                                        mult /= 256.0;
-                                    }
-                                }
-                                const full_value = if (is_negative) float_value - frac_part else float_value + frac_part;
-
-                                switch (frac_precision) {
-                                    .f32 => builtins.utils.writeAs(f32, payload_ptr, @floatCast(full_value), @src()),
-                                    .f64 => builtins.utils.writeAs(f64, payload_ptr, full_value, @src()),
-                                    .dec => {
-                                        const dec_value: i128 = if (is_negative)
-                                            -@as(i128, @intCast(value)) * builtins.dec.RocDec.one_point_zero_i128
-                                        else
-                                            @as(i128, @intCast(value)) * builtins.dec.RocDec.one_point_zero_i128;
-                                        builtins.utils.writeAs(i128, payload_ptr, dec_value, @src());
-                                    },
-                                }
-                            }
-                        }
-                    } else if (!in_range and err_payload_var != null) {
-                        // For Err case, construct InvalidNumeral(Str) with descriptive message
-                        var num_str_buf: [128]u8 = undefined;
-                        const num_str = can.CIR.formatBase256ToDecimal(is_negative, digits_before, digits_after, &num_str_buf);
-
-                        const error_msg = switch (rejection_reason) {
-                            .negative_unsigned => std.fmt.allocPrint(
-                                self.allocator,
-                                "The number {s} is not a valid {s}. {s} values cannot be negative.",
-                                .{ num_str, type_name, type_name },
-                            ) catch null,
-                            .fractional_integer => std.fmt.allocPrint(
-                                self.allocator,
-                                "The number {s} is not a valid {s}. {s} values must be whole numbers, not fractions.",
-                                .{ num_str, type_name, type_name },
-                            ) catch null,
-                            .out_of_range, .overflow => std.fmt.allocPrint(
-                                self.allocator,
-                                "The number {s} is not a valid {s}. Valid {s} values are integers between {s} and {s}.",
-                                .{ num_str, type_name, type_name, min_value_str, max_value_str },
-                            ) catch null,
-                            .none => null,
-                        };
-
-                        if (error_msg) |msg| {
-                            // Store error message for retrieval by caller
-                            // Note: Do NOT free msg here - it will be used and freed by the caller
-                            self.last_error_message = msg;
                         }
                     }
 
@@ -5127,18 +4900,12 @@ pub const Interpreter = struct {
             try out.setInt(@intCast(tag_idx));
             out.is_initialized = true;
             return out;
-        } else if (result_layout.tag == .record) {
-            // Record { tag, payload }
+        } else if (result_layout.tag == .struct_) {
+            // Struct tag union (record-style or tuple-style)
             var dest = try self.pushRaw(result_layout, 0, result_rt_var);
-            var acc = try dest.asRecord(&self.runtime_layout_store);
-            // Layout should guarantee tag and payload fields exist - if not, it's a compiler bug
-            const tag_field_idx = acc.findFieldIndex(self.env.getIdent(self.env.idents.tag)) orelse debugUnreachable(null, "tag field not found in intConvertTry result record", @src());
-            const payload_field_idx = acc.findFieldIndex(self.env.getIdent(self.env.idents.payload)) orelse debugUnreachable(null, "payload field not found in intConvertTry result record", @src());
+            const tag_field, const payload_field = try getStructTagAndPayloadFields(self, &dest, result_layout);
 
             // Write tag discriminant
-            const field_rt = try self.runtime_types.fresh();
-            const tag_field = try acc.getFieldByIndex(tag_field_idx, field_rt);
-            // Tag field should be scalar int - if not, it's a compiler bug
             std.debug.assert(tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int);
             var tmp = tag_field;
             tmp.is_initialized = false;
@@ -5146,46 +4913,6 @@ pub const Interpreter = struct {
             try tmp.setInt(@intCast(tag_idx));
 
             // Clear payload area
-            const field_rt2 = try self.runtime_types.fresh();
-            const payload_field = try acc.getFieldByIndex(payload_field_idx, field_rt2);
-            if (payload_field.ptr) |payload_ptr| {
-                const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
-                if (payload_bytes_len > 0) {
-                    const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
-                    @memset(bytes, 0);
-                }
-            }
-
-            // Write payload for Ok case
-            if (in_range) {
-                const to_value: To = @intCast(from_value);
-                if (payload_field.ptr) |payload_ptr| {
-                    builtins.utils.writeAs(To, payload_ptr, to_value, @src());
-                }
-            }
-            // For Err case, payload is OutOfRange which is a zero-arg tag (already zeroed)
-
-            return dest;
-        } else if (result_layout.tag == .tuple) {
-            // Tuple (payload, tag) - tag unions are now represented as tuples
-            var dest = try self.pushRaw(result_layout, 0, result_rt_var);
-            var result_acc = try dest.asTuple(&self.runtime_layout_store);
-
-            // Element 0 is payload, Element 1 is tag discriminant
-
-            // Write tag discriminant (element 1)
-            const tag_elem_rt_var = try self.runtime_types.fresh();
-            const tag_field = try result_acc.getElement(1, tag_elem_rt_var);
-            // Tag field should be scalar int - if not, it's a compiler bug
-            std.debug.assert(tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int);
-            var tmp = tag_field;
-            tmp.is_initialized = false;
-            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
-            try tmp.setInt(@intCast(tag_idx));
-
-            // Clear payload area (element 0)
-            const payload_elem_rt_var = try self.runtime_types.fresh();
-            const payload_field = try result_acc.getElement(0, payload_elem_rt_var);
             if (payload_field.ptr) |payload_ptr| {
                 const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
                 if (payload_bytes_len > 0) {
@@ -5771,47 +5498,16 @@ pub const Interpreter = struct {
     ) !StackValue {
         const tag_idx: usize = if (success) ok_index orelse 0 else err_index orelse 1;
 
-        if (result_layout.tag == .record) {
+        if (result_layout.tag == .struct_) {
             var dest = try self.pushRaw(result_layout, 0, result_rt_var);
-            var result_acc = try dest.asRecord(&self.runtime_layout_store);
-            const layout_env = self.runtime_layout_store.getEnv();
-            const tag_field_idx = result_acc.findFieldIndex(layout_env.getIdent(layout_env.idents.tag)) orelse debugUnreachable(null, "tag field not found in buildTryResultWithValue record", @src());
-            const payload_field_idx = result_acc.findFieldIndex(layout_env.getIdent(layout_env.idents.payload)) orelse debugUnreachable(null, "payload field not found in buildTryResultWithValue record", @src());
+            const tag_field, const payload_field = try getStructTagAndPayloadFields(self, &dest, result_layout);
 
             // Write tag discriminant
-            const field_rt = try self.runtime_types.fresh();
-            const tag_field = try result_acc.getFieldByIndex(tag_field_idx, field_rt);
             var tmp = tag_field;
             tmp.is_initialized = false;
             try tmp.setInt(@intCast(tag_idx));
 
             // Clear and write payload
-            const field_rt2 = try self.runtime_types.fresh();
-            const payload_field = try result_acc.getFieldByIndex(payload_field_idx, field_rt2);
-            if (payload_field.ptr) |payload_ptr| {
-                const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
-                if (payload_bytes_len > 0) {
-                    @memset(@as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len], 0);
-                }
-                if (success) {
-                    builtins.utils.writeAs(T, payload_ptr, value, @src());
-                }
-            }
-            return dest;
-        } else if (result_layout.tag == .tuple) {
-            var dest = try self.pushRaw(result_layout, 0, result_rt_var);
-            var result_acc = try dest.asTuple(&self.runtime_layout_store);
-
-            // Write tag discriminant (element 1)
-            const tag_elem_rt_var = try self.runtime_types.fresh();
-            const tag_field = try result_acc.getElement(1, tag_elem_rt_var);
-            var tmp = tag_field;
-            tmp.is_initialized = false;
-            try tmp.setInt(@intCast(tag_idx));
-
-            // Clear and write payload (element 0)
-            const payload_elem_rt_var = try self.runtime_types.fresh();
-            const payload_field = try result_acc.getElement(0, payload_elem_rt_var);
             if (payload_field.ptr) |payload_ptr| {
                 const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
                 if (payload_bytes_len > 0) {
@@ -6575,7 +6271,7 @@ pub const Interpreter = struct {
         elem_vars: []const types.Var,
         roc_ops: *RocOps,
     ) StructuralEqError!bool {
-        if (lhs.layout.tag != .tuple or rhs.layout.tag != .tuple) return error.TypeMismatch;
+        if (lhs.layout.tag != .struct_ or rhs.layout.tag != .struct_) return error.TypeMismatch;
         if (elem_vars.len == 0) return true;
 
         const lhs_size = self.runtime_layout_store.layoutSize(lhs.layout);
@@ -6611,7 +6307,7 @@ pub const Interpreter = struct {
         record: types.Record,
         roc_ops: *RocOps,
     ) StructuralEqError!bool {
-        if (lhs.layout.tag != .record or rhs.layout.tag != .record) return error.TypeMismatch;
+        if (lhs.layout.tag != .struct_ or rhs.layout.tag != .struct_) return error.TypeMismatch;
 
         if (@intFromEnum(record.ext) != 0) {
             const ext_resolved = self.resolveBaseVar(record.ext);
@@ -6692,7 +6388,7 @@ pub const Interpreter = struct {
 
         const lhs_payload = lhs_data.payload orelse return error.TypeMismatch;
         const rhs_payload = rhs_data.payload orelse return error.TypeMismatch;
-        if (lhs_payload.layout.tag != .tuple or rhs_payload.layout.tag != .tuple) return error.TypeMismatch;
+        if (lhs_payload.layout.tag != .struct_ or rhs_payload.layout.tag != .struct_) return error.TypeMismatch;
 
         var lhs_tuple = try lhs_payload.asTuple(&self.runtime_layout_store);
         var rhs_tuple = try rhs_payload.asTuple(&self.runtime_layout_store);
@@ -7022,175 +6718,15 @@ pub const Interpreter = struct {
                 },
                 else => return error.TypeMismatch,
             },
-            .record => {
-                var acc = try value.asRecord(&self.runtime_layout_store);
-                const tag_field_idx = acc.findFieldIndex(self.env.getIdent(self.env.idents.tag)) orelse return error.TypeMismatch;
-                const disc_rt_var = try self.runtime_types.fresh();
-                const tag_field = try acc.getFieldByIndex(tag_field_idx, disc_rt_var);
-                var tag_index: usize = undefined;
-                if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
-                    var tmp = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true, .rt_var = tag_field.rt_var };
-                    tag_index = @intCast(tmp.asI128());
-                } else return error.TypeMismatch;
-
-                var payload_value: ?StackValue = null;
-                if (acc.findFieldIndex(self.env.getIdent(self.env.idents.payload))) |payload_idx| {
-                    const payload_rt_var = try self.runtime_types.fresh();
-                    payload_value = try acc.getFieldByIndex(payload_idx, payload_rt_var);
-                    if (payload_value) |field_value| {
-                        var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
-                        defer tag_list.deinit();
-                        try self.appendUnionTags(union_rt_var, &tag_list);
-                        if (tag_index >= tag_list.items.len) return error.TypeMismatch;
-                        const tag_info = tag_list.items[tag_index];
-                        const arg_vars = self.runtime_types.sliceVars(tag_info.args);
-
-                        if (arg_vars.len == 0) {
-                            payload_value = null;
-                        } else if (arg_vars.len == 1) {
-                            // For heterogeneous tag unions (like Try(Str, ErrorRecord)), the payload
-                            // union in memory is sized for the largest variant. When extracting a
-                            // specific variant's payload, we need the correct layout for that variant.
-                            //
-                            // Check if the arg var has a rigid substitution (from polymorphic method
-                            // instantiation). If so, use the substituted type's layout.
-                            const arg_var = arg_vars[0];
-                            const arg_resolved = self.runtime_types.resolveVar(arg_var);
-                            const effective_layout = if (arg_resolved.desc.content == .rigid) blk: {
-                                if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
-                                    // Use the substituted concrete type's layout
-                                    break :blk self.getRuntimeLayout(subst_var) catch field_value.layout;
-                                }
-                                break :blk field_value.layout;
-                            } else field_value.layout;
-
-                            payload_value = StackValue{
-                                .layout = effective_layout,
-                                .ptr = field_value.ptr,
-                                .is_initialized = field_value.is_initialized,
-                                .rt_var = field_value.rt_var,
-                            };
-                        } else {
-                            // For multiple args, use the layout from the stored field
-                            payload_value = StackValue{
-                                .layout = field_value.layout,
-                                .ptr = field_value.ptr,
-                                .is_initialized = field_value.is_initialized,
-                                .rt_var = field_value.rt_var,
-                            };
-                        }
-                    }
+            .struct_ => {
+                // Structs can represent tag unions as either record-style (named "tag"/"payload" fields)
+                // or tuple-style (element 1 = tag, element 0 = payload). Try record-style first.
+                var rec_acc = try value.asRecord(&self.runtime_layout_store);
+                if (rec_acc.findFieldIndex(self.env.getIdent(self.env.idents.tag))) |tag_field_idx_found| {
+                    return self.extractTagValueFromRecord(value, union_rt_var, rec_acc, tag_field_idx_found);
                 }
-
-                return .{ .index = tag_index, .payload = payload_value };
-            },
-            .tuple => {
-                // Tag unions are now represented as tuples (payload, tag)
-                var acc = try value.asTuple(&self.runtime_layout_store);
-
-                // Get tuple element rt_vars if available from value's type
-                const tuple_elem_vars: ?[]const types.Var = blk: {
-                    const resolved = self.runtime_types.resolveVar(value.rt_var);
-                    if (resolved.desc.content == .structure) {
-                        if (resolved.desc.content.structure == .tuple) {
-                            break :blk self.runtime_types.sliceVars(resolved.desc.content.structure.tuple.elems);
-                        }
-                    }
-                    break :blk null;
-                };
-
-                // Element 1 is the tag discriminant - getElement takes original index directly
-                const discrim_rt_var = if (tuple_elem_vars) |vars| (if (vars.len > 1) vars[1] else value.rt_var) else value.rt_var;
-                const tag_field = try acc.getElement(1, discrim_rt_var);
-                var tag_index: usize = undefined;
-                if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
-                    var tmp = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true, .rt_var = tag_field.rt_var };
-                    tag_index = @intCast(tmp.asI128());
-                } else return error.TypeMismatch;
-
-                // Element 0 is the payload - getElement takes original index directly
-                var payload_value: ?StackValue = null;
-                const payload_rt_var = if (tuple_elem_vars) |vars| (if (vars.len > 0) vars[0] else value.rt_var) else value.rt_var;
-                const payload_field = acc.getElement(0, payload_rt_var) catch null;
-                if (payload_field) |field_value| {
-                    var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
-                    defer tag_list.deinit();
-                    try self.appendUnionTags(union_rt_var, &tag_list);
-                    if (tag_index >= tag_list.items.len) return error.TypeMismatch;
-                    const tag_info = tag_list.items[tag_index];
-                    const arg_vars = self.runtime_types.sliceVars(tag_info.args);
-
-                    if (arg_vars.len == 0) {
-                        payload_value = null;
-                    } else if (arg_vars.len == 1) {
-                        // For heterogeneous tag unions (like Try(Str, ErrorRecord)), the payload
-                        // union in memory is sized for the largest variant. When extracting a
-                        // specific variant's payload, we need the correct layout for that variant.
-                        //
-                        // The arg_var contains the actual type of the payload (e.g., Item).
-                        // We should try to compute its layout directly rather than using
-                        // the field_value.layout which is the raw payload union layout.
-                        //
-                        // This is critical for opaque types returned from polymorphic functions
-                        // where the field layout might not match the expected tag union layout
-                        // of the opaque type's backing.
-                        //
-                        // HOWEVER: For polymorphic types where arg_var is a flex var that defaults
-                        // to Dec, the computed layout would be wrong (smaller than actual).
-                        // In this case, prefer the field_value.layout which was set correctly
-                        // during tag creation.
-                        // See https://github.com/roc-lang/roc/issues/8872
-                        const arg_var = arg_vars[0];
-                        const arg_resolved = self.runtime_types.resolveVar(arg_var);
-                        const effective_layout = blk: {
-                            // First try: if arg is a rigid with a substitution, use substituted type's layout
-                            if (arg_resolved.desc.content == .rigid) {
-                                if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
-                                    break :blk self.getRuntimeLayout(subst_var) catch field_value.layout;
-                                }
-                            }
-                            // For flex vars, use the actual field_value.layout which was set
-                            // correctly during tag creation. Computing layout from a flex var
-                            // would give Dec (16 bytes) which may not match the actual payload.
-                            if (arg_resolved.desc.content == .flex) {
-                                break :blk field_value.layout;
-                            }
-                            // Second try: compute layout directly from arg_var
-                            // This handles concrete types like opaque Item returned from polymorphic functions
-                            if (self.getRuntimeLayout(arg_var)) |computed_layout| {
-                                // Only use computed layout if it matches or exceeds field layout size.
-                                // If computed is smaller, the type has flex vars that defaulted to
-                                // a smaller type (like Dec), but the actual data is larger.
-                                const computed_size = self.runtime_layout_store.layoutSize(computed_layout);
-                                const field_size = self.runtime_layout_store.layoutSize(field_value.layout);
-                                if (computed_size >= field_size) {
-                                    break :blk computed_layout;
-                                }
-                                // Fall through to use field_value.layout
-                            } else |_| {}
-                            // Fallback to field_value.layout
-                            break :blk field_value.layout;
-                        };
-
-                        payload_value = StackValue{
-                            .layout = effective_layout,
-                            .ptr = field_value.ptr,
-                            .is_initialized = field_value.is_initialized,
-                            .rt_var = arg_var,
-                        };
-                    } else {
-                        // For multiple args, use the layout from the stored field
-                        // which already has the correct tuple layout
-                        payload_value = StackValue{
-                            .layout = field_value.layout,
-                            .ptr = field_value.ptr,
-                            .is_initialized = field_value.is_initialized,
-                            .rt_var = field_value.rt_var,
-                        };
-                    }
-                }
-
-                return .{ .index = tag_index, .payload = payload_value };
+                // Fall back to tuple-style access
+                return self.extractTagValueFromTuple(value, union_rt_var);
             },
             .tag_union => {
                 // New proper tag_union layout: payload at offset 0, discriminant at discriminant_offset
@@ -7398,6 +6934,236 @@ pub const Interpreter = struct {
                 return self.extractTagValue(unboxed, elem_rt_var);
             },
             else => return error.TypeMismatch,
+        }
+    }
+
+    /// Extract tag value from a record-style struct (with named "tag" and "payload" fields).
+    fn extractTagValueFromRecord(self: *Interpreter, _: StackValue, union_rt_var: types.Var, acc: StackValue.RecordAccessor, tag_field_idx: usize) !TagValue {
+        const disc_rt_var = try self.runtime_types.fresh();
+        const tag_field = try acc.getFieldByIndex(tag_field_idx, disc_rt_var);
+        var tag_index: usize = undefined;
+        if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+            var tmp = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true, .rt_var = tag_field.rt_var };
+            tag_index = @intCast(tmp.asI128());
+        } else return error.TypeMismatch;
+
+        var payload_value: ?StackValue = null;
+        if (acc.findFieldIndex(self.env.getIdent(self.env.idents.payload))) |payload_idx| {
+            const payload_rt_var = try self.runtime_types.fresh();
+            payload_value = try acc.getFieldByIndex(payload_idx, payload_rt_var);
+            if (payload_value) |field_value| {
+                var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+                defer tag_list.deinit();
+                try self.appendUnionTags(union_rt_var, &tag_list);
+                if (tag_index >= tag_list.items.len) return error.TypeMismatch;
+                const tag_info = tag_list.items[tag_index];
+                const arg_vars = self.runtime_types.sliceVars(tag_info.args);
+
+                if (arg_vars.len == 0) {
+                    payload_value = null;
+                } else if (arg_vars.len == 1) {
+                    const arg_var = arg_vars[0];
+                    const arg_resolved = self.runtime_types.resolveVar(arg_var);
+                    const effective_layout = if (arg_resolved.desc.content == .rigid) blk: {
+                        if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
+                            break :blk self.getRuntimeLayout(subst_var) catch field_value.layout;
+                        }
+                        break :blk field_value.layout;
+                    } else field_value.layout;
+
+                    payload_value = StackValue{
+                        .layout = effective_layout,
+                        .ptr = field_value.ptr,
+                        .is_initialized = field_value.is_initialized,
+                        .rt_var = field_value.rt_var,
+                    };
+                } else {
+                    payload_value = StackValue{
+                        .layout = field_value.layout,
+                        .ptr = field_value.ptr,
+                        .is_initialized = field_value.is_initialized,
+                        .rt_var = field_value.rt_var,
+                    };
+                }
+            }
+        }
+
+        return .{ .index = tag_index, .payload = payload_value };
+    }
+
+    /// Extract tag value from a tuple-style struct (element 1 = tag, element 0 = payload).
+    fn extractTagValueFromTuple(self: *Interpreter, value: StackValue, union_rt_var: types.Var) !TagValue {
+        var acc = try value.asTuple(&self.runtime_layout_store);
+
+        // Get tuple element rt_vars if available from value's type
+        const tuple_elem_vars: ?[]const types.Var = blk: {
+            const resolved = self.runtime_types.resolveVar(value.rt_var);
+            if (resolved.desc.content == .structure) {
+                if (resolved.desc.content.structure == .tuple) {
+                    break :blk self.runtime_types.sliceVars(resolved.desc.content.structure.tuple.elems);
+                }
+            }
+            break :blk null;
+        };
+
+        // Element 1 is the tag discriminant
+        const discrim_rt_var = if (tuple_elem_vars) |vars| (if (vars.len > 1) vars[1] else value.rt_var) else value.rt_var;
+        const tag_field = try acc.getElement(1, discrim_rt_var);
+        var tag_index: usize = undefined;
+        if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+            var tmp = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true, .rt_var = tag_field.rt_var };
+            tag_index = @intCast(tmp.asI128());
+        } else return error.TypeMismatch;
+
+        // Element 0 is the payload
+        var payload_value: ?StackValue = null;
+        const payload_rt_var = if (tuple_elem_vars) |vars| (if (vars.len > 0) vars[0] else value.rt_var) else value.rt_var;
+        const payload_field = acc.getElement(0, payload_rt_var) catch null;
+        if (payload_field) |field_value| {
+            var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+            defer tag_list.deinit();
+            try self.appendUnionTags(union_rt_var, &tag_list);
+            if (tag_index >= tag_list.items.len) return error.TypeMismatch;
+            const tag_info = tag_list.items[tag_index];
+            const arg_vars = self.runtime_types.sliceVars(tag_info.args);
+
+            if (arg_vars.len == 0) {
+                payload_value = null;
+            } else if (arg_vars.len == 1) {
+                const arg_var = arg_vars[0];
+                const arg_resolved = self.runtime_types.resolveVar(arg_var);
+                const effective_layout = blk2: {
+                    if (arg_resolved.desc.content == .rigid) {
+                        if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
+                            break :blk2 self.getRuntimeLayout(subst_var) catch field_value.layout;
+                        }
+                    }
+                    if (arg_resolved.desc.content == .flex) {
+                        break :blk2 field_value.layout;
+                    }
+                    if (self.getRuntimeLayout(arg_var)) |computed_layout| {
+                        const computed_size = self.runtime_layout_store.layoutSize(computed_layout);
+                        const field_size = self.runtime_layout_store.layoutSize(field_value.layout);
+                        if (computed_size >= field_size) {
+                            break :blk2 computed_layout;
+                        }
+                    } else |_| {}
+                    break :blk2 field_value.layout;
+                };
+
+                payload_value = StackValue{
+                    .layout = effective_layout,
+                    .ptr = field_value.ptr,
+                    .is_initialized = field_value.is_initialized,
+                    .rt_var = arg_var,
+                };
+            } else {
+                payload_value = StackValue{
+                    .layout = field_value.layout,
+                    .ptr = field_value.ptr,
+                    .is_initialized = field_value.is_initialized,
+                    .rt_var = field_value.rt_var,
+                };
+            }
+        }
+
+        return .{ .index = tag_index, .payload = payload_value };
+    }
+
+    /// Write BadUtf8 error info into a struct (handles both record-style and tuple-style).
+    fn writeErrBadUtf8ToStruct(self: *Interpreter, dest: *StackValue, result: anytype, err_index: ?usize, roc_ops: *RocOps) !void {
+        _ = roc_ops;
+        if (isRecordStyleStruct(dest.layout, &self.runtime_layout_store)) {
+            // Record-style: { tag, payload }
+            var acc = try dest.asRecord(&self.runtime_layout_store);
+            const tag_field_idx = acc.findFieldIndex(self.env.getIdent(self.env.idents.tag)) orelse return;
+            const payload_field_idx = acc.findFieldIndex(self.env.getIdent(self.env.idents.payload)) orelse return;
+
+            const field_rt = try self.runtime_types.fresh();
+            const tag_field = try acc.getFieldByIndex(tag_field_idx, field_rt);
+            if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                var tmp = tag_field;
+                tmp.is_initialized = false;
+                try tmp.setInt(@intCast(err_index orelse 1));
+            }
+
+            const payload_rt = try self.runtime_types.fresh();
+            const outer_payload = try acc.getFieldByIndex(payload_field_idx, payload_rt);
+            try self.writeBadUtf8InnerPayload(outer_payload, result);
+        } else {
+            // Tuple-style: (payload, tag)
+            var acc = try dest.asTuple(&self.runtime_layout_store);
+            const disc_rt_var = try self.runtime_types.fresh();
+            const tag_field = try acc.getElement(1, disc_rt_var);
+            if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                var tmp = tag_field;
+                tmp.is_initialized = false;
+                try tmp.setInt(@intCast(err_index orelse 1));
+            }
+
+            const payload_rt_var = try self.runtime_types.fresh();
+            const payload_field = try acc.getElement(0, payload_rt_var);
+            try self.writeBadUtf8InnerPayload(payload_field, result);
+        }
+    }
+
+    /// Write BadUtf8 error record into a payload value (handles tuple-style and record-style inner structs).
+    fn writeBadUtf8InnerPayload(self: *Interpreter, payload: StackValue, result: anytype) !void {
+        if (payload.layout.tag != .struct_) return;
+
+        if (isRecordStyleStruct(payload.layout, &self.runtime_layout_store)) {
+            // Record-style payload: { tag, payload: { problem, index } }
+            var err_rec = try payload.asRecord(&self.runtime_layout_store);
+            if (err_rec.findFieldIndex(self.env.getIdent(self.env.idents.tag))) |tag_idx| {
+                const field_rt = try self.runtime_types.fresh();
+                const inner_tag = try err_rec.getFieldByIndex(tag_idx, field_rt);
+                if (inner_tag.layout.tag == .scalar and inner_tag.layout.data.scalar.tag == .int) {
+                    var tmp = inner_tag;
+                    tmp.is_initialized = false;
+                    try tmp.setInt(0);
+                }
+            }
+            if (err_rec.findFieldIndex(self.env.getIdent(self.env.idents.payload))) |inner_payload_idx| {
+                const field_rt = try self.runtime_types.fresh();
+                const inner_payload = try err_rec.getFieldByIndex(inner_payload_idx, field_rt);
+                if (inner_payload.layout.tag == .struct_) {
+                    try self.writeProblemIndexFields(inner_payload, result);
+                }
+            }
+        } else {
+            // Tuple-style payload: (error_record, discriminant)
+            var err_tuple = try payload.asTuple(&self.runtime_layout_store);
+            const inner_rt_var = try self.runtime_types.fresh();
+            const inner_payload = try err_tuple.getElement(0, inner_rt_var);
+            if (inner_payload.layout.tag == .struct_) {
+                try self.writeProblemIndexFields(inner_payload, result);
+            }
+            const inner_disc_rt_var = try self.runtime_types.fresh();
+            const err_tag = try err_tuple.getElement(1, inner_disc_rt_var);
+            if (err_tag.layout.tag == .scalar and err_tag.layout.data.scalar.tag == .int) {
+                var tmp = err_tag;
+                tmp.is_initialized = false;
+                try tmp.setInt(0);
+            }
+        }
+    }
+
+    /// Write { problem, index } fields into a struct value.
+    fn writeProblemIndexFields(self: *Interpreter, value: StackValue, result: anytype) !void {
+        var inner_acc = try value.asRecord(&self.runtime_layout_store);
+        if (inner_acc.findFieldIndex(self.env.getIdent(self.env.idents.problem))) |problem_idx| {
+            const problem_rt = try self.runtime_types.fresh();
+            const problem_field = try inner_acc.getFieldByIndex(problem_idx, problem_rt);
+            if (problem_field.ptr) |ptr| {
+                builtins.utils.writeAs(u8, ptr, @intFromEnum(result.problem_code), @src());
+            }
+        }
+        if (inner_acc.findFieldIndex(self.env.getIdent(self.env.idents.index))) |index_idx| {
+            const index_rt = try self.runtime_types.fresh();
+            const index_field = try inner_acc.getFieldByIndex(index_idx, index_rt);
+            if (index_field.ptr) |ptr| {
+                builtins.utils.writeAs(u64, ptr, result.byte_index, @src());
+            }
         }
     }
 
@@ -7909,7 +7675,7 @@ pub const Interpreter = struct {
                 return try self.patternMatchesBind(n.backing_pattern, value, underlying.var_, roc_ops, out_binds, expr_idx);
             },
             .tuple => |tuple_pat| {
-                if (value.layout.tag != .tuple) return false;
+                if (value.layout.tag != .struct_) return false;
                 var accessor = try value.asTuple(&self.runtime_layout_store);
                 const pat_ids = self.env.store.slicePatterns(tuple_pat.patterns);
                 if (pat_ids.len != accessor.getElementCount()) return false;
@@ -8013,7 +7779,7 @@ pub const Interpreter = struct {
                         // Override physical layout with type-based layout when necessary.
                         // This handles recursive opaque types where the physical layout is 'tuple'
                         // but we need 'tag_union' for proper pattern matching.
-                        if (elem_value.layout.tag == .tuple and type_based_elem_layout.tag == .tag_union) {
+                        if (elem_value.layout.tag == .struct_ and type_based_elem_layout.tag == .tag_union) {
                             elem_value.layout = type_based_elem_layout;
                         }
                         const before = out_binds.items.len;
@@ -8030,7 +7796,7 @@ pub const Interpreter = struct {
                         const element_idx = total_len - suffix_len + suffix_idx;
                         var elem_value = try accessor.getElement(element_idx, elem_rt_var);
                         // Override physical layout with type-based layout when necessary
-                        if (elem_value.layout.tag == .tuple and type_based_elem_layout.tag == .tag_union) {
+                        if (elem_value.layout.tag == .struct_ and type_based_elem_layout.tag == .tag_union) {
                             elem_value.layout = type_based_elem_layout;
                         }
                         const before = out_binds.items.len;
@@ -8059,7 +7825,7 @@ pub const Interpreter = struct {
                     while (idx < non_rest_patterns.len) : (idx += 1) {
                         var elem_value = try accessor.getElement(idx, elem_rt_var);
                         // Override physical layout with type-based layout when necessary
-                        if (elem_value.layout.tag == .tuple and type_based_elem_layout.tag == .tag_union) {
+                        if (elem_value.layout.tag == .struct_ and type_based_elem_layout.tag == .tag_union) {
                             elem_value.layout = type_based_elem_layout;
                         }
                         const before = out_binds.items.len;
@@ -8078,11 +7844,11 @@ pub const Interpreter = struct {
                 // Empty record pattern {} matches zero-sized types
                 if (destructs.len == 0) {
                     // No fields to destructure - matches any empty record (including zst)
-                    return value.layout.tag == .record or value.layout.tag == .zst;
+                    return value.layout.tag == .struct_ or value.layout.tag == .zst;
                 }
 
                 // Fail fast with a clear crash message for non-record values (issue #8647 debugging)
-                if (value.layout.tag != .record) {
+                if (value.layout.tag != .struct_) {
                     self.triggerCrash("record_destructure: value layout tag is not .record", false, roc_ops);
                     return error.Crash;
                 }
@@ -8214,7 +7980,7 @@ pub const Interpreter = struct {
                     return true;
                 }
 
-                if (payload_value.layout.tag != .tuple) {
+                if (payload_value.layout.tag != .struct_) {
                     self.trimBindingList(out_binds, start_len, roc_ops);
                     return false;
                 }
@@ -8906,20 +8672,9 @@ pub const Interpreter = struct {
                 }
                 return self.findBoxIdxForTagUnion(lay.data.box, target_tu_idx);
             },
-            .tuple => {
-                const tuple_data = self.runtime_layout_store.getTupleData(lay.data.tuple.idx);
-                const fields = self.runtime_layout_store.tuple_fields.sliceRange(tuple_data.getFields());
-                var i: usize = 0;
-                while (i < fields.len) : (i += 1) {
-                    if (self.findBoxIdxForTagUnion(fields.get(i).layout, target_tu_idx)) |box_idx| {
-                        return box_idx;
-                    }
-                }
-                return null;
-            },
-            .record => {
-                const record_data = self.runtime_layout_store.getRecordData(lay.data.record.idx);
-                const fields = self.runtime_layout_store.record_fields.sliceRange(record_data.getFields());
+            .struct_ => {
+                const struct_data = self.runtime_layout_store.getStructData(lay.data.struct_.idx);
+                const fields = self.runtime_layout_store.struct_fields.sliceRange(struct_data.getFields());
                 var i: usize = 0;
                 while (i < fields.len) : (i += 1) {
                     if (self.findBoxIdxForTagUnion(fields.get(i).layout, target_tu_idx)) |box_idx| {
@@ -8953,21 +8708,9 @@ pub const Interpreter = struct {
                 }
                 return self.layoutContainsBoxOfTagUnion(inner_layout, target_tu_idx);
             },
-            .tuple => {
-                const tuple_data = self.runtime_layout_store.getTupleData(lay.data.tuple.idx);
-                const fields = self.runtime_layout_store.tuple_fields.sliceRange(tuple_data.getFields());
-                var i: usize = 0;
-                while (i < fields.len) : (i += 1) {
-                    const field_layout = self.runtime_layout_store.getLayout(fields.get(i).layout);
-                    if (self.layoutContainsBoxOfTagUnion(field_layout, target_tu_idx)) {
-                        return true;
-                    }
-                }
-                return false;
-            },
-            .record => {
-                const record_data = self.runtime_layout_store.getRecordData(lay.data.record.idx);
-                const fields = self.runtime_layout_store.record_fields.sliceRange(record_data.getFields());
+            .struct_ => {
+                const struct_data = self.runtime_layout_store.getStructData(lay.data.struct_.idx);
+                const fields = self.runtime_layout_store.struct_fields.sliceRange(struct_data.getFields());
                 var i: usize = 0;
                 while (i < fields.len) : (i += 1) {
                     const field_layout = self.runtime_layout_store.getLayout(fields.get(i).layout);
@@ -12506,7 +12249,7 @@ pub const Interpreter = struct {
                     // Zero-sized tag union (single variant with no payload) - just push ZST value
                     const dest = try self.pushRaw(layout_val, 0, rt_var);
                     try value_stack.push(dest);
-                } else if (layout_val.tag == .record or layout_val.tag == .tuple or layout_val.tag == .tag_union) {
+                } else if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
                     const args_exprs = self.env.store.sliceExpr(tag.args);
                     const arg_vars_range = tag_list.items[tag_index].args;
                     const arg_rt_vars = self.runtime_types.sliceVars(arg_vars_range);
@@ -12517,8 +12260,8 @@ pub const Interpreter = struct {
                         try value_stack.push(value);
                     } else {
                         // Has payload args - schedule collection
-                        // layout_type: 0=record, 1=tuple, 2=tag_union
-                        const layout_type: u8 = if (layout_val.tag == .record) 0 else if (layout_val.tag == .tuple) 1 else 2;
+                        // layout_type: 0=record-style struct, 1=tuple-style struct, 2=tag_union
+                        const layout_type: u8 = if (layout_val.tag == .struct_) (if (isRecordStyleStruct(layout_val, &self.runtime_layout_store)) @as(u8, 0) else 1) else 2;
                         try work_stack.push(.{ .apply_continuation = .{ .tag_collect = .{
                             .collected_count = 0,
                             .remaining_args = args_exprs,
@@ -13763,62 +13506,16 @@ pub const Interpreter = struct {
             }
             self.triggerCrash("e_zero_argument_tag: scalar layout is not int", false, roc_ops);
             return error.Crash;
-        } else if (layout_val.tag == .record) {
-            // Record { tag: Discriminant, payload: ZST }
+        } else if (layout_val.tag == .struct_) {
+            // Struct tag union (record-style or tuple-style)
             var dest = try self.pushRaw(layout_val, 0, rt_var);
-            var acc = try dest.asRecord(&self.runtime_layout_store);
-            const tag_idx = acc.findFieldIndex(self.env.getIdent(self.env.idents.tag)) orelse {
-                self.triggerCrash("e_zero_argument_tag: tag field not found", false, roc_ops);
-                return error.Crash;
-            };
-            // Get rt_var for the tag field from the record type
-            const record_resolved = self.runtime_types.resolveVar(rt_var);
-            const tag_rt_var = blk: {
-                if (record_resolved.desc.content == .structure) {
-                    const flat = record_resolved.desc.content.structure;
-                    const fields_range = switch (flat) {
-                        .record => |rec| rec.fields,
-                        .record_unbound => |fields| fields,
-                        else => break :blk try self.runtime_types.fresh(),
-                    };
-                    const fields = self.runtime_types.getRecordFieldsSlice(fields_range);
-                    var i: usize = 0;
-                    while (i < fields.len) : (i += 1) {
-                        const f = fields.get(i);
-                        if (f.name == self.env.idents.tag) {
-                            break :blk f.var_;
-                        }
-                    }
-                }
-                break :blk try self.runtime_types.fresh();
-            };
-            const tag_field = try acc.getFieldByIndex(tag_idx, tag_rt_var);
+            const tag_field = try getStructTagFieldWithRtVar(self, &dest, layout_val, rt_var, roc_ops);
             if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                 var tmp = tag_field;
                 tmp.is_initialized = false;
                 try tmp.setInt(@intCast(tag_index));
             } else {
-                self.triggerCrash("e_zero_argument_tag: record tag field is not scalar int", false, roc_ops);
-                return error.Crash;
-            }
-            return dest;
-        } else if (layout_val.tag == .tuple) {
-            // Tuple (payload, tag) - tag unions are now represented as tuples
-            var dest = try self.pushRaw(layout_val, 0, rt_var);
-            var acc = try dest.asTuple(&self.runtime_layout_store);
-            // Element 1 is the tag discriminant - get its rt_var from the tuple type
-            const tuple_resolved = self.runtime_types.resolveVar(rt_var);
-            const elem_rt_var = if (tuple_resolved.desc.content == .structure and tuple_resolved.desc.content.structure == .tuple) blk: {
-                const elem_vars = self.runtime_types.sliceVars(tuple_resolved.desc.content.structure.tuple.elems);
-                break :blk if (elem_vars.len > 1) elem_vars[1] else rt_var;
-            } else rt_var;
-            const tag_field = try acc.getElement(1, elem_rt_var);
-            if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
-                var tmp = tag_field;
-                tmp.is_initialized = false;
-                try tmp.setInt(@intCast(tag_index));
-            } else {
-                self.triggerCrash("e_zero_argument_tag: tuple tag field is not scalar int", false, roc_ops);
+                self.triggerCrash("e_zero_argument_tag: struct tag field is not scalar int", false, roc_ops);
                 return error.Crash;
             }
             return dest;
@@ -13852,51 +13549,10 @@ pub const Interpreter = struct {
         layout_val: Layout,
         roc_ops: *RocOps,
     ) Error!StackValue {
-        if (layout_val.tag == .record) {
+        if (layout_val.tag == .struct_) {
+            // Struct tag union (record-style or tuple-style)
             var dest = try self.pushRaw(layout_val, 0, rt_var);
-            var acc = try dest.asRecord(&self.runtime_layout_store);
-            const tag_field_idx = acc.findFieldIndex(self.env.getIdent(self.env.idents.tag)) orelse {
-                self.triggerCrash("e_tag: tag field not found", false, roc_ops);
-                return error.Crash;
-            };
-            // Get rt_var for the tag field from the record type
-            const record_resolved = self.runtime_types.resolveVar(rt_var);
-            const tag_rt_var = blk: {
-                if (record_resolved.desc.content == .structure) {
-                    const flat = record_resolved.desc.content.structure;
-                    const fields_range = switch (flat) {
-                        .record => |rec| rec.fields,
-                        .record_unbound => |fields| fields,
-                        else => break :blk try self.runtime_types.fresh(),
-                    };
-                    const fields = self.runtime_types.getRecordFieldsSlice(fields_range);
-                    var i: usize = 0;
-                    while (i < fields.len) : (i += 1) {
-                        const f = fields.get(i);
-                        if (f.name == self.env.idents.tag) {
-                            break :blk f.var_;
-                        }
-                    }
-                }
-                break :blk try self.runtime_types.fresh();
-            };
-            const tag_field = try acc.getFieldByIndex(tag_field_idx, tag_rt_var);
-            if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
-                var tmp = tag_field;
-                tmp.is_initialized = false;
-                try tmp.setInt(@intCast(tag_index));
-            }
-            return dest;
-        } else if (layout_val.tag == .tuple) {
-            var dest = try self.pushRaw(layout_val, 0, rt_var);
-            var acc = try dest.asTuple(&self.runtime_layout_store);
-            // Get element rt_var from tuple type
-            const tuple_resolved = self.runtime_types.resolveVar(rt_var);
-            const elem_rt_var = if (tuple_resolved.desc.content == .structure and tuple_resolved.desc.content.structure == .tuple) blk: {
-                const elem_vars = self.runtime_types.sliceVars(tuple_resolved.desc.content.structure.tuple.elems);
-                break :blk if (elem_vars.len > 1) elem_vars[1] else rt_var;
-            } else rt_var;
-            const tag_field = try acc.getElement(1, elem_rt_var);
+            const tag_field = try getStructTagFieldWithRtVar(self, &dest, layout_val, rt_var, roc_ops);
             if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                 var tmp = tag_field;
                 tmp.is_initialized = false;
@@ -15165,7 +14821,7 @@ pub const Interpreter = struct {
                 defer tuple_val.decref(&self.runtime_layout_store, roc_ops);
 
                 // Verify the value is actually a tuple
-                if (tuple_val.layout.tag != .tuple) {
+                if (tuple_val.layout.tag != .struct_) {
                     return error.TypeMismatch;
                 }
 
@@ -15507,7 +15163,7 @@ pub const Interpreter = struct {
                     if (rc.has_extension) {
                         base_value_opt = value_stack.pop() orelse return error.Crash;
                         const base_value = base_value_opt.?;
-                        if (base_value.layout.tag != .record) {
+                        if (base_value.layout.tag != .struct_) {
                             base_value.decref(&self.runtime_layout_store, roc_ops);
                             for (field_values) |fv| fv.decref(&self.runtime_layout_store, roc_ops);
                             return error.TypeMismatch;
@@ -15567,7 +15223,7 @@ pub const Interpreter = struct {
 
                     var dest = try self.pushRaw(rec_layout, 0, rc.rt_var);
                     // Debug assertion for issue #8647
-                    std.debug.assert(dest.layout.tag == .record);
+                    std.debug.assert(dest.layout.tag == .struct_);
                     var accessor = try dest.asRecord(&self.runtime_layout_store);
 
                     // Copy base record fields first
@@ -16123,9 +15779,9 @@ pub const Interpreter = struct {
                             const expected_payload_layout = self.runtime_layout_store.getLayout(variants.get(tc.tag_index).payload_layout);
 
                             // A multi-value tag payload MUST have a tuple layout. If not, it's a compiler bug.
-                            if (expected_payload_layout.tag != .tuple) unreachable;
-                            const expected_tuple_data = self.runtime_layout_store.getTupleData(expected_payload_layout.data.tuple.idx);
-                            const expected_fields = self.runtime_layout_store.tuple_fields.sliceRange(expected_tuple_data.getFields());
+                            if (expected_payload_layout.tag != .struct_) unreachable;
+                            const expected_tuple_data = self.runtime_layout_store.getStructData(expected_payload_layout.data.struct_.idx);
+                            const expected_fields = self.runtime_layout_store.struct_fields.sliceRange(expected_tuple_data.getFields());
 
                             // Create tuple with expected layouts for proper sizing
                             // We must use the ORIGINAL index from expected_fields, not the sorted index
@@ -16163,12 +15819,8 @@ pub const Interpreter = struct {
                                                 // Lists have nested element layouts - keep actual
                                                 break :blk false;
                                             },
-                                            .tuple => {
-                                                // Tuples have nested element layouts - keep actual
-                                                break :blk false;
-                                            },
-                                            .record => {
-                                                // Records have nested field layouts - keep actual
+                                            .struct_ => {
+                                                // Structs have nested field layouts - keep actual
                                                 break :blk false;
                                             },
                                             .tag_union => {
@@ -16271,10 +15923,10 @@ pub const Interpreter = struct {
                         } else raw_inner_layout;
 
                         // Build the inner tag union value based on the backing layout type
-                        if (backing_layout.tag == .record or backing_layout.tag == .tuple or backing_layout.tag == .tag_union) {
+                        if (backing_layout.tag == .struct_ or backing_layout.tag == .tag_union) {
                             // Construct the inner value using the same approach as the unboxed case
                             // For simplicity, build a record with {tag, payload}
-                            if (backing_layout.tag == .record) {
+                            if (backing_layout.tag == .struct_) {
                                 var inner_dest = try self.pushRaw(backing_layout, 0, tc.rt_var);
                                 var acc = try inner_dest.asRecord(&self.runtime_layout_store);
                                 const tag_field_idx = acc.findFieldIndex(self.env.getIdent(self.env.idents.tag)) orelse {
@@ -17934,14 +17586,14 @@ pub const Interpreter = struct {
                     // Field access on a record
                     defer receiver_value.decref(&self.runtime_layout_store, roc_ops);
 
-                    if (receiver_value.layout.tag != .record) {
+                    if (receiver_value.layout.tag != .struct_) {
                         var buf: [128]u8 = undefined;
                         const msg = std.fmt.bufPrint(&buf, "Field access on non-record type: {s}", .{@tagName(receiver_value.layout.tag)}) catch "Field access on non-record type";
                         self.triggerCrash(msg, false, roc_ops);
                         return error.TypeMismatch;
                     }
 
-                    const rec_data = self.runtime_layout_store.getRecordData(receiver_value.layout.data.record.idx);
+                    const rec_data = self.runtime_layout_store.getStructData(receiver_value.layout.data.struct_.idx);
                     if (rec_data.fields.count == 0) {
                         return error.TypeMismatch;
                     }
@@ -18101,7 +17753,7 @@ pub const Interpreter = struct {
                         .record, .record_unbound => blk: {
                             // For records, check if this is field access + function call
                             // (e.g., main.render(model) where main is { render: closure, ... })
-                            if (receiver_value.layout.tag == .record) {
+                            if (receiver_value.layout.tag == .struct_) {
                                 // Translate field name from compile-time to runtime ident store
                                 const ct_field_name_str = self.env.getIdent(da.field_name);
                                 const rt_field_name = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(ct_field_name_str));
@@ -19440,7 +19092,7 @@ pub const Interpreter = struct {
 
                 // Override elem_layout if physical is tuple but type-based is tag_union
                 // This ensures proper discriminant extraction during pattern matching
-                if (effective_elem_layout.tag == .tag_union and elem_layout.tag == .tuple) {
+                if (effective_elem_layout.tag == .tag_union and elem_layout.tag == .struct_) {
                     elem_layout = effective_elem_layout;
                 }
 

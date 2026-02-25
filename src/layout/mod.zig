@@ -3,7 +3,7 @@
 //! This module provides the core layout system used by the Roc compiler to determine
 //! how values are represented in memory. It includes:
 //!
-//! - Layout definitions for scalars, containers, records, tuples, and closures
+//! - Layout definitions for scalars, containers, structs (records/tuples), and closures
 //! - A layout store that manages layout instances and their dependencies
 //! - Work queue management for stack-safe layout computation
 //!
@@ -21,6 +21,12 @@ pub const Scalar = @import("layout.zig").Scalar;
 pub const ScalarTag = @import("layout.zig").ScalarTag;
 pub const ScalarUnion = @import("layout.zig").ScalarUnion;
 pub const Closure = @import("layout.zig").Closure;
+// Unified struct types (records and tuples are both structs at the layout level)
+pub const StructField = @import("layout.zig").StructField;
+pub const StructLayout = @import("layout.zig").StructLayout;
+pub const StructIdx = @import("layout.zig").StructIdx;
+pub const StructData = @import("layout.zig").StructData;
+// Backwards-compat aliases
 pub const RecordField = @import("layout.zig").RecordField;
 pub const RecordLayout = @import("layout.zig").RecordLayout;
 pub const RecordIdx = @import("layout.zig").RecordIdx;
@@ -41,6 +47,8 @@ pub const SizeAlign = @import("layout.zig").SizeAlign;
 // Re-export Info types
 pub const ListInfo = @import("layout.zig").ListInfo;
 pub const BoxInfo = @import("layout.zig").BoxInfo;
+pub const StructInfo = @import("layout.zig").StructInfo;
+// Backwards-compat aliases
 pub const RecordInfo = @import("layout.zig").RecordInfo;
 pub const TupleInfo = @import("layout.zig").TupleInfo;
 pub const TagUnionInfo = @import("layout.zig").TagUnionInfo;

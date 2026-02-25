@@ -89,39 +89,21 @@ fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
         }
         return;
     }
-    if (layout.tag == .record) {
+    if (layout.tag == .struct_) {
         if (ptr == null) return;
-        const record_info = layout_cache.getRecordInfo(layout);
-        if (record_info.data.fields.count == 0) return;
+        const struct_info = layout_cache.getStructInfo(layout);
+        if (struct_info.data.fields.count == 0) return;
 
-        const field_layouts = record_info.fields;
+        const field_layouts = struct_info.fields;
         const base_ptr = @as([*]u8, @ptrCast(ptr.?));
 
         var field_index: usize = 0;
         while (field_index < field_layouts.len) : (field_index += 1) {
             const field_data = field_layouts.get(field_index);
             const field_layout = layout_cache.getLayout(field_data.layout);
-            const field_offset = layout_cache.getRecordFieldOffset(layout.data.record.idx, @intCast(field_index));
+            const field_offset = layout_cache.getStructFieldOffset(layout.data.struct_.idx, @intCast(field_index));
             const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
             increfLayoutPtr(field_layout, field_ptr, layout_cache, roc_ops, null);
-        }
-        return;
-    }
-    if (layout.tag == .tuple) {
-        if (ptr == null) return;
-        const tuple_info = layout_cache.getTupleInfo(layout);
-        if (tuple_info.data.fields.count == 0) return;
-
-        const element_layouts = tuple_info.fields;
-        const base_ptr = @as([*]u8, @ptrCast(ptr.?));
-
-        var elem_index: usize = 0;
-        while (elem_index < element_layouts.len) : (elem_index += 1) {
-            const elem_data = element_layouts.get(elem_index);
-            const elem_layout = layout_cache.getLayout(elem_data.layout);
-            const elem_offset = layout_cache.getTupleElementOffset(layout.data.tuple.idx, @intCast(elem_index));
-            const elem_ptr = @as(*anyopaque, @ptrCast(base_ptr + elem_offset));
-            increfLayoutPtr(elem_layout, elem_ptr, layout_cache, roc_ops, null);
         }
         return;
     }
@@ -222,39 +204,21 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
         slot.* = 0;
         return;
     }
-    if (layout.tag == .record) {
+    if (layout.tag == .struct_) {
         if (ptr == null) return;
-        const record_info = layout_cache.getRecordInfo(layout);
-        if (record_info.data.fields.count == 0) return;
+        const struct_info = layout_cache.getStructInfo(layout);
+        if (struct_info.data.fields.count == 0) return;
 
-        const field_layouts = record_info.fields;
+        const field_layouts = struct_info.fields;
         const base_ptr = @as([*]u8, @ptrCast(ptr.?));
 
         var field_index: usize = 0;
         while (field_index < field_layouts.len) : (field_index += 1) {
             const field_data = field_layouts.get(field_index);
             const field_layout = layout_cache.getLayout(field_data.layout);
-            const field_offset = layout_cache.getRecordFieldOffset(layout.data.record.idx, @intCast(field_index));
+            const field_offset = layout_cache.getStructFieldOffset(layout.data.struct_.idx, @intCast(field_index));
             const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
             decrefLayoutPtr(field_layout, field_ptr, layout_cache, ops, null);
-        }
-        return;
-    }
-    if (layout.tag == .tuple) {
-        if (ptr == null) return;
-        const tuple_info = layout_cache.getTupleInfo(layout);
-        if (tuple_info.data.fields.count == 0) return;
-
-        const element_layouts = tuple_info.fields;
-        const base_ptr = @as([*]u8, @ptrCast(ptr.?));
-
-        var elem_index: usize = 0;
-        while (elem_index < element_layouts.len) : (elem_index += 1) {
-            const elem_data = element_layouts.get(elem_index);
-            const elem_layout = layout_cache.getLayout(elem_data.layout);
-            const elem_offset = layout_cache.getTupleElementOffset(layout.data.tuple.idx, @intCast(elem_index));
-            const elem_ptr = @as(*anyopaque, @ptrCast(base_ptr + elem_offset));
-            decrefLayoutPtr(elem_layout, elem_ptr, layout_cache, ops, null);
         }
         return;
     }
@@ -284,13 +248,13 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
             traceRefcount("DECREF closure captures_layout.tag={}", .{@intFromEnum(captures_layout.tag)});
         }
 
-        // Only decref if there are actual captures (record with fields)
-        if (captures_layout.tag == .record) {
-            const record_data = layout_cache.getRecordData(captures_layout.data.record.idx);
+        // Only decref if there are actual captures (struct with fields)
+        if (captures_layout.tag == .struct_) {
+            const struct_data = layout_cache.getStructData(captures_layout.data.struct_.idx);
             if (comptime trace_refcount) {
-                traceRefcount("DECREF closure record fields={}", .{record_data.fields.count});
+                traceRefcount("DECREF closure struct fields={}", .{struct_data.fields.count});
             }
-            if (record_data.fields.count > 0) {
+            if (struct_data.fields.count > 0) {
                 const header_size = @sizeOf(layout_mod.Closure);
                 const cap_align = captures_layout.alignment(layout_cache.targetUsize());
                 const aligned_off = std.mem.alignForward(usize, header_size, @intCast(cap_align.toByteUnits()));
@@ -474,11 +438,11 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         return;
     }
 
-    if (self.layout.tag == .record) {
+    if (self.layout.tag == .struct_) {
         // Copy raw bytes first, then recursively incref all fields
         // We call incref on ALL fields (not just isRefcounted()) because:
         // - For directly refcounted types (str, list, box): increfs them
-        // - For nested records/tuples: recursively handles their contents
+        // - For nested structs: recursively handles their contents
         // - For scalars: incref is a no-op
         // This is symmetric with decref which also processes all fields.
         std.debug.assert(self.ptr != null);
@@ -486,50 +450,20 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
         @memmove(dst, src);
 
-        const record_info = layout_cache.getRecordInfo(self.layout);
-        if (record_info.data.fields.count == 0) return;
+        const struct_info = layout_cache.getStructInfo(self.layout);
+        if (struct_info.data.fields.count == 0) return;
 
         const base_ptr = @as([*]u8, @ptrCast(self.ptr.?));
 
         var field_index: usize = 0;
-        while (field_index < record_info.fields.len) : (field_index += 1) {
-            const field_data = record_info.fields.get(field_index);
+        while (field_index < struct_info.fields.len) : (field_index += 1) {
+            const field_data = struct_info.fields.get(field_index);
             const field_layout = layout_cache.getLayout(field_data.layout);
 
-            const field_offset = layout_cache.getRecordFieldOffset(self.layout.data.record.idx, @intCast(field_index));
+            const field_offset = layout_cache.getStructFieldOffset(self.layout.data.struct_.idx, @intCast(field_index));
             const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
 
             increfLayoutPtr(field_layout, field_ptr, layout_cache, roc_ops, null);
-        }
-        return;
-    }
-
-    if (self.layout.tag == .tuple) {
-        // Copy raw bytes first, then recursively incref all elements
-        // We call incref on ALL elements (not just isRefcounted()) because:
-        // - For directly refcounted types (str, list, box): increfs them
-        // - For nested records/tuples: recursively handles their contents
-        // - For scalars: incref is a no-op
-        // This is symmetric with decref which also processes all elements.
-        std.debug.assert(self.ptr != null);
-        const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
-        const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
-        @memmove(dst, src);
-
-        const tuple_info = layout_cache.getTupleInfo(self.layout);
-        if (tuple_info.data.fields.count == 0) return;
-
-        const base_ptr = @as([*]u8, @ptrCast(self.ptr.?));
-
-        var elem_index: usize = 0;
-        while (elem_index < tuple_info.fields.len) : (elem_index += 1) {
-            const elem_data = tuple_info.fields.get(elem_index);
-            const elem_layout = layout_cache.getLayout(elem_data.layout);
-
-            const elem_offset = layout_cache.getTupleElementOffset(self.layout.data.tuple.idx, @intCast(elem_index));
-            const elem_ptr = @as(*anyopaque, @ptrCast(base_ptr + elem_offset));
-
-            increfLayoutPtr(elem_layout, elem_ptr, layout_cache, roc_ops, null);
         }
         return;
     }
@@ -552,18 +486,18 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
 
         const captures_layout = layout_cache.getLayout(closure.captures_layout_idx);
 
-        // Only incref if there are actual captures (record with fields)
-        if (captures_layout.tag == .record) {
-            const record_data = layout_cache.getRecordData(captures_layout.data.record.idx);
-            if (record_data.fields.count > 0) {
+        // Only incref if there are actual captures (struct with fields)
+        if (captures_layout.tag == .struct_) {
+            const struct_data = layout_cache.getStructData(captures_layout.data.struct_.idx);
+            if (struct_data.fields.count > 0) {
                 if (comptime trace_refcount) {
                     traceRefcount("INCREF closure captures ptr=0x{x} fields={}", .{
                         @intFromPtr(self.ptr),
-                        record_data.fields.count,
+                        struct_data.fields.count,
                     });
                 }
 
-                // Calculate the offset to the captures record (after header, with alignment)
+                // Calculate the offset to the captures struct (after header, with alignment)
                 const header_size = @sizeOf(layout_mod.Closure);
                 const cap_align = captures_layout.alignment(layout_cache.targetUsize());
                 const aligned_off = std.mem.alignForward(usize, header_size, @intCast(cap_align.toByteUnits()));
@@ -907,15 +841,15 @@ pub fn setDec(self: *StackValue, value: RocDec, roc_ops: *RocOps) void {
 pub fn asTuple(self: StackValue, layout_cache: *LayoutStore) !TupleAccessor {
     std.debug.assert(self.is_initialized); // Tuple must be initialized before accessing
     std.debug.assert(self.ptr != null);
-    std.debug.assert(self.layout.tag == .tuple);
+    std.debug.assert(self.layout.tag == .struct_);
 
-    const tuple_info = layout_cache.getTupleInfo(self.layout);
+    const struct_info = layout_cache.getStructInfo(self.layout);
 
     return TupleAccessor{
         .base_value = self,
         .layout_cache = layout_cache,
         .tuple_layout = self.layout,
-        .element_layouts = tuple_info.fields,
+        .element_layouts = struct_info.fields,
     };
 }
 
@@ -938,7 +872,7 @@ pub const TupleAccessor = struct {
         const element_layout = self.layout_cache.getLayout(element_layout_info.layout);
 
         // Get the offset for this element within the tuple (using sorted index)
-        const element_offset = self.layout_cache.getTupleElementOffset(self.tuple_layout.data.tuple.idx, @intCast(sorted_index));
+        const element_offset = self.layout_cache.getTupleElementOffset(self.tuple_layout.data.struct_.idx, @intCast(sorted_index));
 
         // Calculate the element pointer with proper alignment
         const base_ptr = @as([*]u8, @ptrCast(self.base_value.ptr.?));
@@ -962,7 +896,7 @@ pub const TupleAccessor = struct {
         const sorted_index = self.findElementIndexByOriginal(original_index) orelse return error.TupleIndexOutOfBounds;
         std.debug.assert(self.base_value.is_initialized);
         std.debug.assert(self.base_value.ptr != null);
-        const element_offset = self.layout_cache.getTupleElementOffset(self.tuple_layout.data.tuple.idx, @intCast(sorted_index));
+        const element_offset = self.layout_cache.getTupleElementOffset(self.tuple_layout.data.struct_.idx, @intCast(sorted_index));
         const base_ptr = @as([*]u8, @ptrCast(self.base_value.ptr.?));
         return @as(*anyopaque, @ptrCast(base_ptr + element_offset));
     }
@@ -1141,15 +1075,15 @@ fn storeListElementCount(list: *RocList, elements_refcounted: bool, roc_ops: *Ro
 pub fn asRecord(self: StackValue, layout_cache: *LayoutStore) !RecordAccessor {
     std.debug.assert(self.is_initialized); // Record must be initialized before accessing
     // Note: ptr can be null for records with all ZST fields
-    std.debug.assert(self.layout.tag == .record);
+    std.debug.assert(self.layout.tag == .struct_);
 
-    const record_info = layout_cache.getRecordInfo(self.layout);
+    const struct_info = layout_cache.getStructInfo(self.layout);
 
     return RecordAccessor{
         .base_value = self,
         .layout_cache = layout_cache,
         .record_layout = self.layout,
-        .field_layouts = record_info.fields,
+        .field_layouts = struct_info.fields,
     };
 }
 
@@ -1173,7 +1107,7 @@ pub const RecordAccessor = struct {
         const field_layout = self.layout_cache.getLayout(field_layout_info.layout);
 
         // Get the offset for this field within the record
-        const field_offset = self.layout_cache.getRecordFieldOffset(self.record_layout.data.record.idx, @intCast(index));
+        const field_offset = self.layout_cache.getRecordFieldOffset(self.record_layout.data.struct_.idx, @intCast(index));
 
         // Calculate the field pointer with proper alignment
         const base_ptr = @as([*]u8, @ptrCast(self.base_value.ptr.?));
@@ -1195,7 +1129,7 @@ pub const RecordAccessor = struct {
     /// Get a StackValue for the field with the given name
     pub fn getFieldByName(self: RecordAccessor, field_name: []const u8, field_rt_var: types.Var) !?StackValue {
         const field_offset = self.layout_cache.getRecordFieldOffsetByNameStr(
-            self.record_layout.data.record.idx,
+            self.record_layout.data.struct_.idx,
             field_name,
         ) orelse return null;
 
@@ -1206,7 +1140,7 @@ pub const RecordAccessor = struct {
             // We need to get the field name from the layout cache's identifier store
             // This is a limitation - we'd need access to the env to get the actual name
             // For now, we'll use the offset-based approach
-            const this_field_offset = self.layout_cache.getRecordFieldOffset(self.record_layout.data.record.idx, @intCast(i));
+            const this_field_offset = self.layout_cache.getRecordFieldOffset(self.record_layout.data.struct_.idx, @intCast(i));
             if (this_field_offset == field_offset) {
                 field_layout = self.layout_cache.getLayout(field_info.layout);
                 break;
@@ -1530,13 +1464,8 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore, roc_ops: *RocOps) vo
         }
         return;
     }
-    // Handle records by recursively incref'ing each field (symmetric with decref)
-    if (self.layout.tag == .record) {
-        increfLayoutPtr(self.layout, self.ptr, layout_cache, roc_ops, null);
-        return;
-    }
-    // Handle tuples by recursively incref'ing each element (symmetric with decref)
-    if (self.layout.tag == .tuple) {
+    // Handle structs (records/tuples) by recursively incref'ing each field (symmetric with decref)
+    if (self.layout.tag == .struct_) {
         increfLayoutPtr(self.layout, self.ptr, layout_cache, roc_ops, null);
         return;
     }
@@ -1592,14 +1521,14 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore, roc_ops: *RocOps) vo
 
         const captures_layout = layout_cache.getLayout(closure_header.captures_layout_idx);
 
-        // Only incref if there are actual captures (record with fields)
-        if (captures_layout.tag == .record) {
-            const record_data = layout_cache.getRecordData(captures_layout.data.record.idx);
-            if (record_data.fields.count > 0) {
+        // Only incref if there are actual captures (struct with fields)
+        if (captures_layout.tag == .struct_) {
+            const struct_data = layout_cache.getStructData(captures_layout.data.struct_.idx);
+            if (struct_data.fields.count > 0) {
                 if (comptime trace_refcount) {
                     traceRefcount("INCREF closure captures ptr=0x{x} fields={}", .{
                         @intFromPtr(self.ptr),
-                        record_data.fields.count,
+                        struct_data.fields.count,
                     });
                 }
                 const header_size = @sizeOf(layout_mod.Closure);
@@ -1750,15 +1679,15 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             slot.* = 0;
             return;
         },
-        .record => {
+        .struct_ => {
             if (self.ptr == null) return;
-            const record_info = layout_cache.getRecordInfo(self.layout);
-            if (record_info.data.fields.count == 0) return;
+            const struct_info = layout_cache.getStructInfo(self.layout);
+            if (struct_info.data.fields.count == 0) return;
 
             if (comptime trace_refcount) {
-                traceRefcount("DECREF record ptr=0x{x} fields={}", .{
+                traceRefcount("DECREF struct ptr=0x{x} fields={}", .{
                     @intFromPtr(self.ptr),
-                    record_info.data.fields.count,
+                    struct_info.data.fields.count,
                 });
             }
 
@@ -1769,21 +1698,6 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             if (self.ptr != null) {
                 self.clearBoxSlot();
             }
-            return;
-        },
-        .tuple => {
-            if (self.ptr == null) return;
-            const tuple_info = layout_cache.getTupleInfo(self.layout);
-            if (tuple_info.data.fields.count == 0) return;
-
-            if (comptime trace_refcount) {
-                traceRefcount("DECREF tuple ptr=0x{x} fields={}", .{
-                    @intFromPtr(self.ptr),
-                    tuple_info.data.fields.count,
-                });
-            }
-
-            decrefLayoutPtr(self.layout, self.ptr, layout_cache, ops, null);
             return;
         },
         .closure => {

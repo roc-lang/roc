@@ -1381,7 +1381,7 @@ fn generateMatchBranches(self: *Self, branches: []const LIR.LirMatchBranch, valu
             // Record destructuring: bind each field to a local
             const ls = self.getLayoutStore();
             const l = ls.getLayout(rec_pat.record_layout);
-            std.debug.assert(l.tag == .record);
+            std.debug.assert(l.tag == .struct_);
             const field_patterns = self.store.getPatternSpan(rec_pat.fields);
 
             for (field_patterns, 0..) |field_pat_id, i| {
@@ -1391,7 +1391,7 @@ fn generateMatchBranches(self: *Self, branches: []const LIR.LirMatchBranch, valu
                         const bind_vt = self.resolveValType(bind.layout_idx);
                         const bind_byte_size = self.layoutByteSize(bind.layout_idx);
                         const local_idx = self.storage.allocLocal(bind.symbol, bind_vt) catch return error.OutOfMemory;
-                        const field_offset = ls.getRecordFieldOffset(l.data.record.idx, @intCast(i));
+                        const field_offset = ls.getStructFieldOffset(l.data.struct_.idx, @intCast(i));
                         self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                         WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
                         if (self.isCompositeLayout(bind.layout_idx)) {
@@ -1408,7 +1408,7 @@ fn generateMatchBranches(self: *Self, branches: []const LIR.LirMatchBranch, valu
                     },
                     .wildcard => {},
                     .record => |inner_rec| {
-                        const field_offset = ls.getRecordFieldOffset(l.data.record.idx, @intCast(i));
+                        const field_offset = ls.getStructFieldOffset(l.data.struct_.idx, @intCast(i));
                         self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                         WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
                         if (field_offset > 0) {
@@ -1422,7 +1422,7 @@ fn generateMatchBranches(self: *Self, branches: []const LIR.LirMatchBranch, valu
                         try self.bindRecordPattern(field_ptr, inner_rec);
                     },
                     .tuple => |inner_tup| {
-                        const field_offset = ls.getRecordFieldOffset(l.data.record.idx, @intCast(i));
+                        const field_offset = ls.getStructFieldOffset(l.data.struct_.idx, @intCast(i));
                         self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                         WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
                         if (field_offset > 0) {
@@ -1906,14 +1906,7 @@ fn generateStructuralEq(self: *Self, lhs: LirExprId, rhs: LirExprId, negate: boo
         if (self.layout_store) |ls| {
             const l = ls.getLayout(lay_idx);
             switch (l.tag) {
-                .record => {
-                    try self.compareCompositeByLayout(lhs_local, rhs_local, lay_idx);
-                    if (negate) {
-                        self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
-                    }
-                    return;
-                },
-                .tuple => {
+                .struct_ => {
                     try self.compareCompositeByLayout(lhs_local, rhs_local, lay_idx);
                     if (negate) {
                         self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
@@ -1952,10 +1945,10 @@ fn compareCompositeByLayout(self: *Self, lhs_local: u32, rhs_local: u32, layout_
     const l = ls.getLayout(layout_idx);
 
     switch (l.tag) {
-        .record => {
-            const record_idx = l.data.record.idx;
-            const record_data = ls.getRecordData(record_idx);
-            const field_count = record_data.fields.count;
+        .struct_ => {
+            const struct_idx = l.data.struct_.idx;
+            const struct_data = ls.getStructData(struct_idx);
+            const field_count = struct_data.fields.count;
             if (field_count == 0) {
                 self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                 WasmModule.leb128WriteI32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
@@ -1965,9 +1958,9 @@ fn compareCompositeByLayout(self: *Self, lhs_local: u32, rhs_local: u32, layout_
             var first = true;
             var field_i: u32 = 0;
             while (field_i < field_count) : (field_i += 1) {
-                const field_offset = ls.getRecordFieldOffset(record_idx, @intCast(field_i));
-                const field_size = ls.getRecordFieldSize(record_idx, @intCast(field_i));
-                const field_layout_idx = ls.getRecordFieldLayout(record_idx, @intCast(field_i));
+                const field_offset = ls.getStructFieldOffset(struct_idx, @intCast(field_i));
+                const field_size = ls.getStructFieldSize(struct_idx, @intCast(field_i));
+                const field_layout_idx = ls.getStructFieldLayout(struct_idx, @intCast(field_i));
 
                 if (field_size == 0) continue;
 
@@ -1981,38 +1974,6 @@ fn compareCompositeByLayout(self: *Self, lhs_local: u32, rhs_local: u32, layout_
 
             if (first) {
                 // All fields were zero-size
-                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                WasmModule.leb128WriteI32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
-            }
-        },
-        .tuple => {
-            const tuple_idx = l.data.tuple.idx;
-            const tuple_data = ls.getTupleData(tuple_idx);
-            const elem_count = tuple_data.fields.count;
-            if (elem_count == 0) {
-                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                WasmModule.leb128WriteI32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
-                return;
-            }
-
-            var first = true;
-            var elem_i: u32 = 0;
-            while (elem_i < elem_count) : (elem_i += 1) {
-                const elem_offset = ls.getTupleElementOffset(tuple_idx, @intCast(elem_i));
-                const elem_size = ls.getTupleElementSize(tuple_idx, @intCast(elem_i));
-                const elem_layout_idx = ls.getTupleElementLayout(tuple_idx, @intCast(elem_i));
-
-                if (elem_size == 0) continue;
-
-                try self.compareFieldByLayout(lhs_local, rhs_local, elem_offset, elem_size, elem_layout_idx);
-
-                if (!first) {
-                    self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-                }
-                first = false;
-            }
-
-            if (first) {
                 self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                 WasmModule.leb128WriteI32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
             }
@@ -2113,8 +2074,8 @@ fn compareTagUnionByLayout(self: *Self, lhs_local: u32, rhs_local: u32, layout_i
 
                 // This variant matches - compare its payload
                 const variant_layout_tag = ls.getLayout(variant_payload_layout).tag;
-                if (variant_payload_layout == .str or variant_layout_tag == .record or
-                    variant_layout_tag == .tuple or variant_layout_tag == .tag_union or
+                if (variant_payload_layout == .str or variant_layout_tag == .struct_ or
+                    variant_layout_tag == .tag_union or
                     variant_layout_tag == .list)
                 {
                     // Layout-aware comparison
@@ -2266,7 +2227,7 @@ fn compareFieldByLayout(
                 WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
             }
         },
-        .record, .tuple, .tag_union => {
+        .struct_, .tag_union => {
             // Nested composite: create offset locals and recurse
             const lhs_field_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             const rhs_field_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -7179,7 +7140,7 @@ fn emitZeroInit(self: *Self, base_local: u32, byte_count: u32) Allocator.Error!v
 fn generateRecord(self: *Self, r: anytype) Allocator.Error!void {
     const ls = self.getLayoutStore();
     const l = ls.getLayout(r.record_layout);
-    std.debug.assert(l.tag == .record);
+    std.debug.assert(l.tag == .struct_);
 
     const size = ls.layoutSize(l);
     if (size == 0) {
@@ -7189,7 +7150,7 @@ fn generateRecord(self: *Self, r: anytype) Allocator.Error!void {
         return;
     }
 
-    const align_val: u32 = @intCast(l.data.record.alignment.toByteUnits());
+    const align_val: u32 = @intCast(l.data.struct_.alignment.toByteUnits());
 
     const frame_offset = try self.allocStackMemory(size, align_val);
 
@@ -7211,7 +7172,7 @@ fn generateRecord(self: *Self, r: anytype) Allocator.Error!void {
     defer self.allocator.free(field_val_types);
 
     for (fields, 0..) |field_expr_id, i| {
-        const field_layout_idx = ls.getRecordFieldLayout(l.data.record.idx, @intCast(i));
+        const field_layout_idx = ls.getStructFieldLayout(l.data.struct_.idx, @intCast(i));
         const is_composite = self.isCompositeLayout(field_layout_idx);
         const field_vt = WasmLayout.resultValTypeWithStore(field_layout_idx, ls);
 
@@ -7239,9 +7200,9 @@ fn generateRecord(self: *Self, r: anytype) Allocator.Error!void {
 
     // Store each field from pre-computed locals
     for (fields, 0..) |_, i| {
-        const field_offset = ls.getRecordFieldOffset(l.data.record.idx, @intCast(i));
-        const field_layout_idx = ls.getRecordFieldLayout(l.data.record.idx, @intCast(i));
-        const field_byte_size = ls.getRecordFieldSize(l.data.record.idx, @intCast(i));
+        const field_offset = ls.getStructFieldOffset(l.data.struct_.idx, @intCast(i));
+        const field_layout_idx = ls.getStructFieldLayout(l.data.struct_.idx, @intCast(i));
+        const field_byte_size = ls.getStructFieldSize(l.data.struct_.idx, @intCast(i));
         const is_composite = self.isCompositeLayout(field_layout_idx);
 
         if (is_composite and field_byte_size > 0) {
@@ -7267,15 +7228,15 @@ fn generateRecord(self: *Self, r: anytype) Allocator.Error!void {
 fn bindRecordPattern(self: *Self, ptr_local: u32, rec: anytype) Allocator.Error!void {
     const ls = self.getLayoutStore();
     const record_layout = ls.getLayout(rec.record_layout);
-    std.debug.assert(record_layout.tag == .record);
+    std.debug.assert(record_layout.tag == .struct_);
 
     const field_patterns = self.store.getPatternSpan(rec.fields);
     for (field_patterns, 0..) |pat_id, i| {
         const pat = self.store.getPattern(pat_id);
         const field_idx: u16 = @intCast(i);
-        const field_offset = ls.getRecordFieldOffset(record_layout.data.record.idx, field_idx);
-        const field_byte_size = ls.getRecordFieldSize(record_layout.data.record.idx, field_idx);
-        const field_layout_idx = ls.getRecordFieldLayout(record_layout.data.record.idx, field_idx);
+        const field_offset = ls.getStructFieldOffset(record_layout.data.struct_.idx, field_idx);
+        const field_byte_size = ls.getStructFieldSize(record_layout.data.struct_.idx, field_idx);
+        const field_layout_idx = ls.getStructFieldLayout(record_layout.data.struct_.idx, field_idx);
 
         switch (pat) {
             .bind => |bind| {
@@ -7341,15 +7302,15 @@ fn bindRecordPattern(self: *Self, ptr_local: u32, rec: anytype) Allocator.Error!
 fn bindTuplePattern(self: *Self, ptr_local: u32, tup: anytype) Allocator.Error!void {
     const ls = self.getLayoutStore();
     const tuple_layout = ls.getLayout(tup.tuple_layout);
-    std.debug.assert(tuple_layout.tag == .tuple);
+    std.debug.assert(tuple_layout.tag == .struct_);
 
     const elem_patterns = self.store.getPatternSpan(tup.elems);
     for (elem_patterns, 0..) |pat_id, i| {
         const pat = self.store.getPattern(pat_id);
         const elem_idx: u16 = @intCast(i);
-        const elem_offset = ls.getTupleElementOffsetByOriginalIndex(tuple_layout.data.tuple.idx, elem_idx);
-        const elem_byte_size = ls.getTupleElementSizeByOriginalIndex(tuple_layout.data.tuple.idx, elem_idx);
-        const elem_layout_idx = ls.getTupleElementLayoutByOriginalIndex(tuple_layout.data.tuple.idx, elem_idx);
+        const elem_offset = ls.getStructFieldOffsetByOriginalIndex(tuple_layout.data.struct_.idx, elem_idx);
+        const elem_byte_size = ls.getStructFieldSizeByOriginalIndex(tuple_layout.data.struct_.idx, elem_idx);
+        const elem_layout_idx = ls.getStructFieldLayoutByOriginalIndex(tuple_layout.data.struct_.idx, elem_idx);
 
         switch (pat) {
             .bind => |bind| {
@@ -7617,10 +7578,10 @@ fn generateFieldAccess(self: *Self, fa: anytype) Allocator.Error!void {
 
     // Get the field offset
     const record_layout = ls.getLayout(fa.record_layout);
-    std.debug.assert(record_layout.tag == .record);
+    std.debug.assert(record_layout.tag == .struct_);
 
-    const field_offset = ls.getRecordFieldOffset(record_layout.data.record.idx, fa.field_idx);
-    const field_byte_size = ls.getRecordFieldSize(record_layout.data.record.idx, fa.field_idx);
+    const field_offset = ls.getStructFieldOffset(record_layout.data.struct_.idx, fa.field_idx);
+    const field_byte_size = ls.getStructFieldSize(record_layout.data.struct_.idx, fa.field_idx);
 
     // Check if the field is a composite type
     if (self.isCompositeLayout(fa.field_layout) and field_byte_size > 0) {
@@ -7643,7 +7604,7 @@ fn generateFieldAccess(self: *Self, fa: anytype) Allocator.Error!void {
 fn generateTuple(self: *Self, t: anytype) Allocator.Error!void {
     const ls = self.getLayoutStore();
     const l = ls.getLayout(t.tuple_layout);
-    std.debug.assert(l.tag == .tuple);
+    std.debug.assert(l.tag == .struct_);
 
     const size = ls.layoutSize(l);
     if (size == 0) {
@@ -7652,7 +7613,7 @@ fn generateTuple(self: *Self, t: anytype) Allocator.Error!void {
         return;
     }
 
-    const align_val: u32 = @intCast(l.data.tuple.alignment.toByteUnits());
+    const align_val: u32 = @intCast(l.data.struct_.alignment.toByteUnits());
 
     const frame_offset = try self.allocStackMemory(size, align_val);
 
@@ -7670,10 +7631,10 @@ fn generateTuple(self: *Self, t: anytype) Allocator.Error!void {
     // but the layout store has elements sorted by alignment
     const elems = self.store.getExprSpan(t.elems);
     for (elems, 0..) |elem_expr_id, i| {
-        const elem_offset = ls.getTupleElementOffsetByOriginalIndex(l.data.tuple.idx, @intCast(i));
-        const elem_layout_idx = ls.getTupleElementLayoutByOriginalIndex(l.data.tuple.idx, @intCast(i));
+        const elem_offset = ls.getStructFieldOffsetByOriginalIndex(l.data.struct_.idx, @intCast(i));
+        const elem_layout_idx = ls.getStructFieldLayoutByOriginalIndex(l.data.struct_.idx, @intCast(i));
         const elem_vt = WasmLayout.resultValTypeWithStore(elem_layout_idx, ls);
-        const elem_byte_size = ls.getTupleElementSizeByOriginalIndex(l.data.tuple.idx, @intCast(i));
+        const elem_byte_size = ls.getStructFieldSizeByOriginalIndex(l.data.struct_.idx, @intCast(i));
 
         try self.generateExpr(elem_expr_id);
 
@@ -7702,10 +7663,10 @@ fn generateTupleAccess(self: *Self, ta: anytype) Allocator.Error!void {
     try self.generateExpr(ta.tuple_expr);
 
     const tuple_layout = ls.getLayout(ta.tuple_layout);
-    std.debug.assert(tuple_layout.tag == .tuple);
+    std.debug.assert(tuple_layout.tag == .struct_);
 
-    const elem_offset = ls.getTupleElementOffset(tuple_layout.data.tuple.idx, ta.elem_idx);
-    const elem_byte_size = ls.getTupleElementSize(tuple_layout.data.tuple.idx, ta.elem_idx);
+    const elem_offset = ls.getStructFieldOffset(tuple_layout.data.struct_.idx, ta.elem_idx);
+    const elem_byte_size = ls.getStructFieldSize(tuple_layout.data.struct_.idx, ta.elem_idx);
 
     if (self.isCompositeLayout(ta.elem_layout) and elem_byte_size > 0) {
         // For composite elements, return pointer to element data

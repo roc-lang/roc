@@ -2476,8 +2476,8 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
 
-    // Verify we got a tuple layout
-    try std.testing.expect(result.layout.tag == .tuple);
+    // Verify we got a struct layout (tuples are now structs)
+    try std.testing.expect(result.layout.tag == .struct_);
 
     // Use the TupleAccessor to safely access tuple elements
     const tuple_accessor = try result.asTuple(layout_cache);
@@ -2537,11 +2537,11 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
 
-    // Verify we got a record layout
-    try std.testing.expect(result.layout.tag == .record);
+    // Verify we got a struct layout (records are now structs)
+    try std.testing.expect(result.layout.tag == .struct_);
 
-    const record_data = layout_cache.getRecordData(result.layout.data.record.idx);
-    const sorted_fields = layout_cache.record_fields.sliceRange(record_data.getFields());
+    const struct_data = layout_cache.getStructData(result.layout.data.struct_.idx);
+    const sorted_fields = layout_cache.struct_fields.sliceRange(struct_data.getFields());
 
     try std.testing.expectEqual(expected_fields.len, sorted_fields.len);
 
@@ -2556,7 +2556,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
                 const field_layout = layout_cache.getLayout(sorted_field.layout);
                 try std.testing.expect(field_layout.tag == .scalar);
 
-                const offset = layout_cache.getRecordFieldOffset(result.layout.data.record.idx, i);
+                const offset = layout_cache.getStructFieldOffset(result.layout.data.struct_.idx, i);
                 const field_ptr = @as([*]u8, @ptrCast(result.ptr.?)) + offset;
                 const field_value = StackValue{
                     .layout = field_layout,
@@ -2740,7 +2740,7 @@ pub fn runExpectEmptyListI64(src: []const u8, should_trace: enum { trace, no_tra
 
 /// Helper function to run an expression and expect a unit/ZST result.
 /// This tests expressions that return `{}` (the unit type / empty record).
-/// Accepts both .zst layout and .record layout with size 0 (empty record).
+/// Accepts both .zst layout and .struct_ layout with size 0 (empty record).
 pub fn runExpectUnit(src: []const u8, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
@@ -2767,13 +2767,13 @@ pub fn runExpectUnit(src: []const u8, should_trace: enum { trace, no_trace }) !v
 
     // Verify we got a ZST layout or an empty record (both represent unit/`{}`)
     const is_zst = result.layout.tag == .zst;
-    const is_empty_record = result.layout.tag == .record and blk: {
-        const record_data = layout_cache.getRecordData(result.layout.data.record.idx);
-        break :blk record_data.size == 0;
+    const is_empty_struct = result.layout.tag == .struct_ and blk: {
+        const struct_data = layout_cache.getStructData(result.layout.data.struct_.idx);
+        break :blk struct_data.size == 0;
     };
 
-    if (!is_zst and !is_empty_record) {
-        std.debug.print("\nExpected .zst or empty .record layout but got .{s}\n", .{@tagName(result.layout.tag)});
+    if (!is_zst and !is_empty_struct) {
+        std.debug.print("\nExpected .zst or empty .struct_ layout but got .{s}\n", .{@tagName(result.layout.tag)});
         return error.TestExpectedEqual;
     }
 

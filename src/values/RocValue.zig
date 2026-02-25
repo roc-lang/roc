@@ -190,37 +190,68 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
         }
     }
 
-    // --- Tuples ---
-    if (self.lay.tag == .tuple) {
-        var out = std.array_list.AlignedManaged(u8, null).init(allocator);
-        errdefer out.deinit();
-        try out.append('(');
-        const tuple_data = ctx.layout_store.getTupleData(self.lay.data.tuple.idx);
-        const fields = ctx.layout_store.tuple_fields.sliceRange(tuple_data.getFields());
-        const count = fields.len;
-        // Iterate by original source index (0, 1, 2, ...) rather than sorted order
-        var original_idx: usize = 0;
-        while (original_idx < count) : (original_idx += 1) {
-            // Find the sorted position for this original index
-            const sorted_idx = blk: {
-                for (0..count) |si| {
-                    if (fields.get(si).index == original_idx) break :blk si;
-                }
-                unreachable; // Every original index must exist in fields
-            };
-            const fld = fields.get(sorted_idx);
-            const elem_layout = ctx.layout_store.getLayout(fld.layout);
-            const elem_offset = ctx.layout_store.getTupleElementOffset(self.lay.data.tuple.idx, @intCast(sorted_idx));
-            const base_ptr = self.ptr.?;
-            const elem_ptr = base_ptr + elem_offset;
-            const elem_val = RocValue{ .ptr = elem_ptr, .lay = elem_layout };
-            const rendered = try elem_val.format(allocator, ctx);
-            defer allocator.free(rendered);
-            try out.appendSlice(rendered);
-            if (original_idx + 1 < count) try out.appendSlice(", ");
+    // --- Structs (unified records and tuples) ---
+    if (self.lay.tag == .struct_) {
+        const struct_data = ctx.layout_store.getStructData(self.lay.data.struct_.idx);
+        const fields = ctx.layout_store.struct_fields.sliceRange(struct_data.getFields());
+        // Check if this is a record-style struct (has named fields) or tuple-style
+        const is_record_style = fields.len > 0 and fields.get(0).name != base.Ident.Idx.NONE;
+        if (is_record_style) {
+            // --- Records ---
+            var out = std.array_list.AlignedManaged(u8, null).init(allocator);
+            errdefer out.deinit();
+            if (struct_data.fields.count == 0) {
+                try out.appendSlice("{}");
+                return out.toOwnedSlice();
+            }
+            try out.appendSlice("{ ");
+            var i: usize = 0;
+            while (i < fields.len) : (i += 1) {
+                const fld = fields.get(i);
+                const name_text = if (ctx.ident_store) |idents| idents.getText(fld.name) else "?";
+                try out.appendSlice(name_text);
+                try out.appendSlice(": ");
+                const offset = ctx.layout_store.getStructFieldOffset(self.lay.data.struct_.idx, @intCast(i));
+                const field_layout = ctx.layout_store.getLayout(fld.layout);
+                const base_ptr = self.ptr.?;
+                const field_ptr = base_ptr + offset;
+                const field_val = RocValue{ .ptr = field_ptr, .lay = field_layout };
+                const rendered = try field_val.format(allocator, ctx);
+                defer allocator.free(rendered);
+                try out.appendSlice(rendered);
+                if (i + 1 < fields.len) try out.appendSlice(", ");
+            }
+            try out.appendSlice(" }");
+            return out.toOwnedSlice();
+        } else {
+            // --- Tuples ---
+            var out = std.array_list.AlignedManaged(u8, null).init(allocator);
+            errdefer out.deinit();
+            try out.append('(');
+            const count = fields.len;
+            // Iterate by original source index (0, 1, 2, ...) rather than sorted order
+            var original_idx: usize = 0;
+            while (original_idx < count) : (original_idx += 1) {
+                const sorted_idx = blk: {
+                    for (0..count) |si| {
+                        if (fields.get(si).index == original_idx) break :blk si;
+                    }
+                    unreachable;
+                };
+                const fld = fields.get(sorted_idx);
+                const elem_layout = ctx.layout_store.getLayout(fld.layout);
+                const elem_offset = ctx.layout_store.getStructFieldOffset(self.lay.data.struct_.idx, @intCast(sorted_idx));
+                const base_ptr = self.ptr.?;
+                const elem_ptr = base_ptr + elem_offset;
+                const elem_val = RocValue{ .ptr = elem_ptr, .lay = elem_layout };
+                const rendered = try elem_val.format(allocator, ctx);
+                defer allocator.free(rendered);
+                try out.appendSlice(rendered);
+                if (original_idx + 1 < count) try out.appendSlice(", ");
+            }
+            try out.append(')');
+            return out.toOwnedSlice();
         }
-        try out.append(')');
-        return out.toOwnedSlice();
     }
 
     // --- Lists ---
@@ -260,37 +291,7 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
         return try std.fmt.allocPrint(allocator, "[<{d} zero-sized elements>]", .{len});
     }
 
-    // --- Records ---
-    if (self.lay.tag == .record) {
-        var out = std.array_list.AlignedManaged(u8, null).init(allocator);
-        errdefer out.deinit();
-        const rec_data = ctx.layout_store.getRecordData(self.lay.data.record.idx);
-        if (rec_data.fields.count == 0) {
-            try out.appendSlice("{}");
-            return out.toOwnedSlice();
-        }
-        try out.appendSlice("{ ");
-        const fields = ctx.layout_store.record_fields.sliceRange(rec_data.getFields());
-        var i: usize = 0;
-        while (i < fields.len) : (i += 1) {
-            const fld = fields.get(i);
-            // Resolve field name from ident store
-            const name_text = if (ctx.ident_store) |idents| idents.getText(fld.name) else "?";
-            try out.appendSlice(name_text);
-            try out.appendSlice(": ");
-            const offset = ctx.layout_store.getRecordFieldOffset(self.lay.data.record.idx, @intCast(i));
-            const field_layout = ctx.layout_store.getLayout(fld.layout);
-            const base_ptr = self.ptr.?;
-            const field_ptr = base_ptr + offset;
-            const field_val = RocValue{ .ptr = field_ptr, .lay = field_layout };
-            const rendered = try field_val.format(allocator, ctx);
-            defer allocator.free(rendered);
-            try out.appendSlice(rendered);
-            if (i + 1 < fields.len) try out.appendSlice(", ");
-        }
-        try out.appendSlice(" }");
-        return out.toOwnedSlice();
-    }
+    // Records are now handled in the struct_ block above
 
     // --- Box ---
     if (self.lay.tag == .box) {
@@ -371,24 +372,24 @@ pub fn equals(self: RocValue, other: RocValue, ctx: FormatContext) bool {
             };
         },
         .zst => return true,
-        .tuple => {
-            const s_fields = ctx.layout_store.tuple_fields.sliceRange(
-                ctx.layout_store.getTupleData(self.lay.data.tuple.idx).getFields(),
+        .struct_ => {
+            const s_fields = ctx.layout_store.struct_fields.sliceRange(
+                ctx.layout_store.getStructData(self.lay.data.struct_.idx).getFields(),
             );
-            const o_fields = ctx.layout_store.tuple_fields.sliceRange(
-                ctx.layout_store.getTupleData(other.lay.data.tuple.idx).getFields(),
+            const o_fields = ctx.layout_store.struct_fields.sliceRange(
+                ctx.layout_store.getStructData(other.lay.data.struct_.idx).getFields(),
             );
             if (s_fields.len != o_fields.len) return false;
             for (0..s_fields.len) |i| {
                 const s_fld = s_fields.get(i);
                 const o_fld = o_fields.get(i);
-                const s_elem_layout = ctx.layout_store.getLayout(s_fld.layout);
-                const o_elem_layout = ctx.layout_store.getLayout(o_fld.layout);
-                const s_offset = ctx.layout_store.getTupleElementOffset(self.lay.data.tuple.idx, @intCast(i));
-                const o_offset = ctx.layout_store.getTupleElementOffset(other.lay.data.tuple.idx, @intCast(i));
-                const s_elem = RocValue{ .ptr = self.ptr.? + s_offset, .lay = s_elem_layout };
-                const o_elem = RocValue{ .ptr = other.ptr.? + o_offset, .lay = o_elem_layout };
-                if (!s_elem.equals(o_elem, ctx)) return false;
+                const s_field_layout = ctx.layout_store.getLayout(s_fld.layout);
+                const o_field_layout = ctx.layout_store.getLayout(o_fld.layout);
+                const s_offset = ctx.layout_store.getStructFieldOffset(self.lay.data.struct_.idx, @intCast(i));
+                const o_offset = ctx.layout_store.getStructFieldOffset(other.lay.data.struct_.idx, @intCast(i));
+                const s_field = RocValue{ .ptr = self.ptr.? + s_offset, .lay = s_field_layout };
+                const o_field = RocValue{ .ptr = other.ptr.? + o_offset, .lay = o_field_layout };
+                if (!s_field.equals(o_field, ctx)) return false;
             }
             return true;
         },
@@ -414,25 +415,7 @@ pub fn equals(self: RocValue, other: RocValue, ctx: FormatContext) bool {
         .list_of_zst => {
             return self.readList().len() == other.readList().len();
         },
-        .record => {
-            const s_rec = ctx.layout_store.getRecordData(self.lay.data.record.idx);
-            const o_rec = ctx.layout_store.getRecordData(other.lay.data.record.idx);
-            const s_fields = ctx.layout_store.record_fields.sliceRange(s_rec.getFields());
-            const o_fields = ctx.layout_store.record_fields.sliceRange(o_rec.getFields());
-            if (s_fields.len != o_fields.len) return false;
-            for (0..s_fields.len) |i| {
-                const s_fld = s_fields.get(i);
-                const o_fld = o_fields.get(i);
-                const s_field_layout = ctx.layout_store.getLayout(s_fld.layout);
-                const o_field_layout = ctx.layout_store.getLayout(o_fld.layout);
-                const s_offset = ctx.layout_store.getRecordFieldOffset(self.lay.data.record.idx, @intCast(i));
-                const o_offset = ctx.layout_store.getRecordFieldOffset(other.lay.data.record.idx, @intCast(i));
-                const s_field = RocValue{ .ptr = self.ptr.? + s_offset, .lay = s_field_layout };
-                const o_field = RocValue{ .ptr = other.ptr.? + o_offset, .lay = o_field_layout };
-                if (!s_field.equals(o_field, ctx)) return false;
-            }
-            return true;
-        },
+        // .record is now handled by .struct_ above
         .box => {
             const s_inner_layout = ctx.layout_store.getLayout(self.lay.data.box);
             const o_inner_layout = ctx.layout_store.getLayout(other.lay.data.box);

@@ -3509,10 +3509,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             };
                             if (op_layout) |ol| {
                                 const stored_layout = ls.getLayout(ol);
-                                if (stored_layout.tag == .record)
+                                if (stored_layout.tag == .struct_)
                                     return self.generateRecordComparisonByLayout(lhs_loc, rhs_loc, ol, .num_is_eq);
-                                if (stored_layout.tag == .tuple)
-                                    return self.generateTupleComparisonByLayout(lhs_loc, rhs_loc, ol, .num_is_eq);
                                 if (stored_layout.tag == .list)
                                     return self.generateListComparisonByLayout(lhs_loc, rhs_loc, ol, .num_is_eq);
                                 if (stored_layout.tag == .tag_union)
@@ -4012,10 +4010,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Look up field offsets by name from the record layout
             const record_layout = ls.getLayout(record_layout_idx orelse unreachable);
-            const record_idx = record_layout.data.record.idx;
-            const record_size = ls.getRecordData(record_idx).size;
-            const start_field_off: i32 = @intCast(ls.getRecordFieldOffsetByNameStr(record_idx, "start") orelse unreachable);
-            const len_field_off: i32 = @intCast(ls.getRecordFieldOffsetByNameStr(record_idx, "len") orelse unreachable);
+            const record_idx = record_layout.data.struct_.idx;
+            const record_size = ls.getStructData(record_idx).size;
+            const start_field_off: i32 = @intCast(ls.getRecordFieldOffsetByNameStr(record_idx, "start"));
+            const len_field_off: i32 = @intCast(ls.getRecordFieldOffsetByNameStr(record_idx, "len"));
 
             const list_off = try self.ensureOnStack(list_loc, roc_list_size);
             const record_off = try self.ensureOnStack(record_loc, record_size);
@@ -4051,19 +4049,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Get the return record layout
             const ret_layout = ls.getLayout(ll.ret_layout);
-            if (ret_layout.tag != .record) unreachable;
-            const record_idx = ret_layout.data.record.idx;
-            const record_data = ls.getRecordData(record_idx);
+            if (ret_layout.tag != .struct_) unreachable;
+            const record_idx = ret_layout.data.struct_.idx;
+            const record_data = ls.getStructData(record_idx);
             const result_size: u32 = record_data.size;
 
             // Find which field is the list and which is the element.
             // The record has exactly 2 fields.
-            const field0_layout_idx = ls.getRecordFieldLayout(record_idx, 0);
+            const field0_layout_idx = ls.getStructFieldLayout(record_idx, 0);
             const field0_layout = ls.getLayout(field0_layout_idx);
-            const field0_offset: i32 = @intCast(ls.getRecordFieldOffset(record_idx, 0));
-            const field1_layout_idx = ls.getRecordFieldLayout(record_idx, 1);
+            const field0_offset: i32 = @intCast(ls.getStructFieldOffset(record_idx, 0));
+            const field1_layout_idx = ls.getStructFieldLayout(record_idx, 1);
             const field1_layout = ls.getLayout(field1_layout_idx);
-            const field1_offset: i32 = @intCast(ls.getRecordFieldOffset(record_idx, 1));
+            const field1_offset: i32 = @intCast(ls.getStructFieldOffset(record_idx, 1));
 
             const field0_is_list = field0_layout.tag == .list or field0_layout.tag == .list_of_zst;
             const list_field_offset: i32 = if (field0_is_list) field0_offset else field1_offset;
@@ -6166,11 +6164,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .record => |r| {
                     if (ls) |layout_store| {
                         const record_layout = layout_store.getLayout(r.record_layout);
-                        if (record_layout.tag == .record) {
+                        if (record_layout.tag == .struct_) {
                             // Use layout store offsets and sizes to match generateRecord
                             for (0..elem_exprs.len) |i| {
-                                const field_offset = layout_store.getRecordFieldOffset(record_layout.data.record.idx, @intCast(i));
-                                const field_size = layout_store.getRecordFieldSize(record_layout.data.record.idx, @intCast(i));
+                                const field_offset = layout_store.getStructFieldOffset(record_layout.data.struct_.idx, @intCast(i));
+                                const field_size = layout_store.getStructFieldSize(record_layout.data.struct_.idx, @intCast(i));
                                 const field_slots: usize = @max(1, (field_size + 7) / 8);
                                 for (0..field_slots) |j| {
                                     try cmp_offsets.append(self.allocator, @as(i32, @intCast(field_offset)) + @as(i32, @intCast(j)) * 8);
@@ -6196,11 +6194,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .tuple => |t| {
                     if (ls) |layout_store| {
                         const tuple_layout = layout_store.getLayout(t.tuple_layout);
-                        if (tuple_layout.tag == .tuple) {
+                        if (tuple_layout.tag == .struct_) {
                             // Use layout store offsets to match generateTuple
                             for (0..elem_exprs.len) |i| {
-                                const elem_offset = layout_store.getTupleElementOffset(tuple_layout.data.tuple.idx, @intCast(i));
-                                const elem_size = layout_store.getTupleElementSize(tuple_layout.data.tuple.idx, @intCast(i));
+                                const elem_offset = layout_store.getStructFieldOffset(tuple_layout.data.struct_.idx, @intCast(i));
+                                const elem_size = layout_store.getStructFieldSize(tuple_layout.data.struct_.idx, @intCast(i));
 
                                 const elem_slots: usize = @max(1, (elem_size + 7) / 8);
 
@@ -6793,19 +6791,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Check layout tag for compound types that need recursive comparison
                 const field_layout = ls.getLayout(field_layout_idx);
                 switch (field_layout.tag) {
-                    .record => {
+                    .struct_ => {
                         const sub_loc = try self.generateRecordComparisonByLayout(
-                            .{ .stack = .{ .offset = lhs_off } },
-                            .{ .stack = .{ .offset = rhs_off } },
-                            field_layout_idx,
-                            .eq,
-                        );
-                        const sub_reg = try self.ensureInGeneralReg(sub_loc);
-                        try self.emitMovRegReg(result_reg, sub_reg);
-                        self.codegen.freeGeneral(sub_reg);
-                    },
-                    .tuple => {
-                        const sub_loc = try self.generateTupleComparisonByLayout(
                             .{ .stack = .{ .offset = lhs_off } },
                             .{ .stack = .{ .offset = rhs_off } },
                             field_layout_idx,
@@ -6875,10 +6862,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!ValueLocation {
             const ls = self.layout_store orelse unreachable;
             const stored_layout = ls.getLayout(record_layout_idx);
-            if (stored_layout.tag != .record) unreachable;
+            if (stored_layout.tag != .struct_) unreachable;
 
-            const record_idx = stored_layout.data.record.idx;
-            const record_data = ls.getRecordData(record_idx);
+            const record_idx = stored_layout.data.struct_.idx;
+            const record_data = ls.getStructData(record_idx);
             const field_count = record_data.fields.count;
             if (field_count == 0) {
                 return .{ .immediate_i64 = if (op == .num_is_eq) 1 else 0 };
@@ -6899,9 +6886,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             var field_i: u32 = 0;
             while (field_i < field_count) : (field_i += 1) {
-                const field_offset = ls.getRecordFieldOffset(record_idx, @intCast(field_i));
-                const field_size = ls.getRecordFieldSize(record_idx, @intCast(field_i));
-                const field_layout_idx = ls.getRecordFieldLayout(record_idx, @intCast(field_i));
+                const field_offset = ls.getStructFieldOffset(record_idx, @intCast(field_i));
+                const field_size = ls.getStructFieldSize(record_idx, @intCast(field_i));
+                const field_layout_idx = ls.getStructFieldLayout(record_idx, @intCast(field_i));
 
                 if (field_size == 0) continue;
 
@@ -6970,10 +6957,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!ValueLocation {
             const ls = self.layout_store orelse unreachable;
             const stored_layout = ls.getLayout(tuple_layout_idx);
-            if (stored_layout.tag != .tuple) unreachable;
+            if (stored_layout.tag != .struct_) unreachable;
 
-            const tuple_idx = stored_layout.data.tuple.idx;
-            const tuple_data = ls.getTupleData(tuple_idx);
+            const tuple_idx = stored_layout.data.struct_.idx;
+            const tuple_data = ls.getStructData(tuple_idx);
             const elem_count = tuple_data.fields.count;
             if (elem_count == 0) {
                 return .{ .immediate_i64 = if (op == .num_is_eq) 1 else 0 };
@@ -6993,9 +6980,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             var elem_i: u32 = 0;
             while (elem_i < elem_count) : (elem_i += 1) {
-                const elem_offset = ls.getTupleElementOffset(tuple_idx, @intCast(elem_i));
-                const elem_size = ls.getTupleElementSize(tuple_idx, @intCast(elem_i));
-                const elem_layout_idx = ls.getTupleElementLayout(tuple_idx, @intCast(elem_i));
+                const elem_offset = ls.getStructFieldOffset(tuple_idx, @intCast(elem_i));
+                const elem_size = ls.getStructFieldSize(tuple_idx, @intCast(elem_i));
+                const elem_layout_idx = ls.getStructFieldLayout(tuple_idx, @intCast(elem_i));
 
                 if (elem_size == 0) continue;
 
@@ -7592,8 +7579,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             is_list_result = true;
                             break :inner roc_list_size;
                         },
-                        .tuple => ls.getTupleData(result_layout.data.tuple.idx).size,
-                        .record => ls.getRecordData(result_layout.data.record.idx).size,
+                        .struct_ => ls.getStructData(result_layout.data.struct_.idx).size,
                         .tag_union => ls.getTagUnionData(result_layout.data.tag_union.idx).size,
                         .zst => 0,
                         .scalar => ls.layoutSizeAlign(result_layout).size,
@@ -7843,7 +7829,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Determine if payload is a tuple (multi-field payload)
             const payload_is_tuple = if (variant_payload_layout) |pl| blk_pt: {
                 const pl_val = ls.getLayout(pl);
-                break :blk_pt pl_val.tag == .tuple;
+                break :blk_pt pl_val.tag == .struct_;
             } else false;
 
             for (args, 0..) |arg_pattern_id, arg_idx| {
@@ -7857,8 +7843,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 const arg_loc: ValueLocation = if (payload_is_tuple and variant_payload_layout != null) plblk: {
                                     // Multi-arg tag: payload is a tuple, use tuple element offsets/layouts
                                     const pl_val = ls.getLayout(variant_payload_layout.?);
-                                    const elem_offset = ls.getTupleElementOffsetByOriginalIndex(pl_val.data.tuple.idx, @intCast(arg_idx));
-                                    const elem_layout = ls.getTupleElementLayoutByOriginalIndex(pl_val.data.tuple.idx, @intCast(arg_idx));
+                                    const elem_offset = ls.getStructFieldOffsetByOriginalIndex(pl_val.data.struct_.idx, @intCast(arg_idx));
+                                    const elem_layout = ls.getStructFieldLayoutByOriginalIndex(pl_val.data.struct_.idx, @intCast(arg_idx));
                                     const arg_offset = base_offset + @as(i32, @intCast(elem_offset));
                                     break :plblk self.stackLocationForLayout(elem_layout, arg_offset);
                                 } else if (variant_payload_layout) |pl| plblk: {
@@ -8469,7 +8455,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             .data_offset = 0,
                             .num_elements = 0,
                         } };
-                    } else if (result_layout_val.tag == .tag_union or result_layout_val.tag == .record or result_layout_val.tag == .tuple) {
+                    } else if (result_layout_val.tag == .tag_union or result_layout_val.tag == .struct_) {
                         // Non-scalar composite types stay as generic stack values
                         // so downstream code uses the layout for proper sizing.
                         // However, if result_size was dynamically upgraded (e.g., a branch
@@ -8769,11 +8755,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Get the record layout
             const record_layout = ls.getLayout(rec.record_layout);
-            if (record_layout.tag != .record) {
+            if (record_layout.tag != .struct_) {
                 unreachable;
             }
 
-            const record_data = ls.getRecordData(record_layout.data.record.idx);
+            const record_data = ls.getStructData(record_layout.data.struct_.idx);
             const stack_size = record_data.size;
 
             // Zero-sized records don't need storage
@@ -8790,8 +8776,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Copy each field to its offset within the record
             // Fields are sorted by alignment descending, then alphabetically - matching the layout
             for (field_exprs, 0..) |field_expr_id, i| {
-                const field_offset = ls.getRecordFieldOffset(record_layout.data.record.idx, @intCast(i));
-                const field_size = ls.getRecordFieldSize(record_layout.data.record.idx, @intCast(i));
+                const field_offset = ls.getStructFieldOffset(record_layout.data.struct_.idx, @intCast(i));
+                const field_size = ls.getStructFieldSize(record_layout.data.struct_.idx, @intCast(i));
                 const field_loc = try self.generateExpr(field_expr_id);
                 try self.copyBytesToStackOffset(base_offset + @as(i32, @intCast(field_offset)), field_loc, field_size);
             }
@@ -8847,7 +8833,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Get the record layout to find field offset and size
             const record_layout = ls.getLayout(access.record_layout);
-            if (record_layout.tag != .record) {
+            if (record_layout.tag != .struct_) {
                 // Cross-module layout index mismatch: the record_layout index from
                 // a builtin module may map to a different layout in the current module.
                 // When field_idx is 0, just return the value as-is (first field = whole value).
@@ -8858,9 +8844,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 unreachable;
             }
 
-            const field_offset = ls.getRecordFieldOffset(record_layout.data.record.idx, access.field_idx);
-            const field_size = ls.getRecordFieldSize(record_layout.data.record.idx, access.field_idx);
-            const field_layout_idx = ls.getRecordFieldLayout(record_layout.data.record.idx, access.field_idx);
+            const field_offset = ls.getStructFieldOffset(record_layout.data.struct_.idx, access.field_idx);
+            const field_size = ls.getStructFieldSize(record_layout.data.struct_.idx, access.field_idx);
+            const field_layout_idx = ls.getStructFieldLayout(record_layout.data.struct_.idx, access.field_idx);
 
             // Return location pointing to the field within the record
             return switch (record_loc) {
@@ -8909,11 +8895,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Get the tuple layout
             const tuple_layout = ls.getLayout(tup.tuple_layout);
-            if (tuple_layout.tag != .tuple) {
+            if (tuple_layout.tag != .struct_) {
                 unreachable;
             }
 
-            const tuple_data = ls.getTupleData(tuple_layout.data.tuple.idx);
+            const tuple_data = ls.getStructData(tuple_layout.data.struct_.idx);
             const stack_size = tuple_data.size;
 
             // Zero-sized tuples don't need storage
@@ -8931,8 +8917,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Use ByOriginalIndex functions because elem_exprs is in source order,
             // but the layout store has elements sorted by alignment
             for (elem_exprs, 0..) |elem_expr_id, i| {
-                const elem_offset = ls.getTupleElementOffsetByOriginalIndex(tuple_layout.data.tuple.idx, @intCast(i));
-                const elem_size = ls.getTupleElementSizeByOriginalIndex(tuple_layout.data.tuple.idx, @intCast(i));
+                const elem_offset = ls.getStructFieldOffsetByOriginalIndex(tuple_layout.data.struct_.idx, @intCast(i));
+                const elem_size = ls.getStructFieldSizeByOriginalIndex(tuple_layout.data.struct_.idx, @intCast(i));
                 const elem_loc = try self.generateExpr(elem_expr_id);
                 try self.copyBytesToStackOffset(base_offset + @as(i32, @intCast(elem_offset)), elem_loc, elem_size);
             }
@@ -8949,12 +8935,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Get the tuple layout to find element offset and size
             const tuple_layout = ls.getLayout(access.tuple_layout);
-            if (tuple_layout.tag != .tuple) {
+            if (tuple_layout.tag != .struct_) {
                 unreachable;
             }
 
-            const elem_offset = ls.getTupleElementOffset(tuple_layout.data.tuple.idx, access.elem_idx);
-            const elem_size = ls.getTupleElementSize(tuple_layout.data.tuple.idx, access.elem_idx);
+            const elem_offset = ls.getStructFieldOffset(tuple_layout.data.struct_.idx, access.elem_idx);
+            const elem_size = ls.getStructFieldSize(tuple_layout.data.struct_.idx, access.elem_idx);
 
             // Return location pointing to the element within the tuple
             return switch (tuple_loc) {
@@ -9088,17 +9074,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // and types larger than 8 bytes (e.g. List=24, Str=24, i128=16).
                 const payload_tuple = if (variant_payload_layout) |pl| blk: {
                     const pl_val = ls.getLayout(pl);
-                    break :blk if (pl_val.tag == .tuple) pl_val.data.tuple.idx else null;
+                    break :blk if (pl_val.tag == .struct_) pl_val.data.struct_.idx else null;
                 } else null;
 
                 for (arg_exprs, 0..) |arg_expr_id, arg_i| {
                     const arg_loc = try self.generateExpr(arg_expr_id);
                     const elem_offset: i32 = if (payload_tuple) |tuple_idx|
-                        @intCast(ls.getTupleElementOffsetByOriginalIndex(tuple_idx, @intCast(arg_i)))
+                        @intCast(ls.getStructFieldOffsetByOriginalIndex(tuple_idx, @intCast(arg_i)))
                     else
                         @as(i32, @intCast(arg_i)) * 8;
                     const elem_size: u32 = if (payload_tuple) |tuple_idx| blk: {
-                        const elem_layout = ls.getTupleElementLayoutByOriginalIndex(tuple_idx, @intCast(arg_i));
+                        const elem_layout = ls.getStructFieldLayoutByOriginalIndex(tuple_idx, @intCast(arg_i));
                         const elem_layout_val = ls.getLayout(elem_layout);
                         break :blk ls.layoutSizeAlign(elem_layout_val).size;
                     } else self.valueSizeFromLoc(arg_loc);
@@ -11032,7 +11018,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Record destructuring: bind each field pattern
                     const ls = self.layout_store orelse return;
                     const record_layout = ls.getLayout(rec.record_layout);
-                    if (record_layout.tag != .record) return;
+                    if (record_layout.tag != .struct_) return;
 
                     const field_patterns = self.store.getPatternSpan(rec.fields);
 
@@ -11045,10 +11031,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     // Bind each field
                     for (field_patterns, 0..) |field_pattern_id, i| {
-                        const field_offset = ls.getRecordFieldOffset(record_layout.data.record.idx, @intCast(i));
+                        const field_offset = ls.getStructFieldOffset(record_layout.data.struct_.idx, @intCast(i));
 
                         // Create a location for the field using the correct layout type
-                        const field_layout_idx = ls.getRecordFieldLayout(record_layout.data.record.idx, @intCast(i));
+                        const field_layout_idx = ls.getStructFieldLayout(record_layout.data.struct_.idx, @intCast(i));
                         const field_loc: ValueLocation = self.stackLocationForLayout(field_layout_idx, base_offset + @as(i32, @intCast(field_offset)));
 
                         try self.bindPattern(field_pattern_id, field_loc);
@@ -11058,7 +11044,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Tuple destructuring: bind each element pattern
                     const ls = self.layout_store orelse return;
                     const tuple_layout = ls.getLayout(tup.tuple_layout);
-                    if (tuple_layout.tag != .tuple) return;
+                    if (tuple_layout.tag != .struct_) return;
 
                     const elem_patterns = self.store.getPatternSpan(tup.elems);
 
@@ -11071,10 +11057,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     // Bind each element (patterns are in source order, so use ByOriginalIndex)
                     for (elem_patterns, 0..) |elem_pattern_id, i| {
-                        const elem_offset = ls.getTupleElementOffsetByOriginalIndex(tuple_layout.data.tuple.idx, @intCast(i));
+                        const elem_offset = ls.getStructFieldOffsetByOriginalIndex(tuple_layout.data.struct_.idx, @intCast(i));
 
                         // Create a location for the element using the correct layout type
-                        const elem_layout_idx = ls.getTupleElementLayoutByOriginalIndex(tuple_layout.data.tuple.idx, @intCast(i));
+                        const elem_layout_idx = ls.getStructFieldLayoutByOriginalIndex(tuple_layout.data.struct_.idx, @intCast(i));
                         const elem_loc: ValueLocation = self.stackLocationForLayout(elem_layout_idx, base_offset + @as(i32, @intCast(elem_offset)));
 
                         try self.bindPattern(elem_pattern_id, elem_loc);
@@ -11290,11 +11276,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     } else {
                         // Multiple args means payload is a tuple - get offsets from tuple layout
                         // Patterns are in source order, so use ByOriginalIndex
-                        if (payload_layout.tag == .tuple) {
+                        if (payload_layout.tag == .struct_) {
                             for (arg_patterns, 0..) |arg_pattern_id, i| {
-                                const tuple_elem_offset = ls.getTupleElementOffsetByOriginalIndex(payload_layout.data.tuple.idx, @intCast(i));
+                                const tuple_elem_offset = ls.getStructFieldOffsetByOriginalIndex(payload_layout.data.struct_.idx, @intCast(i));
                                 const arg_offset = base_offset + payload_offset + @as(i32, @intCast(tuple_elem_offset));
-                                const tuple_elem_layout_idx = ls.getTupleElementLayoutByOriginalIndex(payload_layout.data.tuple.idx, @intCast(i));
+                                const tuple_elem_layout_idx = ls.getStructFieldLayoutByOriginalIndex(payload_layout.data.struct_.idx, @intCast(i));
                                 try self.bindPattern(arg_pattern_id, self.stackLocationForLayout(tuple_elem_layout_idx, arg_offset));
                             }
                         } else {
@@ -12696,7 +12682,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const layout_val = ls.getLayout(al);
                     if (layout_val.tag == .list or layout_val.tag == .list_of_zst) return 3;
                     // Check for records/tuples > 8 bytes
-                    if (layout_val.tag == .record or layout_val.tag == .tuple or layout_val.tag == .tag_union) {
+                    if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
                         const size = ls.layoutSizeAlign(layout_val).size;
                         if (size > 8) return @intCast((size + 7) / 8);
                     }
@@ -12969,8 +12955,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // Use layout store for accurate element offsets and sizes
                         if (self.layout_store) |ls| {
                             const tuple_layout = ls.getLayout(result_layout);
-                            if (tuple_layout.tag == .tuple) {
-                                const tuple_data = ls.getTupleData(tuple_layout.data.tuple.idx);
+                            if (tuple_layout.tag == .struct_) {
+                                const tuple_data = ls.getStructData(tuple_layout.data.struct_.idx);
                                 const total_size = tuple_data.size;
 
                                 // Copy entire tuple as 8-byte chunks
@@ -13147,14 +13133,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (self.layout_store) |ls| {
                         const layout_val = ls.getLayout(result_layout);
                         switch (layout_val.tag) {
-                            .record => {
-                                const record_data = ls.getRecordData(layout_val.data.record.idx);
-                                try self.copyStackToPtr(loc, saved_ptr_reg, record_data.size);
-                                return;
-                            },
-                            .tuple => {
-                                const tuple_data = ls.getTupleData(layout_val.data.tuple.idx);
-                                try self.copyStackToPtr(loc, saved_ptr_reg, tuple_data.size);
+                            .struct_ => {
+                                const struct_data = ls.getStructData(layout_val.data.struct_.idx);
+                                try self.copyStackToPtr(loc, saved_ptr_reg, struct_data.size);
                                 return;
                             },
                             .tag_union => {
@@ -13927,7 +13908,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (self.layout_store) |ls| {
                 if (@intFromEnum(ret_layout) < ls.layouts.len()) {
                     const layout_val = ls.getLayout(ret_layout);
-                    if (layout_val.tag == .record or layout_val.tag == .tag_union or layout_val.tag == .tuple) {
+                    if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
                         return ls.layoutSizeAlign(layout_val).size > max_return_size;
                     }
                 }
@@ -13983,7 +13964,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Check if return type is a multi-register struct (record, tag_union, tuple > 8 bytes)
             if (self.layout_store) |ls| {
                 const layout_val = ls.getLayout(ret_layout);
-                if (layout_val.tag == .record or layout_val.tag == .tag_union or layout_val.tag == .tuple) {
+                if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
                     const size_align = ls.layoutSizeAlign(layout_val);
                     if (size_align.size > 8) {
                         const stack_offset = self.codegen.allocStackSlot(size_align.size);
@@ -14238,7 +14219,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // List parameters need 3 registers (24 bytes)
                     if (layout_val.tag == .list or layout_val.tag == .list_of_zst) return 3;
                     // Record, tag union, and tuple parameters may need multiple registers
-                    if (layout_val.tag == .record or layout_val.tag == .tag_union or layout_val.tag == .tuple) {
+                    if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
                         const size = ls.layoutSizeAlign(layout_val).size;
                         if (size > 8) return @intCast((size + 7) / 8);
                     }
@@ -14432,7 +14413,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                         reg_idx += 3;
                                         continue;
                                     }
-                                    if (layout_val.tag == .record or layout_val.tag == .tag_union or layout_val.tag == .tuple) {
+                                    if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
                                         const size = ls.layoutSizeAlign(layout_val).size;
                                         if (size > 8) {
                                             const local_stack_offset = self.codegen.allocStackSlot(@intCast(size));
@@ -14654,7 +14635,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return;
                 }
 
-                if (layout_val.tag == .record or layout_val.tag == .tag_union or layout_val.tag == .tuple) {
+                if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
                     const size_align = ls.layoutSizeAlign(layout_val);
                     if (size_align.size > 8) {
                         // Large struct - need to return in multiple registers
@@ -14721,7 +14702,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return;
                 }
 
-                if (layout_val.tag == .record or layout_val.tag == .tag_union or layout_val.tag == .tuple) {
+                if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
                     const size_align = ls.layoutSizeAlign(layout_val);
                     if (size_align.size > 8) {
                         const num_regs = (size_align.size + 7) / 8;
@@ -15341,7 +15322,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 const layout_val = ls.getLayout(ret_layout);
                                 is_list = layout_val.tag == .list or layout_val.tag == .list_of_zst;
                                 is_i128 = ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec;
-                                if (layout_val.tag == .record or layout_val.tag == .tag_union or layout_val.tag == .tuple) {
+                                if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
                                     const sa = ls.layoutSizeAlign(layout_val);
                                     if (sa.size > 8) {
                                         is_large_record = true;

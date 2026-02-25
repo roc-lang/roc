@@ -742,7 +742,7 @@ fn evalTupleFirst(allocator: std.mem.Allocator, source: []const u8) !i128 {
     defer interpreter.bindings.items.len = 0;
 
     // Get the first element of the tuple
-    if (result.layout.tag == .tuple) {
+    if (result.layout.tag == .struct_) {
         const fresh_var = try interpreter.runtime_types.fresh();
         var accessor = try result.asTuple(layout_cache);
         const first_elem = try accessor.getElement(0, fresh_var);

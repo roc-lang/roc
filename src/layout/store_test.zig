@@ -196,8 +196,8 @@ test "fromTypeVar - record with only zero-sized fields" {
     // Bare record with only ZST fields should create a record with ZST fields
     const record_idx = try lt.layout_store.fromTypeVar(0, record_var, &lt.type_scope, null);
     const record_layout = lt.layout_store.getLayout(record_idx);
-    try testing.expect(record_layout.tag == .record);
-    const field_slice = lt.layout_store.record_fields.sliceRange(lt.layout_store.getRecordData(record_layout.data.record.idx).getFields());
+    try testing.expect(record_layout.tag == .struct_);
+    const field_slice = lt.layout_store.struct_fields.sliceRange(lt.layout_store.getStructData(record_layout.data.struct_.idx).getFields());
     try testing.expectEqual(@as(usize, 2), field_slice.len); // Both ZST fields are kept
 
     // Box of such a record should be box_of_zst since the record only contains ZST fields
@@ -224,7 +224,7 @@ test "record extension with empty_record succeeds" {
     const record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = zst_var } } });
     const record_idx = try lt.layout_store.fromTypeVar(0, record_var, &lt.type_scope, null);
     const record_layout = lt.layout_store.getLayout(record_idx);
-    try testing.expect(record_layout.tag == .record);
+    try testing.expect(record_layout.tag == .struct_);
 }
 
 test "deeply nested containers with inner ZST" {
@@ -949,7 +949,7 @@ test "getRecordFieldOffsetByNameStr - same alignment, alphabetical order" {
         &.{ start_ident, len_ident },
     );
     const record_layout = lt.layout_store.getLayout(record_idx);
-    const rid = record_layout.data.record.idx;
+    const rid = record_layout.data.struct_.idx;
 
     // len < start alphabetically, so len is first
     try testing.expectEqual(@as(?u32, 0), lt.layout_store.getRecordFieldOffsetByNameStr(rid, "len"));
@@ -975,7 +975,7 @@ test "getRecordFieldOffsetByNameStr - same alignment, opposite alphabetical patt
         &.{ zzz_ident, aaa_ident },
     );
     const record_layout = lt.layout_store.getLayout(record_idx);
-    const rid = record_layout.data.record.idx;
+    const rid = record_layout.data.struct_.idx;
 
     try testing.expectEqual(@as(?u32, 0), lt.layout_store.getRecordFieldOffsetByNameStr(rid, "aaa"));
     try testing.expectEqual(@as(?u32, 8), lt.layout_store.getRecordFieldOffsetByNameStr(rid, "zzz"));
@@ -1000,7 +1000,7 @@ test "getRecordFieldOffsetByNameStr - alignment overrides alphabetical order" {
         &.{ len_ident, start_ident },
     );
     const record_layout = lt.layout_store.getLayout(record_idx);
-    const rid = record_layout.data.record.idx;
+    const rid = record_layout.data.struct_.idx;
 
     // start (U64, align=8) comes before len (U8, align=1) due to alignment sort
     try testing.expectEqual(@as(?u32, 0), lt.layout_store.getRecordFieldOffsetByNameStr(rid, "start"));

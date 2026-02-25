@@ -833,12 +833,12 @@ fn formatWithTypes(
             return formatTagUnion(allocator, ptr, lay, tu, module_env, layout_store);
         },
         .record => |rec| {
-            if (lay.tag == .record) {
+            if (lay.tag == .struct_) {
                 return formatRecord(allocator, ptr, lay, rec, module_env, layout_store);
             }
         },
         .tuple => |tup| {
-            if (lay.tag == .tuple) {
+            if (lay.tag == .struct_) {
                 return formatTuple(allocator, ptr, lay, tup, module_env, layout_store);
             }
         },
@@ -1075,7 +1075,7 @@ fn formatRecord(
     layout_store: *const layout_mod.Store,
 ) FormatError![]u8 {
     const types_store = &module_env.types;
-    const rec_data = layout_store.getRecordData(lay.data.record.idx);
+    const rec_data = layout_store.getStructData(lay.data.struct_.idx);
 
     if (rec_data.fields.count == 0) {
         return try allocator.dupe(u8, "{}");
@@ -1085,7 +1085,7 @@ fn formatRecord(
     errdefer out.deinit();
     try out.appendSlice("{ ");
 
-    const layout_fields = layout_store.record_fields.sliceRange(rec_data.getFields());
+    const layout_fields = layout_store.struct_fields.sliceRange(rec_data.getFields());
     const type_fields = types_store.getRecordFieldsSlice(rec.fields);
     const count = @min(layout_fields.len, type_fields.len);
 
@@ -1109,7 +1109,7 @@ fn formatRecord(
         try out.appendSlice(name_text);
         try out.appendSlice(": ");
 
-        const offset = layout_store.getRecordFieldOffset(lay.data.record.idx, @intCast(layout_idx));
+        const offset = layout_store.getStructFieldOffset(lay.data.struct_.idx, @intCast(layout_idx));
         const field_layout = layout_store.getLayout(l_fld.layout);
         const base_ptr = ptr.?;
         const field_ptr = base_ptr + offset;
@@ -1133,8 +1133,8 @@ fn formatTuple(
     layout_store: *const layout_mod.Store,
 ) FormatError![]u8 {
     const types_store = &module_env.types;
-    const tuple_data = layout_store.getTupleData(lay.data.tuple.idx);
-    const layout_fields = layout_store.tuple_fields.sliceRange(tuple_data.getFields());
+    const tuple_data = layout_store.getStructData(lay.data.struct_.idx);
+    const layout_fields = layout_store.struct_fields.sliceRange(tuple_data.getFields());
     const elem_vars = types_store.sliceVars(tup.elems);
     const count = @min(layout_fields.len, elem_vars.len);
 
@@ -1153,7 +1153,7 @@ fn formatTuple(
         };
         const fld = layout_fields.get(sorted_idx);
         const field_layout = layout_store.getLayout(fld.layout);
-        const elem_offset = layout_store.getTupleElementOffset(lay.data.tuple.idx, @intCast(sorted_idx));
+        const elem_offset = layout_store.getStructFieldOffset(lay.data.struct_.idx, @intCast(sorted_idx));
         const base_ptr = ptr.?;
         const elem_ptr = base_ptr + elem_offset;
         const rendered = try formatWithTypes(allocator, elem_ptr, field_layout, elem_vars[original_idx], module_env, layout_store);

@@ -48,8 +48,7 @@ pub fn wasmReprWithStore(layout_idx: layout.Idx, ls: *const layout.Store) WasmRe
             const l = ls.getLayout(layout_idx);
             return switch (l.tag) {
                 .scalar => .{ .primitive = scalarValType(l) },
-                .record => .{ .stack_memory = ls.layoutSize(l) },
-                .tuple => .{ .stack_memory = ls.layoutSize(l) },
+                .struct_ => .{ .stack_memory = ls.layoutSize(l) },
                 .tag_union => blk: {
                     const size2 = ls.layoutSize(l);
                     const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
