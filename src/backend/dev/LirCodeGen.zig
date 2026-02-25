@@ -92,7 +92,7 @@ const JoinPointId = lir.JoinPointId;
 const LambdaSetMember = lir.LambdaSetMember;
 const LambdaSetMemberSpan = lir.LambdaSetMemberSpan;
 
-// Layout store for accessing record/tuple/tag field offsets
+// Layout store for accessing struct/tag field offsets
 const LayoutStore = layout.Store;
 
 // Control flow statement types (for two-pass compilation)
@@ -738,7 +738,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// The LIR store containing expressions to compile
         store: *const LirExprStore,
 
-        /// Layout store for accessing record/tuple/tag field offsets
+        /// Layout store for accessing struct/tag field offsets
         layout_store: ?*const LayoutStore,
 
         /// Static data interner for string literals
@@ -1314,11 +1314,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const expr = self.store.getExpr(expr_id);
             const raw_layout: ?layout.Idx = switch (expr) {
                 // Expressions that store their layout
-                .record => |rec| rec.record_layout,
-                .tuple => |tup| tup.tuple_layout,
+                .struct_ => |s| s.struct_layout,
                 .tag => |tag| tag.union_layout,
                 .lookup => |lookup| lookup.layout_idx,
-                .field_access => |fa| fa.field_layout,
+                .struct_access => |sa| sa.field_layout,
                 .call => |call| call.ret_layout,
                 .low_level => |ll| ll.ret_layout,
                 .hosted_call => |hc| hc.ret_layout,
@@ -1416,14 +1415,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return try self.generateClosure(self.store.getClosureData(closure_id));
                 },
 
-                // Records
-                .empty_record => .{ .immediate_i64 = 0 },
-                .record => |record| try self.generateRecord(record),
-                .field_access => |fa| try self.generateFieldAccess(fa),
-
-                // Tuples
-                .tuple => |tuple| try self.generateTuple(tuple),
-                .tuple_access => |ta| try self.generateTupleAccess(ta),
+                // Structs (records, tuples, empty records)
+                .struct_ => |s| try self.generateStruct(s),
+                .struct_access => |sa| try self.generateStructAccess(sa),
 
                 // Tags (tagged unions)
                 .zero_arg_tag => |tag| try self.generateZeroArgTag(tag),
@@ -3440,27 +3434,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const lhs_expr = self.store.getExpr(args[0]);
                         const rhs_expr = self.store.getExpr(args[1]);
 
-                        if (lhs_expr == .record) {
+                        if (lhs_expr == .struct_) {
                             if (self.layout_store != null) {
-                                return self.generateRecordComparisonByLayout(lhs_loc, rhs_loc, lhs_expr.record.record_layout, .num_is_eq);
+                                return self.generateStructComparisonByLayout(lhs_loc, rhs_loc, lhs_expr.struct_.struct_layout, .num_is_eq);
                             }
                             return self.generateStructuralComparison(lhs_loc, rhs_loc, lhs_expr, .num_is_eq);
                         }
-                        if (rhs_expr == .record) {
+                        if (rhs_expr == .struct_) {
                             if (self.layout_store != null) {
-                                return self.generateRecordComparisonByLayout(lhs_loc, rhs_loc, rhs_expr.record.record_layout, .num_is_eq);
-                            }
-                            return self.generateStructuralComparison(lhs_loc, rhs_loc, rhs_expr, .num_is_eq);
-                        }
-                        if (lhs_expr == .tuple) {
-                            if (self.layout_store != null) {
-                                return self.generateTupleComparisonByLayout(lhs_loc, rhs_loc, lhs_expr.tuple.tuple_layout, .num_is_eq);
-                            }
-                            return self.generateStructuralComparison(lhs_loc, rhs_loc, lhs_expr, .num_is_eq);
-                        }
-                        if (rhs_expr == .tuple) {
-                            if (self.layout_store != null) {
-                                return self.generateTupleComparisonByLayout(lhs_loc, rhs_loc, rhs_expr.tuple.tuple_layout, .num_is_eq);
+                                return self.generateStructComparisonByLayout(lhs_loc, rhs_loc, rhs_expr.struct_.struct_layout, .num_is_eq);
                             }
                             return self.generateStructuralComparison(lhs_loc, rhs_loc, rhs_expr, .num_is_eq);
                         }
@@ -3510,7 +3492,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             if (op_layout) |ol| {
                                 const stored_layout = ls.getLayout(ol);
                                 if (stored_layout.tag == .struct_)
-                                    return self.generateRecordComparisonByLayout(lhs_loc, rhs_loc, ol, .num_is_eq);
+                                    return self.generateStructComparisonByLayout(lhs_loc, rhs_loc, ol, .num_is_eq);
                                 if (stored_layout.tag == .list)
                                     return self.generateListComparisonByLayout(lhs_loc, rhs_loc, ol, .num_is_eq);
                                 if (stored_layout.tag == .tag_union)
@@ -6136,8 +6118,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!ValueLocation {
             // Get element expressions to determine sizes for nested structures
             const elem_exprs: []const LirExprId = switch (lhs_expr) {
-                .record => |r| self.store.getExprSpan(r.fields),
-                .tuple => |t| self.store.getExprSpan(t.elems),
+                .struct_ => |s| self.store.getExprSpan(s.fields),
                 else => unreachable,
             };
 
@@ -6152,7 +6133,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.codegen.emitLoadImm(result_reg, 1);
 
             // Calculate comparison byte offsets and sizes using the layout store
-            // This must match how generateTuple/generateRecord place elements
+            // This must match how generateStruct places elements
             var cmp_offsets: std.ArrayList(i32) = .empty;
             defer cmp_offsets.deinit(self.allocator);
             var cmp_sizes: std.ArrayList(u32) = .empty;
@@ -6161,14 +6142,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const ls = self.layout_store;
 
             switch (lhs_expr) {
-                .record => |r| {
+                .struct_ => |s| {
                     if (ls) |layout_store| {
-                        const record_layout = layout_store.getLayout(r.record_layout);
-                        if (record_layout.tag == .struct_) {
-                            // Use layout store offsets and sizes to match generateRecord
+                        const struct_layout = layout_store.getLayout(s.struct_layout);
+                        if (struct_layout.tag == .struct_) {
+                            // Use layout store offsets and sizes to match generateStruct
                             for (0..elem_exprs.len) |i| {
-                                const field_offset = layout_store.getStructFieldOffset(record_layout.data.struct_.idx, @intCast(i));
-                                const field_size = layout_store.getStructFieldSize(record_layout.data.struct_.idx, @intCast(i));
+                                const field_offset = layout_store.getStructFieldOffset(struct_layout.data.struct_.idx, @intCast(i));
+                                const field_size = layout_store.getStructFieldSize(struct_layout.data.struct_.idx, @intCast(i));
                                 const field_slots: usize = @max(1, (field_size + 7) / 8);
                                 for (0..field_slots) |j| {
                                     try cmp_offsets.append(self.allocator, @as(i32, @intCast(field_offset)) + @as(i32, @intCast(j)) * 8);
@@ -6177,67 +6158,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 }
                             }
                         } else {
-                            // Fallback: 16-byte slots
+                            // Fallback: 8-byte slots
                             for (0..elem_exprs.len) |i| {
-                                try cmp_offsets.append(self.allocator, @as(i32, @intCast(i)) * 16);
+                                try cmp_offsets.append(self.allocator, @as(i32, @intCast(i)) * 8);
                                 try cmp_sizes.append(self.allocator, 8);
                             }
                         }
                     } else {
-                        // No layout store: 16-byte slots
+                        // No layout store: 8-byte slots
                         for (0..elem_exprs.len) |i| {
-                            try cmp_offsets.append(self.allocator, @as(i32, @intCast(i)) * 16);
+                            try cmp_offsets.append(self.allocator, @as(i32, @intCast(i)) * 8);
                             try cmp_sizes.append(self.allocator, 8);
-                        }
-                    }
-                },
-                .tuple => |t| {
-                    if (ls) |layout_store| {
-                        const tuple_layout = layout_store.getLayout(t.tuple_layout);
-                        if (tuple_layout.tag == .struct_) {
-                            // Use layout store offsets to match generateTuple
-                            for (0..elem_exprs.len) |i| {
-                                const elem_offset = layout_store.getStructFieldOffset(tuple_layout.data.struct_.idx, @intCast(i));
-                                const elem_size = layout_store.getStructFieldSize(tuple_layout.data.struct_.idx, @intCast(i));
-
-                                const elem_slots: usize = @max(1, (elem_size + 7) / 8);
-
-                                for (0..elem_slots) |j| {
-                                    try cmp_offsets.append(self.allocator, @as(i32, @intCast(elem_offset)) + @as(i32, @intCast(j)) * 8);
-                                    const remaining = elem_size - @as(u32, @intCast(j)) * 8;
-                                    try cmp_sizes.append(self.allocator, @min(remaining, 8));
-                                }
-                            }
-                        } else {
-                            // Fallback: 8-byte slots with nested tuple flattening
-                            var current_offset: i32 = 0;
-                            for (elem_exprs) |elem_id| {
-                                const elem_expr = self.store.getExpr(elem_id);
-                                const elem_slots: usize = switch (elem_expr) {
-                                    .tuple => |inner_t| self.store.getExprSpan(inner_t.elems).len,
-                                    else => 1,
-                                };
-                                for (0..elem_slots) |_| {
-                                    try cmp_offsets.append(self.allocator, current_offset);
-                                    try cmp_sizes.append(self.allocator, 8);
-                                    current_offset += 8;
-                                }
-                            }
-                        }
-                    } else {
-                        // No layout store: 8-byte slots with nested tuple flattening
-                        var current_offset: i32 = 0;
-                        for (elem_exprs) |elem_id| {
-                            const elem_expr = self.store.getExpr(elem_id);
-                            const elem_slots: usize = switch (elem_expr) {
-                                .tuple => |inner_t| self.store.getExprSpan(inner_t.elems).len,
-                                else => 1,
-                            };
-                            for (0..elem_slots) |_| {
-                                try cmp_offsets.append(self.allocator, current_offset);
-                                try cmp_sizes.append(self.allocator, 8);
-                                current_offset += 8;
-                            }
                         }
                     }
                 },
@@ -6792,7 +6723,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const field_layout = ls.getLayout(field_layout_idx);
                 switch (field_layout.tag) {
                     .struct_ => {
-                        const sub_loc = try self.generateRecordComparisonByLayout(
+                        const sub_loc = try self.generateStructComparisonByLayout(
                             .{ .stack = .{ .offset = lhs_off } },
                             .{ .stack = .{ .offset = rhs_off } },
                             field_layout_idx,
@@ -6853,20 +6784,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn generateRecordComparisonByLayout(
+        fn generateStructComparisonByLayout(
             self: *Self,
             lhs_loc: ValueLocation,
             rhs_loc: ValueLocation,
-            record_layout_idx: layout.Idx,
+            struct_layout_idx: layout.Idx,
             op: anytype,
         ) Allocator.Error!ValueLocation {
             const ls = self.layout_store orelse unreachable;
-            const stored_layout = ls.getLayout(record_layout_idx);
-            if (stored_layout.tag != .struct_) unreachable;
+            const stored_layout = ls.getLayout(struct_layout_idx);
+            // Empty structs (ZST) have scalar layout, not struct_ — they're always equal
+            if (stored_layout.tag != .struct_) {
+                return .{ .immediate_i64 = if (op == .num_is_eq) 1 else 0 };
+            }
 
-            const record_idx = stored_layout.data.struct_.idx;
-            const record_data = ls.getStructData(record_idx);
-            const field_count = record_data.fields.count;
+            const struct_idx = stored_layout.data.struct_.idx;
+            const struct_data = ls.getStructData(struct_idx);
+            const field_count = struct_data.fields.count;
             if (field_count == 0) {
                 return .{ .immediate_i64 = if (op == .num_is_eq) 1 else 0 };
             }
@@ -6886,9 +6820,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             var field_i: u32 = 0;
             while (field_i < field_count) : (field_i += 1) {
-                const field_offset = ls.getStructFieldOffset(record_idx, @intCast(field_i));
-                const field_size = ls.getStructFieldSize(record_idx, @intCast(field_i));
-                const field_layout_idx = ls.getStructFieldLayout(record_idx, @intCast(field_i));
+                const field_offset = ls.getStructFieldOffset(struct_idx, @intCast(field_i));
+                const field_size = ls.getStructFieldSize(struct_idx, @intCast(field_i));
+                const field_layout_idx = ls.getStructFieldLayout(struct_idx, @intCast(field_i));
 
                 if (field_size == 0) continue;
 
@@ -6945,76 +6879,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 else => unreachable,
             };
-        }
-
-        /// Generate tuple comparison using layout information
-        fn generateTupleComparisonByLayout(
-            self: *Self,
-            lhs_loc: ValueLocation,
-            rhs_loc: ValueLocation,
-            tuple_layout_idx: layout.Idx,
-            op: anytype,
-        ) Allocator.Error!ValueLocation {
-            const ls = self.layout_store orelse unreachable;
-            const stored_layout = ls.getLayout(tuple_layout_idx);
-            if (stored_layout.tag != .struct_) unreachable;
-
-            const tuple_idx = stored_layout.data.struct_.idx;
-            const tuple_data = ls.getStructData(tuple_idx);
-            const elem_count = tuple_data.fields.count;
-            if (elem_count == 0) {
-                return .{ .immediate_i64 = if (op == .num_is_eq) 1 else 0 };
-            }
-
-            const lhs_base = try self.ensureRecordOnStack(lhs_loc, ls.layoutSizeAlign(stored_layout).size);
-            const rhs_base = try self.ensureRecordOnStack(rhs_loc, ls.layoutSizeAlign(stored_layout).size);
-
-            // Use stack-based accumulator since compareFieldByLayout may call builtins
-            const result_slot = self.codegen.allocStackSlot(8);
-            {
-                const temp = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(temp, 1);
-                try self.codegen.emitStoreStack(.w64, result_slot, temp);
-                self.codegen.freeGeneral(temp);
-            }
-
-            var elem_i: u32 = 0;
-            while (elem_i < elem_count) : (elem_i += 1) {
-                const elem_offset = ls.getStructFieldOffset(tuple_idx, @intCast(elem_i));
-                const elem_size = ls.getStructFieldSize(tuple_idx, @intCast(elem_i));
-                const elem_layout_idx = ls.getStructFieldLayout(tuple_idx, @intCast(elem_i));
-
-                if (elem_size == 0) continue;
-
-                const lhs_elem_off = lhs_base + @as(i32, @intCast(elem_offset));
-                const rhs_elem_off = rhs_base + @as(i32, @intCast(elem_offset));
-
-                const elem_eq_reg = try self.allocTempGeneral();
-                try self.compareFieldByLayout(lhs_elem_off, rhs_elem_off, elem_layout_idx, elem_size, elem_eq_reg);
-
-                const acc_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadStack(.w64, acc_reg, result_slot);
-                try self.emitAndRegs(.w64, acc_reg, acc_reg, elem_eq_reg);
-                try self.codegen.emitStoreStack(.w64, result_slot, acc_reg);
-                self.codegen.freeGeneral(acc_reg);
-                self.codegen.freeGeneral(elem_eq_reg);
-            }
-
-            const result_reg = try self.allocTempGeneral();
-            try self.codegen.emitLoadStack(.w64, result_reg, result_slot);
-
-            if (op != .num_is_eq) {
-                const one_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(one_reg, 1);
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.eorRegRegReg(.w64, result_reg, result_reg, one_reg);
-                } else {
-                    try self.codegen.emit.xorRegReg(.w64, result_reg, one_reg);
-                }
-                self.codegen.freeGeneral(one_reg);
-            }
-
-            return .{ .general_reg = result_reg };
         }
 
         /// Generate list comparison using layout information
@@ -8361,31 +8225,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             self.codegen.patchJump(patch, self.codegen.currentOffset());
                         }
                     },
-                    .record => {
-                        // Record destructuring always matches - bind fields and generate body
+                    .struct_ => {
+                        // Struct destructuring always matches - bind fields and generate body
                         // Ensure the value is on the stack for field access
-                        const value_size = ls.layoutSizeAlign(value_layout_val).size;
-                        const stack_off = try self.ensureOnStack(value_loc, value_size);
-                        try self.bindPattern(branch.pattern, .{ .stack = .{ .offset = stack_off } });
-
-                        const guard_patch = try self.emitGuardCheck(branch.guard);
-                        if (guard_patch) |gp| {
-                            const body_loc = try self.generateExpr(branch.body);
-                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
-                            if (i < branches.len - 1) {
-                                const end_patch = try self.codegen.emitJump();
-                                try end_patches.append(self.allocator, end_patch);
-                            }
-                            self.codegen.patchJump(gp, self.codegen.currentOffset());
-                        } else {
-                            const body_loc = try self.generateExpr(branch.body);
-                            try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
-                            break;
-                        }
-                    },
-                    .tuple => {
-                        // Tuple destructuring always matches - bind elements and generate body
-                        // Ensure the value is on the stack for element access
                         const value_size = ls.layoutSizeAlign(value_layout_val).size;
                         const stack_off = try self.ensureOnStack(value_loc, value_size);
                         try self.bindPattern(branch.pattern, .{ .stack = .{ .offset = stack_off } });
@@ -8744,40 +8586,42 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
         }
 
-        /// Generate code for a record literal
-        fn generateRecord(self: *Self, rec: anytype) Allocator.Error!ValueLocation {
+        /// Generate code for a struct literal (records, tuples, empty records).
+        /// Fields are in layout order (sorted by alignment).
+        fn generateStruct(self: *Self, s: anytype) Allocator.Error!ValueLocation {
             const ls = self.layout_store orelse unreachable;
 
             // Validate layout index before use
-            if (@intFromEnum(rec.record_layout) >= ls.layouts.len()) {
+            if (@intFromEnum(s.struct_layout) >= ls.layouts.len()) {
                 unreachable;
             }
 
-            // Get the record layout
-            const record_layout = ls.getLayout(rec.record_layout);
-            if (record_layout.tag != .struct_) {
-                unreachable;
+            // Get the struct layout
+            const struct_layout = ls.getLayout(s.struct_layout);
+            // Empty structs (ZST) have scalar layout, not struct_ layout
+            if (struct_layout.tag != .struct_) {
+                return .{ .immediate_i64 = 0 };
             }
 
-            const record_data = ls.getStructData(record_layout.data.struct_.idx);
-            const stack_size = record_data.size;
+            const struct_data = ls.getStructData(struct_layout.data.struct_.idx);
+            const stack_size = struct_data.size;
 
-            // Zero-sized records don't need storage
+            // Zero-sized structs don't need storage
             if (stack_size == 0) {
                 return .{ .immediate_i64 = 0 };
             }
 
-            // Allocate stack space for the record
+            // Allocate stack space for the struct
             const base_offset = self.codegen.allocStackSlot(stack_size);
 
             // Get field expressions
-            const field_exprs = self.store.getExprSpan(rec.fields);
+            const field_exprs = self.store.getExprSpan(s.fields);
 
-            // Copy each field to its offset within the record
-            // Fields are sorted by alignment descending, then alphabetically - matching the layout
+            // Copy each field to its offset within the struct.
+            // Fields are already in layout order, so iterate positionally.
             for (field_exprs, 0..) |field_expr_id, i| {
-                const field_offset = ls.getStructFieldOffset(record_layout.data.struct_.idx, @intCast(i));
-                const field_size = ls.getStructFieldSize(record_layout.data.struct_.idx, @intCast(i));
+                const field_offset = ls.getStructFieldOffset(struct_layout.data.struct_.idx, @intCast(i));
+                const field_size = ls.getStructFieldSize(struct_layout.data.struct_.idx, @intCast(i));
                 const field_loc = try self.generateExpr(field_expr_id);
                 try self.copyBytesToStackOffset(base_offset + @as(i32, @intCast(field_offset)), field_loc, field_size);
             }
@@ -8785,7 +8629,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .stack = .{ .offset = base_offset, .size = ValueSize.fromByteCount(@min(stack_size, 8)) } };
         }
 
-        /// Generate code for field access
         /// Determine the size of a value from its ValueLocation alone.
         fn valueSizeFromLoc(_: *Self, loc: ValueLocation) u32 {
             return switch (loc) {
@@ -8825,47 +8668,48 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .stack = .{ .offset = field_base, .size = ValueSize.fromByteCount(field_size) } };
         }
 
-        fn generateFieldAccess(self: *Self, access: anytype) Allocator.Error!ValueLocation {
+        /// Generate code for struct field access (records and tuples).
+        /// field_idx is the sorted position in layout.
+        fn generateStructAccess(self: *Self, access: anytype) Allocator.Error!ValueLocation {
             const ls = self.layout_store orelse unreachable;
 
-            // Generate code for the record expression
-            const record_loc = try self.generateExpr(access.record_expr);
+            // Generate code for the struct expression
+            const struct_loc = try self.generateExpr(access.struct_expr);
 
-            // Get the record layout to find field offset and size
-            const record_layout = ls.getLayout(access.record_layout);
-            if (record_layout.tag != .struct_) {
-                // Cross-module layout index mismatch: the record_layout index from
+            // Get the struct layout to find field offset and size
+            const struct_layout = ls.getLayout(access.struct_layout);
+            if (struct_layout.tag != .struct_) {
+                // Cross-module layout index mismatch: the struct_layout index from
                 // a builtin module may map to a different layout in the current module.
                 // When field_idx is 0, just return the value as-is (first field = whole value).
                 if (access.field_idx == 0) {
-                    return record_loc;
+                    return struct_loc;
                 }
-                // Any other field access on non-record is a compiler bug
+                // Any other field access on non-struct is a compiler bug
                 unreachable;
             }
 
-            const field_offset = ls.getStructFieldOffset(record_layout.data.struct_.idx, access.field_idx);
-            const field_size = ls.getStructFieldSize(record_layout.data.struct_.idx, access.field_idx);
-            const field_layout_idx = ls.getStructFieldLayout(record_layout.data.struct_.idx, access.field_idx);
+            const field_offset = ls.getStructFieldOffset(struct_layout.data.struct_.idx, access.field_idx);
+            const field_size = ls.getStructFieldSize(struct_layout.data.struct_.idx, access.field_idx);
+            const field_layout_idx = ls.getStructFieldLayout(struct_layout.data.struct_.idx, access.field_idx);
 
-            // Return location pointing to the field within the record
-            return switch (record_loc) {
-                .stack_str => |s| {
-                    const field_base = s + @as(i32, @intCast(field_offset));
+            // Return location pointing to the field within the struct
+            return switch (struct_loc) {
+                .stack_str => |sv| {
+                    const field_base = sv + @as(i32, @intCast(field_offset));
                     return self.fieldLocationFromLayout(field_base, field_size, field_layout_idx);
                 },
-                .stack => |s| {
-                    const field_base = s.offset + @as(i32, @intCast(field_offset));
+                .stack => |sv| {
+                    const field_base = sv.offset + @as(i32, @intCast(field_offset));
                     return self.fieldLocationFromLayout(field_base, field_size, field_layout_idx);
                 },
-                .stack_i128 => |s| {
-                    // Record itself is i128-sized, field access within it
-                    const field_base = s + @as(i32, @intCast(field_offset));
+                .stack_i128 => |sv| {
+                    // Struct itself is i128-sized, field access within it
+                    const field_base = sv + @as(i32, @intCast(field_offset));
                     return self.fieldLocationFromLayout(field_base, field_size, field_layout_idx);
                 },
                 .general_reg => |reg| {
-                    // Record in register - only valid for small records (<=8 bytes)
-                    // A record with a 16-byte field cannot fit in a register
+                    // Struct in register - only valid for small structs (<=8 bytes)
                     if (field_size > 8) {
                         unreachable;
                     }
@@ -8883,111 +8727,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         unreachable;
                     }
                     const shifted = val >> @intCast(field_offset * 8);
-                    return .{ .immediate_i64 = shifted };
-                },
-                else => unreachable,
-            };
-        }
-
-        /// Generate code for a tuple literal
-        fn generateTuple(self: *Self, tup: anytype) Allocator.Error!ValueLocation {
-            const ls = self.layout_store orelse unreachable;
-
-            // Get the tuple layout
-            const tuple_layout = ls.getLayout(tup.tuple_layout);
-            if (tuple_layout.tag != .struct_) {
-                unreachable;
-            }
-
-            const tuple_data = ls.getStructData(tuple_layout.data.struct_.idx);
-            const stack_size = tuple_data.size;
-
-            // Zero-sized tuples don't need storage
-            if (stack_size == 0) {
-                return .{ .immediate_i64 = 0 };
-            }
-
-            // Allocate stack space for the tuple
-            const base_offset = self.codegen.allocStackSlot(stack_size);
-
-            // Get element expressions
-            const elem_exprs = self.store.getExprSpan(tup.elems);
-
-            // Copy each element to its offset within the tuple
-            // Use ByOriginalIndex functions because elem_exprs is in source order,
-            // but the layout store has elements sorted by alignment
-            for (elem_exprs, 0..) |elem_expr_id, i| {
-                const elem_offset = ls.getStructFieldOffsetByOriginalIndex(tuple_layout.data.struct_.idx, @intCast(i));
-                const elem_size = ls.getStructFieldSizeByOriginalIndex(tuple_layout.data.struct_.idx, @intCast(i));
-                const elem_loc = try self.generateExpr(elem_expr_id);
-                try self.copyBytesToStackOffset(base_offset + @as(i32, @intCast(elem_offset)), elem_loc, elem_size);
-            }
-
-            return .{ .stack = .{ .offset = base_offset, .size = ValueSize.fromByteCount(@min(stack_size, 8)) } };
-        }
-
-        /// Generate code for tuple element access
-        fn generateTupleAccess(self: *Self, access: anytype) Allocator.Error!ValueLocation {
-            const ls = self.layout_store orelse unreachable;
-
-            // Generate code for the tuple expression
-            const tuple_loc = try self.generateExpr(access.tuple_expr);
-
-            // Get the tuple layout to find element offset and size
-            const tuple_layout = ls.getLayout(access.tuple_layout);
-            if (tuple_layout.tag != .struct_) {
-                unreachable;
-            }
-
-            const elem_offset = ls.getStructFieldOffset(tuple_layout.data.struct_.idx, access.elem_idx);
-            const elem_size = ls.getStructFieldSize(tuple_layout.data.struct_.idx, access.elem_idx);
-
-            // Return location pointing to the element within the tuple
-            return switch (tuple_loc) {
-                .stack_str => |s| {
-                    const elem_base = s + @as(i32, @intCast(elem_offset));
-                    // Return stack_i128 for 16-byte elements (Dec/i128/u128)
-                    if (elem_size == 16) {
-                        return .{ .stack_i128 = elem_base };
-                    }
-                    return .{ .stack = .{ .offset = elem_base, .size = ValueSize.fromByteCount(elem_size) } };
-                },
-                .stack => |s| {
-                    const elem_base = s.offset + @as(i32, @intCast(elem_offset));
-                    // Return stack_i128 for 16-byte elements (Dec/i128/u128)
-                    if (elem_size == 16) {
-                        return .{ .stack_i128 = elem_base };
-                    }
-                    return .{ .stack = .{ .offset = elem_base, .size = ValueSize.fromByteCount(elem_size) } };
-                },
-                .stack_i128 => |s| {
-                    // Tuple itself is i128-sized, element access within it
-                    const elem_base = s + @as(i32, @intCast(elem_offset));
-                    if (elem_size == 16) {
-                        return .{ .stack_i128 = elem_base };
-                    }
-                    return .{ .stack = .{ .offset = elem_base, .size = ValueSize.fromByteCount(elem_size) } };
-                },
-                .general_reg => |reg| {
-                    // Tuple in register - only valid for small tuples (<=8 bytes)
-                    // A tuple with a 16-byte element cannot fit in a register
-                    if (elem_size > 8) {
-                        unreachable;
-                    }
-                    if (elem_offset == 0) {
-                        return .{ .general_reg = reg };
-                    } else {
-                        const result_reg = try self.allocTempGeneral();
-                        try self.emitLsrImm(.w64, result_reg, reg, @intCast(elem_offset * 8));
-                        self.codegen.freeGeneral(reg);
-                        return .{ .general_reg = result_reg };
-                    }
-                },
-                .immediate_i64 => |val| {
-                    if (elem_size > 8) {
-                        unreachable;
-                    }
-                    const shifted = val >> @intCast(elem_offset * 8);
                     return .{ .immediate_i64 = shifted };
                 },
                 else => unreachable,
@@ -11014,56 +10753,31 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .wildcard => {
                     // Ignore the value
                 },
-                .record => |rec| {
-                    // Record destructuring: bind each field pattern
+                .struct_ => |s| {
+                    // Struct destructuring: bind each field pattern.
+                    // Fields are in layout order, so iterate positionally.
                     const ls = self.layout_store orelse return;
-                    const record_layout = ls.getLayout(rec.record_layout);
-                    if (record_layout.tag != .struct_) return;
+                    const struct_layout = ls.getLayout(s.struct_layout);
+                    if (struct_layout.tag != .struct_) return;
 
-                    const field_patterns = self.store.getPatternSpan(rec.fields);
+                    const field_patterns = self.store.getPatternSpan(s.fields);
 
-                    // Get the base offset of the record
+                    // Get the base offset of the struct
                     const base_offset: i32 = switch (value_loc) {
-                        .stack => |s| s.offset,
+                        .stack => |sv| sv.offset,
                         .stack_str => |off| off,
                         else => return, // Can't destructure non-stack values
                     };
 
                     // Bind each field
                     for (field_patterns, 0..) |field_pattern_id, i| {
-                        const field_offset = ls.getStructFieldOffset(record_layout.data.struct_.idx, @intCast(i));
+                        const field_offset = ls.getStructFieldOffset(struct_layout.data.struct_.idx, @intCast(i));
 
                         // Create a location for the field using the correct layout type
-                        const field_layout_idx = ls.getStructFieldLayout(record_layout.data.struct_.idx, @intCast(i));
+                        const field_layout_idx = ls.getStructFieldLayout(struct_layout.data.struct_.idx, @intCast(i));
                         const field_loc: ValueLocation = self.stackLocationForLayout(field_layout_idx, base_offset + @as(i32, @intCast(field_offset)));
 
                         try self.bindPattern(field_pattern_id, field_loc);
-                    }
-                },
-                .tuple => |tup| {
-                    // Tuple destructuring: bind each element pattern
-                    const ls = self.layout_store orelse return;
-                    const tuple_layout = ls.getLayout(tup.tuple_layout);
-                    if (tuple_layout.tag != .struct_) return;
-
-                    const elem_patterns = self.store.getPatternSpan(tup.elems);
-
-                    // Get the base offset of the tuple
-                    const base_offset: i32 = switch (value_loc) {
-                        .stack => |s| s.offset,
-                        .stack_str => |off| off,
-                        else => return, // Can't destructure non-stack values
-                    };
-
-                    // Bind each element (patterns are in source order, so use ByOriginalIndex)
-                    for (elem_patterns, 0..) |elem_pattern_id, i| {
-                        const elem_offset = ls.getStructFieldOffsetByOriginalIndex(tuple_layout.data.struct_.idx, @intCast(i));
-
-                        // Create a location for the element using the correct layout type
-                        const elem_layout_idx = ls.getStructFieldLayoutByOriginalIndex(tuple_layout.data.struct_.idx, @intCast(i));
-                        const elem_loc: ValueLocation = self.stackLocationForLayout(elem_layout_idx, base_offset + @as(i32, @intCast(elem_offset)));
-
-                        try self.bindPattern(elem_pattern_id, elem_loc);
                     }
                 },
                 .as_pattern => |as_pat| {
@@ -14265,16 +13979,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const nr: u8 = switch (pat) {
                         .bind => |b| self.calcParamRegCount(b.layout_idx),
                         .wildcard => |w| self.calcParamRegCount(w.layout_idx),
-                        .record => |r| blk: {
+                        .struct_ => |s| blk: {
                             const ls = self.layout_store orelse break :blk 1;
-                            const rl = ls.getLayout(r.record_layout);
-                            const sz = ls.layoutSizeAlign(rl).size;
-                            break :blk @max(1, @as(u8, @intCast((sz + 7) / 8)));
-                        },
-                        .tuple => |t| blk: {
-                            const ls = self.layout_store orelse break :blk 1;
-                            const tl = ls.getLayout(t.tuple_layout);
-                            const sz = ls.layoutSizeAlign(tl).size;
+                            const sl = ls.getLayout(s.struct_layout);
+                            const sz = ls.layoutSizeAlign(sl).size;
                             break :blk @max(1, @as(u8, @intCast((sz + 7) / 8)));
                         },
                         .list => 3,
@@ -14471,11 +14179,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             reg_idx = max_arg_regs;
                         }
                     },
-                    .record => |rec| {
-                        // Record destructuring: store registers to stack, then delegate to bindPattern
+                    .struct_ => |s| {
+                        // Struct destructuring: store registers to stack, then delegate to bindPattern
                         const ls = self.layout_store orelse unreachable;
-                        const record_layout = ls.getLayout(rec.record_layout);
-                        const size = ls.layoutSizeAlign(record_layout).size;
+                        const struct_layout = ls.getLayout(s.struct_layout);
+                        const size = ls.layoutSizeAlign(struct_layout).size;
                         const num_regs: u8 = @max(1, @as(u8, @intCast((size + 7) / 8)));
 
                         if (param_pass_by_ptr[param_idx]) {
@@ -14540,45 +14248,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const stack_offset = self.codegen.allocStackSlot(roc_list_size);
                             try self.copyFromCallerStack(stack_arg_offset, stack_offset, 3);
                             stack_arg_offset += roc_list_size;
-                            reg_idx = max_arg_regs;
-                            try self.bindPattern(pattern_id, .{ .stack = .{ .offset = stack_offset } });
-                        }
-                    },
-                    .tuple => |tup| {
-                        // Tuple destructuring: store registers to stack, then delegate to bindPattern
-                        const ls = self.layout_store orelse unreachable;
-                        const tuple_layout = ls.getLayout(tup.tuple_layout);
-                        const size = ls.layoutSizeAlign(tuple_layout).size;
-                        const num_regs: u8 = @max(1, @as(u8, @intCast((size + 7) / 8)));
-
-                        if (param_pass_by_ptr[param_idx]) {
-                            // Passed by pointer: copy from pointer to local stack.
-                            // Use hardcoded temp to avoid clobbering the arg register.
-                            const temp_r: GeneralReg = scratch_reg;
-                            const stack_offset = self.codegen.allocStackSlot(@intCast(size));
-                            const ptr_reg = self.getArgumentRegister(reg_idx);
-                            var ri: u8 = 0;
-                            while (ri < num_regs) : (ri += 1) {
-                                const off: i32 = @as(i32, ri) * 8;
-                                try self.emitLoad(.w64, temp_r, ptr_reg, off);
-                                try self.emitStore(.w64, frame_ptr, stack_offset + off, temp_r);
-                            }
-                            reg_idx += 1;
-                            try self.bindPattern(pattern_id, .{ .stack = .{ .offset = stack_offset } });
-                        } else if (reg_idx + num_regs <= max_arg_regs) {
-                            const stack_offset = self.codegen.allocStackSlot(@intCast(size));
-                            var ri: u8 = 0;
-                            while (ri < num_regs) : (ri += 1) {
-                                const arg_r = self.getArgumentRegister(reg_idx + ri);
-                                try self.codegen.emitStoreStack(.w64, stack_offset + @as(i32, ri) * 8, arg_r);
-                            }
-                            reg_idx += num_regs;
-                            try self.bindPattern(pattern_id, .{ .stack = .{ .offset = stack_offset } });
-                        } else {
-                            // Read from caller's stack
-                            const stack_offset = self.codegen.allocStackSlot(@intCast(size));
-                            try self.copyFromCallerStack(stack_arg_offset, stack_offset, num_regs);
-                            stack_arg_offset += @as(i32, num_regs) * 8;
                             reg_idx = max_arg_regs;
                             try self.bindPattern(pattern_id, .{ .stack = .{ .offset = stack_offset } });
                         }
@@ -15533,7 +15202,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             }
                         }
                     },
-                    .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => unreachable, // Join point params must be simple bindings or wildcards
+                    .int_literal, .float_literal, .str_literal, .tag, .struct_, .list, .as_pattern => unreachable, // Join point params must be simple bindings or wildcards
                 }
             }
         }
@@ -15575,7 +15244,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try temp_infos.append(self.allocator, .{ .offset = 0, .size = 0 });
                         continue;
                     },
-                    .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => unreachable,
+                    .int_literal, .float_literal, .str_literal, .tag, .struct_, .list, .as_pattern => unreachable,
                 }
 
                 const dst_loc = self.symbol_locations.get(switch (pattern) {
@@ -15702,7 +15371,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const symbol_key: u64 = switch (pattern) {
                     .bind => |bind| @bitCast(bind.symbol),
                     .wildcard => continue,
-                    .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => unreachable,
+                    .int_literal, .float_literal, .str_literal, .tag, .struct_, .list, .as_pattern => unreachable,
                 };
 
                 const dst_loc = self.symbol_locations.get(symbol_key) orelse continue;
@@ -16015,25 +15684,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             self.codegen.patchJump(patch, self.codegen.currentOffset());
                         }
                     },
-                    .record => {
-                        const value_size = ls.layoutSizeAlign(value_layout_val).size;
-                        const stack_off = try self.ensureOnStack(value_loc, value_size);
-                        try self.bindPattern(branch.pattern, .{ .stack = .{ .offset = stack_off } });
-
-                        const guard_patch = try self.emitGuardCheck(branch.guard);
-                        if (guard_patch) |gp| {
-                            try self.generateStmt(branch.body);
-                            if (!is_last_branch) {
-                                const end_patch = try self.codegen.emitJump();
-                                try end_patches.append(self.allocator, end_patch);
-                            }
-                            self.codegen.patchJump(gp, self.codegen.currentOffset());
-                        } else {
-                            try self.generateStmt(branch.body);
-                            break;
-                        }
-                    },
-                    .tuple => {
+                    .struct_ => {
                         const value_size = ls.layoutSizeAlign(value_layout_val).size;
                         const stack_off = try self.ensureOnStack(value_loc, value_size);
                         try self.bindPattern(branch.pattern, .{ .stack = .{ .offset = stack_off } });
@@ -17151,21 +16802,17 @@ test "record equality uses layout-aware comparison" {
     const str4 = try store.addExpr(.{ .i64_literal = 0 }, base.Region.zero());
 
     const fields1 = try store.addExprSpan(&[_]LirExprId{ str1, str2 });
-    const field_names1 = try store.addFieldNameSpan(&[_]Ident.Idx{ field_a, field_b });
 
     const fields2 = try store.addExprSpan(&[_]LirExprId{ str3, str4 });
-    const field_names2 = try store.addFieldNameSpan(&[_]Ident.Idx{ field_a, field_b });
 
-    const lhs_record = try store.addExpr(.{ .record = .{
-        .record_layout = record_layout_idx,
+    const lhs_record = try store.addExpr(.{ .struct_ = .{
+        .struct_layout = record_layout_idx,
         .fields = fields1,
-        .field_names = field_names1,
     } }, base.Region.zero());
 
-    const rhs_record = try store.addExpr(.{ .record = .{
-        .record_layout = record_layout_idx,
+    const rhs_record = try store.addExpr(.{ .struct_ = .{
+        .struct_layout = record_layout_idx,
         .fields = fields2,
-        .field_names = field_names2,
     } }, base.Region.zero());
 
     // LHS record == RHS record
@@ -17176,7 +16823,7 @@ test "record equality uses layout-aware comparison" {
         .ret_layout = .bool,
     } }, base.Region.zero());
 
-    // With layout_store: should use generateRecordComparisonByLayout (no crash)
+    // With layout_store: should use generateStructComparisonByLayout (no crash)
     var codegen = try HostLirCodeGen.init(allocator, &store, &layout_store, null);
     defer codegen.deinit();
 

@@ -266,31 +266,7 @@ pub fn getPatternSpan(self: *const Self, span: LirPatternSpan) []const LirPatter
     return @ptrCast(slice);
 }
 
-/// Add a span of field names (Ident.Idx)
-pub fn addFieldNameSpan(self: *Self, field_names: []const base.Ident.Idx) Allocator.Error!ir.LirFieldNameSpan {
-    if (field_names.len == 0) {
-        return ir.LirFieldNameSpan.empty();
-    }
 
-    const start = @as(u32, @intCast(self.extra_data.items.len));
-
-    try self.extra_data.ensureUnusedCapacity(self.allocator, field_names.len);
-    for (field_names) |name| {
-        self.extra_data.appendAssumeCapacity(@bitCast(name));
-    }
-
-    return .{
-        .start = start,
-        .len = @intCast(field_names.len),
-    };
-}
-
-/// Get field names from a span
-pub fn getFieldNameSpan(self: *const Self, span: ir.LirFieldNameSpan) []const base.Ident.Idx {
-    if (span.len == 0) return &.{};
-    const slice = self.extra_data.items[span.start..][0..span.len];
-    return @ptrCast(slice);
-}
 
 /// Add match branches and return a span
 pub fn addMatchBranches(self: *Self, branches: []const LirMatchBranch) Allocator.Error!LirMatchBranchSpan {

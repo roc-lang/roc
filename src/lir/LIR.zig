@@ -319,15 +319,6 @@ pub const LirStmt = union(enum) {
     }
 };
 
-/// Span of field names (Ident.Idx) for records
-pub const LirFieldNameSpan = extern struct {
-    start: u32,
-    len: u16,
-
-    pub fn empty() LirFieldNameSpan {
-        return .{ .start = 0, .len = 0 };
-    }
-};
 
 /// Lowered expression - all types are layouts, all references are global symbols.
 /// This is the core type that backends consume for code generation.
@@ -402,41 +393,20 @@ pub const LirExpr = union(enum) {
         elems: LirExprSpan,
     },
 
-    /// Empty record `{}`
-    empty_record: void,
-
-    /// Record with fields (fields are in sorted order by field name)
-    record: struct {
-        record_layout: layout.Idx,
+    /// Struct literal (unified representation for records, tuples, and empty records).
+    /// Fields are in layout order (sorted by alignment).
+    struct_: struct {
+        struct_layout: layout.Idx,
         fields: LirExprSpan,
-        /// Field names in the same order as fields (for compile-time lookup)
-        field_names: LirFieldNameSpan,
     },
 
-    /// Tuple
-    tuple: struct {
-        tuple_layout: layout.Idx,
-        elems: LirExprSpan,
-    },
-
-    /// Record field access by index
-    field_access: struct {
-        record_expr: LirExprId,
-        record_layout: layout.Idx,
+    /// Struct field access by sorted field index.
+    struct_access: struct {
+        struct_expr: LirExprId,
+        struct_layout: layout.Idx,
         field_layout: layout.Idx,
-        /// Field index within the record layout (for runtime access)
+        /// Field index within the sorted layout fields
         field_idx: u16,
-        /// Field name for compile-time lookup in record literals
-        field_name: base.Ident.Idx,
-    },
-
-    /// Tuple element access by index
-    tuple_access: struct {
-        tuple_expr: LirExprId,
-        tuple_layout: layout.Idx,
-        elem_layout: layout.Idx,
-        /// Element index (0-based)
-        elem_idx: u16,
     },
 
     /// Zero-argument tag (just the discriminant)
@@ -1050,18 +1020,11 @@ pub const LirPattern = union(enum) {
         args: LirPatternSpan,
     },
 
-    /// Destructure a record
-    record: struct {
-        record_layout: layout.Idx,
+    /// Destructure a struct (record or tuple)
+    struct_: struct {
+        struct_layout: layout.Idx,
         /// Pattern for each field, in layout order
         fields: LirPatternSpan,
-    },
-
-    /// Destructure a tuple
-    tuple: struct {
-        tuple_layout: layout.Idx,
-        /// Pattern for each element
-        elems: LirPatternSpan,
     },
 
     /// Destructure a list with known prefix, optional rest, and suffix

@@ -299,16 +299,10 @@ pub const RcInsertPass = struct {
                     try self.countUsesInto(elem_id, target);
                 }
             },
-            .record => |rec| {
-                const fields = self.store.getExprSpan(rec.fields);
+            .struct_ => |s| {
+                const fields = self.store.getExprSpan(s.fields);
                 for (fields) |field_id| {
                     try self.countUsesInto(field_id, target);
-                }
-            },
-            .tuple => |tup| {
-                const elems = self.store.getExprSpan(tup.elems);
-                for (elems) |elem_id| {
-                    try self.countUsesInto(elem_id, target);
                 }
             },
             .tag => |t| {
@@ -317,11 +311,8 @@ pub const RcInsertPass = struct {
                     try self.countUsesInto(arg_id, target);
                 }
             },
-            .field_access => |fa| {
-                try self.countUsesInto(fa.record_expr, target);
-            },
-            .tuple_access => |ta| {
-                try self.countUsesInto(ta.tuple_expr, target);
+            .struct_access => |sa| {
+                try self.countUsesInto(sa.struct_expr, target);
             },
             .nominal => |n| {
                 try self.countUsesInto(n.backing_expr, target);
@@ -408,7 +399,6 @@ pub const RcInsertPass = struct {
             .str_literal,
             .bool_literal,
             .empty_list,
-            .empty_record,
             .zero_arg_tag,
             .crash,
             .runtime_error,
@@ -434,11 +424,8 @@ pub const RcInsertPass = struct {
             .tag => |t| for (store.getPatternSpan(t.args)) |a| {
                 try walkPatternBinds(store, a, ctx);
             },
-            .record => |r| for (store.getPatternSpan(r.fields)) |f| {
+            .struct_ => |s| for (store.getPatternSpan(s.fields)) |f| {
                 try walkPatternBinds(store, f, ctx);
-            },
-            .tuple => |t| for (store.getPatternSpan(t.elems)) |e| {
-                try walkPatternBinds(store, e, ctx);
             },
             .list => |l| {
                 for (store.getPatternSpan(l.prefix)) |p| try walkPatternBinds(store, p, ctx);
@@ -507,11 +494,8 @@ pub const RcInsertPass = struct {
             .call,
             .empty_list,
             .list,
-            .empty_record,
-            .record,
-            .tuple,
-            .field_access,
-            .tuple_access,
+            .struct_,
+            .struct_access,
             .zero_arg_tag,
             .tag,
             .break_expr,
@@ -1188,20 +1172,15 @@ pub const RcInsertPass = struct {
                 const elems = self.store.getExprSpan(l.elems);
                 for (elems) |elem_id| try self.collectExprBoundSymbols(elem_id, set);
             },
-            .record => |rec| {
-                const fields = self.store.getExprSpan(rec.fields);
+            .struct_ => |s| {
+                const fields = self.store.getExprSpan(s.fields);
                 for (fields) |field_id| try self.collectExprBoundSymbols(field_id, set);
-            },
-            .tuple => |tup| {
-                const elems = self.store.getExprSpan(tup.elems);
-                for (elems) |elem_id| try self.collectExprBoundSymbols(elem_id, set);
             },
             .tag => |t| {
                 const args = self.store.getExprSpan(t.args);
                 for (args) |arg_id| try self.collectExprBoundSymbols(arg_id, set);
             },
-            .field_access => |fa| try self.collectExprBoundSymbols(fa.record_expr, set),
-            .tuple_access => |ta| try self.collectExprBoundSymbols(ta.tuple_expr, set),
+            .struct_access => |sa| try self.collectExprBoundSymbols(sa.struct_expr, set),
             .nominal => |n| try self.collectExprBoundSymbols(n.backing_expr, set),
             .early_return => |ret| try self.collectExprBoundSymbols(ret.expr, set),
             .dbg => |d| try self.collectExprBoundSymbols(d.expr, set),
@@ -1234,7 +1213,6 @@ pub const RcInsertPass = struct {
             .str_literal,
             .bool_literal,
             .empty_list,
-            .empty_record,
             .zero_arg_tag,
             .break_expr,
             .crash,
@@ -1783,11 +1761,8 @@ fn countRcOps(store: *const LirExprStore, expr_id: LirExprId) RcOpCounts {
         .call,
         .empty_list,
         .list,
-        .empty_record,
-        .record,
-        .tuple,
-        .field_access,
-        .tuple_access,
+        .struct_,
+        .struct_access,
         .zero_arg_tag,
         .tag,
         .early_return,

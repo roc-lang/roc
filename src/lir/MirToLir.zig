@@ -71,7 +71,6 @@ scratch_lir_captures: std.ArrayList(LirCapture),
 /// Scratch buffers for layout building (reused across layoutFrom* calls)
 scratch_layouts: std.ArrayList(layout.Layout),
 scratch_layout_idxs: std.ArrayList(layout.Idx),
-scratch_field_names: std.ArrayList(Ident.Idx),
 
 pub fn init(
     allocator: Allocator,
@@ -98,7 +97,6 @@ pub fn init(
         .scratch_lir_captures = std.ArrayList(LirCapture).empty,
         .scratch_layouts = std.ArrayList(layout.Layout).empty,
         .scratch_layout_idxs = std.ArrayList(layout.Idx).empty,
-        .scratch_field_names = std.ArrayList(Ident.Idx).empty,
     };
 }
 
@@ -113,7 +111,6 @@ pub fn deinit(self: *Self) void {
     self.scratch_lir_captures.deinit(self.allocator);
     self.scratch_layouts.deinit(self.allocator);
     self.scratch_layout_idxs.deinit(self.allocator);
-    self.scratch_field_names.deinit(self.allocator);
 }
 
 /// Lower a MIR expression to a LIR expression.
@@ -185,17 +182,17 @@ fn layoutFromRecord(self: *Self, record: anytype) Allocator.Error!layout.Idx {
     const env = self.layout_store.currentEnv();
     const save_layouts = self.scratch_layouts.items.len;
     defer self.scratch_layouts.shrinkRetainingCapacity(save_layouts);
-    const save_names = self.scratch_field_names.items.len;
-    defer self.scratch_field_names.shrinkRetainingCapacity(save_names);
+    var scratch_names = std.ArrayList(Ident.Idx).empty;
+    defer scratch_names.deinit(self.allocator);
 
     for (fields) |field| {
         const field_layout_idx = try self.layoutFromMonotype(field.type_idx);
         const field_layout = self.layout_store.getLayout(field_layout_idx);
         try self.scratch_layouts.append(self.allocator, field_layout);
-        try self.scratch_field_names.append(self.allocator, field.name);
+        try scratch_names.append(self.allocator, field.name);
     }
 
-    return self.layout_store.putRecord(env, self.scratch_layouts.items[save_layouts..], self.scratch_field_names.items[save_names..]);
+    return self.layout_store.putRecord(env, self.scratch_layouts.items[save_layouts..], scratch_names.items);
 }
 
 fn layoutFromTuple(self: *Self, tup: anytype) Allocator.Error!layout.Idx {
@@ -447,7 +444,12 @@ fn lowerList(self: *Self, list_data: anytype, mono_idx: Monotype.Idx, region: Re
 fn lowerRecord(self: *Self, rec: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
     const mir_fields = self.mir_store.getExprSpan(rec.fields);
     if (mir_fields.len == 0) {
-        return self.lir_store.addExpr(.empty_record, region);
+        // Empty record: zero-field struct
+        const record_layout = try self.layoutFromMonotype(mono_idx);
+        return self.lir_store.addExpr(.{ .struct_ = .{
+            .struct_layout = record_layout,
+            .fields = LirExprSpan.empty(),
+        } }, region);
     }
 
     const record_layout = try self.layoutFromMonotype(mono_idx);
@@ -463,8 +465,6 @@ fn lowerRecord(self: *Self, rec: anytype, mono_idx: Monotype.Idx, region: Region
 
         const save_exprs = self.scratch_lir_expr_ids.items.len;
         defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
-        const save_names = self.scratch_field_names.items.len;
-        defer self.scratch_field_names.shrinkRetainingCapacity(save_names);
 
         for (0..layout_fields.len) |li| {
             const layout_field_name = layout_fields.get(li).name;
@@ -473,7 +473,6 @@ fn lowerRecord(self: *Self, rec: anytype, mono_idx: Monotype.Idx, region: Region
                 if (@as(u32, @bitCast(mir_name)) == @as(u32, @bitCast(layout_field_name))) {
                     const lir_expr = try self.lowerExpr(mir_fields[mi]);
                     try self.scratch_lir_expr_ids.append(self.allocator, lir_expr);
-                    try self.scratch_field_names.append(self.allocator, mir_name);
                     found = true;
                     break;
                 }
@@ -482,22 +481,18 @@ fn lowerRecord(self: *Self, rec: anytype, mono_idx: Monotype.Idx, region: Region
         }
 
         const lir_fields = try self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_exprs..]);
-        const lir_field_names = try self.lir_store.addFieldNameSpan(self.scratch_field_names.items[save_names..]);
 
-        return self.lir_store.addExpr(.{ .record = .{
-            .record_layout = record_layout,
+        return self.lir_store.addExpr(.{ .struct_ = .{
+            .struct_layout = record_layout,
             .fields = lir_fields,
-            .field_names = lir_field_names,
         } }, region);
     } else {
-        // Non-record layout (e.g. single-field optimization or ZST) — pass through directly
+        // Non-struct layout (e.g. single-field optimization or ZST) — pass through directly
         const lir_fields = try self.lowerExprSpan(mir_fields);
-        const lir_field_names = try self.lir_store.addFieldNameSpan(mir_field_names);
 
-        return self.lir_store.addExpr(.{ .record = .{
-            .record_layout = record_layout,
+        return self.lir_store.addExpr(.{ .struct_ = .{
+            .struct_layout = record_layout,
             .fields = lir_fields,
-            .field_names = lir_field_names,
         } }, region);
     }
 }
@@ -505,8 +500,37 @@ fn lowerRecord(self: *Self, rec: anytype, mono_idx: Monotype.Idx, region: Region
 fn lowerTuple(self: *Self, tup: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
     const tuple_layout = try self.layoutFromMonotype(mono_idx);
     const mir_elems = self.mir_store.getExprSpan(tup.elems);
-    const lir_elems = try self.lowerExprSpan(mir_elems);
-    return self.lir_store.addExpr(.{ .tuple = .{ .tuple_layout = tuple_layout, .elems = lir_elems } }, region);
+    const tuple_layout_val = self.layout_store.getLayout(tuple_layout);
+
+    if (tuple_layout_val.tag == .struct_) {
+        // MIR elements are in source order (.0, .1, .2, ...) but the layout store
+        // sorts fields by alignment. Reorder to match layout order.
+        const struct_data = self.layout_store.getStructData(tuple_layout_val.data.struct_.idx);
+        const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
+
+        const save_exprs = self.scratch_lir_expr_ids.items.len;
+        defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
+
+        for (0..layout_fields.len) |li| {
+            const original_index = layout_fields.get(li).index;
+            const lir_expr = try self.lowerExpr(mir_elems[original_index]);
+            try self.scratch_lir_expr_ids.append(self.allocator, lir_expr);
+        }
+
+        const lir_fields = try self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_exprs..]);
+
+        return self.lir_store.addExpr(.{ .struct_ = .{
+            .struct_layout = tuple_layout,
+            .fields = lir_fields,
+        } }, region);
+    } else {
+        // Non-struct layout (e.g. single-element optimization) — pass through directly
+        const lir_elems = try self.lowerExprSpan(mir_elems);
+        return self.lir_store.addExpr(.{ .struct_ = .{
+            .struct_layout = tuple_layout,
+            .fields = lir_elems,
+        } }, region);
+    }
 }
 
 fn lowerTag(self: *Self, tag_data: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
@@ -526,10 +550,10 @@ fn lowerTag(self: *Self, tag_data: anytype, mono_idx: Monotype.Idx, region: Regi
             // Single payload → layout is just the payload type, emit it directly
             return self.lowerExpr(mir_args[0]);
         } else {
-            // Multiple payloads → layout is a tuple, emit a tuple expression
-            const tuple_layout = try self.layoutFromMonotype(mono_idx);
+            // Multiple payloads → layout is a struct, emit struct expression
+            const struct_layout = try self.layoutFromMonotype(mono_idx);
             const lir_elems = try self.lowerExprSpan(mir_args);
-            return self.lir_store.addExpr(.{ .tuple = .{ .tuple_layout = tuple_layout, .elems = lir_elems } }, region);
+            return self.lir_store.addExpr(.{ .struct_ = .{ .struct_layout = struct_layout, .fields = lir_elems } }, region);
         }
     }
 
@@ -819,20 +843,19 @@ fn lowerBlock(self: *Self, block_data: anytype, mono_idx: Monotype.Idx, region: 
 }
 
 fn lowerRecordAccess(self: *Self, ra: anytype, mir_expr_id: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
-    const lir_record = try self.lowerExpr(ra.record);
-    const record_mono = self.mir_store.typeOf(ra.record);
-    const record_layout = try self.layoutFromMonotype(record_mono);
+    const lir_struct = try self.lowerExpr(ra.record);
+    const struct_mono = self.mir_store.typeOf(ra.record);
+    const struct_layout = try self.layoutFromMonotype(struct_mono);
     const result_mono = self.mir_store.typeOf(mir_expr_id);
     const field_layout = try self.layoutFromMonotype(result_mono);
 
-    // Find the field index from the layout's field list (alignment-sorted order),
-    // not the monotype's field list (alphabetical order), so codegen accesses
-    // the correct physical offset.
+    // Find the sorted field index from the layout's field list (alignment-sorted order),
+    // not the monotype's field list (alphabetical order).
     var field_idx: ?u16 = null;
-    const record_layout_val = self.layout_store.getLayout(record_layout);
-    if (record_layout_val.tag == .struct_) {
-        const record_data = self.layout_store.getStructData(record_layout_val.data.struct_.idx);
-        const layout_fields = self.layout_store.struct_fields.sliceRange(record_data.getFields());
+    const struct_layout_val = self.layout_store.getLayout(struct_layout);
+    if (struct_layout_val.tag == .struct_) {
+        const struct_data = self.layout_store.getStructData(struct_layout_val.data.struct_.idx);
+        const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
         for (0..layout_fields.len) |li| {
             if (@as(u32, @bitCast(layout_fields.get(li).name)) == @as(u32, @bitCast(ra.field_name))) {
                 field_idx = @intCast(li);
@@ -840,31 +863,47 @@ fn lowerRecordAccess(self: *Self, ra: anytype, mir_expr_id: MIR.ExprId, region: 
             }
         }
     } else {
-        // Single-field record optimized to non-record layout; field_idx 0
+        // Single-field record optimized to non-struct layout; field_idx 0
         field_idx = 0;
     }
 
-    return self.lir_store.addExpr(.{ .field_access = .{
-        .record_expr = lir_record,
-        .record_layout = record_layout,
+    return self.lir_store.addExpr(.{ .struct_access = .{
+        .struct_expr = lir_struct,
+        .struct_layout = struct_layout,
         .field_layout = field_layout,
         .field_idx = field_idx orelse unreachable,
-        .field_name = ra.field_name,
     } }, region);
 }
 
 fn lowerTupleAccess(self: *Self, ta: anytype, mir_expr_id: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
-    const lir_tuple = try self.lowerExpr(ta.tuple);
-    const tuple_mono = self.mir_store.typeOf(ta.tuple);
-    const tuple_layout = try self.layoutFromMonotype(tuple_mono);
+    const lir_struct = try self.lowerExpr(ta.tuple);
+    const struct_mono = self.mir_store.typeOf(ta.tuple);
+    const struct_layout = try self.layoutFromMonotype(struct_mono);
     const result_mono = self.mir_store.typeOf(mir_expr_id);
-    const elem_layout = try self.layoutFromMonotype(result_mono);
+    const field_layout = try self.layoutFromMonotype(result_mono);
 
-    return self.lir_store.addExpr(.{ .tuple_access = .{
-        .tuple_expr = lir_tuple,
-        .tuple_layout = tuple_layout,
-        .elem_layout = elem_layout,
-        .elem_idx = @intCast(ta.elem_index),
+    // Find the sorted field index for this tuple element's original index.
+    var field_idx: ?u16 = null;
+    const struct_layout_val = self.layout_store.getLayout(struct_layout);
+    if (struct_layout_val.tag == .struct_) {
+        const struct_data = self.layout_store.getStructData(struct_layout_val.data.struct_.idx);
+        const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
+        for (0..layout_fields.len) |li| {
+            if (layout_fields.get(li).index == ta.elem_index) {
+                field_idx = @intCast(li);
+                break;
+            }
+        }
+    } else {
+        // Single-element tuple optimized to non-struct layout; field_idx 0
+        field_idx = 0;
+    }
+
+    return self.lir_store.addExpr(.{ .struct_access = .{
+        .struct_expr = lir_struct,
+        .struct_layout = struct_layout,
+        .field_layout = field_layout,
+        .field_idx = field_idx orelse unreachable,
     } }, region);
 }
 
@@ -1045,7 +1084,7 @@ fn lowerExpect(self: *Self, e: anytype, mono_idx: Monotype.Idx, region: Region) 
 
     // The MIR expect body is the boolean condition to assert.
     // After the assertion, the result is empty_record (unit).
-    const lir_body = try self.lir_store.addExpr(.{ .empty_record = {} }, region);
+    const lir_body = try self.lir_store.addExpr(.{ .struct_ = .{ .struct_layout = .zst, .fields = LirExprSpan.empty() } }, region);
 
     return self.lir_store.addExpr(.{ .expect = .{
         .cond = lir_cond,
@@ -1126,9 +1165,9 @@ fn lowerPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Error!LirPatte
                 } else {
                     const tuple_layout = try self.layoutFromMonotype(mono_idx);
                     const lir_elems = try self.lowerPatternSpan(mir_pat_args);
-                    break :blk self.lir_store.addPattern(.{ .tuple = .{
-                        .tuple_layout = tuple_layout,
-                        .elems = lir_elems,
+                    break :blk self.lir_store.addPattern(.{ .struct_ = .{
+                        .struct_layout = tuple_layout,
+                        .fields = lir_elems,
                     } }, region);
                 }
             }
@@ -1216,26 +1255,51 @@ fn lowerPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Error!LirPatte
                 }
 
                 const lir_fields = try self.lir_store.addPatternSpan(self.scratch_lir_pattern_ids.items[save_len..]);
-                break :blk self.lir_store.addPattern(.{ .record = .{
-                    .record_layout = record_layout,
+                break :blk self.lir_store.addPattern(.{ .struct_ = .{
+                    .struct_layout = record_layout,
                     .fields = lir_fields,
                 } }, region);
             } else {
-                // Non-record layout (e.g. ZST) — just lower patterns directly
+                // Non-struct layout (e.g. ZST) — just lower patterns directly
                 const lir_fields = try self.lowerPatternSpan(mir_patterns);
-                break :blk self.lir_store.addPattern(.{ .record = .{
-                    .record_layout = record_layout,
+                break :blk self.lir_store.addPattern(.{ .struct_ = .{
+                    .struct_layout = record_layout,
                     .fields = lir_fields,
                 } }, region);
             }
         },
         .tuple_destructure => |td| blk: {
-            const tuple_layout = try self.layoutFromMonotype(mono_idx);
-            const lir_elems = try self.lowerPatternSpan(self.mir_store.getPatternSpan(td.elems));
-            break :blk self.lir_store.addPattern(.{ .tuple = .{
-                .tuple_layout = tuple_layout,
-                .elems = lir_elems,
-            } }, region);
+            const struct_layout = try self.layoutFromMonotype(mono_idx);
+            const mir_patterns = self.mir_store.getPatternSpan(td.elems);
+            const struct_layout_val = self.layout_store.getLayout(struct_layout);
+
+            if (struct_layout_val.tag == .struct_) {
+                // Reorder patterns from source order to layout (alignment-sorted) order
+                const struct_data = self.layout_store.getStructData(struct_layout_val.data.struct_.idx);
+                const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
+
+                const save_len = self.scratch_lir_pattern_ids.items.len;
+                defer self.scratch_lir_pattern_ids.shrinkRetainingCapacity(save_len);
+
+                for (0..layout_fields.len) |li| {
+                    const original_index = layout_fields.get(li).index;
+                    const lir_pat = try self.lowerPattern(mir_patterns[original_index]);
+                    try self.scratch_lir_pattern_ids.append(self.allocator, lir_pat);
+                }
+
+                const lir_fields = try self.lir_store.addPatternSpan(self.scratch_lir_pattern_ids.items[save_len..]);
+                break :blk self.lir_store.addPattern(.{ .struct_ = .{
+                    .struct_layout = struct_layout,
+                    .fields = lir_fields,
+                } }, region);
+            } else {
+                // Non-struct layout — pass through directly
+                const lir_elems = try self.lowerPatternSpan(mir_patterns);
+                break :blk self.lir_store.addPattern(.{ .struct_ = .{
+                    .struct_layout = struct_layout,
+                    .fields = lir_elems,
+                } }, region);
+            }
         },
         .list_destructure => |ld| blk: {
             const list_monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
@@ -2219,9 +2283,9 @@ test "MIR record access finds correct field index for non-first field" {
     const lir_id = try translator.lower(access_expr);
     const lir_expr = env.lir_store.getExpr(lir_id);
 
-    try testing.expect(lir_expr == .field_access);
-    // Field c is at index 2 in the record's field list
-    try testing.expectEqual(@as(u16, 2), lir_expr.field_access.field_idx);
+    try testing.expect(lir_expr == .struct_access);
+    // Field c is at index 2 in the record's sorted field list
+    try testing.expectEqual(@as(u16, 2), lir_expr.struct_access.field_idx);
 }
 
 test "MIR tuple access preserves element index" {
@@ -2266,8 +2330,9 @@ test "MIR tuple access preserves element index" {
     const lir_id = try translator.lower(access_expr);
     const lir_expr = env.lir_store.getExpr(lir_id);
 
-    try testing.expect(lir_expr == .tuple_access);
-    try testing.expectEqual(@as(u16, 2), lir_expr.tuple_access.elem_idx);
+    try testing.expect(lir_expr == .struct_access);
+    // Original tuple element 2 (I64) is at sorted position 1 (sorted: I64@0, I64@2, Bool@1)
+    try testing.expectEqual(@as(u16, 1), lir_expr.struct_access.field_idx);
 }
 
 test "MIR lookup propagates symbol def to LIR store" {
@@ -2428,9 +2493,9 @@ test "MIR single-tag union with multiple payloads emits tuple" {
     const lir_id = try translator.lower(tag_expr);
     const lir_expr = env.lir_store.getExpr(lir_id);
 
-    // Multiple payloads → should be a tuple, not a .tag
+    // Multiple payloads → should be a struct, not a .tag
     try testing.expect(lir_expr != .tag);
-    try testing.expect(lir_expr == .tuple);
+    try testing.expect(lir_expr == .struct_);
 }
 
 test "MIR single-tag union pattern with one arg emits payload pattern directly" {
@@ -3056,9 +3121,9 @@ test "record access uses layout field order not monotype alphabetical order" {
     const lir_id = try translator.lower(access_expr);
     const lir_expr = env.lir_store.getExpr(lir_id);
 
-    try testing.expect(lir_expr == .field_access);
+    try testing.expect(lir_expr == .struct_access);
     // In layout order, I64 fields (name, score) come before U8 (age), so age is at index 2
-    try testing.expectEqual(@as(u16, 2), lir_expr.field_access.field_idx);
+    try testing.expectEqual(@as(u16, 2), lir_expr.struct_access.field_idx);
 }
 
 test "record destructure wildcard gets actual field layout not zst" {
@@ -3104,8 +3169,8 @@ test "record destructure wildcard gets actual field layout not zst" {
     const lir_pat_id = try translator.lowerPattern(destruct_pat);
     const lir_pat = env.lir_store.getPattern(lir_pat_id);
 
-    try testing.expect(lir_pat == .record);
-    const field_pats = env.lir_store.getPatternSpan(lir_pat.record.fields);
+    try testing.expect(lir_pat == .struct_);
+    const field_pats = env.lir_store.getPatternSpan(lir_pat.struct_.fields);
     // Layout order: [b: I64, c: I64, a: U8] → 3 patterns
     try testing.expectEqual(@as(usize, 3), field_pats.len);
 
