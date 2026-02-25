@@ -161,10 +161,10 @@ pub const Content = union(enum) {
                     .record => |record| {
                         return record;
                     },
-                    _ => return null,
+                    .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => return null,
                 }
             },
-            _ => return null,
+            .flex, .rigid, .alias, .err => return null,
         }
     }
 
@@ -176,10 +176,10 @@ pub const Content = union(enum) {
                     .tag_union => |tag_union| {
                         return tag_union;
                     },
-                    _ => return null,
+                    .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return null,
                 }
             },
-            _ => return null,
+            .flex, .rigid, .alias, .err => return null,
         }
     }
 
@@ -191,10 +191,10 @@ pub const Content = union(enum) {
                     .nominal_type => |nominal_type| {
                         return nominal_type;
                     },
-                    _ => return null,
+                    .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => return null,
                 }
             },
-            _ => return null,
+            .flex, .rigid, .alias, .err => return null,
         }
     }
 
@@ -206,10 +206,10 @@ pub const Content = union(enum) {
                     .fn_pure => |func| return func,
                     .fn_effectful => |func| return func,
                     .fn_unbound => |func| return func,
-                    _ => return null,
+                    .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => return null,
                 }
             },
-            _ => return null,
+            .flex, .rigid, .alias, .err => return null,
         }
     }
 
@@ -221,10 +221,10 @@ pub const Content = union(enum) {
                     .fn_pure => |func| return .{ .func = func, .ext = .pure },
                     .fn_effectful => |func| return .{ .func = func, .ext = .effectful },
                     .fn_unbound => |func| return .{ .func = func, .ext = .unbound },
-                    _ => return null,
+                    .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => return null,
                 }
             },
-            _ => return null,
+            .flex, .rigid, .alias, .err => return null,
         }
     }
 };
