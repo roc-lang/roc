@@ -34,7 +34,7 @@ pub fn handler(comptime ServerType: type) type {
             const version: i64 = switch (version_value) {
                 .integer => |v| v,
                 .float => |f| @intFromFloat(f),
-                _ => 0,
+                .null, .bool, .number_string, .string, .array, .object => 0,
             };
 
             self.doc_store.upsert(uri, version, text) catch |err| {

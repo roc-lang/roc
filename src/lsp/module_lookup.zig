@@ -74,7 +74,7 @@ pub fn extractIdentFromPattern(store: *const NodeStore, pattern_idx: CIR.Pattern
     return switch (pattern) {
         .assign => |a| a.ident,
         .as => |a| a.ident,
-        _ => null,
+        .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .underscore, .runtime_error => null,
     };
 }
 
@@ -85,7 +85,7 @@ pub fn extractIdentFromPatternRecursive(store: *const NodeStore, pattern_idx: CI
     return switch (pattern) {
         .assign => |a| a.ident,
         .as => |a| a.ident,
-        _ => null,
+        .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .underscore, .runtime_error => null,
     };
 }
 
@@ -176,7 +176,7 @@ pub fn findStatementOwningPattern(module_env: *ModuleEnv, target_pattern: CIR.Pa
         const pattern_idx_opt: ?CIR.Pattern.Idx = switch (stmt) {
             .s_decl => |decl| decl.pattern,
             .s_var => |var_stmt| var_stmt.pattern_idx,
-            _ => null,
+            .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => null,
         };
         if (pattern_idx_opt) |pat_idx| {
             if (pat_idx == target_pattern) return .{ .stmt = stmt, .idx = stmt_idx };

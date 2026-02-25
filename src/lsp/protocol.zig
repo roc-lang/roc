@@ -37,7 +37,7 @@ pub const JsonId = union(enum) {
             .integer => |num| .{ .integer = num },
             .float => return error.InvalidIdType,
             .string => |text| .{ .string = try copyString(allocator, text) },
-            _ => error.InvalidIdType,
+            .null, .bool, .number_string, .array, .object => error.InvalidIdType,
         };
     }
 
@@ -102,7 +102,7 @@ pub const InitializeParams = struct {
             params.process_id = switch (pid_node) {
                 .integer => |num| num,
                 .null => null,
-                _ => return error.InvalidParams,
+                .bool, .float, .number_string, .string, .array, .object => return error.InvalidParams,
             };
         }
 
@@ -110,7 +110,7 @@ pub const InitializeParams = struct {
             const uri_text = switch (uri_node) {
                 .string => |text| text,
                 .null => null,
-                _ => return error.InvalidParams,
+                .bool, .integer, .float, .number_string, .array, .object => return error.InvalidParams,
             };
             if (uri_text) |text| {
                 params.root_uri = try copyString(allocator, text);
@@ -136,7 +136,7 @@ pub const InitializeParams = struct {
                 const ver_text = switch (ver_node) {
                     .string => |text| try copyString(allocator, text),
                     .null => null,
-                    _ => return error.InvalidParams,
+                    .bool, .integer, .float, .number_string, .array, .object => return error.InvalidParams,
                 };
                 info.version = ver_text;
             }

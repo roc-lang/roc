@@ -390,7 +390,7 @@ const ImportContext = struct {
             const expr = module_env.store.getExpr(def.expr);
             const is_function = switch (expr) {
                 .e_lambda, .e_closure => true,
-                _ => false,
+                .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => false,
             };
             if (is_function) {
                 // Get the name from the pattern
@@ -437,7 +437,7 @@ const SemanticCollector = struct {
             .s_expr => |e| try self.visitExpr(e.expr),
             // Type declarations and imports don't need special handling
             // since they're covered by the tokenizer
-            _ => {},
+            .s_reassign, .s_crash, .s_dbg, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => {},
         }
     }
 
@@ -447,7 +447,7 @@ const SemanticCollector = struct {
         const expr = self.module_env.store.getExpr(expr_idx);
         const is_function = switch (expr) {
             .e_closure, .e_lambda, .e_hosted_lambda => true,
-            _ => false,
+            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_run_low_level => false,
         };
 
         // Add token for pattern with appropriate type
@@ -498,7 +498,7 @@ const SemanticCollector = struct {
                     try self.visitPatternAsParameter(param_idx);
                 }
             },
-            _ => {},
+            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_run_low_level => {},
         }
     }
 
@@ -546,7 +546,7 @@ const SemanticCollector = struct {
                 const region = self.module_env.store.getPatternRegion(pattern_idx);
                 try self.addToken(region, .parameter);
             },
-            _ => {},
+            .applied_tag, .nominal, .nominal_external, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .runtime_error => {},
         }
     }
 
@@ -567,7 +567,7 @@ const SemanticCollector = struct {
                 // Visit lambda body
                 try self.visitExpr(l.body);
             },
-            _ => {},
+            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => {},
         }
     }
 

@@ -29,7 +29,7 @@ pub fn handler(comptime ServerType: type) type {
             const version: i64 = switch (version_value) {
                 .integer => |v| v,
                 .float => |f| @intFromFloat(f),
-                _ => 0,
+                .null, .bool, .number_string, .string, .array, .object => 0,
             };
 
             const changes_value = obj.get("contentChanges") orelse return;
@@ -117,7 +117,7 @@ pub fn handler(comptime ServerType: type) type {
             return switch (value) {
                 .integer => |v| if (v < 0) error.InvalidField else @intCast(v),
                 .float => |f| if (f < 0) error.InvalidField else @intFromFloat(f),
-                _ => return error.InvalidField,
+                .null, .bool, .number_string, .string, .array, .object => return error.InvalidField,
             };
         }
     };

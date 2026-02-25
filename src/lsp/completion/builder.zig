@@ -417,7 +417,7 @@ pub const CompletionBuilder = struct {
                     const header_idx = switch (stmt) {
                         .s_alias_decl => |a| a.header,
                         .s_nominal_decl => |n| n.header,
-                        _ => unreachable,
+                        .s_decl, .s_var, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_type_anno, .s_type_var_alias, .s_runtime_error => unreachable,
                     };
                     const header = module_env.store.getTypeHeader(header_idx);
                     const name = module_env.getIdentText(header.name);
@@ -438,7 +438,7 @@ pub const CompletionBuilder = struct {
                         .documentation = documentation,
                     });
                 },
-                _ => {},
+                .s_decl, .s_var, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_type_anno, .s_type_var_alias, .s_runtime_error => {},
             }
         }
     }
@@ -502,7 +502,7 @@ pub const CompletionBuilder = struct {
             const ident_idx = switch (pattern) {
                 .assign => |p| p.ident,
                 .as => |p| p.ident,
-                _ => continue,
+                .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .underscore, .runtime_error => continue,
             };
 
             const name = module_env.getIdentText(ident_idx);
@@ -513,7 +513,7 @@ pub const CompletionBuilder = struct {
             const expr = module_env.store.getExpr(def.expr);
             const kind: u32 = switch (expr) {
                 .e_closure, .e_lambda, .e_hosted_lambda => @intFromEnum(CompletionItemKind.function),
-                _ => @intFromEnum(CompletionItemKind.variable),
+                .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_run_low_level => @intFromEnum(CompletionItemKind.variable),
             };
 
             // Get type information for the definition
@@ -556,7 +556,7 @@ pub const CompletionBuilder = struct {
                 const ident_idx = switch (pattern) {
                     .assign => |p| p.ident,
                     .as => |p| p.ident,
-                    _ => continue,
+                    .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .underscore, .runtime_error => continue,
                 };
 
                 const name = module_env.getIdentText(ident_idx);
@@ -569,7 +569,7 @@ pub const CompletionBuilder = struct {
                     const expr = module_env.store.getExpr(expr_idx);
                     kind = switch (expr) {
                         .e_closure, .e_lambda, .e_hosted_lambda => @intFromEnum(CompletionItemKind.function),
-                        _ => @intFromEnum(CompletionItemKind.variable),
+                        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_run_low_level => @intFromEnum(CompletionItemKind.variable),
                     };
                 }
 
@@ -631,7 +631,7 @@ pub const CompletionBuilder = struct {
             const ident_idx = switch (pattern) {
                 .assign => |p| p.ident,
                 .as => |p| p.ident,
-                _ => continue,
+                .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .underscore, .runtime_error => continue,
             };
 
             const name = module_env.getIdentText(ident_idx);
@@ -655,14 +655,14 @@ pub const CompletionBuilder = struct {
             const pattern_idx = switch (stmt) {
                 .s_decl => |decl| decl.pattern,
                 .s_var => |var_stmt| var_stmt.pattern_idx,
-                _ => continue,
+                .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => continue,
             };
 
             const pattern = module_env.store.getPattern(pattern_idx);
             const ident_idx = switch (pattern) {
                 .assign => |p| p.ident,
                 .as => |p| p.ident,
-                _ => continue,
+                .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .underscore, .runtime_error => continue,
             };
 
             const name = module_env.getIdentText(ident_idx);
@@ -714,7 +714,7 @@ pub const CompletionBuilder = struct {
                         _ => break,
                     }
                 },
-                _ => break,
+                .flex, .rigid, .err => break,
             }
         }
 
@@ -772,7 +772,7 @@ pub const CompletionBuilder = struct {
                             content = resolved.desc.content;
                             continue;
                         },
-                        _ => break,
+                        .record, .record_unbound, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => break,
                     }
                 },
                 .alias => |alias| {
@@ -781,7 +781,7 @@ pub const CompletionBuilder = struct {
                     content = resolved.desc.content;
                     continue;
                 },
-                _ => break,
+                .flex, .rigid, .err => break,
             }
         }
     }
@@ -840,7 +840,7 @@ pub const CompletionBuilder = struct {
                         _ => break,
                     }
                 },
-                _ => break,
+                .flex, .rigid, .err => break,
             }
         }
 
@@ -879,7 +879,7 @@ pub const CompletionBuilder = struct {
             .structure => |flat_type| {
                 self.logDebug("addFieldsFromContent: structure, flat_type tag={s}", .{@tagName(flat_type)});
             },
-            _ => {
+            .flex, .rigid, .err => {
                 self.logDebug("addFieldsFromContent: not a record or alias, tag={s}", .{@tagName(content)});
             },
         }
@@ -981,7 +981,7 @@ pub const CompletionBuilder = struct {
                 const ident_idx = switch (pattern) {
                     .assign => |p| p.ident,
                     .as => |p| p.ident,
-                    _ => continue,
+                    .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .underscore, .runtime_error => continue,
                 };
 
                 const name = module_env.getIdentText(ident_idx);
@@ -1004,14 +1004,14 @@ pub const CompletionBuilder = struct {
                 const pattern_idx = switch (stmt) {
                     .s_decl => |decl| decl.pattern,
                     .s_var => |var_stmt| var_stmt.pattern_idx,
-                    _ => continue,
+                    .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => continue,
                 };
 
                 const pattern = module_env.store.getPattern(pattern_idx);
                 const ident_idx = switch (pattern) {
                     .assign => |p| p.ident,
                     .as => |p| p.ident,
-                    _ => continue,
+                    .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .underscore, .runtime_error => continue,
                 };
 
                 const name = module_env.getIdentText(ident_idx);
@@ -1058,7 +1058,7 @@ pub const CompletionBuilder = struct {
                     .nominal_type => |nominal| nominal.ident.ident_idx,
                     _ => null,
                 },
-                _ => null,
+                .flex, .rigid, .err => null,
             };
 
             if (type_ident_opt) |type_ident| {
@@ -1098,7 +1098,7 @@ pub const CompletionBuilder = struct {
                     content = resolved.desc.content;
                     continue;
                 },
-                _ => break,
+                .structure, .err => break,
             }
         }
     }
@@ -1263,7 +1263,7 @@ pub const CompletionBuilder = struct {
             const ident_idx = switch (pattern) {
                 .assign => |p| p.ident,
                 .as => |p| p.ident,
-                _ => continue,
+                .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .underscore, .runtime_error => continue,
             };
 
             if (ident_idx == qualified_ident) {
@@ -1283,14 +1283,14 @@ pub const CompletionBuilder = struct {
             const pattern_idx = switch (stmt) {
                 .s_decl => |decl| decl.pattern,
                 .s_var => |var_stmt| var_stmt.pattern_idx,
-                _ => continue,
+                .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => continue,
             };
 
             const pattern = module_env.store.getPattern(pattern_idx);
             const ident_idx = switch (pattern) {
                 .assign => |p| p.ident,
                 .as => |p| p.ident,
-                _ => continue,
+                .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .underscore, .runtime_error => continue,
             };
 
             if (ident_idx == qualified_ident) {
@@ -1318,7 +1318,7 @@ pub const CompletionBuilder = struct {
             const ident_idx = switch (pattern) {
                 .assign => |p| p.ident,
                 .as => |p| p.ident,
-                _ => continue,
+                .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .underscore, .runtime_error => continue,
             };
 
             if (ident_idx == qualified_ident) {
@@ -1333,14 +1333,14 @@ pub const CompletionBuilder = struct {
             const pattern_idx = switch (stmt) {
                 .s_decl => |decl| decl.pattern,
                 .s_var => |var_stmt| var_stmt.pattern_idx,
-                _ => continue,
+                .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => continue,
             };
 
             const pattern = module_env.store.getPattern(pattern_idx);
             const ident_idx = switch (pattern) {
                 .assign => |p| p.ident,
                 .as => |p| p.ident,
-                _ => continue,
+                .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .underscore, .runtime_error => continue,
             };
 
             if (ident_idx == qualified_ident) {

@@ -173,7 +173,7 @@ const FindTypeContext = struct {
                 const pattern_idx: ?CIR.Pattern.Idx = switch (stmt) {
                     .s_decl => |d| d.pattern,
                     .s_var => |v| v.pattern_idx,
-                    _ => null,
+                    .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => null,
                 };
                 if (pattern_idx) |pat| {
                     ctx.result = .{
@@ -189,7 +189,7 @@ const FindTypeContext = struct {
                 const pattern_idx: ?CIR.Pattern.Idx = switch (stmt) {
                     .s_decl => |d| d.pattern,
                     .s_var => |v| v.pattern_idx,
-                    _ => null,
+                    .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => null,
                 };
                 if (pattern_idx) |pat| {
                     ctx.result = .{
@@ -241,7 +241,7 @@ const FindLookupContext = struct {
                     }
                 }
             },
-            _ => {},
+            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => {},
         }
 
         return .continue_traversal;

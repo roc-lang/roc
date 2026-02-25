@@ -144,7 +144,7 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
 
             return switch (self.state) {
                 .exit_success, .exit_failure => false,
-                _ => true,
+                .waiting_for_initialize, .waiting_for_initialized, .running, .shutdown => true,
             };
         }
 

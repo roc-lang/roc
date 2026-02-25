@@ -552,7 +552,7 @@ pub const SyntaxChecker = struct {
                         break;
                     }
                 },
-                _ => {},
+                .text, .annotated, .line_break, .indent, .space, .horizontal_rule, .annotation_start, .annotation_end, .raw, .reflowing_text, .link, .vertical_stack, .horizontal_concat => {},
             }
         }
 
@@ -610,7 +610,7 @@ pub const SyntaxChecker = struct {
             .source_code_region => |region| return textHasAny(region.line_text, needles),
             .source_code_multi_region => |multi| return textHasAny(multi.source, needles),
             .source_code_with_underlines => |with_underlines| return textHasAny(with_underlines.display_region.line_text, needles),
-            _ => {},
+            .line_break, .indent, .space, .horizontal_rule, .annotation_start, .annotation_end => {},
         }
         return false;
     }
