@@ -698,7 +698,7 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
             const compiler_version = build_options.compiler_version;
             try writeSuccessResponse(response_buffer, compiler_version, null);
         },
-        _ => {
+        .INIT, .QUERY_TOKENS, .QUERY_AST, .QUERY_CIR, .QUERY_TYPES, .QUERY_FORMATTED, .GET_HOVER_INFO, .EVALUATE_TESTS, .REPL_STEP, .CLEAR_REPL => {
             try writeErrorResponse(response_buffer, .INVALID_STATE, "INVALID_STATE");
         },
     }
@@ -741,7 +741,7 @@ fn handleLoadedState(message_type: MessageType, message_json: std.json.Value, re
             const compiler_version = build_options.compiler_version;
             try writeSuccessResponse(response_buffer, compiler_version, null);
         },
-        _ => {
+        .INIT, .LOAD_SOURCE, .INIT_REPL, .REPL_STEP, .CLEAR_REPL => {
             try writeErrorResponse(response_buffer, .INVALID_STATE, "INVALID_STATE");
         },
     }
@@ -835,7 +835,7 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
             // These queries need parse/type information which isn't readily available in REPL mode
             try writeErrorResponse(response_buffer, .ERROR, "Parse/type queries not available in REPL mode");
         },
-        _ => {
+        .INIT, .LOAD_SOURCE, .QUERY_TOKENS, .QUERY_AST, .EVALUATE_TESTS, .INIT_REPL => {
             try writeErrorResponse(response_buffer, .INVALID_STATE, "Invalid message type for REPL state");
         },
     }

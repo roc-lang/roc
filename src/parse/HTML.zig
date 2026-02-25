@@ -62,7 +62,7 @@ pub fn tokensToHtml(ast: *const AST, env: *const CommonEnv, writer: *std.io.Writ
             .Float, .Int => "token-number",
             .OpenRound, .CloseRound, .OpenSquare, .CloseSquare, .OpenCurly, .CloseCurly, .OpenStringInterpolation, .CloseStringInterpolation, .NoSpaceOpenRound => "token-punctuation",
             .EndOfFile => "token-default",
-            _ => "token-default",
+            .MalformedStringPart, .SingleQuote, .MalformedSingleQuote, .MalformedNumberBadSuffix, .MalformedNumberUnicodeSuffix, .MalformedNumberNoDigits, .MalformedNumberNoExponentDigits, .MalformedInvalidUnicodeEscapeSequence, .MalformedInvalidEscapeSequence, .MalformedUnicodeIdent, .Underscore, .DotInt, .NoSpaceDotInt, .MalformedDotUnicodeIdent, .MalformedNoSpaceDotUnicodeIdent, .MalformedNamedUnderscoreUnicode, .OpaqueName, .MalformedOpaqueNameUnicode, .MalformedOpaqueNameWithoutName, .OpDoubleColon, .Comma, .Dot, .DoubleDot, .TripleDot, .DotStar, .OpColon, .OpArrow, .OpFatArrow, .OpBackslash, .KwTargets, .KwWhile, .KwBreak, .MalformedUnknownToken => "token-default",
         };
 
         try writer.print("<span class=\"token {s}\">", .{css_class});

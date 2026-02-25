@@ -302,7 +302,7 @@ pub const Token = struct {
                 .MalformedOpaqueNameUnicode,
                 .OpaqueName,
                 => true,
-                _ => false,
+                .EndOfFile, .Float, .StringStart, .StringEnd, .MultilineStringStart, .StringPart, .MalformedStringPart, .SingleQuote, .MalformedSingleQuote, .Int, .MalformedNumberBadSuffix, .MalformedNumberUnicodeSuffix, .MalformedNumberNoDigits, .MalformedNumberNoExponentDigits, .MalformedInvalidUnicodeEscapeSequence, .MalformedInvalidEscapeSequence, .Underscore, .DotInt, .NoSpaceDotInt, .MalformedOpaqueNameWithoutName, .OpenRound, .CloseRound, .OpenSquare, .CloseSquare, .OpenCurly, .CloseCurly, .OpenStringInterpolation, .CloseStringInterpolation, .NoSpaceOpenRound, .OpPlus, .OpStar, .OpPizza, .OpAssign, .OpBinaryMinus, .OpUnaryMinus, .OpNotEquals, .OpBang, .OpAnd, .OpAmpersand, .OpQuestion, .OpDoubleQuestion, .OpOr, .OpBar, .OpDoubleSlash, .OpSlash, .OpPercent, .OpCaret, .OpGreaterThanOrEq, .OpGreaterThan, .OpLessThanOrEq, .OpBackArrow, .OpLessThan, .OpEquals, .OpColonEqual, .OpDoubleColon, .NoSpaceOpQuestion, .Comma, .Dot, .DoubleDot, .TripleDot, .DotStar, .OpColon, .OpArrow, .OpFatArrow, .OpBackslash, .KwApp, .KwAs, .KwCrash, .KwDbg, .KwElse, .KwExpect, .KwExposes, .KwExposing, .KwFor, .KwGenerates, .KwHas, .KwHosted, .KwIf, .KwImplements, .KwImport, .KwImports, .KwIn, .KwInterface, .KwMatch, .KwModule, .KwPackage, .KwPackages, .KwPlatform, .KwProvides, .KwRequires, .KwReturn, .KwTargets, .KwVar, .KwWhere, .KwWhile, .KwWith, .KwBreak, .MalformedUnknownToken => false,
             };
         }
 
@@ -311,7 +311,7 @@ pub const Token = struct {
                 .LowerIdent,
                 .NamedUnderscore,
                 => true,
-                _ => false,
+                .EndOfFile, .Float, .StringStart, .StringEnd, .MultilineStringStart, .StringPart, .MalformedStringPart, .SingleQuote, .MalformedSingleQuote, .Int, .MalformedNumberBadSuffix, .MalformedNumberUnicodeSuffix, .MalformedNumberNoDigits, .MalformedNumberNoExponentDigits, .MalformedInvalidUnicodeEscapeSequence, .MalformedInvalidEscapeSequence, .UpperIdent, .MalformedUnicodeIdent, .Underscore, .DotLowerIdent, .DotInt, .DotUpperIdent, .NoSpaceDotInt, .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent, .MalformedDotUnicodeIdent, .MalformedNoSpaceDotUnicodeIdent, .MalformedNamedUnderscoreUnicode, .OpaqueName, .MalformedOpaqueNameUnicode, .MalformedOpaqueNameWithoutName, .OpenRound, .CloseRound, .OpenSquare, .CloseSquare, .OpenCurly, .CloseCurly, .OpenStringInterpolation, .CloseStringInterpolation, .NoSpaceOpenRound, .OpPlus, .OpStar, .OpPizza, .OpAssign, .OpBinaryMinus, .OpUnaryMinus, .OpNotEquals, .OpBang, .OpAnd, .OpAmpersand, .OpQuestion, .OpDoubleQuestion, .OpOr, .OpBar, .OpDoubleSlash, .OpSlash, .OpPercent, .OpCaret, .OpGreaterThanOrEq, .OpGreaterThan, .OpLessThanOrEq, .OpBackArrow, .OpLessThan, .OpEquals, .OpColonEqual, .OpDoubleColon, .NoSpaceOpQuestion, .Comma, .Dot, .DoubleDot, .TripleDot, .DotStar, .OpColon, .OpArrow, .OpFatArrow, .OpBackslash, .KwApp, .KwAs, .KwCrash, .KwDbg, .KwElse, .KwExpect, .KwExposes, .KwExposing, .KwFor, .KwGenerates, .KwHas, .KwHosted, .KwIf, .KwImplements, .KwImport, .KwImports, .KwIn, .KwInterface, .KwMatch, .KwModule, .KwPackage, .KwPackages, .KwPlatform, .KwProvides, .KwRequires, .KwReturn, .KwTargets, .KwVar, .KwWhere, .KwWhile, .KwWith, .KwBreak, .MalformedUnknownToken => false,
             };
         }
 
@@ -354,7 +354,7 @@ pub const Token = struct {
                 .SingleQuote,
                 .MalformedSingleQuote,
                 => true,
-                _ => false,
+                .EndOfFile, .StringStart, .MultilineStringStart, .StringPart, .MalformedStringPart, .MalformedInvalidUnicodeEscapeSequence, .MalformedInvalidEscapeSequence, .Underscore, .MalformedOpaqueNameWithoutName, .OpenRound, .OpenSquare, .OpenCurly, .OpenStringInterpolation, .NoSpaceOpenRound, .OpPlus, .OpStar, .OpPizza, .OpAssign, .OpBinaryMinus, .OpUnaryMinus, .OpNotEquals, .OpBang, .OpAnd, .OpAmpersand, .OpQuestion, .OpDoubleQuestion, .OpOr, .OpBar, .OpDoubleSlash, .OpSlash, .OpPercent, .OpCaret, .OpGreaterThanOrEq, .OpGreaterThan, .OpLessThanOrEq, .OpBackArrow, .OpLessThan, .OpEquals, .OpColonEqual, .OpDoubleColon, .NoSpaceOpQuestion, .Comma, .Dot, .DoubleDot, .TripleDot, .DotStar, .OpColon, .OpArrow, .OpFatArrow, .OpBackslash, .KwApp, .KwAs, .KwCrash, .KwDbg, .KwElse, .KwExpect, .KwExposes, .KwExposing, .KwFor, .KwGenerates, .KwHas, .KwHosted, .KwIf, .KwImplements, .KwImport, .KwImports, .KwIn, .KwInterface, .KwMatch, .KwModule, .KwPackage, .KwPackages, .KwPlatform, .KwProvides, .KwRequires, .KwReturn, .KwTargets, .KwVar, .KwWhere, .KwWhile, .KwWith, .KwBreak, .MalformedUnknownToken => false,
             };
         }
 

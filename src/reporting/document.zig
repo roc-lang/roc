@@ -115,7 +115,7 @@ pub const Annotation = enum {
     pub fn usesColor(self: Annotation) bool {
         return switch (self) {
             .emphasized, .dimmed => false,
-            _ => true,
+            .keyword, .type_variable, .error_highlight, .warning_highlight, .suggestion, .code_block, .inline_code, .symbol, .path, .literal, .comment, .underline, .symbol_qualified, .symbol_unqualified, .module_name, .record_field, .tag_name, .binary_operator, .source_region, .reflowing_text => true,
         };
     }
 
@@ -218,7 +218,7 @@ pub const DocumentElement = union(enum) {
             .annotated => |a| a.content,
             .raw => |r| r,
             .reflowing_text => |rt| rt,
-            _ => null,
+            .line_break, .indent, .space, .horizontal_rule, .annotation_start, .annotation_end, .link, .vertical_stack, .horizontal_concat, .source_code_region, .source_code_multi_region, .source_code_with_underlines => null,
         };
     }
 

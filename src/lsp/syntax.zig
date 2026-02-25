@@ -979,7 +979,7 @@ pub const SyntaxChecker = struct {
                     }
                 }
             },
-            _ => {},
+            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => {},
         }
         return null;
     }
@@ -1000,7 +1000,7 @@ pub const SyntaxChecker = struct {
                     _ => return null,
                 }
             },
-            _ => return null,
+            .flex, .rigid, .err => return null,
         }
     }
 
@@ -1083,7 +1083,7 @@ pub const SyntaxChecker = struct {
             const ident_idx = switch (pattern) {
                 .assign => |p| p.ident,
                 .as => |p| p.ident,
-                _ => continue,
+                .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .underscore, .runtime_error => continue,
             };
 
             if (ident_idx == qualified_ident) {
@@ -1104,7 +1104,7 @@ pub const SyntaxChecker = struct {
             const ident_idx = switch (pattern) {
                 .assign => |p| p.ident,
                 .as => |p| p.ident,
-                _ => continue,
+                .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .underscore, .runtime_error => continue,
             };
 
             if (ident_idx == qualified_ident) {
@@ -1227,7 +1227,7 @@ pub const SyntaxChecker = struct {
                 .s_type_anno => |t| t.anno,
                 .s_alias_decl => |a| a.anno,
                 .s_nominal_decl => |n| n.anno,
-                _ => null,
+                .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_type_var_alias, .s_runtime_error => null,
             };
 
             if (maybe_type_anno) |type_anno_idx| {
@@ -1349,7 +1349,7 @@ pub const SyntaxChecker = struct {
                     }
                     return result;
                 },
-                _ => return null,
+                .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
             }
         }
 
@@ -1616,7 +1616,7 @@ pub const SyntaxChecker = struct {
                         .s_type_anno => |t| t.anno,
                         .s_alias_decl => |a| a.anno,
                         .s_nominal_decl => |n| n.anno,
-                        _ => null,
+                        .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_type_var_alias, .s_runtime_error => null,
                     };
 
                     if (maybe_type_anno) |type_anno_idx| {
@@ -1696,7 +1696,7 @@ pub const SyntaxChecker = struct {
                 }
                 return null;
             },
-            _ => return null,
+            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_record, .e_empty_record, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
         }
     }
 
@@ -2391,7 +2391,7 @@ fn extractSymbolFromDecl(
     const expr = module_env.store.getExpr(expr_idx);
     const is_function = switch (expr) {
         .e_closure, .e_lambda, .e_hosted_lambda => true,
-        _ => false,
+        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_run_low_level => false,
     };
 
     // Get the pattern and extract the identifier name
@@ -2399,7 +2399,7 @@ fn extractSymbolFromDecl(
     const ident_idx = switch (pattern) {
         .assign => |p| p.ident,
         .as => |p| p.ident,
-        _ => return null, // Only handle assign and as patterns
+        .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .underscore, .runtime_error => return null, // Only handle assign and as patterns
     };
 
     // Get the identifier text from the module's ident table
