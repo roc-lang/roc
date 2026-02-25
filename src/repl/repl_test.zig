@@ -756,5 +756,5 @@ test "Repl dev backend - range_to" {
 
     const result = try repl.step("1.to(3)");
     defer interpreter_allocator.free(result);
-    try testing.expectEqualStrings("[1.0, 2.0, 3.0]", result);
+    try testing.expectEqualStrings("[1, 2, 3]", result);
 }

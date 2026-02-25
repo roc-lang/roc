@@ -2134,21 +2134,25 @@ fn emitLowLevel(self: *Self, op: LirExpr.LowLevel, args: []const LirExprId, ret_
 ///             while ($i < $len) { if $i > 0 { $acc = str_concat($acc, ", ") }
 ///               $acc = str_concat($acc, inspect(list_get(list, $i))); $i = $i + 1 };
 ///             str_concat($acc, "]") }`
-fn inspektList(self: *Self, list_expr: LirExprId, list_data: anytype, _: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
+fn inspektList(self: *Self, list_expr: LirExprId, list_data: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
     const elem_mono = list_data.elem;
     const elem_layout = try self.layoutFromMonotype(elem_mono);
+    const list_layout = try self.layoutFromMonotype(mono_idx);
 
-    // Create synthetic symbols for mutable accumulator, index, and length
+    // Create synthetic symbols for the list, mutable accumulator, index, and length
+    const list_bp = try self.freshBindPattern(list_layout, false, region);
     const acc_bp = try self.freshBindPattern(.str, true, region);
     const idx_bp = try self.freshBindPattern(.u64, true, region);
     const len_bp = try self.freshBindPattern(.u64, false, region);
 
+    // Statement 0: $list = list_expr (bind once, use via lookups)
     // Statement 1: var $acc = "["
     const open_bracket = try self.emitStrLiteral("[", region);
     // Statement 2: var $i = 0
     const zero_lit = try self.lir_store.addExpr(.{ .i64_literal = 0 }, region);
-    // Statement 3: $len = list_len(list)
-    const list_len_expr = try self.emitLowLevel(.list_len, &.{list_expr}, .u64, region);
+    // Statement 3: $len = list_len($list)
+    const list_lookup_for_len = try self.emitLookup(list_bp.symbol, list_layout, region);
+    const list_len_expr = try self.emitLowLevel(.list_len, &.{list_lookup_for_len}, .u64, region);
 
     // Build while-loop condition: $i < $len
     const cond_i = try self.emitLookup(idx_bp.symbol, .u64, region);
@@ -2183,9 +2187,10 @@ fn inspektList(self: *Self, list_expr: LirExprId, list_data: anytype, _: Monotyp
     const acc_mut_pat1 = try self.lir_store.addPattern(.{ .bind = .{ .symbol = acc_bp.symbol, .layout_idx = .str } }, region);
     try self.scratch_lir_stmts.append(self.allocator, .{ .mutate = .{ .pattern = acc_mut_pat1, .expr = sep_expr } });
 
-    // $elem = list_get(list, $i)
+    // $elem = list_get($list, $i)
+    const list_lookup_for_get = try self.emitLookup(list_bp.symbol, list_layout, region);
     const body_i_lookup2 = try self.emitLookup(idx_bp.symbol, .u64, region);
-    const elem_expr = try self.emitLowLevel(.list_get, &.{ list_expr, body_i_lookup2 }, elem_layout, region);
+    const elem_expr = try self.emitLowLevel(.list_get, &.{ list_lookup_for_get, body_i_lookup2 }, elem_layout, region);
     // inspect($elem)
     const elem_inspected = try self.expandStrInspekt(elem_expr, elem_mono, region);
 
@@ -2218,14 +2223,16 @@ fn inspektList(self: *Self, list_expr: LirExprId, list_data: anytype, _: Monotyp
     } }, region);
 
     // Build the outer block:
+    // decl $list = list_expr
     // decl $acc = "["
     // decl $i = 0
-    // decl $len = list_len(list)
+    // decl $len = list_len($list)
     // while_loop { ... }
     // final: str_concat($acc, "]")
     const outer_save_stmts = self.scratch_lir_stmts.items.len;
     defer self.scratch_lir_stmts.shrinkRetainingCapacity(outer_save_stmts);
 
+    try self.scratch_lir_stmts.append(self.allocator, .{ .decl = .{ .pattern = list_bp.pattern, .expr = list_expr } });
     try self.scratch_lir_stmts.append(self.allocator, .{ .decl = .{ .pattern = acc_bp.pattern, .expr = open_bracket } });
     try self.scratch_lir_stmts.append(self.allocator, .{ .decl = .{ .pattern = idx_bp.pattern, .expr = zero_lit } });
     try self.scratch_lir_stmts.append(self.allocator, .{ .decl = .{ .pattern = len_bp.pattern, .expr = list_len_expr } });
