@@ -1362,7 +1362,8 @@ fn isOpenExtension(type_store: *TypeStore, ext: Var) bool {
         .recursion_var => |rec| {
             return isOpenExtension(type_store, rec.structure);
         },
-        _ => false,
+        .err,
+        => false,
     };
 }
 
@@ -1552,7 +1553,16 @@ fn getCtorArgTypes(allocator: std.mem.Allocator, type_store: *TypeStore, type_va
                         current_tags = ext_tu.tags;
                         current_ext = ext_tu.ext;
                     },
-                    _ => break,
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .empty_record,
+                    .empty_tag_union,
+                    => break,
                 },
                 .alias => |alias| {
                     current_ext = type_store.getAliasBackingVar(alias);
@@ -1750,7 +1760,12 @@ fn getListElemType(type_store: *TypeStore, type_var: Var) ?Var {
             const backing_var = type_store.getAliasBackingVar(alias);
             return getListElemType(type_store, backing_var);
         },
-        _ => {},
+        .flex,
+        .rigid,
+        .structure,
+        .recursion_var,
+        .err,
+        => {},
     }
 
     return null;
@@ -2046,7 +2061,11 @@ fn collectCtorsSketched(
                             }
                         }
                     },
-                    _ => {},
+                    .tag,
+                    .opaque_type,
+                    .tuple,
+                    .guard,
+                    => {},
                 }
             },
             .list => {
@@ -2148,7 +2167,11 @@ fn specializeByConstructorSketched(
     // For records, get the target field names we're specializing by
     const target_fields: ?[]const Ident.Idx = switch (union_info.render_as) {
         .record => |fields| fields,
-        _ => null,
+        .tag,
+        .opaque_type,
+        .tuple,
+        .guard,
+        => null,
     };
 
     for (matrix.rows) |row| {
@@ -2175,7 +2198,11 @@ fn specializeByConstructorSketched(
                         // Get this pattern's field names
                         const pat_fields: []const Ident.Idx = switch (kc.union_info.render_as) {
                             .record => |fields| fields,
-                            _ => &[_]Ident.Idx{}, // Shouldn't happen for records
+                            .tag,
+                            .opaque_type,
+                            .tuple,
+                            .guard,
+                            => &[_]Ident.Idx{}, // Shouldn't happen for records,
                         };
 
                         // Build the new row with fields aligned to target order
@@ -2377,7 +2404,11 @@ pub fn checkExhaustiveSketched(
                         // Use field-name-based lookup for records, positional for everything else
                         const specialized_types = switch (ctor_info.union_info.render_as) {
                             .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
-                            _ => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
+                            .tag,
+                            .opaque_type,
+                            .tuple,
+                            .guard,
+                            => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
                         };
                         const inner_missing = try checkExhaustiveSketched(allocator, type_store, builtin_idents, specialized, specialized_types);
 
@@ -2424,7 +2455,11 @@ pub fn checkExhaustiveSketched(
                 // Use field-name-based lookup for records, positional for everything else
                 const specialized_types = switch (ctor_info.union_info.render_as) {
                     .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
-                    _ => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
+                    .tag,
+                    .opaque_type,
+                    .tuple,
+                    .guard,
+                    => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
                 };
                 const missing = try checkExhaustiveSketched(allocator, type_store, builtin_idents, specialized, specialized_types);
 
@@ -2603,10 +2638,18 @@ pub fn isUsefulSketched(
                                             }
                                         }
                                     },
-                                    _ => {},
+                                    .tag,
+                                    .opaque_type,
+                                    .tuple,
+                                    .guard,
+                                    => {},
                                 }
                             },
-                            _ => {},
+                            .anything,
+                            .literal,
+                            .ctor,
+                            .list,
+                            => {},
                         }
                     }
 
@@ -2623,7 +2666,11 @@ pub fn isUsefulSketched(
                         merged_union_info.alternatives = new_alts;
                     }
                 },
-                _ => {},
+                .tag,
+                .opaque_type,
+                .tuple,
+                .guard,
+                => {},
             }
 
             const arity = if (merged_union_info.alternatives.len > 0)
@@ -2642,7 +2689,11 @@ pub fn isUsefulSketched(
             // Use field-name-based lookup for records, positional for everything else
             const specialized_types = switch (merged_union_info.render_as) {
                 .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
-                _ => try column_types.specializeByConstructor(allocator, kc.tag_id, kc.args.len),
+                .tag,
+                .opaque_type,
+                .tuple,
+                .guard,
+                => try column_types.specializeByConstructor(allocator, kc.tag_id, kc.args.len),
             };
 
             // Expand current pattern's args to match merged field set
@@ -2651,7 +2702,11 @@ pub fn isUsefulSketched(
                     const row = try allocator.alloc(UnresolvedPattern, arity + rest.len);
                     const current_fields = switch (kc.union_info.render_as) {
                         .record => |f| f,
-                        _ => &[_]Ident.Idx{},
+                        .tag,
+                        .opaque_type,
+                        .tuple,
+                        .guard,
+                        => &[_]Ident.Idx{},
                     };
 
                     // Map current pattern's args to merged field positions
@@ -2671,7 +2726,11 @@ pub fn isUsefulSketched(
                     @memcpy(row[arity..], rest);
                     break :blk row;
                 },
-                _ => blk: {
+                .tag,
+                .opaque_type,
+                .tuple,
+                .guard,
+                => blk: {
                     const row = try allocator.alloc(UnresolvedPattern, kc.args.len + rest.len);
                     @memcpy(row[0..kc.args.len], kc.args);
                     @memcpy(row[kc.args.len..], rest);
@@ -2760,7 +2819,11 @@ pub fn isUsefulSketched(
                         // Use field-name-based lookup for records, positional for everything else
                         const specialized_types = switch (ctor_info.union_info.render_as) {
                             .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
-                            _ => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
+                            .tag,
+                            .opaque_type,
+                            .tuple,
+                            .guard,
+                            => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
                         };
 
                         const extended = try allocator.alloc(UnresolvedPattern, alt.arity + rest.len);

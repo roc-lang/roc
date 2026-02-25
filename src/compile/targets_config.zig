@@ -67,7 +67,9 @@ pub const TargetsConfig = struct {
         for (self.exe) |spec| {
             for (spec.items) |item| switch (item) {
                 .file_path => |fp| allocator.free(fp),
-                _ => {},
+                .app,
+                .win_gui,
+                => {},
             };
             allocator.free(spec.items);
         }
@@ -75,7 +77,9 @@ pub const TargetsConfig = struct {
         for (self.static_lib) |spec| {
             for (spec.items) |item| switch (item) {
                 .file_path => |fp| allocator.free(fp),
-                _ => {},
+                .app,
+                .win_gui,
+                => {},
             };
             allocator.free(spec.items);
         }
@@ -83,7 +87,9 @@ pub const TargetsConfig = struct {
         for (self.shared_lib) |spec| {
             for (spec.items) |item| switch (item) {
                 .file_path => |fp| allocator.free(fp),
-                _ => {},
+                .app,
+                .win_gui,
+                => {},
             };
             allocator.free(spec.items);
         }
@@ -178,7 +184,14 @@ pub const TargetsConfig = struct {
         // Only platform headers have targets
         const platform = switch (header) {
             .platform => |p| p,
-            _ => return null,
+            .app,
+            .module,
+            .package,
+            .hosted,
+            .type_module,
+            .default_app,
+            .malformed,
+            => return null,
         };
 
         // If no targets section, return null
@@ -229,7 +242,9 @@ pub const TargetsConfig = struct {
             for (specs.items) |spec| {
                 for (spec.items) |item| switch (item) {
                     .file_path => |fp| allocator.free(fp),
-                    _ => {},
+                    .app,
+                    .win_gui,
+                    => {},
                 };
                 allocator.free(spec.items);
             }
@@ -248,7 +263,9 @@ pub const TargetsConfig = struct {
             errdefer {
                 for (link_items.items) |item| switch (item) {
                     .file_path => |fp| allocator.free(fp),
-                    _ => {},
+                    .app,
+                    .win_gui,
+                    => {},
                 };
                 link_items.deinit();
             }
@@ -289,7 +306,9 @@ pub const TargetsConfig = struct {
         for (specs) |spec| {
             for (spec.items) |item| switch (item) {
                 .file_path => |fp| allocator.free(fp),
-                _ => {},
+                .app,
+                .win_gui,
+                => {},
             };
             allocator.free(spec.items);
         }

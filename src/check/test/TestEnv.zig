@@ -475,7 +475,22 @@ pub fn assertDefTypeOptions(self: *TestEnv, target_def_name: []const u8, expecte
                     return;
                 }
             },
-            _ => {
+            .as,
+            .applied_tag,
+            .nominal,
+            .nominal_external,
+            .record_destructure,
+            .list,
+            .tuple,
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            .underscore,
+            .runtime_error,
+            => {
                 return error.TestUnexpectedResult;
             },
         }

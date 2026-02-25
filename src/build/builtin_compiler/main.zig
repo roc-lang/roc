@@ -1211,7 +1211,17 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                     const type_anno = env.store.getTypeAnno(annotation.anno);
                     const num_params: u32 = switch (type_anno) {
                         .@"fn" => |func| func.args.span.len,
-                        _ => std.debug.panic("Low-level operation {s} does not have a function type annotation", .{@tagName(low_level_op)}),
+                        .apply,
+                        .ty_var,
+                        .underscore_type_var,
+                        .underscore,
+                        .ty,
+                        .tag_union,
+                        .tuple,
+                        .record,
+                        .parens,
+                        .malformed,
+                        => std.debug.panic("Low-level operation {s} does not have a function type annotation", .{@tagName(low_level_op)}),
                     };
 
                     // Create parameter patterns for the lambda
@@ -1539,7 +1549,23 @@ fn validateBuiltinIndicesCompleteness(env: *const ModuleEnv, indices: BuiltinInd
                     return error.BuiltinIndicesIncomplete;
                 }
             },
-            _ => continue,
+            .s_decl,
+            .s_var,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_alias_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => continue,
         }
     }
 }
@@ -1874,7 +1900,23 @@ fn findNestedTypeDeclaration(env: *const ModuleEnv, parent_name: []const u8, typ
                     return stmt_idx;
                 }
             },
-            _ => continue,
+            .s_decl,
+            .s_var,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_alias_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => continue,
         }
     }
 

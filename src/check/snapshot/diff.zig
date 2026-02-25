@@ -245,7 +245,12 @@ pub fn compareTypes(
             .structure => |act_flat| {
                 compareStructures(snap_store, ident_store, exp_flat, act_flat, &hints, gpa, fields, tags);
             },
-            _ => {},
+            .flex,
+            .rigid,
+            .alias,
+            .recursive,
+            .err,
+            => {},
         },
         .alias => |exp_alias| switch (actual) {
             .alias => |act_alias| {
@@ -259,7 +264,12 @@ pub fn compareTypes(
                     .structure => |exp_flat| {
                         compareStructures(snap_store, ident_store, exp_flat, act_flat, &hints, gpa, fields, tags);
                     },
-                    _ => {},
+                    .flex,
+                    .rigid,
+                    .alias,
+                    .recursive,
+                    .err,
+                    => {},
                 }
             },
             .flex, .rigid, .err => {},
@@ -289,7 +299,12 @@ fn compareTypesInternal(
             .structure => |act_flat| {
                 compareStructures(snap_store, ident_store, exp_flat, act_flat, hints, gpa, fields, tags);
             },
-            _ => {},
+            .flex,
+            .rigid,
+            .alias,
+            .recursive,
+            .err,
+            => {},
         },
         .alias => |exp_alias| switch (actual) {
             .alias => |act_alias| {
@@ -301,7 +316,12 @@ fn compareTypesInternal(
                     .structure => |exp_flat| {
                         compareStructures(snap_store, ident_store, exp_flat, act_flat, hints, gpa, fields, tags);
                     },
-                    _ => {},
+                    .flex,
+                    .rigid,
+                    .alias,
+                    .recursive,
+                    .err,
+                    => {},
                 }
             },
             .flex, .rigid, .err => {},
@@ -409,7 +429,17 @@ fn compareStructures(
                 .tag_union => |act_union| {
                     compareTagUnions(snap_store, ident_store, exp_union, act_union, hints, gpa, tags);
                 },
-                _ => {},
+                .box,
+                .tuple,
+                .nominal_type,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .record,
+                .record_unbound,
+                .empty_record,
+                .empty_tag_union,
+                => {},
             }
         },
         .tuple, .nominal_type, .empty_record, .empty_tag_union => {},

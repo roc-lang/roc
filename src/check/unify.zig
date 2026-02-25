@@ -644,7 +644,16 @@ const Unifier = struct {
                     .tuple => |b_tuple| {
                         try self.unifyTuple(vars, a_tuple, b_tuple);
                     },
-                    _ => return error.TypeMismatch,
+                    .record,
+                    .record_unbound,
+                    .nominal_type,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union,
+                    => return error.TypeMismatch,
                 }
             },
             .nominal_type => |a_type| {
@@ -2029,7 +2038,16 @@ const Unifier = struct {
 
                             ext_var = ext_tag_union.ext;
                         },
-                        _ => return .{ .ext = ext_var, .range = range },
+                        .record,
+                        .record_unbound,
+                        .tuple,
+                        .nominal_type,
+                        .fn_pure,
+                        .fn_effectful,
+                        .fn_unbound,
+                        .empty_record,
+                        .empty_tag_union,
+                        => return .{ .ext = ext_var, .range = range },
                     }
                 },
                 .err => return .{ .ext = ext_var, .range = range },

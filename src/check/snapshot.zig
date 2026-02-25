@@ -618,7 +618,12 @@ pub const Store = struct {
                 .alias => |alias| {
                     idx = alias.backing;
                 },
-                _ => return content,
+                .flex,
+                .rigid,
+                .structure,
+                .recursive,
+                .err,
+                => return content,
             }
         }
     }
@@ -670,7 +675,12 @@ pub const Store = struct {
                 .empty_record => return .empty_record,
                 .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_tag_union => return .not_a_record,
             },
-            _ => return .not_a_record,
+            .flex,
+            .rigid,
+            .alias,
+            .recursive,
+            .err,
+            => return .not_a_record,
         }
     }
 

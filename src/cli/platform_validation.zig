@@ -228,7 +228,21 @@ pub fn renderValidationError(
 ) bool {
     switch (result) {
         .valid => return false,
-        _ => {
+        .missing_targets_section,
+        .missing_files_directory,
+        .missing_target_file,
+        .extra_file,
+        .empty_targets,
+        .unsupported_target,
+        .missing_cross_compile_host,
+        .unsupported_glibc_cross,
+        .no_platform_found,
+        .invalid_target,
+        .linker_failed,
+        .linker_not_available,
+        .process_crashed,
+        .process_signaled,
+        => {
             var report = targets_validator.createValidationReport(allocator, result) catch {
                 // Fallback to simple logging if report creation fails
                 std.log.err("Platform validation failed", .{});
@@ -276,7 +290,21 @@ pub fn validateAllTargetFilesExist(
 
     switch (result) {
         .valid => return null,
-        _ => return result,
+        .missing_targets_section,
+        .missing_files_directory,
+        .missing_target_file,
+        .extra_file,
+        .empty_targets,
+        .unsupported_target,
+        .missing_cross_compile_host,
+        .unsupported_glibc_cross,
+        .no_platform_found,
+        .invalid_target,
+        .linker_failed,
+        .linker_not_available,
+        .process_crashed,
+        .process_signaled,
+        => return result,
     }
 }
 

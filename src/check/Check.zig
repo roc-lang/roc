@@ -1247,7 +1247,23 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
                 // Unify statement var with body var
                 _ = try self.unify(stmt_var, body_var, &env);
             },
-            _ => {
+            .s_decl,
+            .s_var,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_for,
+            .s_while,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_alias_decl,
+            .s_nominal_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => {
                 // Other statement types are handled elsewhere (type decls, defs, etc.)
             },
         }
@@ -1467,7 +1483,11 @@ pub fn checkPlatformRequirements(
                             try self.cir.rigid_vars.put(self.cir.gpa, flex_name, fresh_var);
                         }
                     },
-                    _ => {},
+                    .rigid,
+                    .alias,
+                    .structure,
+                    .err,
+                    => {},
                 }
             }
 
@@ -1607,7 +1627,23 @@ fn findTypeAliasBodyVar(self: *Self, name: Ident.Idx) ?Var {
                     return ModuleEnv.varFrom(alias.anno);
                 }
             },
-            _ => {},
+            .s_decl,
+            .s_var,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_nominal_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => {},
         }
     }
     return null;
@@ -3072,7 +3108,22 @@ fn getPatternIdent(self: *const Self, ptrn_idx: CIR.Pattern.Idx) ?Ident.Idx {
     const pattern = self.cir.store.getPattern(ptrn_idx);
     switch (pattern) {
         .assign => |assign| return assign.ident,
-        _ => return null,
+        .as,
+        .applied_tag,
+        .nominal,
+        .nominal_external,
+        .record_destructure,
+        .list,
+        .tuple,
+        .num_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .str_literal,
+        .underscore,
+        .runtime_error,
+        => return null,
     }
 }
 
@@ -3172,7 +3223,50 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     .e_str_segment => {
                         does_fx = try self.checkExpr(seg_expr_idx, env, .no_expectation) or does_fx;
                     },
-                    _ => {
+                    .e_num,
+                    .e_frac_f32,
+                    .e_frac_f64,
+                    .e_dec,
+                    .e_dec_small,
+                    .e_typed_int,
+                    .e_typed_frac,
+                    .e_str,
+                    .e_lookup_local,
+                    .e_lookup_external,
+                    .e_lookup_pending,
+                    .e_lookup_required,
+                    .e_list,
+                    .e_empty_list,
+                    .e_tuple,
+                    .e_match,
+                    .e_if,
+                    .e_call,
+                    .e_record,
+                    .e_empty_record,
+                    .e_block,
+                    .e_tag,
+                    .e_nominal,
+                    .e_nominal_external,
+                    .e_zero_argument_tag,
+                    .e_closure,
+                    .e_lambda,
+                    .e_binop,
+                    .e_unary_minus,
+                    .e_unary_not,
+                    .e_dot_access,
+                    .e_tuple_access,
+                    .e_runtime_error,
+                    .e_crash,
+                    .e_dbg,
+                    .e_expect,
+                    .e_ellipsis,
+                    .e_anno_only,
+                    .e_return,
+                    .e_type_var_dispatch,
+                    .e_for,
+                    .e_hosted_lambda,
+                    .e_run_low_level,
+                    => {
                         does_fx = try self.checkExpr(seg_expr_idx, env, .no_expectation) or does_fx;
                         const seg_var = ModuleEnv.varFrom(seg_expr_idx);
 
@@ -3513,7 +3607,16 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             try self.unifyWith(expr_var, .err, env);
                         }
                     },
-                    _ => {
+                    .record,
+                    .record_unbound,
+                    .nominal_type,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union,
+                    => {
                         // Not a tuple - create a flex var with expected tuple constraint
                         // The elem_index + 1 gives us the minimum tuple size needed
                         const min_elems = tuple_access.elem_index + 1;
@@ -4623,10 +4726,68 @@ fn getExprPatternIdent(self: *const Self, expr_idx: CIR.Expr.Idx) ?Ident.Idx {
             const pattern = self.cir.store.getPattern(lookup.pattern_idx);
             switch (pattern) {
                 .assign => |assign| return assign.ident,
-                _ => return null,
+                .as,
+                .applied_tag,
+                .nominal,
+                .nominal_external,
+                .record_destructure,
+                .list,
+                .tuple,
+                .num_literal,
+                .small_dec_literal,
+                .dec_literal,
+                .frac_f32_literal,
+                .frac_f64_literal,
+                .str_literal,
+                .underscore,
+                .runtime_error,
+                => return null,
             }
         },
-        _ => return null,
+        .e_num,
+        .e_frac_f32,
+        .e_frac_f64,
+        .e_dec,
+        .e_dec_small,
+        .e_typed_int,
+        .e_typed_frac,
+        .e_str_segment,
+        .e_str,
+        .e_lookup_external,
+        .e_lookup_pending,
+        .e_lookup_required,
+        .e_list,
+        .e_empty_list,
+        .e_tuple,
+        .e_match,
+        .e_if,
+        .e_call,
+        .e_record,
+        .e_empty_record,
+        .e_block,
+        .e_tag,
+        .e_nominal,
+        .e_nominal_external,
+        .e_zero_argument_tag,
+        .e_closure,
+        .e_lambda,
+        .e_binop,
+        .e_unary_minus,
+        .e_unary_not,
+        .e_dot_access,
+        .e_tuple_access,
+        .e_runtime_error,
+        .e_crash,
+        .e_dbg,
+        .e_expect,
+        .e_ellipsis,
+        .e_anno_only,
+        .e_return,
+        .e_type_var_dispatch,
+        .e_for,
+        .e_hosted_lambda,
+        .e_run_low_level,
+        => return null,
     }
 }
 
@@ -5312,7 +5473,15 @@ fn checkBinopExpr(
                     .div => self.cir.idents.div_by,
                     .div_trunc => self.cir.idents.div_trunc_by,
                     .rem => self.cir.idents.rem_by,
-                    _ => unreachable,
+                    .lt,
+                    .gt,
+                    .le,
+                    .ge,
+                    .eq,
+                    .ne,
+                    .@"and",
+                    .@"or",
+                    => unreachable,
                 };
 
             // Return type equals lhs type - e.g. Duration.times : Duration, I64 -> Duration

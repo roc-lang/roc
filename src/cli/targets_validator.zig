@@ -136,7 +136,14 @@ pub fn validatePlatformHasTargets(
     // Only platform headers should have targets
     const platform = switch (header) {
         .platform => |p| p,
-        _ => return .{ .valid = {} }, // Non-platform headers don't need targets
+        .app,
+        .module,
+        .package,
+        .hosted,
+        .type_module,
+        .default_app,
+        .malformed,
+        => return .{ .valid = {} }, // Non-platform headers don't need targets,
     };
 
     // Check if targets section exists
@@ -755,7 +762,21 @@ test "validatePlatformHasTargets detects missing targets section" {
         .missing_targets_section => |info| {
             try std.testing.expectEqualStrings("test/platform/main.roc", info.platform_path);
         },
-        _ => {
+        .valid,
+        .missing_files_directory,
+        .missing_target_file,
+        .extra_file,
+        .empty_targets,
+        .unsupported_target,
+        .missing_cross_compile_host,
+        .unsupported_glibc_cross,
+        .no_platform_found,
+        .invalid_target,
+        .linker_failed,
+        .linker_not_available,
+        .process_crashed,
+        .process_signaled,
+        => {
             std.debug.print("Expected missing_targets_section but got {}\n", .{result});
             return error.UnexpectedResult;
         },
@@ -993,7 +1014,21 @@ test "validateTargetFilesExist reports missing target file with valid path" {
             // Clean up the allocated path
             allocator.free(info.expected_full_path);
         },
-        _ => {
+        .valid,
+        .missing_targets_section,
+        .missing_files_directory,
+        .extra_file,
+        .empty_targets,
+        .unsupported_target,
+        .missing_cross_compile_host,
+        .unsupported_glibc_cross,
+        .no_platform_found,
+        .invalid_target,
+        .linker_failed,
+        .linker_not_available,
+        .process_crashed,
+        .process_signaled,
+        => {
             std.debug.print("Expected missing_target_file but got {}\n", .{result});
             return error.UnexpectedResult;
         },

@@ -2221,7 +2221,9 @@ pub const ReportBuilder = struct {
                         std.debug.assert(false);
                         return try self.buildGenericMismatch(types);
                     },
-                    _ => {
+                    .not_a_record,
+                    .empty_record,
+                    => {
                         // Should be impossible for the thing we're updating to
                         // not be a record, but if so show a generic message.
                         std.debug.assert(false);
