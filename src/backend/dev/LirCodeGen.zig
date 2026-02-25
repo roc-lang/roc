@@ -10397,23 +10397,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             var result_is_str = false;
             var result_is_i128 = false;
 
-            // Determine result slot size. For tag unions, use the variant payloads.
-            // For scalars, we defer allocation until the first branch is generated
-            // so we can use the actual result ValueLocation to determine the size.
+            // Determine result slot size from the result layout (not the scrutinee layout).
+            // The result layout tells us the type that each branch produces.
+            // For scalars with unknown result layout, defer allocation until the first branch.
             var result_slot_size: u32 = 0;
             var result_slot: i32 = 0;
 
-            if (union_layout.tag == .tag_union) {
-                const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
-                const variants = ls.getTagUnionVariants(tu_data);
-                var max_size: u32 = 8;
-                for (0..variants.len) |vi| {
-                    const variant = variants.get(vi);
-                    const vl = ls.getLayout(variant.payload_layout);
-                    const vs = ls.layoutSizeAlign(vl).size;
-                    if (vs > max_size) max_size = vs;
-                }
-                result_slot_size = max_size;
+            const result_layout_val = ls.getLayout(ds.result_layout);
+            const result_sa = ls.layoutSizeAlign(result_layout_val);
+            if (result_sa.size > 0) {
+                result_slot_size = result_sa.size;
                 result_slot = self.codegen.allocStackSlot(result_slot_size);
             }
 

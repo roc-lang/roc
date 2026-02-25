@@ -2348,19 +2348,8 @@ pub const Interpreter = struct {
                         // User-defined opaque types without to_inspect render as <opaque>
                         break :blk try self.allocator.dupe(u8, "<opaque>");
                     } else {
-                        // Special case: Bool should render as just "True" or "False", not "Bool.True"
-                        // Check if this is the Builtin.Bool type
-                        const is_builtin_bool = nom.origin_module == self.env.idents.builtin_module and
-                            (nom.ident.ident_idx == self.env.idents.bool or
-                                nom.ident.ident_idx == self.env.idents.bool_type);
-                        if (is_builtin_bool) {
-                            break :blk try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
-                        }
-                        // Nominal types render as "TypeName.InnerValue"
-                        const type_name = self.root_env.getIdent(nom.ident.ident_idx);
-                        const inner_rendered = try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
-                        defer self.allocator.free(inner_rendered);
-                        break :blk try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ type_name, inner_rendered });
+                        // Nominal types render their inner value directly (no prefix)
+                        break :blk try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
                     }
                 } else blk: {
                     break :blk try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
@@ -7431,15 +7420,6 @@ pub const Interpreter = struct {
 
     /// Like renderValueRocWithType but with REPL-specific formatting.
     /// Strips .0 suffix from whole-number Dec values when the type is unbound.
-    pub fn renderValueRocForRepl(self: *Interpreter, value: StackValue, rt_var: types.Var, roc_ops: *RocOps) Error![]u8 {
-        var cb_ctx = ToInspectCallbackContext{
-            .interpreter = self,
-            .roc_ops = roc_ops,
-        };
-        var ctx = self.makeRenderCtxWithCallback(&cb_ctx);
-        ctx.strip_unbound_numeral_decimal = true;
-        return render_helpers.renderValueRocWithType(&ctx, value, rt_var);
-    }
 
     fn makeListSliceValue(
         self: *Interpreter,

@@ -51,7 +51,6 @@ fn interpreterFormatCtx(layout_cache: *const layout.Store) values.RocValue.Forma
     return .{
         .layout_store = layout_cache,
         .ident_store = null, // match dev evaluator (no ident store)
-        .strip_whole_number_decimal = true,
     };
 }
 
@@ -228,7 +227,6 @@ noinline fn executeAndFormat(
     };
     const fmt_ctx = values.RocValue.FormatContext{
         .layout_store = ls,
-        .strip_whole_number_decimal = true,
     };
     return roc_val.format(alloc, fmt_ctx) catch error.UnsupportedLayout;
 }

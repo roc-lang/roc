@@ -92,9 +92,6 @@ pub const RenderCtx = struct {
     to_inspect_callback: ?ToInspectCallback = null,
     /// Opaque context pointer passed to the to_inspect callback.
     callback_ctx: ?*anyopaque = null,
-    /// When true, render whole-number Dec values without .0 if the type is an unbound numeral.
-    /// Used by the REPL for cleaner output.
-    strip_unbound_numeral_decimal: bool = false,
 };
 
 /// Render `value` using the supplied runtime type variable, following alias/nominal backing.
@@ -676,20 +673,6 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
         },
     };
 
-    // Handle Dec values specially when stripping unbound numeral decimals in REPL mode.
-    // When enabled, whole-number Dec values (like 2.0) display without the decimal (as 2).
-    if (ctx.strip_unbound_numeral_decimal and value.layout.tag == .scalar) {
-        const scalar = value.layout.data.scalar;
-        if (scalar.tag == .frac and scalar.data.frac == .dec) {
-            const dec = @as(*const RocDec, @ptrCast(@alignCast(value.ptr.?))).*;
-            // Check if this is a whole number (no fractional part)
-            if (i128h.rem_u128(@abs(dec.num), @intCast(RocDec.one_point_zero_i128)) == 0) {
-                const whole = i128h.divTrunc_i128(dec.num, RocDec.one_point_zero_i128);
-                return try std.fmt.allocPrint(gpa, "{d}", .{whole});
-            }
-        }
-    }
-
     // Fallback: render using layout only (covers flex/rigid type vars, tuples, etc.)
     return renderValueRoc(ctx, value);
 }
@@ -705,7 +688,6 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
     const fmt_ctx = values.RocValue.FormatContext{
         .layout_store = ctx.layout_store,
         .ident_store = ctx.env.getIdentStoreConst(),
-        .strip_whole_number_decimal = ctx.strip_unbound_numeral_decimal,
     };
     return roc_val.format(ctx.allocator, fmt_ctx);
 }

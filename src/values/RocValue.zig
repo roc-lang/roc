@@ -13,7 +13,6 @@ const Idx = layout.Idx;
 const RocDec = builtins.dec.RocDec;
 const RocStr = builtins.str.RocStr;
 const RocList = builtins.list.RocList;
-const i128h = builtins.compiler_rt_128;
 const Ident = base.Ident;
 
 const RocValue = @This();
@@ -126,8 +125,6 @@ pub const FormatContext = struct {
     /// For resolving record field names and tag names to strings.
     /// When null, fields render as positional indices.
     ident_store: ?*const Ident.Store = null,
-    /// Strip trailing .0 from whole-number Dec values (REPL mode).
-    strip_whole_number_decimal: bool = false,
 };
 
 /// Errors that can occur during value formatting.
@@ -174,12 +171,6 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
                     .f64 => try std.fmt.allocPrint(allocator, "{d}", .{self.readF64()}),
                     .dec => {
                         const dec = self.readDec();
-                        if (ctx.strip_whole_number_decimal and
-                            i128h.rem_u128(@abs(dec.num), @intCast(RocDec.one_point_zero_i128)) == 0)
-                        {
-                            const whole = i128h.divTrunc_i128(dec.num, RocDec.one_point_zero_i128);
-                            return try std.fmt.allocPrint(allocator, "{d}", .{whole});
-                        }
                         var buf: [RocDec.max_str_length]u8 = undefined;
                         const slice = dec.format_to_buf(&buf);
                         return try allocator.dupe(u8, slice);
@@ -533,13 +524,13 @@ test "format dec with strip" {
     var bytes: [@sizeOf(i128)]u8 = undefined;
     @memcpy(&bytes, std.mem.asBytes(&dec_val));
     const val = RocValue{ .ptr = &bytes, .lay = dec_layout };
-    const ctx = FormatContext{ .layout_store = undefined, .ident_store = null, .strip_whole_number_decimal = true };
+    const ctx = FormatContext{ .layout_store = undefined, .ident_store = null };
     const result = try val.format(allocator, ctx);
     defer allocator.free(result);
-    try std.testing.expectEqualStrings("3", result);
+    try std.testing.expectEqualStrings("3.0", result);
 }
 
-test "format dec without strip" {
+test "format dec fractional" {
     const allocator = std.testing.allocator;
     const dec_layout = Layout{
         .tag = .scalar,

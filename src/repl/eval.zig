@@ -695,62 +695,51 @@ pub const Repl = struct {
             return .{ .type_error = result };
         }
 
-        // Use DevEvaluator if backend is .dev and we have a DevEvaluator instance
-        // ExecutableMemory is not available on freestanding targets (wasm32)
+        // Wrap expression in Str.inspect so both backends produce a string
+        const inspect_expr = wrapInStrInspect(module_env, final_expr_idx) catch {
+            return .{ .eval_error = try self.allocator.dupe(u8, "Failed to wrap expression in Str.inspect") };
+        };
+
         if (comptime builtin.os.tag != .freestanding) {
             if (self.backend == .dev) {
                 if (self.dev_evaluator) |*dev_eval| {
-                    // Wrap expression in Str.inspect so the compiled code produces a RocStr
-                    const inspect_expr = wrapInStrInspect(module_env, final_expr_idx) catch {
-                        return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
-                    };
-
-                    // Build module envs array matching imported_modules order:
-                    // index 0 = REPL module, index 1 = Builtin module.
-                    // This must match the resolveImports call above so that resolved
-                    // import indices correctly map to the right module in the lowerer.
                     const all_module_envs: []const *ModuleEnv = &.{ module_env, self.builtin_module.env };
-                    var code_result = dev_eval.generateCode(module_env, inspect_expr, all_module_envs) catch {
-                        // Fall back to interpreter on unsupported expressions
-                        return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
+                    var code_result = dev_eval.generateCode(module_env, inspect_expr, all_module_envs) catch |err| {
+                        return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Dev backend codegen error: {s}", .{@errorName(err)}) };
                     };
                     defer code_result.deinit();
 
-                    // Execute the compiled code (with entry_offset for compiled procedures)
-                    var executable = eval_mod.ExecutableMemory.initWithEntryOffset(code_result.code, code_result.entry_offset) catch {
-                        return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
+                    var executable = eval_mod.ExecutableMemory.initWithEntryOffset(code_result.code, code_result.entry_offset) catch |err| {
+                        return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Dev backend executable error: {s}", .{@errorName(err)}) };
                     };
                     defer executable.deinit();
 
-                    // Execute and write result into a stack buffer — result is a RocStr (24 bytes)
                     var result_buf: [512]u8 align(16) = @splat(0);
-                    dev_eval.callWithCrashProtection(&executable, @ptrCast(&result_buf)) catch {
-                        return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
+                    dev_eval.callWithCrashProtection(&executable, @ptrCast(&result_buf)) catch |err| {
+                        return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Dev backend execution error: {s}", .{@errorName(err)}) };
                     };
 
-                    // Extract the RocStr from the result buffer.
-                    // Validate that the result is a well-formed RocStr before reading.
                     const roc_str: *const RocStr = @ptrCast(@alignCast(&result_buf));
                     const slice = if (roc_str.isSmallStr())
                         roc_str.asSlice()
                     else if (roc_str.len() > 0 and roc_str.len() < 1024 * 1024)
                         roc_str.asSlice()
                     else
-                        // Invalid or empty RocStr — fall back to interpreter
-                        return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
+                        return .{ .eval_error = try self.allocator.dupe(u8, "Dev backend returned invalid string") };
                     const output = self.allocator.dupe(u8, slice) catch {
-                        return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
+                        return .{ .eval_error = try self.allocator.dupe(u8, "Out of memory") };
                     };
                     return .{ .expression = output };
                 }
             }
         }
 
-        return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
+        return self.evaluateWithInterpreter(module_env, inspect_expr, &imported_modules, &checker);
     }
 
-    /// Evaluate using the interpreter (fallback path)
-    fn evaluateWithInterpreter(self: *Repl, module_env: *ModuleEnv, final_expr_idx: can.CIR.Expr.Idx, imported_modules: []const *const ModuleEnv, checker: *Check) !StepResult {
+    /// Evaluate a str_inspekt-wrapped expression using the interpreter.
+    /// The expression should already be wrapped in Str.inspect, so the result is a Str.
+    fn evaluateWithInterpreter(self: *Repl, module_env: *ModuleEnv, inspect_expr: can.CIR.Expr.Idx, imported_modules: []const *const ModuleEnv, checker: *Check) !StepResult {
         const builtin_types_for_eval = BuiltinTypes.init(self.builtin_indices, self.builtin_module.env, self.builtin_module.env, self.builtin_module.env);
         var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, self.builtin_module.env, imported_modules, &checker.import_mapping, null, null, roc_target.RocTarget.detectNative()) catch |err| {
             return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err}) };
@@ -761,7 +750,7 @@ pub const Repl = struct {
             ctx.reset();
         }
 
-        const result = interpreter.eval(final_expr_idx, self.roc_ops) catch |err| switch (err) {
+        const result = interpreter.eval(inspect_expr, self.roc_ops) catch |err| switch (err) {
             error.Crash => {
                 if (self.crash_ctx) |ctx| {
                     if (ctx.crashMessage()) |msg| {
@@ -774,10 +763,13 @@ pub const Repl = struct {
         };
 
         if (self.debug_store_snapshots) {
-            try self.generateAndStoreDebugHtml(module_env, final_expr_idx);
+            try self.generateAndStoreDebugHtml(module_env, inspect_expr);
         }
 
-        const output = try interpreter.renderValueRocForRepl(result, result.rt_var, self.roc_ops);
+        // The result is a Str from Str.inspect — extract it directly
+        const roc_str = result.asRocStr() orelse
+            return .{ .eval_error = try self.allocator.dupe(u8, "Str.inspect did not produce a string") };
+        const output = try self.allocator.dupe(u8, roc_str.asSlice());
 
         result.decref(&interpreter.runtime_layout_store, self.roc_ops);
         interpreter.cleanupBindings(self.roc_ops);
@@ -872,7 +864,6 @@ fn formatWithTypes(
     const fmt_ctx = RocValue.FormatContext{
         .layout_store = layout_store,
         .ident_store = ident_store,
-        .strip_whole_number_decimal = true,
     };
     return roc_val.format(allocator, fmt_ctx);
 }
@@ -931,8 +922,7 @@ fn formatTagUnion(
         const fmt_ctx = RocValue.FormatContext{
             .layout_store = layout_store,
             .ident_store = ident_store,
-            .strip_whole_number_decimal = true,
-        };
+            };
         return roc_val.format(allocator, fmt_ctx);
     }
 
@@ -1024,7 +1014,6 @@ fn formatTagUnion(
     const fmt_ctx = RocValue.FormatContext{
         .layout_store = layout_store,
         .ident_store = ident_store,
-        .strip_whole_number_decimal = true,
     };
     return roc_val.format(allocator, fmt_ctx);
 }
