@@ -304,24 +304,72 @@ fn checkElseArrow(allocator: Allocator, file_path: []const u8) ![]u8 {
     };
     defer allocator.free(source);
 
+    // Collect all lines so we can look backwards from each `else =>`.
+    var all_lines = std.ArrayList([]const u8){};
+    defer all_lines.deinit(allocator);
+
+    var splitter = std.mem.splitScalar(u8, source, '\n');
+    while (splitter.next()) |line| {
+        try all_lines.append(allocator, line);
+    }
+
     var errors = std.ArrayList(u8){};
     errdefer errors.deinit(allocator);
 
-    var line_num: usize = 1;
-    var lines = std.mem.splitScalar(u8, source, '\n');
-
-    while (lines.next()) |line| {
-        defer line_num += 1;
-
+    for (all_lines.items, 0..) |line, idx| {
         const trimmed = std.mem.trimLeft(u8, line, " \t");
 
-        // Match "else =>" as a standalone switch arm (not inside strings or comments)
-        if (std.mem.startsWith(u8, trimmed, "else =>")) {
-            try errors.writer(allocator).print("{s}:{d}: 'else =>' is not allowed; use exhaustive match instead\n", .{ file_path, line_num });
+        if (!std.mem.startsWith(u8, trimmed, "else =>")) continue;
+
+        // Look at sibling arms above to determine if this is an enum switch.
+        // If any sibling arm starts with '.' (an enum literal), flag it.
+        if (isEnumSwitch(all_lines.items, idx)) {
+            try errors.writer(allocator).print("{s}:{d}: 'else =>' is not allowed; use exhaustive match instead\n", .{ file_path, idx + 1 });
         }
     }
 
     return errors.toOwnedSlice(allocator);
+}
+
+/// Scan backwards from an `else =>` line to find sibling switch arms.
+/// Returns true if any sibling arm starts with '.' (enum literal syntax),
+/// indicating this is an enum/tagged-union switch that should be exhaustive.
+fn isEnumSwitch(lines: []const []const u8, else_idx: usize) bool {
+    const else_indent = indentLen(lines[else_idx]);
+
+    // Walk backwards looking for arms at the same indentation level.
+    var i: usize = else_idx;
+    while (i > 0) {
+        i -= 1;
+        const prev = lines[i];
+        const prev_trimmed = std.mem.trimLeft(u8, prev, " \t");
+
+        // Skip blank lines and comment-only lines.
+        if (prev_trimmed.len == 0 or std.mem.startsWith(u8, prev_trimmed, "//")) continue;
+
+        const prev_indent = indentLen(prev);
+
+        // If we've dedented past the switch arms, we've left the switch body.
+        if (prev_indent < else_indent) break;
+
+        // Only look at lines at the same indent level (sibling arms).
+        if (prev_indent != else_indent) continue;
+
+        // A sibling arm starting with '.' is an enum literal.
+        if (prev_trimmed[0] == '.') return true;
+    }
+
+    return false;
+}
+
+fn indentLen(line: []const u8) usize {
+    var n: usize = 0;
+    for (line) |c| {
+        if (c == ' ' or c == '\t') {
+            n += 1;
+        } else break;
+    }
+    return n;
 }
 
 fn checkPubDocComments(allocator: Allocator, file_path: []const u8) ![]u8 {
