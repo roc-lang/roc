@@ -641,7 +641,7 @@ pub fn unbundleStream(
                     return error.DirectoryCreateFailed;
                 };
             },
-            _ => {
+            .sym_link, .block_device, .character_device, .named_pipe, .unix_domain_socket, .whiteout, .door, .event_port, .unknown => {
                 // Skip other file types (symlinks, etc.)
                 // std.tar automatically handles skipping the content for us
             },

@@ -7425,7 +7425,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             break;
                         }
                     },
-                    _ => {
+                    .float_literal => {
                         unreachable;
                     },
                 }
@@ -15255,7 +15255,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             break;
                         }
                     },
-                    _ => {
+                    .float_literal => {
                         unreachable;
                     },
                 }

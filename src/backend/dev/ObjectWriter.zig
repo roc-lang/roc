@@ -55,7 +55,7 @@ pub fn generateObjectFile(
                     const rel_name = switch (rel) {
                         .linked_function => |f| f.name,
                         .linked_data => |d| d.name,
-                        _ => continue,
+                        .local_data, .jmp_to_return => continue,
                     };
                     if (std.mem.eql(u8, rel_name, sym.name)) {
                         try elf.addTextRelocation(rel.getOffset(), sym_idx, reloc_addend);
@@ -90,7 +90,7 @@ pub fn generateObjectFile(
                     const rel_name = switch (rel) {
                         .linked_function => |f| f.name,
                         .linked_data => |d| d.name,
-                        _ => continue,
+                        .local_data, .jmp_to_return => continue,
                     };
                     if (std.mem.eql(u8, rel_name, sym.name)) {
                         try macho.addTextRelocation(@intCast(rel.getOffset()), sym_idx, sym.is_external);
@@ -126,7 +126,7 @@ pub fn generateObjectFile(
                     const rel_name = switch (rel) {
                         .linked_function => |f| f.name,
                         .linked_data => |d| d.name,
-                        _ => continue,
+                        .local_data, .jmp_to_return => continue,
                     };
                     if (std.mem.eql(u8, rel_name, sym.name)) {
                         try coff_writer.addTextRelocation(@intCast(rel.getOffset()), sym_idx);

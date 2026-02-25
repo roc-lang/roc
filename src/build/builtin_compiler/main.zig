@@ -1840,7 +1840,7 @@ fn findTypeDeclaration(env: *const ModuleEnv, type_name: []const u8) !CIR.Statem
         const header_idx = switch (stmt) {
             .s_nominal_decl => |decl| decl.header,
             .s_alias_decl => |alias| alias.header,
-            _ => continue,
+            .s_decl, .s_var, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_type_anno, .s_type_var_alias, .s_runtime_error => continue,
         };
         const header = env.store.getTypeHeader(header_idx);
         const ident_idx = header.name;

@@ -600,7 +600,7 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
                 // of whether operands are i32, i64, f32, or f64).
                 const is_comparison = switch (b.op) {
                     .eq, .neq, .lt, .lte, .gt, .gte => true,
-                    _ => false,
+                    .@"and", .@"or", .plus, .minus, .times, .div => false,
                 };
                 const vt = if (is_comparison)
                     self.exprValType(b.lhs)
@@ -909,7 +909,7 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
                             .wildcard => {
                                 self.body.append(self.allocator, Op.drop) catch return error.OutOfMemory;
                             },
-                            _ => {
+                            .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => {
                                 self.body.append(self.allocator, Op.drop) catch return error.OutOfMemory;
                             },
                         }
@@ -970,10 +970,10 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
                                 self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                                 WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
                             },
-                            _ => unreachable,
+                            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
                         }
                     },
-                    _ => unreachable,
+                    .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
                 }
             } else if (self.store.getSymbolDef(l.symbol)) |def_id| {
                 // Symbol not in locals or closure_values — resolve via getSymbolDef.

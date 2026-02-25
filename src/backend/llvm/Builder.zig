@@ -504,7 +504,7 @@ pub const Type = enum(u32) {
             .x86_fp80, .i80 => 80,
             .fp128, .ppc_fp128, .i128 => 128,
             .ptr, .@"ptr addrspace(4)" => @panic("TODO: query data layout"),
-            _ => {
+            .scalar, .len => {
                 const item = builder.type_items.items[@intFromEnum(self)];
                 return switch (item.tag) {
                     .simple,
@@ -902,7 +902,7 @@ pub const Type = enum(u32) {
             .@"ptr addrspace(4)",
             => true,
             .none => unreachable,
-            _ => {
+            .scalar, .len => {
                 const item = builder.type_items.items[@intFromEnum(self)];
                 return switch (item.tag) {
                     .simple => unreachable,
@@ -2196,7 +2196,7 @@ pub const CallConv = enum(u10) {
             .m68k_rtdcc,
             .riscv_vectorcallcc,
             => try w.print(" {s}", .{@tagName(self)}),
-            _ => try w.print(" cc{d}", .{@intFromEnum(self)}),
+            .ccc => try w.print(" cc{d}", .{@intFromEnum(self)}),
         }
     }
 };
@@ -6408,7 +6408,7 @@ pub const WipFunction = struct {
                         defer wip_name.next_name = @enumFromInt(@intFromEnum(wip_name.next_name) + 1);
                         return wip_name.next_name;
                     },
-                    _ => {
+                    .first_anon => {
                         assert(!name.isAnon());
                         const gop = try wip_name.next_unique_name.getOrPut(name);
                         if (!gop.found_existing) {

@@ -485,7 +485,7 @@ fn processTypeDeclFirstPass(
                     const existing_header_idx = switch (existing_stmt) {
                         .s_alias_decl => |alias| if (alias.anno == .placeholder) alias.header else null,
                         .s_nominal_decl => |nominal| if (nominal.anno == .placeholder) nominal.header else null,
-                        _ => null,
+                        .s_decl, .s_var, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_type_anno, .s_type_var_alias, .s_runtime_error => null,
                     };
 
                     if (existing_header_idx) |header_idx| {
@@ -565,7 +565,7 @@ fn processTypeDeclFirstPass(
         const is_placeholder = switch (existing_stmt) {
             .s_alias_decl => |alias| alias.anno == .placeholder,
             .s_nominal_decl => |nominal| nominal.anno == .placeholder,
-            _ => false,
+            .s_decl, .s_var, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_type_anno, .s_type_var_alias, .s_runtime_error => false,
         };
 
         if (is_placeholder) {
@@ -1022,7 +1022,7 @@ fn introduceNestedItemAliases(
                     try self.introduceNestedItemAliases(nested_qualified_idx, new_prefix, nested_assoc.statements);
                 }
             },
-            _ => {},
+            .@"var", .expr, .crash, .dbg, .expect, .@"for", .@"while", .@"return", .@"break", .import, .type_anno, .malformed => {},
         }
     }
 }
@@ -1184,7 +1184,7 @@ fn processAssociatedBlock(
                 // Decl aliases were already added in the FIRST pass above
                 // (before processing nested blocks, so nested scopes can see parent decls)
             },
-            _ => {
+            .@"var", .expr, .crash, .dbg, .expect, .@"for", .@"while", .@"return", .@"break", .import, .type_anno, .malformed => {
                 // Note: .type_anno is not handled here because anno-only patterns
                 // are created during processAssociatedItemsSecondPass, so they need
                 // to be re-introduced AFTER that call completes
@@ -1586,7 +1586,7 @@ fn processAssociatedItemsSecondPass(
                     },
                 });
             },
-            _ => {
+            .@"var", .expr, .crash, .dbg, .expect, .@"for", .@"while", .@"return", .@"break", .malformed => {
                 // Other statement types (var, expr, crash, dbg, expect, for, return, malformed)
                 // are not valid in associated blocks but are already caught by the parser,
                 // so we don't need to emit additional diagnostics here
@@ -1823,7 +1823,7 @@ fn processAssociatedItemsFirstPass(
                     try self.registerUserFacingName(qualified_idx, placeholder_pattern_idx);
                 }
             },
-            _ => {
+            .@"var", .expr, .crash, .dbg, .expect, .@"for", .@"while", .@"return", .@"break", .import, .type_decl, .malformed => {
                 // Skip other statement types
             },
         }
@@ -1993,7 +1993,7 @@ pub fn canonicalizeFile(
                     }
                 }
             },
-            _ => {
+            .@"var", .expr, .crash, .dbg, .expect, .@"for", .@"while", .@"return", .@"break", .import, .type_anno, .malformed => {
                 // Skip non-type-declaration statements in first pass
             },
         }
@@ -2802,7 +2802,7 @@ fn createAnnoOnlyDef(
                     .original_region = original_region,
                 } });
             },
-            _ => {},
+            .already_in_scope => {},
         }
         break :create_new new_pattern_idx;
     };
@@ -7344,7 +7344,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                         },
                         // For apply and other backing types, use the tag expression as fallback
                         .apply => tag_expr_idx,
-                        _ => tag_expr_idx,
+                        .ty_var, .underscore_type_var, .underscore, .ty, .tuple, .@"fn", .parens, .malformed => tag_expr_idx,
                     };
 
                     // Determine the backing type for the nominal expression
@@ -7412,7 +7412,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                         .free_vars = DataSpan.empty(),
                     };
                 },
-                _ => {
+                .s_decl, .s_var, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_type_anno, .s_type_var_alias, .s_runtime_error => {
                     const feature = try self.env.insertString("report an error resolved type decl in scope wasn't actually a type decl");
                     const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
                         .feature = feature,
@@ -7613,7 +7613,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                         .free_vars = DataSpan.empty(),
                     };
                 },
-                _ => {
+                .s_decl, .s_var, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_type_anno, .s_type_var_alias, .s_runtime_error => {
                     const feature = try self.env.insertString("report an error resolved type decl in scope wasn't actually a type decl");
                     const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
                         .feature = feature,
@@ -8397,7 +8397,7 @@ pub fn canonicalizePattern(
                             .region = type_tok_region,
                         } });
                     },
-                    _ => {
+                    .s_decl, .s_var, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_type_anno, .s_type_var_alias, .s_runtime_error => {
                         const feature = try self.env.insertString("report an error resolved type decl in scope wasn't actually a type decl");
                         return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
                             .feature = feature,
@@ -10039,7 +10039,7 @@ fn canonicalizeTypeAnnoTag(
                 .args = args,
             } }, region);
         },
-        _ => {
+        .ty_var, .underscore_type_var, .underscore, .tag_union, .tuple, .record, .@"fn", .parens, .malformed => {
             return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{
                 .malformed_type_annotation = .{ .region = self.parse_ir.tokenizedRegionToRegion(ast_anno.to_tokenized_region()) },
             });
@@ -10210,7 +10210,7 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind
                 } });
                 try self.env.store.addScratchTypeAnno(malformed_anno);
             },
-            _ => {
+            .apply, .ty, .tag_union, .tuple, .record, .@"fn", .parens => {
                 const malformed_anno = try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .malformed_type_annotation = .{
                     .region = node_region,
                 } });
@@ -10350,7 +10350,7 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
 
                     last_expr = CanonicalizedExpr{ .idx = crash_expr, .free_vars = DataSpan.empty() };
                 },
-                _ => unreachable,
+                .decl, .@"var", .expect, .@"for", .@"while", .@"break", .import, .type_decl, .type_anno, .malformed => unreachable,
             }
         } else {
             // Otherwise, this is a normal statement
@@ -10369,7 +10369,7 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
                 switch (cir_stmt) {
                     .s_decl => |decl| try self.collectBoundVarsToScratch(decl.pattern),
                     .s_var => |var_stmt| try self.collectBoundVarsToScratch(var_stmt.pattern_idx),
-                    _ => {},
+                    .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => {},
                 }
 
                 // Collect free vars from the statement into the block's scratch space
@@ -10859,7 +10859,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                                             .original_region = original_region,
                                         } });
                                     },
-                                    _ => {},
+                                    .already_in_scope => {},
                                 }
                                 break :create_new new_pattern_idx;
                             };
@@ -10970,7 +10970,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                                             .original_region = original_region,
                                         } });
                                     },
-                                    _ => {},
+                                    .already_in_scope => {},
                                 }
                                 break :create_new_var new_pattern_idx;
                             };
@@ -11006,7 +11006,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                             stmts_processed = .one;
                         }
                     },
-                    _ => {
+                    .expr, .crash, .dbg, .expect, .@"for", .@"while", .@"return", .@"break", .import, .type_decl, .type_anno, .malformed => {
                         // If the next stmt does not match this annotation,
                         // create a Def with an e_anno_only body
 
@@ -11042,7 +11042,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                                         .original_region = original_region,
                                     } });
                                 },
-                                _ => {},
+                                .already_in_scope => {},
                             }
                             break :create_new2 new_pattern_idx;
                         };
@@ -11114,7 +11114,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                                 .original_region = original_region,
                             } });
                         },
-                        _ => {},
+                        .already_in_scope => {},
                     }
                     break :create_new3 new_pattern_idx;
                 };
@@ -12712,7 +12712,7 @@ fn tryTypeVarAliasDispatch(self: *Self, field_access: AST.BinOp) std.mem.Allocat
                     }, region);
                     return expr_idx;
                 },
-                _ => {
+                .int, .frac, .typed_int, .typed_frac, .single_quote, .string_part, .string, .multiline_string, .list, .tuple, .record, .tag, .lambda, .record_updater, .field_access, .tuple_access, .local_dispatch, .bin_op, .suffix_single_question, .unary_op, .if_then_else, .if_without_else, .match, .dbg, .record_builder, .ellipsis, .block, .for_expr, .malformed => {
                     // Unexpected expression type on right side
                     return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
                         .region = region,
@@ -13075,7 +13075,7 @@ fn parseFieldAccessRight(self: *Self, field_access: AST.BinOp) std.mem.Allocator
             self.parse_ir.tokenizedRegionToRegion(ident.region),
             null,
         },
-        _ => .{
+        .int, .frac, .typed_int, .typed_frac, .single_quote, .string_part, .string, .multiline_string, .list, .tuple, .record, .tag, .lambda, .record_updater, .field_access, .tuple_access, .local_dispatch, .bin_op, .suffix_single_question, .unary_op, .if_then_else, .if_without_else, .match, .dbg, .record_builder, .ellipsis, .block, .for_expr, .malformed => .{
             try self.createUnknownIdent(),
             self.parse_ir.tokenizedRegionToRegion(field_access.region), // fallback to whole region
             null,
