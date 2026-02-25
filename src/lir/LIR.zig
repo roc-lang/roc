@@ -319,7 +319,6 @@ pub const LirStmt = union(enum) {
     }
 };
 
-
 /// Lowered expression - all types are layouts, all references are global symbols.
 /// This is the core type that backends consume for code generation.
 pub const LirExpr = union(enum) {

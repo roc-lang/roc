@@ -914,27 +914,6 @@ pub const Store = struct {
         unreachable; // field name not found
     }
 
-    /// Get the offset of a record field by its string name.
-    /// Iterates through sorted fields to find the one with a matching name string.
-    pub fn getRecordFieldOffsetByNameStr(self: *const Self, struct_idx: StructIdx, field_name_str: []const u8) u32 {
-        const sd = self.getStructData(struct_idx);
-        const sorted_fields = self.struct_fields.sliceRange(sd.getFields());
-
-        var current_offset: u32 = 0;
-        for (0..sorted_fields.len) |i| {
-            const field = sorted_fields.get(@intCast(i));
-            const field_layout = self.getLayout(field.layout);
-            const field_size_align = self.layoutSizeAlign(field_layout);
-            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_size_align.alignment.toByteUnits()))));
-            const name = self.getFieldName(field.name);
-            if (std.mem.eql(u8, name, field_name_str)) {
-                return current_offset;
-            }
-            current_offset += field_size_align.size;
-        }
-        unreachable; // field name not found
-    }
-
     /// Get the offset of a struct field by its ORIGINAL index (source order).
     /// This searches through the sorted fields to find the one with the matching original index.
     pub fn getStructFieldOffsetByOriginalIndex(self: *const Self, struct_idx: StructIdx, original_index: u32) u32 {

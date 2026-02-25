@@ -9,6 +9,8 @@ const builtin = @import("builtin");
 const build_options = @import("build_options");
 const types = @import("types");
 const builtins = @import("builtins");
+const base = @import("base");
+const Ident = base.Ident;
 const layout_mod = @import("layout");
 
 // Compile-time flag for refcount tracing - enabled via `zig build -Dtrace-refcount=true`
@@ -1126,45 +1128,6 @@ pub const RecordAccessor = struct {
         };
     }
 
-    /// Get a StackValue for the field with the given name
-    pub fn getFieldByName(self: RecordAccessor, field_name: []const u8, field_rt_var: types.Var) !?StackValue {
-        const field_offset = self.layout_cache.getRecordFieldOffsetByNameStr(
-            self.record_layout.data.struct_.idx,
-            field_name,
-        ) orelse return null;
-
-        // Find the field layout by name
-        var field_layout: ?Layout = null;
-        for (0..self.field_layouts.len) |i| {
-            const field_info = self.field_layouts.get(i);
-            // We need to get the field name from the layout cache's identifier store
-            // This is a limitation - we'd need access to the env to get the actual name
-            // For now, we'll use the offset-based approach
-            const this_field_offset = self.layout_cache.getRecordFieldOffset(self.record_layout.data.struct_.idx, @intCast(i));
-            if (this_field_offset == field_offset) {
-                field_layout = self.layout_cache.getLayout(field_info.layout);
-                break;
-            }
-        }
-
-        if (field_layout == null) return null;
-
-        const base_ptr = @as([*]u8, @ptrCast(self.base_value.ptr.?));
-        const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
-        const required_alignment = field_layout.?.alignment(self.layout_cache.targetUsize()).toByteUnits();
-        if (required_alignment > 1) {
-            const addr = @intFromPtr(field_ptr);
-            std.debug.assert(addr % required_alignment == 0);
-        }
-
-        return StackValue{
-            .layout = field_layout.?,
-            .ptr = field_ptr,
-            .is_initialized = true,
-            .rt_var = field_rt_var,
-        };
-    }
-
     /// Set a field by copying from a source StackValue
     pub fn setFieldByIndex(self: RecordAccessor, index: usize, source: StackValue, roc_ops: *RocOps) !void {
         const dest_field = try self.getFieldByIndex(index, source.rt_var);
@@ -1185,10 +1148,13 @@ pub const RecordAccessor = struct {
         return self.layout_cache.getLayout(field_layout_info.layout);
     }
 
-    /// Find field index by comparing field name strings
+    /// Find field index by comparing field name text.
+    /// Uses string comparison because ident indices are module-local —
+    /// the same field name from different modules has different Ident.Idx values.
     pub fn findFieldIndex(self: RecordAccessor, field_name: []const u8) ?usize {
         for (0..self.field_layouts.len) |idx| {
             const field = self.field_layouts.get(idx);
+            if (field.name == Ident.Idx.NONE) continue;
             if (std.mem.eql(u8, self.layout_cache.getFieldName(field.name), field_name)) {
                 return idx;
             }

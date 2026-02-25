@@ -266,8 +266,6 @@ pub fn getPatternSpan(self: *const Self, span: LirPatternSpan) []const LirPatter
     return @ptrCast(slice);
 }
 
-
-
 /// Add match branches and return a span
 pub fn addMatchBranches(self: *Self, branches: []const LirMatchBranch) Allocator.Error!LirMatchBranchSpan {
     if (branches.len == 0) {

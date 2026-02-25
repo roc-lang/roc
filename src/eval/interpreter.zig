@@ -2080,7 +2080,7 @@ pub const Interpreter = struct {
                     // Return Err(BadUtf8({ problem: Utf8Problem, index: U64 }))
                     if (result_layout.tag == .struct_) {
                         var dest = try self.pushRaw(result_layout, 0, result_rt_var);
-                        try self.writeErrBadUtf8ToStruct(&dest, result, err_index, roc_ops);
+                        try self.writeErrBadUtf8ToStruct(&dest, result, err_index);
                         dest.is_initialized = true;
                         return dest;
                     } else if (result_layout.tag == .tag_union) {
@@ -7071,8 +7071,7 @@ pub const Interpreter = struct {
     }
 
     /// Write BadUtf8 error info into a struct (handles both record-style and tuple-style).
-    fn writeErrBadUtf8ToStruct(self: *Interpreter, dest: *StackValue, result: anytype, err_index: ?usize, roc_ops: *RocOps) !void {
-        _ = roc_ops;
+    fn writeErrBadUtf8ToStruct(self: *Interpreter, dest: *StackValue, result: anytype, err_index: ?usize) !void {
         if (isRecordStyleStruct(dest.layout, &self.runtime_layout_store)) {
             // Record-style: { tag, payload }
             var acc = try dest.asRecord(&self.runtime_layout_store);

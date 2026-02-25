@@ -655,6 +655,27 @@ const LirProc = lir.LirProc;
 
 const Allocator = std.mem.Allocator;
 
+/// Get the offset of a struct field by its string name.
+/// This is a codegen helper that iterates fields and matches by name string.
+fn getStructFieldOffsetByNameStr(ls: *const layout.Store, struct_idx: layout.StructIdx, field_name_str: []const u8) u32 {
+    const sd = ls.getStructData(struct_idx);
+    const sorted_fields = ls.struct_fields.sliceRange(sd.getFields());
+
+    var current_offset: u32 = 0;
+    for (0..sorted_fields.len) |i| {
+        const field = sorted_fields.get(@intCast(i));
+        const field_layout = ls.getLayout(field.layout);
+        const field_size_align = ls.layoutSizeAlign(field_layout);
+        current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_size_align.alignment.toByteUnits()))));
+        const name = ls.getFieldName(field.name);
+        if (std.mem.eql(u8, name, field_name_str)) {
+            return current_offset;
+        }
+        current_offset += field_size_align.size;
+    }
+    unreachable; // field name not found
+}
+
 /// Code generator for LIR expressions
 /// Parameterized by RocTarget for cross-compilation support
 pub fn LirCodeGen(comptime target: RocTarget) type {
@@ -3994,8 +4015,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const record_layout = ls.getLayout(record_layout_idx orelse unreachable);
             const record_idx = record_layout.data.struct_.idx;
             const record_size = ls.getStructData(record_idx).size;
-            const start_field_off: i32 = @intCast(ls.getRecordFieldOffsetByNameStr(record_idx, "start"));
-            const len_field_off: i32 = @intCast(ls.getRecordFieldOffsetByNameStr(record_idx, "len"));
+            const start_field_off: i32 = @intCast(getStructFieldOffsetByNameStr(ls, record_idx, "start"));
+            const len_field_off: i32 = @intCast(getStructFieldOffsetByNameStr(ls, record_idx, "len"));
 
             const list_off = try self.ensureOnStack(list_loc, roc_list_size);
             const record_off = try self.ensureOnStack(record_loc, record_size);

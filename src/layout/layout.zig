@@ -172,7 +172,9 @@ pub const StructField = struct {
 /// Backwards-compat aliases so existing code that references the old names still compiles.
 /// Callers will be migrated incrementally.
 pub const RecordField = StructField;
+/// Backwards-compat alias for `StructField`.
 pub const TupleField = StructField;
+/// Backwards-compat alias for `StructField`.
 pub const TupleFieldLayout = StructField;
 
 /// Struct layout - stores alignment and index to full data in Store.
@@ -184,8 +186,9 @@ pub const StructLayout = packed struct {
     idx: StructIdx,
 };
 
-/// Backwards-compat aliases
+/// Backwards-compat alias for `StructLayout`.
 pub const RecordLayout = StructLayout;
+/// Backwards-compat alias for `StructLayout`.
 pub const TupleLayout = StructLayout;
 
 /// Index into the Store's struct data
@@ -199,8 +202,9 @@ pub const StructIdx = packed struct {
     }),
 };
 
-/// Backwards-compat aliases
+/// Backwards-compat alias for `StructIdx`.
 pub const RecordIdx = StructIdx;
+/// Backwards-compat alias for `StructIdx`.
 pub const TupleIdx = StructIdx;
 
 /// Struct data stored in the layout Store — unified for records and tuples.
@@ -219,8 +223,9 @@ pub const StructData = struct {
     }
 };
 
-/// Backwards-compat aliases
+/// Backwards-compat alias for `StructData`.
 pub const RecordData = StructData;
+/// Backwards-compat alias for `StructData`.
 pub const TupleData = StructData;
 
 /// Closure layout - stores captures layout index
@@ -474,8 +479,9 @@ pub const StructInfo = struct {
     }
 };
 
-/// Backwards-compat aliases
+/// Backwards-compat alias for `StructInfo`.
 pub const RecordInfo = StructInfo;
+/// Backwards-compat alias for `StructInfo`.
 pub const TupleInfo = StructInfo;
 
 /// Bundled information about a tag union layout
