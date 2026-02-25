@@ -1697,6 +1697,41 @@ test "List.fold with record accumulator - exact list pattern" {
     );
 }
 
+test "record update evaluates extension expression once" {
+    // Regression: `{ ..expr, field: ... }` must evaluate `expr` exactly once.
+    try runExpectI64(
+        \\{
+        \\    var $calls = 0i64
+        \\    rec = {
+        \\        ..({
+        \\            $calls = $calls + 1i64
+        \\            { a: 1i64, b: 2i64, c: 3i64 }
+        \\        }),
+        \\        a: 10i64,
+        \\        b: 20i64,
+        \\        c: 30i64
+        \\    }
+        \\    rec.a + rec.b + rec.c + $calls * 100i64
+        \\}
+    , 160, .no_trace);
+}
+
+test "record update synthesizes missing fields without re-evaluating extension" {
+    try runExpectI64(
+        \\{
+        \\    var $calls = 0i64
+        \\    rec = {
+        \\        ..({
+        \\            $calls = $calls + 1i64
+        \\            { a: $calls, b: $calls, c: $calls }
+        \\        }),
+        \\        c: 99i64
+        \\    }
+        \\    rec.a * 1000i64 + rec.b * 100i64 + rec.c + $calls * 10i64
+        \\}
+    , 1209, .no_trace);
+}
+
 test "List.fold with record accumulator - nested list and record" {
     // Test combining list destructuring with record accumulator updates
     // Using ".. as tail" syntax for the rest pattern

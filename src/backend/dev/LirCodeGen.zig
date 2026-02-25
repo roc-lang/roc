@@ -1452,6 +1452,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .call => |call| try self.generateCall(call),
                 // Lambdas and closures as first-class values (stored to variables)
                 .lambda => |lambda| {
+                    if (self.bodyReturnsCallable(lambda.body)) {
+                        return .{ .closure_value = .{
+                            .stack_offset = 0,
+                            .representation = .direct_call,
+                            .lambda = expr_id,
+                            .captures = lir.LIR.LirCaptureSpan.empty(),
+                        } };
+                    }
                     const code_offset = try self.compileLambdaAsProc(expr_id, lambda);
                     return .{ .lambda_code = .{
                         .code_offset = code_offset,
@@ -9551,11 +9559,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // We must be inside a compileLambdaAsProc — early returns require the
             // jump-to-epilogue infrastructure that compileLambdaAsProc sets up.
             const ret_layout = self.early_return_ret_layout orelse unreachable;
+            const return_loc = self.normalizeResultLocForLayout(value_loc, ret_layout);
             // Move the value to the return register (or copy to return pointer)
             if (self.ret_ptr_slot) |ret_slot| {
-                try self.copyResultToReturnPointer(value_loc, ret_layout, ret_slot);
+                try self.copyResultToReturnPointer(return_loc, ret_layout, ret_slot);
             } else {
-                try self.moveToReturnRegisterWithLayout(value_loc, ret_layout);
+                try self.moveToReturnRegisterWithLayout(return_loc, ret_layout);
             }
             // Emit a jump (will be patched to the epilogue location)
             const patch = try self.codegen.emitJump();
@@ -10923,8 +10932,35 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const body = self.store.getExpr(body_expr_id);
             return switch (body) {
                 .lambda, .closure => true,
+                .lookup => |lk| blk: {
+                    const symbol_key: u64 = @bitCast(lk.symbol);
+                    if (self.symbol_locations.get(symbol_key)) |loc| {
+                        switch (loc) {
+                            .lambda_code, .closure_value => break :blk true,
+                            else => {},
+                        }
+                    }
+                    if (self.store.getSymbolDef(lk.symbol)) |def_id| {
+                        break :blk self.bodyReturnsCallable(def_id);
+                    }
+                    break :blk false;
+                },
+                .nominal => |nom| self.bodyReturnsCallable(nom.backing_expr),
                 .block => |block| self.bodyReturnsCallable(block.final_expr),
-                .if_then_else => |ite| self.bodyReturnsCallable(ite.final_else),
+                .if_then_else => |ite| blk: {
+                    const branches = self.store.getIfBranches(ite.branches);
+                    for (branches) |branch| {
+                        if (self.bodyReturnsCallable(branch.body)) break :blk true;
+                    }
+                    break :blk self.bodyReturnsCallable(ite.final_else);
+                },
+                .match_expr => |when_expr| blk: {
+                    const branches = self.store.getMatchBranches(when_expr.branches);
+                    for (branches) |branch| {
+                        if (self.bodyReturnsCallable(branch.body)) break :blk true;
+                    }
+                    break :blk false;
+                },
                 else => false,
             };
         }
@@ -10992,6 +11028,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Generate the lambda body inline
             const result_loc = try self.generateExpr(lambda.body);
+            const normalized_result_loc = self.normalizeResultLocForLayout(result_loc, lambda.ret_layout);
 
             // Check if any early returns were generated
             if (self.early_return_patches.items.len > saved_early_return_patches_len) {
@@ -11022,7 +11059,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const result_slot = self.codegen.allocStackSlot(@intCast(ret_sa.size));
 
                 // Normal path: store result_loc to the shared slot
-                try self.moveToReturnRegisterWithLayout(result_loc, lambda.ret_layout);
+                try self.moveToReturnRegisterWithLayout(normalized_result_loc, lambda.ret_layout);
                 try self.storeReturnRegisterToStack(lambda.ret_layout, result_slot);
 
                 // Jump past the early-return landing
@@ -11111,6 +11148,27 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (self.symbol_locations.get(symbol_key)) |loc| {
                         switch (loc) {
                             .lambda_code => |lc| {
+                                // If this lookup resolves to a lambda that returns a callable,
+                                // inline its body instead of invoking the compiled proc.
+                                // Compiled-proc returns cannot safely carry closure_value stack data.
+                                if (self.store.getSymbolDef(lookup.symbol)) |def_id| {
+                                    const def_expr = self.store.getExpr(def_id);
+                                    switch (def_expr) {
+                                        .lambda => |lam| {
+                                            if (self.bodyReturnsCallable(lam.body)) {
+                                                return try self.callLambdaBodyDirect(lam, call.args);
+                                            }
+                                        },
+                                        .closure => |closure_id| {
+                                            const closure = self.store.getClosureData(closure_id);
+                                            const inner = self.store.getExpr(closure.lambda);
+                                            if (inner == .lambda and self.bodyReturnsCallable(inner.lambda.body)) {
+                                                return try self.callLambdaBodyDirect(inner.lambda, call.args);
+                                            }
+                                        },
+                                        else => {},
+                                    }
+                                }
                                 return try self.generateCallToLambda(
                                     lc.code_offset,
                                     call.args,
@@ -12272,6 +12330,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        /// Convert callable values stored on stack to a concrete stack ValueLocation
+        /// based on the expected return layout.
+        fn normalizeResultLocForLayout(self: *Self, loc: ValueLocation, ret_layout: layout.Idx) ValueLocation {
+            return switch (loc) {
+                .closure_value => |cv| self.stackLocationForLayout(ret_layout, cv.stack_offset),
+                else => loc,
+            };
+        }
+
         /// Ensure a value is in a floating-point register
         fn ensureInFloatReg(self: *Self, loc: ValueLocation) Allocator.Error!FloatReg {
             switch (loc) {
@@ -13125,12 +13192,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Generate the body
             const result_loc = try self.generateExpr(lambda.body);
+            const normalized_result_loc = self.normalizeResultLocForLayout(result_loc, lambda.ret_layout);
 
             // Move result to return register or copy to return pointer
             if (self.ret_ptr_slot) |ret_slot| {
-                try self.copyResultToReturnPointer(result_loc, lambda.ret_layout, ret_slot);
+                try self.copyResultToReturnPointer(normalized_result_loc, lambda.ret_layout, ret_slot);
             } else {
-                try self.moveToReturnRegisterWithLayout(result_loc, lambda.ret_layout);
+                try self.moveToReturnRegisterWithLayout(normalized_result_loc, lambda.ret_layout);
             }
 
             // Record epilogue location (relative to body, will adjust after prepending prologue)

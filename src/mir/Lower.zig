@@ -1479,25 +1479,110 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, da: anytype, monoty
 fn lowerRecord(self: *Self, module_env: *const ModuleEnv, record: anytype, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
     const cir_field_indices = module_env.store.sliceRecordFields(record.fields);
 
+    const ProvidedField = struct {
+        name: Ident.Idx,
+        expr: MIR.ExprId,
+    };
+    const ExtensionBinding = struct {
+        pattern: MIR.PatternId,
+        expr: MIR.ExprId,
+        lookup: MIR.ExprId,
+    };
+
+    var provided_fields = std.ArrayList(ProvidedField).empty;
+    defer provided_fields.deinit(self.allocator);
+    var extension_binding: ?ExtensionBinding = null;
+
+    for (cir_field_indices) |field_idx| {
+        const field = module_env.store.getRecordField(field_idx);
+        const expr = try self.lowerExpr(field.value);
+        try provided_fields.append(self.allocator, .{
+            .name = field.name,
+            .expr = expr,
+        });
+    }
+
     const exprs_top = self.scratch_expr_ids.top();
     defer self.scratch_expr_ids.clearFrom(exprs_top);
     const names_top = self.scratch_ident_idxs.top();
     defer self.scratch_ident_idxs.clearFrom(names_top);
 
-    for (cir_field_indices) |field_idx| {
-        const field = module_env.store.getRecordField(field_idx);
-        const expr = try self.lowerExpr(field.value);
-        try self.scratch_expr_ids.append(expr);
-        try self.scratch_ident_idxs.append(field.name);
+    if (record.ext) |ext_expr_idx| {
+        const ext_expr = try self.lowerExpr(ext_expr_idx);
+        const ext_expr_mono = self.store.typeOf(ext_expr);
+
+        // Bind the update base once so:
+        // 1) `{ ..expr, all_fields_overridden }` still evaluates `expr`, and
+        // 2) synthesized field accesses never re-evaluate `expr`.
+        const ext_symbol = self.makeSyntheticSymbol(.{
+            .module_idx = self.current_module_idx,
+            .ident_idx = Ident.Idx.NONE,
+        });
+        const ext_pattern = try self.store.addPattern(self.allocator, .{ .bind = ext_symbol }, ext_expr_mono);
+        const ext_lookup = try self.store.addExpr(self.allocator, .{ .lookup = ext_symbol }, ext_expr_mono, region);
+        extension_binding = .{
+            .pattern = ext_pattern,
+            .expr = ext_expr,
+            .lookup = ext_lookup,
+        };
+
+        const mono = self.store.monotype_store.getMonotype(monotype);
+        const mono_record = switch (mono) {
+            .record => |r| r,
+            else => unreachable,
+        };
+        const mono_fields = self.store.monotype_store.getFields(mono_record.fields);
+
+        // Record update: include all fields in the resulting record.
+        // Updated fields use explicit expressions; missing fields become accesses on the
+        // base record expression from `..record`.
+        for (mono_fields) |mono_field| {
+            var maybe_expr: ?MIR.ExprId = null;
+            for (provided_fields.items) |provided| {
+                if (@as(u32, @bitCast(provided.name)) == @as(u32, @bitCast(mono_field.name))) {
+                    maybe_expr = provided.expr;
+                    break;
+                }
+            }
+
+            const field_expr = maybe_expr orelse try self.store.addExpr(self.allocator, .{ .record_access = .{
+                .record = extension_binding.?.lookup,
+                .field_name = mono_field.name,
+            } }, mono_field.type_idx, region);
+
+            try self.scratch_expr_ids.append(field_expr);
+            try self.scratch_ident_idxs.append(mono_field.name);
+        }
+    } else {
+        for (provided_fields.items) |provided| {
+            try self.scratch_expr_ids.append(provided.expr);
+            try self.scratch_ident_idxs.append(provided.name);
+        }
     }
 
     const fields_span = try self.store.addExprSpan(self.allocator, self.scratch_expr_ids.sliceFromStart(exprs_top));
     const names_span = try self.store.addFieldNameSpan(self.allocator, self.scratch_ident_idxs.sliceFromStart(names_top));
 
-    return try self.store.addExpr(self.allocator, .{ .record = .{
+    const record_expr = try self.store.addExpr(self.allocator, .{ .record = .{
         .fields = fields_span,
         .field_names = names_span,
     } }, monotype, region);
+
+    if (extension_binding) |ext| {
+        const stmts = try self.store.addStmts(self.allocator, &.{MIR.Stmt{
+            .decl_const = .{
+                .pattern = ext.pattern,
+                .expr = ext.expr,
+            },
+        }});
+
+        return try self.store.addExpr(self.allocator, .{ .block = .{
+            .stmts = stmts,
+            .final_expr = record_expr,
+        } }, monotype, region);
+    }
+
+    return record_expr;
 }
 
 // --- Type var dispatch & cross-module resolution ---

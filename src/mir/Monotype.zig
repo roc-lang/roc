@@ -153,6 +153,16 @@ pub const TagSpan = extern struct {
 pub const Field = struct {
     name: Ident.Idx,
     type_idx: Idx,
+
+    pub fn sortByNameAsc(ident_store: *const Ident.Store, a: Field, b: Field) bool {
+        return orderByName(ident_store, a, b) == .lt;
+    }
+
+    fn orderByName(ident_store: *const Ident.Store, a: Field, b: Field) std.math.Order {
+        const a_text = ident_store.getText(a.name);
+        const b_text = ident_store.getText(b.name);
+        return std.mem.order(u8, a_text, b_text);
+    }
 };
 
 /// Span of Fields stored in the fields array.
@@ -362,19 +372,79 @@ pub const Store = struct {
                 const placeholder_idx = try self.addMonotype(allocator, .unit);
                 try seen.put(var_, placeholder_idx);
 
-                const fields_slice = types_store.getRecordFieldsSlice(record.fields);
-                const names = fields_slice.items(.name);
-                const vars = fields_slice.items(.var_);
-
                 const scratch_top = scratches.fields.top();
                 defer scratches.fields.clearFrom(scratch_top);
 
-                for (names, vars) |name, field_var| {
-                    const field_type = try self.fromTypeVar(allocator, types_store, field_var, common_idents, seen, scratches);
-                    try scratches.fields.append(.{ .name = name, .type_idx = field_type });
+                // Follow the record extension chain to collect ALL fields.
+                // Roc's type system represents records as linked rows:
+                // { a: A | ext } where ext -> { b: B | ext2 } where ext2 -> {}
+                var current_row = record;
+                rows: while (true) {
+                    const fields_slice = types_store.getRecordFieldsSlice(current_row.fields);
+                    const names = fields_slice.items(.name);
+                    const vars = fields_slice.items(.var_);
+
+                    for (names, vars) |name, field_var| {
+                        var seen_name = false;
+                        for (scratches.fields.sliceFromStart(scratch_top)) |existing| {
+                            if (@as(u32, @bitCast(existing.name)) == @as(u32, @bitCast(name))) {
+                                seen_name = true;
+                                break;
+                            }
+                        }
+                        if (seen_name) continue;
+
+                        const field_type = try self.fromTypeVar(allocator, types_store, field_var, common_idents, seen, scratches);
+                        try scratches.fields.append(.{ .name = name, .type_idx = field_type });
+                    }
+
+                    var ext_var = current_row.ext;
+                    while (true) {
+                        const ext_resolved = types_store.resolveVar(ext_var);
+                        switch (ext_resolved.desc.content) {
+                            .alias => |alias| {
+                                ext_var = types_store.getAliasBackingVar(alias);
+                                continue;
+                            },
+                            .structure => |ext_flat| switch (ext_flat) {
+                                .record => |next_row| {
+                                    current_row = next_row;
+                                    continue :rows;
+                                },
+                                .record_unbound => |fields_range| {
+                                    // Final open-row segment: append known fields.
+                                    const ext_fields = types_store.getRecordFieldsSlice(fields_range);
+                                    const ext_names = ext_fields.items(.name);
+                                    const ext_vars = ext_fields.items(.var_);
+                                    for (ext_names, ext_vars) |name, field_var| {
+                                        var seen_name = false;
+                                        for (scratches.fields.sliceFromStart(scratch_top)) |existing| {
+                                            if (@as(u32, @bitCast(existing.name)) == @as(u32, @bitCast(name))) {
+                                                seen_name = true;
+                                                break;
+                                            }
+                                        }
+                                        if (seen_name) continue;
+
+                                        const field_type = try self.fromTypeVar(allocator, types_store, field_var, common_idents, seen, scratches);
+                                        try scratches.fields.append(.{ .name = name, .type_idx = field_type });
+                                    }
+                                    break :rows;
+                                },
+                                .empty_record => break :rows,
+                                else => break :rows,
+                            },
+                            else => break :rows, // flex/rigid/err -> end of known chain
+                        }
+                    }
                 }
 
-                const field_span = try self.addFields(allocator, scratches.fields.sliceFromStart(scratch_top));
+                const collected_fields = scratches.fields.sliceFromStart(scratch_top);
+                // Each row segment is sorted, but concatenation may not be.
+                if (scratches.ident_store) |ident_store| {
+                    std.mem.sort(Field, collected_fields, ident_store, Field.sortByNameAsc);
+                }
+                const field_span = try self.addFields(allocator, collected_fields);
                 self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .record = .{ .fields = field_span } };
                 return placeholder_idx;
             },

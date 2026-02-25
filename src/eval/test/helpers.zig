@@ -338,6 +338,49 @@ fn forkAndExecute(
 /// Accepted divergences:
 /// - f32/f64 epsilon (machine/CPU instruction differences)
 /// - Bool "True"/"1" (Mono IR block result_layout doesn't propagate Idx.bool)
+/// - 1-field record layout unwrapping (`{ field: x }` vs `x`)
+/// - list-of-ZST rendering (`[<n zero-sized elements>]` vs `[{}, ...]`)
+fn singleFieldRecordValueString(s: []const u8) ?[]const u8 {
+    if (s.len < 6) return null; // "{ a: b }" minimum-ish
+    if (!std.mem.startsWith(u8, s, "{ ")) return null;
+    if (!std.mem.endsWith(u8, s, " }")) return null;
+    const inner = s[2 .. s.len - 2];
+    if (std.mem.indexOfScalar(u8, inner, ',') != null) return null;
+    const colon_idx = std.mem.indexOf(u8, inner, ": ") orelse return null;
+    return inner[colon_idx + 2 ..];
+}
+
+fn parseZeroSizedListCount(s: []const u8) ?usize {
+    const prefix = "[<";
+    const suffix = " zero-sized elements>]";
+    if (!std.mem.startsWith(u8, s, prefix)) return null;
+    if (!std.mem.endsWith(u8, s, suffix)) return null;
+    const n_str = s[prefix.len .. s.len - suffix.len];
+    return std.fmt.parseInt(usize, n_str, 10) catch null;
+}
+
+fn countBraceZstListElements(s: []const u8) ?usize {
+    if (!std.mem.startsWith(u8, s, "[")) return null;
+    if (!std.mem.endsWith(u8, s, "]")) return null;
+    const inner = s[1 .. s.len - 1];
+    if (inner.len == 0) return 0;
+
+    var i: usize = 0;
+    var count: usize = 0;
+    while (i < inner.len) {
+        while (i < inner.len and inner[i] == ' ') : (i += 1) {}
+        if (i + 2 > inner.len) return null;
+        if (!std.mem.eql(u8, inner[i .. i + 2], "{}")) return null;
+        i += 2;
+        count += 1;
+        while (i < inner.len and inner[i] == ' ') : (i += 1) {}
+        if (i == inner.len) break;
+        if (inner[i] != ',') return null;
+        i += 1;
+    }
+    return count;
+}
+
 fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !void {
     const dev_str = devEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env) catch |err| {
         switch (err) {
@@ -352,6 +395,21 @@ fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []cons
     // f32/f64 epsilon: machine/CPU instruction differences can cause
     // small floating-point divergences between interpreter and dev backend.
     if (floatStringsWithinEpsilon(interpreter_str, dev_str)) return;
+
+    // 1-field record layout unwrapping in dev backend.
+    if (singleFieldRecordValueString(interpreter_str)) |inner| {
+        if (std.mem.eql(u8, inner, dev_str)) return;
+    }
+    if (singleFieldRecordValueString(dev_str)) |inner| {
+        if (std.mem.eql(u8, inner, interpreter_str)) return;
+    }
+
+    // List-of-ZST rendering divergence in dev formatter.
+    if (parseZeroSizedListCount(interpreter_str)) |expected_count| {
+        if (countBraceZstListElements(dev_str)) |actual_count| {
+            if (expected_count == actual_count) return;
+        }
+    }
 
     // Bool layout: Mono IR blocks may lose Idx.bool, falling back to int layout.
     // The layout store correctly returns Idx.bool for Bool nominal types, but

@@ -186,6 +186,7 @@ fn layoutFromMonotypeInner(self: *Self, monotype: Monotype.Monotype) Allocator.E
 fn layoutFromRecord(self: *Self, record: anytype) Allocator.Error!layout.Idx {
     const fields = self.mir_store.monotype_store.getFields(record.fields);
     if (fields.len == 0) return .zst;
+    if (fields.len == 1) return self.layoutFromMonotype(fields[0].type_idx);
 
     const env = self.layout_store.currentEnv();
     const save_layouts = self.scratch_layouts.items.len;
@@ -574,56 +575,51 @@ fn lowerRecord(self: *Self, rec: anytype, mono_idx: Monotype.Idx, region: Region
         } }, region);
     }
 
+    // 1-field records are layout-unwrapped, so construction is just the field value.
+    if (mir_fields.len == 1) {
+        return self.lowerExpr(mir_fields[0]);
+    }
+
     const record_layout = try self.layoutFromMonotype(mono_idx);
     const mir_field_names = self.mir_store.getFieldNameSpan(rec.field_names);
     const record_layout_val = self.layout_store.getLayout(record_layout);
+    std.debug.assert(record_layout_val.tag == .struct_);
 
     var acc = self.startLetAccumulator();
 
-    if (record_layout_val.tag == .struct_) {
-        // MIR fields are in source/alphabetical order, but the layout store sorts
-        // fields by alignment descending then alphabetically. Reorder expressions
-        // to match layout order so codegen can use positional field indices.
-        const record_data = self.layout_store.getStructData(record_layout_val.data.struct_.idx);
-        const layout_fields = self.layout_store.struct_fields.sliceRange(record_data.getFields());
+    // MIR fields are in source/alphabetical order, but the layout store sorts
+    // fields by alignment descending then alphabetically. Reorder expressions
+    // to match layout order so codegen can use positional field indices.
+    const record_data = self.layout_store.getStructData(record_layout_val.data.struct_.idx);
+    const layout_fields = self.layout_store.struct_fields.sliceRange(record_data.getFields());
 
-        const save_exprs = self.scratch_lir_expr_ids.items.len;
-        defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
+    const save_exprs = self.scratch_lir_expr_ids.items.len;
+    defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
 
-        for (0..layout_fields.len) |li| {
-            const layout_field_name = layout_fields.get(li).name;
-            var found = false;
-            for (mir_field_names, 0..) |mir_name, mi| {
-                if (@as(u32, @bitCast(mir_name)) == @as(u32, @bitCast(layout_field_name))) {
-                    const lir_expr = try self.lowerExpr(mir_fields[mi]);
-                    const field_mono = self.mir_store.typeOf(mir_fields[mi]);
-                    const field_layout = try self.layoutFromMonotype(field_mono);
-                    const ensured = try acc.ensureSymbol(lir_expr, field_layout, region);
-                    try self.scratch_lir_expr_ids.append(self.allocator, ensured);
-                    found = true;
-                    break;
-                }
+    for (0..layout_fields.len) |li| {
+        const layout_field_name = layout_fields.get(li).name;
+        var found = false;
+        for (mir_field_names, 0..) |mir_name, mi| {
+            if (@as(u32, @bitCast(mir_name)) == @as(u32, @bitCast(layout_field_name))) {
+                const lir_expr = try self.lowerExpr(mir_fields[mi]);
+                const field_mono = self.mir_store.typeOf(mir_fields[mi]);
+                const field_layout = try self.layoutFromMonotype(field_mono);
+                const ensured = try acc.ensureSymbol(lir_expr, field_layout, region);
+                try self.scratch_lir_expr_ids.append(self.allocator, ensured);
+                found = true;
+                break;
             }
-            std.debug.assert(found);
         }
-
-        const lir_fields = try self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_exprs..]);
-
-        const struct_expr = try self.lir_store.addExpr(.{ .struct_ = .{
-            .struct_layout = record_layout,
-            .fields = lir_fields,
-        } }, region);
-        return acc.finish(struct_expr, record_layout, region);
-    } else {
-        // Non-struct layout (e.g. single-field optimization or ZST) — pass through directly
-        const lir_fields = try self.lowerAnfSpan(&acc, mir_fields, region);
-
-        const struct_expr = try self.lir_store.addExpr(.{ .struct_ = .{
-            .struct_layout = record_layout,
-            .fields = lir_fields,
-        } }, region);
-        return acc.finish(struct_expr, record_layout, region);
+        std.debug.assert(found);
     }
+
+    const lir_fields = try self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_exprs..]);
+
+    const struct_expr = try self.lir_store.addExpr(.{ .struct_ = .{
+        .struct_layout = record_layout,
+        .fields = lir_fields,
+    } }, region);
+    return acc.finish(struct_expr, record_layout, region);
 }
 
 fn lowerTuple(self: *Self, tup: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
@@ -1019,9 +1015,18 @@ fn lowerBlock(self: *Self, block_data: anytype, mono_idx: Monotype.Idx, region: 
 }
 
 fn lowerRecordAccess(self: *Self, ra: anytype, mir_expr_id: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
+    const struct_mono = self.mir_store.typeOf(ra.record);
+    const struct_monotype = self.mir_store.monotype_store.getMonotype(struct_mono);
+    if (struct_monotype == .record) {
+        const fields = self.mir_store.monotype_store.getFields(struct_monotype.record.fields);
+        if (fields.len == 1) {
+            // 1-field records are layout-unwrapped: `record.field` is just `record`.
+            return self.lowerExpr(ra.record);
+        }
+    }
+
     var acc = self.startLetAccumulator();
     const lir_struct_raw = try self.lowerExpr(ra.record);
-    const struct_mono = self.mir_store.typeOf(ra.record);
     const struct_layout = try self.layoutFromMonotype(struct_mono);
     const lir_struct = try acc.ensureSymbol(lir_struct_raw, struct_layout, region);
     const result_mono = self.mir_store.typeOf(mir_expr_id);
@@ -1040,9 +1045,6 @@ fn lowerRecordAccess(self: *Self, ra: anytype, mir_expr_id: MIR.ExprId, region: 
                 break;
             }
         }
-    } else {
-        // Single-field record optimized to non-struct layout; field_idx 0
-        field_idx = 0;
     }
 
     const access_expr = try self.lir_store.addExpr(.{ .struct_access = .{
@@ -1415,6 +1417,21 @@ fn lowerPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Error!LirPatte
             // so codegen can use positional field indices.
             const mir_patterns = self.mir_store.getPatternSpan(rd.destructs);
             const mir_field_names = self.mir_store.getFieldNameSpan(rd.field_names);
+            const mono = self.mir_store.monotype_store.getMonotype(mono_idx);
+            const record = switch (mono) {
+                .record => |r| r,
+                else => unreachable,
+            };
+            const all_fields = self.mir_store.monotype_store.getFields(record.fields);
+
+            if (all_fields.len == 1) {
+                if (mir_patterns.len == 0) {
+                    const field_layout = try self.layoutFromMonotype(all_fields[0].type_idx);
+                    break :blk self.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = field_layout } }, region);
+                }
+                break :blk try self.lowerPattern(mir_patterns[0]);
+            }
+
             const record_layout_val = self.layout_store.getLayout(record_layout);
 
             if (record_layout_val.tag == .struct_) {
@@ -1961,7 +1978,29 @@ fn inspektRecord(self: *Self, value_expr: LirExprId, record: anytype, mono_idx: 
     const fields = self.mir_store.monotype_store.getFields(record.fields);
     if (fields.len == 0) return self.emitStrLiteral("{}", region);
 
+    if (fields.len == 1) {
+        // 1-field record layout is unwrapped, so value_expr is already the field value.
+        const save_exprs = self.scratch_lir_expr_ids.items.len;
+        defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
+
+        const field_name = self.getIdentText(fields[0].name) orelse "?";
+        const field_label = try std.fmt.allocPrint(self.allocator, "{{ {s}: ", .{field_name});
+        defer self.allocator.free(field_label);
+
+        try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(field_label, region));
+        const field_inspected = try self.expandStrInspekt(value_expr, fields[0].type_idx, region);
+        try self.scratch_lir_expr_ids.append(self.allocator, field_inspected);
+        try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(" }", region));
+
+        const parts = self.scratch_lir_expr_ids.items[save_exprs..];
+        return self.foldStrConcat(parts, region);
+    }
+
     const struct_layout = try self.layoutFromMonotype(mono_idx);
+    const struct_layout_val = self.layout_store.getLayout(struct_layout);
+    std.debug.assert(struct_layout_val.tag == .struct_);
+    const struct_data = self.layout_store.getStructData(struct_layout_val.data.struct_.idx);
+    const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
 
     // Build parts: "{ " field1_name ": " inspect(field1_value) ", " ... " }"
     // Monotype fields are alphabetically sorted, which matches how we want to display them.
@@ -1984,12 +2023,19 @@ fn inspektRecord(self: *Self, value_expr: LirExprId, record: anytype, mono_idx: 
         try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(field_label, region));
 
         // Access the field value
+        var layout_field_idx: ?u16 = null;
+        for (0..layout_fields.len) |li| {
+            if (layout_fields.get(li).index == i) {
+                layout_field_idx = @intCast(li);
+                break;
+            }
+        }
         const field_layout = try self.layoutFromMonotype(field.type_idx);
         const field_access = try self.lir_store.addExpr(.{ .struct_access = .{
             .struct_expr = value_expr,
             .struct_layout = struct_layout,
             .field_layout = field_layout,
-            .field_idx = @intCast(i),
+            .field_idx = layout_field_idx orelse unreachable,
         } }, region);
 
         // Recursively inspect the field value
