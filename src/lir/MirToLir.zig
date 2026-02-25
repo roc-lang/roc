@@ -51,6 +51,9 @@ all_module_envs: []const *const ModuleEnv,
 /// (Bool is `prim.bool`, not a `tag_union`, so we can't look up tags in the monotype).
 true_tag: Ident.Idx,
 
+/// Counter for generating unique synthetic symbols (used by str_inspekt expansion).
+next_synthetic_id: u29 = 0,
+
 /// Cache: Monotype.Idx → layout.Idx (avoid recomputation)
 layout_cache: std.AutoHashMap(u32, layout.Idx),
 
@@ -1852,8 +1855,7 @@ fn inspektRecord(self: *Self, value_expr: LirExprId, record: anytype, mono_idx: 
     try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(" }", region));
 
     const parts = self.scratch_lir_expr_ids.items[save_exprs..];
-    const span = try self.lir_store.addExprSpan(parts);
-    return self.lir_store.addExpr(.{ .str_concat = span }, region);
+    return self.foldStrConcat(parts, region);
 }
 
 /// Inspect a tuple: (inspect(v0), inspect(v1), ...)
@@ -1888,8 +1890,7 @@ fn inspektTuple(self: *Self, value_expr: LirExprId, tup: anytype, mono_idx: Mono
     try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(")", region));
 
     const parts = self.scratch_lir_expr_ids.items[save_exprs..];
-    const span = try self.lir_store.addExprSpan(parts);
-    return self.lir_store.addExpr(.{ .str_concat = span }, region);
+    return self.foldStrConcat(parts, region);
 }
 
 /// Inspect a tag union: discriminant_switch on the tag, producing "TagName" or "TagName(payload)"
@@ -1975,8 +1976,7 @@ fn inspektSingleTag(self: *Self, value_expr: LirExprId, tag: Monotype.Tag, _: Mo
     try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(")", region));
 
     const parts = self.scratch_lir_expr_ids.items[save_exprs..];
-    const span = try self.lir_store.addExprSpan(parts);
-    return self.lir_store.addExpr(.{ .str_concat = span }, region);
+    return self.foldStrConcat(parts, region);
 }
 
 /// Inspect a bool-like tag union (exactly 2 zero-payload tags, discriminant is bool).
@@ -2060,14 +2060,192 @@ fn inspektTagBranch(self: *Self, union_value: LirExprId, tag: Monotype.Tag, unio
     try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(")", region));
 
     const parts = self.scratch_lir_expr_ids.items[save_exprs..];
-    const span = try self.lir_store.addExprSpan(parts);
-    return self.lir_store.addExpr(.{ .str_concat = span }, region);
+    return self.foldStrConcat(parts, region);
 }
 
-/// Inspect a list. Lists require runtime iteration which needs a loop construct
-/// with mutable accumulation. Placeholder until proper while_loop support is added.
-fn inspektList(self: *Self, _: LirExprId, _: anytype, _: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
-    return self.emitStrLiteral("[<list>]", region);
+/// Fold a slice of string-producing expressions into a single string by chaining
+/// pairwise str_concat calls via let-bindings in a block. This avoids having all
+/// intermediate strings live on the stack simultaneously (which causes stack overflow
+/// for complex types like nested tag unions).
+///
+/// Given parts [a, b, c, d], produces:
+///   { let $t0 = str_concat(a, b); let $t1 = str_concat($t0, c); str_concat($t1, d) }
+fn foldStrConcat(self: *Self, parts: []const LirExprId, region: Region) Allocator.Error!LirExprId {
+    if (parts.len == 0) return self.emitStrLiteral("", region);
+    if (parts.len == 1) return parts[0];
+    if (parts.len == 2) {
+        return self.lir_store.addExpr(.{ .str_concat = try self.lir_store.addExprSpan(parts) }, region);
+    }
+
+    // For 3+ parts, fold left with let-bindings
+    const save_stmts = self.scratch_lir_stmts.items.len;
+    defer self.scratch_lir_stmts.shrinkRetainingCapacity(save_stmts);
+
+    // First concat: parts[0] ++ parts[1]
+    var acc_expr = try self.lir_store.addExpr(.{ .str_concat = try self.lir_store.addExprSpan(parts[0..2]) }, region);
+
+    // For each remaining part, bind the accumulator and concat the next part
+    for (parts[2..]) |part| {
+        const bp = try self.freshBindPattern(.str, false, region);
+        try self.scratch_lir_stmts.append(self.allocator, .{ .decl = .{ .pattern = bp.pattern, .expr = acc_expr } });
+        const acc_lookup = try self.emitLookup(bp.symbol, .str, region);
+        acc_expr = try self.lir_store.addExpr(.{ .str_concat = try self.lir_store.addExprSpan(&.{ acc_lookup, part }) }, region);
+    }
+
+    const stmts = try self.lir_store.addStmts(self.scratch_lir_stmts.items[save_stmts..]);
+    return self.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = acc_expr,
+        .result_layout = .str,
+    } }, region);
+}
+
+/// Create a fresh synthetic symbol for generated code (inspect expansion).
+/// Uses a module_idx of maxInt to avoid colliding with real module indices.
+fn freshSymbol(self: *Self, reassignable: bool) Symbol {
+    const id = self.next_synthetic_id;
+    self.next_synthetic_id += 1;
+    return .{
+        .module_idx = std.math.maxInt(u32),
+        .ident_idx = .{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = reassignable }, .idx = id },
+    };
+}
+
+/// Create a bind pattern for a fresh symbol.
+fn freshBindPattern(self: *Self, layout_idx: layout.Idx, reassignable: bool, region: Region) Allocator.Error!struct { symbol: Symbol, pattern: LirPatternId } {
+    const sym = self.freshSymbol(reassignable);
+    const pat = try self.lir_store.addPattern(.{ .bind = .{ .symbol = sym, .layout_idx = layout_idx } }, region);
+    return .{ .symbol = sym, .pattern = pat };
+}
+
+/// Emit a lookup expression for a symbol with a given layout.
+fn emitLookup(self: *Self, sym: Symbol, layout_idx: layout.Idx, region: Region) Allocator.Error!LirExprId {
+    return self.lir_store.addExpr(.{ .lookup = .{ .symbol = sym, .layout_idx = layout_idx } }, region);
+}
+
+/// Emit a low-level operation with the given arguments and return layout.
+fn emitLowLevel(self: *Self, op: LirExpr.LowLevel, args: []const LirExprId, ret_layout: layout.Idx, region: Region) Allocator.Error!LirExprId {
+    const span = try self.lir_store.addExprSpan(args);
+    return self.lir_store.addExpr(.{ .low_level = .{ .op = op, .args = span, .ret_layout = ret_layout } }, region);
+}
+
+/// Inspect a list by generating a while-loop that iterates over elements.
+/// Produces: `{ var $acc = "["; var $i = 0; $len = list_len(list);
+///             while ($i < $len) { if $i > 0 { $acc = str_concat($acc, ", ") }
+///               $acc = str_concat($acc, inspect(list_get(list, $i))); $i = $i + 1 };
+///             str_concat($acc, "]") }`
+fn inspektList(self: *Self, list_expr: LirExprId, list_data: anytype, _: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
+    const elem_mono = list_data.elem;
+    const elem_layout = try self.layoutFromMonotype(elem_mono);
+
+    // Create synthetic symbols for mutable accumulator, index, and length
+    const acc_bp = try self.freshBindPattern(.str, true, region);
+    const idx_bp = try self.freshBindPattern(.u64, true, region);
+    const len_bp = try self.freshBindPattern(.u64, false, region);
+
+    // Statement 1: var $acc = "["
+    const open_bracket = try self.emitStrLiteral("[", region);
+    // Statement 2: var $i = 0
+    const zero_lit = try self.lir_store.addExpr(.{ .i64_literal = 0 }, region);
+    // Statement 3: $len = list_len(list)
+    const list_len_expr = try self.emitLowLevel(.list_len, &.{list_expr}, .u64, region);
+
+    // Build while-loop condition: $i < $len
+    const cond_i = try self.emitLookup(idx_bp.symbol, .u64, region);
+    const cond_len = try self.emitLookup(len_bp.symbol, .u64, region);
+    const cond_expr = try self.emitLowLevel(.num_is_lt, &.{ cond_i, cond_len }, .bool, region);
+
+    // Build while-loop body as a block:
+    //   if $i > 0: $acc = str_concat($acc, ", ")
+    //   $elem = list_get(list, $i)
+    //   $acc = str_concat($acc, inspect($elem))
+    //   $i = $i + 1
+    const body_save_stmts = self.scratch_lir_stmts.items.len;
+    defer self.scratch_lir_stmts.shrinkRetainingCapacity(body_save_stmts);
+
+    // Conditional separator: if $i > 0 then str_concat($acc, ", ") else $acc
+    const body_acc_lookup = try self.emitLookup(acc_bp.symbol, .str, region);
+    const body_i_lookup = try self.emitLookup(idx_bp.symbol, .u64, region);
+    const zero_for_cmp = try self.lir_store.addExpr(.{ .i64_literal = 0 }, region);
+    const zero_check = try self.emitLowLevel(.num_is_eq, &.{ body_i_lookup, zero_for_cmp }, .bool, region);
+    // If $i == 0: acc stays the same. If $i != 0: prepend ", "
+    const comma_str = try self.emitStrLiteral(", ", region);
+    const acc_with_comma = try self.lir_store.addExpr(.{ .str_concat = try self.lir_store.addExprSpan(&.{ body_acc_lookup, comma_str }) }, region);
+    // if_then_else: if (is_zero) then acc_without_comma else acc_with_comma
+    const is_first_branch = LIR.LirIfBranch{ .cond = zero_check, .body = body_acc_lookup };
+    const if_branches = try self.lir_store.addIfBranches(&.{is_first_branch});
+    const sep_expr = try self.lir_store.addExpr(.{ .if_then_else = .{
+        .branches = if_branches,
+        .final_else = acc_with_comma,
+        .result_layout = .str,
+    } }, region);
+    // mutate $acc = sep_expr (acc with or without comma)
+    const acc_mut_pat1 = try self.lir_store.addPattern(.{ .bind = .{ .symbol = acc_bp.symbol, .layout_idx = .str } }, region);
+    try self.scratch_lir_stmts.append(self.allocator, .{ .mutate = .{ .pattern = acc_mut_pat1, .expr = sep_expr } });
+
+    // $elem = list_get(list, $i)
+    const body_i_lookup2 = try self.emitLookup(idx_bp.symbol, .u64, region);
+    const elem_expr = try self.emitLowLevel(.list_get, &.{ list_expr, body_i_lookup2 }, elem_layout, region);
+    // inspect($elem)
+    const elem_inspected = try self.expandStrInspekt(elem_expr, elem_mono, region);
+
+    // mutate $acc = str_concat($acc, inspect_result)
+    const body_acc_lookup2 = try self.emitLookup(acc_bp.symbol, .str, region);
+    const concat_elem = try self.lir_store.addExpr(.{ .str_concat = try self.lir_store.addExprSpan(&.{ body_acc_lookup2, elem_inspected }) }, region);
+    const acc_mut_pat2 = try self.lir_store.addPattern(.{ .bind = .{ .symbol = acc_bp.symbol, .layout_idx = .str } }, region);
+    try self.scratch_lir_stmts.append(self.allocator, .{ .mutate = .{ .pattern = acc_mut_pat2, .expr = concat_elem } });
+
+    // mutate $i = $i + 1
+    const body_i_lookup3 = try self.emitLookup(idx_bp.symbol, .u64, region);
+    const one_lit = try self.lir_store.addExpr(.{ .i64_literal = 1 }, region);
+    const i_plus_one = try self.emitLowLevel(.num_add, &.{ body_i_lookup3, one_lit }, .u64, region);
+    const idx_mut_pat = try self.lir_store.addPattern(.{ .bind = .{ .symbol = idx_bp.symbol, .layout_idx = .u64 } }, region);
+    try self.scratch_lir_stmts.append(self.allocator, .{ .mutate = .{ .pattern = idx_mut_pat, .expr = i_plus_one } });
+
+    // Build the body block (mutate stmts + unit final expr)
+    const body_stmts = try self.lir_store.addStmts(self.scratch_lir_stmts.items[body_save_stmts..]);
+    const unit_expr = try self.lir_store.addExpr(.{ .i64_literal = 0 }, region);
+    const body_block = try self.lir_store.addExpr(.{ .block = .{
+        .stmts = body_stmts,
+        .final_expr = unit_expr,
+        .result_layout = .zst,
+    } }, region);
+
+    // Build the while_loop
+    const while_expr = try self.lir_store.addExpr(.{ .while_loop = .{
+        .cond = cond_expr,
+        .body = body_block,
+    } }, region);
+
+    // Build the outer block:
+    // decl $acc = "["
+    // decl $i = 0
+    // decl $len = list_len(list)
+    // while_loop { ... }
+    // final: str_concat($acc, "]")
+    const outer_save_stmts = self.scratch_lir_stmts.items.len;
+    defer self.scratch_lir_stmts.shrinkRetainingCapacity(outer_save_stmts);
+
+    try self.scratch_lir_stmts.append(self.allocator, .{ .decl = .{ .pattern = acc_bp.pattern, .expr = open_bracket } });
+    try self.scratch_lir_stmts.append(self.allocator, .{ .decl = .{ .pattern = idx_bp.pattern, .expr = zero_lit } });
+    try self.scratch_lir_stmts.append(self.allocator, .{ .decl = .{ .pattern = len_bp.pattern, .expr = list_len_expr } });
+
+    // The while_loop is a statement too (its result is discarded)
+    const while_pat = try self.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = .zst } }, region);
+    try self.scratch_lir_stmts.append(self.allocator, .{ .decl = .{ .pattern = while_pat, .expr = while_expr } });
+
+    const outer_stmts = try self.lir_store.addStmts(self.scratch_lir_stmts.items[outer_save_stmts..]);
+
+    // Final expression: str_concat($acc, "]")
+    const final_acc = try self.emitLookup(acc_bp.symbol, .str, region);
+    const close_bracket = try self.emitStrLiteral("]", region);
+    const final_concat = try self.lir_store.addExpr(.{ .str_concat = try self.lir_store.addExprSpan(&.{ final_acc, close_bracket }) }, region);
+
+    return self.lir_store.addExpr(.{ .block = .{
+        .stmts = outer_stmts,
+        .final_expr = final_concat,
+        .result_layout = .str,
+    } }, region);
 }
 
 /// Inspect a box: the inner value is behind a pointer.

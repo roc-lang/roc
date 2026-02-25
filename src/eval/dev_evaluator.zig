@@ -218,14 +218,17 @@ fn lirExprResultLayout(store: *const LirExprStore, expr_id: lir.LirExprId) ?layo
         .free,
         .for_loop,
         .while_loop,
+        .tag_payload_access,
+        .break_expr,
+        => null,
+
+        // String-producing operations always return Str layout
         .str_concat,
         .int_to_str,
         .float_to_str,
         .dec_to_str,
         .str_escape_and_quote,
-        .tag_payload_access,
-        .break_expr,
-        => null,
+        => .str,
     };
 }
 

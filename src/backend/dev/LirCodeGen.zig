@@ -745,9 +745,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// CallBuilder type alias for this architecture's emit type
         const Builder = CallingConventionMod.CallBuilder(@TypeOf(@as(CodeGen, undefined).emit));
 
-        /// ForwardFrameBuilder for emitMainPrologue/emitMainEpilogue (push-based, prologue first)
-        const ForwardFrameBuilder = FrameBuilderMod.ForwardFrameBuilder(@TypeOf(@as(CodeGen, undefined).emit));
-
         allocator: Allocator,
 
         /// Calling convention for the target platform (derived from comptime target)
@@ -1148,27 +1145,31 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             result_layout: layout.Idx,
             tuple_len: usize,
         ) Allocator.Error!CodeResult {
-            // Clear any leftover state from compileAllProcs to ensure clean slate
-            // for the main expression. This is critical because procedure compilation
-            // uses positive stack offsets while main expression uses negative offsets.
+            // Clear any leftover state from compileAllProcs
             self.symbol_locations.clearRetainingCapacity();
             self.mutable_var_slots.clearRetainingCapacity();
+            self.codegen.callee_saved_used = 0;
 
-            // Track where the main expression code starts
-            // (procedures may have been compiled before this, at the start of the buffer)
-            const main_code_start = self.codegen.currentOffset();
+            // Initialize stack_offset to reserve space for callee-saved area
+            // (same convention as compileProc — positive offsets, deferred prologue)
+            if (comptime target.toCpuArch() == .x86_64) {
+                self.codegen.stack_offset = -CodeGen.CALLEE_SAVED_AREA_SIZE;
+            } else {
+                // aarch64: FP-relative addressing
+                // Reserve space for: FP/LR (16 bytes) + callee-saved area
+                self.codegen.stack_offset = 16 + CodeGen.CALLEE_SAVED_AREA_SIZE;
+            }
+
+            // Track where the body starts (prologue will be prepended before this)
+            const body_start = self.codegen.currentOffset();
+            const relocs_before = self.codegen.relocations.items.len;
 
             // Reserve argument registers so they don't get allocated for temporaries
             // X0/RDI = result pointer, X1/RSI = RocOps pointer
             self.reserveArgumentRegisters();
 
-            // Emit prologue to save callee-saved registers we'll use (X19 for result ptr)
-            try self.emitMainPrologue();
-
-            // IMPORTANT: Save the result pointer and RocOps pointer to callee-saved registers
+            // Save the result pointer and RocOps pointer to callee-saved registers
             // before generating code that might call procedures (which would clobber them).
-            // On aarch64: save X0 to X19, X1 to X20 (callee-saved)
-            // On x86_64: save RDI to RBX, RSI to R12 (callee-saved)
             const result_ptr_save_reg = if (comptime target.toCpuArch() == .aarch64)
                 aarch64.GeneralReg.X19
             else
@@ -1179,10 +1180,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             else
                 x86_64.GeneralReg.R12;
 
-            // Get the argument registers for the current platform's calling convention
-            // aarch64: X0, X1
-            // x86_64 System V (Linux, macOS): RDI, RSI
-            // x86_64 Windows: RCX, RDX
             const arg0_reg = if (comptime target.toCpuArch() == .aarch64)
                 aarch64.GeneralReg.X0
             else if (comptime target.isWindows())
@@ -1198,10 +1195,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 x86_64.GeneralReg.RSI;
 
             try self.emitMovRegReg(result_ptr_save_reg, arg0_reg);
-
             try self.emitMovRegReg(roc_ops_save_reg, arg1_reg);
 
-            // Store RocOps save reg for use by Dec operations
             self.roc_ops_reg = roc_ops_save_reg;
 
             // Remove roc_ops and result_ptr registers from callee_saved_available
@@ -1214,35 +1209,28 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.callee_saved_available &= ~(@as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RBX));
             }
 
-            // Generate code for the expression - result ends up in a register
+            // Generate code for the expression
             const result_loc = try self.generateExpr(expr_id);
 
-            // Track the actual return layout (may differ from result_layout if body is a closure/lambda)
             var actual_ret_layout = result_layout;
 
             const final_result = switch (result_loc) {
                 .lambda_code => |lc| blk: {
-                    // The lambda's return layout is the actual return type
                     actual_ret_layout = lc.ret_layout;
-                    // Call the lambda
                     const current_offset = self.codegen.currentOffset();
                     if (comptime target.toCpuArch() == .aarch64) {
                         const rel_offset: i28 = @intCast(@as(i32, @intCast(lc.code_offset)) - @as(i32, @intCast(current_offset)));
                         try self.codegen.emit.bl(rel_offset);
                     } else {
-                        // x86_64: emit relative call
                         const rel_offset: i32 = @intCast(@as(i32, @intCast(lc.code_offset)) - @as(i32, @intCast(current_offset)) - 5);
                         try self.codegen.emit.callRel32(rel_offset);
                     }
-                    // Result is in X0/RAX
                     break :blk if (comptime target.toCpuArch() == .aarch64)
                         ValueLocation{ .general_reg = .X0 }
                     else
                         ValueLocation{ .general_reg = .RAX };
                 },
                 .closure_value => |cv| blk: {
-                    // Dispatch the closure call with no arguments
-                    // The closure's return layout is the actual return type, not the closure layout
                     const lambda_expr = self.store.getExpr(cv.lambda);
                     const lambda = switch (lambda_expr) {
                         .lambda => |l| l,
@@ -1261,32 +1249,71 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 else => result_loc,
             };
 
-            // Store result to the saved result pointer - but only if return type is non-zero-sized
-            // Per RocCall ABI: "If the Roc function returns a zero-sized type like `{}`,
-            // it will not write anything into this address."
+            // Store result to the saved result pointer
             const ret_size = self.getLayoutSize(actual_ret_layout);
             if (ret_size > 0) {
                 try self.storeResultToSavedPtr(final_result, actual_ret_layout, result_ptr_save_reg, tuple_len);
             }
 
-            // Emit epilogue to restore callee-saved registers and return
-            try self.emitMainEpilogue();
+            // Emit epilogue using DeferredFrameBuilder with actual stack usage
+            const body_epilogue_offset = self.codegen.currentOffset();
+            {
+                const actual_locals: u32 = if (comptime target.toCpuArch() == .aarch64)
+                    @intCast(self.codegen.stack_offset - 16 - CodeGen.CALLEE_SAVED_AREA_SIZE)
+                else
+                    @intCast(-self.codegen.stack_offset - CodeGen.CALLEE_SAVED_AREA_SIZE);
+                var builder = CodeGen.DeferredFrameBuilder.init();
+                builder.setCalleeSavedMask(self.codegen.callee_saved_used);
+                builder.setStackSize(actual_locals);
+                try builder.emitEpilogue(&self.codegen.emit);
+            }
+
+            const body_end = self.codegen.currentOffset();
+
+            // Prepend prologue: copy body out, emit prologue with exact size, re-append body
+            const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return error.OutOfMemory;
+            defer self.allocator.free(body_bytes);
+
+            self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
+
+            const prologue_start = self.codegen.currentOffset();
+            if (comptime target.toCpuArch() == .x86_64) {
+                const actual_locals_x86: u32 = @intCast(-self.codegen.stack_offset - CodeGen.CALLEE_SAVED_AREA_SIZE);
+                try self.codegen.emitPrologueWithAlloc(actual_locals_x86);
+            } else {
+                const actual_locals: u32 = @intCast(self.codegen.stack_offset - 16 - CodeGen.CALLEE_SAVED_AREA_SIZE);
+                var frame_builder = CodeGen.DeferredFrameBuilder.init();
+                frame_builder.setCalleeSavedMask(self.codegen.callee_saved_used);
+                frame_builder.setStackSize(actual_locals);
+                _ = try frame_builder.emitPrologue(&self.codegen.emit);
+            }
+            const prologue_size = self.codegen.currentOffset() - prologue_start;
+
+            // Re-append body + epilogue
+            self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
+
+            // Adjust relocation offsets for the prepended prologue
+            for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
+                reloc.adjustOffset(prologue_size);
+            }
+
+            // Patch early return jumps (if any) to the epilogue
+            const final_epilogue = body_epilogue_offset - body_start + prologue_size + prologue_start;
+            for (self.early_return_patches.items) |patch| {
+                self.codegen.patchJump(patch + prologue_size, final_epilogue);
+            }
 
             // Patch all pending calls now that all procedures are compiled
             try self.patchPendingCalls();
 
-            // Get ALL the generated code (including procedures at the start)
-            // Execution will start at main_code_start via entry_offset
             const all_code = self.codegen.getCode();
-
-            // Make a copy of the code since codegen buffer may be reused
             const code_copy = self.allocator.dupe(u8, all_code) catch return error.OutOfMemory;
 
             return CodeResult{
                 .code = code_copy,
                 .relocations = self.codegen.relocations.items,
                 .result_layout = result_layout,
-                .entry_offset = main_code_start,
+                .entry_offset = prologue_start,
             };
         }
 
@@ -14734,62 +14761,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return self.saveCallReturnValue(ret_layout, needs_ret_ptr, ret_buffer_offset);
         }
 
-        /// Stack size for main expression locals. Needs to be large enough for builtins
-        /// like List.map which can use 400+ bytes.
-        const MAIN_STACK_SIZE: u32 = 1024;
-
-        /// Create a ForwardFrameBuilder configured for the main expression frame.
-        /// Shared between prologue and epilogue to ensure they always match.
-        fn initMainFrameBuilder(self: *Self) ForwardFrameBuilder {
-            var frame = ForwardFrameBuilder.init(&self.codegen.emit);
-            if (comptime target.toCpuArch() == .aarch64) {
-                // Save X19 and X20 (callee-saved) which we use for result ptr and RocOps ptr
-                frame.saveViaPush(.X19);
-                frame.saveViaPush(.X20);
-            } else {
-                // Save RBX and R12 (callee-saved) which we use for result ptr and RocOps ptr
-                frame.saveViaPush(.RBX);
-                frame.saveViaPush(.R12);
-            }
-            frame.setStackSize(MAIN_STACK_SIZE);
-            return frame;
-        }
-
-        /// Emit prologue for main expression code.
-        /// Sets up frame pointer and saves callee-saved registers using ForwardFrameBuilder.
-        fn emitMainPrologue(self: *Self) Allocator.Error!void {
-            var frame = self.initMainFrameBuilder();
-            self.codegen.stack_offset = try frame.emitPrologue();
-        }
-
-        /// Emit epilogue for main expression code.
-        /// Restores callee-saved registers and frame pointer using ForwardFrameBuilder, then returns.
-        fn emitMainEpilogue(self: *Self) Allocator.Error!void {
-            var frame = self.initMainFrameBuilder();
-            try frame.emitEpilogue();
-        }
-
-        /// Stack size for entrypoint wrapper locals.
-        const ENTRYPOINT_STACK_SIZE: u32 = 64;
-
-        /// Create a ForwardFrameBuilder configured for the entrypoint wrapper frame.
-        /// Shared between prologue and epilogue to ensure they always match.
-        /// Saves: roc_ops, ret_ptr, args_ptr into callee-saved registers.
-        fn initEntrypointFrameBuilder(self: *Self) ForwardFrameBuilder {
-            var frame = ForwardFrameBuilder.init(&self.codegen.emit);
-            if (comptime target.toCpuArch() == .aarch64) {
-                frame.saveViaPush(.X19); // roc_ops
-                frame.saveViaPush(.X20); // ret_ptr
-                frame.saveViaPush(.X21); // args_ptr
-            } else {
-                frame.saveViaPush(.RBX); // ret_ptr
-                frame.saveViaPush(.R12); // roc_ops
-                frame.saveViaPush(.R13); // args_ptr
-            }
-            frame.setStackSize(ENTRYPOINT_STACK_SIZE);
-            return frame;
-        }
-
         /// Bind procedure parameters to argument registers.
         /// Handles stack spilling when arguments exceed available registers.
         fn bindProcParams(self: *Self, params: lir.LirPatternSpan, param_layouts: LayoutIdxSpan) Allocator.Error!void {
@@ -16452,51 +16423,43 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.callee_saved_available = saved_callee_saved_available;
                 self.roc_ops_reg = saved_roc_ops_reg;
             } else {
-                // x86_64: emit prologue using ForwardFrameBuilder
-                var frame = self.initEntrypointFrameBuilder();
-                self.codegen.stack_offset = try frame.emitPrologue();
+                // x86_64: use DeferredFrameBuilder pattern (same as aarch64)
+                const saved_callee_saved_used = self.codegen.callee_saved_used;
+                const saved_callee_saved_available = self.codegen.callee_saved_available;
+                const saved_roc_ops_reg = self.roc_ops_reg;
+                const saved_early_return_patches_len = self.early_return_patches.items.len;
 
-                // Record prologue end for potential sub rsp patching.
-                // The sub rsp, imm32 instruction is the last 7 bytes of the prologue;
-                // the imm32 is at the last 4 bytes.
-                const prologue_end = self.codegen.currentOffset();
-                const initial_stack_alloc = frame.actual_stack_alloc;
+                // Mark RBX, R12, R13 as used callee-saved (ret_ptr, roc_ops, args_ptr)
+                const rbx_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RBX);
+                const r12_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.R12);
+                const r13_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.R13);
+                self.codegen.callee_saved_used = rbx_bit | r12_bit | r13_bit;
+                self.codegen.callee_saved_available &= ~(rbx_bit | r12_bit | r13_bit);
 
-                // Track prologue info for unwind tables
-                prologue_size = @intCast(prologue_end - func_start);
-                stack_alloc = frame.computeActualStackAlloc();
+                // Initialize stack_offset for procedure-style frame (negative, grows downward)
+                self.codegen.stack_offset = -CodeGen.CALLEE_SAVED_AREA_SIZE;
 
-                // On entry, arguments are in different registers depending on ABI:
-                // Windows x64 ABI: RCX=roc_ops, RDX=ret_ptr, R8=args_ptr
-                // System V ABI (Linux/macOS): RDI=roc_ops, RSI=ret_ptr, RDX=args_ptr
+                const body_start = self.codegen.currentOffset();
+                const relocs_before = self.codegen.relocations.items.len;
+
+                // Save args to callee-saved registers
                 if (target.isWindows()) {
-                    // Windows x64 ABI
-                    // Save RocOps pointer (RCX) to R12
-                    try self.codegen.emit.movRegReg(.w64, .R12, .RCX);
-                    // Save ret_ptr (RDX) to RBX
-                    try self.codegen.emit.movRegReg(.w64, .RBX, .RDX);
-                    // Save args_ptr (R8) to R13
-                    try self.codegen.emit.movRegReg(.w64, .R13, .R8);
+                    try self.codegen.emit.movRegReg(.w64, .R12, .RCX); // roc_ops
+                    try self.codegen.emit.movRegReg(.w64, .RBX, .RDX); // ret_ptr
+                    try self.codegen.emit.movRegReg(.w64, .R13, .R8); // args_ptr
                 } else {
-                    // System V ABI (Linux/macOS)
-                    // Save RocOps pointer (RDI) to R12
-                    try self.codegen.emit.movRegReg(.w64, .R12, .RDI);
-                    // Save ret_ptr (RSI) to RBX
-                    try self.codegen.emit.movRegReg(.w64, .RBX, .RSI);
-                    // Save args_ptr (RDX) to R13
-                    try self.codegen.emit.movRegReg(.w64, .R13, .RDX);
+                    try self.codegen.emit.movRegReg(.w64, .R12, .RDI); // roc_ops
+                    try self.codegen.emit.movRegReg(.w64, .RBX, .RSI); // ret_ptr
+                    try self.codegen.emit.movRegReg(.w64, .R13, .RDX); // args_ptr
                 }
 
                 self.roc_ops_reg = .R12;
 
                 // Unpack arguments from args_ptr (R13) to argument registers
-                // System V: RDI, RSI, RDX, RCX, R8, R9 for first 6 args
                 var args_offset: i32 = 0;
                 for (arg_layouts, 0..) |arg_layout, i| {
                     const arg_size = self.getLayoutSize(arg_layout);
                     const dest_reg = self.getArgumentRegister(@intCast(i));
-
-                    // Load from [R13 + args_offset]
                     try self.codegen.emit.movRegMem(.w64, dest_reg, .R13, args_offset);
                     args_offset += @intCast(arg_size);
                 }
@@ -16504,35 +16467,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Generate the body expression
                 const result_loc = try self.generateExpr(body_expr);
 
-                // If the body is a lambda or closure (function value), we need to CALL it, not return it.
-                // This happens when the entrypoint is defined as `main_for_host! = main!` where
-                // `main!` is a lambda/closure. Evaluating the body gives us the function, but we need
-                // to invoke it to get the actual result.
-                // Track the actual return layout (may differ from ret_layout if body is a closure)
                 var actual_ret_layout = ret_layout;
 
                 const final_result = switch (result_loc) {
                     .lambda_code => |lc| blk: {
-                        // The lambda's return layout is the actual return type
                         actual_ret_layout = lc.ret_layout;
-                        // Call the lambda with roc_ops as first argument
-                        // The lambda's code is at lc.code_offset and expects roc_ops in RCX (Windows)
-                        // R12 holds roc_ops, so pass it to the lambda
                         if (target.isWindows()) {
                             try self.codegen.emit.movRegReg(.w64, .RCX, .R12);
                         } else {
                             try self.codegen.emit.movRegReg(.w64, .RDI, .R12);
                         }
-
                         const rel_offset = @as(i32, @intCast(lc.code_offset)) - @as(i32, @intCast(self.codegen.currentOffset() + 5));
                         try self.codegen.emit.callRel32(rel_offset);
-
-                        // Result is in RAX (for small return values)
                         break :blk ValueLocation{ .general_reg = .RAX };
                     },
                     .closure_value => |cv| blk: {
-                        // Dispatch the closure call with no arguments
-                        // The closure's return layout is the actual return type, not the closure layout
                         const lambda_expr = self.store.getExpr(cv.lambda);
                         const lambda = switch (lambda_expr) {
                             .lambda => |l| l,
@@ -16551,31 +16500,58 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     else => result_loc,
                 };
 
-                // Store result to ret_ptr (RBX) - but only if return type is non-zero-sized
-                // Per RocCall ABI: "If the Roc function returns a zero-sized type like `{}`,
-                // it will not write anything into this address."
                 const ret_size = self.getLayoutSize(actual_ret_layout);
                 if (ret_size > 0) {
                     try self.storeResultToSavedPtr(final_result, actual_ret_layout, .RBX, 1);
                 }
 
-                // Compute actual stack usage from body generation.
-                // The body may have allocated more locals than ENTRYPOINT_STACK_SIZE.
-                const push_bytes: u32 = @as(u32, frame.push_count) * 8;
-                const actual_locals: u32 = @intCast(@as(i32, @intCast(push_bytes)) - self.codegen.stack_offset);
-                var epilogue_frame = self.initEntrypointFrameBuilder();
-                epilogue_frame.stack_size = actual_locals;
-                const actual_alloc = epilogue_frame.computeActualStackAlloc();
-
-                // Patch the prologue's sub rsp if the body needed more stack than initially allocated
-                if (actual_alloc != initial_stack_alloc and initial_stack_alloc > 0) {
-                    const patch_offset = prologue_end - 4;
-                    std.mem.writeInt(u32, self.codegen.emit.buf.items[patch_offset..][0..4], actual_alloc, .little);
-                    stack_alloc = actual_alloc;
+                // Emit epilogue with actual stack usage
+                const body_epilogue_offset = self.codegen.currentOffset();
+                const actual_locals_x86: u32 = @intCast(-self.codegen.stack_offset - CodeGen.CALLEE_SAVED_AREA_SIZE);
+                {
+                    var builder = CodeGen.DeferredFrameBuilder.init();
+                    builder.setCalleeSavedMask(self.codegen.callee_saved_used);
+                    builder.setStackSize(actual_locals_x86);
+                    try builder.emitEpilogue(&self.codegen.emit);
                 }
 
-                // Epilogue using ForwardFrameBuilder (matches patched prologue)
-                try epilogue_frame.emitEpilogue();
+                const body_end = self.codegen.currentOffset();
+
+                // Prepend prologue
+                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return error.OutOfMemory;
+                defer self.allocator.free(body_bytes);
+
+                self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
+
+                const prologue_start_x86 = self.codegen.currentOffset();
+                try self.codegen.emitPrologueWithAlloc(actual_locals_x86);
+                const prologue_size_x86 = self.codegen.currentOffset() - prologue_start_x86;
+
+                prologue_size = @intCast(prologue_size_x86);
+                stack_alloc = actual_locals_x86;
+
+                // Re-append body + epilogue
+                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
+
+                // Adjust relocation offsets
+                for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
+                    reloc.adjustOffset(prologue_size_x86);
+                }
+
+                // Patch early return jumps
+                for (self.early_return_patches.items[saved_early_return_patches_len..]) |*patch| {
+                    patch.* += prologue_size_x86;
+                }
+                const final_epilogue = body_epilogue_offset - body_start + prologue_size_x86 + prologue_start_x86;
+                for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
+                    self.codegen.patchJump(patch, final_epilogue);
+                }
+                self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
+
+                // Restore state
+                self.codegen.callee_saved_used = saved_callee_saved_used;
+                self.codegen.callee_saved_available = saved_callee_saved_available;
+                self.roc_ops_reg = saved_roc_ops_reg;
             }
 
             const func_end = self.codegen.currentOffset();

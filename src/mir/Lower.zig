@@ -595,10 +595,17 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
         },
         .e_run_low_level => |run_ll| {
             const args = try self.lowerExprSpan(module_env, run_ll.args);
+            // str_inspekt always returns Str, regardless of input type.
+            // Override monotype when the CIR node was created without type checking
+            // (e.g., programmatic wrapping in test helpers or REPL).
+            const effective_monotype = if (run_ll.op == .str_inspekt)
+                self.store.monotype_store.primIdx(.str)
+            else
+                monotype;
             return try self.store.addExpr(self.allocator, .{ .run_low_level = .{
                 .op = run_ll.op,
                 .args = args,
-            } }, monotype, region);
+            } }, effective_monotype, region);
         },
 
         // --- Error/Debug ---

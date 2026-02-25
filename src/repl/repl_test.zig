@@ -744,7 +744,7 @@ test "Repl dev backend - List.append simple" {
 
     const result = try repl.step("List.append([1, 2], 3)");
     defer interpreter_allocator.free(result);
-    try testing.expectEqualStrings("[1, 2, 3]", result);
+    try testing.expectEqualStrings("[1.0, 2.0, 3.0]", result);
 }
 
 test "Repl dev backend - range_to" {
@@ -756,5 +756,5 @@ test "Repl dev backend - range_to" {
 
     const result = try repl.step("1.to(3)");
     defer interpreter_allocator.free(result);
-    try testing.expectEqualStrings("[1, 2, 3]", result);
+    try testing.expectEqualStrings("[1.0, 2.0, 3.0]", result);
 }

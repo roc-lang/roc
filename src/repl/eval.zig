@@ -27,6 +27,7 @@ const DevEvaluator = eval_mod.DevEvaluator;
 
 pub const Backend = @import("backend").EvalBackend;
 const CommonEnv = base.CommonEnv;
+const RocStr = builtins.str.RocStr;
 
 /// Render a parse diagnostic for REPL output (without source context for cleaner display).
 /// The REPL already shows the input, so we don't need to repeat it in error messages.
@@ -699,12 +700,17 @@ pub const Repl = struct {
         if (comptime builtin.os.tag != .freestanding) {
             if (self.backend == .dev) {
                 if (self.dev_evaluator) |*dev_eval| {
+                    // Wrap expression in Str.inspect so the compiled code produces a RocStr
+                    const inspect_expr = wrapInStrInspect(module_env, final_expr_idx) catch {
+                        return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
+                    };
+
                     // Build module envs array matching imported_modules order:
                     // index 0 = REPL module, index 1 = Builtin module.
                     // This must match the resolveImports call above so that resolved
                     // import indices correctly map to the right module in the lowerer.
                     const all_module_envs: []const *ModuleEnv = &.{ module_env, self.builtin_module.env };
-                    var code_result = dev_eval.generateCode(module_env, final_expr_idx, all_module_envs) catch {
+                    var code_result = dev_eval.generateCode(module_env, inspect_expr, all_module_envs) catch {
                         // Fall back to interpreter on unsupported expressions
                         return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
                     };
@@ -716,26 +722,23 @@ pub const Repl = struct {
                     };
                     defer executable.deinit();
 
-                    // Execute and write result into a stack buffer
-                    var result_buf: [512]u8 align(16) = undefined;
+                    // Execute and write result into a stack buffer — result is a RocStr (24 bytes)
+                    var result_buf: [512]u8 align(16) = @splat(0);
                     dev_eval.callWithCrashProtection(&executable, @ptrCast(&result_buf)) catch {
                         return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
                     };
 
-                    // Format using type-driven rendering (walks type var for tag names)
-                    const ls = code_result.layout_store orelse
+                    // Extract the RocStr from the result buffer.
+                    // Validate that the result is a well-formed RocStr before reading.
+                    const roc_str: *const RocStr = @ptrCast(@alignCast(&result_buf));
+                    const slice = if (roc_str.isSmallStr())
+                        roc_str.asSlice()
+                    else if (roc_str.len() > 0 and roc_str.len() < 1024 * 1024)
+                        roc_str.asSlice()
+                    else
+                        // Invalid or empty RocStr — fall back to interpreter
                         return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
-                    const result_layout = ls.getLayout(code_result.result_layout);
-                    const expr_type_var = ModuleEnv.varFrom(final_expr_idx);
-
-                    const output = formatWithTypes(
-                        self.allocator,
-                        &result_buf,
-                        result_layout,
-                        expr_type_var,
-                        module_env,
-                        ls,
-                    ) catch {
+                    const output = self.allocator.dupe(u8, slice) catch {
                         return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
                     };
                     return .{ .expression = output };
@@ -785,6 +788,20 @@ pub const Repl = struct {
 const layout_mod = @import("layout");
 const Layout = layout_mod.Layout;
 const RocValue = @import("values").RocValue;
+
+/// Wrap a CIR expression in `Str.inspect(expr)` by creating an `e_run_low_level(.str_inspekt, [expr])` node.
+/// The result type is Str but the CIR type variable is left unresolved; the MIR lowerer
+/// overrides the monotype to Str for str_inspekt ops.
+fn wrapInStrInspect(module_env: *ModuleEnv, inner_expr: can.CIR.Expr.Idx) !can.CIR.Expr.Idx {
+    const top = module_env.store.scratchExprTop();
+    try module_env.store.addScratchExpr(inner_expr);
+    const args_span = try module_env.store.exprSpanFrom(top);
+    const region = module_env.store.getExprRegion(inner_expr);
+    return module_env.addExpr(.{ .e_run_low_level = .{
+        .op = .str_inspekt,
+        .args = args_span,
+    } }, region);
+}
 
 const FormatError = error{OutOfMemory};
 
