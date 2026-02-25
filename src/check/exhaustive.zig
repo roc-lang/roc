@@ -747,10 +747,10 @@ fn getUnionFromType(
                     const backing_var = type_store.getNominalBackingVar(nominal);
                     return getUnionFromType(allocator, type_store, builtin_idents, backing_var);
                 },
-                _ => return .not_a_union,
+                .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return .not_a_union,
             }
         },
-        _ => {},
+        .err => {},
     }
 
     // Not a tag union
@@ -836,7 +836,7 @@ fn buildUnionFromTagUnion(
                         has_flex = false;
                         break;
                     },
-                    _ => {
+                    .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => {
                         // Other structure types = closed for our purposes
                         is_open = false;
                         has_flex = false;
@@ -849,7 +849,7 @@ fn buildUnionFromTagUnion(
                 current_ext = type_store.getAliasBackingVar(alias);
                 // Don't break - continue with the resolved alias
             },
-            _ => {
+            .err => {
                 // Other content types = treat as closed
                 is_open = false;
                 has_flex = false;
@@ -1158,13 +1158,13 @@ fn pushTagUnionWork(gpa: std.mem.Allocator, type_store: *TypeStore, work_list: *
                     // Closed union - no more tags
                     break;
                 },
-                _ => break,
+                .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => break,
             },
             .alias => |alias| {
                 // Follow alias
                 current_ext = type_store.getAliasBackingVar(alias);
             },
-            _ => break,
+            .err => break,
         }
     }
 

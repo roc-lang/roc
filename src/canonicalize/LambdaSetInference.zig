@@ -170,7 +170,7 @@ fn collectClosuresFromStatement(self: *Self, module: *ModuleEnv, stmt_idx: CIR.S
         .s_var => |var_stmt| {
             try self.collectClosuresFromExpr(module, var_stmt.expr);
         },
-        _ => {},
+        .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => {},
     }
 }
 
@@ -398,7 +398,7 @@ fn buildLambdaSetsFromStatement(self: *Self, module: *ModuleEnv, stmt_idx: CIR.S
         .s_var => |var_stmt| {
             try self.buildLambdaSetsFromExpr(module, var_stmt.expr);
         },
-        _ => {},
+        .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => {},
     }
 }
 
@@ -484,7 +484,7 @@ fn buildLambdaSetsFromExpr(self: *Self, module: *ModuleEnv, expr_idx: Expr.Idx) 
             try self.buildLambdaSetsFromExpr(module, binop.rhs);
         },
         // Other expressions don't affect lambda sets directly
-        _ => {},
+        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_record, .e_empty_record, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => {},
     }
 }
 

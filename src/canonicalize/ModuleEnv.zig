@@ -2268,7 +2268,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
-        _ => unreachable, // All diagnostics must have explicit handlers
+        .invalid_string_interpolation, .can_lambda_not_implemented, .type_from_missing_module, .too_many_exports, .type_alias_redeclared, .nominal_type_redeclared, .type_shadowed_warning, .type_parameter_conflict, .unused_type_var_name, .type_var_marked_unused, .type_var_starting_with_dollar => unreachable, // All diagnostics must have explicit handlers
     };
 }
 
@@ -2859,7 +2859,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
                     has_type_decl = true;
                     break;
                 },
-                _ => continue,
+                .s_decl, .s_var, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_type_anno, .s_type_var_alias, .s_runtime_error => continue,
             }
         }
 
@@ -2922,7 +2922,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
 
                         try tree.endNode(stmt_begin, stmt_attrs);
                     },
-                    _ => continue,
+                    .s_decl, .s_var, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_type_anno, .s_type_var_alias, .s_runtime_error => continue,
                 }
             }
 

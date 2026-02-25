@@ -27,7 +27,7 @@ test "fractional literal - basic decimal" {
             try testing.expectEqual(dec.value.denominator_power_of_ten, 2);
         },
         .e_dec => {},
-        _ => {
+        .e_num, .e_frac_f32, .e_frac_f64, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => {
             std.debug.print("Unexpected expr type: {}\n", .{expr});
             try testing.expect(false); // Should be dec_small or frac_dec
         },
@@ -54,7 +54,7 @@ test "fractional literal - scientific notation small" {
         .e_frac_f64 => |frac| {
             try testing.expectApproxEqAbs(frac.value, 1.23e-10, 1e-20);
         },
-        _ => {
+        .e_num, .e_frac_f32, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => {
             std.debug.print("Unexpected expr type for '1.23e-10': {}\n", .{expr});
             try testing.expect(false); // Should be e_frac_f64
         },
@@ -126,7 +126,7 @@ test "fractional literal - negative zero" {
             try testing.expectEqual(frac.value, -0.0);
             try testing.expect(std.math.signbit(frac.value));
         },
-        _ => {
+        .e_num, .e_frac_f32, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => {
             try testing.expect(false); // Should be dec_small, frac_dec or frac_f64
         },
     }
@@ -353,7 +353,7 @@ test "negative zero preservation - uses f64" {
                 try testing.expectEqual(f64_val, 0.0);
             }
         },
-        _ => {
+        .e_num, .e_frac_f32, .e_frac_f64, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => {
             try testing.expect(false); // Should be dec_small or frac_dec
         },
     }
@@ -531,7 +531,7 @@ test "small dec - exceeds i16 range falls back to Dec" {
         .e_dec_small => {
             try testing.expect(false); // Should NOT be dec_small
         },
-        _ => {
+        .e_num, .e_frac_f32, .e_frac_f64, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => {
             try testing.expect(false); // Should be frac_dec
         },
     }

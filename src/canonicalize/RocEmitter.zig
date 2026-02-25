@@ -731,7 +731,7 @@ fn emitStatement(self: *Self, stmt_idx: CIR.Statement.Idx) EmitError!void {
         .s_type_anno, .s_type_var_alias, .s_alias_decl, .s_nominal_decl => {
             // Type declarations are not emitted for now
         },
-        _ => {},
+        .s_var, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_runtime_error => {},
     }
 }
 
