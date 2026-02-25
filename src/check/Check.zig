@@ -2925,13 +2925,14 @@ const Polarity = enum { open, closed };
 const PatternCtx = enum {
     bound,
     fn_arg,
+    from_annotation,
     for_,
     match_branch,
 
     fn toPolarity(self: PatternCtx) Polarity {
         return switch (self) {
             .bound, .fn_arg, .for_ => .closed,
-            .match_branch => .open,
+            .from_annotation, .match_branch => .open,
         };
     }
 };
@@ -4272,8 +4273,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // This must happen *before* checking against the expected type so
             // all the pattern types are inferred
             const arg_pattern_idxs = self.cir.store.slicePatterns(lambda.args);
+            const pattern_ctx: PatternCtx = if (mb_anno_func != null) .from_annotation else .fn_arg;
             for (arg_pattern_idxs) |pattern_idx| {
-                try self.checkPattern(pattern_idx, .fn_arg, env);
+                try self.checkPattern(pattern_idx, pattern_ctx, env);
             }
 
             // Now, check if we have an expected function to validate against

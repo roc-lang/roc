@@ -623,7 +623,11 @@ fn writeRecord(self: *TypeWriter, writer: *ByteWrite, record: Record, root_var: 
             _ = try writer.write("..");
 
             if (flex.payload.name) |ident_idx| {
-                _ = try writer.write(self.getIdent(ident_idx));
+                const name = self.getIdent(ident_idx);
+                // Suppress internal names (e.g. #open_ext_0 from anonymous `..`)
+                if (name.len > 0 and name[0] != '#') {
+                    _ = try writer.write(name);
+                }
             } else {
                 if (flex_ext_occurrences > 1) {
                     try self.writeFlexVarName(writer, flex.var_, .RecordExtension, root_var);
@@ -639,7 +643,11 @@ fn writeRecord(self: *TypeWriter, writer: *ByteWrite, record: Record, root_var: 
         .rigid => |rigid| {
             if (num_fields > 0) _ = try writer.write(", ");
             _ = try writer.write("..");
-            _ = try writer.write(self.getIdent(rigid.name));
+            const name = self.getIdent(rigid.name);
+            // Suppress internal names (e.g. #open_ext_0 from anonymous `..`)
+            if (name.len == 0 or name[0] != '#') {
+                _ = try writer.write(name);
+            }
 
             // Since don't recurse above, we must capture the static dispatch
             // constraints directly
@@ -840,7 +848,11 @@ fn writeTagUnion(self: *TypeWriter, writer: *ByteWrite, tag_union: TagUnion, roo
             _ = try writer.write("..");
 
             if (flex.payload.name) |ident_idx| {
-                _ = try writer.write(self.getIdent(ident_idx));
+                const name = self.getIdent(ident_idx);
+                // Suppress internal names (e.g. #open_ext_0 from anonymous `..`)
+                if (name.len > 0 and name[0] != '#') {
+                    _ = try writer.write(name);
+                }
             } else if (true) {
                 // TODO: ^ here, we should consider polarity
                 const occurrences = try self.countVarOccurrences(flex.var_, root_var);
@@ -856,7 +868,11 @@ fn writeTagUnion(self: *TypeWriter, writer: *ByteWrite, tag_union: TagUnion, roo
         .rigid => |rigid| {
             if (num_tags > 0) _ = try writer.write(", ");
             _ = try writer.write("..");
-            _ = try writer.write(self.getIdent(rigid.name));
+            const name = self.getIdent(rigid.name);
+            // Suppress internal names (e.g. #open_ext_0 from anonymous `..`)
+            if (name.len == 0 or name[0] != '#') {
+                _ = try writer.write(name);
+            }
 
             for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
                 try self.appendStaticDispatchConstraint(tag_union.ext, constraint);
