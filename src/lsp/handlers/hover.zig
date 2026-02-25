@@ -16,7 +16,7 @@ pub fn handler(comptime ServerType: type) type {
 
             const obj = switch (params) {
                 .object => |o| o,
-                _ => {
+                .null, .bool, .integer, .float, .number_string, .string, .array => {
                     try self.sendError(id, .invalid_params, "hover params must be an object");
                     return;
                 },
@@ -29,7 +29,7 @@ pub fn handler(comptime ServerType: type) type {
             };
             const text_doc = switch (text_doc_value) {
                 .object => |o| o,
-                _ => {
+                .null, .bool, .integer, .float, .number_string, .string, .array => {
                     try self.sendError(id, .invalid_params, "textDocument must be an object");
                     return;
                 },
@@ -40,7 +40,7 @@ pub fn handler(comptime ServerType: type) type {
             };
             const uri = switch (uri_value) {
                 .string => |s| s,
-                _ => {
+                .null, .bool, .integer, .float, .number_string, .array, .object => {
                     try self.sendError(id, .invalid_params, "uri must be a string");
                     return;
                 },
@@ -53,7 +53,7 @@ pub fn handler(comptime ServerType: type) type {
             };
             const position_obj = switch (position_value) {
                 .object => |o| o,
-                _ => {
+                .null, .bool, .integer, .float, .number_string, .string, .array => {
                     try self.sendError(id, .invalid_params, "position must be an object");
                     return;
                 },
@@ -65,7 +65,7 @@ pub fn handler(comptime ServerType: type) type {
             };
             const line: u32 = switch (line_value) {
                 .integer => |i| @intCast(i),
-                _ => {
+                .null, .bool, .float, .number_string, .string, .array, .object => {
                     try self.sendError(id, .invalid_params, "line must be an integer");
                     return;
                 },
@@ -77,7 +77,7 @@ pub fn handler(comptime ServerType: type) type {
             };
             const character: u32 = switch (character_value) {
                 .integer => |i| @intCast(i),
-                _ => {
+                .null, .bool, .float, .number_string, .string, .array, .object => {
                     try self.sendError(id, .invalid_params, "character must be an integer");
                     return;
                 },

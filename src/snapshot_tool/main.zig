@@ -1013,7 +1013,7 @@ fn processSnapshotContent(
                         can_ir.all_statements = try can_ir.store.statementSpanFrom(scratch_statements_start);
                     }
                 },
-                _ => unreachable,
+                .file, .header => unreachable,
             }
         },
         .repl, .dev_object => unreachable, // Handled above
@@ -2569,7 +2569,13 @@ fn computeTransformedExprType(
                         try can_ir.types.setVarContent(expr_var, ret_resolved.desc.content);
                         return expr_var;
                     },
-                    _ => {},
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union => {},
                 }
             }
             // Fall back to original expression type
@@ -2598,7 +2604,41 @@ fn computeTransformedExprType(
             }
             return expr_var;
         },
-        _ => {
+        .e_frac_f32,
+        .e_frac_f64,
+        .e_dec,
+        .e_dec_small,
+        .e_typed_int,
+        .e_typed_frac,
+        .e_str_segment,
+        .e_str,
+        .e_lookup_external,
+        .e_lookup_pending,
+        .e_lookup_required,
+        .e_list,
+        .e_empty_list,
+        .e_tuple,
+        .e_if,
+        .e_empty_record,
+        .e_nominal,
+        .e_nominal_external,
+        .e_zero_argument_tag,
+        .e_closure,
+        .e_unary_minus,
+        .e_unary_not,
+        .e_dot_access,
+        .e_tuple_access,
+        .e_runtime_error,
+        .e_crash,
+        .e_dbg,
+        .e_expect,
+        .e_ellipsis,
+        .e_anno_only,
+        .e_return,
+        .e_type_var_dispatch,
+        .e_for,
+        .e_hosted_lambda,
+        .e_run_low_level => {
             // For other expressions, use the original type from type-checking
             return expr_var;
         },
@@ -2744,10 +2784,14 @@ fn getDefaultedTypeStringWithSeen(
 
                     return result.toOwnedSlice();
                 },
-                _ => {},
+                .record_unbound,
+                .tuple,
+                .nominal_type,
+                .empty_record,
+                .empty_tag_union => {},
             }
         },
-        _ => {},
+        .rigid, .alias, .err => {},
     }
 
     // Use TypeWriter for all other cases - it has proper cycle detection
@@ -2808,7 +2852,13 @@ fn getMonoTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, expr_idx:
                     .fn_pure => |f| f,
                     .fn_effectful => |f| f,
                     .fn_unbound => |f| f,
-                    _ => unreachable,
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union => unreachable,
                 };
 
                 var result = std.array_list.Managed(u8).init(allocator);
@@ -4448,7 +4498,15 @@ fn searchDirectoryForBuiltin(
                     }
                 }
             },
-            _ => {},
+            .sym_link,
+            .block_device,
+            .character_device,
+            .named_pipe,
+            .unix_domain_socket,
+            .whiteout,
+            .door,
+            .event_port,
+            .unknown => {},
         }
     }
 }

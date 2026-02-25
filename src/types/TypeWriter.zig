@@ -701,10 +701,16 @@ fn gatherRecordFields(self: *TypeWriter, fields: RecordField.SafeMultiList.Range
                         return .unbound;
                     },
                     .empty_record => return .empty_record,
-                    _ => return .invalid,
+                    .tuple,
+                    .nominal_type,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .tag_union,
+                    .empty_tag_union => return .invalid,
                 }
             },
-            _ => return .invalid,
+            .err => return .invalid,
         }
     }
 }
