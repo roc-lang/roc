@@ -6683,14 +6683,27 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!void {
             const ls = self.layout_store orelse unreachable;
 
-            if (field_layout_idx == .str) {
+            // Check layout tag first for compound types that need recursive comparison,
+            // before falling into scalar size-based paths.
+            const field_layout = ls.getLayout(field_layout_idx);
+            if (field_layout.tag == .struct_) {
+                const sub_loc = try self.generateStructComparisonByLayout(
+                    .{ .stack = .{ .offset = lhs_off } },
+                    .{ .stack = .{ .offset = rhs_off } },
+                    field_layout_idx,
+                    .num_is_eq,
+                );
+                const sub_reg = try self.ensureInGeneralReg(sub_loc);
+                try self.emitMovRegReg(result_reg, sub_reg);
+                self.codegen.freeGeneral(sub_reg);
+            } else if (field_layout_idx == .str) {
                 // String: compare by content using strEqual builtin
                 const eq_loc = try self.callStr2ToScalar(lhs_off, rhs_off, @intFromPtr(&wrapStrEqual), .str_equal);
                 const eq_reg = try self.ensureInGeneralReg(eq_loc);
                 try self.emitMovRegReg(result_reg, eq_reg);
                 self.codegen.freeGeneral(eq_reg);
-            } else if (field_layout_idx == .dec or field_layout_idx == .i128 or field_layout_idx == .u128 or field_size == 16) {
-                // 128-bit field: compare as i128 (two 64-bit parts)
+            } else if (field_layout_idx == .dec or field_layout_idx == .i128 or field_layout_idx == .u128) {
+                // 128-bit scalar: compare as i128 (two 64-bit parts)
                 const lhs_parts = try self.getI128Parts(.{ .stack_i128 = lhs_off }, .signed);
                 const rhs_parts = try self.getI128Parts(.{ .stack_i128 = rhs_off }, .signed);
                 try self.generateI128Equality(lhs_parts, rhs_parts, result_reg, true);
@@ -6718,69 +6731,51 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitSetCond(result_reg, condEqual());
                 self.codegen.freeGeneral(lhs_reg);
                 self.codegen.freeGeneral(rhs_reg);
+            } else if (field_layout.tag == .tag_union) {
+                const sub_loc = try self.generateTagUnionComparisonByLayout(
+                    .{ .stack = .{ .offset = lhs_off } },
+                    .{ .stack = .{ .offset = rhs_off } },
+                    field_layout_idx,
+                    .num_is_eq,
+                );
+                const sub_reg = try self.ensureInGeneralReg(sub_loc);
+                try self.emitMovRegReg(result_reg, sub_reg);
+                self.codegen.freeGeneral(sub_reg);
             } else {
-                // Check layout tag for compound types that need recursive comparison
-                const field_layout = ls.getLayout(field_layout_idx);
-                switch (field_layout.tag) {
-                    .struct_ => {
-                        const sub_loc = try self.generateStructComparisonByLayout(
-                            .{ .stack = .{ .offset = lhs_off } },
-                            .{ .stack = .{ .offset = rhs_off } },
-                            field_layout_idx,
-                            .eq,
-                        );
-                        const sub_reg = try self.ensureInGeneralReg(sub_loc);
-                        try self.emitMovRegReg(result_reg, sub_reg);
-                        self.codegen.freeGeneral(sub_reg);
-                    },
-                    .tag_union => {
-                        const sub_loc = try self.generateTagUnionComparisonByLayout(
-                            .{ .stack = .{ .offset = lhs_off } },
-                            .{ .stack = .{ .offset = rhs_off } },
-                            field_layout_idx,
-                            .eq,
-                        );
-                        const sub_reg = try self.ensureInGeneralReg(sub_loc);
-                        try self.emitMovRegReg(result_reg, sub_reg);
-                        self.codegen.freeGeneral(sub_reg);
-                    },
-                    else => {
-                        // Fallback: XOR-based byte comparison for other multi-byte fields
-                        const tmp_a = try self.allocTempGeneral();
-                        const tmp_b = try self.allocTempGeneral();
-                        const xor_acc = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(xor_acc, 0);
+                // Fallback: XOR-based byte comparison for other multi-byte fields
+                const tmp_a = try self.allocTempGeneral();
+                const tmp_b = try self.allocTempGeneral();
+                const xor_acc = try self.allocTempGeneral();
+                try self.codegen.emitLoadImm(xor_acc, 0);
 
-                        var cmp_off: u32 = 0;
-                        while (cmp_off < field_size) {
-                            try self.codegen.emitLoadStack(.w64, tmp_a, lhs_off + @as(i32, @intCast(cmp_off)));
-                            try self.codegen.emitLoadStack(.w64, tmp_b, rhs_off + @as(i32, @intCast(cmp_off)));
-                            const remaining = field_size - cmp_off;
-                            if (remaining < 8) {
-                                const mask: u64 = (@as(u64, 1) << @intCast(remaining * 8)) - 1;
-                                const mask_reg = try self.allocTempGeneral();
-                                try self.codegen.emitLoadImm(mask_reg, @bitCast(mask));
-                                try self.emitAndRegs(.w64, tmp_a, tmp_a, mask_reg);
-                                try self.emitAndRegs(.w64, tmp_b, tmp_b, mask_reg);
-                                self.codegen.freeGeneral(mask_reg);
-                            }
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.eorRegRegReg(.w64, tmp_a, tmp_a, tmp_b);
-                                try self.codegen.emit.orrRegRegReg(.w64, xor_acc, xor_acc, tmp_a);
-                            } else {
-                                try self.codegen.emit.xorRegReg(.w64, tmp_a, tmp_b);
-                                try self.codegen.emit.orRegReg(.w64, xor_acc, tmp_a);
-                            }
-                            cmp_off += 8;
-                        }
-
-                        try self.emitCmpImm(xor_acc, 0);
-                        try self.emitSetCond(result_reg, condEqual());
-                        self.codegen.freeGeneral(tmp_a);
-                        self.codegen.freeGeneral(tmp_b);
-                        self.codegen.freeGeneral(xor_acc);
-                    },
+                var cmp_off: u32 = 0;
+                while (cmp_off < field_size) {
+                    try self.codegen.emitLoadStack(.w64, tmp_a, lhs_off + @as(i32, @intCast(cmp_off)));
+                    try self.codegen.emitLoadStack(.w64, tmp_b, rhs_off + @as(i32, @intCast(cmp_off)));
+                    const remaining = field_size - cmp_off;
+                    if (remaining < 8) {
+                        const mask: u64 = (@as(u64, 1) << @intCast(remaining * 8)) - 1;
+                        const mask_reg = try self.allocTempGeneral();
+                        try self.codegen.emitLoadImm(mask_reg, @bitCast(mask));
+                        try self.emitAndRegs(.w64, tmp_a, tmp_a, mask_reg);
+                        try self.emitAndRegs(.w64, tmp_b, tmp_b, mask_reg);
+                        self.codegen.freeGeneral(mask_reg);
+                    }
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        try self.codegen.emit.eorRegRegReg(.w64, tmp_a, tmp_a, tmp_b);
+                        try self.codegen.emit.orrRegRegReg(.w64, xor_acc, xor_acc, tmp_a);
+                    } else {
+                        try self.codegen.emit.xorRegReg(.w64, tmp_a, tmp_b);
+                        try self.codegen.emit.orRegReg(.w64, xor_acc, tmp_a);
+                    }
+                    cmp_off += 8;
                 }
+
+                try self.emitCmpImm(xor_acc, 0);
+                try self.emitSetCond(result_reg, condEqual());
+                self.codegen.freeGeneral(tmp_a);
+                self.codegen.freeGeneral(tmp_b);
+                self.codegen.freeGeneral(xor_acc);
             }
         }
 
