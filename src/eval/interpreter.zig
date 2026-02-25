@@ -192,7 +192,7 @@ fn hasNestedLayoutMismatch(actual: Layout, expected: Layout, layout_store: *layo
             }
             return false;
         },
-        else => false,
+        .scalar, .box, .box_of_zst, .list_of_zst, .record, .closure, .zst, .tag_union => false,
     };
 }
 
@@ -214,13 +214,13 @@ fn selectCopyFallbackFn(elem_layout: Layout) builtins.list.CopyFallbackFn {
                 .i64 => &builtins.list.copy_i64,
                 .i128 => &builtins.list.copy_i128,
             },
-            else => &builtins.list.copy_fallback,
+            .opaque_ptr, .frac => &builtins.list.copy_fallback,
         },
         .box => &builtins.list.copy_box,
         .box_of_zst => &builtins.list.copy_box_zst,
         .list => &builtins.list.copy_list,
         .list_of_zst => &builtins.list.copy_list_zst,
-        else => &builtins.list.copy_fallback,
+        .record, .tuple, .closure, .zst, .tag_union => &builtins.list.copy_fallback,
     };
 }
 
@@ -611,10 +611,7 @@ pub const Interpreter = struct {
         // Note: The target parameter (Compilation Target) is accepted but unused here.
         // Interpreter memory layout must match the Shim Target (builtin.cpu.arch).
         // Code generation (not interpreter) uses Compilation Target for generated code layouts.
-        const shim_target_usize: base_pkg.target.TargetUsize = switch (builtin.cpu.arch) {
-            .wasm32 => .u32,
-            else => .u64,
-        };
+        const shim_target_usize: base_pkg.target.TargetUsize = if (builtin.cpu.arch == .wasm32) .u32 else .u64;
         std.debug.assert(all_module_envs.len > 0);
         result.runtime_layout_store = try layout.Store.init(all_module_envs, env.idents.builtin_str, allocator, shim_target_usize);
         result.runtime_layout_store.setOverrideTypesStore(result.runtime_types);
@@ -801,7 +798,7 @@ pub const Interpreter = struct {
                         return can.ModuleEnv.varFrom(alias_decl.anno);
                     }
                 },
-                else => {},
+                .s_decl, .s_var, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_nominal_decl, .s_type_anno, .s_type_var_alias => {},
             }
         }
         return null;
@@ -2321,7 +2318,7 @@ pub const Interpreter = struct {
                             roc_ops,
                             effective_rt_var,
                         ),
-                        else => null,
+                        .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => null,
                     }
                 else
                     null;
@@ -3307,12 +3304,12 @@ pub const Interpreter = struct {
                     .int => |l| switch (rhs) {
                         .int => |r| l == r,
                         .dec => |r| l == r.toWholeInt(),
-                        else => return error.TypeMismatch,
+                        .f32, .f64 => return error.TypeMismatch,
                     },
                     .dec => |l| switch (rhs) {
                         .dec => |r| l.num == r.num,
                         .int => |r| if (RocDec.fromWholeInt(r)) |d| l.num == d.num else false,
-                        else => return error.TypeMismatch,
+                        .f32, .f64 => return error.TypeMismatch,
                     },
                     .f32, .f64 => {
                         self.triggerCrash("Equality comparison not supported for F32/F64 due to floating point imprecision", false, roc_ops);
@@ -3331,21 +3328,21 @@ pub const Interpreter = struct {
                         .int => |r| l > r,
                         // Int vs Dec: convert Dec to Int for comparison
                         .dec => |r| l > r.toWholeInt(),
-                        else => return error.TypeMismatch,
+                        .f32, .f64 => return error.TypeMismatch,
                     },
                     .f32 => |l| switch (rhs) {
                         .f32 => |r| l > r,
-                        else => return error.TypeMismatch,
+                        .int, .f64, .dec => return error.TypeMismatch,
                     },
                     .f64 => |l| switch (rhs) {
                         .f64 => |r| l > r,
-                        else => return error.TypeMismatch,
+                        .int, .f32, .dec => return error.TypeMismatch,
                     },
                     .dec => |l| switch (rhs) {
                         .dec => |r| l.num > r.num,
                         // Dec vs Int: convert Int to Dec for comparison
                         .int => |r| l.num > RocDec.fromWholeInt(r).?.num,
-                        else => return error.TypeMismatch,
+                        .f32, .f64 => return error.TypeMismatch,
                     },
                 };
                 return try self.makeBoolValue(result);
@@ -3359,20 +3356,20 @@ pub const Interpreter = struct {
                     .int => |l| switch (rhs) {
                         .int => |r| l >= r,
                         .dec => |r| l >= r.toWholeInt(),
-                        else => return error.TypeMismatch,
+                        .f32, .f64 => return error.TypeMismatch,
                     },
                     .f32 => |l| switch (rhs) {
                         .f32 => |r| l >= r,
-                        else => return error.TypeMismatch,
+                        .int, .f64, .dec => return error.TypeMismatch,
                     },
                     .f64 => |l| switch (rhs) {
                         .f64 => |r| l >= r,
-                        else => return error.TypeMismatch,
+                        .int, .f32, .dec => return error.TypeMismatch,
                     },
                     .dec => |l| switch (rhs) {
                         .dec => |r| l.num >= r.num,
                         .int => |r| l.num >= RocDec.fromWholeInt(r).?.num,
-                        else => return error.TypeMismatch,
+                        .f32, .f64 => return error.TypeMismatch,
                     },
                 };
                 return try self.makeBoolValue(result);
@@ -3386,20 +3383,20 @@ pub const Interpreter = struct {
                     .int => |l| switch (rhs) {
                         .int => |r| l < r,
                         .dec => |r| l < r.toWholeInt(),
-                        else => return error.TypeMismatch,
+                        .f32, .f64 => return error.TypeMismatch,
                     },
                     .f32 => |l| switch (rhs) {
                         .f32 => |r| l < r,
-                        else => return error.TypeMismatch,
+                        .int, .f64, .dec => return error.TypeMismatch,
                     },
                     .f64 => |l| switch (rhs) {
                         .f64 => |r| l < r,
-                        else => return error.TypeMismatch,
+                        .int, .f32, .dec => return error.TypeMismatch,
                     },
                     .dec => |l| switch (rhs) {
                         .dec => |r| l.num < r.num,
                         .int => |r| l.num < RocDec.fromWholeInt(r).?.num,
-                        else => return error.TypeMismatch,
+                        .f32, .f64 => return error.TypeMismatch,
                     },
                 };
                 return try self.makeBoolValue(result);
@@ -3413,20 +3410,20 @@ pub const Interpreter = struct {
                     .int => |l| switch (rhs) {
                         .int => |r| l <= r,
                         .dec => |r| l <= r.toWholeInt(),
-                        else => return error.TypeMismatch,
+                        .f32, .f64 => return error.TypeMismatch,
                     },
                     .f32 => |l| switch (rhs) {
                         .f32 => |r| l <= r,
-                        else => return error.TypeMismatch,
+                        .int, .f64, .dec => return error.TypeMismatch,
                     },
                     .f64 => |l| switch (rhs) {
                         .f64 => |r| l <= r,
-                        else => return error.TypeMismatch,
+                        .int, .f32, .dec => return error.TypeMismatch,
                     },
                     .dec => |l| switch (rhs) {
                         .dec => |r| l.num <= r.num,
                         .int => |r| l.num <= RocDec.fromWholeInt(r).?.num,
-                        else => return error.TypeMismatch,
+                        .f32, .f64 => return error.TypeMismatch,
                     },
                 };
                 return try self.makeBoolValue(result);
@@ -3486,22 +3483,22 @@ pub const Interpreter = struct {
                             const diff = if (l > r) l - r else r - l;
                             try out.setInt(diff);
                         },
-                        else => return error.TypeMismatch,
+                        .f32, .f64, .dec => return error.TypeMismatch,
                     },
                     .f32 => |l| switch (rhs) {
                         .f32 => |r| out.setF32(@abs(l - r)),
-                        else => return error.TypeMismatch,
+                        .int, .f64, .dec => return error.TypeMismatch,
                     },
                     .f64 => |l| switch (rhs) {
                         .f64 => |r| out.setF64(@abs(l - r)),
-                        else => return error.TypeMismatch,
+                        .int, .f32, .dec => return error.TypeMismatch,
                     },
                     .dec => |l| switch (rhs) {
                         .dec => |r| {
                             const diff = l.num - r.num;
                             out.setDec(RocDec{ .num = if (diff < 0) -diff else diff }, roc_ops);
                         },
-                        else => return error.TypeMismatch,
+                        .int, .f32, .f64 => return error.TypeMismatch,
                     },
                 }
                 out.is_initialized = true;
@@ -3520,20 +3517,20 @@ pub const Interpreter = struct {
                     .int => |l| switch (rhs) {
                         .int => |r| try out.setInt(l + r),
                         .dec => |r| try out.setInt(l + r.toWholeInt()),
-                        else => return error.TypeMismatch,
+                        .f32, .f64 => return error.TypeMismatch,
                     },
                     .f32 => |l| switch (rhs) {
                         .f32 => |r| out.setF32(l + r),
-                        else => return error.TypeMismatch,
+                        .int, .f64, .dec => return error.TypeMismatch,
                     },
                     .f64 => |l| switch (rhs) {
                         .f64 => |r| out.setF64(l + r),
-                        else => return error.TypeMismatch,
+                        .int, .f32, .dec => return error.TypeMismatch,
                     },
                     .dec => |l| switch (rhs) {
                         .dec => |r| out.setDec(RocDec.add(l, r, roc_ops), roc_ops),
                         .int => |r| out.setDec(RocDec.add(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops),
-                        else => return error.TypeMismatch,
+                        .f32, .f64 => return error.TypeMismatch,
                     },
                 }
                 out.is_initialized = true;
@@ -3552,20 +3549,20 @@ pub const Interpreter = struct {
                     .int => |l| switch (rhs) {
                         .int => |r| try out.setInt(l - r),
                         .dec => |r| try out.setInt(l - r.toWholeInt()),
-                        else => return error.TypeMismatch,
+                        .f32, .f64 => return error.TypeMismatch,
                     },
                     .f32 => |l| switch (rhs) {
                         .f32 => |r| out.setF32(l - r),
-                        else => return error.TypeMismatch,
+                        .int, .f64, .dec => return error.TypeMismatch,
                     },
                     .f64 => |l| switch (rhs) {
                         .f64 => |r| out.setF64(l - r),
-                        else => return error.TypeMismatch,
+                        .int, .f32, .dec => return error.TypeMismatch,
                     },
                     .dec => |l| switch (rhs) {
                         .dec => |r| out.setDec(RocDec.sub(l, r, roc_ops), roc_ops),
                         .int => |r| out.setDec(RocDec.sub(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops),
-                        else => return error.TypeMismatch,
+                        .f32, .f64 => return error.TypeMismatch,
                     },
                 }
                 out.is_initialized = true;
@@ -3584,20 +3581,20 @@ pub const Interpreter = struct {
                     .int => |l| switch (rhs) {
                         .int => |r| try out.setInt(l * r),
                         .dec => |r| try out.setInt(l * r.toWholeInt()),
-                        else => return error.TypeMismatch,
+                        .f32, .f64 => return error.TypeMismatch,
                     },
                     .f32 => |l| switch (rhs) {
                         .f32 => |r| out.setF32(l * r),
-                        else => return error.TypeMismatch,
+                        .int, .f64, .dec => return error.TypeMismatch,
                     },
                     .f64 => |l| switch (rhs) {
                         .f64 => |r| out.setF64(l * r),
-                        else => return error.TypeMismatch,
+                        .int, .f32, .dec => return error.TypeMismatch,
                     },
                     .dec => |l| switch (rhs) {
                         .dec => |r| out.setDec(RocDec.mul(l, r, roc_ops), roc_ops),
                         .int => |r| out.setDec(RocDec.mul(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops),
-                        else => return error.TypeMismatch,
+                        .f32, .f64 => return error.TypeMismatch,
                     },
                 }
                 out.is_initialized = true;
@@ -3623,21 +3620,21 @@ pub const Interpreter = struct {
                             if (r_int == 0) return error.DivisionByZero;
                             try out.setInt(i128h.divTrunc_i128(l, r_int));
                         },
-                        else => return error.TypeMismatch,
+                        .f32, .f64 => return error.TypeMismatch,
                     },
                     .f32 => |l| switch (rhs) {
                         .f32 => |r| {
                             if (r == 0) return error.DivisionByZero;
                             out.setF32(l / r);
                         },
-                        else => return error.TypeMismatch,
+                        .int, .f64, .dec => return error.TypeMismatch,
                     },
                     .f64 => |l| switch (rhs) {
                         .f64 => |r| {
                             if (r == 0) return error.DivisionByZero;
                             out.setF64(l / r);
                         },
-                        else => return error.TypeMismatch,
+                        .int, .f32, .dec => return error.TypeMismatch,
                     },
                     .dec => |l| switch (rhs) {
                         .dec => |r| {
@@ -3649,7 +3646,7 @@ pub const Interpreter = struct {
                             const r_dec = RocDec.fromWholeInt(r).?;
                             out.setDec(RocDec.div(l, r_dec, roc_ops), roc_ops);
                         },
-                        else => return error.TypeMismatch,
+                        .f32, .f64 => return error.TypeMismatch,
                     },
                 }
                 out.is_initialized = true;
@@ -3675,21 +3672,21 @@ pub const Interpreter = struct {
                             if (r_int == 0) return error.DivisionByZero;
                             try out.setInt(i128h.divTrunc_i128(l, r_int));
                         },
-                        else => return error.TypeMismatch,
+                        .f32, .f64 => return error.TypeMismatch,
                     },
                     .f32 => |l| switch (rhs) {
                         .f32 => |r| {
                             if (r == 0) return error.DivisionByZero;
                             out.setF32(@trunc(l / r));
                         },
-                        else => return error.TypeMismatch,
+                        .int, .f64, .dec => return error.TypeMismatch,
                     },
                     .f64 => |l| switch (rhs) {
                         .f64 => |r| {
                             if (r == 0) return error.DivisionByZero;
                             out.setF64(@trunc(l / r));
                         },
-                        else => return error.TypeMismatch,
+                        .int, .f32, .dec => return error.TypeMismatch,
                     },
                     .dec => |l| switch (rhs) {
                         .dec => |r| {
@@ -3702,7 +3699,7 @@ pub const Interpreter = struct {
                             const r_dec = RocDec.fromWholeInt(r).?;
                             out.setDec(RocDec.div(l, r_dec, roc_ops), roc_ops);
                         },
-                        else => return error.TypeMismatch,
+                        .f32, .f64 => return error.TypeMismatch,
                     },
                 }
                 out.is_initialized = true;
@@ -3728,21 +3725,21 @@ pub const Interpreter = struct {
                             if (r_int == 0) return error.DivisionByZero;
                             try out.setInt(i128h.rem_i128(l, r_int));
                         },
-                        else => return error.TypeMismatch,
+                        .f32, .f64 => return error.TypeMismatch,
                     },
                     .f32 => |l| switch (rhs) {
                         .f32 => |r| {
                             if (r == 0) return error.DivisionByZero;
                             out.setF32(@rem(l, r));
                         },
-                        else => return error.TypeMismatch,
+                        .int, .f64, .dec => return error.TypeMismatch,
                     },
                     .f64 => |l| switch (rhs) {
                         .f64 => |r| {
                             if (r == 0) return error.DivisionByZero;
                             out.setF64(@rem(l, r));
                         },
-                        else => return error.TypeMismatch,
+                        .int, .f32, .dec => return error.TypeMismatch,
                     },
                     .dec => |l| switch (rhs) {
                         .dec => |r| {
@@ -3754,7 +3751,7 @@ pub const Interpreter = struct {
                             const r_dec = RocDec.fromWholeInt(r).?;
                             out.setDec(RocDec.rem(l, r_dec, roc_ops), roc_ops);
                         },
-                        else => return error.TypeMismatch,
+                        .f32, .f64 => return error.TypeMismatch,
                     },
                 }
                 out.is_initialized = true;
@@ -3775,9 +3772,9 @@ pub const Interpreter = struct {
                             if (r == 0) return error.DivisionByZero;
                             try out.setInt(i128h.mod_i128(l, r));
                         },
-                        else => return error.TypeMismatch,
+                        .f32, .f64, .dec => return error.TypeMismatch,
                     },
-                    else => return error.TypeMismatch,
+                    .f32, .f64, .dec => return error.TypeMismatch,
                 }
                 out.is_initialized = true;
                 return out;
@@ -3816,7 +3813,7 @@ pub const Interpreter = struct {
                         };
                         try out.setInt(result);
                     },
-                    else => unreachable, // shift operations are only for integer types
+                    .f32, .f64, .dec => unreachable, // shift operations are only for integer types
                 }
                 out.is_initialized = true;
                 return out;
@@ -3839,7 +3836,7 @@ pub const Interpreter = struct {
                         const result: i128 = l >> shift_amount;
                         try out.setInt(result);
                     },
-                    else => unreachable, // shift operations are only for integer types
+                    .f32, .f64, .dec => unreachable, // shift operations are only for integer types
                 }
                 out.is_initialized = true;
                 return out;
@@ -3898,7 +3895,7 @@ pub const Interpreter = struct {
                         };
                         try out.setInt(result);
                     },
-                    else => unreachable, // shift operations are only for integer types
+                    .f32, .f64, .dec => unreachable, // shift operations are only for integer types
                 }
                 out.is_initialized = true;
                 return out;
@@ -4090,7 +4087,7 @@ pub const Interpreter = struct {
                                         in_range = false;
                                         rejection_reason = .negative_unsigned;
                                     },
-                                    else => {},
+                                    .i8, .i16, .i32, .i64, .i128 => {},
                                 }
                             }
 
@@ -4214,7 +4211,7 @@ pub const Interpreter = struct {
                                             const neg_value: i128 = -%as_signed;
                                             builtins.utils.writeAs(i128, payload_ptr, neg_value, @src());
                                         },
-                                        else => {}, // Unsigned types already rejected above
+                                        .u8, .u16, .u32, .u64, .u128 => {}, // Unsigned types already rejected above
                                     }
                                 } else {
                                     // Write positive value
@@ -4416,7 +4413,7 @@ pub const Interpreter = struct {
                                             const neg_value: i128 = -%as_signed;
                                             builtins.utils.writeAs(i128, payload_ptr, neg_value, @src());
                                         },
-                                        else => {}, // Unsigned types already rejected above
+                                        .u8, .u16, .u32, .u64, .u128 => {}, // Unsigned types already rejected above
                                     }
                                 } else {
                                     // Write positive value
@@ -4543,7 +4540,7 @@ pub const Interpreter = struct {
                                         const neg_value: i128 = -%as_signed;
                                         builtins.utils.writeAs(i128, payload_ptr, neg_value, @src());
                                     },
-                                    else => {},
+                                    .u8, .u16, .u32, .u64, .u128 => {},
                                 }
                             } else {
                                 switch (int_type) {
@@ -5910,7 +5907,7 @@ pub const Interpreter = struct {
             .e_return => true,
 
             // For other expressions, no exit statement at this level
-            else => false,
+            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_call, .e_record, .e_empty_record, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => false,
         };
     }
 
@@ -6059,7 +6056,7 @@ pub const Interpreter = struct {
             .e_lookup_external, .e_lookup_required => false,
 
             // For other expressions, be conservative and return false (don't involve mutable vars)
-            else => false,
+            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_pending, .e_list, .e_empty_list, .e_tuple, .e_record, .e_empty_record, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => false,
         };
     }
 
@@ -6194,60 +6191,60 @@ pub const Interpreter = struct {
                 .int => |l| switch (rhs_val) {
                     .int => |r| try out.setInt(l + r),
                     .dec => |r| try out.setInt(l + r.toWholeInt()),
-                    else => return error.TypeMismatch,
+                    .f32, .f64 => return error.TypeMismatch,
                 },
                 .f32 => |l| switch (rhs_val) {
                     .f32 => |r| out.setF32(l + r),
-                    else => return error.TypeMismatch,
+                    .int, .f64, .dec => return error.TypeMismatch,
                 },
                 .f64 => |l| switch (rhs_val) {
                     .f64 => |r| out.setF64(l + r),
-                    else => return error.TypeMismatch,
+                    .int, .f32, .dec => return error.TypeMismatch,
                 },
                 .dec => |l| switch (rhs_val) {
                     .dec => |r| out.setDec(RocDec.add(l, r, roc_ops), roc_ops),
                     .int => |r| out.setDec(RocDec.add(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops),
-                    else => return error.TypeMismatch,
+                    .f32, .f64 => return error.TypeMismatch,
                 },
             },
             .sub => switch (lhs_val) {
                 .int => |l| switch (rhs_val) {
                     .int => |r| try out.setInt(l - r),
                     .dec => |r| try out.setInt(l - r.toWholeInt()),
-                    else => return error.TypeMismatch,
+                    .f32, .f64 => return error.TypeMismatch,
                 },
                 .f32 => |l| switch (rhs_val) {
                     .f32 => |r| out.setF32(l - r),
-                    else => return error.TypeMismatch,
+                    .int, .f64, .dec => return error.TypeMismatch,
                 },
                 .f64 => |l| switch (rhs_val) {
                     .f64 => |r| out.setF64(l - r),
-                    else => return error.TypeMismatch,
+                    .int, .f32, .dec => return error.TypeMismatch,
                 },
                 .dec => |l| switch (rhs_val) {
                     .dec => |r| out.setDec(RocDec.sub(l, r, roc_ops), roc_ops),
                     .int => |r| out.setDec(RocDec.sub(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops),
-                    else => return error.TypeMismatch,
+                    .f32, .f64 => return error.TypeMismatch,
                 },
             },
             .mul => switch (lhs_val) {
                 .int => |l| switch (rhs_val) {
                     .int => |r| try out.setInt(l * r),
                     .dec => |r| try out.setInt(l * r.toWholeInt()),
-                    else => return error.TypeMismatch,
+                    .f32, .f64 => return error.TypeMismatch,
                 },
                 .f32 => |l| switch (rhs_val) {
                     .f32 => |r| out.setF32(l * r),
-                    else => return error.TypeMismatch,
+                    .int, .f64, .dec => return error.TypeMismatch,
                 },
                 .f64 => |l| switch (rhs_val) {
                     .f64 => |r| out.setF64(l * r),
-                    else => return error.TypeMismatch,
+                    .int, .f32, .dec => return error.TypeMismatch,
                 },
                 .dec => |l| switch (rhs_val) {
                     .dec => |r| out.setDec(RocDec.mul(l, r, roc_ops), roc_ops),
                     .int => |r| out.setDec(RocDec.mul(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops),
-                    else => return error.TypeMismatch,
+                    .f32, .f64 => return error.TypeMismatch,
                 },
             },
             .div, .div_trunc => switch (lhs_val) {
@@ -6256,7 +6253,7 @@ pub const Interpreter = struct {
                         if (r == 0) return error.DivisionByZero;
                         try out.setInt(i128h.divTrunc_i128(l, r));
                     },
-                    else => return error.TypeMismatch,
+                    .f32, .f64, .dec => return error.TypeMismatch,
                 },
                 .f32 => |l| switch (rhs_val) {
                     .f32 => |r| {
@@ -6267,7 +6264,7 @@ pub const Interpreter = struct {
                             out.setF32(l / r);
                         }
                     },
-                    else => return error.TypeMismatch,
+                    .int, .f64, .dec => return error.TypeMismatch,
                 },
                 .f64 => |l| switch (rhs_val) {
                     .f64 => |r| {
@@ -6278,7 +6275,7 @@ pub const Interpreter = struct {
                             out.setF64(l / r);
                         }
                     },
-                    else => return error.TypeMismatch,
+                    .int, .f32, .dec => return error.TypeMismatch,
                 },
                 .dec => |l| switch (rhs_val) {
                     .dec => |r| {
@@ -6289,7 +6286,7 @@ pub const Interpreter = struct {
                         if (r == 0) return error.DivisionByZero;
                         out.setDec(RocDec.div(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops);
                     },
-                    else => return error.TypeMismatch,
+                    .f32, .f64 => return error.TypeMismatch,
                 },
             },
             .rem => switch (lhs_val) {
@@ -6298,21 +6295,21 @@ pub const Interpreter = struct {
                         if (r == 0) return error.DivisionByZero;
                         try out.setInt(i128h.rem_i128(l, r));
                     },
-                    else => return error.TypeMismatch,
+                    .f32, .f64, .dec => return error.TypeMismatch,
                 },
                 .f32 => |l| switch (rhs_val) {
                     .f32 => |r| {
                         if (r == 0) return error.DivisionByZero;
                         out.setF32(@rem(l, r));
                     },
-                    else => return error.TypeMismatch,
+                    .int, .f64, .dec => return error.TypeMismatch,
                 },
                 .f64 => |l| switch (rhs_val) {
                     .f64 => |r| {
                         if (r == 0) return error.DivisionByZero;
                         out.setF64(@rem(l, r));
                     },
-                    else => return error.TypeMismatch,
+                    .int, .f32, .dec => return error.TypeMismatch,
                 },
                 .dec => |l| switch (rhs_val) {
                     .dec => |r| {
@@ -6323,10 +6320,10 @@ pub const Interpreter = struct {
                         if (r == 0) return error.DivisionByZero;
                         out.setDec(RocDec.rem(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops);
                     },
-                    else => return error.TypeMismatch,
+                    .f32, .f64 => return error.TypeMismatch,
                 },
             },
-            else => return error.TypeMismatch,
+            .lt, .gt, .le, .ge, .eq, .ne, .@"and", .@"or" => return error.TypeMismatch,
         }
         out.is_initialized = true;
         return out;
@@ -6358,7 +6355,7 @@ pub const Interpreter = struct {
                     return NumericValue{ .dec = builtins.utils.readAs(RocDec, raw_ptr, @src()) };
                 },
             },
-            else => error.NotNumeric,
+            .opaque_ptr, .str => error.NotNumeric,
         };
     }
 
@@ -6444,7 +6441,7 @@ pub const Interpreter = struct {
                 return std.math.order(lhs.num, RocDec.fromWholeInt(rhs.int).?.num);
             },
             .dec => std.math.order(lhs.num, rhs.dec.num),
-            else => return error.TypeMismatch,
+            .f32, .f64 => return error.TypeMismatch,
         };
     }
 
@@ -6477,20 +6474,20 @@ pub const Interpreter = struct {
                     .int => |l| switch (rhs_num) {
                         .int => |r| l == r,
                         .dec => |r| l == r.toWholeInt(),
-                        else => false,
+                        .f32, .f64 => false,
                     },
                     .dec => |l| switch (rhs_num) {
                         .dec => |r| l.num == r.num,
                         .int => |r| if (RocDec.fromWholeInt(r)) |d| l.num == d.num else false,
-                        else => false,
+                        .f32, .f64 => false,
                     },
                     .f32 => |l| switch (rhs_num) {
                         .f32 => |r| l == r,
-                        else => false,
+                        .int, .f64, .dec => false,
                     },
                     .f64 => |l| switch (rhs_num) {
                         .f64 => |r| l == r,
-                        else => false,
+                        .int, .f32, .dec => false,
                     },
                 };
             }
@@ -6508,7 +6505,7 @@ pub const Interpreter = struct {
                     const rhs_str = rhs.asRocStr().?;
                     return lhs_str.eql(rhs_str.*);
                 },
-                else => {
+                .opaque_ptr => {
                     self.triggerCrash("Internal error: unhandled scalar type in equality comparison", false, roc_ops);
                     return error.TypeMismatch;
                 },
@@ -6883,9 +6880,9 @@ pub const Interpreter = struct {
                         const backing = self.runtime_types.getNominalBackingVar(nom);
                         current = self.runtime_types.resolveVar(backing);
                     },
-                    else => return current,
+                    .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => return current,
                 },
-                else => return current,
+                .flex, .rigid, .err => return current,
             }
         }
     }
@@ -6929,9 +6926,9 @@ pub const Interpreter = struct {
                             }
                         },
                         .empty_tag_union => {},
-                        else => {},
+                        .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => {},
                     },
-                    else => {},
+                    .flex, .rigid, .err => {},
                 }
                 break :expand;
             }
@@ -7007,7 +7004,7 @@ pub const Interpreter = struct {
                 .int => {
                     return .{ .index = @intCast(value.asI128()), .payload = null };
                 },
-                else => return error.TypeMismatch,
+                .opaque_ptr, .str, .frac => return error.TypeMismatch,
             },
             .record => {
                 var acc = try value.asRecord(&self.runtime_layout_store);
@@ -7384,7 +7381,7 @@ pub const Interpreter = struct {
 
                 return self.extractTagValue(unboxed, elem_rt_var);
             },
-            else => return error.TypeMismatch,
+            .box_of_zst, .list, .list_of_zst, .closure, .zst => return error.TypeMismatch,
         }
     }
 
@@ -7442,7 +7439,7 @@ pub const Interpreter = struct {
                 traceDbg(roc_ops, "makeBoxValueFromLayout: returning boxed value", .{});
                 return out;
             },
-            else => return error.TypeMismatch,
+            .scalar, .list, .list_of_zst, .record, .tuple, .closure, .zst, .tag_union => return error.TypeMismatch,
         }
     }
 
@@ -7572,7 +7569,7 @@ pub const Interpreter = struct {
         if (resolved.desc.content != .structure) return null;
         const nom = switch (resolved.desc.content.structure) {
             .nominal_type => |n| n,
-            else => return null,
+            .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => return null,
         };
 
         // Use root_env for ident lookups since self.env may have changed during nested calls
@@ -7878,7 +7875,7 @@ pub const Interpreter = struct {
                         // Dec stores values scaled by 10^18, so compare with scaled literal
                         break :blk if (RocDec.fromWholeInt(lit)) |d| dec_value.num == d.num else false;
                     },
-                    else => false,
+                    .opaque_ptr, .str => false,
                 };
             },
             .str_literal => |sl| {
@@ -8097,7 +8094,7 @@ pub const Interpreter = struct {
                             const fields_range = switch (value_resolved.desc.content.structure) {
                                 .record => |rec| rec.fields,
                                 .record_unbound => |fields| fields,
-                                else => break :blk try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(destruct_idx)),
+                                .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => break :blk try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(destruct_idx)),
                             };
                             const fields = self.runtime_types.getRecordFieldsSlice(fields_range);
                             var i: usize = 0;
@@ -8228,7 +8225,7 @@ pub const Interpreter = struct {
 
                 return true;
             },
-            else => return false,
+            .assign, .as, .nominal, .nominal_external, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .underscore, .runtime_error => return false,
         }
     }
 
@@ -8407,7 +8404,7 @@ pub const Interpreter = struct {
         const constraints: []const types.StaticDispatchConstraint = switch (resolved.desc.content) {
             .flex => |flex| self.runtime_types.sliceStaticDispatchConstraints(flex.constraints),
             .rigid => |rigid| self.runtime_types.sliceStaticDispatchConstraints(rigid.constraints),
-            else => return error.MethodNotFound,
+            .alias, .structure, .err => return error.MethodNotFound,
         };
 
         // Linear search for the matching method name (constraints are typically few)
@@ -8532,7 +8529,7 @@ pub const Interpreter = struct {
                         // both the parameter and return type's `s` to be mapped.
                         try self.propagateFlexMappings(@constCast(origin_env), fn_type.ret, recv_rt_var);
                     },
-                    else => {},
+                    .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => {},
                 }
             }
         }
@@ -8652,7 +8649,7 @@ pub const Interpreter = struct {
                             try self.propagateFlexMappings(@constCast(origin_env), param_vars[0], recv_rt_var);
                         }
                     },
-                    else => {},
+                    .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => {},
                 }
             }
         }
@@ -8823,13 +8820,13 @@ pub const Interpreter = struct {
                         const str_content = try self.runtime_types.mkNominal(str_type_ident, str_backing_var, no_type_args, origin_module_id, false);
                         break :blk try self.runtime_types.freshFromContent(str_content);
                     },
-                    else => {
+                    .opaque_ptr => {
                         // Default to fresh var for unknown scalar types
                         break :blk try self.runtime_types.fresh();
                     },
                 }
             },
-            else => {
+            .box, .box_of_zst, .record, .tuple, .closure, .zst, .tag_union => {
                 // For other layouts, create a fresh var (fallback)
                 return try self.runtime_types.fresh();
             },
@@ -8918,7 +8915,7 @@ pub const Interpreter = struct {
             .list => {
                 return self.findBoxIdxForTagUnion(lay.data.list, target_tu_idx);
             },
-            else => return null,
+            .scalar, .box_of_zst, .list_of_zst, .closure, .zst, .tag_union => return null,
         }
     }
 
@@ -8970,7 +8967,7 @@ pub const Interpreter = struct {
             },
             // Don't recurse into tag_unions - we're looking for Box(target) directly
             // in the current payload, not inside nested tag_unions
-            else => return false,
+            .scalar, .box_of_zst, .list_of_zst, .closure, .zst, .tag_union => return false,
         }
     }
 
@@ -9027,9 +9024,9 @@ pub const Interpreter = struct {
             .structure => |st| switch (st) {
                 .empty_record => try self.runtime_layout_store.ensureEmptyRecordLayout(),
                 .nominal_type => try self.runtime_layout_store.fromTypeVar(0, resolved.var_, &self.empty_scope, null),
-                else => try self.runtime_layout_store.fromTypeVar(0, resolved.var_, &self.empty_scope, null),
+                .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_tag_union => try self.runtime_layout_store.fromTypeVar(0, resolved.var_, &self.empty_scope, null),
             },
-            else => try self.runtime_layout_store.fromTypeVar(0, resolved.var_, &self.empty_scope, null),
+            .flex, .rigid, .alias, .err => try self.runtime_layout_store.fromTypeVar(0, resolved.var_, &self.empty_scope, null),
         };
         // Encode: (generation << 24) | (slot + 1)
         const gen_byte: u8 = @truncate(self.poly_context_generation);
@@ -9099,13 +9096,13 @@ pub const Interpreter = struct {
                     try self.collectRecordFieldsFromVar(module, backing, acc, visited);
                 },
                 .empty_record => {},
-                else => {},
+                .tuple, .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_tag_union => {},
             },
             .alias => |alias| {
                 const backing = module.types.getAliasBackingVar(alias);
                 try self.collectRecordFieldsFromVar(module, backing, acc, visited);
             },
-            else => {},
+            .flex, .rigid, .err => {},
         }
     }
 
@@ -9160,7 +9157,7 @@ pub const Interpreter = struct {
                     }
                     try collectRigidsFromType(allocator, module, f.ret, rigids, visited);
                 },
-                else => {},
+                .record_unbound, .nominal_type, .empty_record, .empty_tag_union => {},
             },
             .alias => |alias| {
                 try collectRigidsFromType(allocator, module, module.types.getAliasBackingVar(alias), rigids, visited);
@@ -9221,7 +9218,7 @@ pub const Interpreter = struct {
                     }
                     try self.collectRigidsFromRuntimeType(allocator, f.ret, rigids, visited);
                 },
-                else => {},
+                .record_unbound, .nominal_type, .empty_record, .empty_tag_union => {},
             },
             .alias => |alias| {
                 try self.collectRigidsFromRuntimeType(allocator, self.runtime_types.getAliasBackingVar(alias), rigids, visited);
@@ -9400,7 +9397,7 @@ pub const Interpreter = struct {
                                         break :blk backing_resolved.desc.content.structure.tag_union;
                                     }
                                 },
-                                else => {},
+                                .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => {},
                             }
                         }
                         break :blk null;
@@ -9436,7 +9433,7 @@ pub const Interpreter = struct {
                     // Record propagation is complex - skip for now
                     // This case is less common for the numeric range use case we're fixing
                 },
-                else => {
+                .record_unbound, .empty_record, .empty_tag_union => {
                     // For other structure types, no recursive propagation needed
                 },
             }
@@ -9607,7 +9604,7 @@ pub const Interpreter = struct {
                                         // Open union with rigid variable
                                         break :blk2 try self.runtime_types.freshFromContent(.{ .rigid = rigid });
                                     },
-                                    else => {
+                                    .alias, .structure, .err => {
                                         // Closed union - use empty_tag_union
                                         break :blk2 try self.runtime_types.freshFromContent(.{ .structure = .empty_tag_union });
                                     },
@@ -10098,7 +10095,7 @@ pub const Interpreter = struct {
                             // Nominal types (like numeric types) act as their backing type
                             current_ext = module.types.getNominalBackingVar(nom);
                         },
-                        else => {
+                        .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound => {
                             debugUnreachable(null, "unexpected structure type in tag union extension", @src());
                         },
                     }
@@ -10108,7 +10105,7 @@ pub const Interpreter = struct {
                 },
                 .flex => break,
                 .rigid => break,
-                else => {
+                .err => {
                     debugUnreachable(null, "unexpected content type in tag union extension", @src());
                 },
             }
@@ -10145,7 +10142,7 @@ pub const Interpreter = struct {
                         .nominal_type => |nom| {
                             current_ext = module.types.getNominalBackingVar(nom);
                         },
-                        else => {
+                        .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound => {
                             return .{ .structure = .empty_tag_union };
                         },
                     }
@@ -10159,7 +10156,7 @@ pub const Interpreter = struct {
                 .rigid => |rigid| {
                     return .{ .rigid = rigid };
                 },
-                else => {
+                .err => {
                     return .{ .structure = .empty_tag_union };
                 },
             }
@@ -10213,9 +10210,9 @@ pub const Interpreter = struct {
                 .fn_pure => |f| f.ret,
                 .fn_effectful => |f| f.ret,
                 .fn_unbound => |f| f.ret,
-                else => return error.TypeMismatch,
+                .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => return error.TypeMismatch,
             },
-            else => return error.TypeMismatch,
+            .flex, .rigid, .alias, .err => return error.TypeMismatch,
         };
 
         // Attempt simple runtime unification of parameters with arguments.
@@ -10224,9 +10221,9 @@ pub const Interpreter = struct {
                 .fn_pure => |f| self.runtime_types.sliceVars(f.args),
                 .fn_effectful => |f| self.runtime_types.sliceVars(f.args),
                 .fn_unbound => |f| self.runtime_types.sliceVars(f.args),
-                else => &[_]types.Var{},
+                .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => &[_]types.Var{},
             },
-            else => &[_]types.Var{},
+            .flex, .rigid, .alias, .err => &[_]types.Var{},
         };
         if (params.len != args.len) return error.TypeMismatch;
 
@@ -11106,7 +11103,7 @@ pub const Interpreter = struct {
                 // Only return binop if it's a numeric operation (not boolean and/or)
                 switch (binop.op) {
                     .add, .sub, .mul, .div, .div_trunc, .rem => return expr_idx,
-                    else => return null,
+                    .lt, .gt, .le, .ge, .eq, .ne, .@"and", .@"or" => return null,
                 }
             },
             .e_lookup_local => |lookup| {
@@ -11126,7 +11123,7 @@ pub const Interpreter = struct {
                 }
                 return null;
             },
-            else => return null,
+            .e_str_segment, .e_str, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => return null,
         }
     }
 
@@ -11176,7 +11173,7 @@ pub const Interpreter = struct {
                     }
                 }
             },
-            else => {},
+            .e_str_segment, .e_str, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => {},
         }
     }
 
@@ -11222,7 +11219,7 @@ pub const Interpreter = struct {
                                 saved_copy.deinit();
                             }
                         },
-                        else => {},
+                        .return_result, .decref_value, .trim_bindings, .and_short_circuit, .or_short_circuit, .if_branch, .block_continue, .bind_decl, .tuple_collect, .tuple_access, .list_collect, .record_collect, .early_return, .tag_collect, .match_branches, .match_guard, .match_cleanup, .expect_check, .dbg_print, .str_collect, .call_collect_args, .unary_op_apply, .binop_eval_rhs, .binop_apply, .dot_access_await_receiver, .dot_access_resolve, .dot_access_collect_args, .type_var_dispatch_collect_args, .type_var_dispatch_invoke, .while_loop_check, .while_loop_body_done, .expect_check_stmt, .reassign_value, .dbg_print_stmt, .negate_bool, .break_from_loop, .nominal_wrap => {},
                     }
                 },
                 .eval_expr => {},
@@ -11499,7 +11496,7 @@ pub const Interpreter = struct {
                             const msg = std.fmt.bufPrint(&buf, "'{s}' is exposed but not implemented", .{ident_str}) catch "Exposed but not implemented";
                             self.triggerCrash(msg, false, roc_ops);
                         },
-                        else => {
+                        .redundant_exposed, .invalid_num_literal, .empty_tuple, .ident_already_in_scope, .ident_not_in_scope, .self_referential_definition, .qualified_ident_does_not_exist, .invalid_top_level_statement, .expr_not_canonicalized, .invalid_string_interpolation, .pattern_arg_invalid, .pattern_not_canonicalized, .can_lambda_not_implemented, .lambda_body_not_canonicalized, .if_condition_not_canonicalized, .if_then_not_canonicalized, .if_else_not_canonicalized, .if_expr_without_else, .malformed_type_annotation, .malformed_where_clause, .where_clause_not_allowed_in_type_decl, .var_across_function_boundary, .shadowing_warning, .type_redeclared, .tuple_elem_not_canonicalized, .module_not_found, .value_not_exposed, .type_not_exposed, .type_from_missing_module, .module_not_imported, .nested_type_not_found, .nested_value_not_found, .record_builder_map2_not_found, .too_many_exports, .undeclared_type, .undeclared_type_var, .type_alias_but_needed_nominal, .crash_expects_string, .type_module_missing_matching_type, .type_module_has_alias_not_nominal, .default_app_missing_main, .default_app_wrong_arity, .cannot_import_default_app, .execution_requires_app_or_default_app, .type_name_case_mismatch, .module_header_deprecated, .redundant_expose_main_type => {
                             self.triggerCrash("Compile-time error encountered at runtime", false, roc_ops);
                         },
                     }
@@ -11548,7 +11545,7 @@ pub const Interpreter = struct {
                             .origin = nom.origin_module,
                             .ident = nom.ident.ident_idx,
                         },
-                        else => null,
+                        .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => null,
                     },
                     .flex => |flex| blk: {
                         // Check if this flex var has a from_numeral constraint,
@@ -11582,7 +11579,7 @@ pub const Interpreter = struct {
                         }
                         break :blk null;
                     },
-                    else => null,
+                    .alias, .err => null,
                 };
 
                 if (nominal_info == null) {
@@ -11788,7 +11785,7 @@ pub const Interpreter = struct {
                             .expected_rt_var = null,
                         } });
                     },
-                    else => {
+                    .add, .sub, .mul, .div, .div_trunc, .rem, .lt, .le, .gt, .ge, .eq, .ne => {
                         // Arithmetic and comparison operations: desugar to method calls
                         const method_ident: base_pkg.Ident.Idx = switch (binop.op) {
                             .add => self.root_env.idents.plus,
@@ -11827,7 +11824,7 @@ pub const Interpreter = struct {
                             // expected_rt_var would be Bool (the result type), not the operand type.
                             const is_arithmetic = switch (binop.op) {
                                 .add, .sub, .mul, .div, .div_trunc, .rem => true,
-                                else => false,
+                                .lt, .gt, .le, .ge, .eq, .ne, .@"and", .@"or" => false,
                             };
                             const target_var = blk: {
                                 if (is_arithmetic) {
@@ -12095,9 +12092,9 @@ pub const Interpreter = struct {
                     const is_elem_zst = switch (elem_content) {
                         .structure => |ft| switch (ft) {
                             .empty_record, .empty_tag_union => true,
-                            else => false,
+                            .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union => false,
                         },
-                        else => false,
+                        .flex, .rigid, .alias, .err => false,
                     };
                     if (is_elem_zst) {
                         // Special case: list of ZSTs
@@ -12207,9 +12204,9 @@ pub const Interpreter = struct {
                                     .backing = self.runtime_types.getNominalBackingVar(nt),
                                     .nominal = nominal_rt_var,
                                 },
-                                else => BackingInfo{ .backing = nominal_rt_var, .nominal = null },
+                                .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => BackingInfo{ .backing = nominal_rt_var, .nominal = null },
                             },
-                            else => BackingInfo{ .backing = nominal_rt_var, .nominal = null },
+                            .flex, .rigid, .alias, .err => BackingInfo{ .backing = nominal_rt_var, .nominal = null },
                         };
                     }
 
@@ -12249,7 +12246,7 @@ pub const Interpreter = struct {
                                                 outer_concrete
                                             else
                                                 rt_type_args[i],
-                                            else => rt_type_args[i],
+                                            .flex, .alias, .structure, .err => rt_type_args[i],
                                         };
                                         // Don't add if it would create a cycle
                                         if (!self.wouldCreateRigidSubstCycle(rigids.items[i], concrete_type)) {
@@ -12260,9 +12257,9 @@ pub const Interpreter = struct {
                                 // Return backing and preserve the nominal type for wrapping
                                 break :blk BackingInfo{ .backing = backing, .nominal = expected };
                             },
-                            else => break :blk BackingInfo{ .backing = expected, .nominal = null },
+                            .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => break :blk BackingInfo{ .backing = expected, .nominal = null },
                         },
-                        else => break :blk BackingInfo{ .backing = expected, .nominal = null },
+                        .flex, .rigid, .alias, .err => break :blk BackingInfo{ .backing = expected, .nominal = null },
                     }
                 } else blk: {
                     // Fall back to translating from current env
@@ -12275,9 +12272,9 @@ pub const Interpreter = struct {
                                 .backing = self.runtime_types.getNominalBackingVar(nt),
                                 .nominal = nominal_rt_var,
                             },
-                            else => BackingInfo{ .backing = nominal_rt_var, .nominal = null },
+                            .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => BackingInfo{ .backing = nominal_rt_var, .nominal = null },
                         },
-                        else => BackingInfo{ .backing = nominal_rt_var, .nominal = null },
+                        .flex, .rigid, .alias, .err => BackingInfo{ .backing = nominal_rt_var, .nominal = null },
                     };
                 };
 
@@ -12305,9 +12302,9 @@ pub const Interpreter = struct {
                     const backing_rt_var = switch (nominal_resolved.desc.content) {
                         .structure => |st| switch (st) {
                             .nominal_type => |nt| self.runtime_types.getNominalBackingVar(nt),
-                            else => nominal_rt_var,
+                            .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => nominal_rt_var,
                         },
-                        else => nominal_rt_var,
+                        .flex, .rigid, .alias, .err => nominal_rt_var,
                     };
                     break :blk backing_rt_var;
                 };
@@ -12778,7 +12775,7 @@ pub const Interpreter = struct {
                                 const msg = std.fmt.bufPrint(&buf, "Cannot call function: nested value not found: {s}.{s}", .{ parent_str, nested_str }) catch "Cannot call function: nested value not found";
                                 self.triggerCrash(msg, false, roc_ops);
                             },
-                            else => |other_diag| {
+                            .redundant_exposed, .invalid_num_literal, .empty_tuple, .ident_already_in_scope, .ident_not_in_scope, .self_referential_definition, .qualified_ident_does_not_exist, .invalid_top_level_statement, .expr_not_canonicalized, .invalid_string_interpolation, .pattern_arg_invalid, .pattern_not_canonicalized, .can_lambda_not_implemented, .lambda_body_not_canonicalized, .if_condition_not_canonicalized, .if_then_not_canonicalized, .if_else_not_canonicalized, .if_expr_without_else, .malformed_type_annotation, .malformed_where_clause, .where_clause_not_allowed_in_type_decl, .var_across_function_boundary, .shadowing_warning, .type_redeclared, .tuple_elem_not_canonicalized, .module_not_found, .value_not_exposed, .type_not_exposed, .type_from_missing_module, .module_not_imported, .nested_type_not_found, .record_builder_map2_not_found, .too_many_exports, .undeclared_type, .undeclared_type_var, .type_alias_but_needed_nominal, .crash_expects_string, .type_module_missing_matching_type, .type_module_has_alias_not_nominal, .default_app_missing_main, .default_app_wrong_arity, .cannot_import_default_app, .execution_requires_app_or_default_app, .type_name_case_mismatch, .module_header_deprecated, .redundant_expose_main_type => |other_diag| {
                                 var buf: [512]u8 = undefined;
                                 const msg = std.fmt.bufPrint(&buf, "Cannot call function: compile-time error ({s})", .{@tagName(other_diag)}) catch "Cannot call function: compile-time error in function definition";
                                 self.triggerCrash(msg, false, roc_ops);
@@ -13137,7 +13134,7 @@ pub const Interpreter = struct {
                             }
                             break :blk false;
                         },
-                        else => false,
+                        .alias, .structure, .err => false,
                     };
                     if (has_from_numeral) {
                         const dec_content = try self.mkNumberTypeContentRuntime("Dec");
@@ -13239,9 +13236,9 @@ pub const Interpreter = struct {
                         ptr.* = RocDec.fromWholeInt(num_lit.value.toI128()).?;
                     },
                 },
-                else => return error.TypeMismatch,
+                .opaque_ptr, .str => return error.TypeMismatch,
             },
-            else => return error.TypeMismatch,
+            .box, .box_of_zst, .list, .list_of_zst, .record, .tuple, .closure, .zst, .tag_union => return error.TypeMismatch,
         }
         value.is_initialized = true;
 
@@ -13268,9 +13265,9 @@ pub const Interpreter = struct {
                         .f64 => try self.runtime_types.freshFromContent(try self.mkNumberTypeContentRuntime("F64")),
                         .dec => try self.runtime_types.freshFromContent(try self.mkNumberTypeContentRuntime("Dec")),
                     },
-                    else => value.rt_var,
+                    .opaque_ptr, .str => value.rt_var,
                 },
-                else => value.rt_var,
+                .box, .box_of_zst, .list, .list_of_zst, .record, .tuple, .closure, .zst, .tag_union => value.rt_var,
             };
             value.rt_var = concrete_rt_var;
         }
@@ -13475,9 +13472,9 @@ pub const Interpreter = struct {
                         ptr.* = RocDec.fromWholeInt(typed_int.value.toI128()).?;
                     },
                 },
-                else => return error.TypeMismatch,
+                .opaque_ptr, .str => return error.TypeMismatch,
             },
-            else => return error.TypeMismatch,
+            .box, .box_of_zst, .list, .list_of_zst, .record, .tuple, .closure, .zst, .tag_union => return error.TypeMismatch,
         }
         value.is_initialized = true;
         return value;
@@ -13549,9 +13546,9 @@ pub const Interpreter = struct {
                     const bytes: [16]u8 = @bitCast(int_val);
                     try value.setIntFromBytes(bytes, false);
                 },
-                else => return error.TypeMismatch,
+                .opaque_ptr, .str => return error.TypeMismatch,
             },
-            else => return error.TypeMismatch,
+            .box, .box_of_zst, .list, .list_of_zst, .record, .tuple, .closure, .zst, .tag_union => return error.TypeMismatch,
         }
         value.is_initialized = true;
         return value;
@@ -13752,7 +13749,7 @@ pub const Interpreter = struct {
                     const fields_range = switch (flat) {
                         .record => |rec| rec.fields,
                         .record_unbound => |fields| fields,
-                        else => break :blk try self.runtime_types.fresh(),
+                        .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => break :blk try self.runtime_types.fresh(),
                     };
                     const fields = self.runtime_types.getRecordFieldsSlice(fields_range);
                     var i: usize = 0;
@@ -13840,7 +13837,7 @@ pub const Interpreter = struct {
                     const fields_range = switch (flat) {
                         .record => |rec| rec.fields,
                         .record_unbound => |fields| fields,
-                        else => break :blk try self.runtime_types.fresh(),
+                        .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => break :blk try self.runtime_types.fresh(),
                     };
                     const fields = self.runtime_types.getRecordFieldsSlice(fields_range);
                     var i: usize = 0;
@@ -14470,7 +14467,7 @@ pub const Interpreter = struct {
                         try self.addClosurePlaceholder(v.pattern_idx, v.expr);
                     }
                 },
-                else => {},
+                .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias => {},
             }
         }
     }
@@ -14759,7 +14756,7 @@ pub const Interpreter = struct {
                     try self.scheduleNextStatement(work_stack, next_stmt, remaining_stmts[1..], final_expr, bindings_start, expected_rt_var, roc_ops);
                 }
             },
-            else => {
+            .s_decl, .s_var, .s_import, .s_alias_decl, .s_type_anno => {
                 self.triggerCrash("Statement type not yet implemented in interpreter", false, roc_ops);
                 return error.NotImplemented;
             },
@@ -15688,7 +15685,7 @@ pub const Interpreter = struct {
                                         val.decref(&self.runtime_layout_store, roc_ops);
                                     }
                                 },
-                                else => {
+                                .decref_value, .trim_bindings, .and_short_circuit, .or_short_circuit, .if_branch, .block_continue, .bind_decl, .tuple_access, .early_return, .match_branches, .match_guard, .match_cleanup, .expect_check, .dbg_print, .unary_op_apply, .binop_eval_rhs, .binop_apply, .dot_access_await_receiver, .type_var_dispatch_invoke, .while_loop_check, .while_loop_body_done, .expect_check_stmt, .reassign_value, .dbg_print_stmt, .sort_compare_result, .negate_bool, .break_from_loop, .nominal_wrap => {
                                     // Skip this continuation - it's part of the function body being early-returned from
                                 },
                             }
@@ -16144,7 +16141,7 @@ pub const Interpreter = struct {
                                                 // Tag unions have nested variant layouts - keep actual
                                                 break :blk false;
                                             },
-                                            else => {
+                                            .scalar, .box, .box_of_zst, .list_of_zst, .closure, .zst => {
                                                 // Scalars, boxes, etc. - can use expected
                                                 break :blk true;
                                             },
@@ -16457,7 +16454,7 @@ pub const Interpreter = struct {
                 const match_expr = self.env.store.getExpr(mb.expr_idx);
                 const is_try_suffix = switch (match_expr) {
                     .e_match => |m| m.is_try_suffix,
-                    else => false,
+                    .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => false,
                 };
 
                 if (is_try_suffix) {
@@ -16503,7 +16500,7 @@ pub const Interpreter = struct {
                         const match_expr = self.env.store.getExpr(mg.expr_idx);
                         const is_try_suffix = switch (match_expr) {
                             .e_match => |m| m.is_try_suffix,
-                            else => false,
+                            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => false,
                         };
 
                         if (is_try_suffix) {
@@ -16820,12 +16817,12 @@ pub const Interpreter = struct {
                                             switch (arg_resolved.desc.content) {
                                                 .flex => |flex| if (flex.constraints.count == 0) break :is_concrete false,
                                                 .rigid => |rigid| if (rigid.constraints.count == 0) break :is_concrete false,
-                                                else => {},
+                                                .alias, .structure, .err => {},
                                             }
                                         }
                                         break :is_concrete true;
                                     },
-                                    else => true,
+                                    .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => true,
                                 },
                                 .flex => |flex| flex.constraints.count > 0,
                                 .rigid => |rigid| rigid.constraints.count > 0,
@@ -17233,9 +17230,9 @@ pub const Interpreter = struct {
                             .origin = nom.origin_module,
                             .ident = nom.ident.ident_idx,
                         },
-                        else => return error.InvalidMethodReceiver,
+                        .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => return error.InvalidMethodReceiver,
                     },
-                    else => return error.InvalidMethodReceiver,
+                    .flex, .rigid, .alias, .err => return error.InvalidMethodReceiver,
                 };
 
                 // Resolve the method function
@@ -17500,7 +17497,7 @@ pub const Interpreter = struct {
                             }
                             break :blk null;
                         },
-                        else => null,
+                        .record_unbound, .fn_pure, .fn_effectful, .fn_unbound => null,
                     },
                     // Flex, rigid, and error vars are unresolved type variables (e.g., numeric literals defaulting to Dec,
                     // or type parameters in generic functions). For is_eq, prefer a numeric scalar fast-path when we can
@@ -17566,7 +17563,7 @@ pub const Interpreter = struct {
                         // already unified flex vars with Dec before reaching here.
                         break :blk null;
                     },
-                    else => null,
+                    .alias => null,
                 };
 
                 if (nominal_info == null) {
@@ -17942,7 +17939,7 @@ pub const Interpreter = struct {
                                                 const fields_range = switch (backing_resolved.desc.content.structure) {
                                                     .record => |rec| rec.fields,
                                                     .record_unbound => |fields| fields,
-                                                    else => null,
+                                                    .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => null,
                                                 };
                                                 if (fields_range) |range| {
                                                     // Find rigids in field types and map them to type args
@@ -18000,9 +17997,9 @@ pub const Interpreter = struct {
                                         }
                                         break :blk try self.runtime_types.fresh();
                                     },
-                                    else => break :blk try self.runtime_types.fresh(),
+                                    .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => break :blk try self.runtime_types.fresh(),
                                 },
-                                else => break :blk try self.runtime_types.fresh(),
+                                .flex, .rigid, .err => break :blk try self.runtime_types.fresh(),
                             }
                         }
                     };
@@ -18065,7 +18062,7 @@ pub const Interpreter = struct {
                                     const fields_range = switch (s) {
                                         .record => |rec| rec.fields,
                                         .record_unbound => |fields| fields,
-                                        else => unreachable,
+                                        .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => unreachable,
                                     };
                                     const fields = self.runtime_types.getRecordFieldsSlice(fields_range);
                                     var field_rt_var: types.Var = try self.runtime_types.fresh();
@@ -18209,7 +18206,7 @@ pub const Interpreter = struct {
                             }
                             break :blk null;
                         },
-                        else => null,
+                        .fn_pure, .fn_effectful, .fn_unbound => null,
                     },
                     .flex, .rigid, .err => blk: {
                         // For flex/rigid types, check if it's numeric is_eq that we can handle directly
@@ -18271,7 +18268,7 @@ pub const Interpreter = struct {
                                         .ident = nom.ident.ident_idx,
                                     };
                                 },
-                                else => {},
+                                .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => {},
                             }
                         }
                         // For flex/rigid numeric types with other method calls (like to_str),
@@ -18328,14 +18325,14 @@ pub const Interpreter = struct {
                                                 .ident = nom.ident.ident_idx,
                                             };
                                         },
-                                        else => {},
+                                        .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => {},
                                     }
                                 }
                             }
                         }
                         break :blk null;
                     },
-                    else => null,
+                    .alias, .structure => null,
                 };
 
                 if (nominal_info == null) {
@@ -18776,7 +18773,7 @@ pub const Interpreter = struct {
                             .fn_pure => |f| .{ .args = f.args, .ret = f.ret },
                             .fn_effectful => |f| .{ .args = f.args, .ret = f.ret },
                             .fn_unbound => |f| .{ .args = f.args, .ret = f.ret },
-                            else => null,
+                            .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => null,
                         };
 
                         if (func_info) |info| {
@@ -18900,7 +18897,7 @@ pub const Interpreter = struct {
                     .fn_pure => |f| self.runtime_types.sliceVars(f.args),
                     .fn_effectful => |f| self.runtime_types.sliceVars(f.args),
                     .fn_unbound => |f| self.runtime_types.sliceVars(f.args),
-                    else => &[_]types.Var{},
+                    .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => &[_]types.Var{},
                 };
                 if (fn_args.len >= 1) {
                     // Create a copy of the receiver's type to avoid corrupting the original
@@ -20219,7 +20216,7 @@ test "interpreter: translateTypeVar for nominal Point(Str)" {
             try std.testing.expect(b_resolved.desc.content == .structure);
             try std.testing.expect(b_resolved.desc.content.structure == .nominal_type);
         },
-        else => return error.TestUnexpectedResult,
+        .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => return error.TestUnexpectedResult,
     }
 }
 
