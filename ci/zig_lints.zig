@@ -56,7 +56,37 @@ pub fn main() !void {
         }
     }
 
-    // Lint 2: Check for pub declarations without doc comments
+    // Lint 2: Check for non-exhaustive "else =>" in switch statements
+    try stdout.print("Checking for non-exhaustive 'else =>' in switch statements...\n", .{});
+
+    {
+        var src_zig_files = PathList{};
+        defer freePathList(&src_zig_files, gpa);
+
+        try walkTree(gpa, "src", &src_zig_files);
+
+        for (src_zig_files.items) |file_path| {
+            const errors = try checkElseArrow(gpa, file_path);
+            defer gpa.free(errors);
+
+            if (errors.len > 0) {
+                try stdout.print("{s}", .{errors});
+                found_errors = true;
+            }
+        }
+
+        if (found_errors) {
+            try stdout.print("\n", .{});
+            try stdout.print("'else =>' is banned in src/. All switch statements must exhaustively match every possibility.\n", .{});
+            try stdout.print("This policy ensures that when new enum variants are added, the compiler tells us every\n", .{});
+            try stdout.print("spot that needs to handle them, rather than silently falling through to an else branch.\n", .{});
+            try stdout.print("\n", .{});
+            try stdout.flush();
+            std.process.exit(1);
+        }
+    }
+
+    // Lint 3: Check for pub declarations without doc comments
     try stdout.print("Checking for pub declarations without doc comments...\n", .{});
 
     var zig_files = PathList{};
@@ -82,7 +112,7 @@ pub fn main() !void {
         std.process.exit(1);
     }
 
-    // Lint 2: Check for top level comments in new Zig files
+    // Lint 4: Check for top level comments in new Zig files
     try stdout.print("Checking for top level comments in new Zig files...\n", .{});
 
     var new_zig_files = try getNewZigFiles(gpa);
@@ -265,6 +295,33 @@ fn containsBoxDrawingCorner(content: []const u8) bool {
         }
     }
     return false;
+}
+
+fn checkElseArrow(allocator: Allocator, file_path: []const u8) ![]u8 {
+    const source = readSourceFile(allocator, file_path) catch |err| switch (err) {
+        error.FileNotFound => return try allocator.dupe(u8, ""),
+        else => return err,
+    };
+    defer allocator.free(source);
+
+    var errors = std.ArrayList(u8){};
+    errdefer errors.deinit(allocator);
+
+    var line_num: usize = 1;
+    var lines = std.mem.splitScalar(u8, source, '\n');
+
+    while (lines.next()) |line| {
+        defer line_num += 1;
+
+        const trimmed = std.mem.trimLeft(u8, line, " \t");
+
+        // Match "else =>" as a standalone switch arm (not inside strings or comments)
+        if (std.mem.startsWith(u8, trimmed, "else =>")) {
+            try errors.writer(allocator).print("{s}:{d}: 'else =>' is not allowed; use exhaustive match instead\n", .{ file_path, line_num });
+        }
+    }
+
+    return errors.toOwnedSlice(allocator);
 }
 
 fn checkPubDocComments(allocator: Allocator, file_path: []const u8) ![]u8 {
