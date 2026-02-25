@@ -56,8 +56,8 @@ pub fn main() !void {
         }
     }
 
-    // Lint 2: Check for non-exhaustive "else =>" in switch statements
-    try stdout.print("Checking for non-exhaustive 'else =>' in switch statements...\n", .{});
+    // Lint 2: Forbid catch-all arms in enum/tagged-union switches
+    try stdout.print("Checking for forbidden catch-all switch arms ('else =>' and '_ =>')...\n", .{});
 
     {
         var src_zig_files = PathList{};
@@ -66,7 +66,7 @@ pub fn main() !void {
         try walkTree(gpa, "src", &src_zig_files);
 
         for (src_zig_files.items) |file_path| {
-            const errors = try checkElseArrow(gpa, file_path);
+            const errors = try checkCatchAllSwitchArms(gpa, file_path);
             defer gpa.free(errors);
 
             if (errors.len > 0) {
@@ -77,9 +77,9 @@ pub fn main() !void {
 
         if (found_errors) {
             try stdout.print("\n", .{});
-            try stdout.print("'else =>' is banned in src/. All switch statements must exhaustively match every possibility.\n", .{});
-            try stdout.print("This policy ensures that when new enum variants are added, the compiler tells us every\n", .{});
-            try stdout.print("spot that needs to handle them, rather than silently falling through to an else branch.\n", .{});
+            try stdout.print("Catch-all switch arms ('else =>' and '_ =>') are banned for enum/tagged-union switches in src/.\n", .{});
+            try stdout.print("The only acceptable fix is to explicitly enumerate every enum/tagged-union variant in the switch.\n", .{});
+            try stdout.print("Do not use catch-all arms to bypass exhaustiveness.\n", .{});
             try stdout.print("\n", .{});
             try stdout.flush();
             std.process.exit(1);
@@ -297,14 +297,14 @@ fn containsBoxDrawingCorner(content: []const u8) bool {
     return false;
 }
 
-fn checkElseArrow(allocator: Allocator, file_path: []const u8) ![]u8 {
+fn checkCatchAllSwitchArms(allocator: Allocator, file_path: []const u8) ![]u8 {
     const source = readSourceFile(allocator, file_path) catch |err| switch (err) {
         error.FileNotFound => return try allocator.dupe(u8, ""),
         else => return err,
     };
     defer allocator.free(source);
 
-    // Collect all lines so we can look backwards from each `else =>`.
+    // Collect all lines so we can look backwards from each catch-all arm.
     var all_lines = std.ArrayList([]const u8){};
     defer all_lines.deinit(allocator);
 
@@ -319,26 +319,26 @@ fn checkElseArrow(allocator: Allocator, file_path: []const u8) ![]u8 {
     for (all_lines.items, 0..) |line, idx| {
         const trimmed = std.mem.trimLeft(u8, line, " \t");
 
-        if (!std.mem.startsWith(u8, trimmed, "else =>")) continue;
+        if (!isCatchAllSwitchArm(trimmed)) continue;
 
         // Look at sibling arms above to determine if this is an enum switch.
         // If any sibling arm starts with '.' (an enum literal), flag it.
         if (isEnumSwitch(all_lines.items, idx)) {
-            try errors.writer(allocator).print("{s}:{d}: 'else =>' is not allowed; use exhaustive match instead\n", .{ file_path, idx + 1 });
+            try errors.writer(allocator).print("{s}:{d}: catch-all switch arms ('else =>' and '_ =>') are not allowed; explicitly enumerate every enum/tagged-union variant\n", .{ file_path, idx + 1 });
         }
     }
 
     return errors.toOwnedSlice(allocator);
 }
 
-/// Scan backwards from an `else =>` line to find sibling switch arms.
+/// Scan backwards from a catch-all arm line to find sibling switch arms.
 /// Returns true if any sibling arm starts with '.' (enum literal syntax),
 /// indicating this is an enum/tagged-union switch that should be exhaustive.
-fn isEnumSwitch(lines: []const []const u8, else_idx: usize) bool {
-    const else_indent = indentLen(lines[else_idx]);
+fn isEnumSwitch(lines: []const []const u8, arm_idx: usize) bool {
+    const arm_indent = indentLen(lines[arm_idx]);
 
     // Walk backwards looking for arms at the same indentation level.
-    var i: usize = else_idx;
+    var i: usize = arm_idx;
     while (i > 0) {
         i -= 1;
         const prev = lines[i];
@@ -350,16 +350,31 @@ fn isEnumSwitch(lines: []const []const u8, else_idx: usize) bool {
         const prev_indent = indentLen(prev);
 
         // If we've dedented past the switch arms, we've left the switch body.
-        if (prev_indent < else_indent) break;
+        if (prev_indent < arm_indent) break;
 
         // Only look at lines at the same indent level (sibling arms).
-        if (prev_indent != else_indent) continue;
+        if (prev_indent != arm_indent) continue;
 
         // A sibling arm starting with '.' is an enum literal.
         if (prev_trimmed[0] == '.') return true;
     }
 
     return false;
+}
+
+fn isCatchAllSwitchArm(trimmed: []const u8) bool {
+    if (startsWithArmPrefix(trimmed, "else")) return true;
+    if (startsWithArmPrefix(trimmed, "_")) return true;
+    return false;
+}
+
+fn startsWithArmPrefix(trimmed: []const u8, prefix: []const u8) bool {
+    if (!std.mem.startsWith(u8, trimmed, prefix)) return false;
+
+    var i = prefix.len;
+    while (i < trimmed.len and (trimmed[i] == ' ' or trimmed[i] == '\t')) : (i += 1) {}
+
+    return std.mem.startsWith(u8, trimmed[i..], "=>");
 }
 
 fn indentLen(line: []const u8) usize {
