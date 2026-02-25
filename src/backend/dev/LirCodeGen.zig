@@ -28,7 +28,6 @@ const x86_64 = @import("x86_64/mod.zig");
 const aarch64 = @import("aarch64/mod.zig");
 const CallingConventionMod = @import("CallingConvention.zig");
 const CallingConvention = CallingConventionMod.CallingConvention;
-const FrameBuilderMod = @import("FrameBuilder.zig");
 const RocTarget = @import("roc_target").RocTarget;
 
 // Num builtin functions for 128-bit integer operations
