@@ -711,7 +711,16 @@ pub const CompletionBuilder = struct {
                             content = resolved.desc.content;
                             continue;
                         },
-                        _ => break,
+                        .record,
+                        .record_unbound,
+                        .tuple,
+                        .fn_pure,
+                        .fn_effectful,
+                        .fn_unbound,
+                        .empty_record,
+                        .tag_union,
+                        .empty_tag_union,
+                        => break,
                     }
                 },
                 .flex, .rigid, .err => break,
@@ -837,7 +846,16 @@ pub const CompletionBuilder = struct {
                             content = resolved.desc.content;
                             continue;
                         },
-                        _ => break,
+                        .record,
+                        .record_unbound,
+                        .tuple,
+                        .fn_pure,
+                        .fn_effectful,
+                        .fn_unbound,
+                        .empty_record,
+                        .tag_union,
+                        .empty_tag_union,
+                        => break,
                     }
                 },
                 .flex, .rigid, .err => break,
@@ -1056,7 +1074,16 @@ pub const CompletionBuilder = struct {
                 .alias => |alias| alias.ident.ident_idx,
                 .structure => |flat_type| switch (flat_type) {
                     .nominal_type => |nominal| nominal.ident.ident_idx,
-                    _ => null,
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union,
+                    => null,
                 },
                 .flex, .rigid, .err => null,
             };
@@ -1385,7 +1412,23 @@ pub const CompletionBuilder = struct {
                     const anno = module_env.store.getTypeAnno(nom_decl.anno);
                     return try self.addTagsFromTypeAnno(module_env, anno);
                 },
-                _ => {},
+                .s_decl,
+                .s_var,
+                .s_reassign,
+                .s_crash,
+                .s_dbg,
+                .s_expr,
+                .s_expect,
+                .s_for,
+                .s_while,
+                .s_break,
+                .s_return,
+                .s_import,
+                .s_alias_decl,
+                .s_type_anno,
+                .s_type_var_alias,
+                .s_runtime_error,
+                => {},
             }
         }
         return false;

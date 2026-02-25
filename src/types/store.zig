@@ -1504,7 +1504,16 @@ test "Store comprehensive CompactWriter roundtrip" {
             try std.testing.expectEqual(arg2, args[1]);
             try std.testing.expectEqual(ret, func.ret);
         },
-        _ => unreachable,
+        .record,
+        .record_unbound,
+        .tuple,
+        .nominal_type,
+        .fn_effectful,
+        .fn_unbound,
+        .empty_record,
+        .tag_union,
+        .empty_tag_union,
+        => unreachable,
     }
 
     const deser_record = deserialized.resolveVar(record_var);
@@ -1518,7 +1527,16 @@ test "Store comprehensive CompactWriter roundtrip" {
             try std.testing.expectEqual(field2_var, fields_slice.items(.var_)[1]);
             try std.testing.expectEqual(record_ext, record.ext);
         },
-        _ => unreachable,
+        .record_unbound,
+        .tuple,
+        .nominal_type,
+        .fn_pure,
+        .fn_effectful,
+        .fn_unbound,
+        .empty_record,
+        .tag_union,
+        .empty_tag_union,
+        => unreachable,
     }
 
     const deser_tag_union = deserialized.resolveVar(tag_union_var);
@@ -1540,7 +1558,16 @@ test "Store comprehensive CompactWriter roundtrip" {
 
             try std.testing.expectEqual(tag_union_ext, tag_union.ext);
         },
-        _ => unreachable,
+        .record,
+        .record_unbound,
+        .tuple,
+        .nominal_type,
+        .fn_pure,
+        .fn_effectful,
+        .fn_unbound,
+        .empty_record,
+        .empty_tag_union,
+        => unreachable,
     }
 }
 

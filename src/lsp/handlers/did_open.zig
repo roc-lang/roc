@@ -35,13 +35,27 @@ pub fn handler(comptime ServerType: type) type {
             const uri_value = text_doc.get("uri") orelse return;
             const uri = switch (uri_value) {
                 .string => |s| s,
-                _ => return,
+                .null,
+                .bool,
+                .integer,
+                .float,
+                .number_string,
+                .array,
+                .object,
+                => return,
             };
 
             const text_value = text_doc.get("text") orelse return;
             const text = switch (text_value) {
                 .string => |s| s,
-                _ => return,
+                .null,
+                .bool,
+                .integer,
+                .float,
+                .number_string,
+                .array,
+                .object,
+                => return,
             };
 
             const version_value = text_doc.get("version") orelse std.json.Value{ .integer = 0 };

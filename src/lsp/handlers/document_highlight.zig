@@ -24,7 +24,14 @@ pub fn handler(comptime ServerType: type) type {
 
             const obj = switch (params) {
                 .object => |o| o,
-                _ => {
+                .null,
+                .bool,
+                .integer,
+                .float,
+                .number_string,
+                .string,
+                .array,
+                => {
                     try self.sendError(id, .invalid_params, "documentHighlight params must be an object");
                     return;
                 },
@@ -37,7 +44,14 @@ pub fn handler(comptime ServerType: type) type {
             };
             const text_doc = switch (text_doc_value) {
                 .object => |o| o,
-                _ => {
+                .null,
+                .bool,
+                .integer,
+                .float,
+                .number_string,
+                .string,
+                .array,
+                => {
                     try self.sendError(id, .invalid_params, "textDocument must be an object");
                     return;
                 },
@@ -48,7 +62,14 @@ pub fn handler(comptime ServerType: type) type {
             };
             const uri = switch (uri_value) {
                 .string => |s| s,
-                _ => {
+                .null,
+                .bool,
+                .integer,
+                .float,
+                .number_string,
+                .array,
+                .object,
+                => {
                     try self.sendError(id, .invalid_params, "uri must be a string");
                     return;
                 },
@@ -61,7 +82,14 @@ pub fn handler(comptime ServerType: type) type {
             };
             const position_obj = switch (position_value) {
                 .object => |o| o,
-                _ => {
+                .null,
+                .bool,
+                .integer,
+                .float,
+                .number_string,
+                .string,
+                .array,
+                => {
                     try self.sendError(id, .invalid_params, "position must be an object");
                     return;
                 },
@@ -71,14 +99,28 @@ pub fn handler(comptime ServerType: type) type {
                 const v = position_obj.get("line") orelse break :blk 0;
                 break :blk switch (v) {
                     .integer => |i| @intCast(i),
-                    _ => 0,
+                    .null,
+                    .bool,
+                    .float,
+                    .number_string,
+                    .string,
+                    .array,
+                    .object,
+                    => 0,
                 };
             };
             const character: u32 = blk: {
                 const v = position_obj.get("character") orelse break :blk 0;
                 break :blk switch (v) {
                     .integer => |i| @intCast(i),
-                    _ => 0,
+                    .null,
+                    .bool,
+                    .float,
+                    .number_string,
+                    .string,
+                    .array,
+                    .object,
+                    => 0,
                 };
             };
 

@@ -997,7 +997,16 @@ pub const SyntaxChecker = struct {
             .structure => |flat_type| {
                 switch (flat_type) {
                     .nominal_type => |nominal| return @as(?base.Ident.Idx, nominal.ident.ident_idx),
-                    _ => return null,
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union,
+                    => return null,
                 }
             },
             .flex, .rigid, .err => return null,
@@ -1097,7 +1106,23 @@ pub const SyntaxChecker = struct {
             const stmt = store.getStatement(stmt_idx);
             const pattern_idx = switch (stmt) {
                 .s_decl => |decl| decl.pattern,
-                _ => continue,
+                .s_var,
+                .s_reassign,
+                .s_crash,
+                .s_dbg,
+                .s_expr,
+                .s_expect,
+                .s_for,
+                .s_while,
+                .s_break,
+                .s_return,
+                .s_import,
+                .s_alias_decl,
+                .s_nominal_decl,
+                .s_type_anno,
+                .s_type_var_alias,
+                .s_runtime_error,
+                => continue,
             };
 
             const pattern = store.getPattern(pattern_idx);
@@ -2097,7 +2122,11 @@ pub const SyntaxChecker = struct {
                     content = resolved.desc.content;
                     continue;
                 },
-                _ => break,
+                .flex,
+                .rigid,
+                .structure,
+                .err,
+                => break,
             }
         }
 

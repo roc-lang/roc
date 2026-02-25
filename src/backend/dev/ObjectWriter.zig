@@ -30,7 +30,6 @@ pub fn generateObjectFile(
             const elf_arch: object.elf.Architecture = switch (cpu_arch) {
                 .x86_64 => .x86_64,
                 .aarch64 => .aarch64,
-                _ => return error.UnsupportedTarget,
             };
             var elf = try object.ElfWriter.init(allocator, elf_arch);
             defer elf.deinit();
@@ -69,7 +68,6 @@ pub fn generateObjectFile(
             const macho_arch: object.macho.Architecture = switch (cpu_arch) {
                 .x86_64 => .x86_64,
                 .aarch64 => .aarch64,
-                _ => return error.UnsupportedTarget,
             };
             var macho = try object.MachOWriter.init(allocator, macho_arch);
             defer macho.deinit();
@@ -104,7 +102,6 @@ pub fn generateObjectFile(
             const coff_arch: object.coff.Architecture = switch (cpu_arch) {
                 .x86_64 => .x86_64,
                 .aarch64 => .aarch64,
-                _ => return error.UnsupportedTarget,
             };
             var coff_writer = try object.CoffWriter.init(allocator, coff_arch);
             defer coff_writer.deinit();
@@ -148,7 +145,41 @@ pub fn generateObjectFile(
 
             try coff_writer.write(output);
         },
-        _ => return error.UnsupportedTarget,
+        .freestanding,
+        .other,
+        .contiki,
+        .fuchsia,
+        .hermit,
+        .aix,
+        .haiku,
+        .hurd,
+        .plan9,
+        .rtems,
+        .serenity,
+        .zos,
+        .dragonfly,
+        .driverkit,
+        .ios,
+        .tvos,
+        .visionos,
+        .watchos,
+        .illumos,
+        .solaris,
+        .uefi,
+        .ps3,
+        .ps4,
+        .ps5,
+        .emscripten,
+        .wasi,
+        .amdhsa,
+        .amdpal,
+        .cuda,
+        .mesa3d,
+        .nvcl,
+        .opencl,
+        .opengl,
+        .vulkan,
+        => return error.UnsupportedTarget,
     }
 }
 

@@ -5486,7 +5486,10 @@ fn rocGlueInner(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
                     return error.ProcessFailed;
                 }
             },
-            _ => {
+            .Signal,
+            .Stopped,
+            .Unknown,
+            => {
                 return error.ProcessFailed;
             },
         }
@@ -5541,7 +5544,10 @@ fn rocGlueInner(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
                     return error.ProcessFailed;
                 }
             },
-            _ => {
+            .Signal,
+            .Stopped,
+            .Unknown,
+            => {
                 stderr.print("Glue spec terminated abnormally\n", .{}) catch {};
                 return error.ProcessFailed;
             },
