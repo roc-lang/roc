@@ -1444,8 +1444,17 @@ fn processSnapshotContent(
         };
 
         if (summary.failed > 0) {
-            std.debug.print("Expect failures in {s}: {d} passed, {d} failed\n", .{
-                output_path, summary.passed, summary.failed,
+            std.debug.print(
+                \\
+                \\-- EXPECT FAILURES --------------------------------
+                \\
+                \\{d} expect(s) failed in {s}
+                \\({d} passed, {d} failed)
+                \\
+                \\
+            , .{
+                summary.failed, output_path,
+                summary.passed, summary.failed,
             });
             success = false;
         }
