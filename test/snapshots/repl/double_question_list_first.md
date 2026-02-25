@@ -9,8 +9,8 @@ type=repl
 » List.first([]) ?? 99
 ~~~
 # OUTPUT
-1
+1.0
 ---
-99
+99.0
 # PROBLEMS
 NIL

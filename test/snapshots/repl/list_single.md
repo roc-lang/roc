@@ -10,10 +10,10 @@ type=repl
 » List.single([1, 2, 3])
 ~~~
 # OUTPUT
-[1]
+[1.0]
 ---
 ["hello"]
 ---
-[[1, 2, 3]]
+[[1.0, 2.0, 3.0]]
 # PROBLEMS
 NIL

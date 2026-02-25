@@ -6,8 +6,6 @@ const can = @import("can");
 const layout = @import("layout");
 const builtins = @import("builtins");
 const StackValue = @import("StackValue.zig");
-const RocDec = builtins.dec.RocDec;
-const i128h = builtins.compiler_rt_128;
 const TypeScope = types.TypeScope;
 
 /// Copy tags and sort them alphabetically, returning the tag at the given index.

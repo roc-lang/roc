@@ -922,7 +922,7 @@ fn formatTagUnion(
         const fmt_ctx = RocValue.FormatContext{
             .layout_store = layout_store,
             .ident_store = ident_store,
-            };
+        };
         return roc_val.format(allocator, fmt_ctx);
     }
 

@@ -255,14 +255,14 @@ test "fx platform all_syntax_test.roc prints expected output" {
         "Line 3\n" ++
         "Unicode escape sequence: \u{00A0}\n" ++
         "This is an effectful function!\n" ++
-        "Try.Ok(1)\n" ++
+        "Ok(1)\n" ++
         "15.0\n" ++
         "False\n" ++
         "10.0\n" ++
         "42.0\n" ++
         "NotOneTwoNotFive\n" ++
         "(\"Roc\", 1.0)\n" ++
-        "Builtin.List.[\"a\", \"b\"]\n" ++
+        "[\"a\", \"b\"]\n" ++
         "(\"Roc\", 1.0, 1.0, \"Roc\")\n" ++
         "10.0\n" ++
         "{ age: 31, name: \"Alice\" }\n" ++

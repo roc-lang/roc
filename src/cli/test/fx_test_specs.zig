@@ -168,7 +168,7 @@ pub const io_spec_tests = [_]TestSpec{
     // Inspect tests
     .{
         .roc_file = "test/fx/inspect_compare_test.roc",
-        .io_spec = "1>With to_inspect: Custom::Red|1>Without to_inspect: ColorWithoutInspect.Red|1>Primitive: 42.0",
+        .io_spec = "1>With to_inspect: Custom::Red|1>Without to_inspect: Red|1>Primitive: 42.0",
         .description = "Inspect comparison with and without to_inspect",
     },
     .{
@@ -184,7 +184,7 @@ pub const io_spec_tests = [_]TestSpec{
     },
     .{
         .roc_file = "test/fx/inspect_no_method_test.roc",
-        .io_spec = "1>Result: Color.Red|1>(Default rendering)",
+        .io_spec = "1>Result: Red|1>(Default rendering)",
         .description = "Inspect without to_inspect method",
     },
     .{

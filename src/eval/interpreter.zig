@@ -7420,7 +7420,6 @@ pub const Interpreter = struct {
 
     /// Like renderValueRocWithType but with REPL-specific formatting.
     /// Strips .0 suffix from whole-number Dec values when the type is unbound.
-
     fn makeListSliceValue(
         self: *Interpreter,
         list_layout: Layout,
