@@ -412,7 +412,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
                 }
                 return;
             },
-            _ => {},
+            .opaque_ptr, .frac => {},
         }
     }
 
@@ -1840,7 +1840,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             }
             return;
         },
-        _ => {},
+        .zst => {},
     }
 
     // Non-refcounted values require no action

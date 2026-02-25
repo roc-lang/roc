@@ -165,7 +165,7 @@ pub fn runNative(
             std.debug.print("FAIL (signal {d})\n", .{sig});
             return .failed;
         },
-        _ => {
+        .Stopped, .Unknown => {
             std.debug.print("FAIL (abnormal termination)\n", .{});
             return .failed;
         },
@@ -230,7 +230,7 @@ pub fn runWithIoSpec(
             std.debug.print("FAIL (signal {d})\n", .{sig});
             return .failed;
         },
-        _ => {
+        .Stopped, .Unknown => {
             std.debug.print("FAIL (abnormal termination)\n", .{});
             return .failed;
         },
@@ -303,7 +303,7 @@ fn runWithIoSpecBuildAndExec(
             std.debug.print("FAIL (signal {d})\n", .{sig});
             return .failed;
         },
-        _ => {
+        .Stopped, .Unknown => {
             std.debug.print("FAIL (abnormal termination)\n", .{});
             return .failed;
         },
@@ -355,7 +355,7 @@ pub fn runWithValgrind(
             std.debug.print("FAIL (signal {d})\n", .{sig});
             return .failed;
         },
-        _ => {
+        .Stopped, .Unknown => {
             std.debug.print("FAIL (abnormal termination)\n", .{});
             return .failed;
         },
@@ -461,7 +461,7 @@ fn handleProcessResult(result: std.process.Child.RunResult, output_name: []const
             std.debug.print("FAIL (signal {d})\n", .{sig});
             return .failed;
         },
-        _ => {
+        .Stopped, .Unknown => {
             std.debug.print("FAIL (abnormal termination)\n", .{});
             return .failed;
         },
@@ -501,7 +501,7 @@ fn handleProcessResultNoCleanup(result: std.process.Child.RunResult, output_name
             std.debug.print("FAIL (signal {d})\n", .{sig});
             return .failed;
         },
-        _ => {
+        .Stopped, .Unknown => {
             std.debug.print("FAIL (abnormal termination)\n", .{});
             return .failed;
         },

@@ -2836,7 +2836,7 @@ fn extractEntrypointsFromPlatform(ctx: *CliContext, roc_file_path: []const u8, e
                             return error.InvalidProvidesEntry;
                         },
                         .string_part => |str_part| break :blk parse_ast.resolve(str_part.token),
-                        _ => {
+                        .int, .frac, .typed_int, .typed_frac, .single_quote, .multiline_string, .list, .tuple, .record, .tag, .lambda, .apply, .record_updater, .field_access, .tuple_access, .local_dispatch, .bin_op, .suffix_single_question, .unary_op, .if_then_else, .if_without_else, .match, .ident, .dbg, .record_builder, .ellipsis, .block, .for_expr, .malformed => {
                             return error.InvalidProvidesEntry;
                         },
                     }
@@ -3031,7 +3031,7 @@ fn validateBundleWithCoordinator(
                 return switch (result) {
                     .missing_target_file => error.MissingTargetFile,
                     .missing_files_directory => error.MissingFilesDirectory,
-                    _ => error.MissingTargetFile,
+                    .valid, .missing_targets_section, .extra_file, .empty_targets, .unsupported_target, .missing_cross_compile_host, .unsupported_glibc_cross, .no_platform_found, .invalid_target, .linker_failed, .linker_not_available, .process_crashed, .process_signaled => error.MissingTargetFile,
                 };
             }
         }
@@ -6032,7 +6032,7 @@ fn generateStubExprFromTypeAnno(gpa: std.mem.Allocator, env: *ModuleEnv, ast: *c
             }
             buf.appendSlice(gpa, " }") catch {};
         },
-        _ => {
+        .apply, .ty_var, .underscore_type_var, .underscore, .ty, .tag_union, .tuple, .parens, .malformed => {
             // For all other types, use { ... } to crash at runtime
             buf.appendSlice(gpa, "{ ... }") catch {};
         },
@@ -7180,7 +7180,7 @@ fn extractAssociatedItems(
                     _ => continue,
                 };
             },
-            _ => continue,
+            .as, .applied_tag, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .underscore, .runtime_error => continue,
         };
 
         const name = try ctx.gpa.dupe(u8, module_env.getIdentText(name_ident_opt));

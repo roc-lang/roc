@@ -670,7 +670,7 @@ pub const Layout = packed struct {
             },
             .list, .list_of_zst => true, // Lists need refcounting
             .box, .box_of_zst => true, // Boxes need refcounting
-            _ => false,
+            .record, .tuple, .closure, .zst, .tag_union => false,
         };
     }
 

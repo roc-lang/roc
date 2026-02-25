@@ -1483,7 +1483,7 @@ pub const BuildEnv = struct {
                                 continue;
                             },
                             .string_part => |str_part| break :blk ast.resolve(str_part.token),
-                            _ => continue,
+                            .int, .frac, .typed_int, .typed_frac, .single_quote, .multiline_string, .list, .tuple, .record, .tag, .lambda, .apply, .record_updater, .field_access, .tuple_access, .local_dispatch, .bin_op, .suffix_single_question, .unary_op, .if_then_else, .if_without_else, .match, .ident, .dbg, .record_builder, .ellipsis, .block, .for_expr, .malformed => continue,
                         }
                     } else continue;
                     try info.provides_entries.append(self.gpa, .{
@@ -1513,7 +1513,7 @@ pub const BuildEnv = struct {
                 info.kind = .default_app;
                 // Default app headers are for REPL-style execution
             },
-            _ => return error.UnsupportedHeader,
+            .malformed => return error.UnsupportedHeader,
         }
 
         return info;

@@ -2018,11 +2018,11 @@ pub const Store = struct {
                                                 break :blk switch (mapped_resolved.desc.content) {
                                                     .structure => |ft| switch (ft) {
                                                         .empty_record, .empty_tag_union => true,
-                                                        _ => false,
+                                                        .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union => false,
                                                     },
                                                     // A mapped flex/rigid should be computed, not assumed ZST
                                                     .flex, .rigid => false,
-                                                    _ => false,
+                                                    .alias, .err => false,
                                                 };
                                             }
                                         }
@@ -2045,11 +2045,11 @@ pub const Store = struct {
                                                 break :blk switch (mapped_resolved.desc.content) {
                                                     .structure => |ft| switch (ft) {
                                                         .empty_record, .empty_tag_union => true,
-                                                        _ => false,
+                                                        .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union => false,
                                                     },
                                                     // A mapped flex/rigid should be computed, not assumed ZST
                                                     .flex, .rigid => false,
-                                                    _ => false,
+                                                    .alias, .err => false,
                                                 };
                                             }
                                         }
@@ -2070,10 +2070,10 @@ pub const Store = struct {
                                                         break :blk switch (mapped_resolved.desc.content) {
                                                             .structure => |ft| switch (ft) {
                                                                 .empty_record, .empty_tag_union => true,
-                                                                _ => false,
+                                                                .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union => false,
                                                             },
                                                             .flex, .rigid => false,
-                                                            _ => false,
+                                                            .alias, .err => false,
                                                         };
                                                     }
                                                 }
@@ -2086,9 +2086,9 @@ pub const Store = struct {
                                     },
                                     .structure => |ft| switch (ft) {
                                         .empty_record, .empty_tag_union => true,
-                                        _ => false,
+                                        .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union => false,
                                     },
-                                    _ => false,
+                                    .alias, .err => false,
                                 };
 
                                 if (is_elem_zst) {
@@ -2435,7 +2435,7 @@ pub const Store = struct {
                                         _ = self.work.pending_containers.pop();
                                         break :blk Layout.boxOfZst();
                                     },
-                                    _ => {
+                                    .record, .tuple, .tag_union => {
                                         // For records and tuples, treat ZST fields normally
                                         break :blk Layout.zst();
                                     },

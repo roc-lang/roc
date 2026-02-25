@@ -1547,7 +1547,7 @@ const Formatter = struct {
                         }
                         try fmt.pushTokenText(id.token);
                     },
-                    _ => {
+                    .var_ident, .int, .frac, .string, .single_quote, .record, .list, .list_rest, .tuple, .underscore, .alternatives, .as, .malformed => {
                         // Fallback - shouldn't happen for valid record builders
                         try fmt.push('.');
                         _ = try fmt.formatExpr(rb.mapper);
@@ -1557,7 +1557,7 @@ const Formatter = struct {
             .malformed => {
                 // Output nothing for malformed node
             },
-            _ => {
+            .record_updater => {
                 std.debug.panic("TODO: Handle formatting {s}", .{@tagName(expr)});
             },
         }
@@ -2650,7 +2650,7 @@ const Formatter = struct {
             .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent, .DotLowerIdent, .DotUpperIdent => {
                 start += 1;
             },
-            _ => {},
+            .EndOfFile, .Float, .StringStart, .StringEnd, .MultilineStringStart, .StringPart, .MalformedStringPart, .SingleQuote, .MalformedSingleQuote, .Int, .MalformedNumberBadSuffix, .MalformedNumberUnicodeSuffix, .MalformedNumberNoDigits, .MalformedNumberNoExponentDigits, .MalformedInvalidUnicodeEscapeSequence, .MalformedInvalidEscapeSequence, .UpperIdent, .LowerIdent, .MalformedUnicodeIdent, .Underscore, .DotInt, .NoSpaceDotInt, .MalformedDotUnicodeIdent, .MalformedNoSpaceDotUnicodeIdent, .NamedUnderscore, .MalformedNamedUnderscoreUnicode, .OpaqueName, .MalformedOpaqueNameUnicode, .MalformedOpaqueNameWithoutName, .OpenRound, .CloseRound, .OpenSquare, .CloseSquare, .OpenCurly, .CloseCurly, .OpenStringInterpolation, .CloseStringInterpolation, .NoSpaceOpenRound, .OpPlus, .OpStar, .OpPizza, .OpAssign, .OpBinaryMinus, .OpUnaryMinus, .OpNotEquals, .OpBang, .OpAnd, .OpAmpersand, .OpQuestion, .OpDoubleQuestion, .OpOr, .OpBar, .OpDoubleSlash, .OpSlash, .OpPercent, .OpCaret, .OpGreaterThanOrEq, .OpGreaterThan, .OpLessThanOrEq, .OpBackArrow, .OpLessThan, .OpEquals, .OpColonEqual, .OpDoubleColon, .NoSpaceOpQuestion, .Comma, .Dot, .DoubleDot, .TripleDot, .DotStar, .OpColon, .OpArrow, .OpFatArrow, .OpBackslash, .KwApp, .KwAs, .KwCrash, .KwDbg, .KwElse, .KwExpect, .KwExposes, .KwExposing, .KwFor, .KwGenerates, .KwHas, .KwHosted, .KwIf, .KwImplements, .KwImport, .KwImports, .KwIn, .KwInterface, .KwMatch, .KwModule, .KwPackage, .KwPackages, .KwPlatform, .KwProvides, .KwRequires, .KwReturn, .KwTargets, .KwVar, .KwWhere, .KwWhile, .KwWith, .KwBreak, .MalformedUnknownToken => {},
         }
 
         const text = fmt.ast.env.source[start..region.end.offset];
@@ -2763,7 +2763,7 @@ const Formatter = struct {
 
                         return fmt.nodeWillBeMultiline(AST.Expr.Idx, f.body);
                     },
-                    _ => return false,
+                    .int, .frac, .typed_int, .typed_frac, .single_quote, .string_part, .string, .multiline_string, .list, .tag, .record_updater, .tuple_access, .match, .ident, .dbg, .ellipsis, .malformed => return false,
                 }
             },
             AST.Pattern.Idx => {

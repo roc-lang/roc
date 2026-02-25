@@ -75,7 +75,7 @@ fn checkSuccess(result: std.process.Child.RunResult) !void {
             std.debug.print("STDERR: {s}\n", .{result.stderr});
             return error.SegFault;
         },
-        _ => {
+        .Stopped, .Unknown => {
             std.debug.print("Run terminated abnormally: {}\n", .{result.term});
             std.debug.print("STDOUT: {s}\n", .{result.stdout});
             std.debug.print("STDERR: {s}\n", .{result.stderr});
@@ -102,7 +102,7 @@ fn checkFailure(result: std.process.Child.RunResult) !void {
             std.debug.print("STDERR: {s}\n", .{result.stderr});
             return error.SegFault;
         },
-        _ => {
+        .Stopped, .Unknown => {
             std.debug.print("ERROR: Process terminated abnormally: {} (expected clean failure with non-zero exit code)\n", .{result.term});
             std.debug.print("STDOUT: {s}\n", .{result.stdout});
             std.debug.print("STDERR: {s}\n", .{result.stderr});
@@ -150,7 +150,7 @@ fn checkTestSuccess(result: std.process.Child.RunResult) !void {
             std.debug.print("STDERR: {s}\n", .{result.stderr});
             return error.SegFault;
         },
-        _ => {
+        .Stopped, .Unknown => {
             std.debug.print("Test terminated abnormally: {}\n", .{result.term});
             std.debug.print("STDERR: {s}\n", .{result.stderr});
             return error.TestFailed;
@@ -1025,7 +1025,7 @@ test "fx platform runtime stack overflow" {
             std.debug.print("Expected: exit code 1 or 134 with stack overflow message\n", .{});
             return error.StackOverflowNotHandled;
         },
-        _ => {
+        .Stopped, .Unknown => {
             std.debug.print("Unexpected termination: {}\n", .{run_result.term});
             return error.UnexpectedTermination;
         },
@@ -1068,7 +1068,7 @@ test "fx platform runtime division by zero" {
             std.debug.print("Process was killed by signal: {}\n", .{sig});
             return error.DivisionByZeroNotHandled;
         },
-        _ => {
+        .Stopped, .Unknown => {
             std.debug.print("Unexpected termination: {}\n", .{run_result.term});
             return error.UnexpectedTermination;
         },
@@ -1376,7 +1376,7 @@ test "fx platform issue9118 try operator on tuple in type method" {
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.Segfault;
         },
-        _ => {
+        .Stopped, .Unknown => {
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.RunTerminatedAbnormally;

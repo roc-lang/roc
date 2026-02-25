@@ -454,7 +454,7 @@ noinline fn executeAndFormat(
                     const zst_name = resolveZstName(module_env, type_var);
                     break :blk try alloc.dupe(u8, zst_name);
                 },
-                _ => @panic("TODO: devEvaluatorStr for unsupported layout tag"),
+                .scalar, .box, .box_of_zst, .tuple, .closure, .tag_union => @panic("TODO: devEvaluatorStr for unsupported layout tag"),
             }
         },
     };
@@ -1085,7 +1085,7 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
                     // Zero-sized type — return 0
                     break :blk std.fmt.allocPrint(allocator, "0", .{});
                 },
-                _ => break :blk error.UnsupportedLayout,
+                .box, .box_of_zst, .list, .list_of_zst, .record, .tuple, .closure => break :blk error.UnsupportedLayout,
             }
         },
     };
@@ -3065,7 +3065,7 @@ fn rewriteNumericLiteralExpr(
             }
             break :blk numerator / divisor;
         },
-        _ => return, // Not a dec literal - nothing to rewrite
+        .e_num, .e_frac_f32, .e_frac_f64, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => return, // Not a dec literal - nothing to rewrite
     };
 
     // Determine the target expression type based on type_name
@@ -3353,7 +3353,7 @@ test "interpreter reuse across multiple evaluations" {
                     // Dec stores values scaled by 10^18, divide to get the integer part
                     break :blk i128h.divTrunc_i128(dec_value.num, builtins.dec.RocDec.one_point_zero_i128);
                 },
-                _ => unreachable,
+                .opaque_ptr, .str => unreachable,
             };
 
             try std.testing.expectEqual(case.expected, actual_value);
