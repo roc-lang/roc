@@ -660,7 +660,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
             if (is_valid and all_fields.items.len == 0) {
                 return try gpa.dupe(u8, "{}");
             }
-            // Fall through to renderValueRoc which can use layout info
+            unreachable;
         },
         .empty_record => {
             return try gpa.dupe(u8, "{}");
@@ -668,7 +668,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
         .fn_pure, .fn_effectful, .fn_unbound => {
             return try gpa.dupe(u8, "<function>");
         },
-        else => {},
+        else => unreachable,
     };
 
     // Handle Dec values specially when stripping unbound numeral decimals in REPL mode.
@@ -685,7 +685,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
         }
     }
 
-    return try renderValueRoc(ctx, value);
+    unreachable;
 }
 
 /// Render `value` using only its layout (without additional type information).
