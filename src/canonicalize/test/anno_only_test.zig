@@ -17,6 +17,6 @@ test "e_anno_only expression variant exists" {
     // Verify it's the correct variant
     switch (expr) {
         .e_anno_only => {},
-        else => return error.WrongExprVariant,
+        _ => return error.WrongExprVariant,
     }
 }

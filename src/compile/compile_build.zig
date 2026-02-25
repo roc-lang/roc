@@ -1477,13 +1477,13 @@ pub const BuildEnv = struct {
                                     const first_part = ast.store.getExpr(parts[0]);
                                     switch (first_part) {
                                         .string_part => |sp| break :blk ast.resolve(sp.token),
-                                        else => continue,
+                                        _ => continue,
                                     }
                                 }
                                 continue;
                             },
                             .string_part => |str_part| break :blk ast.resolve(str_part.token),
-                            else => continue,
+                            _ => continue,
                         }
                     } else continue;
                     try info.provides_entries.append(self.gpa, .{
@@ -1513,7 +1513,7 @@ pub const BuildEnv = struct {
                 info.kind = .default_app;
                 // Default app headers are for REPL-style execution
             },
-            else => return error.UnsupportedHeader,
+            _ => return error.UnsupportedHeader,
         }
 
         return info;
@@ -1546,7 +1546,7 @@ pub const BuildEnv = struct {
 
                 break :blk result;
             },
-            else => error.ExpectedString,
+            _ => error.ExpectedString,
         };
     }
 

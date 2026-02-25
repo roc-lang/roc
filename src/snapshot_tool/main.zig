@@ -869,7 +869,7 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
                 .package => "package",
                 .platform => "platform",
                 .app => "app",
-                else => "file",
+                _ => "file",
             };
             const meta = Meta{
                 .description = try std.fmt.allocPrint(allocator, "{s} module from {s}", .{ base_name, type_name }),
@@ -1013,7 +1013,7 @@ fn processSnapshotContent(
                         can_ir.all_statements = try can_ir.store.statementSpanFrom(scratch_statements_start);
                     }
                 },
-                else => unreachable,
+                _ => unreachable,
             }
         },
         .repl, .dev_object => unreachable, // Handled above
@@ -1250,7 +1250,7 @@ fn processSnapshotContent(
             const pattern = can_ir.store.getPattern(def.pattern);
             const name_hint: ?base.Ident.Idx = switch (pattern) {
                 .assign => |a| a.ident,
-                else => null,
+                _ => null,
             };
 
             // Transform the definition expression
@@ -2569,7 +2569,7 @@ fn computeTransformedExprType(
                         try can_ir.types.setVarContent(expr_var, ret_resolved.desc.content);
                         return expr_var;
                     },
-                    else => {},
+                    _ => {},
                 }
             }
             // Fall back to original expression type
@@ -2598,7 +2598,7 @@ fn computeTransformedExprType(
             }
             return expr_var;
         },
-        else => {
+        _ => {
             // For other expressions, use the original type from type-checking
             return expr_var;
         },
@@ -2744,10 +2744,10 @@ fn getDefaultedTypeStringWithSeen(
 
                     return result.toOwnedSlice();
                 },
-                else => {},
+                _ => {},
             }
         },
-        else => {},
+        _ => {},
     }
 
     // Use TypeWriter for all other cases - it has proper cycle detection
@@ -2808,7 +2808,7 @@ fn getMonoTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, expr_idx:
                     .fn_pure => |f| f,
                     .fn_effectful => |f| f,
                     .fn_unbound => |f| f,
-                    else => unreachable,
+                    _ => unreachable,
                 };
 
                 var result = std.array_list.Managed(u8).init(allocator);
@@ -2955,7 +2955,7 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
     for (can_diagnostics) |diagnostic| {
         switch (diagnostic) {
             .shadowing_warning => {}, // Skip warnings
-            else => error_count += 1,
+            _ => error_count += 1,
         }
     }
 
@@ -2964,7 +2964,7 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
         for (can_diagnostics) |diagnostic| {
             switch (diagnostic) {
                 .shadowing_warning => {}, // Skip warnings in output too
-                else => {
+                _ => {
                     const tag_name = @tagName(diagnostic);
                     std.log.err("  - {s}", .{tag_name});
                 },
@@ -3746,7 +3746,7 @@ fn processDevObjectSnapshot(
                     .s_decl => |decl| {
                         top_level_patterns.put(decl.pattern, {}) catch {};
                     },
-                    else => {},
+                    _ => {},
                 }
             }
 
@@ -3947,7 +3947,7 @@ fn processDevObjectSnapshot(
                         break;
                     }
                 },
-                else => {},
+                _ => {},
             }
         }
     }
@@ -4448,7 +4448,7 @@ fn searchDirectoryForBuiltin(
                     }
                 }
             },
-            else => {},
+            _ => {},
         }
     }
 }

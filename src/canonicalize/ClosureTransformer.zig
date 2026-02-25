@@ -760,7 +760,7 @@ pub fn isStaticDispatchRef(self: *const Self, expr_idx: Expr.Idx) ?StaticDispatc
             .type_var_alias_stmt = tvd.type_var_alias_stmt,
             .args = tvd.args,
         },
-        else => null,
+        _ => null,
     };
 }
 
@@ -796,7 +796,7 @@ pub fn getTypeVarFromExpr(self: *const Self, expr_idx: Expr.Idx) ?types.Var {
             const type_var_anno = stmt.s_type_var_alias.type_var_anno;
             break :blk ModuleEnv.varFrom(type_var_anno);
         },
-        else => null,
+        _ => null,
     };
 }
 
@@ -980,7 +980,7 @@ fn exprContainsPatternRef(
                             return true;
                         }
                     },
-                    else => {},
+                    _ => {},
                 }
             }
             // Check final expression
@@ -1835,7 +1835,7 @@ pub fn transformExprWithLambdaSet(
                         return .{ .expr = transformed, .lambda_set = cloned };
                     }
                 },
-                else => {},
+                _ => {},
             }
 
             return .{ .expr = transformed, .lambda_set = null };
@@ -1882,7 +1882,7 @@ pub fn transformExprWithLambdaSet(
 
             return .{ .expr = expr_idx, .lambda_set = lambda_set };
         },
-        else => {
+        _ => {
             // Other expressions - just transform without lambda set
             const transformed = try self.transformExpr(expr_idx);
             return .{ .expr = transformed, .lambda_set = null };
@@ -1906,7 +1906,7 @@ pub fn transformClosure(
             const lambda_expr = self.module_env.store.getExpr(closure.lambda_idx);
             const lambda = switch (lambda_expr) {
                 .e_lambda => |l| l,
-                else => return closure_expr_idx, // Not a lambda, return as-is
+                _ => return closure_expr_idx, // Not a lambda, return as-is
             };
 
             // Get captures
@@ -2020,7 +2020,7 @@ pub fn transformClosure(
             // Pure lambda (no captures) - leave unchanged, no transformation needed
             return closure_expr_idx;
         },
-        else => return closure_expr_idx, // Not a closure, return as-is
+        _ => return closure_expr_idx, // Not a closure, return as-is
     }
 }
 
@@ -2067,7 +2067,7 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
                         const pattern = self.module_env.store.getPattern(decl.pattern);
                         const name_hint: ?base.Ident.Idx = switch (pattern) {
                             .assign => |a| a.ident,
-                            else => null,
+                            _ => null,
                         };
 
                         // Transform expression and collect lambda set
@@ -2101,7 +2101,7 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
                         );
                         try self.module_env.store.scratch.?.statements.append(new_stmt_idx);
                     },
-                    else => {
+                    _ => {
                         // Copy statement as-is
                         try self.module_env.store.scratch.?.statements.append(stmt_idx);
                     },
@@ -2150,7 +2150,7 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
                         );
                     }
                 },
-                else => {},
+                _ => {},
             }
 
             // Not a closure call, transform normally

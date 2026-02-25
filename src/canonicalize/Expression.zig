@@ -1704,7 +1704,7 @@ pub const Expr = union(enum) {
                         const header = ir.store.getTypeHeader(decl.header);
                         try tree.pushStringPair("nominal", ir.getIdent(header.name));
                     },
-                    else => {
+                    _ => {
                         // Handle malformed nominal type declaration by pushing error info
                         try tree.pushStringPair("nominal", "<malformed>");
                     },

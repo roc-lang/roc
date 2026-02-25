@@ -600,7 +600,7 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
                 // of whether operands are i32, i64, f32, or f64).
                 const is_comparison = switch (b.op) {
                     .eq, .neq, .lt, .lte, .gt, .gte => true,
-                    else => false,
+                    _ => false,
                 };
                 const vt = if (is_comparison)
                     self.exprValType(b.lhs)
@@ -909,7 +909,7 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
                             .wildcard => {
                                 self.body.append(self.allocator, Op.drop) catch return error.OutOfMemory;
                             },
-                            else => {
+                            _ => {
                                 self.body.append(self.allocator, Op.drop) catch return error.OutOfMemory;
                             },
                         }
@@ -970,10 +970,10 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
                                 self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                                 WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
                             },
-                            else => unreachable,
+                            _ => unreachable,
                         }
                     },
-                    else => unreachable,
+                    _ => unreachable,
                 }
             } else if (self.store.getSymbolDef(l.symbol)) |def_id| {
                 // Symbol not in locals or closure_values — resolve via getSymbolDef.

@@ -423,7 +423,7 @@ fn BufType(comptime T: type, comptime min_len: usize) type {
             .auto, .@"extern" => @compileError("Unsupported type: " ++ @typeName(T)),
             .@"packed" => std.meta.Int(.unsigned, @bitSizeOf(T)),
         },
-        else => @compileError("Unsupported type: " ++ @typeName(T)),
+        _ => @compileError("Unsupported type: " ++ @typeName(T)),
     })));
 }
 
@@ -433,6 +433,6 @@ fn bufValue(value: anytype, comptime min_len: usize) BufType(@TypeOf(value), min
         .@"enum" => @intFromEnum(value),
         .bool => @intFromBool(value),
         .@"struct" => @intCast(@as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(value))), @bitCast(value))),
-        else => unreachable,
+        _ => unreachable,
     };
 }

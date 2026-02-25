@@ -219,7 +219,7 @@ pub const Report = struct {
                         .end_col_idx = underlines_data.display_region.end_column,
                     };
                 },
-                else => {},
+                _ => {},
             }
         }
         return null;
@@ -236,7 +236,7 @@ pub const Report = struct {
         for (self.document.elements.items) |element| {
             switch (element) {
                 .line_break => count += 1,
-                else => {},
+                _ => {},
             }
         }
         return count;

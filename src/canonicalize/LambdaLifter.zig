@@ -128,7 +128,7 @@ pub fn liftClosure(
             const lambda_expr = self.module_env.store.getExpr(closure.lambda_idx);
             const lambda = switch (lambda_expr) {
                 .e_lambda => |l| l,
-                else => return, // Not a lambda, skip
+                _ => return, // Not a lambda, skip
             };
 
             // Get captures
@@ -167,7 +167,7 @@ pub fn liftClosure(
             try self.lifted_functions.append(self.allocator, lifted);
             try self.closure_to_function.put(closure_idx, tag_name);
         },
-        else => {}, // Not a closure, skip
+        _ => {}, // Not a closure, skip
     }
 }
 
@@ -297,7 +297,7 @@ fn transformBodyWithCaptures(
                         );
                         try self.module_env.store.scratch.?.statements.append(new_stmt_idx);
                     },
-                    else => {
+                    _ => {
                         try self.module_env.store.scratch.?.statements.append(stmt_idx);
                     },
                 }
@@ -422,7 +422,7 @@ fn transformBodyWithCaptures(
                         },
                     }, base.Region.zero());
                 },
-                else => return body_idx,
+                _ => return body_idx,
             }
         },
 

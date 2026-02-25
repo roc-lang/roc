@@ -644,7 +644,7 @@ const Unifier = struct {
                     .tuple => |b_tuple| {
                         try self.unifyTuple(vars, a_tuple, b_tuple);
                     },
-                    else => return error.TypeMismatch,
+                    _ => return error.TypeMismatch,
                 }
             },
             .nominal_type => |a_type| {
@@ -706,7 +706,7 @@ const Unifier = struct {
                             return error.TypeMismatch;
                         }
                     },
-                    else => return error.TypeMismatch,
+                    _ => return error.TypeMismatch,
                 }
             },
             .fn_pure => |a_func| {
@@ -724,7 +724,7 @@ const Unifier = struct {
                         // pure cannot unify with effectful
                         return error.TypeMismatch;
                     },
-                    else => return error.TypeMismatch,
+                    _ => return error.TypeMismatch,
                 }
             },
             .fn_effectful => |a_func| {
@@ -742,7 +742,7 @@ const Unifier = struct {
                         // effectful cannot unify with pure
                         return error.TypeMismatch;
                     },
-                    else => return error.TypeMismatch,
+                    _ => return error.TypeMismatch,
                 }
             },
             .fn_unbound => |a_func| {
@@ -762,7 +762,7 @@ const Unifier = struct {
                         try self.unifyFunc(vars, a_func, b_func);
                         self.merge(vars, vars.a.desc.content);
                     },
-                    else => return error.TypeMismatch,
+                    _ => return error.TypeMismatch,
                 }
             },
             .record => |a_record| {
@@ -807,7 +807,7 @@ const Unifier = struct {
                         }
                         try self.unifyRecordWithNominal(vars, b_type, b_backing_var, b_backing_resolved, a_record.fields, .{ .ext = a_record.ext }, .b_is_nominal);
                     },
-                    else => return error.TypeMismatch,
+                    _ => return error.TypeMismatch,
                 }
             },
             .record_unbound => |a_fields| {
@@ -853,7 +853,7 @@ const Unifier = struct {
                         }
                         try self.unifyRecordWithNominal(vars, b_type, b_backing_var, b_backing_resolved, a_fields, .unbound, .b_is_nominal);
                     },
-                    else => return error.TypeMismatch,
+                    _ => return error.TypeMismatch,
                 }
             },
             .empty_record => {
@@ -904,7 +904,7 @@ const Unifier = struct {
                             return error.TypeMismatch;
                         }
                     },
-                    else => return error.TypeMismatch,
+                    _ => return error.TypeMismatch,
                 }
             },
             .tag_union => |a_tag_union| {
@@ -934,7 +934,7 @@ const Unifier = struct {
                         }
                         try self.unifyTagUnionWithNominal(vars, b_type, b_backing_var, b_backing_resolved, a_tag_union, .b_is_nominal);
                     },
-                    else => return error.TypeMismatch,
+                    _ => return error.TypeMismatch,
                 }
             },
             .empty_tag_union => {
@@ -969,7 +969,7 @@ const Unifier = struct {
                             return error.TypeMismatch;
                         }
                     },
-                    else => return error.TypeMismatch,
+                    _ => return error.TypeMismatch,
                 }
             },
         }
@@ -1565,10 +1565,10 @@ const Unifier = struct {
 
                                     return .{ .ext = ext, .range = range };
                                 },
-                                else => return .{ .ext = ext, .range = range },
+                                _ => return .{ .ext = ext, .range = range },
                             }
                         },
-                        else => return .{ .ext = ext, .range = range },
+                        _ => return .{ .ext = ext, .range = range },
                     }
                 },
             }
@@ -2029,10 +2029,10 @@ const Unifier = struct {
 
                             ext_var = ext_tag_union.ext;
                         },
-                        else => return .{ .ext = ext_var, .range = range },
+                        _ => return .{ .ext = ext_var, .range = range },
                     }
                 },
-                else => return .{ .ext = ext_var, .range = range },
+                _ => return .{ .ext = ext_var, .range = range },
             }
         }
     }

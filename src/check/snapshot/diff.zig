@@ -245,7 +245,7 @@ pub fn compareTypes(
             .structure => |act_flat| {
                 compareStructures(snap_store, ident_store, exp_flat, act_flat, &hints, gpa, fields, tags);
             },
-            else => {},
+            _ => {},
         },
         .alias => |exp_alias| switch (actual) {
             .alias => |act_alias| {
@@ -259,12 +259,12 @@ pub fn compareTypes(
                     .structure => |exp_flat| {
                         compareStructures(snap_store, ident_store, exp_flat, act_flat, &hints, gpa, fields, tags);
                     },
-                    else => {},
+                    _ => {},
                 }
             },
-            else => {},
+            _ => {},
         },
-        else => {},
+        _ => {},
     }
 
     return hints;
@@ -289,7 +289,7 @@ fn compareTypesInternal(
             .structure => |act_flat| {
                 compareStructures(snap_store, ident_store, exp_flat, act_flat, hints, gpa, fields, tags);
             },
-            else => {},
+            _ => {},
         },
         .alias => |exp_alias| switch (actual) {
             .alias => |act_alias| {
@@ -301,12 +301,12 @@ fn compareTypesInternal(
                     .structure => |exp_flat| {
                         compareStructures(snap_store, ident_store, exp_flat, act_flat, hints, gpa, fields, tags);
                     },
-                    else => {},
+                    _ => {},
                 }
             },
-            else => {},
+            _ => {},
         },
-        else => {},
+        _ => {},
     }
 }
 
@@ -334,7 +334,7 @@ fn compareStructures(
                 .fn_unbound => |act_func| {
                     compareFunctions(exp_func, act_func, hints);
                 },
-                else => {},
+                _ => {},
             }
         },
         .fn_effectful => |exp_func| {
@@ -350,7 +350,7 @@ fn compareStructures(
                 .fn_unbound => |act_func| {
                     compareFunctions(exp_func, act_func, hints);
                 },
-                else => {},
+                _ => {},
             }
         },
         .fn_unbound => |exp_func| {
@@ -358,7 +358,7 @@ fn compareStructures(
                 .fn_pure, .fn_effectful, .fn_unbound => |act_func| {
                     compareFunctions(exp_func, act_func, hints);
                 },
-                else => {},
+                _ => {},
             }
         },
         .record => |exp_record| {
@@ -379,7 +379,7 @@ fn compareStructures(
                     const exp_names = fields.sliceRange(exp_range).items(.name);
                     addMissingFields(exp_names, hints, gpa, fields);
                 },
-                else => {},
+                _ => {},
             }
         },
         .record_unbound => |exp_fields_range| {
@@ -401,7 +401,7 @@ fn compareStructures(
                     const exp_names = snap_store.sliceRecordFields(exp_fields_range).items(.name);
                     addMissingFields(exp_names, hints, gpa, fields);
                 },
-                else => {},
+                _ => {},
             }
         },
         .tag_union => |exp_union| {
@@ -409,10 +409,10 @@ fn compareStructures(
                 .tag_union => |act_union| {
                     compareTagUnions(snap_store, ident_store, exp_union, act_union, hints, gpa, tags);
                 },
-                else => {},
+                _ => {},
             }
         },
-        else => {},
+        _ => {},
     }
 }
 
@@ -602,7 +602,7 @@ fn gatherTagsFromUnion(
                     ext_idx = ext_union.ext;
                 },
                 .empty_tag_union => break,
-                else => break,
+                _ => break,
             },
             .alias => |alias| {
                 ext_idx = alias.backing;

@@ -552,7 +552,7 @@ pub const SyntaxChecker = struct {
                         break;
                     }
                 },
-                else => {},
+                _ => {},
             }
         }
 
@@ -610,7 +610,7 @@ pub const SyntaxChecker = struct {
             .source_code_region => |region| return textHasAny(region.line_text, needles),
             .source_code_multi_region => |multi| return textHasAny(multi.source, needles),
             .source_code_with_underlines => |with_underlines| return textHasAny(with_underlines.display_region.line_text, needles),
-            else => {},
+            _ => {},
         }
         return false;
     }
@@ -979,7 +979,7 @@ pub const SyntaxChecker = struct {
                     }
                 }
             },
-            else => {},
+            _ => {},
         }
         return null;
     }
@@ -997,10 +997,10 @@ pub const SyntaxChecker = struct {
             .structure => |flat_type| {
                 switch (flat_type) {
                     .nominal_type => |nominal| return @as(?base.Ident.Idx, nominal.ident.ident_idx),
-                    else => return null,
+                    _ => return null,
                 }
             },
-            else => return null,
+            _ => return null,
         }
     }
 
@@ -1083,7 +1083,7 @@ pub const SyntaxChecker = struct {
             const ident_idx = switch (pattern) {
                 .assign => |p| p.ident,
                 .as => |p| p.ident,
-                else => continue,
+                _ => continue,
             };
 
             if (ident_idx == qualified_ident) {
@@ -1097,14 +1097,14 @@ pub const SyntaxChecker = struct {
             const stmt = store.getStatement(stmt_idx);
             const pattern_idx = switch (stmt) {
                 .s_decl => |decl| decl.pattern,
-                else => continue,
+                _ => continue,
             };
 
             const pattern = store.getPattern(pattern_idx);
             const ident_idx = switch (pattern) {
                 .assign => |p| p.ident,
                 .as => |p| p.ident,
-                else => continue,
+                _ => continue,
             };
 
             if (ident_idx == qualified_ident) {
@@ -1227,7 +1227,7 @@ pub const SyntaxChecker = struct {
                 .s_type_anno => |t| t.anno,
                 .s_alias_decl => |a| a.anno,
                 .s_nominal_decl => |n| n.anno,
-                else => null,
+                _ => null,
             };
 
             if (maybe_type_anno) |type_anno_idx| {
@@ -1349,7 +1349,7 @@ pub const SyntaxChecker = struct {
                     }
                     return result;
                 },
-                else => return null,
+                _ => return null,
             }
         }
 
@@ -1616,7 +1616,7 @@ pub const SyntaxChecker = struct {
                         .s_type_anno => |t| t.anno,
                         .s_alias_decl => |a| a.anno,
                         .s_nominal_decl => |n| n.anno,
-                        else => null,
+                        _ => null,
                     };
 
                     if (maybe_type_anno) |type_anno_idx| {
@@ -1696,7 +1696,7 @@ pub const SyntaxChecker = struct {
                 }
                 return null;
             },
-            else => return null,
+            _ => return null,
         }
     }
 
@@ -2097,7 +2097,7 @@ pub const SyntaxChecker = struct {
                     content = resolved.desc.content;
                     continue;
                 },
-                else => break,
+                _ => break,
             }
         }
 
@@ -2391,7 +2391,7 @@ fn extractSymbolFromDecl(
     const expr = module_env.store.getExpr(expr_idx);
     const is_function = switch (expr) {
         .e_closure, .e_lambda, .e_hosted_lambda => true,
-        else => false,
+        _ => false,
     };
 
     // Get the pattern and extract the identifier name
@@ -2399,7 +2399,7 @@ fn extractSymbolFromDecl(
     const ident_idx = switch (pattern) {
         .assign => |p| p.ident,
         .as => |p| p.ident,
-        else => return null, // Only handle assign and as patterns
+        _ => return null, // Only handle assign and as patterns
     };
 
     // Get the identifier text from the module's ident table

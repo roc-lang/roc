@@ -36,7 +36,7 @@ pub const TargetFormat = enum {
             .windows => .coff,
             .macos, .ios, .watchos, .tvos => .macho,
             .freestanding => .wasm,
-            else => .elf,
+            _ => .elf,
         };
     }
 
@@ -46,7 +46,7 @@ pub const TargetFormat = enum {
             .windows => .coff,
             .macos, .ios, .watchos, .tvos => .macho,
             .freestanding => .wasm,
-            else => .elf,
+            _ => .elf,
         };
     }
 };
@@ -246,7 +246,7 @@ fn buildLinkArgs(ctx: *CliContext, config: LinkConfig) LinkError!std.array_list.
             switch (target_arch) {
                 .aarch64 => try args.append("arm64"),
                 .x86_64 => try args.append("x86_64"),
-                else => try args.append("arm64"), // default to arm64
+                _ => try args.append("arm64"), // default to arm64
             }
 
             // Add platform version - use a conservative minimum that works across macOS versions
@@ -333,7 +333,7 @@ fn buildLinkArgs(ctx: *CliContext, config: LinkConfig) LinkError!std.array_list.
                                 .x86_64 => "/lib64/ld-linux-x86-64.so.2",
                                 .aarch64 => "/lib/ld-linux-aarch64.so.1",
                                 .x86 => "/lib/ld-linux.so.2",
-                                else => "/lib/ld-linux.so.2",
+                                _ => "/lib/ld-linux.so.2",
                             };
                             try args.append(fallback_ld);
                         }
@@ -392,7 +392,7 @@ fn buildLinkArgs(ctx: *CliContext, config: LinkConfig) LinkError!std.array_list.
                 .x86_64 => try args.append("/machine:x64"),
                 .x86 => try args.append("/machine:x86"),
                 .aarch64 => try args.append("/machine:arm64"),
-                else => try args.append("/machine:x64"), // default to x64
+                _ => try args.append("/machine:x64"), // default to x64
             }
 
             // Set stack size to 16MB (matching Zig's default; Windows default is 1MB).
@@ -464,7 +464,7 @@ fn buildLinkArgs(ctx: *CliContext, config: LinkConfig) LinkError!std.array_list.
             try args.append("-z");
             try args.append(stack_size_str);
         },
-        else => {
+        _ => {
             // Generic ELF linker
             try args.append("ld.lld");
 

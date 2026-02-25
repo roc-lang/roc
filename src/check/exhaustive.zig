@@ -747,10 +747,10 @@ fn getUnionFromType(
                     const backing_var = type_store.getNominalBackingVar(nominal);
                     return getUnionFromType(allocator, type_store, builtin_idents, backing_var);
                 },
-                else => return .not_a_union,
+                _ => return .not_a_union,
             }
         },
-        else => {},
+        _ => {},
     }
 
     // Not a tag union
@@ -836,7 +836,7 @@ fn buildUnionFromTagUnion(
                         has_flex = false;
                         break;
                     },
-                    else => {
+                    _ => {
                         // Other structure types = closed for our purposes
                         is_open = false;
                         has_flex = false;
@@ -849,7 +849,7 @@ fn buildUnionFromTagUnion(
                 current_ext = type_store.getAliasBackingVar(alias);
                 // Don't break - continue with the resolved alias
             },
-            else => {
+            _ => {
                 // Other content types = treat as closed
                 is_open = false;
                 has_flex = false;
@@ -1158,13 +1158,13 @@ fn pushTagUnionWork(gpa: std.mem.Allocator, type_store: *TypeStore, work_list: *
                     // Closed union - no more tags
                     break;
                 },
-                else => break,
+                _ => break,
             },
             .alias => |alias| {
                 // Follow alias
                 current_ext = type_store.getAliasBackingVar(alias);
             },
-            else => break,
+            _ => break,
         }
     }
 
@@ -1229,12 +1229,12 @@ fn isExtensionOpen(type_store: *TypeStore, ext_var: Var) error{OutOfMemory}!bool
                     current_ext = ext_tu.ext;
                 },
                 .empty_tag_union => return false,
-                else => return false,
+                _ => return false,
             },
             .alias => |alias| {
                 current_ext = type_store.getAliasBackingVar(alias);
             },
-            else => return false,
+            _ => return false,
         }
     }
 }
@@ -1352,7 +1352,7 @@ fn isOpenExtension(type_store: *TypeStore, ext: Var) bool {
             .empty_tag_union => false,
             // A tag union extension (nested tags) means more tags exist
             .tag_union => true,
-            else => false,
+            _ => false,
         },
         // Recursion vars, aliases - resolve further
         .alias => |alias| {
@@ -1362,7 +1362,7 @@ fn isOpenExtension(type_store: *TypeStore, ext: Var) bool {
         .recursion_var => |rec| {
             return isOpenExtension(type_store, rec.structure);
         },
-        else => false,
+        _ => false,
     };
 }
 
@@ -1489,7 +1489,7 @@ fn collectTypeParamsFromBackingType(
             .alias => |alias| {
                 try stack.append(gpa, type_store.getAliasBackingVar(alias));
             },
-            else => {},
+            _ => {},
         }
     }
 
@@ -1552,12 +1552,12 @@ fn getCtorArgTypes(allocator: std.mem.Allocator, type_store: *TypeStore, type_va
                         current_tags = ext_tu.tags;
                         current_ext = ext_tu.ext;
                     },
-                    else => break,
+                    _ => break,
                 },
                 .alias => |alias| {
                     current_ext = type_store.getAliasBackingVar(alias);
                 },
-                else => break,
+                _ => break,
             }
         }
     }
@@ -1653,9 +1653,9 @@ fn getCtorArgTypes(allocator: std.mem.Allocator, type_store: *TypeStore, type_va
                 // Unbound records also have field types
                 return getRecordFieldTypes(type_store, fields);
             },
-            else => {},
+            _ => {},
         },
-        else => {},
+        _ => {},
     }
 
     return &[_]Var{};
@@ -1720,13 +1720,13 @@ fn getRecordFieldTypeByName(type_store: *TypeStore, record_type: Var, field_name
                     return null;
                 },
                 .empty_record => return null,
-                else => return null,
+                _ => return null,
             },
             .alias => |alias| {
                 current_type = type_store.getAliasBackingVar(alias);
                 continue;
             },
-            else => return null,
+            _ => return null,
         }
     }
 }
@@ -1750,7 +1750,7 @@ fn getListElemType(type_store: *TypeStore, type_var: Var) ?Var {
             const backing_var = type_store.getAliasBackingVar(alias);
             return getListElemType(type_store, backing_var);
         },
-        else => {},
+        _ => {},
     }
 
     return null;
@@ -2046,7 +2046,7 @@ fn collectCtorsSketched(
                             }
                         }
                     },
-                    else => {},
+                    _ => {},
                 }
             },
             .list => {
@@ -2073,7 +2073,7 @@ fn collectCtorsSketched(
                 .known_ctor => |kc| {
                     try tag_set.put(kc.tag_id, {});
                 },
-                else => {},
+                _ => {},
             }
         }
 
@@ -2148,7 +2148,7 @@ fn specializeByConstructorSketched(
     // For records, get the target field names we're specializing by
     const target_fields: ?[]const Ident.Idx = switch (union_info.render_as) {
         .record => |fields| fields,
-        else => null,
+        _ => null,
     };
 
     for (matrix.rows) |row| {
@@ -2175,7 +2175,7 @@ fn specializeByConstructorSketched(
                         // Get this pattern's field names
                         const pat_fields: []const Ident.Idx = switch (kc.union_info.render_as) {
                             .record => |fields| fields,
-                            else => &[_]Ident.Idx{}, // Shouldn't happen for records
+                            _ => &[_]Ident.Idx{}, // Shouldn't happen for records
                         };
 
                         // Build the new row with fields aligned to target order
@@ -2217,7 +2217,7 @@ fn specializeByConstructorSketched(
                 @memcpy(new_row[arity..], rest);
                 try new_rows.append(allocator, new_row);
             },
-            else => {},
+            _ => {},
         }
     }
 
@@ -2288,7 +2288,7 @@ fn specializeByListAritySketched(
                 @memcpy(new_row[target_len..], rest);
                 try new_rows.append(allocator, new_row);
             },
-            else => {},
+            _ => {},
         }
     }
 
@@ -2377,7 +2377,7 @@ pub fn checkExhaustiveSketched(
                         // Use field-name-based lookup for records, positional for everything else
                         const specialized_types = switch (ctor_info.union_info.render_as) {
                             .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
-                            else => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
+                            _ => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
                         };
                         const inner_missing = try checkExhaustiveSketched(allocator, type_store, builtin_idents, specialized, specialized_types);
 
@@ -2424,7 +2424,7 @@ pub fn checkExhaustiveSketched(
                 // Use field-name-based lookup for records, positional for everything else
                 const specialized_types = switch (ctor_info.union_info.render_as) {
                     .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
-                    else => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
+                    _ => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
                 };
                 const missing = try checkExhaustiveSketched(allocator, type_store, builtin_idents, specialized, specialized_types);
 
@@ -2603,10 +2603,10 @@ pub fn isUsefulSketched(
                                             }
                                         }
                                     },
-                                    else => {},
+                                    _ => {},
                                 }
                             },
-                            else => {},
+                            _ => {},
                         }
                     }
 
@@ -2623,7 +2623,7 @@ pub fn isUsefulSketched(
                         merged_union_info.alternatives = new_alts;
                     }
                 },
-                else => {},
+                _ => {},
             }
 
             const arity = if (merged_union_info.alternatives.len > 0)
@@ -2642,7 +2642,7 @@ pub fn isUsefulSketched(
             // Use field-name-based lookup for records, positional for everything else
             const specialized_types = switch (merged_union_info.render_as) {
                 .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
-                else => try column_types.specializeByConstructor(allocator, kc.tag_id, kc.args.len),
+                _ => try column_types.specializeByConstructor(allocator, kc.tag_id, kc.args.len),
             };
 
             // Expand current pattern's args to match merged field set
@@ -2651,7 +2651,7 @@ pub fn isUsefulSketched(
                     const row = try allocator.alloc(UnresolvedPattern, arity + rest.len);
                     const current_fields = switch (kc.union_info.render_as) {
                         .record => |f| f,
-                        else => &[_]Ident.Idx{},
+                        _ => &[_]Ident.Idx{},
                     };
 
                     // Map current pattern's args to merged field positions
@@ -2671,7 +2671,7 @@ pub fn isUsefulSketched(
                     @memcpy(row[arity..], rest);
                     break :blk row;
                 },
-                else => blk: {
+                _ => blk: {
                     const row = try allocator.alloc(UnresolvedPattern, kc.args.len + rest.len);
                     @memcpy(row[0..kc.args.len], kc.args);
                     @memcpy(row[kc.args.len..], rest);
@@ -2760,7 +2760,7 @@ pub fn isUsefulSketched(
                         // Use field-name-based lookup for records, positional for everything else
                         const specialized_types = switch (ctor_info.union_info.render_as) {
                             .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
-                            else => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
+                            _ => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
                         };
 
                         const extended = try allocator.alloc(UnresolvedPattern, alt.arity + rest.len);
@@ -2829,7 +2829,7 @@ pub fn isUsefulSketched(
                 const matches = switch (row_first) {
                     .literal => |l| Literal.eql(l, lit),
                     .anything => true,
-                    else => false,
+                    _ => false,
                 };
 
                 if (matches) {
@@ -3069,7 +3069,7 @@ pub fn checkMatch(
     const resolved_scrutinee = type_store.resolveVar(scrutinee_type);
     switch (resolved_scrutinee.desc.content) {
         .flex, .rigid => return error.TypeError,
-        else => {},
+        _ => {},
     }
 
     // Phase 1: Convert CIR patterns to sketched (unresolved) patterns

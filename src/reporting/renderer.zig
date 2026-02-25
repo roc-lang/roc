@@ -766,7 +766,7 @@ fn getAnnotationHtmlTag(annotation: Annotation) []const u8 {
         .emphasized => "strong",
         .code_block => "pre",
         .inline_code => "code",
-        else => "span",
+        _ => "span",
     };
 }
 

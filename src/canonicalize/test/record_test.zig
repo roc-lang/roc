@@ -43,7 +43,7 @@ test "record literal uses record_unbound" {
                 // Success! The record literal created a record
                 try std.testing.expect(record.fields.span.len == 2);
             },
-            else => return error.ExpectedRecord,
+            _ => return error.ExpectedRecord,
         }
     }
 
@@ -77,7 +77,7 @@ test "record literal uses record_unbound" {
             .e_empty_record => {
                 // Success! Empty record literal created empty_record
             },
-            else => return error.ExpectedEmptyRecord,
+            _ => return error.ExpectedEmptyRecord,
         }
     }
 
@@ -120,7 +120,7 @@ test "record literal uses record_unbound" {
                 const field_name = env.getIdent(cir_field.name);
                 try std.testing.expectEqualStrings("value", field_name);
             },
-            else => return error.ExpectedRecord,
+            _ => return error.ExpectedRecord,
         }
     }
 }
@@ -167,7 +167,7 @@ test "record_unbound basic functionality" {
             try std.testing.expectEqualStrings("x", env.getIdent(cir_field_0.name));
             try std.testing.expectEqualStrings("y", env.getIdent(cir_field_1.name));
         },
-        else => return error.ExpectedRecord,
+        _ => return error.ExpectedRecord,
     }
 }
 
@@ -215,7 +215,7 @@ test "record_unbound with multiple fields" {
             try std.testing.expectEqualStrings("b", env.getIdent(cir_field_1.name));
             try std.testing.expectEqualStrings("c", env.getIdent(cir_field_2.name));
         },
-        else => return error.ExpectedRecord,
+        _ => return error.ExpectedRecord,
     }
 }
 
@@ -282,17 +282,17 @@ test "record pattern destructuring" {
                     // Both should be found in scope
                     switch (x_lookup) {
                         .found => {},
-                        else => return error.XNotInScope,
+                        _ => return error.XNotInScope,
                     }
                     switch (y_lookup) {
                         .found => {},
-                        else => return error.YNotInScope,
+                        _ => return error.YNotInScope,
                     }
                 },
-                else => return error.ExpectedRecordDestructure,
+                _ => return error.ExpectedRecordDestructure,
             }
         },
-        else => return error.ExpectedDecl,
+        _ => return error.ExpectedDecl,
     }
 }
 
@@ -349,7 +349,7 @@ test "record pattern with sub-patterns" {
                     // Should have a SubPattern kind
                     switch (destruct_name.kind) {
                         .SubPattern => {},
-                        else => return error.ExpectedSubPattern,
+                        _ => return error.ExpectedSubPattern,
                     }
 
                     // Check the second destruct (age: a)
@@ -366,16 +366,16 @@ test "record pattern with sub-patterns" {
                     // Both should be found in scope
                     switch (n_lookup) {
                         .found => {},
-                        else => return error.NNotInScope,
+                        _ => return error.NNotInScope,
                     }
                     switch (a_lookup) {
                         .found => {},
-                        else => return error.ANotInScope,
+                        _ => return error.ANotInScope,
                     }
                 },
-                else => return error.ExpectedRecordDestructure,
+                _ => return error.ExpectedRecordDestructure,
             }
         },
-        else => return error.ExpectedDecl,
+        _ => return error.ExpectedDecl,
     }
 }

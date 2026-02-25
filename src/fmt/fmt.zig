@@ -342,7 +342,7 @@ const Formatter = struct {
         // so flushing here would duplicate the whitespace handling.
         const header_has_own_tokens = switch (header) {
             .type_module, .default_app, .malformed => false,
-            else => true,
+            _ => true,
         };
         if (header_has_own_tokens) {
             _ = try fmt.flushCommentsBefore(header_region.start);
@@ -953,7 +953,7 @@ const Formatter = struct {
         // Only output the extension type if it's not an anonymous underscore
         switch (ext_anno) {
             .underscore => {}, // Anonymous extension - just output ".."
-            else => _ = try @as(fn (*Formatter, AST.TypeAnno.Idx) anyerror!AST.TokenizedRegion, Formatter.formatTypeAnno)(fmt, ext),
+            _ => _ = try @as(fn (*Formatter, AST.TypeAnno.Idx) anyerror!AST.TokenizedRegion, Formatter.formatTypeAnno)(fmt, ext),
         }
         if (record_multiline) {
             try fmt.push(',');
@@ -1041,7 +1041,7 @@ const Formatter = struct {
                         .string_part => |str| {
                             try fmt.pushTokenText(str.token);
                         },
-                        else => try fmt.formatStringInterpolation(idx),
+                        _ => try fmt.formatStringInterpolation(idx),
                     }
                 }
                 try fmt.push('"');
@@ -1067,7 +1067,7 @@ const Formatter = struct {
                             add_newline = true;
                             try fmt.pushTokenText(str.token);
                         },
-                        else => {
+                        _ => {
                             add_newline = false;
                             try fmt.formatStringInterpolation(idx);
                         },
@@ -1547,7 +1547,7 @@ const Formatter = struct {
                         }
                         try fmt.pushTokenText(id.token);
                     },
-                    else => {
+                    _ => {
                         // Fallback - shouldn't happen for valid record builders
                         try fmt.push('.');
                         _ = try fmt.formatExpr(rb.mapper);
@@ -1557,7 +1557,7 @@ const Formatter = struct {
             .malformed => {
                 // Output nothing for malformed node
             },
-            else => {
+            _ => {
                 std.debug.panic("TODO: Handle formatting {s}", .{@tagName(expr)});
             },
         }
@@ -2650,7 +2650,7 @@ const Formatter = struct {
             .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent, .DotLowerIdent, .DotUpperIdent => {
                 start += 1;
             },
-            else => {},
+            _ => {},
         }
 
         const text = fmt.ast.env.source[start..region.end.offset];
@@ -2763,7 +2763,7 @@ const Formatter = struct {
 
                         return fmt.nodeWillBeMultiline(AST.Expr.Idx, f.body);
                     },
-                    else => return false,
+                    _ => return false,
                 }
             },
             AST.Pattern.Idx => {
@@ -2828,7 +2828,7 @@ const Formatter = struct {
                     .expr => |e| {
                         return fmt.nodeWillBeMultiline(AST.Expr.Idx, e.expr);
                     },
-                    else => return false,
+                    _ => return false,
                 }
             },
             AST.TypeHeader.Idx => {
@@ -2867,7 +2867,7 @@ const Formatter = struct {
 
                         return fmt.collectionWillBeMultiline(AST.RecordField.Idx, p.provides);
                     },
-                    else => return false,
+                    _ => return false,
                 }
             },
             else => return false,

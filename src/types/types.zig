@@ -161,10 +161,10 @@ pub const Content = union(enum) {
                     .record => |record| {
                         return record;
                     },
-                    else => return null,
+                    _ => return null,
                 }
             },
-            else => return null,
+            _ => return null,
         }
     }
 
@@ -176,10 +176,10 @@ pub const Content = union(enum) {
                     .tag_union => |tag_union| {
                         return tag_union;
                     },
-                    else => return null,
+                    _ => return null,
                 }
             },
-            else => return null,
+            _ => return null,
         }
     }
 
@@ -191,10 +191,10 @@ pub const Content = union(enum) {
                     .nominal_type => |nominal_type| {
                         return nominal_type;
                     },
-                    else => return null,
+                    _ => return null,
                 }
             },
-            else => return null,
+            _ => return null,
         }
     }
 
@@ -206,10 +206,10 @@ pub const Content = union(enum) {
                     .fn_pure => |func| return func,
                     .fn_effectful => |func| return func,
                     .fn_unbound => |func| return func,
-                    else => return null,
+                    _ => return null,
                 }
             },
-            else => return null,
+            _ => return null,
         }
     }
 
@@ -221,10 +221,10 @@ pub const Content = union(enum) {
                     .fn_pure => |func| return .{ .func = func, .ext = .pure },
                     .fn_effectful => |func| return .{ .func = func, .ext = .effectful },
                     .fn_unbound => |func| return .{ .func = func, .ext = .unbound },
-                    else => return null,
+                    _ => return null,
                 }
             },
-            else => return null,
+            _ => return null,
         }
     }
 };

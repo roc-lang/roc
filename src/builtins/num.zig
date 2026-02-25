@@ -175,7 +175,7 @@ pub fn exportPow(
                         }
                     }
                 },
-                else => {
+                _ => {
                     return std.math.pow(T, base, exp);
                 },
             }
@@ -548,7 +548,7 @@ pub fn addWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
             const answer = @addWithOverflow(self, other);
             return .{ .value = answer[0], .has_overflowed = answer[1] == 1 };
         },
-        else => {
+        _ => {
             const answer = self + other;
             const overflowed = !std.math.isFinite(answer);
             return .{ .value = answer, .has_overflowed = overflowed };
@@ -625,7 +625,7 @@ pub fn subWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
             const answer = @subWithOverflow(self, other);
             return .{ .value = answer[0], .has_overflowed = answer[1] == 1 };
         },
-        else => {
+        _ => {
             const answer = self - other;
             const overflowed = !std.math.isFinite(answer);
             return .{ .value = answer, .has_overflowed = overflowed };
@@ -760,7 +760,7 @@ pub fn mulWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
                 return .{ .value = answer[0], .has_overflowed = answer[1] == 1 };
             }
         },
-        else => {
+        _ => {
             const answer = self * other;
             const overflowed = !std.math.isFinite(answer);
             return .{ .value = answer, .has_overflowed = overflowed };

@@ -173,7 +173,7 @@ pub const Dir = struct {
 
                     try files.append(gpa, relative_path);
                 },
-                else => {
+                _ => {
                     // do nothing
                 },
             }

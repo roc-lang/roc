@@ -179,7 +179,7 @@ fn collectRocFiles(gpa: Allocator, path: []const u8, roc_files: *std.array_list.
         .directory => {
             try findRocFiles(gpa, path, roc_files);
         },
-        else => {
+        _ => {
             fatal("Path '{s}' is not a file or directory", .{path});
         },
     }
@@ -228,7 +228,7 @@ fn findRocFiles(gpa: Allocator, dir_path: []const u8, roc_files: *std.array_list
                 // Recursively search subdirectories
                 try findRocFiles(gpa, full_path, roc_files);
             },
-            else => {
+            _ => {
                 // Ignore other file types
             },
         }

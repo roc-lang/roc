@@ -169,7 +169,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
                     found_invalid_type = true;
                 }
             },
-            else => {},
+            _ => {},
         }
     }
     // Verify we got the expected errors
@@ -225,7 +225,7 @@ test "import validation - no module_envs provided" {
             .module_header_deprecated => {
                 // expected deprecation warning, ignore
             },
-            else => {
+            _ => {
                 // these errors are not expected
                 try testing.expect(false);
             },
@@ -517,7 +517,7 @@ test "export count safety - ensures safe u16 casting" {
         .too_many_exports => |d| {
             try expectEqual(@as(u32, 65535), d.count);
         },
-        else => return error.UnexpectedDiagnostic,
+        _ => return error.UnexpectedDiagnostic,
     }
     // Test the diagnostic for exceeding the limit
     var env2 = try ModuleEnv.init(allocator, "");
@@ -535,7 +535,7 @@ test "export count safety - ensures safe u16 casting" {
         .too_many_exports => |d| {
             try expectEqual(@as(u32, 70000), d.count);
         },
-        else => return error.UnexpectedDiagnostic,
+        _ => return error.UnexpectedDiagnostic,
     }
     // Demonstrate that values under the limit can be safely cast to u16
     const safe_count: u32 = 65534; // Just under the limit

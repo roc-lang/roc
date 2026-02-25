@@ -205,7 +205,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                                     try out.appendSlice("<unsupported>");
                                 }
                             },
-                            else => {
+                            _ => {
                                 // Fallback - render as unsupported
                                 try out.appendSlice("<unsupported>");
                             },
@@ -285,9 +285,9 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                     const backing = ctx.runtime_types.getNominalBackingVar(nt);
                     resolved = ctx.runtime_types.resolveVar(backing);
                 },
-                else => break :unwrap,
+                _ => break :unwrap,
             },
-            else => break :unwrap,
+            _ => break :unwrap,
         }
     }
 
@@ -634,7 +634,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                             ext = ext_record.ext;
                         },
                         .empty_record => break, // Reached the end of the extension chain
-                        else => {
+                        _ => {
                             is_valid = false;
                         },
                     },
@@ -642,7 +642,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                         // Follow alias to its backing type
                         ext = ctx.runtime_types.getAliasBackingVar(alias);
                     },
-                    else => {
+                    _ => {
                         is_valid = false;
                     },
                 }
@@ -682,7 +682,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
         .fn_pure, .fn_effectful, .fn_unbound => {
             return try gpa.dupe(u8, "<function>");
         },
-        else => {},
+        _ => {},
     };
 
     // Handle Dec values specially when stripping unbound numeral decimals in REPL mode.
@@ -731,7 +731,7 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
                 var str_buf: [40]u8 = undefined;
                 return switch (precision) {
                     .u64, .u128 => try gpa.dupe(u8, i128h.u128_to_str(&str_buf, value.asU128()).str),
-                    else => try gpa.dupe(u8, i128h.i128_to_str(&str_buf, value.asI128()).str),
+                    _ => try gpa.dupe(u8, i128h.i128_to_str(&str_buf, value.asI128()).str),
                 };
             },
             .frac => {
@@ -765,7 +765,7 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
                     },
                 };
             },
-            else => {},
+            _ => {},
         }
     }
     if (value.layout.tag == .tuple) {

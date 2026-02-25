@@ -228,7 +228,7 @@ pub fn renderValidationError(
 ) bool {
     switch (result) {
         .valid => return false,
-        else => {
+        _ => {
             var report = targets_validator.createValidationReport(allocator, result) catch {
                 // Fallback to simple logging if report creation fails
                 std.log.err("Platform validation failed", .{});
@@ -276,7 +276,7 @@ pub fn validateAllTargetFilesExist(
 
     switch (result) {
         .valid => return null,
-        else => return result,
+        _ => return result,
     }
 }
 

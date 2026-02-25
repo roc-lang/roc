@@ -74,7 +74,7 @@ pub fn regionIsMultiline(self: *AST, region: TokenizedRegion) bool {
                 // If what follows is a lambda parameter, the bar is opening (not a trailing comma)
                 const is_opening_bar = switch (after_bar) {
                     .LowerIdent, .UpperIdent, .Underscore, .OpenRound, .OpenSquare, .OpenCurly => true,
-                    else => false,
+                    _ => false,
                 };
                 if (!is_opening_bar) {
                     return true;
@@ -275,7 +275,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .where_expected_constraints => "WHERE CLAUSE ERROR",
         .type_alias_cannot_have_associated => "TYPE ALIAS WITH ASSOCIATED ITEMS",
         .nominal_associated_cannot_have_final_expression => "EXPRESSION IN ASSOCIATED ITEMS",
-        else => "PARSE ERROR",
+        _ => "PARSE ERROR",
     };
 
     var report = reporting.Report.init(allocator, title, .runtime_error);
@@ -565,7 +565,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addLineBreak();
             try report.document.addText("To fix this, remove the expression at the very end.");
         },
-        else => {
+        _ => {
             const tag_name = @tagName(diagnostic.tag);
             const owned_tag = try report.addOwnedString(tag_name);
             try report.document.addText("A parsing error occurred: ");
@@ -2616,7 +2616,7 @@ pub const Expr = union(enum) {
     pub fn as_string_part_region(self: @This()) !TokenizedRegion {
         switch (self) {
             .string_part => |part| return part.region,
-            else => return error.ExpectedStringPartRegion,
+            _ => return error.ExpectedStringPartRegion,
         }
     }
 

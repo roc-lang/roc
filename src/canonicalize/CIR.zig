@@ -178,7 +178,7 @@ pub const Def = struct {
             .pattern_str_literal,
             .pattern_underscore,
             => true,
-            else => false,
+            _ => false,
         };
 
         if (is_valid_pattern) {

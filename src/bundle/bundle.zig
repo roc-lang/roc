@@ -641,7 +641,7 @@ pub fn unbundleStream(
                     return error.DirectoryCreateFailed;
                 };
             },
-            else => {
+            _ => {
                 // Skip other file types (symlinks, etc.)
                 // std.tar automatically handles skipping the content for us
             },

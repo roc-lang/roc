@@ -135,7 +135,7 @@ const ShimLibraries = struct {
             // Native/host targets use the native shim
             .x64mac, .arm64mac => native,
             // Fallback for other targets (will use native, may not work for cross-compilation)
-            else => native,
+            _ => native,
         };
     }
 };
@@ -186,7 +186,7 @@ const BuiltinsObjects = struct {
             .x64mac => x64mac,
             .arm64mac => arm64mac,
             // Fallback for other targets (will use native, may not work for cross-compilation)
-            else => native,
+            _ => native,
         };
     }
 
@@ -194,7 +194,7 @@ const BuiltinsObjects = struct {
     pub fn filename(target: roc_target.RocTarget) []const u8 {
         return switch (target.toOsTag()) {
             .windows => "roc_builtins.lib",
-            else => "libroc_builtins.a",
+            _ => "libroc_builtins.a",
         };
     }
 };
@@ -413,7 +413,7 @@ fn createHardlink(ctx: *CliContext, source: []const u8, dest: []const u8) !void 
             const err = std.os.windows.kernel32.GetLastError();
             switch (err) {
                 .ALREADY_EXISTS => return error.PathAlreadyExists,
-                else => return error.Unexpected,
+                _ => return error.Unexpected,
             }
         }
     } else {
@@ -685,7 +685,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
         .fmt => .fmt,
         .bundle => .bundle,
         .unbundle => .unbundle,
-        else => .unknown,
+        _ => .unknown,
     };
 
     // Create CLI context at the top level - this is passed to all command handlers
@@ -2118,7 +2118,7 @@ fn extractNonPlatformPackages(
                             try packages.put(try ctx.gpa.dupe(u8, shorthand), pkg_abs_path);
                         }
                     },
-                    else => {},
+                    _ => {},
                 }
             }
         }
@@ -2392,7 +2392,7 @@ fn extractExposedModulesFromPlatform(ctx: *CliContext, roc_file_path: []const u8
                 try exposed_modules.append(ctx.gpa, try ctx.arena.dupe(u8, item_name));
             }
         },
-        else => {
+        _ => {
             return error.NotPlatformFile;
         },
     }
@@ -2406,7 +2406,7 @@ fn validatePlatformHeader(ctx: *CliContext, parse_ast: *const parse.AST, platfor
 
     switch (validation_result) {
         .valid => return true,
-        else => {
+        _ => {
             // Create and render the validation report
             var report = targets_validator.createValidationReport(ctx.gpa, validation_result) catch {
                 std.log.warn("Platform at {s} is missing targets section", .{platform_path});
@@ -2567,7 +2567,7 @@ fn extractPlatformSpecFromApp(ctx: *CliContext, app_file_path: []const u8) ![]co
             };
             return try ctx.arena.dupe(u8, platform_spec);
         },
-        else => {
+        _ => {
             return ctx.fail(.{ .expected_app_header = .{
                 .path = app_file_path,
                 .found = @tagName(header),
@@ -2591,7 +2591,7 @@ fn stringFromExpr(ast: *parse.AST, expr_idx: parse.AST.Expr.Idx) ![]const u8 {
             }
             return error.ExpectedString;
         },
-        else => error.ExpectedString,
+        _ => error.ExpectedString,
     };
 }
 
@@ -2830,13 +2830,13 @@ fn extractEntrypointsFromPlatform(ctx: *CliContext, roc_file_path: []const u8, e
                                 const first_part = parse_ast.store.getExpr(parts[0]);
                                 switch (first_part) {
                                     .string_part => |sp| break :blk parse_ast.resolve(sp.token),
-                                    else => {},
+                                    _ => {},
                                 }
                             }
                             return error.InvalidProvidesEntry;
                         },
                         .string_part => |str_part| break :blk parse_ast.resolve(str_part.token),
-                        else => {
+                        _ => {
                             return error.InvalidProvidesEntry;
                         },
                     }
@@ -2850,7 +2850,7 @@ fn extractEntrypointsFromPlatform(ctx: *CliContext, roc_file_path: []const u8, e
                 return error.NoEntrypointFound;
             }
         },
-        else => {
+        _ => {
             return error.NotPlatformFile;
         },
     }
@@ -3031,7 +3031,7 @@ fn validateBundleWithCoordinator(
                 return switch (result) {
                     .missing_target_file => error.MissingTargetFile,
                     .missing_files_directory => error.MissingFilesDirectory,
-                    else => error.MissingTargetFile,
+                    _ => error.MissingTargetFile,
                 };
             }
         }
@@ -3453,7 +3453,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     const target_os = target.toOsTag();
     switch (target_arch) {
         .x86_64, .aarch64 => {}, // Supported
-        else => {
+        _ => {
             const stdout = ctx.io.stdout();
             try stdout.print("Note: Dev backend does not support {s} architecture.\n", .{@tagName(target_arch)});
             try stdout.print("Falling back to interpreter mode.\n\n", .{});
@@ -3469,16 +3469,16 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             .exe => switch (target_os) {
                 .windows => ".exe",
                 .freestanding => ".wasm",
-                else => "",
+                _ => "",
             },
             .static_lib => switch (target_os) {
                 .windows => ".lib",
-                else => ".a",
+                _ => ".a",
             },
             .shared_lib => switch (target_os) {
                 .windows => ".dll",
                 .macos => ".dylib",
-                else => ".so",
+                _ => ".so",
             },
         };
         break :blk try std.fmt.allocPrint(ctx.arena, "{s}{s}", .{ output_path, ext });
@@ -3591,7 +3591,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                     .s_decl => |decl| {
                         top_level_patterns.put(decl.pattern, {}) catch {};
                     },
-                    else => {},
+                    _ => {},
                 }
             }
 
@@ -3788,7 +3788,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                         break;
                     }
                 },
-                else => {},
+                _ => {},
             }
         }
 
@@ -5486,7 +5486,7 @@ fn rocGlueInner(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
                     return error.ProcessFailed;
                 }
             },
-            else => {
+            _ => {
                 return error.ProcessFailed;
             },
         }
@@ -5541,7 +5541,7 @@ fn rocGlueInner(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
                     return error.ProcessFailed;
                 }
             },
-            else => {
+            _ => {
                 stderr.print("Glue spec terminated abnormally\n", .{}) catch {};
                 return error.ProcessFailed;
             },
@@ -5685,7 +5685,7 @@ fn parsePlatformHeader(ctx: *CliContext, platform_path: []const u8) !PlatformHea
                 .type_aliases = try type_aliases.toOwnedSlice(ctx.gpa),
             };
         },
-        else => return error.NotPlatformFile,
+        _ => return error.NotPlatformFile,
     }
 }
 
@@ -6032,7 +6032,7 @@ fn generateStubExprFromTypeAnno(gpa: std.mem.Allocator, env: *ModuleEnv, ast: *c
             }
             buf.appendSlice(gpa, " }") catch {};
         },
-        else => {
+        _ => {
             // For all other types, use { ... } to crash at runtime
             buf.appendSlice(gpa, "{ ... }") catch {};
         },
@@ -7126,10 +7126,10 @@ fn extractRecordAssociatedItems(
                 const backing_expr = module_env.store.getExpr(nom.backing_expr);
                 break :blk switch (backing_expr) {
                     .e_record => |rec| try extractRecordAssociatedItems(ctx, module_env, rec.fields),
-                    else => try ctx.gpa.alloc(AssociatedItem, 0),
+                    _ => try ctx.gpa.alloc(AssociatedItem, 0),
                 };
             },
-            else => try ctx.gpa.alloc(AssociatedItem, 0),
+            _ => try ctx.gpa.alloc(AssociatedItem, 0),
         };
 
         try items.append(.{
@@ -7177,10 +7177,10 @@ fn extractAssociatedItems(
                 const stmt = module_env.store.getStatement(n.nominal_type_decl);
                 break :blk switch (stmt) {
                     .s_nominal_decl => |decl| module_env.store.getTypeHeader(decl.header).name,
-                    else => continue,
+                    _ => continue,
                 };
             },
-            else => continue,
+            _ => continue,
         };
 
         const name = try ctx.gpa.dupe(u8, module_env.getIdentText(name_ident_opt));
@@ -7196,13 +7196,13 @@ fn extractAssociatedItems(
                         const backing = module_env.store.getExpr(nom_expr.backing_expr);
                         break :blk2 switch (backing) {
                             .e_record => |record| try extractRecordAssociatedItems(ctx, module_env, record.fields),
-                            else => try ctx.gpa.alloc(AssociatedItem, 0),
+                            _ => try ctx.gpa.alloc(AssociatedItem, 0),
                         };
                     },
-                    else => try ctx.gpa.alloc(AssociatedItem, 0),
+                    _ => try ctx.gpa.alloc(AssociatedItem, 0),
                 };
             },
-            else => try ctx.gpa.alloc(AssociatedItem, 0),
+            _ => try ctx.gpa.alloc(AssociatedItem, 0),
         };
 
         try items.append(.{

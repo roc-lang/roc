@@ -1191,7 +1191,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
             .s_type_anno => |type_anno| {
                 try self.generateStandaloneTypeAnno(stmt_var, type_anno, &env);
             },
-            else => {
+            _ => {
                 // All other stmt types are invalid at the top level
             },
         }
@@ -1247,7 +1247,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
                 // Unify statement var with body var
                 _ = try self.unify(stmt_var, body_var, &env);
             },
-            else => {
+            _ => {
                 // Other statement types are handled elsewhere (type decls, defs, etc.)
             },
         }
@@ -1467,7 +1467,7 @@ pub fn checkPlatformRequirements(
                             try self.cir.rigid_vars.put(self.cir.gpa, flex_name, fresh_var);
                         }
                     },
-                    else => {},
+                    _ => {},
                 }
             }
 
@@ -1607,7 +1607,7 @@ fn findTypeAliasBodyVar(self: *Self, name: Ident.Idx) ?Var {
                     return ModuleEnv.varFrom(alias.anno);
                 }
             },
-            else => {},
+            _ => {},
         }
     }
     return null;
@@ -1862,7 +1862,7 @@ fn generateStmtTypeDeclType(
         .s_runtime_error => {
             try self.unifyWith(decl_var, .err, env);
         },
-        else => {
+        _ => {
             // Do nothing
         },
     }
@@ -2015,7 +2015,7 @@ fn generateHeaderVars(
             .underscore, .malformed => {
                 try self.unifyWith(header_var, .err, env);
             },
-            else => {
+            _ => {
                 // The canonicalizer should only produce rigid_var, underscore, or malformed
                 // for header args. If we hit this, there's a compiler bug.
                 std.debug.assert(false);
@@ -3072,7 +3072,7 @@ fn getPatternIdent(self: *const Self, ptrn_idx: CIR.Pattern.Idx) ?Ident.Idx {
     const pattern = self.cir.store.getPattern(ptrn_idx);
     switch (pattern) {
         .assign => |assign| return assign.ident,
-        else => return null,
+        _ => return null,
     }
 }
 
@@ -3172,7 +3172,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     .e_str_segment => {
                         does_fx = try self.checkExpr(seg_expr_idx, env, .no_expectation) or does_fx;
                     },
-                    else => {
+                    _ => {
                         does_fx = try self.checkExpr(seg_expr_idx, env, .no_expectation) or does_fx;
                         const seg_var = ModuleEnv.varFrom(seg_expr_idx);
 
@@ -3513,7 +3513,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             try self.unifyWith(expr_var, .err, env);
                         }
                     },
-                    else => {
+                    _ => {
                         // Not a tuple - create a flex var with expected tuple constraint
                         // The elem_index + 1 gives us the minimum tuple size needed
                         const min_elems = tuple_access.elem_index + 1;
@@ -3563,7 +3563,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // Propagate error
                     try self.unifyWith(expr_var, .err, env);
                 },
-                else => {
+                _ => {
                     // Not a tuple
                     try self.unifyWith(expr_var, .err, env);
                 },
@@ -3886,13 +3886,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                     .fn_pure => |func| break :blk func,
                                     .fn_unbound => |func| break :blk func,
                                     .fn_effectful => |func| break :blk func,
-                                    else => break :blk null,
+                                    _ => break :blk null,
                                 }
                             },
                             .alias => |alias| {
                                 var_ = self.types.getAliasBackingVar(alias);
                             },
-                            else => break :blk null,
+                            _ => break :blk null,
                         }
                     }
                 } else {
@@ -4086,13 +4086,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                             .fn_pure => |func| break :inner_blk FuncInfo{ .func = func, .is_effectful = false },
                                             .fn_unbound => |func| break :inner_blk FuncInfo{ .func = func, .is_effectful = false },
                                             .fn_effectful => |func| break :inner_blk FuncInfo{ .func = func, .is_effectful = true },
-                                            else => break :inner_blk null,
+                                            _ => break :inner_blk null,
                                         }
                                     },
                                     .alias => |alias| {
                                         var_ = self.types.getAliasBackingVar(alias);
                                     },
-                                    else => break :inner_blk null,
+                                    _ => break :inner_blk null,
                                 }
                             }
                         };
@@ -4242,7 +4242,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         }
                     }
                 },
-                else => {
+                _ => {
                     // The canonicalizer currently only produces CalledVia.apply for e_call expressions.
                     // Other call types (binop, unary_op, string_interpolation, record_builder) are
                     // represented as different expression types. If we hit this, there's a compiler bug.
@@ -4623,10 +4623,10 @@ fn getExprPatternIdent(self: *const Self, expr_idx: CIR.Expr.Idx) ?Ident.Idx {
             const pattern = self.cir.store.getPattern(lookup.pattern_idx);
             switch (pattern) {
                 .assign => |assign| return assign.ident,
-                else => return null,
+                _ => return null,
             }
         },
-        else => return null,
+        _ => return null,
     }
 }
 
@@ -4647,7 +4647,7 @@ fn isFunctionDef(store: *const CIR.NodeStore, expr: CIR.Expr) bool {
         .e_lambda => true,
         .e_anno_only => true,
         .e_hosted_lambda => true,
-        else => false,
+        _ => false,
     };
 }
 
@@ -5312,7 +5312,7 @@ fn checkBinopExpr(
                     .div => self.cir.idents.div_by,
                     .div_trunc => self.cir.idents.div_trunc_by,
                     .rem => self.cir.idents.rem_by,
-                    else => unreachable,
+                    _ => unreachable,
                 };
 
             // Return type equals lhs type - e.g. Duration.times : Duration, I64 -> Duration
@@ -5352,7 +5352,7 @@ fn checkBinopExpr(
                     .le => .{ self.cir.idents.is_lte, try self.freshBool(env, expr_region) },
                     .ge => .{ self.cir.idents.is_gte, try self.freshBool(env, expr_region) },
                     .eq => .{ self.cir.idents.is_eq, try self.freshBool(env, expr_region) },
-                    else => unreachable,
+                    _ => unreachable,
                 };
 
             // Create the binop constraint with unified arg type
@@ -5419,7 +5419,7 @@ fn checkBinopExpr(
             const binop_ctx: problem.Context.BinopContext.Binop = switch (binop.op) {
                 .@"and" => .@"and",
                 .@"or" => .@"or",
-                else => unreachable,
+                _ => unreachable,
             };
             const lhs_result = try self.unifyInContext(lhs_fresh_bool, lhs_var, env, .{ .binop_lhs = .{
                 .operator = binop_ctx,
@@ -5881,7 +5881,7 @@ fn processReturnConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void
                 .try_operator => {
                     _ = try self.unifyInContext(eql.expected, eql.actual, env, .try_operator);
                 },
-                else => {
+                _ => {
                     self.constraints.items.items[write_idx] = constraint;
                     write_idx += 1;
                 },
@@ -6649,7 +6649,7 @@ pub fn createImportMapping(
                         const header_idx = switch (stmt) {
                             .s_nominal_decl => |decl| decl.header,
                             .s_alias_decl => |alias| alias.header,
-                            else => null,
+                            _ => null,
                         };
                         if (header_idx) |hdr_idx| {
                             const header = builtin_env.store.getTypeHeader(hdr_idx);

@@ -475,7 +475,7 @@ pub fn assertDefTypeOptions(self: *TestEnv, target_def_name: []const u8, expecte
                     return;
                 }
             },
-            else => {
+            _ => {
                 return error.TestUnexpectedResult;
             },
         }

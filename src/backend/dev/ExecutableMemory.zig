@@ -122,7 +122,7 @@ fn allocateMemory(size: usize) ![]align(std.heap.page_size_min) u8 {
             const ptr: [*]align(std.heap.page_size_min) u8 = @ptrCast(@alignCast(mem));
             return ptr[0..size];
         },
-        else => return error.UnsupportedPlatform,
+        _ => return error.UnsupportedPlatform,
     }
 }
 
@@ -142,7 +142,7 @@ fn makeExecutable(memory: []align(std.heap.page_size_min) u8) !void {
                 &old_protect,
             ) catch return error.VirtualProtectFailed;
         },
-        else => return error.UnsupportedPlatform,
+        _ => return error.UnsupportedPlatform,
     }
 }
 
@@ -160,7 +160,7 @@ fn freeMemory(memory: []align(std.heap.page_size_min) u8) void {
         },
         // allocateMemory returns error.UnsupportedPlatform for other OSes,
         // so freeMemory should never be called on them
-        else => unreachable,
+        _ => unreachable,
     }
 }
 

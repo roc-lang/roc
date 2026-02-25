@@ -390,7 +390,7 @@ const ImportContext = struct {
             const expr = module_env.store.getExpr(def.expr);
             const is_function = switch (expr) {
                 .e_lambda, .e_closure => true,
-                else => false,
+                _ => false,
             };
             if (is_function) {
                 // Get the name from the pattern
@@ -437,7 +437,7 @@ const SemanticCollector = struct {
             .s_expr => |e| try self.visitExpr(e.expr),
             // Type declarations and imports don't need special handling
             // since they're covered by the tokenizer
-            else => {},
+            _ => {},
         }
     }
 
@@ -447,7 +447,7 @@ const SemanticCollector = struct {
         const expr = self.module_env.store.getExpr(expr_idx);
         const is_function = switch (expr) {
             .e_closure, .e_lambda, .e_hosted_lambda => true,
-            else => false,
+            _ => false,
         };
 
         // Add token for pattern with appropriate type
@@ -479,7 +479,7 @@ const SemanticCollector = struct {
                             try self.visitPatternAsParameter(param_idx);
                         }
                     },
-                    else => {},
+                    _ => {},
                 }
             },
             .e_lambda => |l| {
@@ -498,7 +498,7 @@ const SemanticCollector = struct {
                     try self.visitPatternAsParameter(param_idx);
                 }
             },
-            else => {},
+            _ => {},
         }
     }
 
@@ -546,7 +546,7 @@ const SemanticCollector = struct {
                 const region = self.module_env.store.getPatternRegion(pattern_idx);
                 try self.addToken(region, .parameter);
             },
-            else => {},
+            _ => {},
         }
     }
 
@@ -567,7 +567,7 @@ const SemanticCollector = struct {
                 // Visit lambda body
                 try self.visitExpr(l.body);
             },
-            else => {},
+            _ => {},
         }
     }
 

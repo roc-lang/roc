@@ -614,7 +614,7 @@ fn emitPatternValue(self: *Self, pattern: Pattern) EmitError!void {
                                         try self.emitPattern(pat_idx);
                                     }
                                 },
-                                else => {
+                                _ => {
                                     try self.write(": ");
                                     try self.emitPattern(pat_idx);
                                 },
@@ -731,7 +731,7 @@ fn emitStatement(self: *Self, stmt_idx: CIR.Statement.Idx) EmitError!void {
         .s_type_anno, .s_type_var_alias, .s_alias_decl, .s_nominal_decl => {
             // Type declarations are not emitted for now
         },
-        else => {},
+        _ => {},
     }
 }
 

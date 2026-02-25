@@ -253,7 +253,7 @@ pub const ComptimeEvaluator = struct {
             // values to the platform's `requires` clause. These values are not available
             // during compile-time evaluation of the platform - they will be linked at runtime.
             .e_lookup_required => return EvalResult{ .success = null },
-            else => false,
+            _ => false,
         };
 
         // Reset halted flag at the start of each def - crashes only halt within a single def

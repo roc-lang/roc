@@ -136,7 +136,7 @@ pub fn validatePlatformHasTargets(
     // Only platform headers should have targets
     const platform = switch (header) {
         .platform => |p| p,
-        else => return .{ .valid = {} }, // Non-platform headers don't need targets
+        _ => return .{ .valid = {} }, // Non-platform headers don't need targets
     };
 
     // Check if targets section exists
@@ -755,7 +755,7 @@ test "validatePlatformHasTargets detects missing targets section" {
         .missing_targets_section => |info| {
             try std.testing.expectEqualStrings("test/platform/main.roc", info.platform_path);
         },
-        else => {
+        _ => {
             std.debug.print("Expected missing_targets_section but got {}\n", .{result});
             return error.UnexpectedResult;
         },
@@ -993,7 +993,7 @@ test "validateTargetFilesExist reports missing target file with valid path" {
             // Clean up the allocated path
             allocator.free(info.expected_full_path);
         },
-        else => {
+        _ => {
             std.debug.print("Expected missing_target_file but got {}\n", .{result});
             return error.UnexpectedResult;
         },

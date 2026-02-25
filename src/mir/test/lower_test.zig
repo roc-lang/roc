@@ -33,7 +33,7 @@ test "MIR Store: add and get expression" {
     const retrieved = store.getExpr(expr_id);
     switch (retrieved) {
         .int => |int_val| try testing.expectEqual(@as(i128, 42), int_val.value.toI128()),
-        else => return error.TestUnexpectedResult,
+        _ => return error.TestUnexpectedResult,
     }
 
     try testing.expectEqual(monotype, store.typeOf(expr_id));
@@ -50,7 +50,7 @@ test "MIR Store: add and get pattern" {
     const retrieved = store.getPattern(pat_id);
     switch (retrieved) {
         .bind => |sym| try testing.expect(sym.module_idx == 0),
-        else => return error.TestUnexpectedResult,
+        _ => return error.TestUnexpectedResult,
     }
 
     try testing.expectEqual(monotype, store.patternTypeOf(pat_id));
@@ -204,11 +204,11 @@ test "MIR Store: multiple expressions round trip" {
     // Verify expressions
     switch (store.getExpr(int_id)) {
         .int => |v| try testing.expectEqual(@as(i128, 99), v.value.toI128()),
-        else => return error.TestUnexpectedResult,
+        _ => return error.TestUnexpectedResult,
     }
     switch (store.getExpr(str_id)) {
         .str => {},
-        else => return error.TestUnexpectedResult,
+        _ => return error.TestUnexpectedResult,
     }
     switch (store.getExpr(list_id)) {
         .list => |l| {
@@ -216,11 +216,11 @@ test "MIR Store: multiple expressions round trip" {
             const elems = store.getExprSpan(l.elems);
             try testing.expectEqual(int_id, elems[0]);
         },
-        else => return error.TestUnexpectedResult,
+        _ => return error.TestUnexpectedResult,
     }
     switch (store.getPattern(wild_id)) {
         .wildcard => {},
-        else => return error.TestUnexpectedResult,
+        _ => return error.TestUnexpectedResult,
     }
 }
 
@@ -810,7 +810,7 @@ test "lowerExpr: for loop" {
             .decl_const => |dc| {
                 if (env.mir_store.getExpr(dc.expr) == .for_loop) found_for = true;
             },
-            else => {},
+            _ => {},
         }
     }
     try testing.expect(found_for);

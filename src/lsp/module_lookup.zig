@@ -74,7 +74,7 @@ pub fn extractIdentFromPattern(store: *const NodeStore, pattern_idx: CIR.Pattern
     return switch (pattern) {
         .assign => |a| a.ident,
         .as => |a| a.ident,
-        else => null,
+        _ => null,
     };
 }
 
@@ -85,7 +85,7 @@ pub fn extractIdentFromPatternRecursive(store: *const NodeStore, pattern_idx: CI
     return switch (pattern) {
         .assign => |a| a.ident,
         .as => |a| a.ident,
-        else => null,
+        _ => null,
     };
 }
 
@@ -176,7 +176,7 @@ pub fn findStatementOwningPattern(module_env: *ModuleEnv, target_pattern: CIR.Pa
         const pattern_idx_opt: ?CIR.Pattern.Idx = switch (stmt) {
             .s_decl => |decl| decl.pattern,
             .s_var => |var_stmt| var_stmt.pattern_idx,
-            else => null,
+            _ => null,
         };
         if (pattern_idx_opt) |pat_idx| {
             if (pat_idx == target_pattern) return .{ .stmt = stmt, .idx = stmt_idx };

@@ -153,7 +153,7 @@ pub const I128Arg = switch (builtin.os.tag) {
         extern struct { lo: u64, hi: u64 }
     else
         i128,
-    else => i128,
+    _ => i128,
 };
 
 /// Convert a platform-specific i128 representation to native i128.
@@ -165,7 +165,7 @@ pub fn normalizeI128Return(arg: I128Arg) i128 {
             @as(i128, arg.hi) << 64 | @as(i128, arg.lo)
         else
             arg,
-        else => arg,
+        _ => arg,
     };
 }
 
@@ -181,7 +181,7 @@ pub fn prepareI128Arg(value: i128) I128Arg {
             .lo = @truncate(@as(u128, @bitCast(value))),
             .hi = @truncate(@as(u128, @bitCast(value)) >> 64),
         } else value,
-        else => value,
+        _ => value,
     };
 }
 
@@ -316,7 +316,7 @@ pub fn compileAndExecute(
         const cpu: [*:0]const u8 = switch (builtin.cpu.arch) {
             .x86_64 => "x86-64",
             .x86 => "pentium4",
-            else => "generic",
+            _ => "generic",
         };
 
         // Create a target machine with the baseline CPU and no specific extra features.

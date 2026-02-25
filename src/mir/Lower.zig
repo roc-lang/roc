@@ -312,7 +312,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                             return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, monotype, region);
                         }
                     },
-                    else => {},
+                    _ => {},
                 }
             }
             return try self.store.addExpr(self.allocator, .runtime_err_type, monotype, region);
@@ -987,7 +987,7 @@ fn lowerUnaryMinus(self: *Self, um: CIR.Expr.UnaryMinus, monotype: Monotype.Idx,
                         "lowerUnaryMinus: nominal type reached fallback — type checker should have validated this",
                         .{},
                     ),
-                    else => std.debug.panic(
+                    _ => std.debug.panic(
                         "lowerUnaryMinus: structural type reached fallback — type checker should have rejected this",
                         .{},
                     ),
@@ -1288,7 +1288,7 @@ fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol) Allocator.Error!void {
                     return;
                 }
             },
-            else => {},
+            _ => {},
         }
     }
     unreachable; // Method must exist — type checking should have caught this

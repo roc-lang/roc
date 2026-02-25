@@ -40,7 +40,7 @@ test "local type alias is parsed and canonicalized" {
             .not_implemented => error_count += 1,
             .undeclared_type => error_count += 1,
             .ident_not_in_scope => error_count += 1,
-            else => {},
+            _ => {},
         }
     }
     try testing.expectEqual(@as(usize, 0), error_count);
@@ -69,7 +69,7 @@ test "local nominal type is parsed and canonicalized" {
             .not_implemented => error_count += 1,
             .undeclared_type => error_count += 1,
             .ident_not_in_scope => error_count += 1,
-            else => {},
+            _ => {},
         }
     }
     try testing.expectEqual(@as(usize, 0), error_count);
@@ -99,7 +99,7 @@ test "local opaque type is parsed and canonicalized" {
             .not_implemented => error_count += 1,
             .undeclared_type => error_count += 1,
             .ident_not_in_scope => error_count += 1,
-            else => {},
+            _ => {},
         }
     }
     try testing.expectEqual(@as(usize, 0), error_count);
@@ -133,7 +133,7 @@ test "nested blocks with local types" {
             .not_implemented => error_count += 1,
             .undeclared_type => error_count += 1,
             .ident_not_in_scope => error_count += 1,
-            else => {},
+            _ => {},
         }
     }
     try testing.expectEqual(@as(usize, 0), error_count);
@@ -165,7 +165,7 @@ test "multiple local types in same block" {
             .not_implemented => error_count += 1,
             .undeclared_type => error_count += 1,
             .ident_not_in_scope => error_count += 1,
-            else => {},
+            _ => {},
         }
     }
     try testing.expectEqual(@as(usize, 0), error_count);
@@ -195,7 +195,7 @@ test "local type with type parameters" {
             .not_implemented => error_count += 1,
             .undeclared_type => error_count += 1,
             .ident_not_in_scope => error_count += 1,
-            else => {},
+            _ => {},
         }
     }
     try testing.expectEqual(@as(usize, 0), error_count);
@@ -226,7 +226,7 @@ test "expression that looks like type decl but isn't - record field" {
     for (diagnostics) |diag| {
         switch (diag) {
             .undeclared_type => type_decl_errors += 1,
-            else => {},
+            _ => {},
         }
     }
     try testing.expectEqual(@as(usize, 0), type_decl_errors);
@@ -258,7 +258,7 @@ test "local type alias can be used in annotation" {
             .not_implemented => error_count += 1,
             .undeclared_type => error_count += 1,
             .ident_not_in_scope => error_count += 1,
-            else => {},
+            _ => {},
         }
     }
     try testing.expectEqual(@as(usize, 0), error_count);

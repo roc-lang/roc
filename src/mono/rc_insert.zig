@@ -1589,7 +1589,7 @@ fn countRcOps(store: *const MonoExprStore, expr_id: MonoExprId) RcOpCounts {
             increfs += sub.increfs;
             decrefs += sub.decrefs;
         },
-        else => {},
+        _ => {},
     }
     return .{ .increfs = increfs, .decrefs = decrefs };
 }

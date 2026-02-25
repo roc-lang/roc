@@ -24,7 +24,7 @@ fn getIntValue(module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) !i128 {
         .e_num => |int_expr| {
             return @bitCast(int_expr.value.bytes);
         },
-        else => return error.NotAnInteger,
+        _ => return error.NotAnInteger,
     }
 }
 
@@ -410,7 +410,7 @@ test "integer literal - negative zero" {
             try testing.expectEqual(@as(i128, @bitCast(int.value.bytes)), 0);
             // But it should still be marked as needing a sign
         },
-        else => {
+        _ => {
             try testing.expect(false); // Should be int
         },
     }
@@ -428,7 +428,7 @@ test "integer literal - positive zero" {
             try testing.expectEqual(@as(i128, @bitCast(int.value.bytes)), 0);
             // Positive zero should not need a sign
         },
-        else => {
+        _ => {
             try testing.expect(false); // Should be int
         },
     }

@@ -957,7 +957,7 @@ test "roc check returns exit code 0 for no warnings or errors" {
         switch (result.term) {
             .Exited => |code| std.debug.print("Actual: exit code {}\n", .{code}),
             .Signal => |sig| std.debug.print("Actual: killed by signal {}\n", .{sig}),
-            else => std.debug.print("Actual: {}\n", .{result.term}),
+            _ => std.debug.print("Actual: {}\n", .{result.term}),
         }
         std.debug.print("stdout: {s}\n", .{result.stdout});
         std.debug.print("stderr: {s}\n", .{result.stderr});

@@ -247,7 +247,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
                         try self.locals.put(local, .{ .general_reg = @intFromEnum(reg) });
                         return reg;
                     },
-                    else => return error.InvalidLocalLocation,
+                    _ => return error.InvalidLocalLocation,
                 }
             }
             return error.LocalNotFound;
@@ -324,7 +324,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
                         try self.locals.put(local, .{ .float_reg = @intFromEnum(reg) });
                         return reg;
                     },
-                    else => return error.InvalidLocalLocation,
+                    _ => return error.InvalidLocalLocation,
                 }
             }
             return error.LocalNotFound;
@@ -336,7 +336,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
                 switch (loc) {
                     .general_reg => |r| return @enumFromInt(r),
                     .stack => return self.reloadLocal(local),
-                    else => return error.InvalidLocalLocation,
+                    _ => return error.InvalidLocalLocation,
                 }
             }
             return error.LocalNotFound;
@@ -348,7 +348,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
                 switch (loc) {
                     .float_reg => |r| return @enumFromInt(r),
                     .stack => return self.reloadFloatLocal(local),
-                    else => return error.InvalidLocalLocation,
+                    _ => return error.InvalidLocalLocation,
                 }
             }
             return error.LocalNotFound;

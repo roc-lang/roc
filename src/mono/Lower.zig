@@ -272,7 +272,7 @@ fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) Symbol {
     const ident_idx: Ident.Idx = switch (pattern) {
         .assign => |a| a.ident,
         .as => |as| as.ident,
-        else => Ident.Idx.NONE,
+        _ => Ident.Idx.NONE,
     };
 
     const symbol = Symbol{
@@ -452,7 +452,7 @@ fn getBlockLayout(self: *Self, module_env: *ModuleEnv, block: anytype) LayoutIdx
                 const inferred = self.getExprLayoutFromIdx(module_env, var_stmt.expr);
                 self.type_env.put(pattern_key, inferred) catch {};
             },
-            else => {},
+            _ => {},
         }
     }
 
@@ -579,7 +579,7 @@ fn resolveTagDiscriminant(self: *Self, module_env: *ModuleEnv, type_var: types.V
                     const backing_var = types_store.getNominalBackingVar(nominal);
                     current_ext = backing_var;
                 },
-                else => break,
+                _ => break,
             },
             .alias => |alias| {
                 current_ext = types_store.getAliasBackingVar(alias);
@@ -648,9 +648,9 @@ fn resolveTagDiscriminant(self: *Self, module_env: *ModuleEnv, type_var: types.V
                                         caller_ext = cext_tu.ext;
                                     },
                                     .empty_tag_union => break,
-                                    else => break,
+                                    _ => break,
                                 },
-                                else => break,
+                                _ => break,
                             }
                         }
                     }
@@ -659,7 +659,7 @@ fn resolveTagDiscriminant(self: *Self, module_env: *ModuleEnv, type_var: types.V
                     break;
                 }
             },
-            else => break,
+            _ => break,
         }
     }
 
@@ -756,10 +756,10 @@ fn getForLoopElementLayout(self: *Self, list_expr_idx: CIR.Expr.Idx) LayoutIdx {
                     const elem_layout = ls.fromTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, effective_caller) catch unreachable;
                     return elem_layout;
                 },
-                else => unreachable, // For loop list must be List type
+                _ => unreachable, // For loop list must be List type
             }
         },
-        else => unreachable, // For loop list must be structure type
+        _ => unreachable, // For loop list must be structure type
     }
 }
 
@@ -1119,7 +1119,7 @@ fn convertToMonoLowLevel(op: CIR.Expr.LowLevel) ?ir.MonoExpr.LowLevel {
 
         .num_from_str => .num_from_str,
 
-        else => null,
+        _ => null,
     };
 }
 
@@ -1146,7 +1146,7 @@ fn toStrMonoExpr(op: CIR.Expr.LowLevel, module_env: *ModuleEnv, args: anytype, s
         .dec_to_str => .{ .dec_to_str = arg_id },
         .f32_to_str => .{ .float_to_str = .{ .value = arg_id, .float_precision = .f32 } },
         .f64_to_str => .{ .float_to_str = .{ .value = arg_id, .float_precision = .f64 } },
-        else => null,
+        _ => null,
     };
 }
 
@@ -1212,10 +1212,10 @@ fn setupLocalCallLayoutHints(
             const inner = module_env.store.getExpr(c.lambda_idx);
             break :blk switch (inner) {
                 .e_lambda => |l| l.args,
-                else => return,
+                _ => return,
             };
         },
-        else => return,
+        _ => return,
     };
 
     const param_pattern_indices = module_env.store.slicePatterns(lambda_args);
@@ -1264,10 +1264,10 @@ fn setupLocalCallLayoutHints(
                     const inner_expr = module_env.store.getExpr(c.lambda_idx);
                     break :blk switch (inner_expr) {
                         .e_lambda => |l| l.body,
-                        else => null,
+                        _ => null,
                     };
                 },
-                else => null,
+                _ => null,
             };
             if (lambda_body) |body_idx| {
                 const body_type_var = ModuleEnv.varFrom(body_idx);
@@ -1313,9 +1313,9 @@ fn setupLocalCallLayoutHints(
             .flex, .rigid => true,
             .structure => |st| switch (st) {
                 .tag_union => true, // Tag unions may have rigid/flex payload types
-                else => false,
+                _ => false,
             },
-            else => false,
+            _ => false,
         };
         if (!needs_hint) continue;
 
@@ -1420,7 +1420,7 @@ fn buildLayoutVarOverrides(
                     }
                 }
             },
-            else => {},
+            _ => {},
         },
         .alias => |al| {
             if (cr.desc.content == .alias) {
@@ -1429,7 +1429,7 @@ fn buildLayoutVarOverrides(
                 try self.buildLayoutVarOverrides(env, d_backing, c_backing);
             }
         },
-        else => {},
+        _ => {},
     }
 }
 
@@ -1549,10 +1549,10 @@ fn needsReSpecialization(
             const inner = self.store.getExpr(c.lambda);
             break :blk switch (inner) {
                 .lambda => |l| l,
-                else => return false,
+                _ => return false,
             };
         },
-        else => return false,
+        _ => return false,
     };
 
     const param_patterns = self.store.getPatternSpan(lambda.params);
@@ -1564,7 +1564,7 @@ fn needsReSpecialization(
         const param_layout: LayoutIdx = switch (param_pattern) {
             .bind => |b| b.layout_idx,
             .wildcard => |w| w.layout_idx,
-            else => continue,
+            _ => continue,
         };
         const arg_layout = self.getExprLayoutFromIdx(module_env, arg_indices[i]);
         if (param_layout != arg_layout) return true;
@@ -1591,10 +1591,10 @@ fn needsDotAccessReSpec(
             const inner = self.store.getExpr(c.lambda);
             break :blk switch (inner) {
                 .lambda => |l| l,
-                else => return false,
+                _ => return false,
             };
         },
-        else => return false,
+        _ => return false,
     };
 
     const param_patterns = self.store.getPatternSpan(lambda.params);
@@ -1605,7 +1605,7 @@ fn needsDotAccessReSpec(
     const first_layout: LayoutIdx = switch (first_param) {
         .bind => |b| b.layout_idx,
         .wildcard => |w| w.layout_idx,
-        else => return false,
+        _ => return false,
     };
     const receiver_layout = self.getExprLayoutFromIdx(module_env, receiver_expr_idx);
     if (first_layout != receiver_layout) return true;
@@ -1619,7 +1619,7 @@ fn needsDotAccessReSpec(
                 const param_layout: LayoutIdx = switch (param_pattern) {
                     .bind => |b| b.layout_idx,
                     .wildcard => |w| w.layout_idx,
-                    else => continue,
+                    _ => continue,
                 };
                 const arg_layout = self.getExprLayoutFromIdx(module_env, arg_idx);
                 if (param_layout != arg_layout) return true;
@@ -1749,13 +1749,13 @@ fn collectRigidVars(self: *Self, env: *const ModuleEnv, type_var: types.Var, out
                     self.collectRigidVars(env, e, out, count);
                 }
             },
-            else => {},
+            _ => {},
         },
         .alias => |alias| {
             const backing = env.types.getAliasBackingVar(alias);
             self.collectRigidVars(env, backing, out, count);
         },
-        else => {},
+        _ => {},
     }
 }
 
@@ -1849,7 +1849,7 @@ fn addIntraModuleMappings(
                 }
             }
         },
-        else => {},
+        _ => {},
     }
 }
 
@@ -2012,7 +2012,7 @@ fn collectTypeMappingsWithExpr(
                                     try self.collectTypeMappingsWithExpr(scope, ext_env, ext_args[0], caller_env, first_elem_var, elems[0]);
                                 }
                             },
-                            else => {},
+                            _ => {},
                         }
                     }
                 },
@@ -2049,7 +2049,7 @@ fn collectTypeMappingsWithExpr(
                     // Also recurse into extension vars
                     try self.collectTypeMappings(scope, ext_env, tu.ext, caller_env, caller_tu.ext);
                 },
-                else => {},
+                _ => {},
             }
         },
         .alias => |alias| {
@@ -2494,10 +2494,10 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                                     break :elem_blk ls.fromTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, self.type_scope_caller_module) catch LayoutIdx.default_num;
                                 }
                             },
-                            else => {},
+                            _ => {},
                         }
                     },
-                    else => {},
+                    _ => {},
                 }
                 break :elem_blk LayoutIdx.default_num;
             };
@@ -2651,7 +2651,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                             .origin = nom.origin_module,
                             .ident = nom.ident.ident_idx,
                         },
-                        else => null,
+                        _ => null,
                     },
                     .flex => |flex| fi: {
                         if (!flex.constraints.isEmpty()) {
@@ -2680,7 +2680,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                         }
                         break :ri null;
                     },
-                    else => null,
+                    _ => null,
                 };
 
                 if (recv_nominal) |rn| {
@@ -3376,7 +3376,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                         .origin = nom.origin_module,
                         .ident = nom.ident.ident_idx,
                     },
-                    else => null,
+                    _ => null,
                 },
                 .flex => |flex| fi: {
                     if (!flex.constraints.isEmpty()) {
@@ -3404,7 +3404,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                     }
                     break :ri null;
                 },
-                else => null,
+                _ => null,
             };
 
             const info = nominal_info orelse {
@@ -3476,7 +3476,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             }
         },
 
-        else => {
+        _ => {
             unreachable;
         },
     };
@@ -3715,10 +3715,10 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
                                 // Compute layout for the element type
                                 break :elem_blk ls.fromTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
                             },
-                            else => unreachable, // List pattern must match List type
+                            _ => unreachable, // List pattern must match List type
                         }
                     },
-                    else => unreachable, // List pattern must match structure type
+                    _ => unreachable, // List pattern must match structure type
                 }
             };
 
@@ -3741,7 +3741,7 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
             return self.lowerPattern(module_env, n.backing_pattern);
         },
 
-        else => .{ .wildcard = .{ .layout_idx = self.getPatternLayout(pattern_idx) } }, // Fallback for unsupported patterns
+        _ => .{ .wildcard = .{ .layout_idx = self.getPatternLayout(pattern_idx) } }, // Fallback for unsupported patterns
     };
 
     return self.store.addPattern(mono_pattern, region);
@@ -3940,7 +3940,7 @@ fn exprContainsPatternRef(
                             return true;
                         }
                     },
-                    else => {},
+                    _ => {},
                 }
             }
             // Check final expression
@@ -3977,7 +3977,7 @@ fn exprContainsPatternRef(
             return false;
         },
         // Leaf expressions that can't contain references
-        else => return false,
+        _ => return false,
     }
 }
 
@@ -4057,7 +4057,7 @@ fn collectIfClosureLambdaSet(
                 });
                 tag += 1;
             },
-            else => {
+            _ => {
                 // Not a closure - add placeholder
                 tag += 1;
             },
@@ -4091,7 +4091,7 @@ fn collectIfClosureLambdaSet(
                 .tag = tag,
             });
         },
-        else => {},
+        _ => {},
     }
 
     if (!has_closures) {
@@ -4228,7 +4228,7 @@ fn lowerExprWithLambdaSet(
 
             return self.store.addExpr(closure_expr, Region.zero());
         },
-        else => {
+        _ => {
             // Not a closure - lower normally
             return self.lowerExprFromIdx(module_env, expr_idx);
         },
@@ -4507,7 +4507,7 @@ fn lowerStmts(self: *Self, module_env: *ModuleEnv, stmts: CIR.Statement.Span) Al
                     .expr = while_loop_expr,
                 });
             },
-            else => {
+            _ => {
                 // Skip other statement types (s_import, s_alias_decl, etc.)
             },
         }
@@ -4632,7 +4632,7 @@ fn lowerInspectByLayout(
             .opaque_ptr => try self.addStrLiteral("<opaque>", region),
         },
         .list, .list_of_zst => try self.addStrLiteral("[...]", region),
-        else => try self.addStrLiteral("<value>", region),
+        _ => try self.addStrLiteral("<value>", region),
     };
 }
 
@@ -5060,7 +5060,7 @@ fn lowerInspectWithMethod(
                     ret_layout = lam_expr.lambda.ret_layout;
                 }
             },
-            else => {},
+            _ => {},
         }
     }
 
@@ -5150,7 +5150,7 @@ fn lowerExprToStmt(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, 
         .e_block => |block| try self.lowerBlockToStmt(module_env, block, ret_layout),
         .e_if => |ite| try self.lowerIfToSwitchStmt(module_env, ite, ret_layout),
         .e_match => |match_expr| try self.lowerMatchToStmt(module_env, match_expr, ret_layout, expr_idx),
-        else => {
+        _ => {
             // For other expressions, wrap in a return statement
             const expr_id = try self.lowerExprInner(module_env, expr, region, expr_idx);
             return try self.store.addCFStmt(.{
@@ -5199,7 +5199,7 @@ fn lowerBlockToStmt(self: *Self, module_env: *ModuleEnv, block: anytype, ret_lay
                     },
                 });
             },
-            else => {}, // Skip other statement types for now
+            _ => {}, // Skip other statement types for now
         }
     }
 
@@ -5367,7 +5367,7 @@ fn lowerClosureToProc(
     const lambda_expr = module_env.store.getExpr(closure.lambda_idx);
     const lambda = switch (lambda_expr) {
         .e_lambda => |l| l,
-        else => unreachable,
+        _ => unreachable,
     };
 
     // Lower parameters first, then extract their layouts

@@ -162,7 +162,7 @@ const FindTypeContext = struct {
         const anno_idx: ?CIR.Annotation.Idx = switch (stmt) {
             .s_decl => |d| d.anno,
             .s_var => |v| v.anno,
-            else => null,
+            _ => null,
         };
 
         if (anno_idx) |anno| {
@@ -173,7 +173,7 @@ const FindTypeContext = struct {
                 const pattern_idx: ?CIR.Pattern.Idx = switch (stmt) {
                     .s_decl => |d| d.pattern,
                     .s_var => |v| v.pattern_idx,
-                    else => null,
+                    _ => null,
                 };
                 if (pattern_idx) |pat| {
                     ctx.result = .{
@@ -189,7 +189,7 @@ const FindTypeContext = struct {
                 const pattern_idx: ?CIR.Pattern.Idx = switch (stmt) {
                     .s_decl => |d| d.pattern,
                     .s_var => |v| v.pattern_idx,
-                    else => null,
+                    _ => null,
                 };
                 if (pattern_idx) |pat| {
                     ctx.result = .{
@@ -241,7 +241,7 @@ const FindLookupContext = struct {
                     }
                 }
             },
-            else => {},
+            _ => {},
         }
 
         return .continue_traversal;
@@ -267,7 +267,7 @@ const CollectReferencesContext = struct {
                     }
                 }
             },
-            else => {},
+            _ => {},
         }
         return .continue_traversal;
     }
@@ -311,7 +311,7 @@ const FindDotReceiverContext = struct {
     fn visitExprPre(ctx: *FindDotReceiverContext, _: CIR.Expr.Idx, expr: CIR.Expr) VisitAction {
         const region = switch (expr) {
             .e_dot_access => |dot| dot.field_name_region,
-            else => return .continue_traversal,
+            _ => return .continue_traversal,
         };
 
         // Early exit if region doesn't contain target

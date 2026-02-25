@@ -136,7 +136,7 @@ fn looksLikeTypeDecl(self: *Parser) bool {
                 .OpenRound, .NoSpaceOpenRound => depth += 1,
                 .CloseRound => depth -= 1,
                 .EndOfFile => return false,
-                else => {},
+                _ => {},
             }
             lookahead += 1;
         }
@@ -165,7 +165,7 @@ fn looksLikeTypeDecl(self: *Parser) bool {
         .NamedUnderscore, // Named wildcard: _foo
         => true,
         // NOT valid type starts - this is probably a malformed expression
-        else => false,
+        _ => false,
     };
 }
 
@@ -314,7 +314,7 @@ pub fn parseHeader(self: *Parser) Error!AST.Header.Idx {
         .KwPlatform => {
             return self.parsePlatformHeader();
         },
-        else => {
+        _ => {
             // No header keyword found - this is a type module
             return try self.store.addHeader(.{ .type_module = .{
                 .region = .{ .start = 0, .end = 0 },
@@ -1064,7 +1064,7 @@ pub fn parseExposedItem(self: *Parser) Error!AST.ExposedItem.Idx {
 
             return ei;
         },
-        else => {
+        _ => {
             return try self.pushMalformed(AST.ExposedItem.Idx, .exposed_item_unexpected_token, start);
         },
     }
@@ -1106,7 +1106,7 @@ pub fn parseTargetFile(self: *Parser) Error!AST.TargetFile.Idx {
             self.advance(); // Advance past KwApp
             return try self.store.addTargetFile(.{ .special_ident = start });
         },
-        else => {
+        _ => {
             return try self.pushMalformed(AST.TargetFile.Idx, .expected_target_file, start);
         },
     }
@@ -1256,7 +1256,7 @@ pub fn parseTargetsSection(self: *Parser) Error!AST.TargetsSection.Idx {
                 }
                 // Unknown fields are ignored (shared_lib to be added later)
             },
-            else => {
+            _ => {
                 return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, start);
             },
         }
@@ -1616,7 +1616,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 const kind: AST.TypeDeclKind = switch (self.peek()) {
                     .OpColonEqual => .nominal,
                     .OpDoubleColon => .@"opaque",
-                    else => .alias,
+                    _ => .alias,
                 };
                 self.advance();
                 const anno = try self.parseTypeAnno(.not_looking_for_args);
@@ -1701,7 +1701,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 return statement_idx;
             }
         },
-        else => {},
+        _ => {},
     }
 
     if (statementType == .top_level) {
@@ -2059,7 +2059,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) Error!AST.Pattern
                     .region = .{ .start = start, .end = self.pos },
                 } });
             },
-            else => {
+            _ => {
                 return try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, self.pos);
             },
         }
@@ -2478,7 +2478,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                                 }
                             },
                             .EndOfFile => break,
-                            else => {
+                            _ => {
                                 // Ignore other tokens
                             },
                         }
@@ -2628,7 +2628,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
             // Return keyword found in expression context (outside a function/block)
             return try self.pushMalformed(AST.Expr.Idx, .return_outside_function, start);
         },
-        else => {
+        _ => {
             return try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, start);
         },
     }
@@ -2944,7 +2944,7 @@ pub fn parseMultiLineStringExpr(self: *Parser) Error!AST.Expr.Idx {
                     .end = self.pos,
                 });
             },
-            else => {
+            _ => {
                 // Multi lins strings just end
                 break;
             },
@@ -3005,7 +3005,7 @@ pub fn parseStringExpr(self: *Parser) Error!AST.Expr.Idx {
                 // a more precise diagnostic with the exact error location
                 self.advance();
             },
-            else => {
+            _ => {
                 // Something is broken in the tokenizer if we get here!
                 return try self.pushMalformed(AST.Expr.Idx, .string_unexpected_token, self.pos);
             },
@@ -3100,10 +3100,10 @@ fn parseTypeIdent(self: *Parser) Error!AST.TypeAnno.Idx {
                 .LowerIdent => .{ .ty_var = .{ .region = region, .tok = tok } },
                 .NamedUnderscore => .{ .underscore_type_var = .{ .region = region, .tok = tok } },
                 .Underscore => .{ .underscore = .{ .region = region } },
-                else => unreachable,
+                _ => unreachable,
             });
         },
-        else => {
+        _ => {
             return self.pushMalformed(AST.TypeAnno.Idx, .invalid_type_arg, self.pos);
         },
     }
@@ -3342,7 +3342,7 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
             } });
             self.advance(); // Advance past Underscore
         },
-        else => {
+        _ => {
             return try self.pushMalformed(AST.TypeAnno.Idx, .ty_anno_unexpected_token, self.pos);
         },
     }
@@ -3676,6 +3676,6 @@ fn getTokenBP(tok: Token.Tag) ?BinOpBp {
         .OpGreaterThanOrEq => .{ .left = 5, .right = 5 }, // 5 NOASSOC
         .OpAnd => .{ .left = 4, .right = 3 }, // 3 RIGHT
         .OpOr => .{ .left = 2, .right = 1 }, // 1 RIGHT
-        else => null,
+        _ => null,
     };
 }

@@ -62,7 +62,7 @@ pub fn tokensToHtml(ast: *const AST, env: *const CommonEnv, writer: *std.io.Writ
             .Float, .Int => "token-number",
             .OpenRound, .CloseRound, .OpenSquare, .CloseSquare, .OpenCurly, .CloseCurly, .OpenStringInterpolation, .CloseStringInterpolation, .NoSpaceOpenRound => "token-punctuation",
             .EndOfFile => "token-default",
-            else => "token-default",
+            _ => "token-default",
         };
 
         try writer.print("<span class=\"token {s}\">", .{css_class});

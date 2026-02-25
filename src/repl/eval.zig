@@ -392,7 +392,7 @@ pub const Repl = struct {
         pub fn isError(self: StepResult) bool {
             return switch (self) {
                 .parse_error, .canonicalize_error, .type_error, .eval_error => true,
-                else => false,
+                _ => false,
             };
         }
 
@@ -455,7 +455,7 @@ pub const Repl = struct {
                 },
                 .import => return ParseResult.import,
                 .type_decl => return ParseResult.type_decl,
-                else => return ParseResult.expression,
+                _ => return ParseResult.expression,
             }
         }
 

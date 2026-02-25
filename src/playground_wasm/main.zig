@@ -601,7 +601,7 @@ fn handleStartState(message_type: MessageType, _: std.json.Value, response_buffe
             const compiler_version = build_options.compiler_version;
             try writeSuccessResponse(response_buffer, compiler_version, null);
         },
-        else => {
+        _ => {
             try writeErrorResponse(response_buffer, .INVALID_STATE, "INVALID_STATE");
         },
     }
@@ -698,7 +698,7 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
             const compiler_version = build_options.compiler_version;
             try writeSuccessResponse(response_buffer, compiler_version, null);
         },
-        else => {
+        _ => {
             try writeErrorResponse(response_buffer, .INVALID_STATE, "INVALID_STATE");
         },
     }
@@ -741,7 +741,7 @@ fn handleLoadedState(message_type: MessageType, message_json: std.json.Value, re
             const compiler_version = build_options.compiler_version;
             try writeSuccessResponse(response_buffer, compiler_version, null);
         },
-        else => {
+        _ => {
             try writeErrorResponse(response_buffer, .INVALID_STATE, "INVALID_STATE");
         },
     }
@@ -835,7 +835,7 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
             // These queries need parse/type information which isn't readily available in REPL mode
             try writeErrorResponse(response_buffer, .ERROR, "Parse/type queries not available in REPL mode");
         },
-        else => {
+        _ => {
             try writeErrorResponse(response_buffer, .INVALID_STATE, "Invalid message type for REPL state");
         },
     }
@@ -1677,21 +1677,21 @@ fn writeHoverInfoResponse(response_buffer: []u8, data: CompilerStageData, messag
 
     const line_num = switch (line_val) {
         .integer => |i| @as(u32, @intCast(i)) - 1, // Convert from 1-based to 0-based index
-        else => {
+        _ => {
             try writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Invalid line parameter");
             return;
         },
     };
     const ch_num = switch (ch_val) {
         .integer => |i| @as(u32, @intCast(i)) - 1, // Convert from 1-based to 0-based
-        else => {
+        _ => {
             try writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Invalid ch parameter");
             return;
         },
     };
     const ident_str = switch (identifier_val) {
         .string => |s| s,
-        else => {
+        _ => {
             try writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Invalid identifier parameter");
             return;
         },
@@ -1801,7 +1801,7 @@ fn findHoverInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier
                         };
                     }
                 },
-                else => {},
+                _ => {},
             }
         }
     }

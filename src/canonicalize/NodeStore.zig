@@ -511,7 +511,7 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
                 .diagnostic = @enumFromInt(p.value),
             } };
         },
-        else => {
+        _ => {
             std.debug.panic("unreachable, node is not a statement tag: {}", .{node.tag});
         },
     }
@@ -950,7 +950,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         // If compilation errors occur, use pushMalformed() to create .malformed nodes
         // that reference diagnostic indices. The .malformed case above handles
         // converting these to runtime_error nodes in the ModuleEnv.
-        else => {
+        _ => {
             std.debug.panic("unreachable, node is not an expression tag: {}", .{node.tag});
         },
     }
@@ -1087,7 +1087,7 @@ pub fn getExprSpecific(store: *const NodeStore, expr_idx: CIR.Expr.Idx) CIR.Expr
     const expr = store.getExpr(expr_idx);
     switch (expr) {
         .e_block => |block| return block.final_expr,
-        else => return expr_idx,
+        _ => return expr_idx,
     }
 }
 
@@ -1173,7 +1173,7 @@ pub fn getWhereClause(store: *const NodeStore, whereClause: CIR.WhereClause.Idx)
                 .diagnostic = diagnostic,
             } };
         },
-        else => {
+        _ => {
             std.debug.panic("unreachable, node is not a where tag: {}", .{node.tag});
         },
     }
@@ -1199,7 +1199,7 @@ fn isPatternTag(tag: Node.Tag) bool {
         .pattern_underscore,
         .malformed, // Valid pattern tag for runtime_error patterns
         => true,
-        else => false,
+        _ => false,
     };
 }
 
@@ -1373,7 +1373,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
                 .diagnostic = @enumFromInt(p.value),
             } };
         },
-        else => {
+        _ => {
             std.debug.panic("unreachable, node is not a pattern tag: {}", .{node.tag});
         },
     }
@@ -1500,7 +1500,7 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
                 .diagnostic = @enumFromInt(p.value),
             } };
         },
-        else => {
+        _ => {
             std.debug.panic("unreachable, node is not a type annotation tag: {}", .{node.tag});
         },
     }
@@ -1575,7 +1575,7 @@ pub fn getExposedItem(store: *const NodeStore, exposedItem: CIR.ExposedItem.Idx)
                 .is_wildcard = p.is_wildcard != 0,
             };
         },
-        else => std.debug.panic("Expected exposed_item node, got {s}\n", .{@tagName(node.tag)}),
+        _ => std.debug.panic("Expected exposed_item node, got {s}\n", .{@tagName(node.tag)}),
     }
 }
 
@@ -2173,7 +2173,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
     const actual_region = switch (expr) {
         .e_lookup_external => |e| e.region,
         .e_lookup_pending => |e| e.region,
-        else => region,
+        _ => region,
     };
     _ = try store.regions.append(store.gpa, actual_region);
     return @enumFromInt(@intFromEnum(node_idx));
@@ -3944,7 +3944,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
                 .region = store.getRegionAt(node_idx),
             } };
         },
-        else => {
+        _ => {
             @panic("getDiagnostic called with non-diagnostic node - this indicates a compiler bug");
         },
     }

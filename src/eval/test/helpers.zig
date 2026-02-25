@@ -454,7 +454,7 @@ noinline fn executeAndFormat(
                     const zst_name = resolveZstName(module_env, type_var);
                     break :blk try alloc.dupe(u8, zst_name);
                 },
-                else => @panic("TODO: devEvaluatorStr for unsupported layout tag"),
+                _ => @panic("TODO: devEvaluatorStr for unsupported layout tag"),
             }
         },
     };
@@ -1085,7 +1085,7 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
                     // Zero-sized type — return 0
                     break :blk std.fmt.allocPrint(allocator, "0", .{});
                 },
-                else => break :blk error.UnsupportedLayout,
+                _ => break :blk error.UnsupportedLayout,
             }
         },
     };
@@ -3019,9 +3019,9 @@ fn rewriteDeferredNumericLiterals(env: *ModuleEnv, types_store: *types.Store, im
         const nominal_type = switch (content) {
             .structure => |flat_type| switch (flat_type) {
                 .nominal_type => |nom| nom,
-                else => continue, // Not a nominal type
+                _ => continue, // Not a nominal type
             },
-            else => continue, // Not a structure
+            _ => continue, // Not a structure
         };
 
         // Use import mapping to get the user-facing display name (e.g., "I64" from "Builtin.Num.I64")
@@ -3065,7 +3065,7 @@ fn rewriteNumericLiteralExpr(
             }
             break :blk numerator / divisor;
         },
-        else => return, // Not a dec literal - nothing to rewrite
+        _ => return, // Not a dec literal - nothing to rewrite
     };
 
     // Determine the target expression type based on type_name
@@ -3353,7 +3353,7 @@ test "interpreter reuse across multiple evaluations" {
                     // Dec stores values scaled by 10^18, divide to get the integer part
                     break :blk i128h.divTrunc_i128(dec_value.num, builtins.dec.RocDec.one_point_zero_i128);
                 },
-                else => unreachable,
+                _ => unreachable,
             };
 
             try std.testing.expectEqual(case.expected, actual_value);

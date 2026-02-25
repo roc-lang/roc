@@ -1455,7 +1455,7 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
                 .region = node.region,
             } };
         },
-        else => {
+        _ => {
             std.debug.panic("Expected a valid statement tag, got {s}", .{@tagName(node.tag)});
         },
     }
@@ -1583,7 +1583,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pat
                 .region = node.region,
             } };
         },
-        else => {
+        _ => {
             std.debug.panic("Expected a valid pattern tag, got {s}", .{@tagName(node.tag)});
         },
     }
@@ -1853,7 +1853,7 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .region = node.region,
             } };
         },
-        else => {
+        _ => {
             std.debug.panic("Expected a valid expr tag, got {s}", .{@tagName(node.tag)});
         },
     }
@@ -1946,7 +1946,7 @@ pub fn getWhereClause(store: *const NodeStore, where_clause_idx: AST.WhereClause
                 .region = node.region,
             } };
         },
-        else => {
+        _ => {
             std.debug.panic("Expected a valid where clause node, found {s}", .{@tagName(node.tag)});
         },
     }
@@ -2070,7 +2070,7 @@ pub fn getTypeAnno(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.T
                 .region = node.region,
             } };
         },
-        else => {
+        _ => {
             // Return a malformed type annotation instead of panicking
             // This handles cases where an invalid node type is encountered
             return .{ .malformed = .{
@@ -2695,7 +2695,7 @@ pub fn getTargetFile(store: *const NodeStore, idx: AST.TargetFile.Idx) AST.Targe
                 .region = node.region,
             } };
         },
-        else => {
+        _ => {
             std.debug.panic("Expected a valid target_file tag, got {s}", .{@tagName(node.tag)});
         },
     }

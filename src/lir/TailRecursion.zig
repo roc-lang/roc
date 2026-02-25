@@ -104,10 +104,10 @@ pub const TailRecursionPass = struct {
                             .not_self_recursive => {},
                         }
                     },
-                    else => {},
+                    _ => {},
                 }
             },
-            else => {},
+            _ => {},
         }
         return null;
     }
@@ -323,7 +323,7 @@ pub fn makeTailRecursive(
                 const placeholder_id = try store.addExpr(.{ .i64_literal = 0 }, Region.zero());
                 try initial_args.append(allocator, placeholder_id);
             },
-            else => unreachable, // Only bind and wildcard should appear as function params after desugaring
+            _ => unreachable, // Only bind and wildcard should appear as function params after desugaring
         }
     }
 

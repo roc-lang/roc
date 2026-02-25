@@ -152,7 +152,7 @@ pub const Instantiator = struct {
 
                 return fresh_var;
             },
-            else => {
+            _ => {
                 // Generate the content
 
                 // Remember this substitution for recursive references

@@ -398,7 +398,7 @@ pub fn getTopLevelConstants(
         const is_constant = switch (expr) {
             .e_lambda => |lambda| lambda.args.span.len == 0, // Zero-arg lambda is a constant
             .e_closure => false, // Closures with captures are not constants
-            else => true, // Everything else (literals, records, etc.) is a constant
+            _ => true, // Everything else (literals, records, etc.) is a constant
         };
 
         if (is_constant) {

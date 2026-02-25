@@ -37,7 +37,7 @@ pub const JsonId = union(enum) {
             .integer => |num| .{ .integer = num },
             .float => return error.InvalidIdType,
             .string => |text| .{ .string = try copyString(allocator, text) },
-            else => error.InvalidIdType,
+            _ => error.InvalidIdType,
         };
     }
 
@@ -51,7 +51,7 @@ pub const JsonId = union(enum) {
     pub fn deinit(self: *JsonId, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .string => |slice| allocator.free(slice),
-            else => {},
+            _ => {},
         }
         self.* = undefined;
     }
@@ -93,7 +93,7 @@ pub const InitializeParams = struct {
     pub fn fromJson(allocator: std.mem.Allocator, value: std.json.Value) !InitializeParams {
         const obj = switch (value) {
             .object => |o| o,
-            else => return error.InvalidParams,
+            _ => return error.InvalidParams,
         };
 
         var params = InitializeParams{};
@@ -102,7 +102,7 @@ pub const InitializeParams = struct {
             params.process_id = switch (pid_node) {
                 .integer => |num| num,
                 .null => null,
-                else => return error.InvalidParams,
+                _ => return error.InvalidParams,
             };
         }
 
@@ -110,7 +110,7 @@ pub const InitializeParams = struct {
             const uri_text = switch (uri_node) {
                 .string => |text| text,
                 .null => null,
-                else => return error.InvalidParams,
+                _ => return error.InvalidParams,
             };
             if (uri_text) |text| {
                 params.root_uri = try copyString(allocator, text);
@@ -120,12 +120,12 @@ pub const InitializeParams = struct {
         if (obj.get("clientInfo")) |client_node| {
             const client_obj = switch (client_node) {
                 .object => |o| o,
-                else => return error.InvalidParams,
+                _ => return error.InvalidParams,
             };
             const name_value = client_obj.get("name") orelse return error.InvalidParams;
             const name_string = switch (name_value) {
                 .string => |text| text,
-                else => return error.InvalidParams,
+                _ => return error.InvalidParams,
             };
 
             var info = ClientInfo{
@@ -136,7 +136,7 @@ pub const InitializeParams = struct {
                 const ver_text = switch (ver_node) {
                     .string => |text| try copyString(allocator, text),
                     .null => null,
-                    else => return error.InvalidParams,
+                    _ => return error.InvalidParams,
                 };
                 info.version = ver_text;
             }
@@ -208,13 +208,13 @@ pub const TextDocumentIdentifier = struct {
     pub fn fromJson(allocator: std.mem.Allocator, value: std.json.Value) !TextDocumentIdentifier {
         const obj = switch (value) {
             .object => |o| o,
-            else => return error.InvalidParams,
+            _ => return error.InvalidParams,
         };
 
         const uri_value = obj.get("uri") orelse return error.InvalidParams;
         const uri_text = switch (uri_value) {
             .string => |text| text,
-            else => return error.InvalidParams,
+            _ => return error.InvalidParams,
         };
 
         return .{
@@ -235,7 +235,7 @@ pub const SemanticTokensParams = struct {
     pub fn fromJson(allocator: std.mem.Allocator, value: std.json.Value) !SemanticTokensParams {
         const obj = switch (value) {
             .object => |o| o,
-            else => return error.InvalidParams,
+            _ => return error.InvalidParams,
         };
 
         const doc_value = obj.get("textDocument") orelse return error.InvalidParams;

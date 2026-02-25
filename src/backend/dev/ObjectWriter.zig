@@ -30,7 +30,7 @@ pub fn generateObjectFile(
             const elf_arch: object.elf.Architecture = switch (cpu_arch) {
                 .x86_64 => .x86_64,
                 .aarch64 => .aarch64,
-                else => return error.UnsupportedTarget,
+                _ => return error.UnsupportedTarget,
             };
             var elf = try object.ElfWriter.init(allocator, elf_arch);
             defer elf.deinit();
@@ -55,7 +55,7 @@ pub fn generateObjectFile(
                     const rel_name = switch (rel) {
                         .linked_function => |f| f.name,
                         .linked_data => |d| d.name,
-                        else => continue,
+                        _ => continue,
                     };
                     if (std.mem.eql(u8, rel_name, sym.name)) {
                         try elf.addTextRelocation(rel.getOffset(), sym_idx, reloc_addend);
@@ -69,7 +69,7 @@ pub fn generateObjectFile(
             const macho_arch: object.macho.Architecture = switch (cpu_arch) {
                 .x86_64 => .x86_64,
                 .aarch64 => .aarch64,
-                else => return error.UnsupportedTarget,
+                _ => return error.UnsupportedTarget,
             };
             var macho = try object.MachOWriter.init(allocator, macho_arch);
             defer macho.deinit();
@@ -90,7 +90,7 @@ pub fn generateObjectFile(
                     const rel_name = switch (rel) {
                         .linked_function => |f| f.name,
                         .linked_data => |d| d.name,
-                        else => continue,
+                        _ => continue,
                     };
                     if (std.mem.eql(u8, rel_name, sym.name)) {
                         try macho.addTextRelocation(@intCast(rel.getOffset()), sym_idx, sym.is_external);
@@ -104,7 +104,7 @@ pub fn generateObjectFile(
             const coff_arch: object.coff.Architecture = switch (cpu_arch) {
                 .x86_64 => .x86_64,
                 .aarch64 => .aarch64,
-                else => return error.UnsupportedTarget,
+                _ => return error.UnsupportedTarget,
             };
             var coff_writer = try object.CoffWriter.init(allocator, coff_arch);
             defer coff_writer.deinit();
@@ -126,7 +126,7 @@ pub fn generateObjectFile(
                     const rel_name = switch (rel) {
                         .linked_function => |f| f.name,
                         .linked_data => |d| d.name,
-                        else => continue,
+                        _ => continue,
                     };
                     if (std.mem.eql(u8, rel_name, sym.name)) {
                         try coff_writer.addTextRelocation(@intCast(rel.getOffset()), sym_idx);
@@ -148,7 +148,7 @@ pub fn generateObjectFile(
 
             try coff_writer.write(output);
         },
-        else => return error.UnsupportedTarget,
+        _ => return error.UnsupportedTarget,
     }
 }
 

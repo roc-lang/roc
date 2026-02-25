@@ -75,7 +75,7 @@ fn checkSuccess(result: std.process.Child.RunResult) !void {
             std.debug.print("STDERR: {s}\n", .{result.stderr});
             return error.SegFault;
         },
-        else => {
+        _ => {
             std.debug.print("Run terminated abnormally: {}\n", .{result.term});
             std.debug.print("STDOUT: {s}\n", .{result.stdout});
             std.debug.print("STDERR: {s}\n", .{result.stderr});
@@ -102,7 +102,7 @@ fn checkFailure(result: std.process.Child.RunResult) !void {
             std.debug.print("STDERR: {s}\n", .{result.stderr});
             return error.SegFault;
         },
-        else => {
+        _ => {
             std.debug.print("ERROR: Process terminated abnormally: {} (expected clean failure with non-zero exit code)\n", .{result.term});
             std.debug.print("STDOUT: {s}\n", .{result.stdout});
             std.debug.print("STDERR: {s}\n", .{result.stderr});
@@ -150,7 +150,7 @@ fn checkTestSuccess(result: std.process.Child.RunResult) !void {
             std.debug.print("STDERR: {s}\n", .{result.stderr});
             return error.SegFault;
         },
-        else => {
+        _ => {
             std.debug.print("Test terminated abnormally: {}\n", .{result.term});
             std.debug.print("STDERR: {s}\n", .{result.stderr});
             return error.TestFailed;
@@ -366,7 +366,7 @@ test "fx platform check unused state var reports correct errors" {
                 return error.UnexpectedSuccess;
             }
         },
-        else => {
+        _ => {
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             return error.RunFailed;
         },
@@ -514,7 +514,7 @@ test "custom platform and package qualifiers work in roc run" {
                 return error.RunFailed;
             }
         },
-        else => {
+        _ => {
             std.debug.print("\n❌ Run terminated abnormally: {}\n", .{run_result.term});
             return error.AbnormalTermination;
         },
@@ -551,7 +551,7 @@ test "fx platform string interpolation type mismatch" {
         .Exited => |code| {
             try testing.expectEqual(@as(u8, 0), code);
         },
-        else => {
+        _ => {
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
@@ -603,7 +603,7 @@ test "fx platform run from different cwd" {
                 return error.RunFailed;
             }
         },
-        else => {
+        _ => {
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
@@ -712,7 +712,7 @@ test "fx platform expect with toplevel numeric" {
                 return error.RunFailed;
             }
         },
-        else => {
+        _ => {
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
@@ -743,7 +743,7 @@ test "fx platform expect with toplevel numeric" {
                 return error.TestFailed;
             }
         },
-        else => {
+        _ => {
             std.debug.print("Test terminated abnormally: {}\n", .{test_result.term});
             std.debug.print("STDOUT: {s}\n", .{test_result.stdout});
             std.debug.print("STDERR: {s}\n", .{test_result.stderr});
@@ -779,7 +779,7 @@ test "fx platform test_type_mismatch" {
                 return error.UnexpectedSuccess;
             }
         },
-        else => {
+        _ => {
             // Abnormal termination should also indicate error
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
@@ -813,7 +813,7 @@ test "fx platform issue8433" {
                 return error.UnexpectedSuccess;
             }
         },
-        else => {
+        _ => {
             // Abnormal termination should also indicate error
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
@@ -1025,7 +1025,7 @@ test "fx platform runtime stack overflow" {
             std.debug.print("Expected: exit code 1 or 134 with stack overflow message\n", .{});
             return error.StackOverflowNotHandled;
         },
-        else => {
+        _ => {
             std.debug.print("Unexpected termination: {}\n", .{run_result.term});
             return error.UnexpectedTermination;
         },
@@ -1068,7 +1068,7 @@ test "fx platform runtime division by zero" {
             std.debug.print("Process was killed by signal: {}\n", .{sig});
             return error.DivisionByZeroNotHandled;
         },
-        else => {
+        _ => {
             std.debug.print("Unexpected termination: {}\n", .{run_result.term});
             return error.UnexpectedTermination;
         },
@@ -1205,7 +1205,7 @@ test "fx platform issue8826 app vs platform type mismatch" {
                 return error.UnexpectedSuccess;
             }
         },
-        else => {
+        _ => {
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.RunTerminatedAbnormally;
@@ -1376,7 +1376,7 @@ test "fx platform issue9118 try operator on tuple in type method" {
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.Segfault;
         },
-        else => {
+        _ => {
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.RunTerminatedAbnormally;

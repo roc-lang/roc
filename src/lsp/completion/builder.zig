@@ -417,7 +417,7 @@ pub const CompletionBuilder = struct {
                     const header_idx = switch (stmt) {
                         .s_alias_decl => |a| a.header,
                         .s_nominal_decl => |n| n.header,
-                        else => unreachable,
+                        _ => unreachable,
                     };
                     const header = module_env.store.getTypeHeader(header_idx);
                     const name = module_env.getIdentText(header.name);
@@ -438,7 +438,7 @@ pub const CompletionBuilder = struct {
                         .documentation = documentation,
                     });
                 },
-                else => {},
+                _ => {},
             }
         }
     }
@@ -502,7 +502,7 @@ pub const CompletionBuilder = struct {
             const ident_idx = switch (pattern) {
                 .assign => |p| p.ident,
                 .as => |p| p.ident,
-                else => continue,
+                _ => continue,
             };
 
             const name = module_env.getIdentText(ident_idx);
@@ -513,7 +513,7 @@ pub const CompletionBuilder = struct {
             const expr = module_env.store.getExpr(def.expr);
             const kind: u32 = switch (expr) {
                 .e_closure, .e_lambda, .e_hosted_lambda => @intFromEnum(CompletionItemKind.function),
-                else => @intFromEnum(CompletionItemKind.variable),
+                _ => @intFromEnum(CompletionItemKind.variable),
             };
 
             // Get type information for the definition
@@ -556,7 +556,7 @@ pub const CompletionBuilder = struct {
                 const ident_idx = switch (pattern) {
                     .assign => |p| p.ident,
                     .as => |p| p.ident,
-                    else => continue,
+                    _ => continue,
                 };
 
                 const name = module_env.getIdentText(ident_idx);
@@ -569,7 +569,7 @@ pub const CompletionBuilder = struct {
                     const expr = module_env.store.getExpr(expr_idx);
                     kind = switch (expr) {
                         .e_closure, .e_lambda, .e_hosted_lambda => @intFromEnum(CompletionItemKind.function),
-                        else => @intFromEnum(CompletionItemKind.variable),
+                        _ => @intFromEnum(CompletionItemKind.variable),
                     };
                 }
 
@@ -631,7 +631,7 @@ pub const CompletionBuilder = struct {
             const ident_idx = switch (pattern) {
                 .assign => |p| p.ident,
                 .as => |p| p.ident,
-                else => continue,
+                _ => continue,
             };
 
             const name = module_env.getIdentText(ident_idx);
@@ -655,14 +655,14 @@ pub const CompletionBuilder = struct {
             const pattern_idx = switch (stmt) {
                 .s_decl => |decl| decl.pattern,
                 .s_var => |var_stmt| var_stmt.pattern_idx,
-                else => continue,
+                _ => continue,
             };
 
             const pattern = module_env.store.getPattern(pattern_idx);
             const ident_idx = switch (pattern) {
                 .assign => |p| p.ident,
                 .as => |p| p.ident,
-                else => continue,
+                _ => continue,
             };
 
             const name = module_env.getIdentText(ident_idx);
@@ -711,10 +711,10 @@ pub const CompletionBuilder = struct {
                             content = resolved.desc.content;
                             continue;
                         },
-                        else => break,
+                        _ => break,
                     }
                 },
-                else => break,
+                _ => break,
             }
         }
 
@@ -772,7 +772,7 @@ pub const CompletionBuilder = struct {
                             content = resolved.desc.content;
                             continue;
                         },
-                        else => break,
+                        _ => break,
                     }
                 },
                 .alias => |alias| {
@@ -781,7 +781,7 @@ pub const CompletionBuilder = struct {
                     content = resolved.desc.content;
                     continue;
                 },
-                else => break,
+                _ => break,
             }
         }
     }
@@ -837,10 +837,10 @@ pub const CompletionBuilder = struct {
                             content = resolved.desc.content;
                             continue;
                         },
-                        else => break,
+                        _ => break,
                     }
                 },
-                else => break,
+                _ => break,
             }
         }
 
@@ -879,7 +879,7 @@ pub const CompletionBuilder = struct {
             .structure => |flat_type| {
                 self.logDebug("addFieldsFromContent: structure, flat_type tag={s}", .{@tagName(flat_type)});
             },
-            else => {
+            _ => {
                 self.logDebug("addFieldsFromContent: not a record or alias, tag={s}", .{@tagName(content)});
             },
         }
@@ -981,7 +981,7 @@ pub const CompletionBuilder = struct {
                 const ident_idx = switch (pattern) {
                     .assign => |p| p.ident,
                     .as => |p| p.ident,
-                    else => continue,
+                    _ => continue,
                 };
 
                 const name = module_env.getIdentText(ident_idx);
@@ -1004,14 +1004,14 @@ pub const CompletionBuilder = struct {
                 const pattern_idx = switch (stmt) {
                     .s_decl => |decl| decl.pattern,
                     .s_var => |var_stmt| var_stmt.pattern_idx,
-                    else => continue,
+                    _ => continue,
                 };
 
                 const pattern = module_env.store.getPattern(pattern_idx);
                 const ident_idx = switch (pattern) {
                     .assign => |p| p.ident,
                     .as => |p| p.ident,
-                    else => continue,
+                    _ => continue,
                 };
 
                 const name = module_env.getIdentText(ident_idx);
@@ -1056,9 +1056,9 @@ pub const CompletionBuilder = struct {
                 .alias => |alias| alias.ident.ident_idx,
                 .structure => |flat_type| switch (flat_type) {
                     .nominal_type => |nominal| nominal.ident.ident_idx,
-                    else => null,
+                    _ => null,
                 },
-                else => null,
+                _ => null,
             };
 
             if (type_ident_opt) |type_ident| {
@@ -1098,7 +1098,7 @@ pub const CompletionBuilder = struct {
                     content = resolved.desc.content;
                     continue;
                 },
-                else => break,
+                _ => break,
             }
         }
     }
@@ -1263,7 +1263,7 @@ pub const CompletionBuilder = struct {
             const ident_idx = switch (pattern) {
                 .assign => |p| p.ident,
                 .as => |p| p.ident,
-                else => continue,
+                _ => continue,
             };
 
             if (ident_idx == qualified_ident) {
@@ -1283,14 +1283,14 @@ pub const CompletionBuilder = struct {
             const pattern_idx = switch (stmt) {
                 .s_decl => |decl| decl.pattern,
                 .s_var => |var_stmt| var_stmt.pattern_idx,
-                else => continue,
+                _ => continue,
             };
 
             const pattern = module_env.store.getPattern(pattern_idx);
             const ident_idx = switch (pattern) {
                 .assign => |p| p.ident,
                 .as => |p| p.ident,
-                else => continue,
+                _ => continue,
             };
 
             if (ident_idx == qualified_ident) {
@@ -1318,7 +1318,7 @@ pub const CompletionBuilder = struct {
             const ident_idx = switch (pattern) {
                 .assign => |p| p.ident,
                 .as => |p| p.ident,
-                else => continue,
+                _ => continue,
             };
 
             if (ident_idx == qualified_ident) {
@@ -1333,14 +1333,14 @@ pub const CompletionBuilder = struct {
             const pattern_idx = switch (stmt) {
                 .s_decl => |decl| decl.pattern,
                 .s_var => |var_stmt| var_stmt.pattern_idx,
-                else => continue,
+                _ => continue,
             };
 
             const pattern = module_env.store.getPattern(pattern_idx);
             const ident_idx = switch (pattern) {
                 .assign => |p| p.ident,
                 .as => |p| p.ident,
-                else => continue,
+                _ => continue,
             };
 
             if (ident_idx == qualified_ident) {
@@ -1385,7 +1385,7 @@ pub const CompletionBuilder = struct {
                     const anno = module_env.store.getTypeAnno(nom_decl.anno);
                     return try self.addTagsFromTypeAnno(module_env, anno);
                 },
-                else => {},
+                _ => {},
             }
         }
         return false;
@@ -1416,12 +1416,12 @@ pub const CompletionBuilder = struct {
                                 .detail = detail,
                             });
                         },
-                        else => {},
+                        _ => {},
                     }
                 }
                 return true;
             },
-            else => return false,
+            _ => return false,
         }
     }
 

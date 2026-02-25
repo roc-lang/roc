@@ -115,7 +115,7 @@ pub const Annotation = enum {
     pub fn usesColor(self: Annotation) bool {
         return switch (self) {
             .emphasized, .dimmed => false,
-            else => true,
+            _ => true,
         };
     }
 
@@ -218,7 +218,7 @@ pub const DocumentElement = union(enum) {
             .annotated => |a| a.content,
             .raw => |r| r,
             .reflowing_text => |rt| rt,
-            else => null,
+            _ => null,
         };
     }
 
@@ -226,7 +226,7 @@ pub const DocumentElement = union(enum) {
     pub fn hasContent(self: DocumentElement) bool {
         return switch (self) {
             .text, .annotated, .raw, .reflowing_text, .link, .vertical_stack, .horizontal_concat, .source_code_region, .source_code_multi_region => true,
-            else => false,
+            _ => false,
         };
     }
 };
@@ -264,7 +264,7 @@ pub const Document = struct {
                     self.allocator.free(underlines.display_region.line_text);
                     if (underlines.display_region.filename) |f| self.allocator.free(f);
                 },
-                else => {},
+                _ => {},
             }
         }
         self.elements.deinit();

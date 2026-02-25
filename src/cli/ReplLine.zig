@@ -16,7 +16,7 @@ pub const SUPPORTED_OS = switch (builtin.os.tag) {
     .windows => SupportedOS.windows,
     .linux => SupportedOS.linux,
     .macos => SupportedOS.macos,
-    else => |tag| @compileError(@tagName(tag) ++ " is not a support OS for ReplLine!"),
+    _ => |tag| @compileError(@tagName(tag) ++ " is not a support OS for ReplLine!"),
 };
 
 /// Platform-specific newline sequence.

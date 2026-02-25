@@ -4350,7 +4350,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         .call => |call| call.ret_layout,
                         .lookup => |lookup| lookup.layout_idx,
                         .block => |block| block.result_layout,
-                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lambda, .closure, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => {
+                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lambda, .closure, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => switch (rhs_expr) {
                             .call => |call| call.ret_layout,
                             .lookup => |lookup| lookup.layout_idx,
                             .block => |block| block.result_layout,
@@ -4377,7 +4377,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Check if operands are i128/Dec (need special handling even for comparisons that return bool)
             const operands_are_i128 = switch (lhs_loc) {
                 .immediate_i128, .stack_i128 => true,
-                .general_reg, .float_reg, .stack, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .lambda_code, .closure_value, .noreturn => {
+                .general_reg, .float_reg, .stack, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .lambda_code, .closure_value, .noreturn => switch (rhs_loc) {
                     .immediate_i128, .stack_i128 => true,
                     .general_reg, .float_reg, .stack, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .lambda_code, .closure_value, .noreturn => false,
                 },
@@ -7425,7 +7425,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             break;
                         }
                     },
-                    else => {
+                    _ => {
                         unreachable;
                     },
                 }
@@ -8473,7 +8473,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 const shift = comptime switch (width) {
                     .w64 => @as(u5, 3),
                     .w32 => @as(u5, 2),
-                    else => @compileError("Use strhRegMem/strbRegMem for .w16/.w8"),
+                    _ => @compileError("Use strhRegMem/strbRegMem for .w16/.w8"),
                 };
                 try self.codegen.emit.strRegMemUoff(width, src, ptr_reg, @intCast(@as(u32, @intCast(byte_offset)) >> shift));
             } else {
@@ -11934,7 +11934,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     }
                 },
                 .general_reg, .float_reg, .stack_i128, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
-                else => {
+                _ => {
                     // Check if this is a composite type (record/tuple/list) via layout store
                     if (self.layout_store) |ls| {
                         const layout_val = ls.getLayout(result_layout);
@@ -15255,7 +15255,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             break;
                         }
                     },
-                    else => {
+                    _ => {
                         unreachable;
                     },
                 }

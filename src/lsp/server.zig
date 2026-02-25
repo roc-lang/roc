@@ -144,7 +144,7 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
 
             return switch (self.state) {
                 .exit_success, .exit_failure => false,
-                else => true,
+                _ => true,
             };
         }
 
@@ -155,7 +155,7 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
             const root = parsed.value;
             const obj = switch (root) {
                 .object => |o| o,
-                else => {
+                _ => {
                     log.err("received non-object JSON-RPC message", .{});
                     return;
                 },
@@ -164,7 +164,7 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
             const method_value = obj.get("method") orelse return;
             const method = switch (method_value) {
                 .string => |text| text,
-                else => return,
+                _ => return,
             };
 
             if (obj.get("id")) |id_node| {

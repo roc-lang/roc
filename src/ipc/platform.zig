@@ -163,7 +163,7 @@ pub fn getSystemPageSize() !usize {
             const result = std.c.getpagesize();
             break :blk @intCast(result);
         },
-        else => return error.UnsupportedPlatform,
+        _ => return error.UnsupportedPlatform,
     };
 
     // Ensure page_size is a power of 2 (required for alignForward)
@@ -254,7 +254,7 @@ pub fn createMapping(size: usize) SharedMemoryError!Handle {
 
             return fd;
         },
-        else => return error.UnsupportedPlatform,
+        _ => return error.UnsupportedPlatform,
     }
 }
 
@@ -302,7 +302,7 @@ pub fn openMapping(allocator: std.mem.Allocator, name: []const u8) SharedMemoryE
             // Use the coordination file approach instead
             return error.UnsupportedPlatform;
         },
-        else => return error.UnsupportedPlatform,
+        _ => return error.UnsupportedPlatform,
     }
 }
 
@@ -353,7 +353,7 @@ pub fn mapMemory(handle: Handle, size: usize, base_addr: ?*anyopaque) SharedMemo
             }
             return ptr;
         },
-        else => return error.UnsupportedPlatform,
+        _ => return error.UnsupportedPlatform,
     }
 }
 

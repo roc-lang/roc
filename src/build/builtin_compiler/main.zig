@@ -1211,7 +1211,7 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                     const type_anno = env.store.getTypeAnno(annotation.anno);
                     const num_params: u32 = switch (type_anno) {
                         .@"fn" => |func| func.args.span.len,
-                        else => std.debug.panic("Low-level operation {s} does not have a function type annotation", .{@tagName(low_level_op)}),
+                        _ => std.debug.panic("Low-level operation {s} does not have a function type annotation", .{@tagName(low_level_op)}),
                     };
 
                     // Create parameter patterns for the lambda
@@ -1539,7 +1539,7 @@ fn validateBuiltinIndicesCompleteness(env: *const ModuleEnv, indices: BuiltinInd
                     return error.BuiltinIndicesIncomplete;
                 }
             },
-            else => continue,
+            _ => continue,
         }
     }
 }
@@ -1840,7 +1840,7 @@ fn findTypeDeclaration(env: *const ModuleEnv, type_name: []const u8) !CIR.Statem
         const header_idx = switch (stmt) {
             .s_nominal_decl => |decl| decl.header,
             .s_alias_decl => |alias| alias.header,
-            else => continue,
+            _ => continue,
         };
         const header = env.store.getTypeHeader(header_idx);
         const ident_idx = header.name;
@@ -1874,7 +1874,7 @@ fn findNestedTypeDeclaration(env: *const ModuleEnv, parent_name: []const u8, typ
                     return stmt_idx;
                 }
             },
-            else => continue,
+            _ => continue,
         }
     }
 

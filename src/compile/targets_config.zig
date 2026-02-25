@@ -67,7 +67,7 @@ pub const TargetsConfig = struct {
         for (self.exe) |spec| {
             for (spec.items) |item| switch (item) {
                 .file_path => |fp| allocator.free(fp),
-                else => {},
+                _ => {},
             };
             allocator.free(spec.items);
         }
@@ -75,7 +75,7 @@ pub const TargetsConfig = struct {
         for (self.static_lib) |spec| {
             for (spec.items) |item| switch (item) {
                 .file_path => |fp| allocator.free(fp),
-                else => {},
+                _ => {},
             };
             allocator.free(spec.items);
         }
@@ -83,7 +83,7 @@ pub const TargetsConfig = struct {
         for (self.shared_lib) |spec| {
             for (spec.items) |item| switch (item) {
                 .file_path => |fp| allocator.free(fp),
-                else => {},
+                _ => {},
             };
             allocator.free(spec.items);
         }
@@ -178,7 +178,7 @@ pub const TargetsConfig = struct {
         // Only platform headers have targets
         const platform = switch (header) {
             .platform => |p| p,
-            else => return null,
+            _ => return null,
         };
 
         // If no targets section, return null
@@ -229,7 +229,7 @@ pub const TargetsConfig = struct {
             for (specs.items) |spec| {
                 for (spec.items) |item| switch (item) {
                     .file_path => |fp| allocator.free(fp),
-                    else => {},
+                    _ => {},
                 };
                 allocator.free(spec.items);
             }
@@ -248,7 +248,7 @@ pub const TargetsConfig = struct {
             errdefer {
                 for (link_items.items) |item| switch (item) {
                     .file_path => |fp| allocator.free(fp),
-                    else => {},
+                    _ => {},
                 };
                 link_items.deinit();
             }
@@ -289,7 +289,7 @@ pub const TargetsConfig = struct {
         for (specs) |spec| {
             for (spec.items) |item| switch (item) {
                 .file_path => |fp| allocator.free(fp),
-                else => {},
+                _ => {},
             };
             allocator.free(spec.items);
         }

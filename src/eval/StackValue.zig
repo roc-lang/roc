@@ -412,7 +412,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
                 }
                 return;
             },
-            else => {},
+            _ => {},
         }
     }
 
@@ -1675,7 +1675,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
                 roc_str.decref(ops);
                 return;
             },
-            else => {},
+            _ => {},
         },
         .list => {
             const list_header = self.asRocList() orelse return;
@@ -1840,7 +1840,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             }
             return;
         },
-        else => {},
+        _ => {},
     }
 
     // Non-refcounted values require no action

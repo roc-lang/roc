@@ -24,7 +24,7 @@ pub fn handler(comptime ServerType: type) type {
 
             const obj = switch (params) {
                 .object => |o| o,
-                else => {
+                _ => {
                     try self.sendError(id, .invalid_params, "selectionRange params must be an object");
                     return;
                 },
@@ -37,7 +37,7 @@ pub fn handler(comptime ServerType: type) type {
             };
             const text_doc = switch (text_doc_value) {
                 .object => |o| o,
-                else => {
+                _ => {
                     try self.sendError(id, .invalid_params, "textDocument must be an object");
                     return;
                 },
@@ -48,7 +48,7 @@ pub fn handler(comptime ServerType: type) type {
             };
             const uri = switch (uri_value) {
                 .string => |s| s,
-                else => {
+                _ => {
                     try self.sendError(id, .invalid_params, "uri must be a string");
                     return;
                 },
@@ -61,7 +61,7 @@ pub fn handler(comptime ServerType: type) type {
             };
             const positions = switch (positions_value) {
                 .array => |a| a,
-                else => {
+                _ => {
                     try self.sendError(id, .invalid_params, "positions must be an array");
                     return;
                 },
@@ -89,7 +89,7 @@ pub fn handler(comptime ServerType: type) type {
             for (positions.items) |pos_value| {
                 const pos_obj = switch (pos_value) {
                     .object => |o| o,
-                    else => {
+                    _ => {
                         try results.append(self.allocator, null);
                         continue;
                     },
@@ -99,14 +99,14 @@ pub fn handler(comptime ServerType: type) type {
                     const v = pos_obj.get("line") orelse break :blk 0;
                     break :blk switch (v) {
                         .integer => |i| @intCast(i),
-                        else => 0,
+                        _ => 0,
                     };
                 };
                 const character: u32 = blk: {
                     const v = pos_obj.get("character") orelse break :blk 0;
                     break :blk switch (v) {
                         .integer => |i| @intCast(i),
-                        else => 0,
+                        _ => 0,
                     };
                 };
 

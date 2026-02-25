@@ -170,7 +170,7 @@ fn collectClosuresFromStatement(self: *Self, module: *ModuleEnv, stmt_idx: CIR.S
         .s_var => |var_stmt| {
             try self.collectClosuresFromExpr(module, var_stmt.expr);
         },
-        else => {},
+        _ => {},
     }
 }
 
@@ -398,7 +398,7 @@ fn buildLambdaSetsFromStatement(self: *Self, module: *ModuleEnv, stmt_idx: CIR.S
         .s_var => |var_stmt| {
             try self.buildLambdaSetsFromExpr(module, var_stmt.expr);
         },
-        else => {},
+        _ => {},
     }
 }
 
@@ -484,7 +484,7 @@ fn buildLambdaSetsFromExpr(self: *Self, module: *ModuleEnv, expr_idx: Expr.Idx) 
             try self.buildLambdaSetsFromExpr(module, binop.rhs);
         },
         // Other expressions don't affect lambda sets directly
-        else => {},
+        _ => {},
     }
 }
 

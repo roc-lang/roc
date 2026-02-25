@@ -2268,7 +2268,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
-        else => unreachable, // All diagnostics must have explicit handlers
+        _ => unreachable, // All diagnostics must have explicit handlers
     };
 }
 
@@ -2821,7 +2821,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
             const pattern = self.store.getPattern(def.pattern);
             switch (pattern) {
                 .assign => {},
-                else => continue, // Skip non-assign patterns (like destructuring)
+                _ => continue, // Skip non-assign patterns (like destructuring)
             }
 
             // Use def_idx for type lookup, not def.pattern. During type checking,
@@ -2859,7 +2859,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
                     has_type_decl = true;
                     break;
                 },
-                else => continue,
+                _ => continue,
             }
         }
 
@@ -2922,7 +2922,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
 
                         try tree.endNode(stmt_begin, stmt_attrs);
                     },
-                    else => continue,
+                    _ => continue,
                 }
             }
 

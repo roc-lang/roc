@@ -222,7 +222,7 @@ pub const Watcher = struct {
         .macos => MacOSData,
         .linux => LinuxData,
         .windows => WindowsData,
-        else => @compileError("Unsupported platform for file watching"),
+        _ => @compileError("Unsupported platform for file watching"),
     },
 
     const MacOSData = struct {
@@ -287,7 +287,7 @@ pub const Watcher = struct {
                     .overlapped_data = std.array_list.Managed(WindowsData.OverlappedData).init(allocator),
                     .stop_event = null,
                 },
-                else => unreachable,
+                _ => unreachable,
             },
         };
 
@@ -329,7 +329,7 @@ pub const Watcher = struct {
                 self.impl.overlapped_data.deinit();
                 self.impl.handles.deinit();
             },
-            else => {},
+            _ => {},
         }
 
         self.allocator.destroy(self);
@@ -411,7 +411,7 @@ pub const Watcher = struct {
                 }
                 self.impl.overlapped_data.clearRetainingCapacity();
             },
-            else => {},
+            _ => {},
         }
     }
 
@@ -420,7 +420,7 @@ pub const Watcher = struct {
             .macos => self.watchLoopMacOS(),
             .linux => self.watchLoopLinux(),
             .windows => self.watchLoopWindows(),
-            else => unreachable,
+            _ => unreachable,
         }
     }
 

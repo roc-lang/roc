@@ -276,7 +276,7 @@ test "completion context detects after_record_dot for lowercase identifier" {
         .after_value_dot => |access| {
             try std.testing.expectEqualStrings("my_var", access.access_chain);
         },
-        else => return error.TestUnexpectedResult,
+        _ => return error.TestUnexpectedResult,
     }
 }
 
@@ -287,7 +287,7 @@ test "completion context detects after_module_dot for uppercase identifier" {
         .after_module_dot => |module_name| {
             try std.testing.expectEqualStrings("Str", module_name);
         },
-        else => return error.TestUnexpectedResult,
+        _ => return error.TestUnexpectedResult,
     }
 }
 
@@ -298,7 +298,7 @@ test "completion context detects after_receiver_dot for chained call" {
         .after_receiver_dot => |info| {
             try std.testing.expectEqual(@as(u32, 17), info.dot_offset);
         },
-        else => return error.TestUnexpectedResult,
+        _ => return error.TestUnexpectedResult,
     }
 }
 
@@ -307,7 +307,7 @@ test "completion context detects expression context" {
     const context = completion_context.detectCompletionContext(source, 0, 7);
     switch (context) {
         .expression => {},
-        else => return error.TestUnexpectedResult,
+        _ => return error.TestUnexpectedResult,
     }
 }
 
@@ -316,7 +316,7 @@ test "completion context detects after_colon for type annotation" {
     const context = completion_context.detectCompletionContext(source, 0, 6);
     switch (context) {
         .after_colon => {},
-        else => return error.TestUnexpectedResult,
+        _ => return error.TestUnexpectedResult,
     }
 }
 

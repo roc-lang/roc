@@ -302,7 +302,7 @@ pub const Token = struct {
                 .MalformedOpaqueNameUnicode,
                 .OpaqueName,
                 => true,
-                else => false,
+                _ => false,
             };
         }
 
@@ -311,7 +311,7 @@ pub const Token = struct {
                 .LowerIdent,
                 .NamedUnderscore,
                 => true,
-                else => false,
+                _ => false,
             };
         }
 
@@ -354,7 +354,7 @@ pub const Token = struct {
                 .SingleQuote,
                 .MalformedSingleQuote,
                 => true,
-                else => false,
+                _ => false,
             };
         }
 

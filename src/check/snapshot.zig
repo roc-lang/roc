@@ -618,7 +618,7 @@ pub const Store = struct {
                 .alias => |alias| {
                     idx = alias.backing;
                 },
-                else => return content,
+                _ => return content,
             }
         }
     }
@@ -668,9 +668,9 @@ pub const Store = struct {
                     return RecordFieldSnapshot{ .record = fields_out_range };
                 },
                 .empty_record => return .empty_record,
-                else => return .not_a_record,
+                _ => return .not_a_record,
             },
-            else => return .not_a_record,
+            _ => return .not_a_record,
         }
     }
 
@@ -712,7 +712,7 @@ pub const Store = struct {
                         break;
                     },
                     .empty_record => break,
-                    else => break,
+                    _ => break,
                 },
                 .alias => |alias| {
                     ext_idx = alias.backing;

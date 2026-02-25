@@ -51,7 +51,7 @@ test "exposed but not implemented - values" {
                     found_bar_error = true;
                 }
             },
-            else => {},
+            _ => {},
         }
     }
     try testing.expect(found_bar_error);
@@ -94,7 +94,7 @@ test "exposed but not implemented - types" {
                     found_other_type_error = true;
                 }
             },
-            else => {},
+            _ => {},
         }
     }
     try testing.expect(found_other_type_error);
@@ -138,7 +138,7 @@ test "redundant exposed entries" {
                     found_bar_redundant = true;
                 }
             },
-            else => {},
+            _ => {},
         }
     }
     try testing.expect(found_foo_redundant);
@@ -177,7 +177,7 @@ test "shadowing with exposed items" {
         const diag = env.store.getDiagnostic(diag_idx);
         switch (diag) {
             .shadowing_warning => shadowing_count += 1,
-            else => {},
+            _ => {},
         }
     }
     // Should have warnings for both x and y being shadowed
@@ -219,7 +219,7 @@ test "shadowing non-exposed items" {
                     found_shadowing = true;
                 }
             },
-            else => {},
+            _ => {},
         }
     }
     try testing.expect(found_shadowing);
@@ -277,7 +277,7 @@ test "exposed items correctly tracked across shadowing" {
                     found_unexpected_not_implemented = true;
                 }
             },
-            else => {},
+            _ => {},
         }
     }
     try testing.expect(found_x_shadowing);
@@ -336,7 +336,7 @@ test "complex case with redundant, shadowing, and not implemented" {
                     found_not_implemented = true;
                 }
             },
-            else => {},
+            _ => {},
         }
     }
     try testing.expect(found_a_redundant);

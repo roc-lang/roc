@@ -1967,7 +1967,7 @@ pub const ReportBuilder = struct {
                     }, self, &report);
                     try report.document.addLineBreak();
                 },
-                else => {},
+                _ => {},
             }
         }
 
@@ -2221,7 +2221,7 @@ pub const ReportBuilder = struct {
                         std.debug.assert(false);
                         return try self.buildGenericMismatch(types);
                     },
-                    else => {
+                    _ => {
                         // Should be impossible for the thing we're updating to
                         // not be a record, but if so show a generic message.
                         std.debug.assert(false);
@@ -2617,12 +2617,12 @@ pub const ReportBuilder = struct {
                     return true;
                 },
                 // Other types (box, etc.) assumed to support equality
-                else => true,
+                _ => true,
             },
             // Aliases: check the underlying type
             .alias => |alias| self.snapshotSupportsEquality(alias.backing),
             // Other types (flex, rigid, recursive, err) assumed to support equality
-            else => true,
+            _ => true,
         };
     }
 
@@ -2730,7 +2730,7 @@ pub const ReportBuilder = struct {
                     }
                     return false;
                 },
-                else => return false,
+                _ => return false,
             },
             .alias => |alias| {
                 if (!self.snapshotSupportsEquality(alias.backing)) {
@@ -2738,7 +2738,7 @@ pub const ReportBuilder = struct {
                 }
                 return false;
             },
-            else => return false,
+            _ => return false,
         }
     }
 

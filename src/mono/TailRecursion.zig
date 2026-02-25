@@ -102,10 +102,10 @@ pub const TailRecursionPass = struct {
                             .not_self_recursive => {},
                         }
                     },
-                    else => {},
+                    _ => {},
                 }
             },
-            else => {},
+            _ => {},
         }
         return null;
     }
@@ -325,7 +325,7 @@ pub fn makeTailRecursive(
                     try store.addExpr(.{ .i64_literal = 0 }, @import("base").Region.zero());
                 try initial_args.append(allocator, placeholder_id);
             },
-            else => unreachable,
+            _ => unreachable,
         }
     }
 

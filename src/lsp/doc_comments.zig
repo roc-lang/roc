@@ -183,7 +183,7 @@ pub fn docOffsetForStatement(store: *const NodeStore, stmt: CIR.Statement, stmt_
             store.getAnnotationRegion(a).start.offset
         else
             store.getPatternRegion(v.pattern_idx).start.offset,
-        else => store.getStatementRegion(stmt_idx).start.offset,
+        _ => store.getStatementRegion(stmt_idx).start.offset,
     };
 }
 

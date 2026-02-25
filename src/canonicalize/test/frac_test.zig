@@ -27,7 +27,7 @@ test "fractional literal - basic decimal" {
             try testing.expectEqual(dec.value.denominator_power_of_ten, 2);
         },
         .e_dec => {},
-        else => {
+        _ => {
             std.debug.print("Unexpected expr type: {}\n", .{expr});
             try testing.expect(false); // Should be dec_small or frac_dec
         },
@@ -54,7 +54,7 @@ test "fractional literal - scientific notation small" {
         .e_frac_f64 => |frac| {
             try testing.expectApproxEqAbs(frac.value, 1.23e-10, 1e-20);
         },
-        else => {
+        _ => {
             std.debug.print("Unexpected expr type for '1.23e-10': {}\n", .{expr});
             try testing.expect(false); // Should be e_frac_f64
         },
@@ -73,7 +73,7 @@ test "fractional literal - scientific notation large (near f64 max)" {
         .e_frac_f64 => |frac| {
             try testing.expectEqual(frac.value, 1e308);
         },
-        else => {
+        _ => {
             try testing.expect(false); // Should be frac_f64
         },
     }
@@ -93,7 +93,7 @@ test "fractional literal - scientific notation at f32 boundary" {
             try testing.expect(true); // Above f32 max
             try testing.expectEqual(frac.value, 3.5e38);
         },
-        else => {
+        _ => {
             try testing.expect(false); // Should be frac_f64
         },
     }
@@ -126,7 +126,7 @@ test "fractional literal - negative zero" {
             try testing.expectEqual(frac.value, -0.0);
             try testing.expect(std.math.signbit(frac.value));
         },
-        else => {
+        _ => {
             try testing.expect(false); // Should be dec_small, frac_dec or frac_f64
         },
     }
@@ -147,7 +147,7 @@ test "fractional literal - positive zero" {
             try testing.expect(true); // 0.5 fits in F32
             try testing.expect(true); // 0.5 fits in Dec
         },
-        else => {
+        _ => {
             try testing.expect(false); // Should be dec_small
         },
     }
@@ -168,7 +168,7 @@ test "fractional literal - very small scientific notation" {
             try testing.expect(true); // 1e-40 fits in F32 subnormal range
             try testing.expectApproxEqAbs(frac.value, 1e-40, 1e-50);
         },
-        else => {
+        _ => {
             try testing.expect(false); // Should be frac_f64
         },
     }
@@ -224,7 +224,7 @@ test "fractional literal - scientific notation with capital E" {
             try testing.expect(true); // 2.5e10 is within f32 range
             try testing.expectApproxEqAbs(builtins.compiler_rt_128.i128_to_f64(frac.value.num) / std.math.pow(f64, 10, 18), 2.5e10, 1e-5);
         },
-        else => {
+        _ => {
             try testing.expect(false); // Should be frac_dec
         },
     }
@@ -245,7 +245,7 @@ test "fractional literal - negative scientific notation" {
             // Let's just check the value is correct
             try testing.expectApproxEqAbs(builtins.compiler_rt_128.i128_to_f64(frac.value.num) / std.math.pow(f64, 10, 18), -1.5e-5, 1e-10);
         },
-        else => {
+        _ => {
             try testing.expect(false); // Should be frac_dec
         },
     }
@@ -288,7 +288,7 @@ test "negative zero forced to f64 parsing" {
             try testing.expectEqual(small.value.numerator, 0);
             try testing.expectEqual(small.value.denominator_power_of_ten, 0);
         },
-        else => {
+        _ => {
             try testing.expect(false); // Should be dec_small
         },
     }
@@ -326,7 +326,7 @@ test "small dec - basic positive decimal" {
             try testing.expectEqual(dec.value.denominator_power_of_ten, 2);
             try testing.expect(true); // 1.1 fits in Dec
         },
-        else => {
+        _ => {
             try testing.expect(false); // Should be dec_small
         },
     }
@@ -353,7 +353,7 @@ test "negative zero preservation - uses f64" {
                 try testing.expectEqual(f64_val, 0.0);
             }
         },
-        else => {
+        _ => {
             try testing.expect(false); // Should be dec_small or frac_dec
         },
     }
@@ -372,7 +372,7 @@ test "negative zero with scientific notation - preserves sign via f64" {
             try testing.expectEqual(small.value.numerator, 0);
             try testing.expectEqual(small.value.denominator_power_of_ten, 0);
         },
-        else => {
+        _ => {
             try testing.expect(false); // Should be dec_small
         },
     }
@@ -394,7 +394,7 @@ test "small dec - positive zero" {
             // Verify positive zero
             try testing.expectEqual(dec.value.numerator, 0);
         },
-        else => {
+        _ => {
             try testing.expect(false); // Should be dec_small
         },
     }
@@ -413,7 +413,7 @@ test "small dec - precision preservation for 0.1" {
             try testing.expectEqual(dec.value.numerator, 1);
             try testing.expectEqual(dec.value.denominator_power_of_ten, 1);
         },
-        else => {
+        _ => {
             try testing.expect(false); // Should be dec_small
         },
     }
@@ -432,7 +432,7 @@ test "small dec - trailing zeros" {
             try testing.expectEqual(dec.value.numerator, 1100);
             try testing.expectEqual(dec.value.denominator_power_of_ten, 3);
         },
-        else => {
+        _ => {
             try testing.expect(false); // Should be dec_small
         },
     }
@@ -451,7 +451,7 @@ test "small dec - negative number" {
             try testing.expectEqual(dec.value.numerator, -525);
             try testing.expectEqual(dec.value.denominator_power_of_ten, 2);
         },
-        else => {
+        _ => {
             try testing.expect(false); // Should be dec_small
         },
     }
@@ -470,7 +470,7 @@ test "small dec - max i8 value" {
             try testing.expectEqual(dec.value.numerator, 12799);
             try testing.expectEqual(dec.value.denominator_power_of_ten, 2);
         },
-        else => {
+        _ => {
             try testing.expect(false); // Should be dec_small
         },
     }
@@ -489,7 +489,7 @@ test "small dec - min i8 value" {
             try testing.expectEqual(dec.value.numerator, -1280);
             try testing.expectEqual(dec.value.denominator_power_of_ten, 1);
         },
-        else => {
+        _ => {
             try testing.expect(false); // Should be dec_small
         },
     }
@@ -509,7 +509,7 @@ test "small dec - 128.0 now fits with new representation" {
             try testing.expectEqual(dec.value.numerator, 1280);
             try testing.expectEqual(dec.value.denominator_power_of_ten, 1);
         },
-        else => {
+        _ => {
             try testing.expect(false); // Should be dec_small
         },
     }
@@ -531,7 +531,7 @@ test "small dec - exceeds i16 range falls back to Dec" {
         .e_dec_small => {
             try testing.expect(false); // Should NOT be dec_small
         },
-        else => {
+        _ => {
             try testing.expect(false); // Should be frac_dec
         },
     }
@@ -550,7 +550,7 @@ test "small dec - too many fractional digits falls back to Dec" {
             try testing.expectEqual(dec.value.numerator, 1234);
             try testing.expectEqual(dec.value.denominator_power_of_ten, 3);
         },
-        else => {
+        _ => {
             try testing.expect(false); // Should be dec_small
         },
     }
@@ -569,7 +569,7 @@ test "small dec - complex example 0.001" {
             try testing.expectEqual(dec.value.numerator, 1);
             try testing.expectEqual(dec.value.denominator_power_of_ten, 3);
         },
-        else => {
+        _ => {
             try testing.expect(false); // Should be dec_small
         },
     }
@@ -589,7 +589,7 @@ test "small dec - negative example -0.05" {
             try testing.expectEqual(dec.value.numerator, -5);
             try testing.expectEqual(dec.value.denominator_power_of_ten, 2);
         },
-        else => {
+        _ => {
             try testing.expect(false); // Should be dec_small
         },
     }
@@ -609,7 +609,7 @@ test "negative zero with scientific notation preserves sign" {
             try testing.expectEqual(small.value.numerator, 0);
             try testing.expectEqual(small.value.denominator_power_of_ten, 0);
         },
-        else => {
+        _ => {
             try testing.expect(false); // Should be dec_small
         },
     }
@@ -628,7 +628,7 @@ test "fractional literal - simple 1.0 uses small dec" {
             try testing.expectEqual(dec.value.numerator, 10);
             try testing.expectEqual(dec.value.denominator_power_of_ten, 1);
         },
-        else => {
+        _ => {
             try testing.expect(false); // Should be dec_small
         },
     }
