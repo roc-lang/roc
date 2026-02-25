@@ -785,7 +785,7 @@ fn lowerCall(self: *Self, call_data: anytype, mono_idx: Monotype.Idx, region: Re
 /// Detect calls to Box.box or Box.unbox, which are [ProvidedByCompiler] methods
 /// with no Roc body. The MIR lowerer produces runtime_err_anno_only for their bodies.
 /// Returns the appropriate LIR low-level op, or null if this is not a Box intrinsic call.
-fn isBoxIntrinsicCall(self: *const Self, call_data: anytype) ?LirExpr.LowLevel {
+fn isBoxIntrinsicCall(self: *Self, call_data: anytype) ?LirExpr.LowLevel {
     const func_expr = self.mir_store.getExpr(call_data.func);
     const func_sym = switch (func_expr) {
         .lookup => |sym| sym,
@@ -800,14 +800,42 @@ fn isBoxIntrinsicCall(self: *const Self, call_data: anytype) ?LirExpr.LowLevel {
     const func_monotype = self.mir_store.monotype_store.getMonotype(func_mono);
     if (func_monotype != .func) return null;
 
-    const ret_mono = self.mir_store.monotype_store.getMonotype(func_monotype.func.ret);
-    if (ret_mono == .box) return .box_box;
+    // Check the method name to distinguish box vs unbox.
+    // Monotype comparison alone is insufficient because Box.unbox(Box(Box(T)))
+    // has both a box argument and a box return type, and monotype indices
+    // are not deduplicated, so structural equality via index comparison fails.
+    if (self.getIdentText(func_sym.ident_idx)) |name| {
+        if (std.mem.eql(u8, name, "box")) return .box_box;
+        if (std.mem.eql(u8, name, "unbox")) return .box_unbox;
+    }
 
-    // For unbox, the first (and only non-self) argument type is .box
+    // Fallback: use monotype structure.
+    const ret_mono = self.mir_store.monotype_store.getMonotype(func_monotype.func.ret);
     const param_monos = self.mir_store.monotype_store.getIdxSpan(func_monotype.func.args);
-    if (param_monos.len > 0) {
-        const first_param = self.mir_store.monotype_store.getMonotype(param_monos[0]);
-        if (first_param == .box) return .box_unbox;
+    const first_param_mono = if (param_monos.len > 0)
+        self.mir_store.monotype_store.getMonotype(param_monos[0])
+    else
+        null;
+
+    const ret_is_box = ret_mono == .box;
+    const param_is_box = if (first_param_mono) |m| m == .box else false;
+
+    if (ret_is_box and param_is_box) {
+        // Both arg and return are box types. Disambiguate using layouts, which
+        // ARE deduplicated (unlike monotype indices). For box_unbox, the arg's
+        // inner layout equals the return layout. For box_box, the return's inner
+        // layout equals the arg layout.
+        const ret_layout = self.layoutFromMonotype(func_monotype.func.ret) catch return null;
+        const arg_layout = self.layoutFromMonotype(param_monos[0]) catch return null;
+        const ret_layout_data = self.layout_store.getLayout(ret_layout);
+        if (ret_layout_data.tag == .box and ret_layout_data.data.box == arg_layout)
+            return .box_box;
+        // Otherwise it must be unbox
+        return .box_unbox;
+    } else if (ret_is_box) {
+        return .box_box;
+    } else if (param_is_box) {
+        return .box_unbox;
     }
 
     return null;

@@ -3708,9 +3708,27 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Box.box(value) -> Box(value): heap-allocate and copy value
                     const ls = self.layout_store orelse unreachable;
                     const ret_layout_data = ls.getLayout(ll.ret_layout);
+
+                    if (ret_layout_data.tag == .box_of_zst) {
+                        // Boxing a ZST: evaluate the expression (for side effects) but
+                        // return a null-like pointer since there's no data to store.
+                        _ = try self.generateExpr(args[0]);
+                        const reg = try self.allocTempGeneral();
+                        try self.codegen.emitLoadImm(reg, 0);
+                        return .{ .general_reg = reg };
+                    }
+
                     const box_info = ls.getBoxInfo(ret_layout_data);
                     const elem_size: u32 = box_info.elem_size;
                     const elem_alignment: u32 = box_info.elem_alignment;
+
+                    // Handle ZST element even when layout tag is .box (not .box_of_zst)
+                    if (elem_size == 0) {
+                        _ = try self.generateExpr(args[0]);
+                        const reg = try self.allocTempGeneral();
+                        try self.codegen.emitLoadImm(reg, 0);
+                        return .{ .general_reg = reg };
+                    }
 
                     const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
@@ -3748,8 +3766,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // The argument is the Box — get its layout to find element info
                     const box_arg_layout = self.getExprLayout(args[0]) orelse unreachable;
                     const box_layout_data = ls.getLayout(box_arg_layout);
+
+                    if (box_layout_data.tag == .box_of_zst) {
+                        // Unboxing a ZST: evaluate the box expression (for side effects)
+                        // but return a ZST (no data).
+                        _ = try self.generateExpr(args[0]);
+                        return .{ .immediate_i64 = 0 };
+                    }
+
                     const box_info = ls.getBoxInfo(box_layout_data);
                     const elem_size: u32 = box_info.elem_size;
+
+                    // Handle ZST element even when layout tag is .box (not .box_of_zst)
+                    if (elem_size == 0) {
+                        _ = try self.generateExpr(args[0]);
+                        return .{ .immediate_i64 = 0 };
+                    }
                     const elem_layout_idx = box_info.elem_layout_idx;
                     const elem_layout_data = box_info.elem_layout;
 
@@ -12901,8 +12933,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 try self.copyStackToPtr(loc, saved_ptr_reg, sa.size);
                                 return;
                             },
-                            else => {
-                                unreachable;
+                            .box => {
+                                // Box is a heap pointer (machine word)
+                                const reg = try self.ensureInGeneralReg(loc);
+                                try self.emitStoreToMem(saved_ptr_reg, reg);
+                                return;
+                            },
+                            .box_of_zst => {
+                                // Box of zero-sized type — nothing to store.
+                                return;
                             },
                         }
                     } else {

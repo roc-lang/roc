@@ -818,6 +818,9 @@ fn formatWithTypes(
                     if (std.mem.eql(u8, ident_text, "List")) {
                         return formatList(allocator, ptr, lay, nt, module_env, layout_store);
                     }
+                    if (std.mem.eql(u8, ident_text, "Box")) {
+                        return formatBox(allocator, ptr, lay, nt, module_env, layout_store);
+                    }
                     const backing = types_store.getNominalBackingVar(nt);
                     resolved = types_store.resolveVar(backing);
                 },
@@ -1058,6 +1061,45 @@ fn formatList(
     }
 
     try out.append(']');
+    return out.toOwnedSlice();
+}
+
+/// Format a Box value by dereferencing the pointer and rendering the inner value.
+fn formatBox(
+    allocator: Allocator,
+    ptr: ?[*]const u8,
+    lay: Layout,
+    nt: types.NominalType,
+    module_env: *const ModuleEnv,
+    layout_store: *const layout_mod.Store,
+) FormatError![]u8 {
+    const types_store = &module_env.types;
+    const arg_vars = types_store.sliceNominalArgs(nt);
+    if (arg_vars.len != 1) return try allocator.dupe(u8, "Box(<unknown>)");
+    const inner_type_var = arg_vars[0];
+
+    var out = std.array_list.AlignedManaged(u8, null).init(allocator);
+    errdefer out.deinit();
+    try out.appendSlice("Box(");
+
+    if (lay.tag == .box) {
+        // Box layout: the value at ptr is a machine word (pointer to heap-allocated inner value)
+        const inner_layout = layout_store.getLayout(lay.data.box);
+        if (ptr) |p| {
+            const box_ptr: *const usize = @ptrCast(@alignCast(p));
+            const inner_ptr: [*]const u8 = @ptrFromInt(box_ptr.*);
+            const rendered = try formatWithTypes(allocator, inner_ptr, inner_layout, inner_type_var, module_env, layout_store);
+            defer allocator.free(rendered);
+            try out.appendSlice(rendered);
+        }
+    } else if (lay.tag == .box_of_zst) {
+        const zst_layout = Layout{ .tag = .zst, .data = .{ .zst = {} } };
+        const rendered = try formatWithTypes(allocator, null, zst_layout, inner_type_var, module_env, layout_store);
+        defer allocator.free(rendered);
+        try out.appendSlice(rendered);
+    }
+
+    try out.append(')');
     return out.toOwnedSlice();
 }
 
