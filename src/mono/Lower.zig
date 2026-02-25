@@ -272,7 +272,7 @@ fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) Symbol {
     const ident_idx: Ident.Idx = switch (pattern) {
         .assign => |a| a.ident,
         .as => |as| as.ident,
-        _ => Ident.Idx.NONE,
+        .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .underscore, .runtime_error => Ident.Idx.NONE,
     };
 
     const symbol = Symbol{
@@ -452,7 +452,7 @@ fn getBlockLayout(self: *Self, module_env: *ModuleEnv, block: anytype) LayoutIdx
                 const inferred = self.getExprLayoutFromIdx(module_env, var_stmt.expr);
                 self.type_env.put(pattern_key, inferred) catch {};
             },
-            _ => {},
+            .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => {},
         }
     }
 
@@ -579,7 +579,7 @@ fn resolveTagDiscriminant(self: *Self, module_env: *ModuleEnv, type_var: types.V
                     const backing_var = types_store.getNominalBackingVar(nominal);
                     current_ext = backing_var;
                 },
-                _ => break,
+                .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => break,
             },
             .alias => |alias| {
                 current_ext = types_store.getAliasBackingVar(alias);
@@ -648,9 +648,9 @@ fn resolveTagDiscriminant(self: *Self, module_env: *ModuleEnv, type_var: types.V
                                         caller_ext = cext_tu.ext;
                                     },
                                     .empty_tag_union => break,
-                                    _ => break,
+                                    .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => break,
                                 },
-                                _ => break,
+                                .flex, .rigid, .alias, .err => break,
                             }
                         }
                     }
@@ -659,7 +659,7 @@ fn resolveTagDiscriminant(self: *Self, module_env: *ModuleEnv, type_var: types.V
                     break;
                 }
             },
-            _ => break,
+            .err => break,
         }
     }
 
@@ -756,10 +756,10 @@ fn getForLoopElementLayout(self: *Self, list_expr_idx: CIR.Expr.Idx) LayoutIdx {
                     const elem_layout = ls.fromTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, effective_caller) catch unreachable;
                     return elem_layout;
                 },
-                _ => unreachable, // For loop list must be List type
+                .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => unreachable, // For loop list must be List type
             }
         },
-        _ => unreachable, // For loop list must be structure type
+        .flex, .rigid, .alias, .err => unreachable, // For loop list must be structure type
     }
 }
 
@@ -1119,7 +1119,7 @@ fn convertToMonoLowLevel(op: CIR.Expr.LowLevel) ?ir.MonoExpr.LowLevel {
 
         .num_from_str => .num_from_str,
 
-        _ => null,
+        .str_inspekt, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_sort_with, .bool_is_eq, .num_is_zero, .num_is_negative, .num_is_positive, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_from_numeral => null,
     };
 }
 
@@ -1146,7 +1146,7 @@ fn toStrMonoExpr(op: CIR.Expr.LowLevel, module_env: *ModuleEnv, args: anytype, s
         .dec_to_str => .{ .dec_to_str = arg_id },
         .f32_to_str => .{ .float_to_str = .{ .value = arg_id, .float_precision = .f32 } },
         .f64_to_str => .{ .float_to_str = .{ .value = arg_id, .float_precision = .f64 } },
-        _ => null,
+        .str_is_empty, .str_is_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_with_prefix, .str_drop_prefix, .str_drop_suffix, .str_count_utf8_bytes, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8, .str_split_on, .str_join_with, .str_inspekt, .list_len, .list_is_empty, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_sort_with, .list_drop_at, .list_sublist, .list_append, .bool_is_eq, .num_is_zero, .num_is_negative, .num_is_positive, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_from_numeral, .num_from_str, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_i128_try_unsafe, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64 => null,
     };
 }
 
@@ -1212,10 +1212,10 @@ fn setupLocalCallLayoutHints(
             const inner = module_env.store.getExpr(c.lambda_idx);
             break :blk switch (inner) {
                 .e_lambda => |l| l.args,
-                _ => return,
+                .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => return,
             };
         },
-        _ => return,
+        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => return,
     };
 
     const param_pattern_indices = module_env.store.slicePatterns(lambda_args);
@@ -1264,10 +1264,10 @@ fn setupLocalCallLayoutHints(
                     const inner_expr = module_env.store.getExpr(c.lambda_idx);
                     break :blk switch (inner_expr) {
                         .e_lambda => |l| l.body,
-                        _ => null,
+                        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => null,
                     };
                 },
-                _ => null,
+                .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => null,
             };
             if (lambda_body) |body_idx| {
                 const body_type_var = ModuleEnv.varFrom(body_idx);
@@ -1313,9 +1313,9 @@ fn setupLocalCallLayoutHints(
             .flex, .rigid => true,
             .structure => |st| switch (st) {
                 .tag_union => true, // Tag unions may have rigid/flex payload types
-                _ => false,
+                .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => false,
             },
-            _ => false,
+            .alias, .err => false,
         };
         if (!needs_hint) continue;
 
@@ -1420,7 +1420,7 @@ fn buildLayoutVarOverrides(
                     }
                 }
             },
-            _ => {},
+            .record_unbound, .empty_record, .empty_tag_union => {},
         },
         .alias => |al| {
             if (cr.desc.content == .alias) {
@@ -1429,7 +1429,7 @@ fn buildLayoutVarOverrides(
                 try self.buildLayoutVarOverrides(env, d_backing, c_backing);
             }
         },
-        _ => {},
+        .flex, .rigid, .err => {},
     }
 }
 
@@ -1549,10 +1549,10 @@ fn needsReSpecialization(
             const inner = self.store.getExpr(c.lambda);
             break :blk switch (inner) {
                 .lambda => |l| l,
-                _ => return false,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .closure, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => return false,
             };
         },
-        _ => return false,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => return false,
     };
 
     const param_patterns = self.store.getPatternSpan(lambda.params);
@@ -1564,7 +1564,7 @@ fn needsReSpecialization(
         const param_layout: LayoutIdx = switch (param_pattern) {
             .bind => |b| b.layout_idx,
             .wildcard => |w| w.layout_idx,
-            _ => continue,
+            .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => continue,
         };
         const arg_layout = self.getExprLayoutFromIdx(module_env, arg_indices[i]);
         if (param_layout != arg_layout) return true;
@@ -1591,10 +1591,10 @@ fn needsDotAccessReSpec(
             const inner = self.store.getExpr(c.lambda);
             break :blk switch (inner) {
                 .lambda => |l| l,
-                _ => return false,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .closure, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => return false,
             };
         },
-        _ => return false,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => return false,
     };
 
     const param_patterns = self.store.getPatternSpan(lambda.params);
@@ -1605,7 +1605,7 @@ fn needsDotAccessReSpec(
     const first_layout: LayoutIdx = switch (first_param) {
         .bind => |b| b.layout_idx,
         .wildcard => |w| w.layout_idx,
-        _ => return false,
+        .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => return false,
     };
     const receiver_layout = self.getExprLayoutFromIdx(module_env, receiver_expr_idx);
     if (first_layout != receiver_layout) return true;
@@ -1619,7 +1619,7 @@ fn needsDotAccessReSpec(
                 const param_layout: LayoutIdx = switch (param_pattern) {
                     .bind => |b| b.layout_idx,
                     .wildcard => |w| w.layout_idx,
-                    _ => continue,
+                    .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => continue,
                 };
                 const arg_layout = self.getExprLayoutFromIdx(module_env, arg_idx);
                 if (param_layout != arg_layout) return true;
@@ -1749,13 +1749,13 @@ fn collectRigidVars(self: *Self, env: *const ModuleEnv, type_var: types.Var, out
                     self.collectRigidVars(env, e, out, count);
                 }
             },
-            _ => {},
+            .record, .record_unbound, .empty_record, .tag_union, .empty_tag_union => {},
         },
         .alias => |alias| {
             const backing = env.types.getAliasBackingVar(alias);
             self.collectRigidVars(env, backing, out, count);
         },
-        _ => {},
+        .flex, .err => {},
     }
 }
 
@@ -1849,7 +1849,7 @@ fn addIntraModuleMappings(
                 }
             }
         },
-        _ => {},
+        .record_unbound, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => {},
     }
 }
 
@@ -2012,7 +2012,7 @@ fn collectTypeMappingsWithExpr(
                                     try self.collectTypeMappingsWithExpr(scope, ext_env, ext_args[0], caller_env, first_elem_var, elems[0]);
                                 }
                             },
-                            _ => {},
+                            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => {},
                         }
                     }
                 },
@@ -2049,7 +2049,7 @@ fn collectTypeMappingsWithExpr(
                     // Also recurse into extension vars
                     try self.collectTypeMappings(scope, ext_env, tu.ext, caller_env, caller_tu.ext);
                 },
-                _ => {},
+                .record_unbound, .empty_record, .empty_tag_union => {},
             }
         },
         .alias => |alias| {
@@ -2494,10 +2494,10 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                                     break :elem_blk ls.fromTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, self.type_scope_caller_module) catch LayoutIdx.default_num;
                                 }
                             },
-                            _ => {},
+                            .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => {},
                         }
                     },
-                    _ => {},
+                    .flex, .rigid, .alias, .err => {},
                 }
                 break :elem_blk LayoutIdx.default_num;
             };
@@ -2651,7 +2651,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                             .origin = nom.origin_module,
                             .ident = nom.ident.ident_idx,
                         },
-                        _ => null,
+                        .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => null,
                     },
                     .flex => |flex| fi: {
                         if (!flex.constraints.isEmpty()) {
@@ -2680,7 +2680,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                         }
                         break :ri null;
                     },
-                    _ => null,
+                    .alias, .err => null,
                 };
 
                 if (recv_nominal) |rn| {
@@ -3376,7 +3376,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                         .origin = nom.origin_module,
                         .ident = nom.ident.ident_idx,
                     },
-                    _ => null,
+                    .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => null,
                 },
                 .flex => |flex| fi: {
                     if (!flex.constraints.isEmpty()) {
@@ -3404,7 +3404,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                     }
                     break :ri null;
                 },
-                _ => null,
+                .alias, .err => null,
             };
 
             const info = nominal_info orelse {
@@ -3476,7 +3476,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             }
         },
 
-        _ => {
+        .e_lookup_pending, .e_tuple_access, .e_ellipsis, .e_anno_only => {
             unreachable;
         },
     };
@@ -3715,10 +3715,10 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
                                 // Compute layout for the element type
                                 break :elem_blk ls.fromTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
                             },
-                            _ => unreachable, // List pattern must match List type
+                            .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => unreachable, // List pattern must match List type
                         }
                     },
-                    _ => unreachable, // List pattern must match structure type
+                    .flex, .rigid, .alias, .err => unreachable, // List pattern must match structure type
                 }
             };
 
@@ -3741,7 +3741,7 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
             return self.lowerPattern(module_env, n.backing_pattern);
         },
 
-        _ => .{ .wildcard = .{ .layout_idx = self.getPatternLayout(pattern_idx) } }, // Fallback for unsupported patterns
+        .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .runtime_error => .{ .wildcard = .{ .layout_idx = self.getPatternLayout(pattern_idx) } }, // Fallback for unsupported patterns
     };
 
     return self.store.addPattern(mono_pattern, region);
@@ -3940,7 +3940,7 @@ fn exprContainsPatternRef(
                             return true;
                         }
                     },
-                    _ => {},
+                    .s_var, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => {},
                 }
             }
             // Check final expression
@@ -3977,7 +3977,7 @@ fn exprContainsPatternRef(
             return false;
         },
         // Leaf expressions that can't contain references
-        _ => return false,
+        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_record, .e_empty_record, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_for, .e_hosted_lambda, .e_run_low_level => return false,
     }
 }
 
@@ -4057,7 +4057,7 @@ fn collectIfClosureLambdaSet(
                 });
                 tag += 1;
             },
-            _ => {
+            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => {
                 // Not a closure - add placeholder
                 tag += 1;
             },
@@ -4091,7 +4091,7 @@ fn collectIfClosureLambdaSet(
                 .tag = tag,
             });
         },
-        _ => {},
+        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => {},
     }
 
     if (!has_closures) {
@@ -4228,7 +4228,7 @@ fn lowerExprWithLambdaSet(
 
             return self.store.addExpr(closure_expr, Region.zero());
         },
-        _ => {
+        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => {
             // Not a closure - lower normally
             return self.lowerExprFromIdx(module_env, expr_idx);
         },
@@ -4507,7 +4507,7 @@ fn lowerStmts(self: *Self, module_env: *ModuleEnv, stmts: CIR.Statement.Span) Al
                     .expr = while_loop_expr,
                 });
             },
-            _ => {
+            .s_crash, .s_dbg, .s_expect, .s_break, .s_return, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => {
                 // Skip other statement types (s_import, s_alias_decl, etc.)
             },
         }
@@ -4632,7 +4632,7 @@ fn lowerInspectByLayout(
             .opaque_ptr => try self.addStrLiteral("<opaque>", region),
         },
         .list, .list_of_zst => try self.addStrLiteral("[...]", region),
-        _ => try self.addStrLiteral("<value>", region),
+        .box, .box_of_zst, .record, .tuple, .closure, .zst, .tag_union => try self.addStrLiteral("<value>", region),
     };
 }
 
@@ -5060,7 +5060,7 @@ fn lowerInspectWithMethod(
                     ret_layout = lam_expr.lambda.ret_layout;
                 }
             },
-            _ => {},
+            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => {},
         }
     }
 
@@ -5150,7 +5150,7 @@ fn lowerExprToStmt(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, 
         .e_block => |block| try self.lowerBlockToStmt(module_env, block, ret_layout),
         .e_if => |ite| try self.lowerIfToSwitchStmt(module_env, ite, ret_layout),
         .e_match => |match_expr| try self.lowerMatchToStmt(module_env, match_expr, ret_layout, expr_idx),
-        _ => {
+        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_call, .e_record, .e_empty_record, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => {
             // For other expressions, wrap in a return statement
             const expr_id = try self.lowerExprInner(module_env, expr, region, expr_idx);
             return try self.store.addCFStmt(.{
@@ -5199,7 +5199,7 @@ fn lowerBlockToStmt(self: *Self, module_env: *ModuleEnv, block: anytype, ret_lay
                     },
                 });
             },
-            _ => {}, // Skip other statement types for now
+            .s_var, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => {}, // Skip other statement types for now
         }
     }
 
