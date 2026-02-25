@@ -1259,6 +1259,18 @@ test "check type - alias with mismatch arg" {
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
+test "check type - alias open tag union" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyAlias(others) : [A, B, ..others]
+        \\
+        \\x : {} -> MyAlias([C])
+        \\x = |{}| C
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> MyAlias([C])");
+}
+
 // nominal types //
 
 test "check type - basic nominal" {
@@ -4965,6 +4977,41 @@ test "check type - exhaustive match is inferred as closed" {
     );
 }
 
+test "check type - annotation with named open ext prevents closing" {
+    // Using a named ext var `..a` links both occurrences to the same rigid,
+    // so the annotation unification succeeds and the match cannot close it.
+    // A wildcard is needed because the rigid ext means unknown tags could exist.
+    const source =
+        \\test : [Red, ..a] -> Try([Red, ..a], err)
+        \\test = |x| {
+        \\  match(x) {
+        \\    Red => Try.Ok(x)
+        \\    _ => Try.Ok(x)
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Red, ..a] -> Try([Red, ..a], err)" },
+        },
+    );
+}
+
+test "check type - annotation with open ext without wildcard is non-exhaustive" {
+    // The annotation says [Red, ..a] so matching only Red without a wildcard
+    // is non-exhaustive — unknown tags could exist.
+    const source =
+        \\test : [Red, ..a] -> Try([Red, ..a], err)
+        \\test = |x| {
+        \\  match(x) {
+        \\    Red => Try.Ok(x)
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "NON-EXHAUSTIVE MATCH");
+}
+
 test "check type - exhaustive match with nested payload is inferred as closed" {
     const source =
         \\test = |x| {
@@ -5664,6 +5711,189 @@ test "check type - exhaustive match close with value reuse - no static dispatch"
         \\This argument has the type:
         \\
         \\    [Red]
+        \\
+        \\But `accept_broad` needs the first argument to be:
+        \\
+        \\    [Blue, Red]
+        \\
+        \\
+    );
+}
+
+test "check type - annotation keeps tag union open despite exhaustive match" {
+    // The function annotation declares an open return type [Red, ..].
+    // Even though the caller matches exhaustively without a wildcard,
+    // the rigid ext var from the annotation prevents closing.
+    // Each call site gets an instantiation with the rigid ext var,
+    // so the value can still be used at a broader type.
+    const source =
+        \\make : {} -> [Red, ..]
+        \\make = |{}| Red
+        \\
+        \\accept_broad = |color| {
+        \\  match color {
+        \\    Red => "red"
+        \\    Blue => "blue"
+        \\  }
+        \\}
+        \\
+        \\test = {
+        \\  val = make({})
+        \\  _narrow_result = match val {
+        \\    Red => "red"
+        \\    _ => "other"
+        \\  }
+        \\  broad_result = accept_broad(val)
+        \\  broad_result
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "make", .expected = "{  } -> [Red, ..]" },
+            .{ .def = "test", .expected = "Str" },
+        },
+    );
+}
+
+test "check type - annotated open arg not closed by exhaustive match in body" {
+    // The function arg is annotated as open [Red, ..].
+    // Matching all known tags in the body doesn't close it because
+    // the ext var is rigid (from annotation), not flex.
+    const source =
+        \\test : [Red, ..] -> Str
+        \\test = |x| {
+        \\  match x {
+        \\    Red => "red"
+        \\    _ => "other"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Red, ..] -> Str" },
+        },
+    );
+}
+
+test "check type - annotated open return type preserved after caller exhaustive match" {
+    // Static dispatch method annotated with open return type.
+    // Caller matches exhaustively then reuses the value — the annotation
+    // prevents closing, so the second use at a broader type succeeds.
+    const source =
+        \\Maker := {}.{
+        \\  get : Maker -> [Red, ..]
+        \\  get = |_maker| Red
+        \\}
+        \\
+        \\accept_broad = |color| {
+        \\  match color {
+        \\    Red => "red"
+        \\    Blue => "blue"
+        \\  }
+        \\}
+        \\
+        \\test = {
+        \\  val = Maker.get(Maker)
+        \\  _narrow_result = match val {
+        \\    Red => "red"
+        \\    _ => "other"
+        \\  }
+        \\  broad_result = accept_broad(val)
+        \\  broad_result
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Maker.get", .expected = "Maker -> [Red, ..]" },
+            .{ .def = "test", .expected = "Str" },
+        },
+    );
+}
+
+test "check type - annotated open return type still closed by exhaustive match without wildcard" {
+    // `make` is annotated as returning [Red, ..] (open), but when instantiated
+    // at the call site, the rigid ext var becomes flex. The exhaustive match
+    // without a wildcard closes that flex var, so `val` becomes [Red] (closed)
+    // and can't unify with [Blue, Red]. Confirmed by Rust compiler.
+    const source =
+        \\make : {} -> [Red, ..]
+        \\make = |{}| Red
+        \\
+        \\accept_broad = |color| {
+        \\  match color {
+        \\    Red => "red"
+        \\    Blue => "blue"
+        \\  }
+        \\}
+        \\
+        \\test = {
+        \\  val = make({})
+        \\  _narrow_result = match val {
+        \\    Red => "red"
+        \\  }
+        \\  broad_result = accept_broad(val)
+        \\  broad_result
+        \\}
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The first argument being passed to this function has the wrong type:
+        \\**test:16:18:**
+        \\```roc
+        \\  broad_result = accept_broad(val)
+        \\```
+        \\                              ^^^
+        \\
+        \\This argument has the type:
+        \\
+        \\    [Red]
+        \\
+        \\But `accept_broad` needs the first argument to be:
+        \\
+        \\    [Blue, Red]
+        \\
+        \\
+    );
+}
+
+test "check type - annotated open arg not closed even with exhaustive match" {
+    // Function arg annotated as [Red, ..] (open). The `..` creates a rigid
+    // ext var that the exhaustive match cannot close. The arg stays open as
+    // [Red, ..], which still can't unify with [Blue, Red] (closed) because
+    // the rigid ext prevents adding Blue.
+    // A wildcard is needed in the match because the rigid ext makes it non-exhaustive.
+    const source =
+        \\accept_broad = |color| {
+        \\  match color {
+        \\    Red => "red"
+        \\    Blue => "blue"
+        \\  }
+        \\}
+        \\
+        \\test : [Red, ..] -> Str
+        \\test = |x| {
+        \\  _narrow_result = match x {
+        \\    Red => "red"
+        \\    _ => "other"
+        \\  }
+        \\  accept_broad(x)
+        \\}
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The first argument being passed to this function has the wrong type:
+        \\**test:14:3:**
+        \\```roc
+        \\  accept_broad(x)
+        \\```
+        \\               ^
+        \\
+        \\This argument has the type:
+        \\
+        \\    [Red, ..]
         \\
         \\But `accept_broad` needs the first argument to be:
         \\
