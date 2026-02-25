@@ -3522,6 +3522,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                     }
 
+                    // Check for string operands that ended up in num_is_eq
+                    // (e.g., from structural equality on tag unions containing strings)
+                    if (ll.op == .num_is_eq) {
+                        if (operand_layout == .str) {
+                            const a_off = try self.ensureOnStack(lhs_loc, roc_str_size);
+                            const b_off = try self.ensureOnStack(rhs_loc, roc_str_size);
+                            return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrEqual), .str_equal);
+                        }
+                    }
+
                     // Check for i128/Dec operands
                     const operands_are_i128 = switch (lhs_loc) {
                         .immediate_i128, .stack_i128 => true,
