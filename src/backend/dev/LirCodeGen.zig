@@ -1428,6 +1428,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate code for an expression (raw — may return bare register locations).
         fn generateExprRaw(self: *Self, expr_id: LirExprId) Allocator.Error!ValueLocation {
             const expr = self.store.getExpr(expr_id);
+            std.debug.print("DBG generateExprRaw expr_id={} tag={s}\n", .{
+                @intFromEnum(expr_id),
+                @tagName(std.meta.activeTag(expr)),
+            });
 
             return switch (expr) {
                 // Literals
@@ -3493,8 +3497,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 const stored_layout = ls.getLayout(layout_idx);
                                 if (stored_layout.tag == .struct_)
                                     return self.generateStructComparisonByLayout(lhs_loc, rhs_loc, layout_idx, .num_is_eq);
-                                if (stored_layout.tag == .list)
-                                    return self.generateListComparisonByLayout(lhs_loc, rhs_loc, layout_idx, .num_is_eq);
+                                if (stored_layout.tag == .list) @panic("DBG list eq dispatch");
                                 if (stored_layout.tag == .tag_union)
                                     return self.generateTagUnionComparisonByLayout(lhs_loc, rhs_loc, layout_idx, .num_is_eq);
                             }
@@ -4866,10 +4869,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for a symbol lookup
-        fn generateLookup(self: *Self, symbol: Symbol, _: layout.Idx) Allocator.Error!ValueLocation {
+        fn generateLookup(self: *Self, symbol: Symbol, layout_idx: layout.Idx) Allocator.Error!ValueLocation {
             // Check if we have a location for this symbol
             const symbol_key: u64 = @bitCast(symbol);
             if (self.symbol_locations.get(symbol_key)) |loc| {
+                std.debug.print("DBG lookup sym={} layout_idx={} loc_tag={s}\n", .{
+                    symbol_key,
+                    @intFromEnum(layout_idx),
+                    @tagName(std.meta.activeTag(loc)),
+                });
+                if (loc == .list_stack) {
+                    std.debug.print("DBG lookup list_stack offset={}\n", .{loc.list_stack.struct_offset});
+                } else if (loc == .stack) {
+                    std.debug.print("DBG lookup stack offset={}\n", .{loc.stack.offset});
+                }
                 return loc;
             }
 
@@ -4899,6 +4912,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const loc = try self.generateExpr(def_expr_id);
                 // Cache the location
                 try self.symbol_locations.put(symbol_key, loc);
+                std.debug.print("DBG lookup def sym={} layout_idx={} cached_loc_tag={s}\n", .{
+                    symbol_key,
+                    @intFromEnum(layout_idx),
+                    @tagName(std.meta.activeTag(loc)),
+                });
+                if (loc == .list_stack) {
+                    std.debug.print("DBG lookup def list_stack offset={}\n", .{loc.list_stack.struct_offset});
+                } else if (loc == .stack) {
+                    std.debug.print("DBG lookup def stack offset={}\n", .{loc.stack.offset});
+                }
                 return loc;
             }
 
@@ -6393,6 +6416,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.freeGeneral(lhs_parts.high);
                 self.codegen.freeGeneral(rhs_parts.low);
                 self.codegen.freeGeneral(rhs_parts.high);
+            } else if (field_layout.tag == .list) {
+                const sub_loc = try self.generateListComparisonByLayout(
+                    .{ .stack = .{ .offset = lhs_off } },
+                    .{ .stack = .{ .offset = rhs_off } },
+                    field_layout_idx,
+                    .num_is_eq,
+                );
+                const sub_reg = try self.ensureInGeneralReg(sub_loc);
+                try self.emitMovRegReg(result_reg, sub_reg);
+                self.codegen.freeGeneral(sub_reg);
             } else if (field_size <= 8) {
                 // Small field: compare as single register value
                 const lhs_reg = try self.allocTempGeneral();
@@ -6574,6 +6607,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const elem_layout = ls.getLayout(elem_layout_idx);
             const elem_sa = ls.layoutSizeAlign(elem_layout);
             const elem_size: u32 = elem_sa.size;
+            std.debug.print("DBG list cmp: list_layout_idx={} elem_layout_idx={} elem_tag={s} elem_size={}\n", .{
+                @intFromEnum(list_layout_idx),
+                @intFromEnum(elem_layout_idx),
+                @tagName(elem_layout.tag),
+                elem_size,
+            });
 
             // Get list struct offsets (ptr at +0, len at +8)
             const lhs_base: i32 = switch (lhs_loc) {
@@ -8168,6 +8207,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     },
                     .list_stack => |list_info| {
                         // For lists, copy the full RocList struct
+                        std.debug.assert(elem_size == roc_list_size);
                         const temp_reg = try self.allocTempGeneral();
                         var copied: u32 = 0;
                         while (copied < roc_list_size) : (copied += target_ptr_size) {
@@ -8254,6 +8294,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Return the list location
             // Note: data_offset is no longer meaningful for heap-allocated lists,
             // but we keep it for compatibility with existing code
+            std.debug.print("DBG generateList elem_layout={} elem_size={} num_elems={} list_struct_offset={} heap_ptr_slot={}\n", .{
+                @intFromEnum(list.elem_layout),
+                elem_size,
+                num_elems,
+                list_struct_offset,
+                heap_ptr_slot,
+            });
             return .{
                 .list_stack = .{
                     .struct_offset = list_struct_offset,
@@ -10363,6 +10410,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             switch (pattern) {
                 .bind => |bind| {
                     const symbol_key: u64 = @bitCast(bind.symbol);
+                    std.debug.print("DBG bind symbol={} layout_idx={} value_loc={s}\n", .{
+                        symbol_key,
+                        @intFromEnum(bind.layout_idx),
+                        @tagName(std.meta.activeTag(value_loc)),
+                    });
+                    if (value_loc == .list_stack) {
+                        std.debug.print("DBG bind list_stack offset={}\n", .{value_loc.list_stack.struct_offset});
+                    } else if (value_loc == .stack) {
+                        std.debug.print("DBG bind stack offset={}\n", .{value_loc.stack.offset});
+                    }
 
                     // Check if this is a reassignable (mutable) variable
                     if (bind.symbol.ident_idx.attributes.reassignable) {
@@ -10490,6 +10547,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     } else ls.getLayout(lst.elem_layout);
                     const elem_size_align = ls.layoutSizeAlign(elem_layout);
                     const elem_size = elem_size_align.size;
+                    std.debug.print("DBG bindPattern list base_offset={} elem_layout_idx={} elem_layout_tag={s} elem_size={}\n", .{
+                        base_offset,
+                        @intFromEnum(lst.elem_layout),
+                        @tagName(elem_layout.tag),
+                        elem_size,
+                    });
 
                     // Load list pointer to a register
                     const list_ptr_reg = try self.allocTempGeneral();
@@ -10517,6 +10580,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                         // Bind the element pattern to the stack slot
                         const elem_loc: ValueLocation = self.stackLocationForLayout(lst.elem_layout, elem_slot);
+                        std.debug.print("DBG bindPattern list elem_slot={} elem_loc_tag={s}\n", .{
+                            elem_slot,
+                            @tagName(std.meta.activeTag(elem_loc)),
+                        });
                         try self.bindPattern(elem_pattern_id, elem_loc);
                     }
 
@@ -11005,6 +11072,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const args = self.store.getExprSpan(args_span);
             const params = self.store.getPatternSpan(lambda.params);
             const num_args = @min(params.len, args.len);
+            std.debug.print("DBG callLambdaBodyDirect params_len={} args_len={} num_args={} ret_layout={}\n", .{
+                params.len,
+                args.len,
+                num_args,
+                @intFromEnum(lambda.ret_layout),
+            });
 
             // Evaluate ALL arguments before binding ANY patterns.
             // This prevents nested inlining (e.g., recursive map2 calls in
@@ -11018,6 +11091,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             const arg_locs = self.scratch_arg_locs.sliceFromStart(arg_locs_start);
             for (params[0..num_args], 0..) |pattern_id, i| {
+                const pat = self.store.getPattern(pattern_id);
+                std.debug.print("DBG callLambdaBodyDirect param_i={} pat_tag={s} arg_loc={s}\n", .{
+                    i,
+                    @tagName(std.meta.activeTag(pat)),
+                    @tagName(std.meta.activeTag(arg_locs[i])),
+                });
+                if (pat == .bind) {
+                    std.debug.print("DBG callLambdaBodyDirect param bind symbol={} layout_idx={}\n", .{
+                        @as(u64, @bitCast(pat.bind.symbol)),
+                        @intFromEnum(pat.bind.layout_idx),
+                    });
+                }
+                if (arg_locs[i] == .list_stack) {
+                    std.debug.print("DBG callLambdaBodyDirect arg list_stack offset={}\n", .{arg_locs[i].list_stack.struct_offset});
+                } else if (arg_locs[i] == .stack) {
+                    std.debug.print("DBG callLambdaBodyDirect arg stack offset={}\n", .{arg_locs[i].stack.offset});
+                }
                 try self.bindPattern(pattern_id, arg_locs[i]);
             }
 
@@ -11092,6 +11182,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn generateCall(self: *Self, call: anytype) Allocator.Error!ValueLocation {
             // Get the function expression
             const fn_expr = self.store.getExpr(call.fn_expr);
+            std.debug.print("DBG generateCall fn_expr_id={} fn_tag={s} args_len={} ret_layout={}\n", .{
+                @intFromEnum(call.fn_expr),
+                @tagName(std.meta.activeTag(fn_expr)),
+                self.store.getExprSpan(call.args).len,
+                @intFromEnum(call.ret_layout),
+            });
 
             return switch (fn_expr) {
                 // Direct lambda call: inline the body in the current scope.
@@ -11365,6 +11461,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             self.codegen.freeGeneral(temp);
                         },
                         .list_stack => |info| {
+                            std.debug.print("DBG materialize capture list sym={} layout_idx={} src_struct_offset={} dst_offset={} capture_size={} num_words={}\n", .{
+                                symbol_key,
+                                @intFromEnum(capture.layout_idx),
+                                info.struct_offset,
+                                base_offset + offset,
+                                capture_size,
+                                num_words,
+                            });
                             // Copy all 3 words of the list (ptr, len, capacity)
                             const temp = try self.allocTempGeneral();
                             var w: u32 = 0;
@@ -11669,6 +11773,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 } else if (capture.layout_idx == .str) {
                     try self.symbol_locations.put(symbol_key, .{ .stack_str = capture_offset });
                 } else if (capture_layout.tag == .list or capture_layout.tag == .list_of_zst) {
+                    std.debug.print("DBG callSingleClosure capture sym={} layout_idx={} capture_offset={} as list_stack\n", .{
+                        symbol_key,
+                        @intFromEnum(capture.layout_idx),
+                        capture_offset,
+                    });
                     try self.symbol_locations.put(symbol_key, .{ .list_stack = .{
                         .struct_offset = capture_offset,
                         .data_offset = 0,
@@ -11917,6 +12026,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Look up the function in top-level definitions
             if (self.store.getSymbolDef(lookup.symbol)) |def_expr_id| {
                 const def_expr = self.store.getExpr(def_expr_id);
+                std.debug.print("DBG generateLookupCall symbol={} def_expr_id={} def_tag={s} args_len={} ret_layout={}\n", .{
+                    symbol_key,
+                    @intFromEnum(def_expr_id),
+                    @tagName(std.meta.activeTag(def_expr)),
+                    self.store.getExprSpan(args_span).len,
+                    @intFromEnum(ret_layout),
+                });
 
                 return switch (def_expr) {
                     .lambda => |lambda| {
@@ -11931,6 +12047,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     },
                     .closure => |closure_id| {
                         const closure = self.store.getClosureData(closure_id);
+                        std.debug.print("DBG lookupCall closure_id={} lambda_expr_id={} captures_len={} repr={s}\n", .{
+                            @intFromEnum(closure_id),
+                            @intFromEnum(closure.lambda),
+                            self.store.getCaptures(closure.captures).len,
+                            @tagName(closure.representation),
+                        });
                         const inner = self.store.getExpr(closure.lambda);
                         if (inner == .lambda) {
                             if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(inner.lambda.body)) {
@@ -13767,6 +13889,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .bind => |bind| {
                         const symbol_key: u64 = @bitCast(bind.symbol);
                         const num_regs = self.calcParamRegCount(bind.layout_idx);
+                        std.debug.print("DBG bindLambdaParam symbol={} layout_idx={} num_regs={} reg_idx={} pass_by_ptr={}\n", .{
+                            symbol_key,
+                            @intFromEnum(bind.layout_idx),
+                            num_regs,
+                            reg_idx,
+                            param_pass_by_ptr[param_idx],
+                        });
 
                         // Check if this param is passed by pointer (pre-computed)
                         if (param_pass_by_ptr[param_idx]) {
@@ -14313,6 +14442,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
                 const arg_layout = self.getExprLayout(arg_id);
                 const num_regs = self.calcArgRegCount(arg_loc, arg_layout);
+                std.debug.print("DBG generateCallToLambda arg_id={} layout={} loc={s} num_regs={}\n", .{
+                    @intFromEnum(arg_id),
+                    if (arg_layout) |al| @intFromEnum(al) else @as(usize, 999999),
+                    @tagName(std.meta.activeTag(arg_loc)),
+                    num_regs,
+                });
+                if (arg_loc == .list_stack) {
+                    std.debug.print("DBG generateCallToLambda arg list_stack offset={}\n", .{arg_loc.list_stack.struct_offset});
+                } else if (arg_loc == .stack) {
+                    std.debug.print("DBG generateCallToLambda arg stack offset={}\n", .{arg_loc.stack.offset});
+                }
                 try self.scratch_arg_infos.append(.{ .loc = arg_loc, .layout_idx = arg_layout, .num_regs = num_regs });
             }
             const arg_infos = self.scratch_arg_infos.sliceFromStart(arg_infos_start);
@@ -14438,8 +14578,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             false;
 
                         // Check if this is a list type (24 bytes)
-                        const is_list = if (param_idx < layouts.len) blk: {
-                            const param_layout = layouts[param_idx];
+                        const param_layout_idx = if (param_idx < layouts.len) layouts[param_idx] else bind.layout_idx;
+                        const layout_in_bounds = if (self.layout_store) |ls|
+                            @intFromEnum(param_layout_idx) < ls.layouts.len()
+                        else
+                            false;
+                        const is_list = blk: {
+                            const param_layout = param_layout_idx;
                             if (self.layout_store) |ls| {
                                 if (@intFromEnum(param_layout) >= ls.layouts.len()) {
                                     break :blk false;
@@ -14448,7 +14593,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 break :blk layout_val.tag == .list or layout_val.tag == .list_of_zst;
                             }
                             break :blk false;
-                        } else false;
+                        };
+                        std.debug.print("DBG bindProc param={} layout={} in_bounds={} is_list={} is_str={} is_128={} \n", .{
+                            param_idx,
+                            @intFromEnum(param_layout_idx),
+                            layout_in_bounds,
+                            is_list,
+                            is_str,
+                            is_128bit,
+                        });
 
                         // Determine number of registers needed
                         const num_regs: u8 = if (is_128bit) 2 else if (is_str or is_list) 3 else 1;
@@ -15428,6 +15581,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Get the layout to check if it's a heap-allocated type
             const layout_val = ls.getLayout(rc_op.layout_idx);
+            std.debug.print("DBG incref layout_idx={} layout_tag={s} count={} value_loc={s}\n", .{
+                @intFromEnum(rc_op.layout_idx),
+                @tagName(layout_val.tag),
+                rc_op.count,
+                @tagName(std.meta.activeTag(value_loc)),
+            });
 
             // Only incref heap-allocated types: list, str (large), box
             switch (layout_val.tag) {
@@ -15543,9 +15702,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             switch (value_loc) {
                 .stack => |s| {
                     const offset = s.offset;
+                    std.debug.print("DBG emitListIncref from stack offset={} count={}\n", .{ offset, count });
                     try self.emitLoad(.w64, ptr_reg, frame_ptr, offset);
                 },
                 .list_stack => |info| {
+                    std.debug.print("DBG emitListIncref from list_stack struct_offset={} count={}\n", .{ info.struct_offset, count });
                     try self.emitLoad(.w64, ptr_reg, frame_ptr, info.struct_offset);
                 },
                 else => return, // Can't incref non-stack values

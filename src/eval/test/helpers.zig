@@ -146,6 +146,7 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     const all_module_envs = [_]*ModuleEnv{ module_env, @constCast(builtin_module_env) };
 
     // Generate code using Mono IR pipeline
+    std.debug.print("DBG devEvaluatorStr before generateCode\n", .{});
     var code_result = dev_eval.generateCode(module_env, expr_idx, &all_module_envs) catch {
         return error.GenerateCodeFailed;
     };
