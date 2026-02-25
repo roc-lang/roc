@@ -1229,12 +1229,12 @@ fn isExtensionOpen(type_store: *TypeStore, ext_var: Var) error{OutOfMemory}!bool
                     current_ext = ext_tu.ext;
                 },
                 .empty_tag_union => return false,
-                _ => return false,
+                .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return false,
             },
             .alias => |alias| {
                 current_ext = type_store.getAliasBackingVar(alias);
             },
-            _ => return false,
+            .err => return false,
         }
     }
 }
@@ -1352,7 +1352,7 @@ fn isOpenExtension(type_store: *TypeStore, ext: Var) bool {
             .empty_tag_union => false,
             // A tag union extension (nested tags) means more tags exist
             .tag_union => true,
-            _ => false,
+            .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => false,
         },
         // Recursion vars, aliases - resolve further
         .alias => |alias| {
@@ -1489,7 +1489,7 @@ fn collectTypeParamsFromBackingType(
             .alias => |alias| {
                 try stack.append(gpa, type_store.getAliasBackingVar(alias));
             },
-            _ => {},
+            .err => {},
         }
     }
 
@@ -1557,7 +1557,7 @@ fn getCtorArgTypes(allocator: std.mem.Allocator, type_store: *TypeStore, type_va
                 .alias => |alias| {
                     current_ext = type_store.getAliasBackingVar(alias);
                 },
-                _ => break,
+                .flex, .rigid, .err => break,
             }
         }
     }
@@ -1653,9 +1653,9 @@ fn getCtorArgTypes(allocator: std.mem.Allocator, type_store: *TypeStore, type_va
                 // Unbound records also have field types
                 return getRecordFieldTypes(type_store, fields);
             },
-            _ => {},
+            .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => {},
         },
-        _ => {},
+        .flex, .rigid, .err => {},
     }
 
     return &[_]Var{};
@@ -1720,13 +1720,13 @@ fn getRecordFieldTypeByName(type_store: *TypeStore, record_type: Var, field_name
                     return null;
                 },
                 .empty_record => return null,
-                _ => return null,
+                .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_tag_union => return null,
             },
             .alias => |alias| {
                 current_type = type_store.getAliasBackingVar(alias);
                 continue;
             },
-            _ => return null,
+            .flex, .rigid, .err => return null,
         }
     }
 }
@@ -2073,7 +2073,7 @@ fn collectCtorsSketched(
                 .known_ctor => |kc| {
                     try tag_set.put(kc.tag_id, {});
                 },
-                _ => {},
+                .anything, .literal, .list => {},
             }
         }
 
@@ -2217,7 +2217,7 @@ fn specializeByConstructorSketched(
                 @memcpy(new_row[arity..], rest);
                 try new_rows.append(allocator, new_row);
             },
-            _ => {},
+            .literal, .list => {},
         }
     }
 
@@ -2288,7 +2288,7 @@ fn specializeByListAritySketched(
                 @memcpy(new_row[target_len..], rest);
                 try new_rows.append(allocator, new_row);
             },
-            _ => {},
+            .literal, .ctor => {},
         }
     }
 
@@ -2829,7 +2829,7 @@ pub fn isUsefulSketched(
                 const matches = switch (row_first) {
                     .literal => |l| Literal.eql(l, lit),
                     .anything => true,
-                    _ => false,
+                    .ctor, .list => false,
                 };
 
                 if (matches) {
@@ -3069,7 +3069,7 @@ pub fn checkMatch(
     const resolved_scrutinee = type_store.resolveVar(scrutinee_type);
     switch (resolved_scrutinee.desc.content) {
         .flex, .rigid => return error.TypeError,
-        _ => {},
+        .alias, .structure, .err => {},
     }
 
     // Phase 1: Convert CIR patterns to sketched (unresolved) patterns

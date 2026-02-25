@@ -135,7 +135,7 @@ const ShimLibraries = struct {
             // Native/host targets use the native shim
             .x64mac, .arm64mac => native,
             // Fallback for other targets (will use native, may not work for cross-compilation)
-            _ => native,
+            .x64freebsd, .x64openbsd, .x64netbsd, .x64linux, .x64elf, .arm64linux, .arm32linux, .arm32musl => native,
         };
     }
 };
@@ -186,7 +186,7 @@ const BuiltinsObjects = struct {
             .x64mac => x64mac,
             .arm64mac => arm64mac,
             // Fallback for other targets (will use native, may not work for cross-compilation)
-            _ => native,
+            .x64freebsd, .x64openbsd, .x64netbsd, .x64linux, .x64elf, .arm64linux, .arm32linux, .arm32musl => native,
         };
     }
 
@@ -685,7 +685,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
         .fmt => .fmt,
         .bundle => .bundle,
         .unbundle => .unbundle,
-        _ => .unknown,
+        .dev, .docs, .repl, .unknown => .unknown,
     };
 
     // Create CLI context at the top level - this is passed to all command handlers

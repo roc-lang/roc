@@ -668,7 +668,7 @@ pub const Store = struct {
                     return RecordFieldSnapshot{ .record = fields_out_range };
                 },
                 .empty_record => return .empty_record,
-                _ => return .not_a_record,
+                .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_tag_union => return .not_a_record,
             },
             _ => return .not_a_record,
         }
@@ -712,7 +712,7 @@ pub const Store = struct {
                         break;
                     },
                     .empty_record => break,
-                    _ => break,
+                    .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_tag_union => break,
                 },
                 .alias => |alias| {
                     ext_idx = alias.backing;

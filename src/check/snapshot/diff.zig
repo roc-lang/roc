@@ -262,9 +262,9 @@ pub fn compareTypes(
                     _ => {},
                 }
             },
-            _ => {},
+            .flex, .rigid, .err => {},
         },
-        _ => {},
+        .flex, .rigid, .err => {},
     }
 
     return hints;
@@ -304,9 +304,9 @@ fn compareTypesInternal(
                     _ => {},
                 }
             },
-            _ => {},
+            .flex, .rigid, .err => {},
         },
-        _ => {},
+        .flex, .rigid, .err => {},
     }
 }
 
@@ -334,7 +334,7 @@ fn compareStructures(
                 .fn_unbound => |act_func| {
                     compareFunctions(exp_func, act_func, hints);
                 },
-                _ => {},
+                .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => {},
             }
         },
         .fn_effectful => |exp_func| {
@@ -350,7 +350,7 @@ fn compareStructures(
                 .fn_unbound => |act_func| {
                     compareFunctions(exp_func, act_func, hints);
                 },
-                _ => {},
+                .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => {},
             }
         },
         .fn_unbound => |exp_func| {
@@ -358,7 +358,7 @@ fn compareStructures(
                 .fn_pure, .fn_effectful, .fn_unbound => |act_func| {
                     compareFunctions(exp_func, act_func, hints);
                 },
-                _ => {},
+                .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => {},
             }
         },
         .record => |exp_record| {
@@ -379,7 +379,7 @@ fn compareStructures(
                     const exp_names = fields.sliceRange(exp_range).items(.name);
                     addMissingFields(exp_names, hints, gpa, fields);
                 },
-                _ => {},
+                .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_tag_union => {},
             }
         },
         .record_unbound => |exp_fields_range| {
@@ -401,7 +401,7 @@ fn compareStructures(
                     const exp_names = snap_store.sliceRecordFields(exp_fields_range).items(.name);
                     addMissingFields(exp_names, hints, gpa, fields);
                 },
-                _ => {},
+                .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_tag_union => {},
             }
         },
         .tag_union => |exp_union| {
@@ -412,7 +412,7 @@ fn compareStructures(
                 _ => {},
             }
         },
-        _ => {},
+        .tuple, .nominal_type, .empty_record, .empty_tag_union => {},
     }
 }
 
@@ -602,7 +602,7 @@ fn gatherTagsFromUnion(
                     ext_idx = ext_union.ext;
                 },
                 .empty_tag_union => break,
-                _ => break,
+                .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => break,
             },
             .alias => |alias| {
                 ext_idx = alias.backing;
