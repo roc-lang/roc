@@ -10,19 +10,40 @@ pub fn handler(comptime ServerType: type) type {
             const params = params_value orelse return;
             const obj = switch (params) {
                 .object => |o| o,
-                _ => return,
+                .null,
+                .bool,
+                .integer,
+                .float,
+                .number_string,
+                .string,
+                .array,
+                => return,
             };
 
             const text_doc_value = obj.get("textDocument") orelse return;
             const text_doc = switch (text_doc_value) {
                 .object => |o| o,
-                _ => return,
+                .null,
+                .bool,
+                .integer,
+                .float,
+                .number_string,
+                .string,
+                .array,
+                => return,
             };
 
             const uri_value = text_doc.get("uri") orelse return;
             const uri = switch (uri_value) {
                 .string => |s| s,
-                _ => return,
+                .null,
+                .bool,
+                .integer,
+                .float,
+                .number_string,
+                .array,
+                .object,
+                => return,
             };
 
             const version_value = text_doc.get("version") orelse std.json.Value{ .integer = 0 };
@@ -35,7 +56,14 @@ pub fn handler(comptime ServerType: type) type {
             const changes_value = obj.get("contentChanges") orelse return;
             const changes = switch (changes_value) {
                 .array => |arr| arr,
-                _ => return,
+                .null,
+                .bool,
+                .integer,
+                .float,
+                .number_string,
+                .string,
+                .object,
+                => return,
             };
             if (changes.items.len == 0) return;
 
@@ -45,12 +73,26 @@ pub fn handler(comptime ServerType: type) type {
             for (changes.items) |change_value| {
                 const change_obj = switch (change_value) {
                     .object => |o| o,
-                    _ => return,
+                    .null,
+                    .bool,
+                    .integer,
+                    .float,
+                    .number_string,
+                    .string,
+                    .array,
+                    => return,
                 };
                 const text_value = change_obj.get("text") orelse return;
                 const text = switch (text_value) {
                     .string => |s| s,
-                    _ => return,
+                    .null,
+                    .bool,
+                    .integer,
+                    .float,
+                    .number_string,
+                    .array,
+                    .object,
+                    => return,
                 };
 
                 var change = DocumentStore.ContentChange{ .text = text };
@@ -94,15 +136,36 @@ pub fn handler(comptime ServerType: type) type {
         fn parseRange(value: std.json.Value) !DocumentStore.Range {
             const range_obj = switch (value) {
                 .object => |o| o,
-                _ => return error.InvalidRange,
+                .null,
+                .bool,
+                .integer,
+                .float,
+                .number_string,
+                .string,
+                .array,
+                => return error.InvalidRange,
             };
             const start_obj = switch (range_obj.get("start") orelse return error.InvalidRange) {
                 .object => |o| o,
-                _ => return error.InvalidRange,
+                .null,
+                .bool,
+                .integer,
+                .float,
+                .number_string,
+                .string,
+                .array,
+                => return error.InvalidRange,
             };
             const end_obj = switch (range_obj.get("end") orelse return error.InvalidRange) {
                 .object => |o| o,
-                _ => return error.InvalidRange,
+                .null,
+                .bool,
+                .integer,
+                .float,
+                .number_string,
+                .string,
+                .array,
+                => return error.InvalidRange,
             };
             return DocumentStore.Range{
                 .start_line = parseIndex(start_obj, "line") catch return error.InvalidRange,

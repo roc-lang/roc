@@ -9,13 +9,27 @@ pub fn handler(comptime ServerType: type) type {
             const params = params_value orelse return;
             const obj = switch (params) {
                 .object => |o| o,
-                _ => return,
+                .null,
+                .bool,
+                .integer,
+                .float,
+                .number_string,
+                .string,
+                .array,
+                => return,
             };
 
             const text_doc_value = obj.get("textDocument") orelse return;
             const text_doc = switch (text_doc_value) {
                 .object => |o| o,
-                _ => return,
+                .null,
+                .bool,
+                .integer,
+                .float,
+                .number_string,
+                .string,
+                .array,
+                => return,
             };
 
             const uri_value = text_doc.get("uri") orelse return;

@@ -283,7 +283,22 @@ pub const DependencyGraph = struct {
                     const name = module_env.common.idents.getText(assign.ident);
                     try export_names.append(allocator, name);
                 },
-                _ => {},
+                .as,
+                .applied_tag,
+                .nominal,
+                .nominal_external,
+                .record_destructure,
+                .list,
+                .tuple,
+                .num_literal,
+                .small_dec_literal,
+                .dec_literal,
+                .frac_f32_literal,
+                .frac_f64_literal,
+                .str_literal,
+                .underscore,
+                .runtime_error,
+                => {},
             }
         }
 

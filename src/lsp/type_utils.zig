@@ -40,7 +40,11 @@ pub fn unwrapAliases(type_store: *const TypeStore, type_var: Var, max_depth: usi
                 resolved = type_store.resolveVar(backing_var);
                 content = resolved.desc.content;
             },
-            _ => break,
+            .flex,
+            .rigid,
+            .structure,
+            .err,
+            => break,
         }
     }
 
@@ -137,7 +141,11 @@ pub fn extractBaseTypeName(type_str: []const u8) []const u8 {
 pub fn getAliasIdent(content: Content) ?TypeIdent {
     return switch (content) {
         .alias => |alias| alias.ident,
-        _ => null,
+        .flex,
+        .rigid,
+        .structure,
+        .err,
+        => null,
     };
 }
 
@@ -146,7 +154,11 @@ pub fn getAliasIdent(content: Content) ?TypeIdent {
 pub fn getAliasBackingVar(type_store: *const TypeStore, content: Content) ?Var {
     return switch (content) {
         .alias => |alias| type_store.getAliasBackingVar(alias),
-        _ => null,
+        .flex,
+        .rigid,
+        .structure,
+        .err,
+        => null,
     };
 }
 

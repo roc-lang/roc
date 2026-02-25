@@ -22,7 +22,14 @@ pub fn handler(comptime ServerType: type) type {
 
             const obj = switch (params) {
                 .object => |o| o,
-                _ => {
+                .null,
+                .bool,
+                .integer,
+                .float,
+                .number_string,
+                .string,
+                .array,
+                => {
                     try self.sendError(id, .invalid_params, "foldingRange params must be an object");
                     return;
                 },
@@ -35,7 +42,14 @@ pub fn handler(comptime ServerType: type) type {
             };
             const text_doc = switch (text_doc_value) {
                 .object => |o| o,
-                _ => {
+                .null,
+                .bool,
+                .integer,
+                .float,
+                .number_string,
+                .string,
+                .array,
+                => {
                     try self.sendError(id, .invalid_params, "textDocument must be an object");
                     return;
                 },
@@ -46,7 +60,14 @@ pub fn handler(comptime ServerType: type) type {
             };
             const uri = switch (uri_value) {
                 .string => |s| s,
-                _ => {
+                .null,
+                .bool,
+                .integer,
+                .float,
+                .number_string,
+                .array,
+                .object,
+                => {
                     try self.sendError(id, .invalid_params, "uri must be a string");
                     return;
                 },

@@ -614,7 +614,22 @@ fn emitPatternValue(self: *Self, pattern: Pattern) EmitError!void {
                                         try self.emitPattern(pat_idx);
                                     }
                                 },
-                                _ => {
+                                .as,
+                                .applied_tag,
+                                .nominal,
+                                .nominal_external,
+                                .record_destructure,
+                                .list,
+                                .tuple,
+                                .num_literal,
+                                .small_dec_literal,
+                                .dec_literal,
+                                .frac_f32_literal,
+                                .frac_f64_literal,
+                                .str_literal,
+                                .underscore,
+                                .runtime_error,
+                                => {
                                     try self.write(": ");
                                     try self.emitPattern(pat_idx);
                                 },
