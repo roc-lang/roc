@@ -1000,16 +1000,16 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
                                             self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                                             WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
                                         },
-                                        else => unreachable,
+                                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
                                     }
                                 },
-                                else => unreachable,
+                                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
                             }
                         } else {
                             unreachable;
                         }
                     },
-                    else => unreachable,
+                    .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
                 }
             } else {
                 unreachable;
@@ -1199,7 +1199,7 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
                 .incref => |inc| inc.value,
                 .decref => |dec| dec.value,
                 .free => |f| f.value,
-                else => unreachable,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .lambda, .closure, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .hosted_call => unreachable,
             };
             try self.generateExpr(inner_expr);
         },
@@ -1481,7 +1481,7 @@ fn generateMatchBranches(self: *Self, branches: []const mono.MonoIR.MonoMatchBra
                             try self.bindTuplePattern(field_ptr, inner_tup);
                             payload_offset += field_byte_size;
                         },
-                        else => unreachable,
+                        .int_literal, .float_literal, .str_literal, .tag, .list, .as_pattern => unreachable,
                     }
                 }
             } else {
@@ -1494,7 +1494,7 @@ fn generateMatchBranches(self: *Self, branches: []const mono.MonoIR.MonoMatchBra
                             _ = self.storage.allocLocal(bind.symbol, bind_vt) catch return error.OutOfMemory;
                         },
                         .wildcard => {},
-                        else => unreachable,
+                        .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => unreachable,
                     }
                 }
             }
@@ -1562,7 +1562,7 @@ fn generateMatchBranches(self: *Self, branches: []const mono.MonoIR.MonoMatchBra
                         WasmModule.leb128WriteU32(self.allocator, &self.body, field_ptr) catch return error.OutOfMemory;
                         try self.bindTuplePattern(field_ptr, inner_tup);
                     },
-                    else => unreachable,
+                    .int_literal, .float_literal, .str_literal, .tag, .list, .as_pattern => unreachable,
                 }
             }
             try self.generateExpr(branch.body);
@@ -1597,7 +1597,7 @@ fn generateMatchBranches(self: *Self, branches: []const mono.MonoIR.MonoMatchBra
                     try self.bindTuplePattern(value_local, inner_tup);
                     try self.generateExpr(branch.body);
                 },
-                else => unreachable,
+                .int_literal, .float_literal, .str_literal, .tag, .list, .as_pattern => unreachable,
             }
         },
         .float_literal => |float_pat| {
@@ -1738,7 +1738,7 @@ fn generateMatchBranches(self: *Self, branches: []const mono.MonoIR.MonoMatchBra
                             try self.emitLocalSet(field_ptr);
                             try self.bindTuplePattern(field_ptr, inner_tup);
                         },
-                        else => unreachable,
+                        .int_literal, .float_literal, .str_literal, .tag, .list, .as_pattern => unreachable,
                     }
                 }
             }
@@ -1795,7 +1795,7 @@ fn generateMatchBranches(self: *Self, branches: []const mono.MonoIR.MonoMatchBra
                         try self.emitLocalSet(local_idx);
                     },
                     .wildcard => {},
-                    else => unreachable,
+                    .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => unreachable,
                 }
             }
 
@@ -1811,7 +1811,7 @@ fn generateMatchBranches(self: *Self, branches: []const mono.MonoIR.MonoMatchBra
 fn isUnsignedLayout(layout_idx: layout.Idx) bool {
     return switch (layout_idx) {
         .u8, .u16, .u32, .u64, .u128, .bool => true,
-        else => false,
+        .str, .opaque_ptr, .i8, .i16, .i32, .i64, .i128, .f32, .f64, .dec, .zst, _ => false,
     };
 }
 
@@ -1864,7 +1864,7 @@ fn exprLayoutIdx(self: *Self, expr_id: MonoExprId) ?layout.Idx {
         .dec_to_str => layout.Idx.str,
         .str_escape_and_quote => layout.Idx.str,
         .tag_payload_access => |tpa| tpa.payload_layout,
-        else => null,
+        .lambda, .empty_list, .list, .empty_record, .early_return, .crash, .runtime_error, .discriminant_switch, .for_loop, .while_loop, .hosted_call => null,
     };
 }
 
@@ -1916,7 +1916,7 @@ fn exprValType(self: *Self, expr_id: MonoExprId) ValType {
         .dec_to_str => .i32, // pointer to 12-byte RocStr
         .str_escape_and_quote => .i32, // pointer to 12-byte RocStr
         .tag_payload_access => |tpa| self.resolveValType(tpa.payload_layout),
-        else => .i64, // conservative default
+        .crash, .runtime_error, .for_loop, .while_loop, .hosted_call => .i64,
     };
 }
 
@@ -1930,7 +1930,7 @@ fn exprByteSize(self: *Self, expr_id: MonoExprId) u32 {
     switch (expr) {
         .list, .empty_list => return 12, // RocList = ptr + len + cap
         .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote => return 12, // RocStr
-        else => {},
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .lambda, .closure, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => {},
     }
     // Fallback based on ValType
     return switch (self.exprValType(expr_id)) {
@@ -1974,7 +1974,7 @@ fn isCompositeExpr(self: *const Self, expr_id: MonoExprId) bool {
         .incref => |inc| self.isCompositeExpr(inc.value),
         .decref => |dec| self.isCompositeExpr(dec.value),
         .free => |f| self.isCompositeExpr(f.value),
-        else => false,
+        .i64_literal, .f64_literal, .f32_literal, .bool_literal, .lambda, .closure, .empty_record, .early_return, .crash, .runtime_error, .discriminant_switch, .for_loop, .while_loop, .hosted_call => false,
     };
 }
 
@@ -2025,7 +2025,7 @@ fn generateStructuralEq(self: *Self, lhs: MonoExprId, rhs: MonoExprId, negate: b
             try self.generateStrEq(lhs, rhs, negate);
             return;
         },
-        else => {},
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .bool_literal, .lookup, .call, .lambda, .closure, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => {},
     }
 
     // Generate both operand expressions — each pushes an i32 pointer
@@ -2067,7 +2067,7 @@ fn generateStructuralEq(self: *Self, lhs: MonoExprId, rhs: MonoExprId, negate: b
                     }
                     // No heap types — fall through to bytewise comparison
                 },
-                else => {},
+                .scalar, .box, .box_of_zst, .list, .list_of_zst, .closure, .zst => {},
             }
         }
     }
@@ -2153,7 +2153,7 @@ fn compareCompositeByLayout(self: *Self, lhs_local: u32, rhs_local: u32, layout_
                 WasmModule.leb128WriteI32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
             }
         },
-        else => {
+        .scalar, .box, .box_of_zst, .list, .list_of_zst, .closure, .zst, .tag_union => {
             // For non-composite types, fall back to bytewise comparison
             const byte_size = ls.layoutSizeAlign(l).size;
             try self.emitBytewiseEq(lhs_local, rhs_local, byte_size);
@@ -2434,7 +2434,7 @@ fn compareFieldByLayout(
                 try self.compareCompositeByLayout(lhs_field_local, rhs_field_local, field_layout_idx);
             }
         },
-        else => {
+        .scalar, .box, .box_of_zst, .list_of_zst, .closure, .zst => {
             // Scalar/other: bytewise comparison at offset
             try self.emitBytewiseEqAtOffset(lhs_local, rhs_local, field_offset, field_size);
         },
@@ -4300,11 +4300,11 @@ fn getUnwrappedCaptureLayout(self: *const Self, body_id: MonoExprId) ?layout.Idx
     return switch (body) {
         .closure => |c| switch (c.representation) {
             .unwrapped_capture => |uc| uc.capture_layout,
-            else => null,
+            .struct_captures, .enum_dispatch, .union_repr, .direct_call => null,
         },
         .nominal => |n| self.getUnwrappedCaptureLayout(n.backing_expr),
         .block => |b| self.getUnwrappedCaptureLayout(b.final_expr),
-        else => null,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .lambda, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => null,
     };
 }
 
@@ -4461,21 +4461,21 @@ fn emitConversion(self: *Self, source: ValType, target: ValType) Allocator.Error
             .i32 => @as(u8, 0xA7), // i32.wrap_i64
             .f32 => @as(u8, 0xB4), // f32.convert_i64_s
             .f64 => @as(u8, 0xB9), // f64.convert_i64_s
-            else => null,
+            .i64 => null,
         },
         .i32 => switch (target) {
             .i64 => @as(u8, 0xAC), // i64.extend_i32_s
             .f32 => @as(u8, 0xB2), // f32.convert_i32_s
             .f64 => @as(u8, 0xB7), // f64.convert_i32_s
-            else => null,
+            .i32 => null,
         },
         .f64 => switch (target) {
             .f32 => @as(u8, 0xB6), // f32.demote_f64
-            else => null,
+            .i32, .i64, .f64 => null,
         },
         .f32 => switch (target) {
             .f64 => @as(u8, 0xBB), // f64.promote_f32
-            else => null,
+            .i32, .i64, .f32 => null,
         },
     };
     if (op) |opcode| {
@@ -4511,7 +4511,7 @@ fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Allocator.Er
                 const vt = if (self.closure_values.get(param_key)) |cv| blk: {
                     break :blk switch (cv.representation) {
                         .unwrapped_capture => |repr| self.resolveValType(repr.capture_layout),
-                        else => self.resolveValType(bind.layout_idx),
+                        .struct_captures, .enum_dispatch, .union_repr, .direct_call => self.resolveValType(bind.layout_idx),
                     };
                 } else self.resolveValType(bind.layout_idx);
                 param_types.append(self.allocator, vt) catch return error.OutOfMemory;
@@ -4524,7 +4524,7 @@ fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Allocator.Er
                 // Record/tuple/list destructuring param — passed as i32 pointer
                 param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
             },
-            else => unreachable,
+            .int_literal, .float_literal, .str_literal, .tag, .as_pattern => unreachable,
         }
     }
 
@@ -4553,11 +4553,11 @@ fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Allocator.Er
                                 }) catch return error.OutOfMemory;
                             }
                         },
-                        else => {}, // unwrapped_capture handled by alias, direct_call has no captures
+                        .unwrapped_capture, .enum_dispatch, .union_repr, .direct_call => {},
                     }
                 }
             },
-            else => {},
+            .wildcard, .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => {},
         }
     }
 
@@ -4613,7 +4613,7 @@ fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Allocator.Er
                 const vt = if (self.closure_values.get(param_key)) |cv| blk: {
                     break :blk switch (cv.representation) {
                         .unwrapped_capture => |repr| self.resolveValType(repr.capture_layout),
-                        else => self.resolveValType(bind.layout_idx),
+                        .struct_captures, .enum_dispatch, .union_repr, .direct_call => self.resolveValType(bind.layout_idx),
                     };
                 } else self.resolveValType(bind.layout_idx);
                 _ = self.storage.allocLocal(bind.symbol, vt) catch return error.OutOfMemory;
@@ -4633,7 +4633,7 @@ fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Allocator.Er
                 const ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                 try self.bindListPattern(ptr, list_pat);
             },
-            else => unreachable,
+            .int_literal, .float_literal, .str_literal, .tag, .as_pattern => unreachable,
         }
     }
 
@@ -4661,11 +4661,11 @@ fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Allocator.Er
                                 }
                             }
                         },
-                        else => {},
+                        .struct_captures, .enum_dispatch, .union_repr, .direct_call => {},
                     }
                 }
             },
-            else => {},
+            .wildcard, .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => {},
         }
     }
 
@@ -4768,7 +4768,7 @@ fn compileClosure(self: *Self, expr_id: MonoExprId, closure: anytype) Allocator.
     const inner = self.store.getExpr(closure.lambda);
     const lambda = switch (inner) {
         .lambda => |l| l,
-        else => unreachable,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .closure, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
     };
 
     // Get captures
@@ -4808,7 +4808,7 @@ fn compileClosure(self: *Self, expr_id: MonoExprId, closure: anytype) Allocator.
             .record, .tuple, .list => {
                 param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
             },
-            else => unreachable,
+            .int_literal, .float_literal, .str_literal, .tag, .as_pattern => unreachable,
         }
     }
 
@@ -4867,7 +4867,7 @@ fn compileClosure(self: *Self, expr_id: MonoExprId, closure: anytype) Allocator.
                 const ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                 try self.bindListPattern(ptr, list_pat);
             },
-            else => unreachable,
+            .int_literal, .float_literal, .str_literal, .tag, .as_pattern => unreachable,
         }
     }
 
@@ -4891,11 +4891,11 @@ fn compileClosure(self: *Self, expr_id: MonoExprId, closure: anytype) Allocator.
                                 }
                             }
                         },
-                        else => {},
+                        .struct_captures, .enum_dispatch, .union_repr, .direct_call => {},
                     }
                 }
             },
-            else => {},
+            .wildcard, .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => {},
         }
     }
 
@@ -5000,20 +5000,20 @@ fn preBindCallableArgs(self: *Self, def_expr: MonoExpr, call_args: mono.MonoIR.M
                     const lam = self.store.getExpr(c.lambda);
                     break :blk2 switch (lam) {
                         .lambda => |l| l.params,
-                        else => return,
+                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .closure, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => return,
                     };
                 },
-                else => return,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => return,
             };
         },
         .closure => |c| blk: {
             const lam = self.store.getExpr(c.lambda);
             break :blk switch (lam) {
                 .lambda => |l| l.params,
-                else => return,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .closure, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => return,
             };
         },
-        else => return,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => return,
     };
     const params = self.store.getPatternSpan(param_span);
 
@@ -5024,7 +5024,7 @@ fn preBindCallableArgs(self: *Self, def_expr: MonoExpr, call_args: mono.MonoIR.M
         const pat = self.store.getPattern(params[i]);
         const param_sym = switch (pat) {
             .bind => |b| b.symbol,
-            else => continue,
+            .wildcard, .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => continue,
         };
 
         const arg_expr = self.store.getExpr(args[i]);
@@ -5045,11 +5045,11 @@ fn preBindCallableArgs(self: *Self, def_expr: MonoExpr, call_args: mono.MonoIR.M
                         .lambda, .closure, .nominal => {
                             _ = self.tryBindFunction(sym_def_id, sym_def, param_sym) catch continue;
                         },
-                        else => {},
+                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => {},
                     }
                 }
             },
-            else => {},
+            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => {},
         }
     }
 }
@@ -5147,7 +5147,7 @@ fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: Sym
             const func_idx = switch (inner_fn_expr) {
                 .closure => |closure| try self.compileClosure(closure_info.lambda_expr, closure),
                 .lambda => |lambda| try self.compileLambda(closure_info.lambda_expr, lambda),
-                else => return false,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => return false,
             };
 
             // Generate the call — leaves closure value on the wasm stack
@@ -5202,7 +5202,7 @@ fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: Sym
 
             return true;
         },
-        else => return false,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => return false,
     }
 }
 
@@ -5284,7 +5284,7 @@ fn compileProc(self: *Self, proc: MonoProc) Allocator.Error!void {
                 const ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                 try self.bindTuplePattern(ptr, tup);
             },
-            else => unreachable,
+            .int_literal, .float_literal, .str_literal, .tag, .list, .as_pattern => unreachable,
         }
     }
 
@@ -5538,7 +5538,7 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
                         param_locals[i] = local_idx;
                         try self.bindTuplePattern(local_idx, tup);
                     },
-                    else => unreachable,
+                    .int_literal, .float_literal, .str_literal, .tag, .list, .as_pattern => unreachable,
                 }
             }
             self.join_point_param_locals.put(jp_key, param_locals) catch return error.OutOfMemory;
@@ -5828,7 +5828,7 @@ fn bindCFLetPattern(self: *Self, pat: MonoPattern, value_expr: MonoExprId) Alloc
             try self.emitLocalSet(ptr);
             try self.bindListPattern(ptr, list_pat);
         },
-        else => unreachable,
+        .int_literal, .float_literal, .str_literal => unreachable,
     }
 }
 
@@ -5911,7 +5911,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
                     try self.generateCallArgs(c.args);
                     try self.emitCall(func_idx);
                 },
-                else => unreachable, // Nominal should only wrap lambda or closure
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
             }
         },
         .call => |inner_call| {
@@ -5944,7 +5944,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
             const func_idx = switch (inner_fn_expr) {
                 .closure => |closure| try self.compileClosure(inner_closure_info.lambda_expr, closure),
                 .lambda => |lambda| try self.compileLambda(inner_closure_info.lambda_expr, lambda),
-                else => unreachable,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
             };
 
             switch (inner_closure_info.representation) {
@@ -6047,7 +6047,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
                 },
             }
         },
-        else => unreachable, // Call target should be lambda, closure, lookup, nominal, call, or block
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
     }
 }
 
@@ -6118,7 +6118,7 @@ fn getReturnedClosureInfo(self: *const Self, fn_expr_id: MonoExprId) ?ReturnedCl
                         break :blk if (lam == .lambda) self.getClosureInfoFromExpr(lam.lambda.body) else null;
                     },
                     .lambda => |l| self.getClosureInfoFromExpr(l.body),
-                    else => null,
+                    .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => null,
                 };
             } else {
                 return self.getReturnedClosureInfo(inner_call.fn_expr);
@@ -6131,7 +6131,7 @@ fn getReturnedClosureInfo(self: *const Self, fn_expr_id: MonoExprId) ?ReturnedCl
             }
             return null;
         },
-        else => return null,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => return null,
     }
 }
 
@@ -6152,7 +6152,7 @@ fn getClosureInfoFromExpr(self: *const Self, expr_id: MonoExprId) ?ReturnedClosu
         .nominal => |nom| {
             return self.getClosureInfoFromExpr(nom.backing_expr);
         },
-        else => return null,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .lambda, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => return null,
     }
 }
 
@@ -6326,7 +6326,7 @@ fn dispatchClosureCall(
                 break :blk switch (fn_expr) {
                     .closure => |closure| try self.compileClosure(cv.lambda_expr, closure),
                     .lambda => |lambda| try self.compileLambda(cv.lambda_expr, lambda),
-                    else => unreachable,
+                    .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
                 };
             };
 
@@ -6505,7 +6505,7 @@ fn compileLambdaSetMemberAndCall(
     const func_idx: u32 = switch (lambda_expr) {
         .lambda => |lambda| try self.compileLambda(member.lambda_body, lambda),
         .closure => |closure| try self.compileClosure(member.lambda_body, closure),
-        else => unreachable,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
     };
 
     // Push roc_ops_ptr first
@@ -6898,7 +6898,7 @@ fn bindRecordPattern(self: *Self, ptr_local: u32, rec: anytype) Allocator.Error!
                 WasmModule.leb128WriteU32(self.allocator, &self.body, field_ptr) catch return error.OutOfMemory;
                 try self.bindTuplePattern(field_ptr, inner_tup);
             },
-            else => unreachable,
+            .int_literal, .float_literal, .str_literal, .tag, .list, .as_pattern => unreachable,
         }
     }
 }
@@ -6971,7 +6971,7 @@ fn bindTuplePattern(self: *Self, ptr_local: u32, tup: anytype) Allocator.Error!v
                 WasmModule.leb128WriteU32(self.allocator, &self.body, field_ptr) catch return error.OutOfMemory;
                 try self.bindTuplePattern(field_ptr, inner_tup);
             },
-            else => unreachable,
+            .int_literal, .float_literal, .str_literal, .tag, .list, .as_pattern => unreachable,
         }
     }
 }
@@ -7055,7 +7055,7 @@ fn bindTagPattern(self: *Self, ptr_local: u32, tag: anytype) Allocator.Error!voi
                 try self.bindTuplePattern(field_ptr, inner_tup);
                 payload_offset += field_byte_size;
             },
-            else => unreachable,
+            .int_literal, .float_literal, .str_literal, .tag, .list, .as_pattern => unreachable,
         }
     }
 }
@@ -7120,7 +7120,7 @@ fn bindListPattern(self: *Self, ptr_local: u32, list_pat: anytype) Allocator.Err
                 try self.emitLocalSet(field_ptr);
                 try self.bindTuplePattern(field_ptr, inner_tup);
             },
-            else => unreachable,
+            .int_literal, .float_literal, .str_literal, .tag, .list, .as_pattern => unreachable,
         }
     }
 
@@ -7171,7 +7171,7 @@ fn bindListPattern(self: *Self, ptr_local: u32, list_pat: anytype) Allocator.Err
                 try self.emitLocalSet(local_idx);
             },
             .wildcard => {},
-            else => unreachable,
+            .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => unreachable,
         }
     }
 }
@@ -7643,7 +7643,7 @@ fn generateForLoopExpr(self: *Self, fl: anytype) Allocator.Error!void {
             WasmModule.leb128WriteU32(self.allocator, &self.body, elem_ptr) catch return error.OutOfMemory;
             try self.bindTuplePattern(elem_ptr, tup);
         },
-        else => unreachable,
+        .int_literal, .float_literal, .str_literal, .tag, .list, .as_pattern => unreachable,
     }
 
     // Generate body (result is discarded)
@@ -8165,7 +8165,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                     WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(v)) catch return error.OutOfMemory;
                 },
-                else => {
+                .i128_literal, .f64_literal, .f32_literal, .str_literal, .bool_literal, .lookup, .call, .lambda, .closure, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => {
                     try self.generateExpr(args[1]);
                     if (self.exprValType(args[1]) == .i64) {
                         self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
@@ -8928,7 +8928,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 .str_with_ascii_lowercased => self.str_with_ascii_lowercased_import orelse unreachable,
                 .str_with_ascii_uppercased => self.str_with_ascii_uppercased_import orelse unreachable,
                 .str_release_excess_capacity => self.str_release_excess_capacity_import orelse unreachable,
-                else => unreachable,
+                .str_is_empty, .str_is_eq, .str_concat, .str_contains, .str_starts_with, .str_ends_with, .str_count_utf8_bytes, .str_caseless_ascii_equals, .str_to_utf8, .str_from_utf8, .str_repeat, .str_split, .str_join_with, .str_reserve, .str_with_capacity, .str_drop_prefix, .str_drop_suffix, .str_with_prefix, .str_from_utf8_lossy, .list_len, .list_is_empty, .list_get, .list_set, .list_append, .list_prepend, .list_concat, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_contains, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_with_capacity, .list_repeat, .list_split_first, .list_split_last, .num_add, .num_sub, .num_mul, .num_div, .num_mod, .num_neg, .num_abs, .num_pow, .num_sqrt, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .num_from_str, .num_from_numeral, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_i128_try_unsafe, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .compare, .crash => unreachable,
             };
             try self.generateExpr(args[0]);
             const input = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -8945,7 +8945,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 .str_with_prefix => self.str_with_prefix_import orelse unreachable,
                 .str_drop_prefix => self.str_drop_prefix_import orelse unreachable,
                 .str_drop_suffix => self.str_drop_suffix_import orelse unreachable,
-                else => unreachable,
+                .str_is_empty, .str_is_eq, .str_concat, .str_contains, .str_starts_with, .str_ends_with, .str_count_utf8_bytes, .str_caseless_ascii_equals, .str_to_utf8, .str_from_utf8, .str_repeat, .str_trim, .str_trim_start, .str_trim_end, .str_split, .str_join_with, .str_reserve, .str_release_excess_capacity, .str_with_capacity, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_from_utf8_lossy, .list_len, .list_is_empty, .list_get, .list_set, .list_append, .list_prepend, .list_concat, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_contains, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_with_capacity, .list_repeat, .list_split_first, .list_split_last, .num_add, .num_sub, .num_mul, .num_div, .num_mod, .num_neg, .num_abs, .num_pow, .num_sqrt, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .num_from_str, .num_from_numeral, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_i128_try_unsafe, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .compare, .crash => unreachable,
             };
             try self.generateExpr(args[0]);
             const a = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -8965,7 +8965,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const import_idx = switch (ll.op) {
                 .str_split => self.str_split_import orelse unreachable,
                 .str_join_with => self.str_join_with_import orelse unreachable,
-                else => unreachable,
+                .str_is_empty, .str_is_eq, .str_concat, .str_contains, .str_starts_with, .str_ends_with, .str_count_utf8_bytes, .str_caseless_ascii_equals, .str_to_utf8, .str_from_utf8, .str_repeat, .str_trim, .str_trim_start, .str_trim_end, .str_reserve, .str_release_excess_capacity, .str_with_capacity, .str_drop_prefix, .str_drop_suffix, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_with_prefix, .str_from_utf8_lossy, .list_len, .list_is_empty, .list_get, .list_set, .list_append, .list_prepend, .list_concat, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_contains, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_with_capacity, .list_repeat, .list_split_first, .list_split_last, .num_add, .num_sub, .num_mul, .num_div, .num_mod, .num_neg, .num_abs, .num_pow, .num_sqrt, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .num_from_str, .num_from_numeral, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_i128_try_unsafe, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .compare, .crash => unreachable,
             };
             try self.generateExpr(args[0]);
             const a = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -8985,7 +8985,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const import_idx = switch (ll.op) {
                 .str_repeat => self.str_repeat_import orelse unreachable,
                 .str_reserve => self.str_reserve_import orelse unreachable,
-                else => unreachable,
+                .str_is_empty, .str_is_eq, .str_concat, .str_contains, .str_starts_with, .str_ends_with, .str_count_utf8_bytes, .str_caseless_ascii_equals, .str_to_utf8, .str_from_utf8, .str_trim, .str_trim_start, .str_trim_end, .str_split, .str_join_with, .str_release_excess_capacity, .str_with_capacity, .str_drop_prefix, .str_drop_suffix, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_with_prefix, .str_from_utf8_lossy, .list_len, .list_is_empty, .list_get, .list_set, .list_append, .list_prepend, .list_concat, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_contains, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_with_capacity, .list_repeat, .list_split_first, .list_split_last, .num_add, .num_sub, .num_mul, .num_div, .num_mod, .num_neg, .num_abs, .num_pow, .num_sqrt, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .num_from_str, .num_from_numeral, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_i128_try_unsafe, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .compare, .crash => unreachable,
             };
             try self.generateExpr(args[0]);
             const str_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -9180,7 +9180,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // Determine if unsigned from layout
             const is_unsigned = if (arg_layout) |al| switch (al) {
                 .u8, .u16, .u32, .u64, .u128 => true,
-                else => false,
+                .bool, .str, .opaque_ptr, .i8, .i16, .i32, .i64, .i128, .f32, .f64, .dec, .zst, _ => false,
             } else false;
 
             switch (arg_vt) {
@@ -10331,7 +10331,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 .dec_to_u32_try_unsafe => .{ .val_size = 4, .is_i64 = false, .min_i = 0, .max_i = 4294967295 },
                 .dec_to_i64_try_unsafe => .{ .val_size = 8, .is_i64 = true, .min_i = std.math.minInt(i64), .max_i = std.math.maxInt(i64) },
                 .dec_to_u64_try_unsafe => .{ .val_size = 8, .is_i64 = true, .min_i = 0, .max_i = std.math.maxInt(i64) },
-                else => unreachable,
+                .str_is_empty, .str_is_eq, .str_concat, .str_contains, .str_starts_with, .str_ends_with, .str_count_utf8_bytes, .str_caseless_ascii_equals, .str_to_utf8, .str_from_utf8, .str_repeat, .str_trim, .str_trim_start, .str_trim_end, .str_split, .str_join_with, .str_reserve, .str_release_excess_capacity, .str_with_capacity, .str_drop_prefix, .str_drop_suffix, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_with_prefix, .str_from_utf8_lossy, .list_len, .list_is_empty, .list_get, .list_set, .list_append, .list_prepend, .list_concat, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_contains, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_with_capacity, .list_repeat, .list_split_first, .list_split_last, .num_add, .num_sub, .num_mul, .num_div, .num_mod, .num_neg, .num_abs, .num_pow, .num_sqrt, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .num_from_str, .num_from_numeral, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i16_trunc, .dec_to_i32_trunc, .dec_to_i64_trunc, .dec_to_i128_trunc, .dec_to_i128_try_unsafe, .dec_to_u8_trunc, .dec_to_u16_trunc, .dec_to_u32_trunc, .dec_to_u64_trunc, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .compare, .crash => unreachable,
             };
 
             // in_range = int_val >= min && int_val <= max
@@ -10735,7 +10735,6 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const MonoExprId, r
                 .f32, .f64 => try self.emitFloatMod(vt),
             }
         },
-        else => unreachable,
     }
 }
 
@@ -11394,11 +11393,11 @@ fn generateIntToStr(self: *Self, its: anytype) Allocator.Error!void {
 
     const is_signed = switch (precision) {
         .i8, .i16, .i32, .i64 => true,
-        else => false,
+        .u8, .u16, .u32, .u64, .u128, .i128 => false,
     };
     const is_64bit = switch (precision) {
         .i64, .u64 => true,
-        else => false,
+        .u8, .i8, .u16, .i16, .u32, .i32, .u128, .i128 => false,
     };
     const val_type: ValType = if (is_64bit) .i64 else .i32;
 
