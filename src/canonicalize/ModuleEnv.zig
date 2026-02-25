@@ -2821,7 +2821,22 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
             const pattern = self.store.getPattern(def.pattern);
             switch (pattern) {
                 .assign => {},
-                _ => continue, // Skip non-assign patterns (like destructuring)
+                .as,
+                .applied_tag,
+                .nominal,
+                .nominal_external,
+                .record_destructure,
+                .list,
+                .tuple,
+                .num_literal,
+                .small_dec_literal,
+                .dec_literal,
+                .frac_f32_literal,
+                .frac_f64_literal,
+                .str_literal,
+                .underscore,
+                .runtime_error,
+                => continue, // Skip non-assign patterns (like destructuring),
             }
 
             // Use def_idx for type lookup, not def.pattern. During type checking,

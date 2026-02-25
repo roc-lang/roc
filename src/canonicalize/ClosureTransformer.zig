@@ -2067,7 +2067,22 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
                         const pattern = self.module_env.store.getPattern(decl.pattern);
                         const name_hint: ?base.Ident.Idx = switch (pattern) {
                             .assign => |a| a.ident,
-                            _ => null,
+                            .as,
+                            .applied_tag,
+                            .nominal,
+                            .nominal_external,
+                            .record_destructure,
+                            .list,
+                            .tuple,
+                            .num_literal,
+                            .small_dec_literal,
+                            .dec_literal,
+                            .frac_f32_literal,
+                            .frac_f64_literal,
+                            .str_literal,
+                            .underscore,
+                            .runtime_error,
+                            => null,
                         };
 
                         // Transform expression and collect lambda set
