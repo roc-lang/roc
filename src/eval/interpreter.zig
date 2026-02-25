@@ -12582,8 +12582,22 @@ pub const Interpreter = struct {
                 // Get type info for scrutinee and result
                 const scrutinee_ct_var = can.ModuleEnv.varFrom(m.cond);
                 const scrutinee_rt_var = try self.translateTypeVar(self.env, scrutinee_ct_var);
-                const match_result_ct_var = can.ModuleEnv.varFrom(expr_idx);
-                const match_result_rt_var = try self.translateTypeVar(self.env, match_result_ct_var);
+
+                // Use expected_rt_var when available to preserve the caller's wider type.
+                // When a match expression is inside a polymorphic callee (e.g., Cmd.exec_exit_code!),
+                // the callee's compile-time type may have unresolved flex extension variables
+                // (the `..` in open tag unions). The caller's expected type has the full set of
+                // tags after unification, so using it ensures correct discriminant assignment
+                // for tag values created in match branches.
+                const match_result_rt_var = if (expected_rt_var) |expected| blk: {
+                    const expected_resolved = self.runtime_types.resolveVar(expected);
+                    if (expected_resolved.desc.content == .structure or
+                        expected_resolved.desc.content == .alias)
+                    {
+                        break :blk expected;
+                    }
+                    break :blk try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(expr_idx));
+                } else try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(expr_idx));
 
                 const branches = self.env.store.matchBranchSlice(m.branches);
 
