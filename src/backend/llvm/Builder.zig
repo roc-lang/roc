@@ -1168,7 +1168,7 @@ pub const Attribute = union(Kind) {
                     });
                 },
                 .string, .none => unreachable,
-                _ => unreachable,
+                _ => unreachable, // zig-lint-allow: catch-all (Attribute.Kind is non-exhaustive)
             };
         }
 
@@ -10086,7 +10086,7 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
                         switch (extra.weights) {
                             .none => {},
                             .unpredictable => try w.writeAll("!unpredictable !{}"),
-                            _ => try w.print("{f}", .{
+                            _ => try w.print("{f}", .{ // zig-lint-allow: catch-all (Weights is non-exhaustive)
                                 try metadata_formatter.fmt("!prof ", extra.weights.toMetadata(), null),
                             }),
                         }
@@ -10369,7 +10369,7 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
                         switch (extra.data.weights) {
                             .none => {},
                             .unpredictable => try w.writeAll("!unpredictable !{}"),
-                            _ => try w.print("{f}", .{
+                            _ => try w.print("{f}", .{ // zig-lint-allow: catch-all (Weights is non-exhaustive)
                                 try metadata_formatter.fmt("!prof ", extra.data.weights.toMetadata(), null),
                             }),
                         }
@@ -15316,7 +15316,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                                     .kind = .unpredictable,
                                     .metadata = .empty_tuple,
                                 }, metadata_adapter),
-                                _ => try metadata_attach_block.writeAbbrevAdapted(MetadataAttachmentBlock.AttachmentInstructionSingle{
+                                _ => try metadata_attach_block.writeAbbrevAdapted(MetadataAttachmentBlock.AttachmentInstructionSingle{ // zig-lint-allow: catch-all (Weights is non-exhaustive)
                                     .inst = instr_index,
                                     .kind = .prof,
                                     .metadata = weights.toMetadata(),

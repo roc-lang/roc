@@ -321,6 +321,10 @@ fn checkCatchAllSwitchArms(allocator: Allocator, file_path: []const u8) ![]u8 {
 
         if (!isCatchAllSwitchArm(trimmed)) continue;
 
+        // Allow suppressing this lint with an inline comment for non-exhaustive enums
+        // where `_ =>` is genuinely required by Zig.
+        if (std.mem.indexOf(u8, line, "// zig-lint-allow: catch-all") != null) continue;
+
         // Look at sibling arms above to determine if this is an enum switch.
         // If any sibling arm starts with '.' (an enum literal), flag it.
         if (isEnumSwitch(all_lines.items, idx)) {

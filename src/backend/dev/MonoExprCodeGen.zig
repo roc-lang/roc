@@ -11932,7 +11932,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         },
                     }
                 },
-                _ => {
+                _ => { // zig-lint-allow: catch-all (layout.Idx is non-exhaustive)
                     // Check if this is a composite type (record/tuple/list) via layout store
                     if (self.layout_store) |ls| {
                         const layout_val = ls.getLayout(result_layout);

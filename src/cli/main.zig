@@ -413,7 +413,7 @@ fn createHardlink(ctx: *CliContext, source: []const u8, dest: []const u8) !void 
             const err = std.os.windows.kernel32.GetLastError();
             switch (err) {
                 .ALREADY_EXISTS => return error.PathAlreadyExists,
-                _ => return error.Unexpected,
+                _ => return error.Unexpected, // zig-lint-allow: catch-all (Win32Error is non-exhaustive)
             }
         }
     } else {
