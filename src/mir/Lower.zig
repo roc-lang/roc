@@ -2192,6 +2192,7 @@ fn seedTypeVarSeen(self: *Self, type_var: types.Var, monotype: Monotype.Idx) voi
             self.seedTypeVarSeen(backing_var, monotype);
         },
         .structure => |flat_type| {
+            if (!self.monotypeCompatibleWithFlatType(flat_type, monotype)) return;
             // Seed this structure var so that any expression whose type var
             // resolves to this same root (e.g. a numeric literal inside a
             // polymorphic lambda body) will find the concrete monotype
@@ -2201,6 +2202,35 @@ fn seedTypeVarSeen(self: *Self, type_var: types.Var, monotype: Monotype.Idx) voi
         },
         .err => {},
     }
+}
+
+fn monotypeCompatibleWithFlatType(self: *Self, flat_type: types.FlatType, monotype: Monotype.Idx) bool {
+    if (monotype.isNone()) return false;
+
+    const mono = self.store.monotype_store.getMonotype(monotype);
+    const common = self.currentCommonIdents();
+
+    return switch (flat_type) {
+        .fn_pure, .fn_effectful, .fn_unbound => mono == .func,
+        .record, .record_unbound => mono == .record,
+        .tuple => mono == .tuple,
+        .tag_union, .empty_tag_union => switch (mono) {
+            .tag_union => true,
+            .prim => |p| p == .bool,
+            else => false,
+        },
+        .empty_record => mono == .unit or mono == .record,
+        .nominal_type => |nominal| blk: {
+            if (nominal.origin_module == common.builtin_module and nominal.ident.ident_idx == common.list) {
+                break :blk mono == .list;
+            }
+            if (nominal.origin_module == common.builtin_module and nominal.ident.ident_idx == common.box) {
+                break :blk mono == .box;
+            }
+            // Non-builtin nominals are represented by their backing monotype.
+            break :blk true;
+        },
+    };
 }
 
 fn seedTypeVarSeenStructure(self: *Self, flat_type: types.FlatType, monotype: Monotype.Idx) void {

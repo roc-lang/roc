@@ -352,7 +352,13 @@ fn tagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monot
 
             unreachable; // compiler bug: tag name not in tag union
         },
-        .unit, .record, .tuple, .list, .box, .func => unreachable, // compiler bug: expected tag_union monotype
+        .unit, .record, .tuple, .list, .box, .func => {
+            const tag_text = self.getIdentText(tag_name) orelse "<unknown>";
+            std.debug.panic(
+                "tagDiscriminant expected tag_union/Bool; got {s} for tag '{s}' mono_idx={d}",
+                .{ @tagName(std.meta.activeTag(monotype)), tag_text, @intFromEnum(union_mono_idx) },
+            );
+        },
     }
 }
 

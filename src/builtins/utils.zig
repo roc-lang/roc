@@ -859,6 +859,11 @@ pub fn unsafeReallocate(
     roc_ops.roc_realloc(&roc_realloc_args, roc_ops.env);
 
     const new_source = @as([*]u8, @ptrCast(roc_realloc_args.answer)) + extra_bytes;
+    if (comptime builtin.mode == .Debug and builtin.os.tag != .freestanding) {
+        const old_rc_addr = @intFromPtr(source_ptr - @sizeOf(usize));
+        const new_rc_addr = @intFromPtr(new_source - @sizeOf(usize));
+        DebugRefcountTracker.onRealloc(old_rc_addr, new_rc_addr);
+    }
     return new_source;
 }
 
@@ -1014,6 +1019,15 @@ pub const DebugRefcountTracker = struct {
         if (find(rc_addr)) |idx| {
             logOp(rc_addr, .free, 0, shadow_rcs[idx], .free_from_decref);
             shadow_rcs[idx] = -1; // mark as freed
+        }
+    }
+
+    /// Called from unsafeReallocate when an allocation's address changes.
+    pub fn onRealloc(old_rc_addr: usize, new_rc_addr: usize) void {
+        if (!active) return;
+        if (old_rc_addr == new_rc_addr) return;
+        if (find(old_rc_addr)) |idx| {
+            rc_addrs[idx] = new_rc_addr;
         }
     }
 

@@ -34,6 +34,7 @@ const LirStmtSpan = LIR.LirStmtSpan;
 const LirPatternId = LIR.LirPatternId;
 const LirIfBranch = LIR.LirIfBranch;
 const LirMatchBranch = LIR.LirMatchBranch;
+const LirExprSpan = LIR.LirExprSpan;
 const LayoutIdx = layout_mod.Idx;
 const Region = base.Region;
 
@@ -480,6 +481,138 @@ pub const RcInsertPass = struct {
             .while_loop => |wl| self.processWhileLoop(wl, region, expr_id),
             .discriminant_switch => |ds| self.processDiscriminantSwitch(ds, region),
             .early_return => |ret| self.processEarlyReturn(ret, region, expr_id),
+            .call => |call| {
+                const new_fn_expr = try self.processExpr(call.fn_expr);
+                const args_res = try self.processExprSpan(call.args);
+                if (new_fn_expr == call.fn_expr and !args_res.changed) return expr_id;
+                return self.store.addExpr(.{ .call = .{
+                    .fn_expr = new_fn_expr,
+                    .fn_layout = call.fn_layout,
+                    .args = args_res.span,
+                    .ret_layout = call.ret_layout,
+                    .called_via = call.called_via,
+                } }, region);
+            },
+            .list => |list| {
+                const elems_res = try self.processExprSpan(list.elems);
+                if (!elems_res.changed) return expr_id;
+                return self.store.addExpr(.{ .list = .{
+                    .elem_layout = list.elem_layout,
+                    .elems = elems_res.span,
+                } }, region);
+            },
+            .struct_ => |s| {
+                const fields_res = try self.processExprSpan(s.fields);
+                if (!fields_res.changed) return expr_id;
+                return self.store.addExpr(.{ .struct_ = .{
+                    .struct_layout = s.struct_layout,
+                    .fields = fields_res.span,
+                } }, region);
+            },
+            .struct_access => |sa| {
+                const new_struct_expr = try self.processExpr(sa.struct_expr);
+                if (new_struct_expr == sa.struct_expr) return expr_id;
+                return self.store.addExpr(.{ .struct_access = .{
+                    .struct_expr = new_struct_expr,
+                    .struct_layout = sa.struct_layout,
+                    .field_layout = sa.field_layout,
+                    .field_idx = sa.field_idx,
+                } }, region);
+            },
+            .tag => |tag| {
+                const args_res = try self.processExprSpan(tag.args);
+                if (!args_res.changed) return expr_id;
+                return self.store.addExpr(.{ .tag = .{
+                    .discriminant = tag.discriminant,
+                    .union_layout = tag.union_layout,
+                    .args = args_res.span,
+                } }, region);
+            },
+            .low_level => |ll| {
+                const args_res = try self.processExprSpan(ll.args);
+                if (!args_res.changed) return expr_id;
+                return self.store.addExpr(.{ .low_level = .{
+                    .op = ll.op,
+                    .args = args_res.span,
+                    .ret_layout = ll.ret_layout,
+                } }, region);
+            },
+            .dbg => |d| {
+                const new_expr = try self.processExpr(d.expr);
+                if (new_expr == d.expr) return expr_id;
+                return self.store.addExpr(.{ .dbg = .{
+                    .msg = d.msg,
+                    .expr = new_expr,
+                    .result_layout = d.result_layout,
+                } }, region);
+            },
+            .expect => |e| {
+                const new_cond = try self.processExpr(e.cond);
+                const new_body = try self.processExpr(e.body);
+                if (new_cond == e.cond and new_body == e.body) return expr_id;
+                return self.store.addExpr(.{ .expect = .{
+                    .cond = new_cond,
+                    .body = new_body,
+                    .result_layout = e.result_layout,
+                } }, region);
+            },
+            .nominal => |n| {
+                const new_backing = try self.processExpr(n.backing_expr);
+                if (new_backing == n.backing_expr) return expr_id;
+                return self.store.addExpr(.{ .nominal = .{
+                    .backing_expr = new_backing,
+                    .nominal_layout = n.nominal_layout,
+                } }, region);
+            },
+            .str_concat => |parts| {
+                const parts_res = try self.processExprSpan(parts);
+                if (!parts_res.changed) return expr_id;
+                return self.store.addExpr(.{ .str_concat = parts_res.span }, region);
+            },
+            .int_to_str => |its| {
+                const new_value = try self.processExpr(its.value);
+                if (new_value == its.value) return expr_id;
+                return self.store.addExpr(.{ .int_to_str = .{
+                    .value = new_value,
+                    .int_precision = its.int_precision,
+                } }, region);
+            },
+            .float_to_str => |fts| {
+                const new_value = try self.processExpr(fts.value);
+                if (new_value == fts.value) return expr_id;
+                return self.store.addExpr(.{ .float_to_str = .{
+                    .value = new_value,
+                    .float_precision = fts.float_precision,
+                } }, region);
+            },
+            .dec_to_str => |dec_expr| {
+                const new_expr = try self.processExpr(dec_expr);
+                if (new_expr == dec_expr) return expr_id;
+                return self.store.addExpr(.{ .dec_to_str = new_expr }, region);
+            },
+            .str_escape_and_quote => |str_expr| {
+                const new_expr = try self.processExpr(str_expr);
+                if (new_expr == str_expr) return expr_id;
+                return self.store.addExpr(.{ .str_escape_and_quote = new_expr }, region);
+            },
+            .tag_payload_access => |tpa| {
+                const new_value = try self.processExpr(tpa.value);
+                if (new_value == tpa.value) return expr_id;
+                return self.store.addExpr(.{ .tag_payload_access = .{
+                    .value = new_value,
+                    .union_layout = tpa.union_layout,
+                    .payload_layout = tpa.payload_layout,
+                } }, region);
+            },
+            .hosted_call => |hc| {
+                const args_res = try self.processExprSpan(hc.args);
+                if (!args_res.changed) return expr_id;
+                return self.store.addExpr(.{ .hosted_call = .{
+                    .index = hc.index,
+                    .args = args_res.span,
+                    .ret_layout = hc.ret_layout,
+                } }, region);
+            },
             // For all other expressions, return as-is.
             // RC operations are inserted at block boundaries, not inside
             // individual expressions.
@@ -491,32 +624,79 @@ pub const RcInsertPass = struct {
             .str_literal,
             .bool_literal,
             .lookup,
-            .call,
             .empty_list,
-            .list,
-            .struct_,
-            .struct_access,
             .zero_arg_tag,
-            .tag,
             .break_expr,
-            .low_level,
-            .dbg,
-            .expect,
             .crash,
             .runtime_error,
-            .nominal,
-            .str_concat,
-            .int_to_str,
-            .float_to_str,
-            .dec_to_str,
-            .str_escape_and_quote,
-            .tag_payload_access,
-            .hosted_call,
             .incref,
             .decref,
             .free,
             => expr_id,
         };
+    }
+
+    fn processExprSpan(self: *RcInsertPass, span: LirExprSpan) Allocator.Error!struct { span: LirExprSpan, changed: bool } {
+        const exprs = self.store.getExprSpan(span);
+        if (exprs.len == 0) return .{ .span = span, .changed = false };
+
+        var new_exprs = std.ArrayList(LirExprId).empty;
+        defer new_exprs.deinit(self.allocator);
+
+        var changed = false;
+        for (exprs) |expr_id| {
+            const new_expr = try self.processExpr(expr_id);
+            if (new_expr != expr_id) changed = true;
+            try new_exprs.append(self.allocator, new_expr);
+        }
+
+        if (!changed) return .{ .span = span, .changed = false };
+
+        return .{
+            .span = try self.store.addExprSpan(new_exprs.items),
+            .changed = true,
+        };
+    }
+
+    /// Temporarily add an expression's consumed uses into `block_consumed_uses`.
+    /// Returns the exact per-symbol deltas so callers can roll them back.
+    fn pushExprUsesToBlockConsumed(self: *RcInsertPass, expr_id: LirExprId) Allocator.Error!std.AutoHashMap(u64, u32) {
+        var added = std.AutoHashMap(u64, u32).init(self.allocator);
+
+        self.scratch_uses.clearRetainingCapacity();
+        try self.countUsesInto(expr_id, &self.scratch_uses);
+
+        var it = self.scratch_uses.iterator();
+        while (it.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const amount = entry.value_ptr.*;
+
+            const gop = try self.block_consumed_uses.getOrPut(key);
+            if (gop.found_existing) {
+                gop.value_ptr.* += amount;
+            } else {
+                gop.value_ptr.* = amount;
+            }
+
+            try added.put(key, amount);
+        }
+
+        return added;
+    }
+
+    fn popExprUsesFromBlockConsumed(self: *RcInsertPass, added: *const std.AutoHashMap(u64, u32)) void {
+        var it = added.iterator();
+        while (it.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const amount = entry.value_ptr.*;
+
+            if (self.block_consumed_uses.getPtr(key)) |cur| {
+                cur.* -|= amount;
+                if (cur.* == 0) {
+                    _ = self.block_consumed_uses.remove(key);
+                }
+            }
+        }
     }
 
     /// Process a block, inserting decrefs for symbols that go out of scope
@@ -583,7 +763,7 @@ pub const RcInsertPass = struct {
         var changed = false;
 
         // Process each statement
-        for (stmts) |stmt| {
+        for (stmts, 0..) |stmt, stmt_index| {
             const b = stmt.binding();
             // Recursively process the statement's expression
             const new_expr = try self.processExpr(b.expr);
@@ -606,10 +786,15 @@ pub const RcInsertPass = struct {
             }
 
             // For mutations of refcounted symbols, decref the old value first
+            // unless the RHS reads the same symbol (e.g. `x = f(x)`), in which
+            // case RHS evaluation is responsible for ownership transfer.
             if (stmt == .mutate) {
-                const before_len = stmt_buf.items.len;
-                try self.emitMutateDecrefsForPattern(b.pattern, region, &stmt_buf);
-                if (stmt_buf.items.len > before_len) changed = true;
+                const rhs_reads_mutated_symbol = try self.exprUsesPatternSymbol(b.expr, b.pattern);
+                if (!rhs_reads_mutated_symbol) {
+                    const before_len = stmt_buf.items.len;
+                    try self.emitMutateDecrefsForPattern(b.pattern, region, &stmt_buf);
+                    if (stmt_buf.items.len > before_len) changed = true;
+                }
             }
 
             // Add the (possibly updated) statement, preserving decl/mutate kind
@@ -621,11 +806,9 @@ pub const RcInsertPass = struct {
 
             // Track live RC symbols and emit increfs for multi-use bindings
             try self.trackLiveRcSymbolsForPattern(b.pattern);
-            {
-                const before_len = stmt_buf.items.len;
-                try self.emitBlockIncrefsForPattern(b.pattern, region, &stmt_buf);
-                if (stmt_buf.items.len > before_len) changed = true;
-            }
+            const before_len = stmt_buf.items.len;
+            try self.emitBlockIncrefsForPattern(b.pattern, region, &stmt_buf, stmts, stmt_index, final_expr);
+            if (stmt_buf.items.len > before_len) changed = true;
         }
 
         // Recursively process the final expression
@@ -635,9 +818,16 @@ pub const RcInsertPass = struct {
         // Insert decrefs for refcounted symbols bound in this block that are never used
         {
             const before_len = stmt_buf.items.len;
-            for (stmts) |stmt| {
+            for (stmts, 0..) |stmt, stmt_index| {
                 const b = stmt.binding();
-                try self.emitBlockDecrefsForPattern(b.pattern, region, &stmt_buf);
+                try self.emitBlockDecrefsForPattern(
+                    b.pattern,
+                    region,
+                    &stmt_buf,
+                    stmts,
+                    stmt_index,
+                    final_expr,
+                );
             }
             if (stmt_buf.items.len > before_len) changed = true;
         }
@@ -714,11 +904,18 @@ pub const RcInsertPass = struct {
         defer new_branches.deinit(self.allocator);
 
         for (branches) |branch| {
+            // Branch condition is evaluated before branch body.
+            var cond_added = try self.pushExprUsesToBlockConsumed(branch.cond);
+
             self.scratch_uses.clearRetainingCapacity();
             try self.countUsesInto(branch.body, &self.scratch_uses);
             try self.setPendingBranchRcAdj(&self.scratch_uses, &symbols_in_any_branch);
             const processed_body = try self.processExpr(branch.body);
             self.clearPendingBranchRcAdj();
+
+            self.popExprUsesFromBlockConsumed(&cond_added);
+            cond_added.deinit();
+
             // Re-count: processExpr may have used scratch_uses recursively
             self.scratch_uses.clearRetainingCapacity();
             try self.countUsesInto(branch.body, &self.scratch_uses);
@@ -815,12 +1012,26 @@ pub const RcInsertPass = struct {
         var new_branches = std.ArrayList(LirMatchBranch).empty;
         defer new_branches.deinit(self.allocator);
 
+        // Match scrutinee is evaluated before guards/bodies in any taken branch.
+        var value_added = try self.pushExprUsesToBlockConsumed(value);
+        defer {
+            self.popExprUsesFromBlockConsumed(&value_added);
+            value_added.deinit();
+        }
+
         for (branches) |branch| {
+            // Guard is evaluated before body for the taken branch.
+            var guard_added = try self.pushExprUsesToBlockConsumed(branch.guard);
+
             self.scratch_uses.clearRetainingCapacity();
             try self.countUsesInto(branch.body, &self.scratch_uses);
             try self.setPendingBranchRcAdj(&self.scratch_uses, &symbols_in_any_branch);
             const processed_body = try self.processExpr(branch.body);
             self.clearPendingBranchRcAdj();
+
+            self.popExprUsesFromBlockConsumed(&guard_added);
+            guard_added.deinit();
+
             const processed_guard = try self.processExpr(branch.guard);
             // Re-count body uses for wrapBranchWithRcOps
             self.scratch_uses.clearRetainingCapacity();
@@ -850,6 +1061,13 @@ pub const RcInsertPass = struct {
     /// Each branch is mutually exclusive, so symbols used in any branch
     /// get per-branch RC adjustments (same pattern as if_then_else/match).
     fn processDiscriminantSwitch(self: *RcInsertPass, ds: anytype, region: Region) Allocator.Error!LirExprId {
+        // Switch discriminant is evaluated before any branch body.
+        var value_added = try self.pushExprUsesToBlockConsumed(ds.value);
+        defer {
+            self.popExprUsesFromBlockConsumed(&value_added);
+            value_added.deinit();
+        }
+
         // Copy branches to avoid iterator invalidation from nested processExpr
         // calls that may grow the exprs ArrayList.
         const branches = try self.allocator.dupe(LirExprId, self.store.getExprSpan(ds.branches));
@@ -922,6 +1140,13 @@ pub const RcInsertPass = struct {
             self.live_rc_symbols.shrinkRetainingCapacity(saved_live_len);
         }
 
+        // Lambda parameters are live bindings for the whole body and must be
+        // included in early_return cleanup.
+        const params = self.store.getPatternSpan(lam.params);
+        for (params) |pat_id| {
+            try self.trackLiveRcSymbolsForPattern(pat_id);
+        }
+
         const new_body = try self.processExpr(lam.body);
 
         // Count uses locally within the lambda body (using scratch_uses)
@@ -932,7 +1157,6 @@ pub const RcInsertPass = struct {
         var rc_stmts = std.ArrayList(LirStmt).empty;
         defer rc_stmts.deinit(self.allocator);
 
-        const params = self.store.getPatternSpan(lam.params);
         for (params) |pat_id| {
             try self.emitRcOpsForPatternInto(pat_id, &self.scratch_uses, region, &rc_stmts);
         }
@@ -983,6 +1207,20 @@ pub const RcInsertPass = struct {
     /// The loop provides 1 reference per element. We emit body-local RC ops
     /// for the element binding similar to lambda params.
     fn processForLoop(self: *RcInsertPass, fl: anytype, region: Region, expr_id: LirExprId) Allocator.Error!LirExprId {
+        // The loop element binding is live while processing the body and must
+        // be considered by early_return cleanup.
+        const saved_live_len = self.live_rc_symbols.items.len;
+        defer self.live_rc_symbols.shrinkRetainingCapacity(saved_live_len);
+        try self.trackLiveRcSymbolsForPattern(fl.elem_pattern);
+
+        // The iterated list expression is evaluated before loop-body execution.
+        // Early returns in the body must treat those consumed uses as already spent.
+        var list_added = try self.pushExprUsesToBlockConsumed(fl.list_expr);
+        defer {
+            self.popExprUsesFromBlockConsumed(&list_added);
+            list_added.deinit();
+        }
+
         const new_body = try self.processExpr(fl.body);
 
         // Count uses locally within the loop body (using scratch_uses)
@@ -1056,8 +1294,12 @@ pub const RcInsertPass = struct {
             // the early return: increfs (positive adj) add refs to clean up,
             // decrefs (negative adj) reduce refs since they're already handled.
             const global_count = self.symbol_use_counts.get(key) orelse 1;
+            // Mutable bindings are re-bound over time; global symbol use counts
+            // over-approximate live refs for the current value at an early_return.
+            // Treat the current mutable binding as owning exactly one live ref.
+            const base_count: u32 = if (live.symbol.ident_idx.attributes.reassignable) 1 else global_count;
             const branch_adj: i32 = self.pending_branch_rc_adj.get(key) orelse 0;
-            const effective_signed: i32 = @as(i32, @intCast(global_count)) + branch_adj;
+            const effective_signed: i32 = @as(i32, @intCast(base_count)) + branch_adj;
             if (effective_signed <= 0) continue; // branch wrapper decrefs handle all refs
             const effective_count: u32 = @intCast(effective_signed);
             // Include uses consumed by outer enclosing blocks (cumulative)
@@ -1110,6 +1352,23 @@ pub const RcInsertPass = struct {
             }
         };
         try walkPatternBinds(self.store, pat_id, Ctx{ .set = set });
+    }
+
+    fn exprUsesPatternSymbol(self: *RcInsertPass, expr_id: LirExprId, pat_id: LirPatternId) Allocator.Error!bool {
+        var pattern_symbols = std.AutoHashMap(u64, void).init(self.allocator);
+        defer pattern_symbols.deinit();
+        try self.collectPatternSymbols(pat_id, &pattern_symbols);
+        if (pattern_symbols.count() == 0) return false;
+
+        self.scratch_uses.clearRetainingCapacity();
+        defer self.scratch_uses.clearRetainingCapacity();
+        try self.countUsesInto(expr_id, &self.scratch_uses);
+
+        var it = self.scratch_uses.keyIterator();
+        while (it.next()) |key| {
+            if (pattern_symbols.contains(key.*)) return true;
+        }
+        return false;
     }
 
     /// Collect all symbols bound by patterns within an expression tree.
@@ -1362,8 +1621,10 @@ pub const RcInsertPass = struct {
             region: Region,
             stmts: *std.ArrayList(LirStmt),
             fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
-                if (ctx.pass.layoutNeedsRc(layout_idx)) {
-                    try ctx.pass.emitDecrefInto(symbol, layout_idx, ctx.region, ctx.stmts);
+                const key = @as(u64, @bitCast(symbol));
+                const resolved_layout = ctx.pass.symbol_layouts.get(key) orelse layout_idx;
+                if (ctx.pass.layoutNeedsRc(resolved_layout)) {
+                    try ctx.pass.emitDecrefInto(symbol, resolved_layout, ctx.region, ctx.stmts);
                 }
             }
         };
@@ -1376,6 +1637,14 @@ pub const RcInsertPass = struct {
             pass: *RcInsertPass,
             fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
                 if (ctx.pass.layoutNeedsRc(layout_idx)) {
+                    // Mutable reassignments re-bind the same symbol. Keep a single
+                    // live entry per symbol so early_return cleanup does not double-decref.
+                    for (ctx.pass.live_rc_symbols.items) |*live| {
+                        if (std.meta.eql(live.symbol, symbol)) {
+                            live.layout_idx = layout_idx;
+                            return;
+                        }
+                    }
                     try ctx.pass.live_rc_symbols.append(ctx.pass.allocator, .{
                         .symbol = symbol,
                         .layout_idx = layout_idx,
@@ -1392,23 +1661,31 @@ pub const RcInsertPass = struct {
         self: *RcInsertPass,
         pat_id: LirPatternId,
         region: Region,
-        stmts: *std.ArrayList(LirStmt),
+        rc_stmts: *std.ArrayList(LirStmt),
+        _: []const LirStmt,
+        _: usize,
+        _: LirExprId,
     ) Allocator.Error!void {
         const Ctx = struct {
             pass: *RcInsertPass,
             region: Region,
-            stmts: *std.ArrayList(LirStmt),
+            rc_stmts: *std.ArrayList(LirStmt),
             fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
-                if (ctx.pass.layoutNeedsRc(layout_idx)) {
-                    const key = @as(u64, @bitCast(symbol));
+                const key = @as(u64, @bitCast(symbol));
+                const resolved_layout = ctx.pass.symbol_layouts.get(key) orelse layout_idx;
+                if (ctx.pass.layoutNeedsRc(resolved_layout)) {
                     const use_count = ctx.pass.symbol_use_counts.get(key) orelse 0;
                     if (use_count > 1) {
-                        try ctx.pass.emitIncrefInto(symbol, layout_idx, @intCast(use_count - 1), ctx.region, ctx.stmts);
+                        try ctx.pass.emitIncrefInto(symbol, resolved_layout, @intCast(use_count - 1), ctx.region, ctx.rc_stmts);
                     }
                 }
             }
         };
-        try walkPatternBinds(self.store, pat_id, Ctx{ .pass = self, .region = region, .stmts = stmts });
+        try walkPatternBinds(self.store, pat_id, Ctx{
+            .pass = self,
+            .region = region,
+            .rc_stmts = rc_stmts,
+        });
     }
 
     /// Recursively emit decrefs for unused refcounted symbols bound by a pattern.
@@ -1418,22 +1695,30 @@ pub const RcInsertPass = struct {
         pat_id: LirPatternId,
         region: Region,
         stmts: *std.ArrayList(LirStmt),
+        _: []const LirStmt,
+        _: usize,
+        _: LirExprId,
     ) Allocator.Error!void {
         const Ctx = struct {
             pass: *RcInsertPass,
             region: Region,
             stmts: *std.ArrayList(LirStmt),
             fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
-                if (ctx.pass.layoutNeedsRc(layout_idx)) {
-                    const key = @as(u64, @bitCast(symbol));
+                const key = @as(u64, @bitCast(symbol));
+                const resolved_layout = ctx.pass.symbol_layouts.get(key) orelse layout_idx;
+                if (ctx.pass.layoutNeedsRc(resolved_layout)) {
                     const use_count = ctx.pass.symbol_use_counts.get(key) orelse 0;
                     if (use_count == 0) {
-                        try ctx.pass.emitDecrefInto(symbol, layout_idx, ctx.region, ctx.stmts);
+                        try ctx.pass.emitDecrefInto(symbol, resolved_layout, ctx.region, ctx.stmts);
                     }
                 }
             }
         };
-        try walkPatternBinds(self.store, pat_id, Ctx{ .pass = self, .region = region, .stmts = stmts });
+        try walkPatternBinds(self.store, pat_id, Ctx{
+            .pass = self,
+            .region = region,
+            .stmts = stmts,
+        });
     }
 
     /// Recursively emit RC ops for all symbols bound by a pattern.
@@ -1730,6 +2015,9 @@ fn countRcOps(store: *const LirExprStore, expr_id: LirExprId) RcOpCounts {
             decrefs += sub.decrefs;
         },
         .for_loop => |fl| {
+            const sub_list = countRcOps(store, fl.list_expr);
+            increfs += sub_list.increfs;
+            decrefs += sub_list.decrefs;
             const sub = countRcOps(store, fl.body);
             increfs += sub.increfs;
             decrefs += sub.decrefs;
@@ -1750,6 +2038,118 @@ fn countRcOps(store: *const LirExprStore, expr_id: LirExprId) RcOpCounts {
             increfs += sub_body.increfs;
             decrefs += sub_body.decrefs;
         },
+        .call => |c| {
+            const sub_fn = countRcOps(store, c.fn_expr);
+            increfs += sub_fn.increfs;
+            decrefs += sub_fn.decrefs;
+            const args = store.getExprSpan(c.args);
+            for (args) |arg_id| {
+                const sub = countRcOps(store, arg_id);
+                increfs += sub.increfs;
+                decrefs += sub.decrefs;
+            }
+        },
+        .low_level => |ll| {
+            const args = store.getExprSpan(ll.args);
+            for (args) |arg_id| {
+                const sub = countRcOps(store, arg_id);
+                increfs += sub.increfs;
+                decrefs += sub.decrefs;
+            }
+        },
+        .hosted_call => |hc| {
+            const args = store.getExprSpan(hc.args);
+            for (args) |arg_id| {
+                const sub = countRcOps(store, arg_id);
+                increfs += sub.increfs;
+                decrefs += sub.decrefs;
+            }
+        },
+        .list => |list| {
+            const elems = store.getExprSpan(list.elems);
+            for (elems) |elem_id| {
+                const sub = countRcOps(store, elem_id);
+                increfs += sub.increfs;
+                decrefs += sub.decrefs;
+            }
+        },
+        .struct_ => |s| {
+            const fields = store.getExprSpan(s.fields);
+            for (fields) |field_id| {
+                const sub = countRcOps(store, field_id);
+                increfs += sub.increfs;
+                decrefs += sub.decrefs;
+            }
+        },
+        .struct_access => |sa| {
+            const sub = countRcOps(store, sa.struct_expr);
+            increfs += sub.increfs;
+            decrefs += sub.decrefs;
+        },
+        .tag => |t| {
+            const args = store.getExprSpan(t.args);
+            for (args) |arg_id| {
+                const sub = countRcOps(store, arg_id);
+                increfs += sub.increfs;
+                decrefs += sub.decrefs;
+            }
+        },
+        .early_return => |ret| {
+            const sub = countRcOps(store, ret.expr);
+            increfs += sub.increfs;
+            decrefs += sub.decrefs;
+        },
+        .dbg => |d| {
+            const sub = countRcOps(store, d.expr);
+            increfs += sub.increfs;
+            decrefs += sub.decrefs;
+        },
+        .expect => |e| {
+            const cond_sub = countRcOps(store, e.cond);
+            increfs += cond_sub.increfs;
+            decrefs += cond_sub.decrefs;
+            const body_sub = countRcOps(store, e.body);
+            increfs += body_sub.increfs;
+            decrefs += body_sub.decrefs;
+        },
+        .nominal => |n| {
+            const sub = countRcOps(store, n.backing_expr);
+            increfs += sub.increfs;
+            decrefs += sub.decrefs;
+        },
+        .str_concat => |span| {
+            const parts = store.getExprSpan(span);
+            for (parts) |part_id| {
+                const sub = countRcOps(store, part_id);
+                increfs += sub.increfs;
+                decrefs += sub.decrefs;
+            }
+        },
+        .int_to_str => |its| {
+            const sub = countRcOps(store, its.value);
+            increfs += sub.increfs;
+            decrefs += sub.decrefs;
+        },
+        .float_to_str => |fts| {
+            const sub = countRcOps(store, fts.value);
+            increfs += sub.increfs;
+            decrefs += sub.decrefs;
+        },
+        .dec_to_str => |d| {
+            const sub = countRcOps(store, d);
+            increfs += sub.increfs;
+            decrefs += sub.decrefs;
+        },
+        .str_escape_and_quote => |s| {
+            const sub = countRcOps(store, s);
+            increfs += sub.increfs;
+            decrefs += sub.decrefs;
+        },
+        .tag_payload_access => |tpa| {
+            const sub = countRcOps(store, tpa.value);
+            increfs += sub.increfs;
+            decrefs += sub.decrefs;
+        },
         .i64_literal,
         .i128_literal,
         .f64_literal,
@@ -1758,28 +2158,11 @@ fn countRcOps(store: *const LirExprStore, expr_id: LirExprId) RcOpCounts {
         .str_literal,
         .bool_literal,
         .lookup,
-        .call,
         .empty_list,
-        .list,
-        .struct_,
-        .struct_access,
         .zero_arg_tag,
-        .tag,
-        .early_return,
         .break_expr,
-        .low_level,
-        .dbg,
-        .expect,
         .crash,
         .runtime_error,
-        .nominal,
-        .str_concat,
-        .int_to_str,
-        .float_to_str,
-        .dec_to_str,
-        .str_escape_and_quote,
-        .tag_payload_access,
-        .hosted_call,
         .free,
         => {},
     }
@@ -3003,4 +3386,57 @@ test "RC early_return inside branch accounts for branch-level increfs" {
     // Total: 2 incref nodes, 0 early-return decrefs.
     const rc = countRcOps(&env.lir_store, result);
     try std.testing.expectEqual(@as(u32, 2), rc.increfs);
+}
+
+test "RC early_return nested in call arguments gets cleanup decrefs" {
+    // Build: { s = "hello"; _ = str_concat(s, early_return("x")); s }
+    // s has global_use_count = 2 (call arg + final lookup) -> incref(1) at binding.
+    // early_return doesn't use s and happens before call completes, so both refs
+    // must be decref'd by early_return cleanup.
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const str_layout: LayoutIdx = .str;
+    const sym_s = makeSymbol(1);
+
+    const str_hello = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
+    const str_x = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
+    const lookup_s_call = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const lookup_s_final = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const early_ret = try env.lir_store.addExpr(.{ .early_return = .{
+        .expr = str_x,
+        .ret_layout = str_layout,
+    } }, Region.zero());
+
+    const call_args = try env.lir_store.addExprSpan(&.{ lookup_s_call, early_ret });
+    const str_concat_call = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .str_concat,
+        .args = call_args,
+        .ret_layout = str_layout,
+    } }, Region.zero());
+
+    const pat_s = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const wild = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = str_layout } }, Region.zero());
+    const stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = pat_s, .expr = str_hello } },
+        .{ .decl = .{ .pattern = wild, .expr = str_concat_call } },
+    });
+
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = lookup_s_final,
+        .result_layout = str_layout,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+
+    const rc = countRcOps(&env.lir_store, result);
+    try std.testing.expectEqual(@as(u32, 1), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 2), rc.decrefs);
 }

@@ -810,33 +810,38 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
                 // Symbol is a closure bound via tryBindFunction — generate its
                 // runtime closure value (used when passing closures as arguments
                 // to higher-order functions like List.fold).
-                const def_id = self.store.getSymbolDef(l.symbol) orelse unreachable;
-                const def_expr = self.store.getExpr(def_id);
-                switch (def_expr) {
-                    .closure => |closure_id| try self.generateClosureValue(self.store.getClosureData(closure_id)),
-                    .lambda => {
-                        // Lambda with no captures: push dummy 0 (direct_call)
-                        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                        WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-                    },
-                    .nominal => |nom| {
-                        const inner = self.store.getExpr(nom.backing_expr);
-                        switch (inner) {
-                            .closure => |inner_closure_id| try self.generateClosureValue(self.store.getClosureData(inner_closure_id)),
-                            .lambda => {
-                                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                                WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-                            },
-                            else => unreachable,
-                        }
-                    },
-                    .call => {
-                        // Symbol is bound to a call result (e.g., add5 = make_adder(5)).
-                        // The captures were extracted into locals by tryBindFunction(.call).
-                        // Generate the closure value from the stored closure_values entry.
-                        try self.generateClosureValue(cv);
-                    },
-                    else => unreachable,
+                if (self.store.getSymbolDef(l.symbol)) |def_id| {
+                    const def_expr = self.store.getExpr(def_id);
+                    switch (def_expr) {
+                        .closure => |closure_id| try self.generateClosureValue(self.store.getClosureData(closure_id)),
+                        .lambda => {
+                            // Lambda with no captures: push dummy 0 (direct_call)
+                            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                            WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                        },
+                        .nominal => |nom| {
+                            const inner = self.store.getExpr(nom.backing_expr);
+                            switch (inner) {
+                                .closure => |inner_closure_id| try self.generateClosureValue(self.store.getClosureData(inner_closure_id)),
+                                .lambda => {
+                                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                                    WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                                },
+                                else => unreachable,
+                            }
+                        },
+                        .call => {
+                            // Symbol is bound to a call result (e.g., add5 = make_adder(5)).
+                            // The captures were extracted into locals by tryBindFunction(.call).
+                            // Generate the closure value from the stored closure_values entry.
+                            try self.generateClosureValue(cv);
+                        },
+                        else => unreachable,
+                    }
+                } else {
+                    // Some lowered closure symbols (e.g. synthetic specializations)
+                    // are tracked in closure_values without a symbol_def entry.
+                    try self.generateClosureValue(cv);
                 }
             } else if (self.store.getSymbolDef(l.symbol)) |def_id| {
                 // Symbol not in locals or closure_values — resolve via getSymbolDef.
