@@ -1271,6 +1271,18 @@ test "check type - alias open tag union" {
     try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> MyAlias([C])");
 }
 
+test "check type - alias open record" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyAlias(others) : { a: Str, ..others }
+        \\
+        \\x : {} -> MyAlias({b: U8})
+        \\x = |{}| {a: "hello", b: 10} 
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> MyAlias({ b: U8 })");
+}
+
 // nominal types //
 
 test "check type - basic nominal" {
