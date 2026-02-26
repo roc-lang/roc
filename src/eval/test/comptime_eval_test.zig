@@ -1168,7 +1168,7 @@ fn errorContains(problems: *check.problem.Store, expected: []const u8) bool {
             .comptime_eval_error => |comptime_eval_error| {
                 return std.mem.indexOf(u8, problems.getExtraString(comptime_eval_error.error_name), expected) != null;
             },
-            _ => {},
+            .type_mismatch, .type_apply_mismatch_arities, .static_dispatch, .cannot_access_opaque_nominal, .nominal_type_resolution_failed, .recursive_alias, .unsupported_alias_where_clause, .infinite_recursion, .anonymous_recursion, .platform_def_not_found, .platform_alias_not_found, .comptime_crash, .comptime_expect_failed, .non_exhaustive_match, .redundant_pattern, .unmatchable_pattern => {},
         }
     }
     return false;

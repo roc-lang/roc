@@ -1477,7 +1477,7 @@ pub const BuildEnv = struct {
                                     const first_part = ast.store.getExpr(parts[0]);
                                     switch (first_part) {
                                         .string_part => |sp| break :blk ast.resolve(sp.token),
-                                        _ => continue,
+                                        .int, .frac, .typed_int, .typed_frac, .single_quote, .string, .multiline_string, .list, .tuple, .record, .tag, .lambda, .apply, .record_updater, .field_access, .tuple_access, .local_dispatch, .bin_op, .suffix_single_question, .unary_op, .if_then_else, .if_without_else, .match, .ident, .dbg, .record_builder, .ellipsis, .block, .for_expr, .malformed => continue,
                                     }
                                 }
                                 continue;
@@ -1546,7 +1546,7 @@ pub const BuildEnv = struct {
 
                 break :blk result;
             },
-            _ => error.ExpectedString,
+            .int, .frac, .typed_int, .typed_frac, .single_quote, .string_part, .multiline_string, .list, .tuple, .record, .tag, .lambda, .apply, .record_updater, .field_access, .tuple_access, .local_dispatch, .bin_op, .suffix_single_question, .unary_op, .if_then_else, .if_without_else, .match, .ident, .dbg, .record_builder, .ellipsis, .block, .for_expr, .malformed => error.ExpectedString,
         };
     }
 

@@ -1459,12 +1459,12 @@ pub const CompletionBuilder = struct {
                                 .detail = detail,
                             });
                         },
-                        _ => {},
+                        .apply, .rigid_var, .rigid_var_lookup, .underscore, .lookup, .tag_union, .tuple, .record, .@"fn", .parens, .malformed => {},
                     }
                 }
                 return true;
             },
-            _ => return false,
+            .apply, .rigid_var, .rigid_var_lookup, .underscore, .lookup, .tag, .tuple, .record, .@"fn", .parens, .malformed => return false,
         }
     }
 

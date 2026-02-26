@@ -173,7 +173,7 @@ pub const Dir = struct {
 
                     try files.append(gpa, relative_path);
                 },
-                _ => {
+                .block_device, .character_device, .directory, .named_pipe, .sym_link, .unix_domain_socket, .whiteout, .door, .event_port, .unknown => {
                     // do nothing
                 },
             }

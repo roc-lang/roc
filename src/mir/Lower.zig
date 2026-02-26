@@ -312,7 +312,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                             return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, monotype, region);
                         }
                     },
-                    _ => {},
+                    .as, .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .underscore, .runtime_error => {},
                 }
             }
             return try self.store.addExpr(self.allocator, .runtime_err_type, monotype, region);
@@ -987,7 +987,7 @@ fn lowerUnaryMinus(self: *Self, um: CIR.Expr.UnaryMinus, monotype: Monotype.Idx,
                         "lowerUnaryMinus: nominal type reached fallback — type checker should have validated this",
                         .{},
                     ),
-                    _ => std.debug.panic(
+                    .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => std.debug.panic(
                         "lowerUnaryMinus: structural type reached fallback — type checker should have rejected this",
                         .{},
                     ),
@@ -1288,7 +1288,7 @@ fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol) Allocator.Error!void {
                     return;
                 }
             },
-            _ => {},
+            .as, .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .underscore, .runtime_error => {},
         }
     }
     unreachable; // Method must exist — type checking should have caught this

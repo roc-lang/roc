@@ -2121,7 +2121,7 @@ test "SafeMultiList CompactWriter various field alignments and sizes" {
                         .int => @as(field.type, @intCast(@min(i * (fi + 1) + 1, std.math.maxInt(field.type)))),
                         .float => @as(field.type, @floatFromInt(i * (fi + 1) + 1)),
                         .bool => @as(field.type, (i + fi) % 2 == 0),
-                        _ => @compileError("Unsupported field type in TestType: " ++ @typeName(field.type)),
+                        .type, .void, .noreturn, .pointer, .array, .@"struct", .comptime_float, .comptime_int, .undefined, .null, .optional, .error_union, .error_set, .@"enum", .@"union", .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal => @compileError("Unsupported field type in TestType: " ++ @typeName(field.type)),
                     };
                     @field(item, field.name) = value;
                 }

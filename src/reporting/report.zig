@@ -219,20 +219,7 @@ pub const Report = struct {
                         .end_col_idx = underlines_data.display_region.end_column,
                     };
                 },
-                .text,
-                .annotated,
-                .line_break,
-                .indent,
-                .space,
-                .horizontal_rule,
-                .annotation_start,
-                .annotation_end,
-                .raw,
-                .reflowing_text,
-                .link,
-                .vertical_stack,
-                .horizontal_concat,
-                .source_code_multi_region => {},
+                .text, .annotated, .line_break, .indent, .space, .horizontal_rule, .annotation_start, .annotation_end, .raw, .reflowing_text, .link, .vertical_stack, .horizontal_concat, .source_code_multi_region => {},
             }
         }
         return null;
@@ -249,7 +236,7 @@ pub const Report = struct {
         for (self.document.elements.items) |element| {
             switch (element) {
                 .line_break => count += 1,
-                _ => {},
+                .text, .annotated, .indent, .space, .horizontal_rule, .annotation_start, .annotation_end, .raw, .reflowing_text, .link, .vertical_stack, .horizontal_concat, .source_code_region, .source_code_multi_region => {},
             }
         }
         return count;

@@ -8473,7 +8473,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 const shift = comptime switch (width) {
                     .w64 => @as(u5, 3),
                     .w32 => @as(u5, 2),
-                    _ => @compileError("Use strhRegMem/strbRegMem for .w16/.w8"),
                 };
                 try self.codegen.emit.strRegMemUoff(width, src, ptr_reg, @intCast(@as(u32, @intCast(byte_offset)) >> shift));
             } else {
@@ -11933,7 +11932,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         },
                     }
                 },
-                .general_reg, .float_reg, .stack_i128, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
                 _ => {
                     // Check if this is a composite type (record/tuple/list) via layout store
                     if (self.layout_store) |ls| {

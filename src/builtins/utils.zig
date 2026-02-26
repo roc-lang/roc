@@ -35,7 +35,7 @@ pub inline fn alignedPtrCast(comptime T: type, ptr: anytype, src: std.builtin.So
         const ptr_info = @typeInfo(T);
         const alignment = switch (ptr_info) {
             .pointer => |p| p.alignment,
-            _ => @compileError("alignedPtrCast target must be a pointer type"),
+            .type, .void, .bool, .noreturn, .int, .float, .array, .@"struct", .comptime_float, .comptime_int, .undefined, .null, .optional, .error_union, .error_set, .@"enum", .@"union", .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal => @compileError("alignedPtrCast target must be a pointer type"),
         };
         const ptr_int = @intFromPtr(ptr);
         if (alignment > 0 and ptr_int % alignment != 0) {

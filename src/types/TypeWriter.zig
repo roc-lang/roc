@@ -100,7 +100,7 @@ const StaticDispatchTmp = struct {
                     ctx.idents.getText(b.fn_name),
                 ) == .lt;
             },
-            _ => {
+            .lt, .gt => {
                 return type_ord == .lt;
             },
         }
@@ -701,13 +701,7 @@ fn gatherRecordFields(self: *TypeWriter, fields: RecordField.SafeMultiList.Range
                         return .unbound;
                     },
                     .empty_record => return .empty_record,
-                    .tuple,
-                    .nominal_type,
-                    .fn_pure,
-                    .fn_effectful,
-                    .fn_unbound,
-                    .tag_union,
-                    .empty_tag_union => return .invalid,
+                    .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_tag_union => return .invalid,
                 }
             },
             .err => return .invalid,
@@ -768,7 +762,7 @@ fn writeTagUnion(self: *TypeWriter, writer: *ByteWrite, tag_union: TagUnion, roo
                 // Closed union - just close the bracket
                 _ = try writer.write("]");
             },
-            _ => {
+            .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union => {
                 // Extension is a non-empty structure (e.g., another tag union)
                 if (has_tags) _ = try writer.write(", ");
                 _ = try writer.write("..");

@@ -1675,7 +1675,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
                 roc_str.decref(ops);
                 return;
             },
-            _ => {},
+            .opaque_ptr, .int, .frac => {},
         },
         .list => {
             const list_header = self.asRocList() orelse return;

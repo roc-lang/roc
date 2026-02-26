@@ -3019,9 +3019,9 @@ fn rewriteDeferredNumericLiterals(env: *ModuleEnv, types_store: *types.Store, im
         const nominal_type = switch (content) {
             .structure => |flat_type| switch (flat_type) {
                 .nominal_type => |nom| nom,
-                _ => continue, // Not a nominal type
+                .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => continue, // Not a nominal type
             },
-            _ => continue, // Not a structure
+            .flex, .rigid, .alias, .err => continue, // Not a structure
         };
 
         // Use import mapping to get the user-facing display name (e.g., "I64" from "Builtin.Num.I64")

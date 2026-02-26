@@ -175,8 +175,11 @@ pub fn exportPow(
                         }
                     }
                 },
-                _ => {
+                .float, .comptime_float, .comptime_int => {
                     return std.math.pow(T, base, exp);
+                },
+                .type, .void, .bool, .noreturn, .pointer, .array, .@"struct", .undefined, .null, .optional, .error_union, .error_set, .@"enum", .@"union", .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal => {
+                    @compileError("Unsupported type for pow: " ++ @typeName(T));
                 },
             }
         }
@@ -548,10 +551,13 @@ pub fn addWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
             const answer = @addWithOverflow(self, other);
             return .{ .value = answer[0], .has_overflowed = answer[1] == 1 };
         },
-        _ => {
+        .float, .comptime_float, .comptime_int => {
             const answer = self + other;
             const overflowed = !std.math.isFinite(answer);
             return .{ .value = answer, .has_overflowed = overflowed };
+        },
+        .type, .void, .bool, .noreturn, .pointer, .array, .@"struct", .undefined, .null, .optional, .error_union, .error_set, .@"enum", .@"union", .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal => {
+            @compileError("Unsupported type for addWithOverflow: " ++ @typeName(T));
         },
     }
 }
@@ -625,10 +631,13 @@ pub fn subWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
             const answer = @subWithOverflow(self, other);
             return .{ .value = answer[0], .has_overflowed = answer[1] == 1 };
         },
-        _ => {
+        .float, .comptime_float, .comptime_int => {
             const answer = self - other;
             const overflowed = !std.math.isFinite(answer);
             return .{ .value = answer, .has_overflowed = overflowed };
+        },
+        .type, .void, .bool, .noreturn, .pointer, .array, .@"struct", .undefined, .null, .optional, .error_union, .error_set, .@"enum", .@"union", .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal => {
+            @compileError("Unsupported type for subWithOverflow: " ++ @typeName(T));
         },
     }
 }
@@ -760,10 +769,13 @@ pub fn mulWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
                 return .{ .value = answer[0], .has_overflowed = answer[1] == 1 };
             }
         },
-        _ => {
+        .float, .comptime_float, .comptime_int => {
             const answer = self * other;
             const overflowed = !std.math.isFinite(answer);
             return .{ .value = answer, .has_overflowed = overflowed };
+        },
+        .type, .void, .bool, .noreturn, .pointer, .array, .@"struct", .undefined, .null, .optional, .error_union, .error_set, .@"enum", .@"union", .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal => {
+            @compileError("Unsupported type for mulWithOverflow: " ++ @typeName(T));
         },
     }
 }

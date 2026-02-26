@@ -666,7 +666,7 @@ pub const Layout = packed struct {
         return switch (self.tag) {
             .scalar => switch (self.data.scalar.tag) {
                 .str => true, // RocStr needs refcounting
-                _ => false,
+                .opaque_ptr, .int, .frac => false,
             },
             .list, .list_of_zst => true, // Lists need refcounting
             .box, .box_of_zst => true, // Boxes need refcounting

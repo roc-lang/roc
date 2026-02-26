@@ -4345,7 +4345,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         }
                     }
                 },
-                _ => {
+                .binop, .unary_op, .string_interpolation, .record_builder => {
                     // The canonicalizer currently only produces CalledVia.apply for e_call expressions.
                     // Other call types (binop, unary_op, string_interpolation, record_builder) are
                     // represented as different expression types. If we hit this, there's a compiler bug.

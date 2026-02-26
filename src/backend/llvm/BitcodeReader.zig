@@ -241,7 +241,7 @@ fn nextRecord(bc: *BitcodeReader) !?Record {
                             switch (encoding) {
                                 .fixed, .vbr => try operands.append(try bc.readVbr(u7, 5)),
                                 .array, .char6, .blob => {},
-                                _ => return error.UnsupportedAbbrevEncoding,
+                                .reserved_0, .reserved_6, .reserved_7 => return error.UnsupportedAbbrevEncoding,
                             }
                         },
                     },
@@ -489,12 +489,14 @@ const Abbrev = struct {
 
         const literal_id = std.math.maxInt(u64);
         const Encoding = enum(u3) {
+            reserved_0 = 0,
             fixed = 1,
             vbr = 2,
             array = 3,
             char6 = 4,
             blob = 5,
-            _,
+            reserved_6 = 6,
+            reserved_7 = 7,
         };
     };
 

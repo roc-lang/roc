@@ -107,7 +107,7 @@ pub const TailRecursionPass = struct {
                     .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .call, .lambda, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => {},
                 }
             },
-            _ => {},
+            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .lambda, .closure, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => {},
         }
         return null;
     }

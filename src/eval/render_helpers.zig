@@ -285,7 +285,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                     const backing = ctx.runtime_types.getNominalBackingVar(nt);
                     resolved = ctx.runtime_types.resolveVar(backing);
                 },
-                _ => break :unwrap,
+                .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => break :unwrap,
             },
             .flex, .rigid, .err => break :unwrap,
         }

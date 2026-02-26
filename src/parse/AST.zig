@@ -2616,7 +2616,7 @@ pub const Expr = union(enum) {
     pub fn as_string_part_region(self: @This()) !TokenizedRegion {
         switch (self) {
             .string_part => |part| return part.region,
-            _ => return error.ExpectedStringPartRegion,
+            .int, .frac, .typed_int, .typed_frac, .single_quote, .string, .multiline_string, .list, .tuple, .record, .tag, .lambda, .apply, .record_updater, .field_access, .tuple_access, .local_dispatch, .bin_op, .suffix_single_question, .unary_op, .if_then_else, .if_without_else, .match, .ident, .dbg, .record_builder, .ellipsis, .block, .for_expr, .malformed => return error.ExpectedStringPartRegion,
         }
     }
 
