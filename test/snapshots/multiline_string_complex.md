@@ -64,7 +64,7 @@ This **not** method is being called on a value whose type doesn't have that meth
 ```
 	   ^^^
 
-The value's type, which does not have a method named**not**, is:
+The value's type, which does not have a method named **not**, is:
 
     Str
 
@@ -193,14 +193,14 @@ package
 
 value1 = \\This is a "string" with just one line
 
-value2 = 
+value2 =
 	\\This is a "string" with just one line
 
 value3 = \\This is a string
 	\\With multiple lines
 	\\${value1}
 
-value4 = 
+value4 =
 	\\This is a string
 	# A comment in between
 	\\With multiple lines

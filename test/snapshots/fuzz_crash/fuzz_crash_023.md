@@ -946,7 +946,7 @@ tuple : Value((a, b, c))
 
 
 **TYPE MISMATCH**
-This `if` condition must evaluate to a `Bool`–either `True` or `False`:
+This `if` condition must evaluate to a `Bool` – either `True` or `False`:
 **fuzz_crash_023.md:70:5:70:8:**
 ```roc
 	if num {
@@ -1091,7 +1091,7 @@ The value before this **+** operator has a type that doesn't have a **plus** met
 ```
 		         ^^^^^^^^^^
 
-The value's type, which does not have a method named**plus**, is:
+The value's type, which does not have a method named **plus**, is:
 
     Str
 
@@ -2074,9 +2074,9 @@ main! = |_| { # Yeah I can leave a comment here
 		Stdout.line!("Adding ${n} to ${number}")
 		number = number + n
 	}
-	record = 
+	record =
 		tag
-		qux : 
+		qux :
 	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
 	multiline_tuple = (
 		123,

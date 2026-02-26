@@ -1499,7 +1499,7 @@ test "check type - if else - invalid condition 1" {
         source,
         .fail_with,
         \\**TYPE MISMATCH**
-        \\This `if` condition must evaluate to a `Bool`–either `True` or `False`:
+        \\This `if` condition must evaluate to a `Bool` – either `True` or `False`:
         \\**test:2:8:2:13:**
         \\```roc
         \\x = if 5.I64 "true" else "false"
@@ -2314,7 +2314,7 @@ test "check type - expect not bool" {
         source,
         .fail_with,
         \\**TYPE MISMATCH**
-        \\This `expect` statement must evaluate to a `Bool`–either `True` or `False`:
+        \\This `expect` statement must evaluate to a `Bool` – either `True` or `False`:
         \\**test:3:10:3:11:**
         \\```roc
         \\  expect x
@@ -3401,7 +3401,7 @@ test "check type - recursive type - recursive alias" {
         \\```
         \\                              ^^^^^^^^^^^^^
         \\
-        \\Type aliases cannot be recursive. If you need a recursive type, use a nominal type `:=` instead of an alias`:`.
+        \\Type aliases cannot be recursive. If you need a recursive type, use a nominal type `:=` instead of an alias `:`.
         \\
         \\
     );
