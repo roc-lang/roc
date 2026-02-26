@@ -1021,7 +1021,7 @@ fn processSnapshotContent(
                         can_ir.all_statements = try can_ir.store.statementSpanFrom(scratch_statements_start);
                     }
                 },
-                .file, .header => unreachable,
+                .file, .header, .package, .platform, .app, .repl, .snippet, .mono, .dev_object => unreachable,
             }
         },
         .repl, .dev_object => unreachable, // Handled above

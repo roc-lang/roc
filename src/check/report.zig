@@ -1967,7 +1967,7 @@ pub const ReportBuilder = struct {
                     }, self, &report);
                     try report.document.addLineBreak();
                 },
-                .record_unbound, .nominal_type, .empty_record, .empty_tag_union => {},
+                .box, .record_unbound, .nominal_type, .empty_record, .empty_tag_union => {},
             }
         }
 
@@ -2619,12 +2619,12 @@ pub const ReportBuilder = struct {
                     return true;
                 },
                 // Other types (box, etc.) assumed to support equality
-                .record_unbound => true,
+                .box, .record_unbound => true,
             },
             // Aliases: check the underlying type
             .alias => |alias| self.snapshotSupportsEquality(alias.backing),
             // Other types (flex, rigid, recursive, err) assumed to support equality
-            .flex, .rigid, .err => true,
+            .flex, .rigid, .recursive, .err => true,
         };
     }
 
@@ -2732,7 +2732,7 @@ pub const ReportBuilder = struct {
                     }
                     return false;
                 },
-                .record_unbound, .empty_record, .empty_tag_union => return false,
+                .box, .record_unbound, .empty_record, .empty_tag_union => return false,
             },
             .alias => |alias| {
                 if (!self.snapshotSupportsEquality(alias.backing)) {
@@ -2740,7 +2740,7 @@ pub const ReportBuilder = struct {
                 }
                 return false;
             },
-            .flex, .rigid, .err => return false,
+            .flex, .rigid, .recursive, .err => return false,
         }
     }
 

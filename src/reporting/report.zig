@@ -236,7 +236,7 @@ pub const Report = struct {
         for (self.document.elements.items) |element| {
             switch (element) {
                 .line_break => count += 1,
-                .text, .annotated, .indent, .space, .horizontal_rule, .annotation_start, .annotation_end, .raw, .reflowing_text, .link, .vertical_stack, .horizontal_concat, .source_code_region, .source_code_multi_region => {},
+                .text, .annotated, .indent, .space, .horizontal_rule, .annotation_start, .annotation_end, .raw, .reflowing_text, .link, .vertical_stack, .horizontal_concat, .source_code_region, .source_code_multi_region, .source_code_with_underlines => {},
             }
         }
         return count;

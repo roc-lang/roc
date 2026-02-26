@@ -634,7 +634,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                             ext = ext_record.ext;
                         },
                         .empty_record => break, // Reached the end of the extension chain
-                        .not_a_record => {
+                        .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_tag_union => {
                             is_valid = false;
                         },
                     },
@@ -730,8 +730,8 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
                 const precision = value.getIntPrecision();
                 var str_buf: [40]u8 = undefined;
                 return switch (precision) {
-                    .u64, .u128 => try gpa.dupe(u8, i128h.u128_to_str(&str_buf, value.asU128()).str),
-                    .i64, .i128, .f64, .dec => try gpa.dupe(u8, i128h.i128_to_str(&str_buf, value.asI128()).str),
+                    .u8, .u16, .u32, .u64, .u128 => try gpa.dupe(u8, i128h.u128_to_str(&str_buf, value.asU128()).str),
+                    .i8, .i16, .i32, .i64, .i128 => try gpa.dupe(u8, i128h.i128_to_str(&str_buf, value.asI128()).str),
                 };
             },
             .frac => {

@@ -1121,7 +1121,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             if (inner == .lambda) break :inner inner.lambda;
                             unreachable;
                         },
-                        .i64_literal, .i64, .i128_literal, .i128, .f64_literal, .f64, .f32_literal, .f32, .dec_literal, .str_literal, .Idx, .bool_literal, .bool, .lookup, .call, .ClosureDataId, .empty_list, .list, .empty_record, .void, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .LirExprSpan, .int_to_str, .float_to_str, .dec_to_str, .LirExprId, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
+                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
                     };
                     actual_ret_layout = lambda.ret_layout;
                     const empty_span = lir.LIR.LirExprSpan.empty();
@@ -1236,7 +1236,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .str_escape_and_quote => .str,
                 .discriminant_switch => null,
                 // For other expressions, no layout available
-                .i64, .i128, .f64, .f32, .Idx, .bool, .lambda, .closure, .ClosureDataId, .empty_list, .list, .empty_record, .void, .tuple_access, .zero_arg_tag, .break_expr, .unary_not, .crash, .runtime_error, .nominal, .LirExprSpan, .LirExprId, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free => null,
+                .lambda, .closure, .empty_list, .list, .empty_record, .tuple_access, .zero_arg_tag, .break_expr, .unary_not, .crash, .runtime_error, .nominal, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free => null,
             };
 
             if (raw_layout) |layout_idx| {
@@ -4343,7 +4343,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const tu_layout = switch (lhs_expr) {
                             .tag => |t| t.union_layout,
                             .zero_arg_tag => |t| t.union_layout,
-                            .i64_literal, .i64, .i128_literal, .i128, .f64_literal, .f64, .f32_literal, .f32, .dec_literal, .str_literal, .Idx, .bool_literal, .bool, .lookup, .call, .lambda, .closure, .ClosureDataId, .empty_list, .list, .empty_record, .void, .record, .tuple, .field_access, .tuple_access, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .LirExprSpan, .int_to_str, .float_to_str, .dec_to_str, .LirExprId, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
+                            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .lambda, .closure, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
                         };
                         if (ls.getLayout(tu_layout).tag == .tag_union) {
                             return self.generateTagUnionComparisonByLayout(lhs_loc, rhs_loc, tu_layout, binop.op);
@@ -4355,7 +4355,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const tu_layout = switch (rhs_expr) {
                             .tag => |t| t.union_layout,
                             .zero_arg_tag => |t| t.union_layout,
-                            .i64_literal, .i64, .i128_literal, .i128, .f64_literal, .f64, .f32_literal, .f32, .dec_literal, .str_literal, .Idx, .bool_literal, .bool, .lookup, .call, .lambda, .closure, .ClosureDataId, .empty_list, .list, .empty_record, .void, .record, .tuple, .field_access, .tuple_access, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .LirExprSpan, .int_to_str, .float_to_str, .dec_to_str, .LirExprId, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
+                            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .lambda, .closure, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
                         };
                         if (ls.getLayout(tu_layout).tag == .tag_union) {
                             return self.generateTagUnionComparisonByLayout(lhs_loc, rhs_loc, tu_layout, binop.op);
@@ -4370,11 +4370,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .call => |call| call.ret_layout,
                         .lookup => |lookup| lookup.layout_idx,
                         .block => |block| block.result_layout,
-                        .i64_literal, .i64, .i128_literal, .i128, .f64_literal, .f64, .f32_literal, .f32, .dec_literal, .str_literal, .Idx, .bool_literal, .bool, .lambda, .closure, .ClosureDataId, .empty_list, .list, .empty_record, .void, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .LirExprSpan, .int_to_str, .float_to_str, .dec_to_str, .LirExprId, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => switch (rhs_expr) {
+                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lambda, .closure, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => switch (rhs_expr) {
                             .call => |call| call.ret_layout,
                             .lookup => |lookup| lookup.layout_idx,
                             .block => |block| block.result_layout,
-                            .i64_literal, .i64, .i128_literal, .i128, .f64_literal, .f64, .f32_literal, .f32, .dec_literal, .str_literal, .Idx, .bool_literal, .bool, .lambda, .closure, .ClosureDataId, .empty_list, .list, .empty_record, .void, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .LirExprSpan, .int_to_str, .float_to_str, .dec_to_str, .LirExprId, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => null,
+                            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lambda, .closure, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => null,
                         },
                     };
 
@@ -5070,12 +5070,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .u16, .i16 => 2,
                 .u32, .i32 => 4,
                 .u64, .i64 => 8,
-                .bool, .str, .opaque_ptr, .u128, .i128, .f32, .f64, .dec, .zst, ._ => unreachable, // Non-integer num_from_str not yet supported
+                .bool, .str, .opaque_ptr, .u128, .i128, .f32, .f64, .dec, .zst, _ => unreachable, // Non-integer num_from_str not yet supported
             };
             const is_signed: bool = switch (payload_idx) {
                 .i8, .i16, .i32, .i64 => true,
                 .u8, .u16, .u32, .u64 => false,
-                .bool, .str, .opaque_ptr, .u128, .i128, .f32, .f64, .dec, .zst, ._ => unreachable,
+                .bool, .str, .opaque_ptr, .u128, .i128, .f32, .f64, .dec, .zst, _ => unreachable,
             };
 
             const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_int_from_str);
@@ -5615,7 +5615,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const elem_exprs: []const LirExprId = switch (lhs_expr) {
                 .record => |r| self.store.getExprSpan(r.fields),
                 .tuple => |t| self.store.getExprSpan(t.elems),
-                .i64_literal, .i64, .i128_literal, .i128, .f64_literal, .f64, .f32_literal, .f32, .dec_literal, .str_literal, .Idx, .bool_literal, .bool, .lookup, .call, .lambda, .closure, .ClosureDataId, .empty_list, .list, .empty_record, .void, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .LirExprSpan, .int_to_str, .float_to_str, .dec_to_str, .LirExprId, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .lambda, .closure, .empty_list, .list, .empty_record, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
             };
 
             if (elem_exprs.len == 0) {
@@ -5692,7 +5692,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 const elem_expr = self.store.getExpr(elem_id);
                                 const elem_slots: usize = switch (elem_expr) {
                                     .tuple => |inner_t| self.store.getExprSpan(inner_t.elems).len,
-                                    .i64_literal, .i64, .i128_literal, .i128, .f64_literal, .f64, .f32_literal, .f32, .dec_literal, .str_literal, .Idx, .bool_literal, .bool, .lookup, .call, .lambda, .closure, .ClosureDataId, .empty_list, .list, .empty_record, .void, .record, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .LirExprSpan, .int_to_str, .float_to_str, .dec_to_str, .LirExprId, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => 1,
+                                    .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .lambda, .closure, .empty_list, .list, .empty_record, .record, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => 1,
                                 };
                                 for (0..elem_slots) |_| {
                                     try cmp_offsets.append(self.allocator, current_offset);
@@ -5708,7 +5708,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const elem_expr = self.store.getExpr(elem_id);
                             const elem_slots: usize = switch (elem_expr) {
                                 .tuple => |inner_t| self.store.getExprSpan(inner_t.elems).len,
-                                .i64_literal, .i64, .i128_literal, .i128, .f64_literal, .f64, .f32_literal, .f32, .dec_literal, .str_literal, .Idx, .bool_literal, .bool, .lookup, .call, .lambda, .closure, .ClosureDataId, .empty_list, .list, .empty_record, .void, .record, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .LirExprSpan, .int_to_str, .float_to_str, .dec_to_str, .LirExprId, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => 1,
+                                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .lambda, .closure, .empty_list, .list, .empty_record, .record, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => 1,
                             };
                             for (0..elem_slots) |_| {
                                 try cmp_offsets.append(self.allocator, current_offset);
@@ -5718,7 +5718,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                     }
                 },
-                .i64_literal, .i64, .i128_literal, .i128, .f64_literal, .f64, .f32_literal, .f32, .dec_literal, .str_literal, .Idx, .bool_literal, .bool, .lookup, .call, .lambda, .closure, .ClosureDataId, .empty_list, .list, .empty_record, .void, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .LirExprSpan, .int_to_str, .float_to_str, .dec_to_str, .LirExprId, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .lambda, .closure, .empty_list, .list, .empty_record, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
             }
 
             const temp_lhs = try self.allocTempGeneral();
@@ -6019,14 +6019,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Get list elements for element-by-element comparison
             const lhs_list = switch (lhs_expr) {
                 .list => |l| l,
-                .i64_literal, .i64, .i128_literal, .i128, .f64_literal, .f64, .f32_literal, .f32, .dec_literal, .str_literal, .Idx, .bool_literal, .bool, .lookup, .call, .lambda, .closure, .ClosureDataId, .empty_list, .empty_record, .void, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .LirExprSpan, .int_to_str, .float_to_str, .dec_to_str, .LirExprId, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .lambda, .closure, .empty_list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
             };
             const lhs_elems = self.store.getExprSpan(lhs_list.elems);
 
             // Determine element size (default to 8 bytes)
             const elem_layout = switch (lhs_expr) {
                 .list => |l| l.elem_layout,
-                .i64_literal, .i64, .i128_literal, .i128, .f64_literal, .f64, .f32_literal, .f32, .dec_literal, .str_literal, .Idx, .bool_literal, .bool, .lookup, .call, .lambda, .closure, .ClosureDataId, .empty_list, .empty_record, .void, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .LirExprSpan, .int_to_str, .float_to_str, .dec_to_str, .LirExprId, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => .i64,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .lambda, .closure, .empty_list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => .i64,
             };
 
             // Check if elements are themselves lists by examining the actual elements
@@ -6046,7 +6046,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .i32, .u32, .f32 => 4,
                 .i64, .u64, .f64, .str => 8,
                 .i128, .u128, .dec => 16,
-                .bool, .opaque_ptr, .zst, ._ => unreachable,
+                .bool, .opaque_ptr, .zst, _ => unreachable,
             };
 
             const result_reg = try self.allocTempGeneral();
@@ -6132,11 +6132,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const inner_elem_count: usize = switch (inner_list_expr) {
                         .list => |l| self.store.getExprSpan(l.elems).len,
                         .empty_list => 0,
-                        .i64_literal, .i64, .i128_literal, .i128, .f64_literal, .f64, .f32_literal, .f32, .dec_literal, .str_literal, .Idx, .bool_literal, .bool, .lookup, .call, .lambda, .closure, .ClosureDataId, .empty_record, .void, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .LirExprSpan, .int_to_str, .float_to_str, .dec_to_str, .LirExprId, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => 0,
+                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .lambda, .closure, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => 0,
                     };
                     const inner_elem_layout = switch (inner_list_expr) {
                         .list => |l| l.elem_layout,
-                        .i64_literal, .i64, .i128_literal, .i128, .f64_literal, .f64, .f32_literal, .f32, .dec_literal, .str_literal, .Idx, .bool_literal, .bool, .lookup, .call, .lambda, .closure, .ClosureDataId, .empty_list, .empty_record, .void, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .LirExprSpan, .int_to_str, .float_to_str, .dec_to_str, .LirExprId, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => .i64,
+                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .lambda, .closure, .empty_list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => .i64,
                     };
                     const inner_elem_size: i32 = switch (inner_elem_layout) {
                         .i8, .u8 => 1,
@@ -6144,7 +6144,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .i32, .u32, .f32 => 4,
                         .i64, .u64, .f64, .str => 8,
                         .i128, .u128, .dec => 16,
-                        .bool, .opaque_ptr, .zst, ._ => 8,
+                        .bool, .opaque_ptr, .zst, _ => 8,
                     };
 
                     // Compare each inner element
@@ -6829,13 +6829,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Check if float
             const is_float = switch (unary.result_layout) {
                 .f32, .f64 => true,
-                .bool, .str, .opaque_ptr, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .zst, ._ => false,
+                .bool, .str, .opaque_ptr, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .zst, _ => false,
             };
 
             // Check if 128-bit type
             const is_i128 = switch (unary.result_layout) {
                 .i128, .u128, .dec => true,
-                .bool, .str, .opaque_ptr, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .f32, .f64, .zst, ._ => false,
+                .bool, .str, .opaque_ptr, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .f32, .f64, .zst, _ => false,
             };
 
             if (is_float) {
@@ -6925,7 +6925,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     is_str_result = true;
                     break :blk roc_str_size;
                 },
-                .opaque_ptr, .zst, ._ => if (self.layout_store) |ls| blk: {
+                .opaque_ptr, .zst, _ => if (self.layout_store) |ls| blk: {
                     const result_layout = ls.getLayout(ite.result_layout);
                     break :blk switch (result_layout.tag) {
                         .list, .list_of_zst => inner: {
@@ -7274,11 +7274,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                     try self.symbol_locations.put(inner_key, inner_loc);
                                 },
                                 .wildcard => {},
-                                .int_literal, .float_literal, .str_literal, .Idx, .tag, .record, .tuple, .list, .as_pattern => {},
+                                .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => {},
                             }
                         }
                     },
-                    .int_literal, .float_literal, .str_literal, .Idx, .record, .tuple, .list, .as_pattern => unreachable,
+                    .int_literal, .float_literal, .str_literal, .record, .tuple, .list, .as_pattern => unreachable,
                 }
             }
         }
@@ -7784,7 +7784,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             break;
                         }
                     },
-                    .float_literal, .Idx => {
+                    .float_literal => {
                         unreachable;
                     },
                 }
@@ -8937,11 +8937,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// On x86_64, uses movMemReg with the byte offset directly.
         fn emitStoreToPtr(self: *Self, comptime width: anytype, src: GeneralReg, ptr_reg: GeneralReg, byte_offset: i32) !void {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                const shift = comptime switch (width) {
-                    .w64 => @as(u5, 3),
-                    .w32 => @as(u5, 2),
-                    .w8, .w16 => @compileError("Use strhRegMem/strbRegMem for .w16/.w8"),
-                };
+                const shift: u5 = if (width == .w64) 3 else if (width == .w32) 2 else @compileError("Use strhRegMem/strbRegMem for .w16/.w8");
                 const unsigned_offset: u32 = @intCast(byte_offset);
                 std.debug.assert(@rem(unsigned_offset, @as(u32, 1) << shift) == 0);
                 try self.codegen.emit.strRegMemUoff(width, src, ptr_reg, @intCast(unsigned_offset >> shift));
@@ -9267,7 +9263,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     },
                     .wildcard => {}, // Fall through to use for_loop.elem_layout
                     // Other patterns not valid for for loop element
-                    .int_literal, .float_literal, .str_literal, .Idx, .tag, .record, .tuple, .list, .as_pattern => unreachable,
+                    .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => unreachable,
                 }
                 break :blk for_loop.elem_layout;
             };
@@ -10609,7 +10605,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                     }
                 },
-                .int_literal, .float_literal, .str_literal, .Idx => {
+                .int_literal, .float_literal, .str_literal => {
                     // Literal patterns (int_literal, float_literal, str_literal) don't bind anything
                     // They are used for matching in match expressions, not for binding
                 },
@@ -10865,7 +10861,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .lambda, .closure => true,
                 .block => |block| self.bodyReturnsCallable(block.final_expr),
                 .if_then_else => |ite| self.bodyReturnsCallable(ite.final_else),
-                .i64_literal, .i64, .i128_literal, .i128, .f64_literal, .f64, .f32_literal, .f32, .dec_literal, .str_literal, .Idx, .bool_literal, .bool, .lookup, .call, .ClosureDataId, .empty_list, .list, .empty_record, .void, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .match_expr, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .LirExprSpan, .int_to_str, .float_to_str, .dec_to_str, .LirExprId, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => false,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .match_expr, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => false,
             };
         }
 
@@ -10890,11 +10886,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const def = self.store.getExpr(def_id);
                             switch (def) {
                                 .lambda, .closure => return true,
-                                .i64_literal, .i64, .i128_literal, .i128, .f64_literal, .f64, .f32_literal, .f32, .dec_literal, .str_literal, .Idx, .bool_literal, .bool, .lookup, .call, .ClosureDataId, .empty_list, .list, .empty_record, .void, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .LirExprSpan, .int_to_str, .float_to_str, .dec_to_str, .LirExprId, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => {},
+                                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => {},
                             }
                         }
                     },
-                    .i64_literal, .i64, .i128_literal, .i128, .f64_literal, .f64, .f32_literal, .f32, .dec_literal, .str_literal, .Idx, .bool_literal, .bool, .call, .ClosureDataId, .empty_list, .list, .empty_record, .void, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .LirExprSpan, .int_to_str, .float_to_str, .dec_to_str, .LirExprId, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => {},
+                    .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => {},
                 }
             }
             return false;
@@ -11029,7 +11025,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return try self.generateLookupCall(lookup, call.args, call.ret_layout);
                 },
 
-                .i64_literal, .i64, .i128_literal, .i128, .f64_literal, .f64, .f32_literal, .f32, .dec_literal, .str_literal, .Idx, .bool_literal, .bool, .ClosureDataId, .empty_list, .list, .empty_record, .void, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .LirExprSpan, .int_to_str, .float_to_str, .dec_to_str, .LirExprId, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
             };
         }
 
@@ -11340,7 +11336,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             }
                             unreachable;
                         },
-                        .i64_literal, .i64, .i128_literal, .i128, .f64_literal, .f64, .f32_literal, .f32, .dec_literal, .str_literal, .Idx, .bool_literal, .bool, .lookup, .call, .ClosureDataId, .empty_list, .list, .empty_record, .void, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .LirExprSpan, .int_to_str, .float_to_str, .dec_to_str, .LirExprId, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
+                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
                     }
                 },
             }
@@ -11537,7 +11533,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     unreachable;
                 },
-                .i64_literal, .i64, .i128_literal, .i128, .f64_literal, .f64, .f32_literal, .f32, .dec_literal, .str_literal, .Idx, .bool_literal, .bool, .lookup, .call, .ClosureDataId, .empty_list, .list, .empty_record, .void, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .LirExprSpan, .int_to_str, .float_to_str, .dec_to_str, .LirExprId, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
             }
         }
 
@@ -11565,7 +11561,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     unreachable;
                 },
-                .i64_literal, .i64, .i128_literal, .i128, .f64_literal, .f64, .f32_literal, .f32, .dec_literal, .str_literal, .Idx, .bool_literal, .bool, .lookup, .call, .ClosureDataId, .empty_list, .list, .empty_record, .void, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .LirExprSpan, .int_to_str, .float_to_str, .dec_to_str, .LirExprId, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
             }
         }
 
@@ -11611,7 +11607,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     unreachable;
                 },
-                .i64_literal, .i64, .i128_literal, .i128, .f64_literal, .f64, .f32_literal, .f32, .dec_literal, .str_literal, .Idx, .bool_literal, .bool, .lookup, .call, .ClosureDataId, .empty_list, .list, .empty_record, .void, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .LirExprSpan, .int_to_str, .float_to_str, .dec_to_str, .LirExprId, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
             }
         }
 
@@ -11841,7 +11837,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.emitRocCrash("hit a runtime error in call (dead code path)");
                         return .{ .immediate_i64 = 0 };
                     },
-                    .i64_literal, .i64, .i128_literal, .i128, .f64_literal, .f64, .f32_literal, .f32, .dec_literal, .str_literal, .Idx, .bool_literal, .bool, .lookup, .call, .ClosureDataId, .empty_list, .list, .empty_record, .void, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .str_concat, .LirExprSpan, .int_to_str, .float_to_str, .dec_to_str, .LirExprId, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
+                    .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
                 };
             }
 
@@ -12406,8 +12402,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         },
                     }
                 },
-                .opaque_ptr, .zst, ._ => {
-                    // Check if this is a composite type (record/tuple/list) via layout store
+                .opaque_ptr, .zst, _ => {
+                    // Non-primitive or composite layout - check via layout store
                     if (self.layout_store) |ls| {
                         const layout_val = ls.getLayout(result_layout);
                         switch (layout_val.tag) {
@@ -13549,7 +13545,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             break :blk @max(1, @as(u8, @intCast((sz + 7) / 8)));
                         },
                         .list => 3,
-                        .int_literal, .float_literal, .str_literal, .Idx, .tag, .as_pattern => 1,
+                        .int_literal, .float_literal, .str_literal, .tag, .as_pattern => 1,
                     };
                     param_num_regs[pi] = nr;
                     if (pre_reg_count + nr <= max_arg_regs) {
@@ -13841,7 +13837,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try self.bindPattern(pattern_id, .{ .stack = .{ .offset = stack_offset } });
                         }
                     },
-                    .int_literal, .float_literal, .str_literal, .Idx, .tag, .as_pattern => {
+                    .int_literal, .float_literal, .str_literal, .tag, .as_pattern => {
                         // For now, skip complex patterns - assume 1 register
                         if (reg_idx < max_arg_regs) {
                             reg_idx += 1;
@@ -14109,7 +14105,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const inner = self.store.getExpr(c.lambda);
                             break :blk inner.lambda;
                         },
-                        .i64_literal, .i64, .i128_literal, .i128, .f64_literal, .f64, .f32_literal, .f32, .dec_literal, .str_literal, .Idx, .bool_literal, .bool, .lookup, .call, .ClosureDataId, .empty_list, .list, .empty_record, .void, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .LirExprSpan, .int_to_str, .float_to_str, .dec_to_str, .LirExprId, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
+                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
                     };
                     const cv_code_offset = try self.compileLambdaAsProc(cv.lambda, lambda);
                     arg_loc = .{ .lambda_code = .{
@@ -14388,7 +14384,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             reg_idx = max_arg_regs; // Mark all registers as consumed
                         }
                     },
-                    .wildcard, .int_literal, .float_literal, .str_literal, .Idx, .tag, .record, .tuple, .list, .as_pattern => {
+                    .wildcard, .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => {
                         // Complex parameter patterns not yet supported
                         // Assume 1 register for now
                         if (reg_idx < max_arg_regs) {
@@ -14792,7 +14788,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 const dst_loc = self.symbol_locations.get(switch (pattern) {
                     .bind => |bind| @bitCast(bind.symbol),
-                    .wildcard, .int_literal, .float_literal, .str_literal, .Idx, .tag, .record, .tuple, .list, .as_pattern => unreachable,
+                    .wildcard, .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => unreachable,
                 }) orelse {
                     try temp_infos.append(self.allocator, .{ .offset = 0, .size = 0 });
                     continue;
@@ -14835,7 +14831,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const pattern = self.store.getPattern(pattern_ids[param_idx]);
                 const symbol_key: u64 = switch (pattern) {
                     .bind => |bind| @bitCast(bind.symbol),
-                    .wildcard, .int_literal, .float_literal, .str_literal, .Idx, .tag, .record, .tuple, .list, .as_pattern => continue,
+                    .wildcard, .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => continue,
                 };
 
                 const dst_loc = self.symbol_locations.get(symbol_key) orelse continue;
@@ -15283,7 +15279,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             break;
                         }
                     },
-                    .float_literal, .Idx => {
+                    .float_literal => {
                         unreachable;
                     },
                 }
@@ -15876,7 +15872,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 if (inner == .lambda) break :inner inner.lambda;
                                 unreachable;
                             },
-                            .i64_literal, .i64, .i128_literal, .i128, .f64_literal, .f64, .f32_literal, .f32, .dec_literal, .str_literal, .Idx, .bool_literal, .bool, .lookup, .call, .ClosureDataId, .empty_list, .list, .empty_record, .void, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .LirExprSpan, .int_to_str, .float_to_str, .dec_to_str, .LirExprId, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
+                            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
                         };
                         actual_ret_layout = lambda.ret_layout;
                         const empty_span = lir.LIR.LirExprSpan.empty();
@@ -16039,7 +16035,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 if (inner == .lambda) break :inner inner.lambda;
                                 unreachable;
                             },
-                            .i64_literal, .i64, .i128_literal, .i128, .f64_literal, .f64, .f32_literal, .f32, .dec_literal, .str_literal, .Idx, .bool_literal, .bool, .lookup, .call, .ClosureDataId, .empty_list, .list, .empty_record, .void, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .LirExprSpan, .int_to_str, .float_to_str, .dec_to_str, .LirExprId, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
+                            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .lookup, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .block, .early_return, .break_expr, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
                         };
                         actual_ret_layout = lambda.ret_layout;
                         const empty_span = lir.LIR.LirExprSpan.empty();
@@ -16102,7 +16098,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .i64, .u64, .f64 => 8,
                 .i128, .u128, .dec => 16,
                 .str => 24,
-                .opaque_ptr, ._ => 8, // Default to 8 bytes
+                .opaque_ptr, _ => 8, // Default to 8 bytes
             };
         }
 

@@ -5605,7 +5605,7 @@ fn checkBinopExpr(
             const binop_ctx: problem.Context.BinopContext.Binop = switch (binop.op) {
                 .@"and" => .@"and",
                 .@"or" => .@"or",
-                .plus, .minus, .times, .div, .eq, .neq, .lt, .lte, .gt, .gte => unreachable,
+                .add, .sub, .mul, .div, .rem, .eq, .ne, .lt, .le, .gt, .ge, .div_trunc => unreachable,
             };
             const lhs_result = try self.unifyInContext(lhs_fresh_bool, lhs_var, env, .{ .binop_lhs = .{
                 .operator = binop_ctx,

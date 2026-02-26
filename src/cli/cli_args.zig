@@ -31,7 +31,7 @@ pub const CliArgs = union(enum) {
             .run => |run| alloc.free(run.app_args),
             .bundle => |bundle| alloc.free(bundle.paths),
             .unbundle => |unbundle| alloc.free(unbundle.paths),
-            .build, .check, .test_cmd, .dev, .docs, .repl, .unknown => return,
+            .build, .check, .test_cmd, .docs, .repl, .glue, .version, .experimental_lsp, .help, .licenses, .problem => return,
         }
     }
 };

@@ -51,7 +51,7 @@ pub const JsonId = union(enum) {
     pub fn deinit(self: *JsonId, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .string => |slice| allocator.free(slice),
-            .null, .bool, .integer, .float, .number_string, .array, .object => {},
+            .integer => {},
         }
         self.* = undefined;
     }

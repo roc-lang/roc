@@ -1547,7 +1547,7 @@ const Formatter = struct {
                         }
                         try fmt.pushTokenText(id.token);
                     },
-                    .var_ident, .int, .frac, .string, .single_quote, .record, .list, .list_rest, .tuple, .underscore, .alternatives, .as, .malformed => {
+                    .int, .frac, .typed_int, .typed_frac, .single_quote, .string_part, .string, .multiline_string, .list, .tuple, .record, .lambda, .apply, .record_updater, .field_access, .tuple_access, .local_dispatch, .bin_op, .suffix_single_question, .unary_op, .if_then_else, .if_without_else, .match, .dbg, .record_builder, .ellipsis, .block, .for_expr, .malformed => {
                         // Fallback - shouldn't happen for valid record builders
                         try fmt.push('.');
                         _ = try fmt.formatExpr(rb.mapper);

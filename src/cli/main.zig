@@ -194,7 +194,7 @@ const BuiltinsObjects = struct {
     pub fn filename(target: roc_target.RocTarget) []const u8 {
         return switch (target.toOsTag()) {
             .windows => "roc_builtins.lib",
-            .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .vita, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => "libroc_builtins.a",
+            .freestanding, .other, .contiki, .fuchsia, .hermit, .aix, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .zos, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .macos, .tvos, .visionos, .watchos, .solaris, .uefi, .ps3, .ps4, .ps5, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => "libroc_builtins.a",
         };
     }
 };
@@ -686,7 +686,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
         .fmt => .fmt,
         .bundle => .bundle,
         .unbundle => .unbundle,
-        .dev, .docs, .repl, .unknown => .unknown,
+        .docs, .repl, .glue, .version, .experimental_lsp, .help, .licenses, .problem => .unknown,
     };
 
     // Create CLI context at the top level - this is passed to all command handlers
@@ -3454,7 +3454,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     const target_os = target.toOsTag();
     switch (target_arch) {
         .x86_64, .aarch64 => {}, // Supported
-        .aarch64_be, .alpha, .amdgcn, .arc, .arceb, .arm, .armeb, .avr, .bpfeb, .bpfel, .csky, .hexagon, .hppa, .hppa64, .kalimba, .kvx, .lanai, .loongarch32, .loongarch64, .m68k, .microblaze, .microblazeel, .mips, .mipsel, .mips64, .mips64el, .msp430, .nvptx, .nvptx64, .or1k, .powerpc, .powerpcle, .powerpc64, .powerpc64le, .propeller, .riscv32, .riscv32be, .riscv64, .riscv64be, .s390x, .sh, .sheb, .sparc, .sparc64, .spirv32, .spirv64, .thumb, .thumbeb, .ve, .wasm32, .wasm64, .x86_16, .x86, .xcore, .xtensa, .xtensaeb => {
+        .aarch64_be, .amdgcn, .arc, .arm, .armeb, .avr, .bpfeb, .bpfel, .csky, .hexagon, .kalimba, .lanai, .loongarch32, .loongarch64, .m68k, .mips, .mipsel, .mips64, .mips64el, .msp430, .nvptx, .nvptx64, .or1k, .powerpc, .powerpcle, .powerpc64, .powerpc64le, .propeller, .riscv32, .riscv64, .s390x, .sparc, .sparc64, .spirv32, .spirv64, .thumb, .thumbeb, .ve, .wasm32, .wasm64, .x86, .xcore, .xtensa => {
             const stdout = ctx.io.stdout();
             try stdout.print("Note: Dev backend does not support {s} architecture.\n", .{@tagName(target_arch)});
             try stdout.print("Falling back to interpreter mode.\n\n", .{});
@@ -3470,16 +3470,16 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             .exe => switch (target_os) {
                 .windows => ".exe",
                 .freestanding => ".wasm",
-                .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .vita, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => "",
+                .other, .contiki, .fuchsia, .hermit, .aix, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .zos, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .macos, .tvos, .visionos, .watchos, .solaris, .uefi, .ps3, .ps4, .ps5, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => "",
             },
             .static_lib => switch (target_os) {
                 .windows => ".lib",
-                .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .vita, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => ".a",
+                .freestanding, .other, .contiki, .fuchsia, .hermit, .aix, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .zos, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .macos, .tvos, .visionos, .watchos, .solaris, .uefi, .ps3, .ps4, .ps5, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => ".a",
             },
             .shared_lib => switch (target_os) {
                 .windows => ".dll",
                 .macos => ".dylib",
-                .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .maccatalyst, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .vita, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => ".so",
+                .freestanding, .other, .contiki, .fuchsia, .hermit, .aix, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .zos, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .tvos, .visionos, .watchos, .solaris, .uefi, .ps3, .ps4, .ps5, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => ".so",
             },
         };
         break :blk try std.fmt.allocPrint(ctx.arena, "{s}{s}", .{ output_path, ext });

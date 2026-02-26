@@ -2802,7 +2802,9 @@ fn createAnnoOnlyDef(
                     .original_region = original_region,
                 } });
             },
-            .already_in_scope => {},
+            .top_level_var_error => {},
+            .var_across_function_boundary => {},
+            .var_reassignment_ok => {},
         }
         break :create_new new_pattern_idx;
     };
@@ -7345,7 +7347,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                         },
                         // For apply and other backing types, use the tag expression as fallback
                         .apply => tag_expr_idx,
-                        .ty_var, .underscore_type_var, .underscore, .ty, .tuple, .@"fn", .parens, .malformed => tag_expr_idx,
+                        .rigid_var, .rigid_var_lookup, .underscore, .lookup, .tag, .tuple, .@"fn", .parens, .malformed => tag_expr_idx,
                     };
 
                     // Determine the backing type for the nominal expression
@@ -10863,7 +10865,9 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                                             .original_region = original_region,
                                         } });
                                     },
-                                    .already_in_scope => {},
+                                    .top_level_var_error => {},
+                                    .var_across_function_boundary => {},
+                                    .var_reassignment_ok => {},
                                 }
                                 break :create_new new_pattern_idx;
                             };
@@ -10974,7 +10978,9 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                                             .original_region = original_region,
                                         } });
                                     },
-                                    .already_in_scope => {},
+                                    .top_level_var_error => {},
+                                    .var_across_function_boundary => {},
+                                    .var_reassignment_ok => {},
                                 }
                                 break :create_new_var new_pattern_idx;
                             };
@@ -11046,7 +11052,9 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                                         .original_region = original_region,
                                     } });
                                 },
-                                .already_in_scope => {},
+                                .top_level_var_error => {},
+                                .var_across_function_boundary => {},
+                                .var_reassignment_ok => {},
                             }
                             break :create_new2 new_pattern_idx;
                         };
@@ -11118,7 +11126,9 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                                 .original_region = original_region,
                             } });
                         },
-                        .already_in_scope => {},
+                        .top_level_var_error => {},
+                        .var_across_function_boundary => {},
+                        .var_reassignment_ok => {},
                     }
                     break :create_new3 new_pattern_idx;
                 };

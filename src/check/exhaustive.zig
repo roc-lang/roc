@@ -1763,7 +1763,6 @@ fn getListElemType(type_store: *TypeStore, type_var: Var) ?Var {
         .flex,
         .rigid,
         .structure,
-        .recursion_var,
         .err,
         => {},
     }
@@ -2315,7 +2314,7 @@ fn specializeByListAritySketched(
                 @memcpy(new_row[target_len..], rest);
                 try new_rows.append(allocator, new_row);
             },
-            .literal, .ctor => {},
+            .literal, .ctor, .known_ctor => {},
         }
     }
 
@@ -2892,7 +2891,7 @@ pub fn isUsefulSketched(
                 const matches = switch (row_first) {
                     .literal => |l| Literal.eql(l, lit),
                     .anything => true,
-                    .ctor, .list => false,
+                    .ctor, .known_ctor, .list => false,
                 };
 
                 if (matches) {

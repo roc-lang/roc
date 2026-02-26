@@ -5045,12 +5045,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .u16, .i16 => 2,
                 .u32, .i32 => 4,
                 .u64, .i64 => 8,
-                .bool, .str, .opaque_ptr, .u128, .i128, .f32, .f64, .dec, .zst => unreachable, // Non-integer num_from_str not yet supported
+                .bool, .str, .opaque_ptr, .u128, .i128, .f32, .f64, .dec, .zst, _ => unreachable, // Non-integer num_from_str not yet supported
             };
             const is_signed: bool = switch (payload_idx) {
                 .i8, .i16, .i32, .i64 => true,
                 .u8, .u16, .u32, .u64 => false,
-                .bool, .str, .opaque_ptr, .u128, .i128, .f32, .f64, .dec, .zst => unreachable,
+                .bool, .str, .opaque_ptr, .u128, .i128, .f32, .f64, .dec, .zst, _ => unreachable,
             };
 
             const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_int_from_str);
@@ -5819,7 +5819,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .i32, .u32, .f32 => 4,
                 .i64, .u64, .f64, .str => 8,
                 .i128, .u128, .dec => 16,
-                .bool, .opaque_ptr, .zst => unreachable,
+                .bool, .opaque_ptr, .zst, _ => unreachable,
             };
 
             const result_reg = try self.allocTempGeneral();
@@ -5917,7 +5917,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         .i32, .u32, .f32 => 4,
                         .i64, .u64, .f64, .str => 8,
                         .i128, .u128, .dec => 16,
-                        .bool, .opaque_ptr, .zst => 8,
+                        .bool, .opaque_ptr, .zst, _ => 8,
                     };
 
                     // Compare each inner element
@@ -6569,13 +6569,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Check if float
             const is_float = switch (unary.result_layout) {
                 .f32, .f64 => true,
-                .bool, .str, .opaque_ptr, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .zst => false,
+                .bool, .str, .opaque_ptr, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .zst, _ => false,
             };
 
             // Check if 128-bit type
             const is_i128 = switch (unary.result_layout) {
                 .i128, .u128, .dec => true,
-                .bool, .str, .opaque_ptr, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .f32, .f64, .zst => false,
+                .bool, .str, .opaque_ptr, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .f32, .f64, .zst, _ => false,
             };
 
             if (is_float) {
@@ -6665,18 +6665,18 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     is_str_result = true;
                     break :blk roc_str_size;
                 },
-                .opaque_ptr, .zst => {
-                    const result_layout = ls.getLayout(ite.result_layout);
-                    break :blk switch (result_layout.tag) {
+                .opaque_ptr, .zst, _ => if (self.layout_store) |ls_inner| blk2: {
+                    const result_layout = ls_inner.getLayout(ite.result_layout);
+                    break :blk2 switch (result_layout.tag) {
                         .list, .list_of_zst => inner: {
                             is_list_result = true;
                             break :inner roc_list_size;
                         },
-                        .tuple => ls.getTupleData(result_layout.data.tuple.idx).size,
-                        .record => ls.getRecordData(result_layout.data.record.idx).size,
-                        .tag_union => ls.getTagUnionData(result_layout.data.tag_union.idx).size,
+                        .tuple => ls_inner.getTupleData(result_layout.data.tuple.idx).size,
+                        .record => ls_inner.getRecordData(result_layout.data.record.idx).size,
+                        .tag_union => ls_inner.getTagUnionData(result_layout.data.tag_union.idx).size,
                         .zst => 0,
-                        .scalar => ls.layoutSizeAlign(result_layout).size,
+                        .scalar => ls_inner.layoutSizeAlign(result_layout).size,
                         .box, .box_of_zst, .closure => unreachable,
                     };
                 } else unreachable,
@@ -7197,7 +7197,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                             }
                                         }
                                     },
-                                    .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => unreachable,
+                                    .int_literal, .float_literal, .str_literal, .record, .tuple, .list, .as_pattern => unreachable,
                                 }
                             }
                         }
@@ -8280,7 +8280,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(reg);
                     return;
                 },
-                .general_reg, .float_reg, .immediate_i64, .immediate_f64, .immediate_i128, .noreturn => {
+                .float_reg, .immediate_f64, .noreturn => {
                     // For other locations, fall through to copyValueToStackOffset
                     try self.copyValueToStackOffset(dest_offset, loc);
                     return;
@@ -8470,10 +8470,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         /// On x86_64, uses movMemReg with the byte offset directly.
         fn emitStoreToPtr(self: *Self, comptime width: anytype, src: GeneralReg, ptr_reg: GeneralReg, byte_offset: i32) !void {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                const shift = comptime switch (width) {
-                    .w64 => @as(u5, 3),
-                    .w32 => @as(u5, 2),
-                };
+                const shift: u5 = if (width == .w64) 3 else if (width == .w32) 2 else @compileError("Use strhRegMem/strbRegMem for .w16/.w8");
                 try self.codegen.emit.strRegMemUoff(width, src, ptr_reg, @intCast(@as(u32, @intCast(byte_offset)) >> shift));
             } else {
                 try self.codegen.emit.movMemReg(width, ptr_reg, byte_offset, src);
@@ -10416,7 +10413,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     return try self.generateLookupCall(lookup, call.args, call.ret_layout);
                 },
 
-                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .call, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bool_literal, .empty_list, .list, .empty_record, .record, .tuple, .field_access, .tuple_access, .zero_arg_tag, .tag, .if_then_else, .match_expr, .early_return, .binop, .unary_minus, .unary_not, .low_level, .dbg, .expect, .crash, .runtime_error, .nominal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote, .discriminant_switch, .tag_payload_access, .for_loop, .while_loop, .incref, .decref, .free, .hosted_call => unreachable,
             };
         }
 
@@ -10618,7 +10615,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             try self.codegen.emitStoreStack(.w64, base_offset + offset, temp);
                             self.codegen.freeGeneral(temp);
                         },
-                        .general_reg, .float_reg, .immediate_i64, .immediate_f64, .immediate_i128, .closure_value, .noreturn => {
+                        .float_reg, .immediate_f64, .closure_value, .noreturn => {
                             const slot = try self.ensureOnStack(capture_loc, capture_size);
                             const temp = try self.allocTempGeneral();
                             var w: u32 = 0;
@@ -11313,7 +11310,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         // Multi-register struct (record > 8 bytes)
                         const offset: i32 = switch (arg_loc) {
                             .stack => |s| s.offset,
-                            .general_reg, .float_reg, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
+                            .general_reg, .float_reg, .stack_i128, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
                                 // Fall back to single register
                                 const arg_reg = self.getArgumentRegister(reg_idx);
                                 try self.moveToReg(arg_loc, arg_reg);
@@ -13084,7 +13081,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             try self.bindPattern(pattern_id, .{ .stack = .{ .offset = stack_offset } });
                         }
                     },
-                    .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => {
+                    .int_literal, .float_literal, .str_literal, .tag, .as_pattern => {
                         // For now, skip complex patterns - assume 1 register
                         if (reg_idx < max_arg_regs) {
                             reg_idx += 1;
@@ -13469,7 +13466,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         // Multi-register struct (record > 8 bytes)
                         const offset: i32 = switch (arg_loc) {
                             .stack => |s| s.offset,
-                            .general_reg, .float_reg, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
+                            .general_reg, .float_reg, .stack_i128, .stack_str, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
                                 const arg_reg = self.getArgumentRegister(reg_idx);
                                 try self.moveToReg(arg_loc, arg_reg);
                                 reg_idx += 1;
@@ -14115,7 +14112,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             reg_idx = max_arg_regs; // Mark all registers as consumed
                         }
                     },
-                    .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => {
+                    .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern, .wildcard => {
                         // Complex parameter patterns not yet supported
                         // Assume 1 register for now
                         if (reg_idx < max_arg_regs) {
@@ -15073,7 +15070,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                             }
                                         }
                                     },
-                                    .int_literal, .float_literal, .str_literal, .tag, .record, .tuple, .list, .as_pattern => unreachable,
+                                    .int_literal, .float_literal, .str_literal, .record, .tuple, .list, .as_pattern => unreachable,
                                 }
                             }
                         }
@@ -16071,7 +16068,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .i64, .u64, .f64 => 8,
                 .i128, .u128, .dec => 16,
                 .str => 24,
-                .opaque_ptr => 8, // Default to 8 bytes
+                .opaque_ptr, _ => 8, // Default to 8 bytes
             };
         }
 

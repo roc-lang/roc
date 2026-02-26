@@ -595,6 +595,7 @@ test "record pattern with sub-patterns" {
                     switch (destruct_name.kind) {
                         .SubPattern => {},
                         .Required,
+                        .Rest,
                         => return error.ExpectedSubPattern,
                     }
 

@@ -30,6 +30,7 @@ pub fn generateObjectFile(
             const elf_arch: object.elf.Architecture = switch (cpu_arch) {
                 .x86_64 => .x86_64,
                 .aarch64 => .aarch64,
+                .amdgcn, .arc, .arm, .armeb, .thumb, .thumbeb, .aarch64_be, .avr, .bpfel, .bpfeb, .csky, .hexagon, .kalimba, .lanai, .loongarch32, .loongarch64, .m68k, .mips, .mipsel, .mips64, .mips64el, .msp430, .or1k, .nvptx, .nvptx64, .powerpc, .powerpcle, .powerpc64, .powerpc64le, .propeller, .riscv32, .riscv64, .s390x, .sparc, .sparc64, .spirv32, .spirv64, .ve, .wasm32, .wasm64, .x86, .xcore, .xtensa => return error.UnsupportedTarget,
             };
             var elf = try object.ElfWriter.init(allocator, elf_arch);
             defer elf.deinit();
@@ -68,6 +69,7 @@ pub fn generateObjectFile(
             const macho_arch: object.macho.Architecture = switch (cpu_arch) {
                 .x86_64 => .x86_64,
                 .aarch64 => .aarch64,
+                .amdgcn, .arc, .arm, .armeb, .thumb, .thumbeb, .aarch64_be, .avr, .bpfel, .bpfeb, .csky, .hexagon, .kalimba, .lanai, .loongarch32, .loongarch64, .m68k, .mips, .mipsel, .mips64, .mips64el, .msp430, .or1k, .nvptx, .nvptx64, .powerpc, .powerpcle, .powerpc64, .powerpc64le, .propeller, .riscv32, .riscv64, .s390x, .sparc, .sparc64, .spirv32, .spirv64, .ve, .wasm32, .wasm64, .x86, .xcore, .xtensa => return error.UnsupportedTarget,
             };
             var macho = try object.MachOWriter.init(allocator, macho_arch);
             defer macho.deinit();
@@ -102,6 +104,7 @@ pub fn generateObjectFile(
             const coff_arch: object.coff.Architecture = switch (cpu_arch) {
                 .x86_64 => .x86_64,
                 .aarch64 => .aarch64,
+                .amdgcn, .arc, .arm, .armeb, .thumb, .thumbeb, .aarch64_be, .avr, .bpfel, .bpfeb, .csky, .hexagon, .kalimba, .lanai, .loongarch32, .loongarch64, .m68k, .mips, .mipsel, .mips64, .mips64el, .msp430, .or1k, .nvptx, .nvptx64, .powerpc, .powerpcle, .powerpc64, .powerpc64le, .propeller, .riscv32, .riscv64, .s390x, .sparc, .sparc64, .spirv32, .spirv64, .ve, .wasm32, .wasm64, .x86, .xcore, .xtensa => return error.UnsupportedTarget,
             };
             var coff_writer = try object.CoffWriter.init(allocator, coff_arch);
             defer coff_writer.deinit();

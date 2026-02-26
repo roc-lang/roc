@@ -798,7 +798,7 @@ pub const Interpreter = struct {
                         return can.ModuleEnv.varFrom(alias_decl.anno);
                     }
                 },
-                .s_decl, .s_var, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_nominal_decl, .s_type_anno, .s_type_var_alias => {},
+                .s_decl, .s_var, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => {},
             }
         }
         return null;
@@ -6056,7 +6056,7 @@ pub const Interpreter = struct {
             .e_lookup_external, .e_lookup_required => false,
 
             // For other expressions, be conservative and return false (don't involve mutable vars)
-            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_pending, .e_list, .e_empty_list, .e_tuple, .e_record, .e_empty_record, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => false,
+            .e_lookup_pending, .e_list, .e_tuple, .e_record, .e_tag, .e_nominal, .e_nominal_external, .e_closure, .e_lambda, .e_tuple_access, .e_dbg, .e_expect, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => false,
         };
     }
 
@@ -8226,7 +8226,7 @@ pub const Interpreter = struct {
 
                 return true;
             },
-            .assign, .as, .nominal, .nominal_external, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .underscore, .runtime_error => return false,
+            .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .runtime_error => return false,
         }
     }
 
@@ -11497,7 +11497,7 @@ pub const Interpreter = struct {
                             const msg = std.fmt.bufPrint(&buf, "'{s}' is exposed but not implemented", .{ident_str}) catch "Exposed but not implemented";
                             self.triggerCrash(msg, false, roc_ops);
                         },
-                        .redundant_exposed, .invalid_num_literal, .empty_tuple, .ident_already_in_scope, .ident_not_in_scope, .self_referential_definition, .qualified_ident_does_not_exist, .invalid_top_level_statement, .expr_not_canonicalized, .invalid_string_interpolation, .pattern_arg_invalid, .pattern_not_canonicalized, .can_lambda_not_implemented, .lambda_body_not_canonicalized, .if_condition_not_canonicalized, .if_then_not_canonicalized, .if_else_not_canonicalized, .if_expr_without_else, .malformed_type_annotation, .malformed_where_clause, .where_clause_not_allowed_in_type_decl, .var_across_function_boundary, .shadowing_warning, .type_redeclared, .tuple_elem_not_canonicalized, .module_not_found, .value_not_exposed, .type_not_exposed, .type_from_missing_module, .module_not_imported, .nested_type_not_found, .nested_value_not_found, .record_builder_map2_not_found, .too_many_exports, .undeclared_type, .undeclared_type_var, .type_alias_but_needed_nominal, .crash_expects_string, .type_module_missing_matching_type, .type_module_has_alias_not_nominal, .default_app_missing_main, .default_app_wrong_arity, .cannot_import_default_app, .execution_requires_app_or_default_app, .type_name_case_mismatch, .module_header_deprecated, .redundant_expose_main_type => {
+                        .redundant_exposed, .invalid_num_literal, .empty_tuple, .ident_already_in_scope, .ident_not_in_scope, .self_referential_definition, .qualified_ident_does_not_exist, .invalid_top_level_statement, .expr_not_canonicalized, .invalid_string_interpolation, .pattern_arg_invalid, .pattern_not_canonicalized, .can_lambda_not_implemented, .lambda_body_not_canonicalized, .if_condition_not_canonicalized, .if_then_not_canonicalized, .if_else_not_canonicalized, .if_expr_without_else, .malformed_type_annotation, .malformed_where_clause, .where_clause_not_allowed_in_type_decl, .var_across_function_boundary, .shadowing_warning, .type_redeclared, .tuple_elem_not_canonicalized, .module_not_found, .value_not_exposed, .type_not_exposed, .type_from_missing_module, .module_not_imported, .nested_type_not_found, .nested_value_not_found, .record_builder_map2_not_found, .too_many_exports, .undeclared_type, .undeclared_type_var, .type_alias_but_needed_nominal, .crash_expects_string, .type_module_missing_matching_type, .type_module_has_alias_not_nominal, .default_app_missing_main, .default_app_wrong_arity, .cannot_import_default_app, .execution_requires_app_or_default_app, .type_name_case_mismatch, .module_header_deprecated, .redundant_expose_main_type, .invalid_main_type_rename_in_exposing, .type_alias_redeclared, .nominal_type_redeclared, .type_shadowed_warning, .type_parameter_conflict, .unused_variable, .used_underscore_variable, .duplicate_record_field, .f64_pattern_literal, .underscore_in_type_declaration, .unused_type_var_name, .type_var_marked_unused, .type_var_starting_with_dollar, .break_outside_loop, .return_outside_fn, .mutually_recursive_type_aliases, .deprecated_number_suffix => {
                             self.triggerCrash("Compile-time error encountered at runtime", false, roc_ops);
                         },
                     }
@@ -12776,9 +12776,9 @@ pub const Interpreter = struct {
                                 const msg = std.fmt.bufPrint(&buf, "Cannot call function: nested value not found: {s}.{s}", .{ parent_str, nested_str }) catch "Cannot call function: nested value not found";
                                 self.triggerCrash(msg, false, roc_ops);
                             },
-                            .redundant_exposed, .invalid_num_literal, .empty_tuple, .ident_already_in_scope, .ident_not_in_scope, .self_referential_definition, .qualified_ident_does_not_exist, .invalid_top_level_statement, .expr_not_canonicalized, .invalid_string_interpolation, .pattern_arg_invalid, .pattern_not_canonicalized, .can_lambda_not_implemented, .lambda_body_not_canonicalized, .if_condition_not_canonicalized, .if_then_not_canonicalized, .if_else_not_canonicalized, .if_expr_without_else, .malformed_type_annotation, .malformed_where_clause, .where_clause_not_allowed_in_type_decl, .var_across_function_boundary, .shadowing_warning, .type_redeclared, .tuple_elem_not_canonicalized, .module_not_found, .value_not_exposed, .type_not_exposed, .type_from_missing_module, .module_not_imported, .nested_type_not_found, .record_builder_map2_not_found, .too_many_exports, .undeclared_type, .undeclared_type_var, .type_alias_but_needed_nominal, .crash_expects_string, .type_module_missing_matching_type, .type_module_has_alias_not_nominal, .default_app_missing_main, .default_app_wrong_arity, .cannot_import_default_app, .execution_requires_app_or_default_app, .type_name_case_mismatch, .module_header_deprecated, .redundant_expose_main_type => |other_diag| {
+                            .redundant_exposed, .invalid_num_literal, .empty_tuple, .ident_already_in_scope, .ident_not_in_scope, .self_referential_definition, .qualified_ident_does_not_exist, .invalid_top_level_statement, .expr_not_canonicalized, .invalid_string_interpolation, .pattern_arg_invalid, .pattern_not_canonicalized, .can_lambda_not_implemented, .lambda_body_not_canonicalized, .if_condition_not_canonicalized, .if_then_not_canonicalized, .if_else_not_canonicalized, .if_expr_without_else, .malformed_type_annotation, .malformed_where_clause, .where_clause_not_allowed_in_type_decl, .var_across_function_boundary, .shadowing_warning, .type_redeclared, .tuple_elem_not_canonicalized, .module_not_found, .value_not_exposed, .type_not_exposed, .type_from_missing_module, .module_not_imported, .nested_type_not_found, .record_builder_map2_not_found, .too_many_exports, .undeclared_type, .undeclared_type_var, .type_alias_but_needed_nominal, .crash_expects_string, .type_module_missing_matching_type, .type_module_has_alias_not_nominal, .default_app_missing_main, .default_app_wrong_arity, .cannot_import_default_app, .execution_requires_app_or_default_app, .type_name_case_mismatch, .module_header_deprecated, .redundant_expose_main_type, .invalid_main_type_rename_in_exposing, .type_alias_redeclared, .nominal_type_redeclared, .type_shadowed_warning, .type_parameter_conflict, .unused_variable, .used_underscore_variable, .duplicate_record_field, .f64_pattern_literal, .underscore_in_type_declaration, .unused_type_var_name, .type_var_marked_unused, .type_var_starting_with_dollar, .break_outside_loop, .return_outside_fn, .mutually_recursive_type_aliases, .deprecated_number_suffix => {
                                 var buf: [512]u8 = undefined;
-                                const msg = std.fmt.bufPrint(&buf, "Cannot call function: compile-time error ({s})", .{@tagName(other_diag)}) catch "Cannot call function: compile-time error in function definition";
+                                const msg = std.fmt.bufPrint(&buf, "Cannot call function: compile-time error ({s})", .{@tagName(diag)}) catch "Cannot call function: compile-time error in function definition";
                                 self.triggerCrash(msg, false, roc_ops);
                             },
                         }
@@ -14468,7 +14468,7 @@ pub const Interpreter = struct {
                         try self.addClosurePlaceholder(v.pattern_idx, v.expr);
                     }
                 },
-                .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias => {},
+                .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => {},
             }
         }
     }
@@ -14757,7 +14757,7 @@ pub const Interpreter = struct {
                     try self.scheduleNextStatement(work_stack, next_stmt, remaining_stmts[1..], final_expr, bindings_start, expected_rt_var, roc_ops);
                 }
             },
-            .s_decl, .s_var, .s_import, .s_alias_decl, .s_type_anno => {
+            .s_import, .s_alias_decl, .s_type_anno, .s_runtime_error => {
                 self.triggerCrash("Statement type not yet implemented in interpreter", false, roc_ops);
                 return error.NotImplemented;
             },
@@ -18333,7 +18333,7 @@ pub const Interpreter = struct {
                         }
                         break :blk null;
                     },
-                    .alias, .structure => null,
+                    .alias => null,
                 };
 
                 if (nominal_info == null) {
