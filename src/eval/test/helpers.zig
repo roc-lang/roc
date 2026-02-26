@@ -146,7 +146,6 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     const all_module_envs = [_]*ModuleEnv{ module_env, @constCast(builtin_module_env) };
 
     // Generate code using Mono IR pipeline
-    std.debug.print("DBG devEvaluatorStr before generateCode\n", .{});
     var code_result = dev_eval.generateCode(module_env, expr_idx, &all_module_envs) catch {
         return error.GenerateCodeFailed;
     };
@@ -2129,18 +2128,20 @@ pub fn runExpectTypeMismatchAndCrash(src: []const u8) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    // Step 1: Verify that the type checker detected a type mismatch
+    // Step 1: Verify that the type checker detected a type-level dispatch failure.
+    // Depending on where the failure is reported, this may surface as either
+    // `type_mismatch` or `static_dispatch`.
     const problems = resources.checker.problems.problems.items;
-    var found_type_mismatch = false;
+    var found_dispatch_failure = false;
     for (problems) |problem| {
-        if (problem == .type_mismatch) {
-            found_type_mismatch = true;
+        if (problem == .type_mismatch or problem == .static_dispatch) {
+            found_dispatch_failure = true;
             break;
         }
     }
 
-    if (!found_type_mismatch) {
-        std.debug.print("Expected TYPE MISMATCH error, but found {} problems:\n", .{problems.len});
+    if (!found_dispatch_failure) {
+        std.debug.print("Expected TYPE MISMATCH/STATIC DISPATCH error, but found {} problems:\n", .{problems.len});
         for (problems, 0..) |problem, i| {
             std.debug.print("  Problem {}: {s}\n", .{ i, @tagName(problem) });
         }

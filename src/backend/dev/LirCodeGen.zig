@@ -1428,10 +1428,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate code for an expression (raw — may return bare register locations).
         fn generateExprRaw(self: *Self, expr_id: LirExprId) Allocator.Error!ValueLocation {
             const expr = self.store.getExpr(expr_id);
-            std.debug.print("DBG generateExprRaw expr_id={} tag={s}\n", .{
-                @intFromEnum(expr_id),
-                @tagName(std.meta.activeTag(expr)),
-            });
 
             return switch (expr) {
                 // Literals
@@ -3497,7 +3493,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 const stored_layout = ls.getLayout(layout_idx);
                                 if (stored_layout.tag == .struct_)
                                     return self.generateStructComparisonByLayout(lhs_loc, rhs_loc, layout_idx, .num_is_eq);
-                                if (stored_layout.tag == .list) @panic("DBG list eq dispatch");
+                                if (stored_layout.tag == .list)
+                                    return self.generateListComparisonByLayout(lhs_loc, rhs_loc, layout_idx, .num_is_eq);
                                 if (stored_layout.tag == .tag_union)
                                     return self.generateTagUnionComparisonByLayout(lhs_loc, rhs_loc, layout_idx, .num_is_eq);
                             }
@@ -4869,25 +4866,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for a symbol lookup
-        fn generateLookup(self: *Self, symbol: Symbol, layout_idx: layout.Idx) Allocator.Error!ValueLocation {
+        fn generateLookup(self: *Self, symbol: Symbol, _: layout.Idx) Allocator.Error!ValueLocation {
             // Check if we have a location for this symbol
             const symbol_key: u64 = @bitCast(symbol);
             if (self.symbol_locations.get(symbol_key)) |loc| {
-                std.debug.print("DBG lookup sym={} layout_idx={} loc_tag={s}\n", .{
-                    symbol_key,
-                    @intFromEnum(layout_idx),
-                    @tagName(std.meta.activeTag(loc)),
-                });
-                if (loc == .list_stack) {
-                    std.debug.print("DBG lookup list_stack offset={}\n", .{loc.list_stack.struct_offset});
-                } else if (loc == .stack) {
-                    std.debug.print("DBG lookup stack offset={}\n", .{loc.stack.offset});
-                }
+                if (loc == .list_stack) {} else if (loc == .stack) {}
                 return loc;
             }
 
             // Symbol not found - it might be a top-level definition
-            if (self.store.getSymbolDef(symbol)) |def_expr_id| {
+            if (self.getSymbolDefRelaxed(symbol)) |def_expr_id| {
                 const def_expr = self.store.getExpr(def_expr_id);
 
                 // For closures, compile the lambda as a proc and pre-register as lambda_code.
@@ -4912,20 +4900,75 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const loc = try self.generateExpr(def_expr_id);
                 // Cache the location
                 try self.symbol_locations.put(symbol_key, loc);
-                std.debug.print("DBG lookup def sym={} layout_idx={} cached_loc_tag={s}\n", .{
-                    symbol_key,
-                    @intFromEnum(layout_idx),
-                    @tagName(std.meta.activeTag(loc)),
-                });
-                if (loc == .list_stack) {
-                    std.debug.print("DBG lookup def list_stack offset={}\n", .{loc.list_stack.struct_offset});
-                } else if (loc == .stack) {
-                    std.debug.print("DBG lookup def stack offset={}\n", .{loc.stack.offset});
-                }
+                if (loc == .list_stack) {} else if (loc == .stack) {}
                 return loc;
             }
 
             unreachable;
+        }
+
+        /// Look up a symbol definition, tolerating identifier attribute drift
+        /// by falling back to matching `(module_idx, ident_idx.idx)`.
+        fn getSymbolDefRelaxed(self: *Self, symbol: Symbol) ?LirExprId {
+            if (self.store.getSymbolDef(symbol)) |expr_id| return expr_id;
+
+            var it = self.store.symbol_defs.iterator();
+            while (it.next()) |entry| {
+                const key_symbol: Symbol = @bitCast(entry.key_ptr.*);
+                if (key_symbol.module_idx == symbol.module_idx and key_symbol.ident_idx.idx == symbol.ident_idx.idx) {
+                    return entry.value_ptr.*;
+                }
+            }
+
+            // Last-resort fallback: match by identifier text within the same module.
+            // This handles cases where lookup symbols carry an unqualified method
+            // name (e.g. `decode_i32`) while symbol_defs stores a qualified one
+            // (e.g. `MyFormat.decode_i32`), or vice versa.
+            const target_name = self.symbolNameInModule(symbol) orelse return null;
+            const target_tail = symbolNameTail(target_name);
+
+            var unique_tail_match: ?LirExprId = null;
+            var tail_match_ambiguous = false;
+
+            var by_name_it = self.store.symbol_defs.iterator();
+            while (by_name_it.next()) |entry| {
+                const key_symbol: Symbol = @bitCast(entry.key_ptr.*);
+                if (key_symbol.module_idx != symbol.module_idx) continue;
+
+                const key_name = self.symbolNameInModule(key_symbol) orelse continue;
+
+                if (std.mem.eql(u8, key_name, target_name)) {
+                    return entry.value_ptr.*;
+                }
+
+                if (std.mem.eql(u8, symbolNameTail(key_name), target_tail)) {
+                    if (unique_tail_match == null) {
+                        unique_tail_match = entry.value_ptr.*;
+                    } else if (unique_tail_match.? != entry.value_ptr.*) {
+                        tail_match_ambiguous = true;
+                    }
+                }
+            }
+
+            if (!tail_match_ambiguous) return unique_tail_match;
+
+            return null;
+        }
+
+        fn symbolNameInModule(self: *Self, symbol: Symbol) ?[]const u8 {
+            const ls = self.layout_store orelse return null;
+            if (symbol.module_idx >= ls.all_module_envs.len) return null;
+
+            const env = ls.all_module_envs[symbol.module_idx];
+            if (symbol.ident_idx.idx >= env.common.idents.interner.bytes.len()) return null;
+
+            return env.getIdent(symbol.ident_idx);
+        }
+
+        fn symbolNameTail(name: []const u8) []const u8 {
+            const dot_idx = std.mem.lastIndexOfScalar(u8, name, '.') orelse return name;
+            if (dot_idx + 1 >= name.len) return name;
+            return name[dot_idx + 1 ..];
         }
 
         /// Generate integer binary operation
@@ -6607,12 +6650,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const elem_layout = ls.getLayout(elem_layout_idx);
             const elem_sa = ls.layoutSizeAlign(elem_layout);
             const elem_size: u32 = elem_sa.size;
-            std.debug.print("DBG list cmp: list_layout_idx={} elem_layout_idx={} elem_tag={s} elem_size={}\n", .{
-                @intFromEnum(list_layout_idx),
-                @intFromEnum(elem_layout_idx),
-                @tagName(elem_layout.tag),
-                elem_size,
-            });
 
             // Get list struct offsets (ptr at +0, len at +8)
             const lhs_base: i32 = switch (lhs_loc) {
@@ -8294,13 +8331,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Return the list location
             // Note: data_offset is no longer meaningful for heap-allocated lists,
             // but we keep it for compatibility with existing code
-            std.debug.print("DBG generateList elem_layout={} elem_size={} num_elems={} list_struct_offset={} heap_ptr_slot={}\n", .{
-                @intFromEnum(list.elem_layout),
-                elem_size,
-                num_elems,
-                list_struct_offset,
-                heap_ptr_slot,
-            });
             return .{
                 .list_stack = .{
                     .struct_offset = list_struct_offset,
@@ -10410,16 +10440,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             switch (pattern) {
                 .bind => |bind| {
                     const symbol_key: u64 = @bitCast(bind.symbol);
-                    std.debug.print("DBG bind symbol={} layout_idx={} value_loc={s}\n", .{
-                        symbol_key,
-                        @intFromEnum(bind.layout_idx),
-                        @tagName(std.meta.activeTag(value_loc)),
-                    });
-                    if (value_loc == .list_stack) {
-                        std.debug.print("DBG bind list_stack offset={}\n", .{value_loc.list_stack.struct_offset});
-                    } else if (value_loc == .stack) {
-                        std.debug.print("DBG bind stack offset={}\n", .{value_loc.stack.offset});
-                    }
+                    if (value_loc == .list_stack) {} else if (value_loc == .stack) {}
 
                     // Check if this is a reassignable (mutable) variable
                     if (bind.symbol.ident_idx.attributes.reassignable) {
@@ -10547,12 +10568,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     } else ls.getLayout(lst.elem_layout);
                     const elem_size_align = ls.layoutSizeAlign(elem_layout);
                     const elem_size = elem_size_align.size;
-                    std.debug.print("DBG bindPattern list base_offset={} elem_layout_idx={} elem_layout_tag={s} elem_size={}\n", .{
-                        base_offset,
-                        @intFromEnum(lst.elem_layout),
-                        @tagName(elem_layout.tag),
-                        elem_size,
-                    });
 
                     // Load list pointer to a register
                     const list_ptr_reg = try self.allocTempGeneral();
@@ -10580,10 +10595,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                         // Bind the element pattern to the stack slot
                         const elem_loc: ValueLocation = self.stackLocationForLayout(lst.elem_layout, elem_slot);
-                        std.debug.print("DBG bindPattern list elem_slot={} elem_loc_tag={s}\n", .{
-                            elem_slot,
-                            @tagName(std.meta.activeTag(elem_loc)),
-                        });
                         try self.bindPattern(elem_pattern_id, elem_loc);
                     }
 
@@ -11007,7 +11018,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             else => {},
                         }
                     }
-                    if (self.store.getSymbolDef(lk.symbol)) |def_id| {
+                    if (self.getSymbolDefRelaxed(lk.symbol)) |def_id| {
                         break :blk self.bodyReturnsCallable(def_id);
                     }
                     break :blk false;
@@ -11032,6 +11043,72 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
         }
 
+        /// Check whether an expression contains a call through a lookup whose
+        /// function layout is opaque_ptr (function-pointer style call).
+        ///
+        /// These calls rely on caller scope bindings and should be inlined instead
+        /// of compiled as standalone procedures.
+        fn bodyHasOpaqueLookupCall(self: *Self, expr_id: lir.LirExprId) bool {
+            const expr = self.store.getExpr(expr_id);
+            return switch (expr) {
+                .call => |c| blk: {
+                    const fn_expr = self.store.getExpr(c.fn_expr);
+                    if (fn_expr == .lookup and fn_expr.lookup.layout_idx == .opaque_ptr) break :blk true;
+                    if (self.bodyHasOpaqueLookupCall(c.fn_expr)) break :blk true;
+                    const args = self.store.getExprSpan(c.args);
+                    for (args) |arg_id| {
+                        if (self.bodyHasOpaqueLookupCall(arg_id)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .block => |b| blk: {
+                    const stmts = self.store.getStmts(b.stmts);
+                    for (stmts) |stmt| {
+                        if (self.bodyHasOpaqueLookupCall(stmt.binding().expr)) break :blk true;
+                    }
+                    break :blk self.bodyHasOpaqueLookupCall(b.final_expr);
+                },
+                .if_then_else => |ite| blk: {
+                    const branches = self.store.getIfBranches(ite.branches);
+                    for (branches) |branch| {
+                        if (self.bodyHasOpaqueLookupCall(branch.cond)) break :blk true;
+                        if (self.bodyHasOpaqueLookupCall(branch.body)) break :blk true;
+                    }
+                    break :blk self.bodyHasOpaqueLookupCall(ite.final_else);
+                },
+                .match_expr => |when_expr| blk: {
+                    if (self.bodyHasOpaqueLookupCall(when_expr.value)) break :blk true;
+                    const branches = self.store.getMatchBranches(when_expr.branches);
+                    for (branches) |branch| {
+                        if (!branch.guard.isNone() and self.bodyHasOpaqueLookupCall(branch.guard)) break :blk true;
+                        if (self.bodyHasOpaqueLookupCall(branch.body)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .nominal => |nom| self.bodyHasOpaqueLookupCall(nom.backing_expr),
+                .dbg => |d| self.bodyHasOpaqueLookupCall(d.expr),
+                .expect => |e| self.bodyHasOpaqueLookupCall(e.cond) or self.bodyHasOpaqueLookupCall(e.body),
+                .incref => |inc| self.bodyHasOpaqueLookupCall(inc.value),
+                .decref => |dec| self.bodyHasOpaqueLookupCall(dec.value),
+                .free => |f| self.bodyHasOpaqueLookupCall(f.value),
+                .for_loop => |fl| self.bodyHasOpaqueLookupCall(fl.list_expr) or self.bodyHasOpaqueLookupCall(fl.body),
+                .while_loop => |wl| self.bodyHasOpaqueLookupCall(wl.cond) or self.bodyHasOpaqueLookupCall(wl.body),
+                .discriminant_switch => |sw| blk: {
+                    if (self.bodyHasOpaqueLookupCall(sw.value)) break :blk true;
+                    const branches = self.store.getExprSpan(sw.branches);
+                    for (branches) |branch_expr| {
+                        if (self.bodyHasOpaqueLookupCall(branch_expr)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .tag_payload_access => |tpa| self.bodyHasOpaqueLookupCall(tpa.value),
+                // Do not recurse into nested callable definitions here; only the
+                // current expression's execution path matters for inlining choice.
+                .lambda, .closure => false,
+                else => false,
+            };
+        }
+
         /// Check if any argument is a callable value (lambda, closure, or lookup
         /// that resolves to one). Higher-order function calls with callable args
         /// must be inlined because compiled procs can't dispatch opaque stack values.
@@ -11049,7 +11126,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 else => {},
                             }
                         }
-                        if (self.store.getSymbolDef(lk.symbol)) |def_id| {
+                        if (self.getSymbolDefRelaxed(lk.symbol)) |def_id| {
                             const def = self.store.getExpr(def_id);
                             switch (def) {
                                 .lambda, .closure => return true,
@@ -11072,12 +11149,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const args = self.store.getExprSpan(args_span);
             const params = self.store.getPatternSpan(lambda.params);
             const num_args = @min(params.len, args.len);
-            std.debug.print("DBG callLambdaBodyDirect params_len={} args_len={} num_args={} ret_layout={}\n", .{
-                params.len,
-                args.len,
-                num_args,
-                @intFromEnum(lambda.ret_layout),
-            });
 
             // Evaluate ALL arguments before binding ANY patterns.
             // This prevents nested inlining (e.g., recursive map2 calls in
@@ -11092,22 +11163,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const arg_locs = self.scratch_arg_locs.sliceFromStart(arg_locs_start);
             for (params[0..num_args], 0..) |pattern_id, i| {
                 const pat = self.store.getPattern(pattern_id);
-                std.debug.print("DBG callLambdaBodyDirect param_i={} pat_tag={s} arg_loc={s}\n", .{
-                    i,
-                    @tagName(std.meta.activeTag(pat)),
-                    @tagName(std.meta.activeTag(arg_locs[i])),
-                });
-                if (pat == .bind) {
-                    std.debug.print("DBG callLambdaBodyDirect param bind symbol={} layout_idx={}\n", .{
-                        @as(u64, @bitCast(pat.bind.symbol)),
-                        @intFromEnum(pat.bind.layout_idx),
-                    });
-                }
-                if (arg_locs[i] == .list_stack) {
-                    std.debug.print("DBG callLambdaBodyDirect arg list_stack offset={}\n", .{arg_locs[i].list_stack.struct_offset});
-                } else if (arg_locs[i] == .stack) {
-                    std.debug.print("DBG callLambdaBodyDirect arg stack offset={}\n", .{arg_locs[i].stack.offset});
-                }
+                if (pat == .bind) {}
+                if (arg_locs[i] == .list_stack) {} else if (arg_locs[i] == .stack) {}
                 try self.bindPattern(pattern_id, arg_locs[i]);
             }
 
@@ -11182,12 +11239,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn generateCall(self: *Self, call: anytype) Allocator.Error!ValueLocation {
             // Get the function expression
             const fn_expr = self.store.getExpr(call.fn_expr);
-            std.debug.print("DBG generateCall fn_expr_id={} fn_tag={s} args_len={} ret_layout={}\n", .{
-                @intFromEnum(call.fn_expr),
-                @tagName(std.meta.activeTag(fn_expr)),
-                self.store.getExprSpan(call.args).len,
-                @intFromEnum(call.ret_layout),
-            });
 
             return switch (fn_expr) {
                 // Direct lambda call: inline the body in the current scope.
@@ -11198,9 +11249,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Direct closure call: inline the inner lambda's body.
                 .closure => |closure_id| {
                     const closure = self.store.getClosureData(closure_id);
-                    const inner = self.store.getExpr(closure.lambda);
-                    if (inner == .lambda) {
-                        return try self.callLambdaBodyDirect(inner.lambda, call.args);
+                    const closure_loc = try self.generateClosure(closure);
+                    if (closure_loc == .closure_value) {
+                        return try self.generateClosureDispatch(
+                            closure_loc.closure_value,
+                            call.args,
+                            call.ret_layout,
+                        );
                     }
                     unreachable;
                 },
@@ -11247,18 +11302,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 // If this lookup resolves to a lambda that returns a callable,
                                 // inline its body instead of invoking the compiled proc.
                                 // Compiled-proc returns cannot safely carry closure_value stack data.
-                                if (self.store.getSymbolDef(lookup.symbol)) |def_id| {
+                                if (self.getSymbolDefRelaxed(lookup.symbol)) |def_id| {
                                     const def_expr = self.store.getExpr(def_id);
                                     switch (def_expr) {
                                         .lambda => |lam| {
-                                            if (self.bodyReturnsCallable(lam.body)) {
+                                            if (self.bodyReturnsCallable(lam.body) or self.bodyHasOpaqueLookupCall(lam.body)) {
                                                 return try self.callLambdaBodyDirect(lam, call.args);
                                             }
                                         },
                                         .closure => |closure_id| {
                                             const closure = self.store.getClosureData(closure_id);
                                             const inner = self.store.getExpr(closure.lambda);
-                                            if (inner == .lambda and self.bodyReturnsCallable(inner.lambda.body)) {
+                                            if (inner == .lambda and (self.bodyReturnsCallable(inner.lambda.body) or self.bodyHasOpaqueLookupCall(inner.lambda.body))) {
                                                 return try self.callLambdaBodyDirect(inner.lambda, call.args);
                                             }
                                         },
@@ -11461,14 +11516,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             self.codegen.freeGeneral(temp);
                         },
                         .list_stack => |info| {
-                            std.debug.print("DBG materialize capture list sym={} layout_idx={} src_struct_offset={} dst_offset={} capture_size={} num_words={}\n", .{
-                                symbol_key,
-                                @intFromEnum(capture.layout_idx),
-                                info.struct_offset,
-                                base_offset + offset,
-                                capture_size,
-                                num_words,
-                            });
                             // Copy all 3 words of the list (ptr, len, capacity)
                             const temp = try self.allocTempGeneral();
                             var w: u32 = 0;
@@ -11773,11 +11820,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 } else if (capture.layout_idx == .str) {
                     try self.symbol_locations.put(symbol_key, .{ .stack_str = capture_offset });
                 } else if (capture_layout.tag == .list or capture_layout.tag == .list_of_zst) {
-                    std.debug.print("DBG callSingleClosure capture sym={} layout_idx={} capture_offset={} as list_stack\n", .{
-                        symbol_key,
-                        @intFromEnum(capture.layout_idx),
-                        capture_offset,
-                    });
                     try self.symbol_locations.put(symbol_key, .{ .list_stack = .{
                         .struct_offset = capture_offset,
                         .data_offset = 0,
@@ -12024,42 +12066,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             // Look up the function in top-level definitions
-            if (self.store.getSymbolDef(lookup.symbol)) |def_expr_id| {
+            if (self.getSymbolDefRelaxed(lookup.symbol)) |def_expr_id| {
                 const def_expr = self.store.getExpr(def_expr_id);
-                std.debug.print("DBG generateLookupCall symbol={} def_expr_id={} def_tag={s} args_len={} ret_layout={}\n", .{
-                    symbol_key,
-                    @intFromEnum(def_expr_id),
-                    @tagName(std.meta.activeTag(def_expr)),
-                    self.store.getExprSpan(args_span).len,
-                    @intFromEnum(ret_layout),
-                });
 
                 return switch (def_expr) {
                     .lambda => |lambda| {
                         // Inline when:
                         // 1. Args contain callables (higher-order calls)
                         // 2. Body returns callable (closure-returning functions)
-                        if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(lambda.body)) {
+                        if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(lambda.body) or self.bodyHasOpaqueLookupCall(lambda.body)) {
                             return try self.callLambdaBodyDirect(lambda, args_span);
                         }
                         const offset = try self.compileLambdaAsProc(def_expr_id, lambda);
                         return try self.generateCallToLambda(offset, args_span, ret_layout);
                     },
-                    .closure => |closure_id| {
-                        const closure = self.store.getClosureData(closure_id);
-                        std.debug.print("DBG lookupCall closure_id={} lambda_expr_id={} captures_len={} repr={s}\n", .{
-                            @intFromEnum(closure_id),
-                            @intFromEnum(closure.lambda),
-                            self.store.getCaptures(closure.captures).len,
-                            @tagName(closure.representation),
-                        });
-                        const inner = self.store.getExpr(closure.lambda);
-                        if (inner == .lambda) {
-                            if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(inner.lambda.body)) {
-                                return try self.callLambdaBodyDirect(inner.lambda, args_span);
-                            }
-                            const offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
-                            return try self.generateCallToLambda(offset, args_span, ret_layout);
+                    .closure => |_| {
+                        const closure_loc = try self.generateExpr(def_expr_id);
+                        if (closure_loc == .closure_value) {
+                            return try self.generateClosureDispatch(closure_loc.closure_value, args_span, ret_layout);
                         }
                         unreachable;
                     },
@@ -12082,21 +12106,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // Unwrap nominal and retry with the inner expression
                         const inner = self.store.getExpr(nom.backing_expr);
                         if (inner == .lambda) {
-                            if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(inner.lambda.body)) {
+                            if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(inner.lambda.body) or self.bodyHasOpaqueLookupCall(inner.lambda.body)) {
                                 return try self.callLambdaBodyDirect(inner.lambda, args_span);
                             }
                             const offset = try self.compileLambdaAsProc(nom.backing_expr, inner.lambda);
                             return try self.generateCallToLambda(offset, args_span, ret_layout);
                         }
                         if (inner == .closure) {
-                            const inner_clo = self.store.getClosureData(inner.closure);
-                            const closure_inner = self.store.getExpr(inner_clo.lambda);
-                            if (closure_inner == .lambda) {
-                                if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(closure_inner.lambda.body)) {
-                                    return try self.callLambdaBodyDirect(closure_inner.lambda, args_span);
-                                }
-                                const offset = try self.compileLambdaAsProc(inner_clo.lambda, closure_inner.lambda);
-                                return try self.generateCallToLambda(offset, args_span, ret_layout);
+                            const inner_loc = try self.generateExpr(nom.backing_expr);
+                            if (inner_loc == .closure_value) {
+                                return try self.generateClosureDispatch(inner_loc.closure_value, args_span, ret_layout);
+                            }
+                            if (inner_loc == .lambda_code) {
+                                return try self.generateCallToLambda(
+                                    inner_loc.lambda_code.code_offset,
+                                    args_span,
+                                    ret_layout,
+                                );
                             }
                         }
                         if (inner == .block) {
@@ -12144,7 +12170,38 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
 
-            @panic("generateLookupCall: symbol not found in proc_registry, symbol_defs, or symbol_locations");
+            // Fallback: lazy-compile a matching LirProc by symbol.
+            // Some lifted procedures are only available in the proc list and may not
+            // be pre-registered in proc_registry at this point.
+            for (self.store.getProcs()) |proc| {
+                const proc_key: u64 = @bitCast(proc.name);
+                if (proc_key != symbol_key) continue;
+                try self.compileProc(proc);
+                if (self.proc_registry.get(symbol_key)) |compiled_proc| {
+                    return try self.generateCallToCompiledProc(compiled_proc, args_span, ret_layout);
+                }
+            }
+
+            const sym: Symbol = @bitCast(symbol_key);
+            var sym_name: []const u8 = "<unknown>";
+            if (self.layout_store) |ls| {
+                if (sym.module_idx < ls.all_module_envs.len) {
+                    const env = ls.all_module_envs[sym.module_idx];
+                    if (sym.ident_idx.idx < env.common.idents.interner.bytes.len()) {
+                        sym_name = env.getIdent(sym.ident_idx);
+                    }
+                }
+            }
+            std.debug.panic(
+                "generateLookupCall: unresolved symbol={} module={} ident={} name={s} layout={}",
+                .{
+                    symbol_key,
+                    sym.module_idx,
+                    sym.ident_idx.idx,
+                    sym_name,
+                    @intFromEnum(lookup.layout_idx),
+                },
+            );
         }
 
         /// Generate a call to an already-compiled procedure.
@@ -13889,13 +13946,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .bind => |bind| {
                         const symbol_key: u64 = @bitCast(bind.symbol);
                         const num_regs = self.calcParamRegCount(bind.layout_idx);
-                        std.debug.print("DBG bindLambdaParam symbol={} layout_idx={} num_regs={} reg_idx={} pass_by_ptr={}\n", .{
-                            symbol_key,
-                            @intFromEnum(bind.layout_idx),
-                            num_regs,
-                            reg_idx,
-                            param_pass_by_ptr[param_idx],
-                        });
 
                         // Check if this param is passed by pointer (pre-computed)
                         if (param_pass_by_ptr[param_idx]) {
@@ -14442,17 +14492,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
                 const arg_layout = self.getExprLayout(arg_id);
                 const num_regs = self.calcArgRegCount(arg_loc, arg_layout);
-                std.debug.print("DBG generateCallToLambda arg_id={} layout={} loc={s} num_regs={}\n", .{
-                    @intFromEnum(arg_id),
-                    if (arg_layout) |al| @intFromEnum(al) else @as(usize, 999999),
-                    @tagName(std.meta.activeTag(arg_loc)),
-                    num_regs,
-                });
-                if (arg_loc == .list_stack) {
-                    std.debug.print("DBG generateCallToLambda arg list_stack offset={}\n", .{arg_loc.list_stack.struct_offset});
-                } else if (arg_loc == .stack) {
-                    std.debug.print("DBG generateCallToLambda arg stack offset={}\n", .{arg_loc.stack.offset});
-                }
+                if (arg_loc == .list_stack) {} else if (arg_loc == .stack) {}
                 try self.scratch_arg_infos.append(.{ .loc = arg_loc, .layout_idx = arg_layout, .num_regs = num_regs });
             }
             const arg_infos = self.scratch_arg_infos.sliceFromStart(arg_infos_start);
@@ -14579,10 +14619,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                         // Check if this is a list type (24 bytes)
                         const param_layout_idx = if (param_idx < layouts.len) layouts[param_idx] else bind.layout_idx;
-                        const layout_in_bounds = if (self.layout_store) |ls|
-                            @intFromEnum(param_layout_idx) < ls.layouts.len()
-                        else
-                            false;
                         const is_list = blk: {
                             const param_layout = param_layout_idx;
                             if (self.layout_store) |ls| {
@@ -14594,14 +14630,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             }
                             break :blk false;
                         };
-                        std.debug.print("DBG bindProc param={} layout={} in_bounds={} is_list={} is_str={} is_128={} \n", .{
-                            param_idx,
-                            @intFromEnum(param_layout_idx),
-                            layout_in_bounds,
-                            is_list,
-                            is_str,
-                            is_128bit,
-                        });
 
                         // Determine number of registers needed
                         const num_regs: u8 = if (is_128bit) 2 else if (is_str or is_list) 3 else 1;
@@ -15581,12 +15609,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Get the layout to check if it's a heap-allocated type
             const layout_val = ls.getLayout(rc_op.layout_idx);
-            std.debug.print("DBG incref layout_idx={} layout_tag={s} count={} value_loc={s}\n", .{
-                @intFromEnum(rc_op.layout_idx),
-                @tagName(layout_val.tag),
-                rc_op.count,
-                @tagName(std.meta.activeTag(value_loc)),
-            });
 
             // Only incref heap-allocated types: list, str (large), box
             switch (layout_val.tag) {
@@ -15702,11 +15724,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             switch (value_loc) {
                 .stack => |s| {
                     const offset = s.offset;
-                    std.debug.print("DBG emitListIncref from stack offset={} count={}\n", .{ offset, count });
                     try self.emitLoad(.w64, ptr_reg, frame_ptr, offset);
                 },
                 .list_stack => |info| {
-                    std.debug.print("DBG emitListIncref from list_stack struct_offset={} count={}\n", .{ info.struct_offset, count });
                     try self.emitLoad(.w64, ptr_reg, frame_ptr, info.struct_offset);
                 },
                 else => return, // Can't incref non-stack values

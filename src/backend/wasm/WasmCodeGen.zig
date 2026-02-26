@@ -710,7 +710,7 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
                             // string), the result pointer references the callee's now-freed
                             // stack frame. Copy to the caller's frame so subsequent calls
                             // don't overwrite the data.
-                            if (stmt_expr == .call and target_is_composite) {
+                            if (target_is_composite and self.exprNeedsCompositeCallStabilization(stmt.expr)) {
                                 const ret_size = self.layoutByteSize(bind.layout_idx);
                                 if (ret_size > 0) {
                                     const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -1762,6 +1762,44 @@ fn isCompositeExpr(self: *const Self, expr_id: LirExprId) bool {
         .incref => |inc| self.isCompositeExpr(inc.value),
         .decref => |dec| self.isCompositeExpr(dec.value),
         .free => |f| self.isCompositeExpr(f.value),
+        else => false,
+    };
+}
+
+/// True when a composite expression result may point into a callee-owned stack frame.
+/// These values must be copied before binding if they need to outlive subsequent calls.
+fn exprNeedsCompositeCallStabilization(self: *const Self, expr_id: LirExprId) bool {
+    const expr = self.store.getExpr(expr_id);
+    return switch (expr) {
+        .call => true,
+        .nominal => |nom| self.exprNeedsCompositeCallStabilization(nom.backing_expr),
+        .block => |b| self.exprNeedsCompositeCallStabilization(b.final_expr),
+        .incref => |inc| self.exprNeedsCompositeCallStabilization(inc.value),
+        .decref => |dec| self.exprNeedsCompositeCallStabilization(dec.value),
+        .free => |f| self.exprNeedsCompositeCallStabilization(f.value),
+        .dbg => |d| self.exprNeedsCompositeCallStabilization(d.expr),
+        .expect => |e| self.exprNeedsCompositeCallStabilization(e.body),
+        .if_then_else => |ite| blk: {
+            const branches = self.store.getIfBranches(ite.branches);
+            for (branches) |branch| {
+                if (self.exprNeedsCompositeCallStabilization(branch.body)) break :blk true;
+            }
+            break :blk self.exprNeedsCompositeCallStabilization(ite.final_else);
+        },
+        .match_expr => |w| blk: {
+            const branches = self.store.getMatchBranches(w.branches);
+            for (branches) |branch| {
+                if (self.exprNeedsCompositeCallStabilization(branch.body)) break :blk true;
+            }
+            break :blk false;
+        },
+        .discriminant_switch => |sw| blk: {
+            const branches = self.store.getExprSpan(sw.branches);
+            for (branches) |branch| {
+                if (self.exprNeedsCompositeCallStabilization(branch)) break :blk true;
+            }
+            break :blk false;
+        },
         else => false,
     };
 }
@@ -5878,6 +5916,22 @@ fn bindCFLetPattern(self: *Self, pat: LirPattern, value_expr: LirExprId) Allocat
                     (self.storage.allocLocal(bind.symbol, .i32) catch return error.OutOfMemory);
                 try self.emitLocalSet(local_idx);
             } else {
+                // Composite values returned from calls point into the callee's stack
+                // frame. Copy them into the caller's frame before binding.
+                if (target_is_composite and self.exprNeedsCompositeCallStabilization(value_expr)) {
+                    const ret_size = self.layoutByteSize(bind.layout_idx);
+                    if (ret_size > 0) {
+                        const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                        try self.emitLocalSet(src_local);
+                        const dst_offset = try self.allocStackMemory(ret_size, 4);
+                        const dst_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                        try self.emitFpOffset(dst_offset);
+                        try self.emitLocalSet(dst_local);
+                        try self.emitMemCopy(dst_local, 0, src_local, ret_size);
+                        try self.emitLocalGet(dst_local);
+                    }
+                }
+
                 const vt = self.resolveValType(bind.layout_idx);
                 const expr_vt = self.exprValType(value_expr);
                 try self.emitConversion(expr_vt, vt);
@@ -7079,12 +7133,28 @@ fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
     defer self.allocator.free(field_val_types);
 
     for (fields, 0..) |field_expr_id, i| {
+        const field_byte_size = ls.getStructFieldSize(l.data.struct_.idx, @intCast(i));
         const field_layout_idx = ls.getStructFieldLayout(l.data.struct_.idx, @intCast(i));
         const is_composite = self.isCompositeLayout(field_layout_idx);
         const field_vt = WasmLayout.resultValTypeWithStore(field_layout_idx, ls);
 
         // Generate the field expression
         try self.generateExpr(field_expr_id);
+
+        // Composite field expressions can return pointers into callee-owned stack
+        // frames. Stabilize by copying bytes into this frame before saving pointer.
+        if (is_composite and field_byte_size > 0) {
+            const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(src_local);
+
+            const stable_align: u32 = if (field_byte_size >= 8) 8 else if (field_byte_size >= 4) 4 else if (field_byte_size >= 2) 2 else 1;
+            const stable_offset = try self.allocStackMemory(field_byte_size, stable_align);
+            const stable_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitFpOffset(stable_offset);
+            try self.emitLocalSet(stable_local);
+            try self.emitMemCopy(stable_local, 0, src_local, field_byte_size);
+            try self.emitLocalGet(stable_local);
+        }
 
         // Convert type if needed (for primitives)
         if (!is_composite) {
@@ -11006,7 +11076,7 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LirExprId, re
         .num_is_eq => {
             // Check for structural equality (strings, lists, records, etc.)
             if (self.exprLayoutIdx(args[0])) |lay_idx| {
-                if (lay_idx == .str or (self.layout_store != null and self.getLayoutStore().getLayout(lay_idx).tag == .list)) {
+                if (lay_idx == .str or self.isCompositeLayout(lay_idx)) {
                     try self.generateStructuralEq(args[0], args[1], false);
                     return;
                 }

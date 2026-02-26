@@ -635,6 +635,11 @@ pub const Store = struct {
         return self.static_dispatch_constraints.sliceRange(range);
     }
 
+    /// Get all static dispatch constraints in this store.
+    pub fn sliceAllStaticDispatchConstraints(self: *const Self) []StaticDispatchConstraint {
+        return self.static_dispatch_constraints.items.items;
+    }
+
     // helpers - alias types //
 
     // Alias types contain a span of variables. In this span, the 1st element

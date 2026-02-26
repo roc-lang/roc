@@ -2347,12 +2347,11 @@ test "decode: I32.decode with simple format" {
     // Test I32.decode with a format that provides decode_i32
     try runExpectI64(
         \\{
-        \\    # Define a format type with decode_i32 method
-        \\    MyFormat := {}.{
-        \\        decode_i32 : MyFormat, List(U8) -> (Try(I32, [Err]), List(U8))
-        \\        decode_i32 = |_fmt, src| (Ok(42i32), src)
+        \\    Fmt := {}.{
+        \\        decode_i32 : Fmt, List(U8) -> (Try(I32, [Err]), List(U8))
+        \\        decode_i32 = |_fmt, src| (Ok(42.I32), src)
         \\    }
-        \\    fmt : MyFormat
+        \\    fmt : Fmt
         \\    fmt = {}
         \\    (result, _rest) = I32.decode([], fmt)
         \\    match result {
@@ -2363,15 +2362,30 @@ test "decode: I32.decode with simple format" {
     , 42, .no_trace);
 }
 
+test "decode: I32.decode with record field format mismatches and crashes" {
+    try runExpectTypeMismatchAndCrash(
+        \\{
+        \\    fmt = {
+        \\        decode_i32: |_fmt, src| (Ok(42.I32), src),
+        \\    }
+        \\    (result, _rest) = I32.decode([], fmt)
+        \\    match result {
+        \\        Ok(n) => n.to_i64()
+        \\        Err(_) => 0i64
+        \\    }
+        \\}
+    );
+}
+
 test "decode: I64.decode with simple format" {
     // Test I64.decode with a simple format that returns a constant
     try runExpectI64(
         \\{
-        \\    MyFormat := {}.{
-        \\        decode_i64 : MyFormat, List(U8) -> (Try(I64, [Err]), List(U8))
-        \\        decode_i64 = |_fmt, src| (Ok(99i64), src)
+        \\    Fmt := {}.{
+        \\        decode_i64 : Fmt, List(U8) -> (Try(I64, [Err]), List(U8))
+        \\        decode_i64 = |_fmt, src| (Ok(99.I64), src)
         \\    }
-        \\    fmt : MyFormat
+        \\    fmt : Fmt
         \\    fmt = {}
         \\    (result, _rest) = I64.decode([], fmt)
         \\    match result {
@@ -2386,11 +2400,11 @@ test "decode: U8.decode success" {
     // Test U8.decode with simple constant format
     try runExpectI64(
         \\{
-        \\    MyFormat := {}.{
-        \\        decode_u8 : MyFormat, List(U8) -> (Try(U8, [Empty]), List(U8))
-        \\        decode_u8 = |_fmt, src| (Ok(255u8), src)
+        \\    Fmt := {}.{
+        \\        decode_u8 : Fmt, List(U8) -> (Try(U8, [Empty]), List(U8))
+        \\        decode_u8 = |_fmt, src| (Ok(255.U8), src)
         \\    }
-        \\    fmt : MyFormat
+        \\    fmt : Fmt
         \\    fmt = {}
         \\    (result, _rest) = U8.decode([], fmt)
         \\    match result {
@@ -2405,11 +2419,11 @@ test "decode: U8.decode error" {
     // Test U8.decode returns error - use I64 result to avoid complex match
     try runExpectI64(
         \\{
-        \\    MyFormat := {}.{
-        \\        decode_u8 : MyFormat, List(U8) -> (Try(U8, [Empty]), List(U8))
+        \\    Fmt := {}.{
+        \\        decode_u8 : Fmt, List(U8) -> (Try(U8, [Empty]), List(U8))
         \\        decode_u8 = |_fmt, src| (Err(Empty), src)
         \\    }
-        \\    fmt : MyFormat
+        \\    fmt : Fmt
         \\    fmt = {}
         \\    (result, _rest) = U8.decode([], fmt)
         \\    match result {
@@ -2424,11 +2438,11 @@ test "decode: Bool.decode true" {
     // Test Bool.decode returns true
     try runExpectBool(
         \\{
-        \\    MyFormat := {}.{
-        \\        decode_bool : MyFormat, List(U8) -> (Try(Bool, [Empty]), List(U8))
+        \\    Fmt := {}.{
+        \\        decode_bool : Fmt, List(U8) -> (Try(Bool, [Empty]), List(U8))
         \\        decode_bool = |_fmt, src| (Ok(Bool.True), src)
         \\    }
-        \\    fmt : MyFormat
+        \\    fmt : Fmt
         \\    fmt = {}
         \\    (result, _rest) = Bool.decode([], fmt)
         \\    match result {
@@ -2443,11 +2457,11 @@ test "decode: Bool.decode false" {
     // Test Bool.decode returns false
     try runExpectBool(
         \\{
-        \\    MyFormat := {}.{
-        \\        decode_bool : MyFormat, List(U8) -> (Try(Bool, [Empty]), List(U8))
+        \\    Fmt := {}.{
+        \\        decode_bool : Fmt, List(U8) -> (Try(Bool, [Empty]), List(U8))
         \\        decode_bool = |_fmt, src| (Ok(Bool.False), src)
         \\    }
-        \\    fmt : MyFormat
+        \\    fmt : Fmt
         \\    fmt = {}
         \\    (result, _rest) = Bool.decode([], fmt)
         \\    match result {
@@ -2462,11 +2476,11 @@ test "decode: Str.decode success" {
     // Test Str.decode with constant
     try runExpectStr(
         \\{
-        \\    MyFormat := {}.{
-        \\        decode_str : MyFormat, List(U8) -> (Try(Str, [BadUtf8]), List(U8))
+        \\    Fmt := {}.{
+        \\        decode_str : Fmt, List(U8) -> (Try(Str, [BadUtf8]), List(U8))
         \\        decode_str = |_fmt, src| (Ok("hi"), src)
         \\    }
-        \\    fmt : MyFormat
+        \\    fmt : Fmt
         \\    fmt = {}
         \\    (result, _rest) = Str.decode([], fmt)
         \\    match result {
@@ -2481,11 +2495,11 @@ test "decode: rest returned from decode" {
     // Verify that decode returns the rest bytes
     try runExpectI64(
         \\{
-        \\    MyFormat := {}.{
-        \\        decode_u8 : MyFormat, List(U8) -> (Try(U8, [Empty]), List(U8))
-        \\        decode_u8 = |_fmt, src| (Ok(1u8), src)
+        \\    Fmt := {}.{
+        \\        decode_u8 : Fmt, List(U8) -> (Try(U8, [Empty]), List(U8))
+        \\        decode_u8 = |_fmt, src| (Ok(1.U8), src)
         \\    }
-        \\    fmt : MyFormat
+        \\    fmt : Fmt
         \\    fmt = {}
         \\    (result, _rest) = U8.decode([5u8], fmt)
         \\    match result {
@@ -2500,11 +2514,11 @@ test "decode: U16.decode" {
     // Test U16.decode
     try runExpectI64(
         \\{
-        \\    MyFormat := {}.{
-        \\        decode_u16 : MyFormat, List(U8) -> (Try(U16, [Err]), List(U8))
-        \\        decode_u16 = |_fmt, src| (Ok(1000u16), src)
+        \\    Fmt := {}.{
+        \\        decode_u16 : Fmt, List(U8) -> (Try(U16, [Err]), List(U8))
+        \\        decode_u16 = |_fmt, src| (Ok(1000.U16), src)
         \\    }
-        \\    fmt : MyFormat
+        \\    fmt : Fmt
         \\    fmt = {}
         \\    (result, _rest) = U16.decode([], fmt)
         \\    match result {
@@ -2519,11 +2533,11 @@ test "decode: U32.decode" {
     // Test U32.decode
     try runExpectI64(
         \\{
-        \\    MyFormat := {}.{
-        \\        decode_u32 : MyFormat, List(U8) -> (Try(U32, [Err]), List(U8))
-        \\        decode_u32 = |_fmt, src| (Ok(100000u32), src)
+        \\    Fmt := {}.{
+        \\        decode_u32 : Fmt, List(U8) -> (Try(U32, [Err]), List(U8))
+        \\        decode_u32 = |_fmt, src| (Ok(100000.U32), src)
         \\    }
-        \\    fmt : MyFormat
+        \\    fmt : Fmt
         \\    fmt = {}
         \\    (result, _rest) = U32.decode([], fmt)
         \\    match result {
@@ -2538,11 +2552,11 @@ test "decode: U64.decode" {
     // Test U64.decode
     try runExpectI64(
         \\{
-        \\    MyFormat := {}.{
-        \\        decode_u64 : MyFormat, List(U8) -> (Try(U64, [Err]), List(U8))
-        \\        decode_u64 = |_fmt, src| (Ok(9223372036854775807u64), src)
+        \\    Fmt := {}.{
+        \\        decode_u64 : Fmt, List(U8) -> (Try(U64, [Err]), List(U8))
+        \\        decode_u64 = |_fmt, src| (Ok(9223372036854775807.U64), src)
         \\    }
-        \\    fmt : MyFormat
+        \\    fmt : Fmt
         \\    fmt = {}
         \\    (result, _rest) = U64.decode([], fmt)
         \\    match result {
@@ -2557,11 +2571,11 @@ test "decode: I8.decode negative" {
     // Test I8.decode with negative value
     try runExpectI64(
         \\{
-        \\    MyFormat := {}.{
-        \\        decode_i8 : MyFormat, List(U8) -> (Try(I8, [Err]), List(U8))
-        \\        decode_i8 = |_fmt, src| (Ok(-42i8), src)
+        \\    Fmt := {}.{
+        \\        decode_i8 : Fmt, List(U8) -> (Try(I8, [Err]), List(U8))
+        \\        decode_i8 = |_fmt, src| (Ok(-42.I8), src)
         \\    }
-        \\    fmt : MyFormat
+        \\    fmt : Fmt
         \\    fmt = {}
         \\    (result, _rest) = I8.decode([], fmt)
         \\    match result {
@@ -2576,11 +2590,11 @@ test "decode: I16.decode negative" {
     // Test I16.decode with negative value
     try runExpectI64(
         \\{
-        \\    MyFormat := {}.{
-        \\        decode_i16 : MyFormat, List(U8) -> (Try(I16, [Err]), List(U8))
-        \\        decode_i16 = |_fmt, src| (Ok(-1000i16), src)
+        \\    Fmt := {}.{
+        \\        decode_i16 : Fmt, List(U8) -> (Try(I16, [Err]), List(U8))
+        \\        decode_i16 = |_fmt, src| (Ok(-1000.I16), src)
         \\    }
-        \\    fmt : MyFormat
+        \\    fmt : Fmt
         \\    fmt = {}
         \\    (result, _rest) = I16.decode([], fmt)
         \\    match result {
@@ -3990,6 +4004,86 @@ test "focused: fold multi-field record equality" {
     );
 }
 
+test "focused: fold multi-field record field checks" {
+    try runExpectBool(
+        \\{
+        \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
+        \\    rec.sum == 6 and rec.count == 3
+        \\}
+    , true, .no_trace);
+}
+
+test "focused: fold multi-field record binding identity" {
+    const expected = [_]ExpectedField{
+        .{ .name = "sum", .value = 6 },
+        .{ .name = "count", .value = 3 },
+    };
+    try runExpectRecord(
+        \\{
+        \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
+        \\    rec
+        \\}
+    , &expected, .no_trace);
+}
+
+test "focused: fold multi-field record binding survives extra alloc" {
+    const expected = [_]ExpectedField{
+        .{ .name = "sum", .value = 6 },
+        .{ .name = "count", .value = 3 },
+    };
+    try runExpectRecord(
+        \\{
+        \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
+        \\    _tmp = 999
+        \\    rec
+        \\}
+    , &expected, .no_trace);
+}
+
+test "focused: fold multi-field record sum check" {
+    try runExpectBool(
+        \\{
+        \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
+        \\    rec.sum == 6
+        \\}
+    , true, .no_trace);
+}
+
+test "focused: fold multi-field record count check" {
+    try runExpectBool(
+        \\{
+        \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
+        \\    rec.count == 3
+        \\}
+    , true, .no_trace);
+}
+
+test "focused: fold multi-field record sum value" {
+    try runExpectDec(
+        \\{
+        \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
+        \\    rec.sum
+        \\}
+    , 6_000_000_000_000_000_000, .no_trace);
+}
+
+test "focused: fold multi-field record count value" {
+    try runExpectDec(
+        \\{
+        \\    rec = List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1})
+        \\    rec.count
+        \\}
+    , 3_000_000_000_000_000_000, .no_trace);
+}
+
+test "focused: simple two-field record sum access" {
+    try runExpectDec("{sum: 6, count: 3}.sum", 6_000_000_000_000_000_000, .no_trace);
+}
+
+test "focused: simple two-field record count access" {
+    try runExpectDec("{sum: 6, count: 3}.count", 3_000_000_000_000_000_000, .no_trace);
+}
+
 test "focused: fold partial record destructuring" {
     const expected = [_]ExpectedField{.{ .name = "sum", .value = 6 }};
     try runExpectRecord(
@@ -4023,4 +4117,29 @@ test "focused: list append zst" {
 
 test "focused: nested list equality" {
     try runExpectBool("[[1, 2]] == [[1, 2]]", true, .no_trace);
+}
+
+test "focused: nested list equality i64 literals" {
+    try runExpectBool("[[1i64, 2i64]] == [[1i64, 2i64]]", true, .no_trace);
+}
+
+test "focused: nested list equality multiple elements" {
+    try runExpectBool("[[1, 2], [3, 4]] == [[1, 2], [3, 4]]", true, .no_trace);
+    try runExpectBool("[[1, 2], [3, 4]] == [[1, 2], [4, 3]]", false, .no_trace);
+    try runExpectBool("[[3, 4]] == [[4, 3]]", false, .no_trace);
+}
+
+test "focused: list equality order-sensitive" {
+    try runExpectBool("[3, 4] == [4, 3]", false, .no_trace);
+}
+
+test "focused: polymorphic additional specialization via List.append (non-eq)" {
+    try runExpectI64(
+        \\{
+        \\    append_one = |acc, x| List.append(acc, x)
+        \\    clone_via_fold = |xs| xs.fold(List.with_capacity(1), append_one)
+        \\    first_len = clone_via_fold([1i64, 2i64]).len()
+        \\    clone_via_fold([[1i64, 2i64], [3i64, 4i64]]).len()
+        \\}
+    , 2, .no_trace);
 }

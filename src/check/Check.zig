@@ -4360,6 +4360,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         .fn_name = dot_access.field_name,
                         .fn_var = constraint_fn_var,
                         .origin = .method_call,
+                        .source_expr_idx = @intFromEnum(expr_idx),
                     };
                     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
@@ -4544,6 +4545,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     .fn_name = tvd.method_name,
                     .fn_var = constraint_fn_var,
                     .origin = .method_call,
+                    .source_expr_idx = @intFromEnum(expr_idx),
                 };
                 const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
@@ -6185,8 +6187,14 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
             const region = self.getRegionAt(deferred_constraint.var_);
 
             // Iterate over the constraints
-            const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
-            for (constraints) |constraint| {
+            const constraints_range = deferred_constraint.constraints;
+            const constraints_len = constraints_range.len();
+            const constraints_start: usize = @intFromEnum(constraints_range.start);
+            var constraint_i: usize = 0;
+            while (constraint_i < constraints_len) : (constraint_i += 1) {
+                // Re-fetch by index each iteration because nested unification can append
+                // constraints and reallocate the backing array.
+                var constraint = self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i];
                 const constraint_fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
                 if (constraint_fn_resolved == .err) {
                     // If this constraint is already an error, the skip this pass
@@ -6217,6 +6225,12 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                     );
                     continue;
                 };
+
+                constraint.resolved_target = .{
+                    .origin_module = nominal_type.origin_module,
+                    .method_ident = method_ident,
+                };
+                self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i] = constraint;
 
                 const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx_in_original_env)));
                 const def_var: Var = ModuleEnv.varFrom(def_idx);
