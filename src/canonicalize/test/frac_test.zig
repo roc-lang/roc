@@ -222,7 +222,7 @@ test "fractional literal - scientific notation with capital E" {
         .e_dec => |frac| {
             try testing.expect(true); // 1e7 fits in Dec
             try testing.expect(true); // 2.5e10 is within f32 range
-            try testing.expectApproxEqAbs(@as(f64, @floatFromInt(frac.value.num)) / std.math.pow(f64, 10, 18), 2.5e10, 1e-5);
+            try testing.expectApproxEqAbs(builtins.compiler_rt_128.i128_to_f64(frac.value.num) / std.math.pow(f64, 10, 18), 2.5e10, 1e-5);
         },
         else => {
             try testing.expect(false); // Should be frac_dec
@@ -243,7 +243,7 @@ test "fractional literal - negative scientific notation" {
             try testing.expect(true); // 1e-7 fits in Dec
             // -1.5e-5 may not round-trip perfectly through f32
             // Let's just check the value is correct
-            try testing.expectApproxEqAbs(@as(f64, @floatFromInt(frac.value.num)) / std.math.pow(f64, 10, 18), -1.5e-5, 1e-10);
+            try testing.expectApproxEqAbs(builtins.compiler_rt_128.i128_to_f64(frac.value.num) / std.math.pow(f64, 10, 18), -1.5e-5, 1e-10);
         },
         else => {
             try testing.expect(false); // Should be frac_dec
@@ -348,7 +348,7 @@ test "negative zero preservation - uses f64" {
         .e_dec => |frac| {
             // If it went through Dec path, check if sign is preserved
             if (std.mem.eql(u8, "-0.0", "-0.0")) {
-                const f64_val = @as(f64, @floatFromInt(frac.value.num)) / std.math.pow(f64, 10, 18);
+                const f64_val = builtins.compiler_rt_128.i128_to_f64(frac.value.num) / std.math.pow(f64, 10, 18);
                 // Dec doesn't preserve negative zero, which is expected
                 try testing.expectEqual(f64_val, 0.0);
             }

@@ -18,7 +18,7 @@ const target = base.target;
 /// Different modules can have type variables with the same numeric value that
 /// refer to completely different types, so we key by (module_idx, var).
 pub const ModuleVarKey = packed struct {
-    module_idx: u16,
+    module_idx: u32,
     var_: types.Var,
 };
 const Ident = base.Ident;
@@ -62,7 +62,7 @@ pub const Store = struct {
     allocator: std.mem.Allocator,
 
     /// Current module index during fromTypeVar processing
-    current_module_idx: u16 = 0,
+    current_module_idx: u32 = 0,
 
     /// Optional override types store (used by interpreter for runtime types).
     /// When set, this is used instead of all_module_envs[module_idx].types.
@@ -252,7 +252,7 @@ pub const Store = struct {
     }
 
     /// Get the current module environment
-    fn currentEnv(self: *const Self) *const ModuleEnv {
+    pub fn currentEnv(self: *const Self) *const ModuleEnv {
         return self.all_module_envs[self.current_module_idx];
     }
 
@@ -482,6 +482,127 @@ pub const Store = struct {
         _ = try self.tuple_data.append(self.allocator, TupleData{ .size = total_size, .fields = fields_range });
         const tuple_layout = Layout.tuple(std.mem.Alignment.fromByteUnits(max_alignment), tuple_idx);
         return try self.insertLayout(tuple_layout);
+    }
+
+    /// Create a tag union layout from pre-computed variant payload layouts.
+    /// `variant_layouts[i]` is the layout Idx for variant i's payload
+    /// (use ensureZstLayout() for no-payload variants).
+    /// Tags must be sorted alphabetically; variant_layouts[i] corresponds
+    /// to the tag at sorted index i.
+    pub fn putTagUnion(self: *Self, variant_layouts: []const Idx) std.mem.Allocator.Error!Idx {
+        const variants_start: u32 = @intCast(self.tag_union_variants.len());
+
+        var max_payload_size: u32 = 0;
+        var max_payload_alignment: std.mem.Alignment = .@"1";
+
+        for (variant_layouts) |variant_layout_idx| {
+            const variant_layout = self.getLayout(variant_layout_idx);
+            const variant_size = self.layoutSize(variant_layout);
+            const variant_alignment = variant_layout.alignment(self.targetUsize());
+            if (variant_size > max_payload_size) max_payload_size = variant_size;
+            max_payload_alignment = max_payload_alignment.max(variant_alignment);
+
+            _ = try self.tag_union_variants.append(self.allocator, .{
+                .payload_layout = variant_layout_idx,
+            });
+        }
+
+        // Discriminant size from variant count
+        const discriminant_size: u8 = if (variant_layouts.len <= 256) 1 else if (variant_layouts.len <= 65536) 2 else if (variant_layouts.len <= (1 << 32)) 4 else 8;
+        const disc_align = TagUnionData.alignmentForDiscriminantSize(discriminant_size);
+
+        // Canonical layout: payload at offset 0, discriminant after (aligned)
+        const discriminant_offset: u16 = @intCast(
+            std.mem.alignForward(u32, max_payload_size, @intCast(disc_align.toByteUnits())),
+        );
+        const tag_union_alignment = max_payload_alignment.max(disc_align);
+        const total_size = std.mem.alignForward(
+            u32,
+            discriminant_offset + discriminant_size,
+            @intCast(tag_union_alignment.toByteUnits()),
+        );
+
+        const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
+        _ = try self.tag_union_data.append(self.allocator, .{
+            .size = total_size,
+            .discriminant_offset = discriminant_offset,
+            .discriminant_size = discriminant_size,
+            .variants = .{
+                .start = variants_start,
+                .count = @intCast(variant_layouts.len),
+            },
+        });
+
+        const tu_layout = Layout.tagUnion(tag_union_alignment, .{ .int_idx = @intCast(tag_union_data_idx) });
+        return try self.insertLayout(tu_layout);
+    }
+
+    /// Create a tuple layout representing the sequential layout of closure captures.
+    /// Captures are stored with alignment padding between them, like tuple fields.
+    pub fn putCaptureStruct(self: *Self, capture_layout_idxs: []const Idx) std.mem.Allocator.Error!Idx {
+        var temp_fields = std.ArrayList(TupleField).empty;
+        defer temp_fields.deinit(self.allocator);
+
+        var max_alignment: usize = 1;
+        var current_offset: u32 = 0;
+        for (capture_layout_idxs, 0..) |cap_idx, i| {
+            try temp_fields.append(self.allocator, .{ .index = @intCast(i), .layout = cap_idx });
+            const cap_layout = self.getLayout(cap_idx);
+            const cap_sa = self.layoutSizeAlign(cap_layout);
+            const field_alignment = cap_sa.alignment.toByteUnits();
+            max_alignment = @max(max_alignment, field_alignment);
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment))));
+            current_offset += cap_sa.size;
+        }
+
+        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment)))));
+
+        const fields_start = self.tuple_fields.items.len;
+        for (temp_fields.items) |field| {
+            _ = try self.tuple_fields.append(self.allocator, field);
+        }
+
+        const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(temp_fields.items.len) };
+        const tuple_idx = TupleIdx{ .int_idx = @intCast(self.tuple_data.len()) };
+        _ = try self.tuple_data.append(self.allocator, TupleData{ .size = total_size, .fields = fields_range });
+        const capture_layout = Layout.tuple(std.mem.Alignment.fromByteUnits(max_alignment), tuple_idx);
+        return try self.insertLayout(capture_layout);
+    }
+
+    /// Create a tuple layout representing the sequential layout of a lambda set union.
+    /// The layout is: 8-byte tag + max(capture struct size per variant).
+    pub fn putCaptureUnion(self: *Self, variants: []const []const Idx) std.mem.Allocator.Error!Idx {
+        // Find the maximum payload size across all variants
+        var max_payload_size: u32 = 0;
+        var max_alignment: usize = 8; // At least 8 for the tag
+        for (variants) |capture_idxs| {
+            var current_offset: u32 = 0;
+            for (capture_idxs) |cap_idx| {
+                const cap_layout = self.getLayout(cap_idx);
+                const cap_sa = self.layoutSizeAlign(cap_layout);
+                const field_alignment = cap_sa.alignment.toByteUnits();
+                max_alignment = @max(max_alignment, field_alignment);
+                current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment))));
+                current_offset += cap_sa.size;
+            }
+            max_payload_size = @max(max_payload_size, current_offset);
+        }
+
+        // Total size = 8 (tag) + max_payload_size, aligned to max_alignment
+        const total_size: u32 = @intCast(std.mem.alignForward(
+            u32,
+            8 + max_payload_size,
+            @as(u32, @intCast(max_alignment)),
+        ));
+
+        // Create a tuple layout with a single dummy field (TupleData requires NonEmptyRange)
+        const fields_start = self.tuple_fields.items.len;
+        _ = try self.tuple_fields.append(self.allocator, .{ .index = 0, .layout = .u64 });
+        const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = 1 };
+        const tuple_idx = TupleIdx{ .int_idx = @intCast(self.tuple_data.len()) };
+        _ = try self.tuple_data.append(self.allocator, TupleData{ .size = total_size, .fields = fields_range });
+        const union_layout = Layout.tuple(std.mem.Alignment.fromByteUnits(max_alignment), tuple_idx);
+        return try self.insertLayout(union_layout);
     }
 
     pub fn getLayout(self: *const Self, idx: Idx) Layout {
@@ -910,7 +1031,7 @@ pub const Store = struct {
     /// Get the boxed layout for a recursive nominal type, if it exists.
     /// This is used for list elements where the element type is a recursive nominal.
     /// Returns null if the type is not a recursive nominal.
-    pub fn getRecursiveBoxedLayout(self: *const Self, module_idx: u16, type_var: Var) ?Layout {
+    pub fn getRecursiveBoxedLayout(self: *const Self, module_idx: u32, type_var: Var) ?Layout {
         const key = ModuleVarKey{ .module_idx = module_idx, .var_ = type_var };
         if (self.recursive_boxed_layouts.get(key)) |boxed_idx| {
             return self.getLayout(boxed_idx);
@@ -1534,10 +1655,10 @@ pub const Store = struct {
     /// for cross-module polymorphic function calls.
     pub fn fromTypeVar(
         self: *Self,
-        module_idx: u16,
+        module_idx: u32,
         unresolved_var: Var,
         type_scope: *const TypeScope,
-        caller_module_idx: ?u16,
+        caller_module_idx: ?u32,
     ) std.mem.Allocator.Error!Idx {
         // Set the current module for this computation
         self.current_module_idx = module_idx;
@@ -2828,11 +2949,11 @@ pub const Store = struct {
     /// numerics) but we need to compute a proper List layout based on the expression structure.
     pub fn computeListLayout(
         self: *Self,
-        module_idx: u16,
+        module_idx: u32,
         module_env: *ModuleEnv,
         list_elem_span: can.CIR.Expr.Span,
         type_scope: *const TypeScope,
-        caller_module_idx: ?u16,
+        caller_module_idx: ?u32,
     ) !Idx {
         const elems = module_env.store.exprSlice(list_elem_span);
 

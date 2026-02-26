@@ -2,7 +2,7 @@
 //!
 //! This module provides background cleanup functionality that:
 //! - Removes temporary runtime directories older than 5 minutes
-//! - Removes persistent cache files (mod/ and exe/) older than 30 days
+//! - Removes persistent cache files (mod/, exe/, and test/) older than 30 days
 //! - Removes empty directories after cleanup
 //!
 //! The cleanup runs on a single background thread that is fire-and-forget:
@@ -67,16 +67,12 @@ pub fn startBackgroundCleanup(allocator: Allocator) !CleanupThread {
 
 /// Run the full cleanup process (called on background thread).
 fn runCleanup(allocator: Allocator) void {
-    // ---------------------------------------------------------------------------
     // TODO: REMOVE THIS FOR THE 0.1.0 RELEASE - NOT NEEDED ANYMORE
     // This is just to clean up people who have old stale Roc caches from before
     // we restructured the cache directories to use roc/{version}/ structure.
-    // ---------------------------------------------------------------------------
     cleanupLegacyTempDirs(allocator, null);
     cleanupLegacyPersistentCache(allocator, null);
-    // ---------------------------------------------------------------------------
     // END OF LEGACY CLEANUP - REMOVE ABOVE FOR 0.1.0
-    // ---------------------------------------------------------------------------
 
     // Clean up temp directories (5 minute threshold)
     cleanupTempDirs(allocator, null);
@@ -190,6 +186,11 @@ fn cleanupPersistentCache(allocator: Allocator, maybe_stats: ?*CleanupStats) voi
         cleanupCacheSubdir(allocator, exe_path, now, maybe_stats);
         allocator.free(exe_path);
 
+        // Clean up test/ directory
+        const test_path = std.fs.path.join(allocator, &.{ version_path, "test" }) catch continue;
+        cleanupCacheSubdir(allocator, test_path, now, maybe_stats);
+        allocator.free(test_path);
+
         // NOTE: We intentionally do NOT delete empty version directories.
         // Empty directories are harmless and deleting them can cause race conditions.
     }
@@ -276,12 +277,9 @@ pub fn deleteTempDir(allocator: Allocator, temp_dir_path: []const u8) void {
     std.fs.cwd().deleteFile(txt_path) catch {};
 }
 
-// ---------------------------------------------------------------------------
-// LEGACY CLEANUP FUNCTIONS
 // TODO: REMOVE THESE FOR THE 0.1.0 RELEASE - NOT NEEDED ANYMORE
 // These clean up old cache directories from before we restructured to use
 // the roc/{version}/ directory structure.
-// ---------------------------------------------------------------------------
 
 /// Clean up legacy temp directories that used the old "roc-*" prefix pattern.
 /// Old structure: /tmp/roc-{random}/ (directly in temp, with roc- prefix)
@@ -383,14 +381,6 @@ fn isLegacyHashDir(name: []const u8) bool {
 
     return true;
 }
-
-// ---------------------------------------------------------------------------
-// END OF LEGACY CLEANUP FUNCTIONS - REMOVE FOR 0.1.0
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 test "Config constants are reasonable" {
     // 5 minutes in nanoseconds

@@ -25,6 +25,7 @@ const UpdateMode = @import("utils.zig").UpdateMode;
 const TestEnv = @import("utils.zig").TestEnv;
 
 const utils = @import("utils.zig");
+const compiler_rt_128 = @import("compiler_rt_128.zig");
 const ascii = std.ascii;
 const mem = std.mem;
 const unicode = std.unicode;
@@ -592,9 +593,14 @@ fn strFromIntHelp(
     };
 
     var buf: [size]u8 = undefined;
-    const result = std.fmt.bufPrint(&buf, "{}", .{int}) catch unreachable;
+    const result: []const u8 = if (T == i128)
+        compiler_rt_128.i128_to_str(&buf, int).str
+    else if (T == u128)
+        compiler_rt_128.u128_to_str(&buf, int).str
+    else
+        std.fmt.bufPrint(&buf, "{}", .{int}) catch unreachable;
 
-    return RocStr.init(&buf, result.len, roc_ops);
+    return RocStr.init(result.ptr, result.len, roc_ops);
 }
 
 // Str.fromFloat
@@ -620,10 +626,13 @@ fn strFromFloatHelp(
     float: T,
     roc_ops: *RocOps,
 ) RocStr {
-    var buf: [400]u8 = undefined;
-    const result = std.fmt.bufPrint(&buf, "{d}", .{float}) catch unreachable;
+    var buf: [32]u8 = undefined;
+    const result = if (T == f32)
+        compiler_rt_128.f32_to_str(&buf, float)
+    else
+        compiler_rt_128.f64_to_str(&buf, float);
 
-    return RocStr.init(&buf, result.len, roc_ops);
+    return RocStr.init(result.ptr, result.len, roc_ops);
 }
 
 // Str.splitOn

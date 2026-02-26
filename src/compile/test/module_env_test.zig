@@ -102,7 +102,8 @@ test "ModuleEnv.Serialized roundtrip" {
         .external_decls = deserialized_ptr.external_decls.deserializeInto(@intFromPtr(buffer.ptr)),
         .imports = try deserialized_ptr.imports.deserializeInto(@intFromPtr(buffer.ptr), deser_alloc),
         .module_name = "TestModule",
-        .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
+        .display_module_name_idx = base.Ident.Idx.NONE, // Not used for deserialized modules (only needed during fresh canonicalization)
+        .qualified_module_ident = base.Ident.Idx.NONE,
         .diagnostics = deserialized_ptr.diagnostics,
         .store = deserialized_ptr.store.deserializeInto(@intFromPtr(buffer.ptr), deser_alloc),
         .evaluation_order = null,

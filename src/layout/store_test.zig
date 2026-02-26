@@ -564,6 +564,7 @@ test "fromTypeVar - type alias inside Try nominal (issue #8708)" {
         .{ .ident_idx = token_contents_ident_idx },
         token_tag_union_var,
         &[_]types.Var{},
+        builtin_module_idx,
     );
     const token_contents_alias_var = try lt.type_store.freshFromContent(alias_content);
 

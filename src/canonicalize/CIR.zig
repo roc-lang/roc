@@ -505,14 +505,17 @@ pub const IntValue = struct {
     }
 
     pub fn bufPrint(self: IntValue, buf: []u8) ![]u8 {
+        const i128h = builtins.compiler_rt_128;
         switch (self.kind) {
             .i128 => {
                 const val: i128 = @bitCast(self.bytes);
-                return std.fmt.bufPrint(buf, "{d}", .{val});
+                const result = i128h.i128_to_str(buf, val);
+                return buf[result.start..buf.len];
             },
             .u128 => {
                 const val: u128 = @bitCast(self.bytes);
-                return std.fmt.bufPrint(buf, "{d}", .{val});
+                const result = i128h.u128_to_str(buf, val);
+                return buf[result.start..buf.len];
             },
         }
     }
@@ -564,13 +567,13 @@ pub const IntValue = struct {
     pub fn toFracRequirements(self: IntValue) types_mod.FracRequirements {
         // Convert to f64 for checking
         const f64_val: f64 = switch (self.kind) {
-            .i128 => @floatFromInt(@as(i128, @bitCast(self.bytes))),
+            .i128 => builtins.compiler_rt_128.i128_to_f64(@as(i128, @bitCast(self.bytes))),
             .u128 => blk: {
                 const val = @as(u128, @bitCast(self.bytes));
                 if (val > @as(u128, 1) << 64) {
                     break :blk std.math.inf(f64);
                 }
-                break :blk @floatFromInt(val);
+                break :blk builtins.compiler_rt_128.u128_to_f64(val);
             },
         };
 
@@ -699,7 +702,8 @@ pub fn formatBase256ToDecimal(
     for (digits_before_pt) |digit| {
         value = value * 256 + digit;
     }
-    w.print("{d}", .{value}) catch {};
+    var int_buf: [40]u8 = undefined;
+    w.writeAll(builtins.compiler_rt_128.u128_to_str(&int_buf, value).str) catch {};
 
     // Format fractional part if present and non-zero
     if (digits_after_pt.len > 0) {
@@ -714,14 +718,14 @@ pub fn formatBase256ToDecimal(
             w.writeAll(".") catch {};
             // Convert base-256 fractional digits to decimal
             var frac: f64 = 0;
-            var mult: f64 = 1.0 / 256.0;
+            var frac_mult: f64 = 1.0 / 256.0;
             for (digits_after_pt) |digit| {
-                frac += @as(f64, @floatFromInt(digit)) * mult;
-                mult /= 256.0;
+                frac += @as(f64, @floatFromInt(digit)) * frac_mult;
+                frac_mult /= 256.0;
             }
             // Print fractional part (removing leading "0.")
-            var frac_buf: [32]u8 = undefined;
-            const frac_str = std.fmt.bufPrint(&frac_buf, "{d:.6}", .{frac}) catch "0";
+            var frac_buf: [400]u8 = undefined;
+            const frac_str = builtins.compiler_rt_128.f64_to_str(&frac_buf, frac);
             if (frac_str.len > 2 and std.mem.startsWith(u8, frac_str, "0.")) {
                 w.writeAll(frac_str[2..]) catch {};
             }
@@ -743,7 +747,7 @@ pub fn toI128(self: RocDec) i128 {
 /// Creates a RocDec from an f64 value, returns null if conversion fails
 pub fn fromF64(f: f64) ?RocDec {
     // Simple conversion - the real implementation is in builtins/dec.zig
-    const scaled = @as(i128, @intFromFloat(f * 1_000_000_000_000_000_000.0));
+    const scaled = builtins.compiler_rt_128.f64_to_i128(f * 1_000_000_000_000_000_000.0);
     return RocDec{ .num = scaled };
 }
 
@@ -754,8 +758,14 @@ pub const Import = struct {
         _,
     };
 
-    /// Sentinel value indicating unresolved import (max u32)
-    pub const UNRESOLVED_MODULE: u32 = std.math.maxInt(u32);
+    pub const ResolvedModuleIdx = enum(u32) {
+        none = std.math.maxInt(u32),
+        _,
+
+        pub fn isNone(self: ResolvedModuleIdx) bool {
+            return self == .none;
+        }
+    };
 
     pub const Store = struct {
         /// Map from interned string idx to Import.Idx for deduplication
@@ -766,8 +776,8 @@ pub const Import = struct {
         /// Used for efficient index-based lookups instead of string comparison
         import_idents: collections.SafeList(base.Ident.Idx) = .{},
         /// Resolved module indices, parallel to imports list
-        /// Each entry is either a valid module index or UNRESOLVED_MODULE
-        resolved_modules: collections.SafeList(u32) = .{},
+        /// Each entry is either a valid module index or unresolved
+        resolved_modules: collections.SafeList(ResolvedModuleIdx) = .{},
 
         pub fn init() Store {
             return .{};
@@ -789,7 +799,7 @@ pub const Import = struct {
 
         /// Get or create an Import.Idx for the given module name.
         /// The module name is first checked against existing imports by comparing strings.
-        /// New imports are initially unresolved (UNRESOLVED_MODULE).
+        /// New imports are initially unresolved (unresolved).
         /// If ident_idx is provided, it will be stored for index-based lookups.
         pub fn getOrPut(self: *Store, allocator: std.mem.Allocator, strings: *base.StringLiteral.Store, module_name: []const u8) !Import.Idx {
             return self.getOrPutWithIdent(allocator, strings, module_name, null);
@@ -797,7 +807,7 @@ pub const Import = struct {
 
         /// Get or create an Import.Idx for the given module name, with an associated ident.
         /// The module name is first checked against existing imports by comparing strings.
-        /// New imports are initially unresolved (UNRESOLVED_MODULE).
+        /// New imports are initially unresolved (unresolved).
         /// If ident_idx is provided, it will be stored for index-based lookups.
         pub fn getOrPutWithIdent(self: *Store, allocator: std.mem.Allocator, strings: *base.StringLiteral.Store, module_name: []const u8, ident_idx: ?base.Ident.Idx) !Import.Idx {
             // First check if we already have this module name by comparing strings
@@ -825,7 +835,7 @@ pub const Import = struct {
             // Add to both the list and the map, with unresolved module initially
             _ = try self.imports.append(allocator, string_idx);
             _ = try self.import_idents.append(allocator, ident_idx orelse base.Ident.Idx.NONE);
-            _ = try self.resolved_modules.append(allocator, Import.UNRESOLVED_MODULE);
+            _ = try self.resolved_modules.append(allocator, ResolvedModuleIdx.none);
             try self.map.put(allocator, string_idx, idx);
 
             return idx;
@@ -845,15 +855,15 @@ pub const Import = struct {
             const idx = @intFromEnum(import_idx);
             if (idx >= self.resolved_modules.len()) return null;
             const resolved = self.resolved_modules.items.items[idx];
-            if (resolved == Import.UNRESOLVED_MODULE) return null;
-            return resolved;
+            if (resolved.isNone()) return null;
+            return @intFromEnum(resolved);
         }
 
         /// Set the resolved module index for an import
         pub fn setResolvedModule(self: *Store, import_idx: Import.Idx, module_idx: u32) void {
             const idx = @intFromEnum(import_idx);
             if (idx < self.resolved_modules.len()) {
-                self.resolved_modules.items.items[idx] = module_idx;
+                self.resolved_modules.items.items[idx] = @enumFromInt(module_idx);
             }
         }
 
@@ -936,7 +946,7 @@ pub const Import = struct {
             map: [3]u64,
             imports: collections.SafeList(base.StringLiteral.Idx).Serialized,
             import_idents: collections.SafeList(base.Ident.Idx).Serialized,
-            resolved_modules: collections.SafeList(u32).Serialized,
+            resolved_modules: collections.SafeList(Import.ResolvedModuleIdx).Serialized,
 
             /// Serialize a Store into this Serialized struct, appending data to the writer
             pub fn serialize(

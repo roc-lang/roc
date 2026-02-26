@@ -276,7 +276,7 @@ pub const TagUnionData = struct {
     size: u32,
     /// Offset of the discriminant within the union (usually after payload)
     discriminant_offset: u16,
-    /// Size of the discriminant in bytes (1, 2, or 4)
+    /// Size of the discriminant in bytes (1, 2, 4, or 8)
     discriminant_size: u8,
     /// Range of variants in the tag_union_variants list
     variants: collections.NonEmptyRange,

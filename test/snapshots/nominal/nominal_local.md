@@ -166,12 +166,12 @@ test = |{}| {
 	(defs
 		(patt (type "_arg -> {}"))
 		(patt (type "Error"))
-		(patt (type "{} -> Error")))
+		(patt (type "{ .. } -> Error")))
 	(type_decls
 		(nominal (type "Error")
 			(ty-header (name "Utf8Format"))))
 	(expressions
 		(expr (type "_arg -> {}"))
 		(expr (type "Error, Error -> List(U8)"))
-		(expr (type "{} -> Error"))))
+		(expr (type "{ .. } -> Error"))))
 ~~~

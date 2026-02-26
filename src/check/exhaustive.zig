@@ -27,6 +27,8 @@
 
 const std = @import("std");
 const base = @import("base");
+const builtins = @import("builtins");
+const i128h = builtins.compiler_rt_128;
 const Can = @import("can");
 const types = @import("types");
 const problem = @import("problem.zig");
@@ -3157,15 +3159,25 @@ fn formatPatternInto(
         .anything => try writer.writeAll("_"),
 
         .literal => |lit| switch (lit) {
-            .int => |i| try writer.print("{d}", .{i}),
-            .uint => |u| try writer.print("{d}", .{u}),
+            .int => |i| {
+                var str_buf: [40]u8 = undefined;
+                try writer.writeAll(i128h.i128_to_str(&str_buf, i).str);
+            },
+            .uint => |u| {
+                var str_buf: [40]u8 = undefined;
+                try writer.writeAll(i128h.u128_to_str(&str_buf, u).str);
+            },
             .bit => |b| try writer.writeAll(if (b) "Bool.true" else "Bool.false"),
-            .byte => |b| try writer.print("{d}", .{b}),
+            .byte => |b| try writer.print("{}", .{b}),
             .float => |f| {
                 const float_val: f64 = @bitCast(f);
-                try writer.print("{d}", .{float_val});
+                var float_buf: [400]u8 = undefined;
+                try writer.writeAll(i128h.f64_to_str(&float_buf, float_val));
             },
-            .decimal => |d| try writer.print("{d}", .{d}),
+            .decimal => |d| {
+                var str_buf: [40]u8 = undefined;
+                try writer.writeAll(i128h.i128_to_str(&str_buf, d).str);
+            },
             .str => |idx| {
                 try writer.writeAll("\"");
                 const text = string_store.get(idx);

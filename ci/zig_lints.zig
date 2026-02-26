@@ -22,8 +22,8 @@ pub fn main() !void {
 
     var found_errors = false;
 
-    // Lint 1: Check for separator comments (// ====)
-    try stdout.print("Checking for separator comments (// ====)...\n", .{});
+    // Lint 1: Check for separator comments (// ====, // ----, // ────, etc.)
+    try stdout.print("Checking for separator comments...\n", .{});
 
     {
         var zig_files = PathList{};
@@ -48,7 +48,8 @@ pub fn main() !void {
 
         if (found_errors) {
             try stdout.print("\n", .{});
-            try stdout.print("Separator comments like '// ====' are not allowed. Please delete these lines.\n", .{});
+            try stdout.print("Horizontal line separator comments are not allowed (e.g. // ====, // ----, // ────).\n", .{});
+            try stdout.print("Do not attempt to work around this by using different characters. Just don't put horizontal lines in the code.\n", .{});
             try stdout.print("\n", .{});
             try stdout.flush();
             std.process.exit(1);
@@ -177,13 +178,13 @@ fn checkSeparatorComments(allocator: Allocator, file_path: []const u8) ![]u8 {
         const trimmed = std.mem.trimLeft(u8, line, " \t");
 
         // Check if line starts with // and is a separator comment
-        // Separator comments are lines like "// ====" or "// ==== Section ===="
+        // Separator comments are lines like "// ====", "// ----", "// ────────"
         // We detect them by checking if, after the //, the line consists only of
-        // whitespace, equals signs, and letters (for section titles)
+        // whitespace, separator characters, and letters (for section titles)
         if (std.mem.startsWith(u8, trimmed, "//")) {
             const after_slashes = trimmed[2..];
             if (isSeparatorComment(after_slashes)) {
-                try errors.writer(allocator).print("{s}:{d}: separator comment '// ====' not allowed\n", .{ file_path, line_num });
+                try errors.writer(allocator).print("{s}:{d}: horizontal line separator comment not allowed\n", .{ file_path, line_num });
             }
         }
     }
@@ -191,35 +192,52 @@ fn checkSeparatorComments(allocator: Allocator, file_path: []const u8) ![]u8 {
     return errors.toOwnedSlice(allocator);
 }
 
-/// Checks if a line (after the //) is a separator comment.
-/// Separator comments are lines consisting only of equals signs (with optional
-/// whitespace and a section title between them).
+/// Checks if a line (after the //) is a horizontal line separator comment.
+/// These are lines consisting of repeated separator characters (=, -, ─)
+/// with optional whitespace and a section title between them.
 /// Examples that should match:
 ///   " ===="
 ///   " ===== Section ====="
-///   " ==== Title ===="
+///   " ----"
+///   " ---- Title ----"
+///   " ──────────"
 /// Examples that should NOT match:
 ///   " 2. Stdout contains "=====""
 ///   " This is a normal comment about ===="
+///   " --something"
+///   " ┌─────────────┐"  (box art with corners)
+///   " └───────┬─────┘"  (box art with corners)
 fn isSeparatorComment(after_slashes: []const u8) bool {
-    // Must contain ====
-    if (std.mem.indexOf(u8, after_slashes, "====") == null) return false;
-
     // Trim whitespace
     const content = std.mem.trim(u8, after_slashes, " \t");
     if (content.len == 0) return false;
 
-    // Must start with ====
-    if (!std.mem.startsWith(u8, content, "====")) return false;
+    // Check for box-drawing horizontal line (U+2500 "─", encoded as 0xE2 0x94 0x80 in UTF-8).
+    // Only flag if the line has 4+ consecutive ─ but NO box-drawing corners/intersections
+    // (┌ ┐ └ ┘ ├ ┤ ┬ ┴ ┼ │ etc.), which would indicate it's part of a diagram.
+    if (std.mem.indexOf(u8, content, "\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80") != null) {
+        if (!containsBoxDrawingCorner(content)) return true;
+    }
 
-    // Find where the leading equals end
+    // For ASCII separators, must contain 4+ repeated chars and start with them
+    const sep_char: u8 = if (std.mem.indexOf(u8, content, "====") != null)
+        '='
+    else if (std.mem.indexOf(u8, content, "----") != null)
+        '-'
+    else
+        return false;
+
+    // Must start with the separator character
+    if (content[0] != sep_char) return false;
+
+    // Find where the leading separator chars end
     var i: usize = 0;
-    while (i < content.len and content[i] == '=') : (i += 1) {}
+    while (i < content.len and content[i] == sep_char) : (i += 1) {}
 
-    // Everything after leading equals should be whitespace, letters, or trailing equals
+    // Everything after leading separators should be whitespace, letters, or trailing separators
     while (i < content.len) : (i += 1) {
         const c = content[i];
-        if (c == '=' or c == ' ' or c == '\t' or (c >= 'A' and c <= 'Z') or (c >= 'a' and c <= 'z')) {
+        if (c == sep_char or c == ' ' or c == '\t' or (c >= 'A' and c <= 'Z') or (c >= 'a' and c <= 'z')) {
             continue;
         }
         // Found a character that's not allowed in separator comments
@@ -227,6 +245,26 @@ fn isSeparatorComment(after_slashes: []const u8) bool {
     }
 
     return true;
+}
+
+/// Returns true if the content contains any box-drawing corner or intersection
+/// character (anything in the U+2500 block that isn't U+2500 "─" itself).
+/// These characters (┌ ┐ └ ┘ ├ ┤ ┬ ┴ ┼ │ etc.) indicate the line is part
+/// of a diagram, not a separator.
+fn containsBoxDrawingCorner(content: []const u8) bool {
+    var i: usize = 0;
+    while (i + 2 < content.len) : (i += 1) {
+        if (content[i] == 0xE2 and content[i + 1] == 0x94) {
+            // U+2500 block: 0xE2 0x94 0x80-0xBF
+            // U+2500 (─) is 0x80 — skip it, everything else is a corner/intersection
+            if (content[i + 2] != 0x80) return true;
+            i += 2; // skip the rest of this UTF-8 sequence
+        } else if (content[i] == 0xE2 and content[i + 1] == 0x95) {
+            // U+2540-U+257F block: 0xE2 0x95 0x80-0xBF (double-line box drawing)
+            return true;
+        }
+    }
+    return false;
 }
 
 fn checkPubDocComments(allocator: Allocator, file_path: []const u8) ![]u8 {

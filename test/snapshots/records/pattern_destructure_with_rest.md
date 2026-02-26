@@ -99,7 +99,7 @@ match person {
 									(required
 										(p-assign (ident "first_name"))))
 								(record-destruct (label "others") (ident "others")
-									(required
+									(rest-pattern
 										(p-assign (ident "others"))))))))
 				(value
 					(e-binop (op "gt")

@@ -28,7 +28,7 @@ This expression is used in an unexpected way:
 
 It has the type:
 
-    { c: Str }
+    { .., c: Str }
 
 But you are trying to use it as:
 

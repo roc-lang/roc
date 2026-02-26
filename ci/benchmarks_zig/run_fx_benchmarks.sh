@@ -83,7 +83,7 @@ run_benchmark() {
 }
 
 echo "=== Building FX platform ==="
-zig build test-platforms -Dplatform=fx
+zig build test-platforms -Dplatform=fx -Doptimize=ReleaseFast
 
 echo ""
 echo "=== FX File Execution Benchmarks ==="

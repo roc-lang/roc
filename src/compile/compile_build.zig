@@ -40,6 +40,7 @@ const FileProvider = compile_package.FileProvider;
 const coordinator_mod = @import("coordinator.zig");
 const Coordinator = coordinator_mod.Coordinator;
 const roc_target = @import("roc_target");
+const targets_config_mod = @import("targets_config.zig");
 
 // Compile-time flag for build tracing - enabled via `zig build -Dtrace-build`
 const trace_build = if (@hasDecl(build_options, "trace_build")) build_options.trace_build else false;
@@ -128,6 +129,11 @@ pub const BuildEnv = struct {
     // Builtin modules (Bool, Try, Str) shared across all packages (heap-allocated to prevent moves)
     builtin_modules: *BuiltinModules,
 
+    // Discovery state (populated by discoverDependencies, consumed by compileDiscovered)
+    discovered_root_abs: ?[]const u8 = null,
+    discovered_root_dir: ?[]const u8 = null,
+    discovered_pkg_name: ?[]const u8 = null,
+
     // Owned resolver ctx pointers for cleanup (typed)
     resolver_ctxs: std.array_list.Managed(*ResolverCtx),
     // Owned per-package sink contexts for fully-qualified emission
@@ -194,6 +200,11 @@ pub const BuildEnv = struct {
         if (self.cache_manager) |cm| {
             self.gpa.destroy(cm);
         }
+
+        // Free discovery state
+        if (self.discovered_root_abs) |ra| self.gpa.free(ra);
+        if (self.discovered_root_dir) |rd| self.gpa.free(rd);
+        // discovered_pkg_name is a static string ("app" or "module"), not heap-allocated
 
         // Free resolver ctxs owned by this BuildEnv (if any)
         for (self.resolver_ctxs.items) |ctx_ptr| {
@@ -272,6 +283,34 @@ pub const BuildEnv = struct {
         self.file_provider = provider orelse FileProvider.filesystem;
     }
 
+    /// Get the TargetsConfig from the platform package, if any.
+    pub fn getPlatformTargetsConfig(self: *const BuildEnv) ?targets_config_mod.TargetsConfig {
+        var pit = self.packages.iterator();
+        while (pit.next()) |entry| {
+            if (entry.value_ptr.kind == .platform) {
+                return entry.value_ptr.targets_config;
+            }
+        }
+        return null;
+    }
+
+    /// Get the root_file of the platform package, if any.
+    pub fn getPlatformRootFile(self: *const BuildEnv) ?[]const u8 {
+        var pit = self.packages.iterator();
+        while (pit.next()) |entry| {
+            if (entry.value_ptr.kind == .platform) {
+                return entry.value_ptr.root_file;
+            }
+        }
+        return null;
+    }
+
+    /// Set the target for this build environment.
+    /// Must be called before compileDiscovered() if target needs to change after discovery.
+    pub fn setTarget(self: *BuildEnv, target: roc_target.RocTarget) void {
+        self.target = target;
+    }
+
     /// Build an app file specifically (validates it's an app)
     pub fn buildApp(self: *BuildEnv, app_file: []const u8) !void {
         // Build and let the main function handle everything
@@ -295,11 +334,12 @@ pub const BuildEnv = struct {
     // Uses the actor model coordinator for both single-threaded and multi-threaded modes.
     // The coordinator uses message passing to eliminate race conditions.
     pub fn build(self: *BuildEnv, root_file: []const u8) !void {
-        try self.buildWithCoordinator(root_file);
+        try self.discoverDependencies(root_file);
+        try self.compileDiscovered();
     }
 
     /// Initialize the actor model coordinator.
-    /// This must be called before buildWithCoordinator().
+    /// This must be called before compileDiscovered().
     pub fn initCoordinator(self: *BuildEnv) !void {
         if (self.coordinator != null) return; // Already initialized
 
@@ -320,18 +360,16 @@ pub const BuildEnv = struct {
         self.coordinator = coord;
     }
 
-    /// Build using the actor model coordinator.
-    /// This is an alternative to build() that uses message passing instead of shared mutable state.
-    pub fn buildWithCoordinator(self: *BuildEnv, root_file: []const u8) !void {
-        // Initialize coordinator if not already done
-        try self.initCoordinator();
-        const coord = self.coordinator.?;
-
+    /// Phase 1: Parse headers, create package entries, extract TargetsConfig, and populate
+    /// shorthands. Does NOT init the Coordinator, allowing the caller to inspect
+    /// discovered state (e.g., TargetsConfig) and change the target before compilation.
+    pub fn discoverDependencies(self: *BuildEnv, root_file: []const u8) !void {
         // Parse root file header
         const root_abs = try self.makeAbsolute(root_file);
-        defer self.gpa.free(root_abs);
+        // Store immediately so deinit() frees on any subsequent error
+        self.discovered_root_abs = root_abs;
         const root_dir = if (std.fs.path.dirname(root_abs)) |d| try std.fs.path.resolve(self.gpa, &.{d}) else try self.gpa.dupe(u8, ".");
-        defer self.gpa.free(root_dir);
+        self.discovered_root_dir = root_dir;
 
         try self.workspace_roots.append(try self.gpa.dupe(u8, root_dir));
 
@@ -358,10 +396,37 @@ pub const BuildEnv = struct {
             .root_dir = pkg_root_dir,
         });
 
+        // Transfer provides entries and targets_config from header to package for platform roots
+        if (header_info.kind == .platform) {
+            if (self.packages.getPtr(pkg_name)) |pkg| {
+                pkg.provides_entries = header_info.provides_entries;
+                header_info.provides_entries = .{}; // Prevent double-free in deinit
+                pkg.targets_config = header_info.targets_config;
+                header_info.targets_config = null; // Prevent double-free in deinit
+            }
+        }
+
         // Populate package graph (for apps and packages with dependencies)
         if (header_info.kind == .app or header_info.kind == .package) {
             try self.populatePackageShorthands(pkg_name, &header_info);
         }
+
+        self.discovered_pkg_name = pkg_name;
+    }
+
+    /// Phase 2: Initialize the Coordinator, create coordinator packages from the
+    /// discovered BuildEnv packages, and run compilation to completion.
+    /// Must be called after discoverDependencies().
+    pub fn compileDiscovered(self: *BuildEnv) !void {
+        const pkg_name = self.discovered_pkg_name orelse unreachable; // Must call discoverDependencies() first
+
+        // Initialize coordinator if not already done
+        try self.initCoordinator();
+        const coord = self.coordinator.?;
+
+        // Look up the root file from the package entry (already stored by discoverDependencies)
+        const root_pkg = self.packages.get(pkg_name) orelse unreachable; // Must call discoverDependencies() first
+        const pkg_root_file = root_pkg.root_file;
 
         // Create coordinator packages mirroring BuildEnv packages
         // Skip .module kind packages - these are platform-exposed modules (e.g., Stdout)
@@ -463,7 +528,15 @@ pub const BuildEnv = struct {
         try coord.coordinatorLoop();
 
         if (comptime trace_build) {
-            std.debug.print("[BUILD] Coordinator loop complete, transferring results...\n", .{});
+            std.debug.print("[BUILD] Coordinator loop complete, processing hosted functions...\n", .{});
+        }
+
+        // Process hosted functions and assign global indices
+        // This must happen before lowering so the CIR has correct indices
+        try self.processHostedFunctions();
+
+        if (comptime trace_build) {
+            std.debug.print("[BUILD] Hosted functions processed, transferring results...\n", .{});
         }
 
         // Transfer results back to PackageEnv for compatibility
@@ -484,7 +557,7 @@ pub const BuildEnv = struct {
         try self.emitDeterministic();
 
         if (comptime trace_build) {
-            std.debug.print("[BUILD] buildWithCoordinator complete\n", .{});
+            std.debug.print("[BUILD] compileDiscovered complete\n", .{});
         }
     }
 
@@ -618,6 +691,144 @@ pub const BuildEnv = struct {
         }
     }
 
+    /// Process hosted functions from all platform modules and assign global indices.
+    /// This must be called after compilation but before lowering/code generation.
+    /// The indices are used at runtime to call the correct function from RocOps.hosted_fns.
+    pub fn processHostedFunctions(self: *BuildEnv) !void {
+        if (comptime trace_build) {
+            std.debug.print("[BUILD] processHostedFunctions: starting\n", .{});
+        }
+        const coord = self.coordinator orelse return;
+        const HostedCompiler = can.HostedCompiler;
+
+        var all_hosted_fns = std.ArrayList(HostedCompiler.HostedFunctionInfo).empty;
+        defer all_hosted_fns.deinit(self.gpa);
+
+        // Find the platform package
+        var platform_pkg: ?*coordinator_mod.PackageState = null;
+        var pkg_it = coord.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            const pkg_name = entry.key_ptr.*;
+            if (self.packages.get(pkg_name)) |pkg_info| {
+                if (pkg_info.kind == .platform) {
+                    platform_pkg = entry.value_ptr.*;
+                    break;
+                }
+            }
+        }
+        const pf_pkg = platform_pkg orelse return;
+
+        // Collect hosted functions from all platform modules (except main)
+        for (pf_pkg.modules.items, 0..) |*mod, mod_idx| {
+            // Skip platform main.roc
+            if (pf_pkg.root_module_id) |root_id| {
+                if (mod_idx == root_id) continue;
+            }
+
+            if (mod.env) |platform_env| {
+                var module_fns = HostedCompiler.collectAndSortHostedFunctions(platform_env) catch continue;
+                defer module_fns.deinit(platform_env.gpa);
+
+                for (module_fns.items) |fn_info| {
+                    // Copy the name_text with our gpa
+                    const name_copy = self.gpa.dupe(u8, fn_info.name_text) catch continue;
+                    // Free original
+                    platform_env.gpa.free(fn_info.name_text);
+                    all_hosted_fns.append(self.gpa, .{
+                        .symbol_name = fn_info.symbol_name,
+                        .expr_idx = fn_info.expr_idx,
+                        .name_text = name_copy,
+                    }) catch {
+                        self.gpa.free(name_copy);
+                        continue;
+                    };
+                }
+            }
+        }
+
+        if (all_hosted_fns.items.len == 0) return;
+
+        // Sort globally by qualified name
+        const SortContext = struct {
+            pub fn lessThan(_: void, a: HostedCompiler.HostedFunctionInfo, b: HostedCompiler.HostedFunctionInfo) bool {
+                return std.mem.order(u8, a.name_text, b.name_text) == .lt;
+            }
+        };
+        std.mem.sort(HostedCompiler.HostedFunctionInfo, all_hosted_fns.items, {}, SortContext.lessThan);
+
+        // Deduplicate
+        var write_idx: usize = 0;
+        for (all_hosted_fns.items, 0..) |fn_info, read_idx| {
+            if (write_idx == 0 or !std.mem.eql(u8, all_hosted_fns.items[write_idx - 1].name_text, fn_info.name_text)) {
+                if (write_idx != read_idx) {
+                    all_hosted_fns.items[write_idx] = fn_info;
+                }
+                write_idx += 1;
+            } else {
+                self.gpa.free(fn_info.name_text);
+            }
+        }
+        all_hosted_fns.shrinkRetainingCapacity(write_idx);
+
+        if (comptime trace_build) {
+            std.debug.print("[BUILD] Hosted functions (sorted globally, count={d}):\n", .{all_hosted_fns.items.len});
+            for (all_hosted_fns.items, 0..) |fn_info, idx| {
+                std.debug.print("[BUILD]   [{d}] {s}\n", .{ idx, fn_info.name_text });
+            }
+        }
+
+        // Reassign global indices for all platform modules (except main)
+        for (pf_pkg.modules.items, 0..) |*mod, mod_idx| {
+            if (pf_pkg.root_module_id) |root_id| {
+                if (mod_idx == root_id) continue;
+            }
+
+            if (mod.env) |platform_env| {
+                const all_defs = platform_env.store.sliceDefs(platform_env.all_defs);
+                for (all_defs) |def_idx| {
+                    const def = platform_env.store.getDef(def_idx);
+                    const expr = platform_env.store.getExpr(def.expr);
+
+                    if (expr == .e_hosted_lambda) {
+                        const hosted = expr.e_hosted_lambda;
+                        const local_name = platform_env.getIdent(hosted.symbol_name);
+
+                        // Build qualified name
+                        const plat_module_name = base.module_path.getModuleName(platform_env.module_name);
+                        const qualified_name = std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ plat_module_name, local_name }) catch continue;
+                        defer self.gpa.free(qualified_name);
+
+                        const stripped_name = if (std.mem.endsWith(u8, qualified_name, "!"))
+                            qualified_name[0 .. qualified_name.len - 1]
+                        else
+                            qualified_name;
+
+                        // Find matching global index and assign
+                        for (all_hosted_fns.items, 0..) |fn_info, idx| {
+                            if (std.mem.eql(u8, fn_info.name_text, stripped_name)) {
+                                const expr_node_idx = @as(@TypeOf(platform_env.store.nodes).Idx, @enumFromInt(@intFromEnum(def.expr)));
+                                var expr_node = platform_env.store.nodes.get(expr_node_idx);
+                                var payload = expr_node.getPayload().expr_hosted_lambda;
+                                payload.index = @intCast(idx);
+                                expr_node.setPayload(.{ .expr_hosted_lambda = payload });
+                                platform_env.store.nodes.set(expr_node_idx, expr_node);
+                                if (comptime trace_build) {
+                                    std.debug.print("[BUILD] Assigned global index {d} to {s}\n", .{ idx, stripped_name });
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Free name_text strings
+        for (all_hosted_fns.items) |fn_info| {
+            self.gpa.free(fn_info.name_text);
+        }
+    }
+
     /// Check that app exports match platform requirements.
     /// This is called after all modules are compiled and type-checked.
     fn checkPlatformRequirements(self: *BuildEnv) !void {
@@ -712,7 +923,7 @@ pub const BuildEnv = struct {
 
         // Build builtin context for the type checker
         const builtin_ctx = Check.BuiltinContext{
-            .module_name = app_root_env.module_name_idx,
+            .module_name = app_root_env.qualified_module_ident,
             .bool_stmt = builtin_indices.bool_type,
             .try_stmt = builtin_indices.try_type,
             .str_stmt = builtin_indices.str_type,
@@ -799,10 +1010,6 @@ pub const BuildEnv = struct {
             }
         }
     }
-
-    // ------------------------
-    // Resolver implementation
-    // ------------------------
 
     const ResolverCtx = struct { ws: *BuildEnv };
 
@@ -901,11 +1108,14 @@ pub const BuildEnv = struct {
         };
     }
 
-    // ------------------------
-    // Package graph construction
-    // ------------------------
-
     const PackageKind = enum { app, package, platform, module, hosted, type_module, default_app };
+
+    /// A mapping from a Roc identifier to an FFI symbol name, extracted from
+    /// a platform's `provides { roc_ident: "ffi_symbol" }` clause.
+    pub const ProvidesEntry = struct {
+        roc_ident: []const u8,
+        ffi_symbol: []const u8,
+    };
 
     const PackageRef = struct {
         name: []const u8, // Package name (alias in workspace)
@@ -918,8 +1128,16 @@ pub const BuildEnv = struct {
         root_file: []u8,
         root_dir: []u8,
         shorthands: std.StringHashMapUnmanaged(PackageRef) = .{},
+        provides_entries: std.ArrayListUnmanaged(ProvidesEntry) = .{},
+        targets_config: ?targets_config_mod.TargetsConfig = null,
 
         fn deinit(self: *Package, gpa: Allocator) void {
+            if (self.targets_config) |tc| tc.deinit(gpa);
+            for (self.provides_entries.items) |entry| {
+                freeConstSlice(gpa, entry.roc_ident);
+                freeConstSlice(gpa, entry.ffi_symbol);
+            }
+            self.provides_entries.deinit(gpa);
             var it = self.shorthands.iterator();
             while (it.next()) |e| {
                 freeConstSlice(gpa, e.key_ptr.*);
@@ -940,8 +1158,13 @@ pub const BuildEnv = struct {
         shorthands: std.StringHashMapUnmanaged([]const u8) = .{},
         /// Platform-exposed modules (e.g., Stdout, Stderr) that apps can import
         exposes: std.ArrayListUnmanaged([]const u8) = .{},
+        /// Platform provides entries (roc_ident -> ffi_symbol mapping)
+        provides_entries: std.ArrayListUnmanaged(ProvidesEntry) = .{},
+        /// Targets configuration extracted from platform header
+        targets_config: ?targets_config_mod.TargetsConfig = null,
 
         fn deinit(self: *HeaderInfo, gpa: Allocator) void {
+            if (self.targets_config) |tc| tc.deinit(gpa);
             if (self.platform_alias) |a| freeSlice(gpa, a);
             if (self.platform_path) |p| freeSlice(gpa, p);
             var it = self.shorthands.iterator();
@@ -954,6 +1177,11 @@ pub const BuildEnv = struct {
                 freeConstSlice(gpa, e);
             }
             self.exposes.deinit(gpa);
+            for (self.provides_entries.items) |entry| {
+                freeConstSlice(gpa, entry.roc_ident);
+                freeConstSlice(gpa, entry.ffi_symbol);
+            }
+            self.provides_entries.deinit(gpa);
         }
     };
 
@@ -1233,6 +1461,39 @@ pub const BuildEnv = struct {
                     const item_name = ast.resolve(token_idx);
                     try info.exposes.append(self.gpa, try self.gpa.dupe(u8, item_name));
                 }
+
+                // Extract provides entries (roc_ident -> ffi_symbol mapping)
+                const provides_coll = ast.store.getCollection(p.provides);
+                const provides_fields = ast.store.recordFieldSlice(.{ .span = provides_coll.span });
+                for (provides_fields) |field_idx| {
+                    const field = ast.store.getRecordField(field_idx);
+                    const roc_ident = ast.resolve(field.name);
+                    const ffi_symbol = if (field.value) |value_idx| blk: {
+                        const value_expr = ast.store.getExpr(value_idx);
+                        switch (value_expr) {
+                            .string => |str_like| {
+                                const parts = ast.store.exprSlice(str_like.parts);
+                                if (parts.len > 0) {
+                                    const first_part = ast.store.getExpr(parts[0]);
+                                    switch (first_part) {
+                                        .string_part => |sp| break :blk ast.resolve(sp.token),
+                                        else => continue,
+                                    }
+                                }
+                                continue;
+                            },
+                            .string_part => |str_part| break :blk ast.resolve(str_part.token),
+                            else => continue,
+                        }
+                    } else continue;
+                    try info.provides_entries.append(self.gpa, .{
+                        .roc_ident = try self.gpa.dupe(u8, roc_ident),
+                        .ffi_symbol = try self.gpa.dupe(u8, ffi_symbol),
+                    });
+                }
+
+                // Extract targets config from the platform AST
+                info.targets_config = targets_config_mod.TargetsConfig.fromAST(self.gpa, ast) catch null;
             },
             .module => {
                 info.kind = .module;
@@ -1578,6 +1839,18 @@ pub const BuildEnv = struct {
             const dep_name = try self.gpa.dupe(u8, alias);
             try self.ensurePackage(dep_name, .platform, abs);
 
+            // Transfer provides entries and targets_config from parsed header to platform package
+            if (self.packages.getPtr(alias)) |plat_pkg| {
+                if (plat_pkg.provides_entries.items.len == 0) {
+                    plat_pkg.provides_entries = child_info.provides_entries;
+                    child_info.provides_entries = .{}; // Prevent double-free in deinit
+                }
+                if (plat_pkg.targets_config == null) {
+                    plat_pkg.targets_config = child_info.targets_config;
+                    child_info.targets_config = null; // Prevent double-free in deinit
+                }
+            }
+
             // Re-fetch pack pointer since ensurePackage may have caused HashMap reallocation
             pack = self.packages.getPtr(pkg_name).?;
 
@@ -1676,6 +1949,16 @@ pub const BuildEnv = struct {
             const dep_name = try self.gpa.dupe(u8, alias);
 
             try self.ensurePackage(dep_name, child_info.kind, abs);
+
+            // Transfer provides entries from parsed header to platform package
+            if (child_info.kind == .platform) {
+                if (self.packages.getPtr(alias)) |plat_pkg| {
+                    if (plat_pkg.provides_entries.items.len == 0) {
+                        plat_pkg.provides_entries = child_info.provides_entries;
+                        child_info.provides_entries = .{}; // Prevent double-free in deinit
+                    }
+                }
+            }
 
             // Re-fetch pack pointer since ensurePackage may have caused HashMap reallocation
             pack = self.packages.getPtr(pkg_name).?;
@@ -1919,6 +2202,8 @@ pub const BuildEnv = struct {
         is_platform_sibling: bool,
         /// Dependency depth from root
         depth: u32,
+        /// Platform provides entries (only populated for platform main modules)
+        provides_entries: []const ProvidesEntry = &.{},
     };
 
     /// Get all compiled modules from the schedulers (after build completes).
@@ -1940,9 +2225,9 @@ pub const BuildEnv = struct {
             const sched = sched_entry.value_ptr.*;
 
             // Determine package kind
-            const pkg_info = self.packages.get(pkg_name);
-            const is_platform_pkg = pkg_info != null and pkg_info.?.kind == .platform;
-            const is_app_pkg = pkg_info != null and (pkg_info.?.kind == .app or pkg_info.?.kind == .default_app);
+            const pkg_ptr = self.packages.getPtr(pkg_name);
+            const is_platform_pkg = pkg_ptr != null and pkg_ptr.?.kind == .platform;
+            const is_app_pkg = pkg_ptr != null and (pkg_ptr.?.kind == .app or pkg_ptr.?.kind == .default_app);
 
             for (sched.modules.items, 0..) |*sched_mod, mod_idx| {
                 // Skip modules without env (not compiled or failed)
@@ -1966,6 +2251,10 @@ pub const BuildEnv = struct {
                     .is_app = is_app,
                     .is_platform_sibling = is_platform_sibling,
                     .depth = sched_mod.depth,
+                    .provides_entries = if (is_platform_main)
+                        if (pkg_ptr) |p| p.provides_entries.items else &.{}
+                    else
+                        &.{},
                 });
             }
         }

@@ -690,9 +690,11 @@ fn processTypeDeclFirstPass(
     try self.env.store.setStatementNode(type_decl_stmt_idx, type_decl_stmt);
     try self.env.store.addScratchStatement(type_decl_stmt_idx);
 
-    // For type modules, associate the node index with the exposed type
+    // For type modules, associate the node index with the exposed type.
+    // display_module_name_idx is the bare module name (e.g., "Color"), which matches
+    // what canonicalization produces for unqualified type module references.
     if (self.env.module_kind == .type_module) {
-        if (qualified_name_idx == self.env.module_name_idx) {
+        if (qualified_name_idx == self.env.display_module_name_idx) {
             // This is the main type of the type module - set its node index
             const node_idx_u16 = @as(u16, @intCast(@intFromEnum(type_decl_stmt_idx)));
             try self.env.setExposedNodeIndexById(qualified_name_idx, node_idx_u16);
@@ -788,9 +790,11 @@ fn processTypeDeclFirstPassWithExisting(
     try self.env.store.setStatementNode(type_decl_stmt_idx, type_decl_stmt);
     try self.env.store.addScratchStatement(type_decl_stmt_idx);
 
-    // For type modules, associate the node index with the exposed type
+    // For type modules, associate the node index with the exposed type.
+    // display_module_name_idx is the bare module name (e.g., "Color"), which matches
+    // what canonicalization produces for unqualified type module references.
     if (self.env.module_kind == .type_module) {
-        if (qualified_name_idx == self.env.module_name_idx) {
+        if (qualified_name_idx == self.env.display_module_name_idx) {
             const node_idx_u16 = @as(u16, @intCast(@intFromEnum(type_decl_stmt_idx)));
             try self.env.setExposedNodeIndexById(qualified_name_idx, node_idx_u16);
         }
@@ -2896,6 +2900,7 @@ fn collectBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) !void {
                 switch (destruct.kind) {
                     .Required => |sub_pattern_idx| try self.collectBoundVarsToScratch(sub_pattern_idx),
                     .SubPattern => |sub_pattern_idx| try self.collectBoundVarsToScratch(sub_pattern_idx),
+                    .Rest => |sub_pattern_idx| try self.collectBoundVarsToScratch(sub_pattern_idx),
                 }
             }
         },
@@ -5126,7 +5131,7 @@ pub fn canonicalizeExpr(
             }
 
             const rounded_val = @round(scaled_val);
-            const i128_val = @as(i128, @intFromFloat(rounded_val));
+            const i128_val = builtins.compiler_rt_128.f64_to_i128(rounded_val);
 
             const int_value = CIR.IntValue{
                 .bytes = @bitCast(i128_val),
@@ -5726,13 +5731,24 @@ pub fn canonicalizeExpr(
                     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span };
                 },
                 else => {
-                    // Unexpected expression type on right side of arrow
-                    const feature = try self.env.insertString("arrow with complex expression");
-                    const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
-                        .feature = feature,
-                        .region = region,
-                    } });
-                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+                    // Generic case: expr->(any_expression)
+                    // Desugar to (any_expression)(left)
+                    const can_fn_expr = try self.canonicalizeExpr(local_dispatch.right) orelse return null;
+
+                    const scratch_top = self.env.store.scratchExprTop();
+                    try self.env.store.addScratchExpr(can_first_arg.idx);
+                    const args_span = try self.env.store.exprSpanFrom(scratch_top);
+
+                    const expr_idx = try self.env.addExpr(CIR.Expr{
+                        .e_call = .{
+                            .func = can_fn_expr.idx,
+                            .args = args_span,
+                            .called_via = CalledVia.apply,
+                        },
+                    }, region);
+
+                    const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span };
                 },
             }
         },
@@ -6368,17 +6384,40 @@ pub fn canonicalizeExpr(
                     try self.collectBoundVarsToScratch(branch_pat.pattern);
                 }
 
-                // Save position before canonicalizing body so we can filter pattern-bound vars
+                // Save position before canonicalizing guard/body so we can filter pattern-bound vars
                 const body_free_vars_start = self.scratch_free_vars.top();
 
-                // Reset self-reference tracking for the branch body - variables bound by the
-                // branch pattern are valid to use in the body and aren't self-references
+                // Reset self-reference tracking for the branch guard/body - variables bound by the
+                // branch pattern are valid to use in the guard/body and aren't self-references
                 const saved_defining_patterns_start = self.defining_patterns_start;
                 const saved_defining_pattern = self.defining_pattern;
                 self.defining_patterns_start = null;
                 self.defining_pattern = null;
                 defer self.defining_patterns_start = saved_defining_patterns_start;
                 defer self.defining_pattern = saved_defining_pattern;
+
+                // Canonicalize the guard expression (if present)
+                const can_guard: ?Expr.Idx = if (ast_branch.guard) |guard_expr_idx| blk: {
+                    const can_guard_result = try self.canonicalizeExpr(guard_expr_idx) orelse {
+                        break :blk null;
+                    };
+                    // Filter guard's free vars (pattern-bound vars are not truly free)
+                    if (can_guard_result.free_vars.len > 0) {
+                        const guard_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_guard_result.free_vars);
+                        self.scratch_free_vars.clearFrom(body_free_vars_start);
+                        var bound_vars_view = self.scratch_bound_vars.setViewFrom(branch_bound_vars_top);
+                        defer bound_vars_view.deinit();
+                        for (guard_free_vars_slice) |fv| {
+                            if (!bound_vars_view.contains(fv)) {
+                                try self.scratch_free_vars.append(fv);
+                            }
+                        }
+                    }
+                    break :blk can_guard_result.idx;
+                } else null;
+
+                // Update start for body free vars (after guard's filtered free vars)
+                const body_free_vars_start_after_guard = self.scratch_free_vars.top();
 
                 // Canonicalize the branch's body
                 const can_body = try self.canonicalizeExpr(ast_branch.body) orelse {
@@ -6398,7 +6437,7 @@ pub fn canonicalizeExpr(
                     // Copy the free vars we need to filter
                     const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_body.free_vars);
                     // Clear back to before body canonicalization
-                    self.scratch_free_vars.clearFrom(body_free_vars_start);
+                    self.scratch_free_vars.clearFrom(body_free_vars_start_after_guard);
                     // Re-add only filtered vars (not bound by branch patterns)
                     var bound_vars_view = self.scratch_bound_vars.setViewFrom(branch_bound_vars_top);
                     defer bound_vars_view.deinit();
@@ -6413,7 +6452,7 @@ pub fn canonicalizeExpr(
                     Expr.Match.Branch{
                         .patterns = branch_pat_span,
                         .value = value_idx,
-                        .guard = null,
+                        .guard = can_guard,
                         .redundant = try self.env.types.fresh(),
                     },
                     region,
@@ -8495,7 +8534,10 @@ pub fn canonicalizePattern(
                         const record_destruct = CIR.Pattern.RecordDestruct{
                             .label = field_name_ident,
                             .ident = field_name_ident,
-                            .kind = .{ .Required = assign_pattern_idx },
+                            .kind = if (field.rest)
+                                .{ .Rest = assign_pattern_idx }
+                            else
+                                .{ .Required = assign_pattern_idx },
                         };
 
                         const destruct_idx = try self.env.addRecordDestruct(record_destruct, field_region);
@@ -8992,7 +9034,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
                 };
             }
 
-            const dec_num = @as(i128, @intFromFloat(rounded_val));
+            const dec_num = builtins.compiler_rt_128.f64_to_i128(rounded_val);
 
             // Check if the value is too small (would round to 0 or near 0)
             // This prevents loss of precision for very small numbers like 1e-40

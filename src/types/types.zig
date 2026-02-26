@@ -32,7 +32,7 @@ test {
     // If it went up, please make sure your changes are absolutely required!
     try std.testing.expectEqual(32, @sizeOf(Descriptor));
     try std.testing.expectEqual(28, @sizeOf(Content));
-    try std.testing.expectEqual(12, @sizeOf(Alias));
+    try std.testing.expectEqual(16, @sizeOf(Alias));
     try std.testing.expectEqual(24, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(20, @sizeOf(NominalType)); // Increased from 16 due to is_opaque field
@@ -286,6 +286,9 @@ pub const Rigid = struct {
 pub const Alias = struct {
     ident: TypeIdent,
     vars: Var.SafeList.NonEmptyRange,
+    /// The full module path where this alias type was originally defined
+    /// (e.g., "Json.Decode" or "mypackage.Data.Person")
+    origin_module: Ident.Idx,
 };
 
 /// Represents an ident of a type
@@ -294,18 +297,6 @@ pub const TypeIdent = struct {
     const Self = @This();
 
     ident_idx: Ident.Idx,
-    // TODO: Add module ident?
-
-    pub fn eql(store: *const Ident.Store, a: Self, b: Self) bool {
-        return Self.order(store, a, b) == .eq;
-    }
-
-    /// Get the ordering of how a compares to b
-    pub fn order(store: *const Ident.Store, a: Self, b: Self) std.math.Order {
-        const a_text = store.getText(a.ident_idx);
-        const b_text = store.getText(b.ident_idx);
-        return std.mem.order(u8, a_text, b_text);
-    }
 };
 
 // flat types //

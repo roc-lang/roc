@@ -7,6 +7,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
 const builtins = @import("builtins");
+const i128h = builtins.compiler_rt_128;
 const can = @import("can");
 const check_mod = @import("check");
 const types_mod = @import("types");
@@ -238,7 +239,7 @@ pub const ComptimeEvaluator = struct {
         const expr = self.env.store.getExpr(expr_idx);
 
         const is_lambda = switch (expr) {
-            .e_lambda, .e_closure, .e_low_level_lambda => true,
+            .e_lambda, .e_closure => true,
             .e_runtime_error => return EvalResult{
                 .crash = .{
                     .message = "Runtime error in expression",
@@ -421,7 +422,7 @@ pub const ComptimeEvaluator = struct {
                         const scaled_value = dec_value.num;
 
                         // Unscale by dividing by 10^18 to get the original literal value
-                        const unscaled_value = @divTrunc(scaled_value, builtins.dec.RocDec.one_point_zero_i128);
+                        const unscaled_value = i128h.divTrunc_i128(scaled_value, builtins.dec.RocDec.one_point_zero_i128);
 
                         // Create IntValue and fold as Dec
                         const int_value = CIR.IntValue{
@@ -869,7 +870,7 @@ pub const ComptimeEvaluator = struct {
                     .dec => {
                         const dec_value = stack_value.asDec(self.get_ops());
                         const scaled_value = dec_value.num;
-                        const unscaled_value = @divTrunc(scaled_value, builtins.dec.RocDec.one_point_zero_i128);
+                        const unscaled_value = i128h.divTrunc_i128(scaled_value, builtins.dec.RocDec.one_point_zero_i128);
 
                         const int_value = CIR.IntValue{
                             .bytes = @bitCast(unscaled_value),
@@ -1349,7 +1350,7 @@ pub const ComptimeEvaluator = struct {
                 // For user-defined types, use interpreter's module lookup
                 break :blk self.interpreter.module_envs.get(origin_module_ident) orelse {
                     // Module not found - might be current module
-                    if (origin_module_ident == self.env.module_name_idx) {
+                    if (origin_module_ident == self.env.qualified_module_ident) {
                         break :blk self.env;
                     }
                     // Unknown module - skip for now
@@ -1463,7 +1464,7 @@ pub const ComptimeEvaluator = struct {
         const f64_value: f64 = switch (current_expr) {
             .e_dec => |dec| blk: {
                 // Dec is stored as i128 scaled by 10^18
-                const scaled = @as(f64, @floatFromInt(dec.value.num));
+                const scaled = builtins.compiler_rt_128.i128_to_f64(dec.value.num);
                 break :blk scaled / 1e18;
             },
             .e_dec_small => |small| blk: {
@@ -1675,13 +1676,18 @@ pub const ComptimeEvaluator = struct {
             return false;
         }
 
-        // Check if this is a low-level lambda (builtin type) or a user-defined function
+        // Check if this is a low-level operation (builtin type) or a user-defined function
         const lambda_expr = origin_env.store.getExpr(closure_header.lambda_expr_idx);
 
+        // Extract low-level op from e_lambda whose body is e_run_low_level
+        const ll_op: ?CIR.Expr.LowLevel = if (lambda_expr == .e_lambda) blk: {
+            const body = origin_env.store.getExpr(lambda_expr.e_lambda.body);
+            break :blk if (body == .e_run_low_level) body.e_run_low_level.op else null;
+        } else null;
+
         var result: eval_mod.StackValue = undefined;
-        if (lambda_expr == .e_low_level_lambda) {
+        if (ll_op) |low_level_op| {
             // Builtin type: dispatch directly to low-level implementation
-            const low_level = lambda_expr.e_low_level_lambda;
 
             // Get return type for low-level builtin
             // We need to translate the type variable for the result type
@@ -1712,7 +1718,7 @@ pub const ComptimeEvaluator = struct {
 
             // Call the low-level builtin with our Numeral argument and target type
             var args = [_]eval_mod.StackValue{num_literal_record};
-            result = self.interpreter.callLowLevelBuiltinWithTargetType(low_level.op, &args, roc_ops, return_rt_var, target_rt_var) catch |err| {
+            result = self.interpreter.callLowLevelBuiltinWithTargetType(low_level_op, &args, roc_ops, return_rt_var, target_rt_var) catch |err| {
                 // Include crash message if available for better debugging
                 const crash_msg = self.crash.crashMessage() orelse "no crash message";
                 const error_msg = try self.problems.putFmtExtraString(

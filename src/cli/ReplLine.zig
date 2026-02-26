@@ -323,19 +323,45 @@ fn helper(self: *ReplLine, outlive: Allocator, prompt: []const u8, out: *std.Io.
     try out.writeAll(prompt);
     try out.flush();
 
+    var read_buf: [256]u8 = undefined;
+
     while (true) : ({
         try out.flush();
     }) {
-        state.bytes_read = try in.read(&state.in_buffer);
+        const total = try in.read(&read_buf);
+        if (total == 0) continue;
 
-        const cmd = ReplLine.findCommandFn(&state);
-        cmd(&state) catch |err| {
-            switch (err) {
-                error.ExitRepl => return try outlive.dupe(u8, "exit"),
-                error.NewLine => break,
-                else => |readline_error| return readline_error,
+        var done = false;
+        var i: usize = 0;
+        while (i < total) {
+            const key = read_buf[i];
+
+            if (key == control_code.esc and i + 2 < total and read_buf[i + 1] == '[') {
+                // Escape sequence: copy 3 bytes into in_buffer for findCommandFn
+                state.in_buffer[0] = read_buf[i];
+                state.in_buffer[1] = read_buf[i + 1];
+                state.in_buffer[2] = read_buf[i + 2];
+                state.bytes_read = 3;
+                i += 3;
+            } else {
+                state.in_buffer[0] = key;
+                state.bytes_read = 1;
+                i += 1;
             }
-        };
+
+            const cmd = ReplLine.findCommandFn(&state);
+            cmd(&state) catch |err| {
+                switch (err) {
+                    error.ExitRepl => return try outlive.dupe(u8, "exit"),
+                    error.NewLine => {
+                        done = true;
+                        break;
+                    },
+                    else => |readline_error| return readline_error,
+                }
+            };
+        }
+        if (done) break;
     }
     try out.writeAll(NEW_LINE);
     try out.flush();

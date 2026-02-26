@@ -33,6 +33,7 @@ const runExpectStr = helpers.runExpectStr;
 const runExpectRecord = helpers.runExpectRecord;
 const runExpectListI64 = helpers.runExpectListI64;
 const runExpectListZst = helpers.runExpectListZst;
+const runExpectDec = helpers.runExpectDec;
 const ExpectedField = helpers.ExpectedField;
 
 const TraceWriterState = struct {
@@ -409,6 +410,20 @@ test "lambdas with capture" {
     , 60, .no_trace);
 }
 
+test "closure with many captures (struct_captures)" {
+    // 4 captures -> struct_captures representation
+    try runExpectI64(
+        \\{
+        \\    a = 100.I64
+        \\    b = 200.I64
+        \\    c = 300.I64
+        \\    d = 400.I64
+        \\    f = |n| a + b + c + d + n
+        \\    f(5.I64)
+        \\}
+    , 1005, .no_trace);
+}
+
 test "lambdas nested closures" {
     // Nested closures with block locals
     try runExpectI64(
@@ -462,6 +477,15 @@ test "decimal literal evaluation" {
     try runExpectSuccess("0.0dec", .no_trace);
     try runExpectSuccess("123.456dec", .no_trace);
     try runExpectSuccess("-1.5dec", .no_trace);
+}
+
+test "decimal arithmetic with negative values" {
+    // one_point_zero = 10^18 = 1_000_000_000_000_000_000
+    const one = 1_000_000_000_000_000_000;
+    try runExpectDec("-1.5dec", -one - one / 2, .no_trace);
+    try runExpectDec("1.5dec", one + one / 2, .no_trace);
+    try runExpectDec("-1.5dec + 2.5dec", one, .no_trace);
+    try runExpectDec("0.0dec - 1.0dec", -one, .no_trace);
 }
 
 test "float literal evaluation" {
@@ -876,13 +900,15 @@ test "ModuleEnv serialization and interpreter evaluation" {
             try deserialized_env.common.idents.interner.enableRuntimeInserts(gpa);
             try @constCast(builtin_module.env).common.idents.interner.enableRuntimeInserts(gpa);
 
-            // Fix up module_name_idx for deserialized modules (critical for method dispatch).
-            // Deserialized modules have module_name_idx set to NONE - we need to re-intern the name.
-            if (deserialized_env.module_name_idx.isNone() and deserialized_env.module_name.len > 0) {
-                deserialized_env.module_name_idx = try deserialized_env.insertIdent(base.Ident.for_text(deserialized_env.module_name));
+            // Fix up display_module_name_idx and qualified_module_ident for deserialized modules (critical for method dispatch).
+            // Deserialized modules have display_module_name_idx set to NONE - we need to re-intern the name.
+            if (deserialized_env.display_module_name_idx.isNone() and deserialized_env.module_name.len > 0) {
+                deserialized_env.display_module_name_idx = try deserialized_env.insertIdent(base.Ident.for_text(deserialized_env.module_name));
+                deserialized_env.qualified_module_ident = deserialized_env.display_module_name_idx;
             }
-            if (builtin_module.env.module_name_idx.isNone() and builtin_module.env.module_name.len > 0) {
-                @constCast(builtin_module.env).module_name_idx = try @constCast(builtin_module.env).insertIdent(base.Ident.for_text(builtin_module.env.module_name));
+            if (builtin_module.env.display_module_name_idx.isNone() and builtin_module.env.module_name.len > 0) {
+                @constCast(builtin_module.env).display_module_name_idx = try @constCast(builtin_module.env).insertIdent(base.Ident.for_text(builtin_module.env.module_name));
+                @constCast(builtin_module.env).qualified_module_ident = builtin_module.env.display_module_name_idx;
             }
 
             const builtin_types_local = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
@@ -1068,6 +1094,331 @@ test "nominal type equality - nested structures with Bool" {
     try runExpectBool("{ outer: { inner: Bool.True } } == { outer: { inner: Bool.True } }", true, .no_trace);
     try runExpectBool("{ outer: { inner: Bool.True } } == { outer: { inner: Bool.False } }", false, .no_trace);
     try runExpectBool("((Bool.True, Bool.False), Bool.True) == ((Bool.True, Bool.False), Bool.True)", true, .no_trace);
+}
+
+// Tests for tag union equality
+
+test "tag union equality - same tag no payload" {
+    try runExpectBool("Ok == Ok", true, .no_trace);
+    try runExpectBool("Err == Err", true, .no_trace);
+    try runExpectBool("Ok == Err", false, .no_trace);
+    try runExpectBool("Err == Ok", false, .no_trace);
+}
+
+test "tag union equality - same tag with payload" {
+    try runExpectBool("Ok(1) == Ok(1)", true, .no_trace);
+    try runExpectBool("Ok(1) == Ok(2)", false, .no_trace);
+    try runExpectBool("Err(1) == Err(1)", true, .no_trace);
+}
+
+test "tag union equality - different tags with payload" {
+    try runExpectBool(
+        \\{
+        \\    x = Ok(1)
+        \\    y = if Bool.False Ok(1) else Err(1)
+        \\    x == y
+        \\}
+    , false, .no_trace);
+}
+
+test "tag union equality - string payloads" {
+    try runExpectBool("Ok(\"hello\") == Ok(\"hello\")", true, .no_trace);
+    try runExpectBool("Ok(\"hello\") == Ok(\"world\")", false, .no_trace);
+}
+
+test "tag union equality - three or more tags" {
+    // Use match to produce values of the same tag union type with 3 variants
+    try runExpectBool(
+        \\{
+        \\    x = Red
+        \\    y = Red
+        \\    x == y
+        \\}
+    , true, .no_trace);
+    try runExpectBool(
+        \\{
+        \\    x = Red
+        \\    y = if Bool.True Red else if Bool.True Green else Blue
+        \\    x == y
+        \\}
+    , true, .no_trace);
+    try runExpectBool(
+        \\{
+        \\    x = Red
+        \\    y = if Bool.False Red else Green
+        \\    x == y
+        \\}
+    , false, .no_trace);
+}
+
+// Tests for inequality operator (!=) on structural types
+
+test "record inequality" {
+    try runExpectBool("{ x: 1, y: 2 } != { x: 1, y: 2 }", false, .no_trace);
+    try runExpectBool("{ x: 1, y: 2 } != { x: 1, y: 3 }", true, .no_trace);
+    try runExpectBool("{ x: 1, y: 2 } != { y: 2, x: 1 }", false, .no_trace);
+}
+
+test "tuple inequality" {
+    try runExpectBool("(1, 2) != (1, 2)", false, .no_trace);
+    try runExpectBool("(1, 2) != (1, 3)", true, .no_trace);
+}
+
+test "tag union inequality" {
+    try runExpectBool("Ok == Ok", true, .no_trace);
+    try runExpectBool("Ok != Ok", false, .no_trace);
+    try runExpectBool("Ok != Err", true, .no_trace);
+    try runExpectBool("Ok(1) != Ok(1)", false, .no_trace);
+    try runExpectBool("Ok(1) != Ok(2)", true, .no_trace);
+}
+
+// Tests for mixed structural types (combinations of records, tuples, tag unions)
+
+test "record containing tuple equality" {
+    try runExpectBool("{ pair: (1, 2) } == { pair: (1, 2) }", true, .no_trace);
+    try runExpectBool("{ pair: (1, 2) } == { pair: (1, 3) }", false, .no_trace);
+}
+
+test "tuple containing record equality" {
+    try runExpectBool("({ x: 1 }, 2) == ({ x: 1 }, 2)", true, .no_trace);
+    try runExpectBool("({ x: 1 }, 2) == ({ x: 9 }, 2)", false, .no_trace);
+}
+
+test "record with multiple types" {
+    try runExpectBool(
+        \\{ name: "alice", age: 30 } == { name: "alice", age: 30 }
+    , true, .no_trace);
+    try runExpectBool(
+        \\{ name: "alice", age: 30 } == { name: "bob", age: 30 }
+    , false, .no_trace);
+    try runExpectBool(
+        \\{ name: "alice", age: 30 } == { name: "alice", age: 31 }
+    , false, .no_trace);
+}
+
+test "deeply nested mixed structures" {
+    try runExpectBool(
+        \\{ a: (1, { b: 2 }), c: 3 } == { a: (1, { b: 2 }), c: 3 }
+    , true, .no_trace);
+    try runExpectBool(
+        \\{ a: (1, { b: 2 }), c: 3 } == { a: (1, { b: 9 }), c: 3 }
+    , false, .no_trace);
+}
+
+test "tuple of tuples equality" {
+    try runExpectBool("((1, 2), (3, 4)) == ((1, 2), (3, 4))", true, .no_trace);
+    try runExpectBool("((1, 2), (3, 4)) == ((1, 2), (3, 5))", false, .no_trace);
+}
+
+test "record with string and bool fields" {
+    try runExpectBool(
+        \\{ name: "hello", active: Bool.True } == { name: "hello", active: Bool.True }
+    , true, .no_trace);
+    try runExpectBool(
+        \\{ name: "hello", active: Bool.True } == { name: "hello", active: Bool.False }
+    , false, .no_trace);
+}
+
+test "tag union inside record equality" {
+    try runExpectBool(
+        \\{
+        \\    a = { status: Ok(42) }
+        \\    b = { status: Ok(42) }
+        \\    a == b
+        \\}
+    , true, .no_trace);
+    try runExpectBool(
+        \\{
+        \\    a = { status: Ok(42) }
+        \\    b = { status: Ok(99) }
+        \\    a == b
+        \\}
+    , false, .no_trace);
+}
+
+test "record inside tag union equality" {
+    try runExpectBool("Ok({ x: 1, y: 2 }) == Ok({ x: 1, y: 2 })", true, .no_trace);
+    try runExpectBool("Ok({ x: 1, y: 2 }) == Ok({ x: 1, y: 9 })", false, .no_trace);
+}
+
+test "tag union inside tuple equality" {
+    try runExpectBool("(Ok(1), 2) == (Ok(1), 2)", true, .no_trace);
+    try runExpectBool("(Ok(1), 2) == (Ok(9), 2)", false, .no_trace);
+}
+
+test "tuple inside tag union equality" {
+    try runExpectBool("Ok((1, 2)) == Ok((1, 2))", true, .no_trace);
+    try runExpectBool("Ok((1, 2)) == Ok((1, 9))", false, .no_trace);
+}
+
+test "record inside tag union inside tuple equality" {
+    // Three-deep nesting: tuple containing tag union containing record
+    try runExpectBool(
+        \\(Ok({ x: 1, y: 2 }), 42) == (Ok({ x: 1, y: 2 }), 42)
+    , true, .no_trace);
+    try runExpectBool(
+        \\(Ok({ x: 1, y: 2 }), 42) == (Ok({ x: 1, y: 9 }), 42)
+    , false, .no_trace);
+}
+
+test "tuple inside record inside tag union equality" {
+    // Three-deep nesting: tag union containing record containing tuple
+    try runExpectBool(
+        \\Ok({ pair: (1, 2), val: 99 }) == Ok({ pair: (1, 2), val: 99 })
+    , true, .no_trace);
+    try runExpectBool(
+        \\Ok({ pair: (1, 2), val: 99 }) == Ok({ pair: (1, 9), val: 99 })
+    , false, .no_trace);
+}
+
+test "tag union inside record inside tuple equality" {
+    // Three-deep nesting: tuple containing record containing tag union
+    try runExpectBool(
+        \\({ result: Ok(1) }, 99) == ({ result: Ok(1) }, 99)
+    , true, .no_trace);
+    try runExpectBool(
+        \\({ result: Ok(1) }, 99) == ({ result: Ok(2) }, 99)
+    , false, .no_trace);
+}
+
+test "four-deep nested equality" {
+    // Record → tuple → tag union → record
+    try runExpectBool(
+        \\{ data: (Ok({ val: 42 }), 1) } == { data: (Ok({ val: 42 }), 1) }
+    , true, .no_trace);
+    try runExpectBool(
+        \\{ data: (Ok({ val: 42 }), 1) } == { data: (Ok({ val: 99 }), 1) }
+    , false, .no_trace);
+}
+
+// Tests for heap-type fields (long strings beyond SSO) inside structural types.
+// These exercise layout-aware comparison rather than raw byte comparison,
+// ensuring heap pointers are compared by content, not address.
+
+test "record with long string field equality" {
+    // Long strings exceed SSO (~23 bytes), forcing heap allocation
+    try runExpectBool(
+        \\{ name: "this string is long enough to avoid SSO optimization" } == { name: "this string is long enough to avoid SSO optimization" }
+    , true, .no_trace);
+    try runExpectBool(
+        \\{ name: "this string is long enough to avoid SSO optimization" } == { name: "different long string that also avoids SSO optimization" }
+    , false, .no_trace);
+}
+
+test "record with long string field inequality" {
+    try runExpectBool(
+        \\{ name: "this string is long enough to avoid SSO optimization" } != { name: "this string is long enough to avoid SSO optimization" }
+    , false, .no_trace);
+    try runExpectBool(
+        \\{ name: "this string is long enough to avoid SSO optimization" } != { name: "different long string that also avoids SSO optimization" }
+    , true, .no_trace);
+}
+
+test "tuple with long string element equality" {
+    try runExpectBool(
+        \\("this string is long enough to avoid SSO optimization", 42) == ("this string is long enough to avoid SSO optimization", 42)
+    , true, .no_trace);
+    try runExpectBool(
+        \\("this string is long enough to avoid SSO optimization", 42) == ("different long string that also avoids SSO optimization", 42)
+    , false, .no_trace);
+}
+
+test "record with multiple long string fields equality" {
+    try runExpectBool(
+        \\{ a: "first long string exceeding SSO limit!!", b: "second long string exceeding SSO limit!" } == { a: "first long string exceeding SSO limit!!", b: "second long string exceeding SSO limit!" }
+    , true, .no_trace);
+    try runExpectBool(
+        \\{ a: "first long string exceeding SSO limit!!", b: "second long string exceeding SSO limit!" } == { a: "first long string exceeding SSO limit!!", b: "DIFFERENT long string exceeding SSO!!!!" }
+    , false, .no_trace);
+}
+
+test "long string inside record inside tuple equality" {
+    try runExpectBool(
+        \\({ name: "this string is long enough to avoid SSO optimization" }, 1) == ({ name: "this string is long enough to avoid SSO optimization" }, 1)
+    , true, .no_trace);
+    try runExpectBool(
+        \\({ name: "this string is long enough to avoid SSO optimization" }, 1) == ({ name: "different long string that also avoids SSO optimization" }, 1)
+    , false, .no_trace);
+}
+
+test "tag union with long string payload equality" {
+    try runExpectBool(
+        \\Ok("this string is long enough to avoid SSO optimization") == Ok("this string is long enough to avoid SSO optimization")
+    , true, .no_trace);
+    try runExpectBool(
+        \\Ok("this string is long enough to avoid SSO optimization") == Ok("different long string that also avoids SSO optimization")
+    , false, .no_trace);
+}
+
+test "tag union with long string payload inequality" {
+    try runExpectBool(
+        \\Ok("this string is long enough to avoid SSO optimization") != Ok("this string is long enough to avoid SSO optimization")
+    , false, .no_trace);
+    try runExpectBool(
+        \\Ok("this string is long enough to avoid SSO optimization") != Ok("different long string that also avoids SSO optimization")
+    , true, .no_trace);
+}
+
+// Tests for equality in control flow contexts
+
+test "equality result used in if condition" {
+    try runExpectI64(
+        \\if { x: 1 } == { x: 1 } 42 else 0
+    , 42, .no_trace);
+    try runExpectI64(
+        \\if { x: 1 } == { x: 2 } 42 else 0
+    , 0, .no_trace);
+}
+
+test "equality with variable bindings" {
+    try runExpectBool(
+        \\{
+        \\    a = { x: 10, y: 20 }
+        \\    b = { x: 10, y: 20 }
+        \\    a == b
+        \\}
+    , true, .no_trace);
+    try runExpectBool(
+        \\{
+        \\    a = { x: 10, y: 20 }
+        \\    b = { x: 10, y: 99 }
+        \\    a == b
+        \\}
+    , false, .no_trace);
+}
+
+test "inequality with variable bindings - tuples" {
+    try runExpectBool(
+        \\{
+        \\    a = (1, 2, 3)
+        \\    b = (1, 2, 3)
+        \\    a != b
+        \\}
+    , false, .no_trace);
+    try runExpectBool(
+        \\{
+        \\    a = (1, 2, 3)
+        \\    b = (1, 2, 4)
+        \\    a != b
+        \\}
+    , true, .no_trace);
+}
+
+test "inequality with variable bindings - records" {
+    try runExpectBool(
+        \\{
+        \\    a = { x: 10, y: 20 }
+        \\    b = { x: 10, y: 20 }
+        \\    a != b
+        \\}
+    , false, .no_trace);
+    try runExpectBool(
+        \\{
+        \\    a = { x: 10, y: 20 }
+        \\    b = { x: 10, y: 99 }
+        \\    a != b
+        \\}
+    , true, .no_trace);
 }
 
 // Tests for List.fold with record accumulators
@@ -1289,6 +1640,14 @@ test "match with list destructuring - baseline" {
     try runExpectI64(
         "match [1, 2, 3] { [a, b, c] => a + b + c, _ => 0 }",
         6,
+        .no_trace,
+    );
+}
+
+test "match with pattern alternatives" {
+    try runExpectI64(
+        "match Err(42) { Ok(x) | Err(x) => x, _ => 0 }",
+        42,
         .no_trace,
     );
 }
@@ -2201,10 +2560,10 @@ test "debug 8783a: lambda with tag match called directly" {
         \\{
         \\    f = |child|
         \\        match child {
-        \\            Text(_) => 1.I64
-        \\            Element(_, _) => 10.I64
+        \\            Aaa(_, _) => 10.I64
+        \\            Bbb(_) => 1.I64
         \\        }
-        \\    f(Text("hello"))
+        \\    f(Bbb(42.I64))
         \\}
     , 1, .no_trace);
 }
@@ -3070,6 +3429,55 @@ test "Bool in record field - bug confirmation" {
     try runExpectBool("{ flag: Bool.False }.flag", false, .no_trace);
 }
 
+test "polymorphic tag union payload substitution: extract payload" {
+    // Tests that `a -> I64` is discovered from the Ok tag's payload
+    try runExpectI64(
+        \\{
+        \\    second : [Left(a), Right(b)] -> b
+        \\    second = |either| match either {
+        \\        Left(_) => 0i64
+        \\        Right(val) => val
+        \\    }
+        \\
+        \\    input : [Left(I64), Right(I64)]
+        \\    input = Right(42i64)
+        \\    second(input)
+        \\}
+    , 42, .no_trace);
+}
+
+test "polymorphic tag union payload substitution: multiple type vars" {
+    // Tests that `e -> Str` is discovered from the Err tag's payload
+    try runExpectStr(
+        \\{
+        \\    get_err : [Ok(a), Err(e)] -> e
+        \\    get_err = |result| match result {
+        \\        Ok(_) => ""
+        \\        Err(e) => e
+        \\    }
+        \\
+        \\    val : [Ok(I64), Err(Str)]
+        \\    val = Err("hello")
+        \\    get_err(val)
+        \\}
+    , "hello", .no_trace);
+}
+
+test "polymorphic tag union payload substitution: wrap and unwrap" {
+    // Tests that `a -> I64` is discovered from the return type's tag payload
+    try runExpectI64(
+        \\{
+        \\    wrap : a -> [Val(a)]
+        \\    wrap = |x| Val(x)
+        \\
+        \\    result = wrap(42)
+        \\    match result {
+        \\        Val(n) => n
+        \\    }
+        \\}
+    , 42, .no_trace);
+}
+
 test "Bool in record with mixed alignment fields - bug confirmation" {
     // Test Bool in a record with fields of different alignments
     // Similar to the bug report: { key: U64, childCount: U32, isElement: Bool }
@@ -3078,3 +3486,132 @@ test "Bool in record with mixed alignment fields - bug confirmation" {
     try runExpectBool("{ key: 42u64, count: 1u32, flag: Bool.True }.flag", true, .no_trace);
     try runExpectBool("{ key: 42u64, count: 1u32, flag: Bool.False }.flag", false, .no_trace);
 }
+
+test "Str.trim" {
+    try runExpectStr("Str.trim(\"  hello  \")", "hello", .no_trace);
+    try runExpectStr("Str.trim(\"hello\")", "hello", .no_trace);
+    try runExpectStr("Str.trim(\"  \")", "", .no_trace);
+}
+
+test "Str.trim_start" {
+    try runExpectStr("Str.trim_start(\"  hello  \")", "hello  ", .no_trace);
+    try runExpectStr("Str.trim_start(\"hello\")", "hello", .no_trace);
+}
+
+test "Str.trim_end" {
+    try runExpectStr("Str.trim_end(\"  hello  \")", "  hello", .no_trace);
+    try runExpectStr("Str.trim_end(\"hello\")", "hello", .no_trace);
+}
+
+test "Str.with_ascii_lowercased" {
+    try runExpectStr("Str.with_ascii_lowercased(\"HELLO\")", "hello", .no_trace);
+    try runExpectStr("Str.with_ascii_lowercased(\"Hello World\")", "hello world", .no_trace);
+    try runExpectStr("Str.with_ascii_lowercased(\"abc\")", "abc", .no_trace);
+}
+
+test "Str.with_ascii_uppercased" {
+    try runExpectStr("Str.with_ascii_uppercased(\"hello\")", "HELLO", .no_trace);
+    try runExpectStr("Str.with_ascii_uppercased(\"Hello World\")", "HELLO WORLD", .no_trace);
+    try runExpectStr("Str.with_ascii_uppercased(\"ABC\")", "ABC", .no_trace);
+}
+
+test "Str.caseless_ascii_equals" {
+    try runExpectBool("Str.caseless_ascii_equals(\"hello\", \"HELLO\")", true, .no_trace);
+    try runExpectBool("Str.caseless_ascii_equals(\"abc\", \"abc\")", true, .no_trace);
+    try runExpectBool("Str.caseless_ascii_equals(\"abc\", \"def\")", false, .no_trace);
+}
+
+test "Str.repeat" {
+    try runExpectStr("Str.repeat(\"ab\", 3)", "ababab", .no_trace);
+    try runExpectStr("Str.repeat(\"x\", 1)", "x", .no_trace);
+    try runExpectStr("Str.repeat(\"x\", 0)", "", .no_trace);
+}
+
+test "Str.with_prefix" {
+    try runExpectStr("Str.with_prefix(\"world\", \"hello \")", "hello world", .no_trace);
+    try runExpectStr("Str.with_prefix(\"bar\", \"\")", "bar", .no_trace);
+}
+
+test "polymorphic closure capture duplication during monomorphization" {
+    // Regression test: when a polymorphic function creates a closure that captures
+    // its argument, each specialization must get independent copies of the captures.
+    // Without proper duplication, specializations share capture data, causing corruption.
+
+    // Polymorphic function that returns a closure capturing its argument,
+    // called with both integer and string types.
+    try runExpectI64(
+        \\{
+        \\    make_getter = |n| |_x| n
+        \\    get_num = make_getter(42)
+        \\    get_num(0)
+        \\}
+    , 42, .no_trace);
+
+    try runExpectStr(
+        \\{
+        \\    make_getter = |n| |_x| n
+        \\    get_str = make_getter("hello")
+        \\    get_str(0)
+        \\}
+    , "hello", .no_trace);
+}
+
+test "large record - chained higher-order calls with growing intermediates" {
+    // Simulates the record builder pattern: nested apply calls build up larger types
+    try runExpectStr(
+        \\{
+        \\    apply2 = |a, b, f| f(a, b)
+        \\    step1 = apply2("x_val", "y_val", |x, y| { x, y })
+        \\    result = apply2("w_val", step1.y, |w, y| { w, y })
+        \\    result.w
+        \\}
+    , "w_val", .no_trace);
+    try runExpectStr(
+        \\{
+        \\    apply2 = |a, b, f| f(a, b)
+        \\    step1 = apply2("x_val", "y_val", |x, y| { x, y })
+        \\    result = apply2("w_val", step1.y, |w, y| { w, y })
+        \\    result.y
+        \\}
+    , "y_val", .no_trace);
+}
+
+test "Str.drop_prefix" {
+    try runExpectStr("Str.drop_prefix(\"foobar\", \"foo\")", "bar", .no_trace);
+    try runExpectStr("Str.drop_prefix(\"foobar\", \"baz\")", "foobar", .no_trace);
+}
+
+test "Str.drop_suffix" {
+    try runExpectStr("Str.drop_suffix(\"foobar\", \"bar\")", "foo", .no_trace);
+    try runExpectStr("Str.drop_suffix(\"foobar\", \"baz\")", "foobar", .no_trace);
+}
+
+test "Str.release_excess_capacity" {
+    try runExpectStr("Str.release_excess_capacity(\"hello\")", "hello", .no_trace);
+}
+
+test "Str.split_on and Str.join_with" {
+    try runExpectStr(
+        \\{
+        \\    parts = Str.split_on("a,b,c", ",")
+        \\    Str.join_with(parts, "-")
+        \\}
+    , "a-b-c", .no_trace);
+}
+
+test "Str.join_with" {
+    try runExpectStr(
+        \\Str.join_with(["hello", "world"], " ")
+    , "hello world", .no_trace);
+}
+
+// Note: List.contains is implemented as List.any(list, |x| x == needle) in the builtins,
+// which goes through closure + higher-order function paths rather than the list_contains
+// low-level. The DevEvaluator doesn't currently support List.any with variable-capturing
+// closures, so List.contains tests are not included here. The list_contains low-level
+// codegen fix (H4) is tested via the LirCodeGen unit tests and will be exercised when
+// the full compilation pipeline (CIR -> MIR -> LIR -> codegen) is used.
+
+// Note: Str.from_utf8 returns a Result which requires match support in all evaluators.
+// It is tested indirectly via the encode/decode tests. The wasm codegen for it is implemented
+// but we don't add a standalone test here to avoid DevEvaluator limitations with Result matching.

@@ -1,7 +1,7 @@
-//! Tests for e_low_level_lambda runtime evaluation in the interpreter
+//! Tests for low_level runtime evaluation in the interpreter
 //!
 //! These tests verify that low-level operations (like Str.is_empty, List.concat) that are defined
-//! as e_low_level_lambda nodes correctly dispatch to their builtin implementations
+//! as low_level nodes correctly dispatch to their builtin implementations
 //! when called at compile-time, producing the correct runtime values.
 
 const std = @import("std");
@@ -262,7 +262,7 @@ fn evalModuleAndGetString(src: []const u8, decl_index: usize, _: std.mem.Allocat
     unreachable;
 }
 
-test "e_low_level_lambda - Str.is_empty returns True for empty string" {
+test "low_level - Str.is_empty returns True for empty string" {
     const src =
         \\x = Str.is_empty("")
     ;
@@ -271,7 +271,7 @@ test "e_low_level_lambda - Str.is_empty returns True for empty string" {
     try testing.expectEqualStrings("True", value);
 }
 
-test "e_low_level_lambda - Str.is_empty returns False for non-empty string" {
+test "low_level - Str.is_empty returns False for non-empty string" {
     const src =
         \\x = Str.is_empty("hello")
     ;
@@ -280,7 +280,7 @@ test "e_low_level_lambda - Str.is_empty returns False for non-empty string" {
     try testing.expectEqualStrings("False", value);
 }
 
-test "e_low_level_lambda - Str.is_empty in conditional" {
+test "low_level - Str.is_empty in conditional" {
     const src =
         \\x = if True {
         \\    Str.is_empty("")
@@ -293,7 +293,7 @@ test "e_low_level_lambda - Str.is_empty in conditional" {
     try testing.expectEqualStrings("True", value);
 }
 
-test "e_low_level_lambda - Str.concat with two non-empty strings" {
+test "low_level - Str.concat with two non-empty strings" {
     const src =
         \\x = Str.concat("hello", "world")
     ;
@@ -302,7 +302,7 @@ test "e_low_level_lambda - Str.concat with two non-empty strings" {
     try testing.expectEqualStrings("\"helloworld\"", value);
 }
 
-test "e_low_level_lambda - Str.concat with empty and non-empty string" {
+test "low_level - Str.concat with empty and non-empty string" {
     const src =
         \\x = Str.concat("", "test")
     ;
@@ -311,7 +311,7 @@ test "e_low_level_lambda - Str.concat with empty and non-empty string" {
     try testing.expectEqualStrings("\"test\"", value);
 }
 
-test "e_low_level_lambda - Str.concat with non-empty and empty string" {
+test "low_level - Str.concat with non-empty and empty string" {
     const src =
         \\x = Str.concat("test", "")
     ;
@@ -320,7 +320,7 @@ test "e_low_level_lambda - Str.concat with non-empty and empty string" {
     try testing.expectEqualStrings("\"test\"", value);
 }
 
-test "e_low_level_lambda - Str.concat with two empty strings" {
+test "low_level - Str.concat with two empty strings" {
     const src =
         \\x = Str.concat("", "")
     ;
@@ -329,7 +329,7 @@ test "e_low_level_lambda - Str.concat with two empty strings" {
     try testing.expectEqualStrings("\"\"", value);
 }
 
-test "e_low_level_lambda - Str.concat with special characters" {
+test "low_level - Str.concat with special characters" {
     const src =
         \\x = Str.concat("hello ", "world!")
     ;
@@ -338,7 +338,7 @@ test "e_low_level_lambda - Str.concat with special characters" {
     try testing.expectEqualStrings("\"hello world!\"", value);
 }
 
-test "e_low_level_lambda - Str.concat with longer strings" {
+test "low_level - Str.concat with longer strings" {
     const src =
         \\x = Str.concat("This is a longer string that contains about one hundred characters for testing concatenation.", " This is the second string that also has many characters in it for testing longer string operations.")
     ;
@@ -347,7 +347,7 @@ test "e_low_level_lambda - Str.concat with longer strings" {
     try testing.expectEqualStrings("\"This is a longer string that contains about one hundred characters for testing concatenation. This is the second string that also has many characters in it for testing longer string operations.\"", value);
 }
 
-test "e_low_level_lambda - Str.contains with substring in middle" {
+test "low_level - Str.contains with substring in middle" {
     const src =
         \\x = Str.contains("foobarbaz", "bar")
     ;
@@ -356,7 +356,7 @@ test "e_low_level_lambda - Str.contains with substring in middle" {
     try testing.expectEqualStrings("True", value);
 }
 
-test "e_low_level_lambda - Str.contains with non-matching strings" {
+test "low_level - Str.contains with non-matching strings" {
     const src =
         \\x = Str.contains("apple", "orange")
     ;
@@ -365,7 +365,7 @@ test "e_low_level_lambda - Str.contains with non-matching strings" {
     try testing.expectEqualStrings("False", value);
 }
 
-test "e_low_level_lambda - Str.contains with empty needle" {
+test "low_level - Str.contains with empty needle" {
     const src =
         \\x = Str.contains("anything", "")
     ;
@@ -374,7 +374,7 @@ test "e_low_level_lambda - Str.contains with empty needle" {
     try testing.expectEqualStrings("True", value);
 }
 
-test "e_low_level_lambda - Str.contains with substring at start" {
+test "low_level - Str.contains with substring at start" {
     const src =
         \\x = Str.contains("hello world", "hello")
     ;
@@ -383,7 +383,7 @@ test "e_low_level_lambda - Str.contains with substring at start" {
     try testing.expectEqualStrings("True", value);
 }
 
-test "e_low_level_lambda - Str.contains with substring at end" {
+test "low_level - Str.contains with substring at end" {
     const src =
         \\x = Str.contains("hello world", "world")
     ;
@@ -392,7 +392,7 @@ test "e_low_level_lambda - Str.contains with substring at end" {
     try testing.expectEqualStrings("True", value);
 }
 
-test "e_low_level_lambda - Str.contains with empty haystack" {
+test "low_level - Str.contains with empty haystack" {
     const src =
         \\x = Str.contains("", "hello")
     ;
@@ -401,7 +401,7 @@ test "e_low_level_lambda - Str.contains with empty haystack" {
     try testing.expectEqualStrings("False", value);
 }
 
-test "e_low_level_lambda - Str.contains with identical strings" {
+test "low_level - Str.contains with identical strings" {
     const src =
         \\x = Str.contains("test", "test")
     ;
@@ -410,7 +410,7 @@ test "e_low_level_lambda - Str.contains with identical strings" {
     try testing.expectEqualStrings("True", value);
 }
 
-test "e_low_level_lambda - Str.caseless_ascii_equals with equal strings" {
+test "low_level - Str.caseless_ascii_equals with equal strings" {
     const src =
         \\x = Str.caseless_ascii_equals("hello", "hello")
     ;
@@ -419,7 +419,7 @@ test "e_low_level_lambda - Str.caseless_ascii_equals with equal strings" {
     try testing.expectEqualStrings("True", value);
 }
 
-test "e_low_level_lambda - Str.caseless_ascii_equals with different case" {
+test "low_level - Str.caseless_ascii_equals with different case" {
     const src =
         \\x = Str.caseless_ascii_equals("hello", "HELLO")
     ;
@@ -428,7 +428,7 @@ test "e_low_level_lambda - Str.caseless_ascii_equals with different case" {
     try testing.expectEqualStrings("True", value);
 }
 
-test "e_low_level_lambda - Str.caseless_ascii_equals with different strings" {
+test "low_level - Str.caseless_ascii_equals with different strings" {
     const src =
         \\x = Str.caseless_ascii_equals("hello", "world")
     ;
@@ -437,7 +437,7 @@ test "e_low_level_lambda - Str.caseless_ascii_equals with different strings" {
     try testing.expectEqualStrings("False", value);
 }
 
-test "e_low_level_lambda - Str.caseless_ascii_equals with empty strings" {
+test "low_level - Str.caseless_ascii_equals with empty strings" {
     const src =
         \\x = Str.caseless_ascii_equals("", "")
     ;
@@ -446,7 +446,7 @@ test "e_low_level_lambda - Str.caseless_ascii_equals with empty strings" {
     try testing.expectEqualStrings("True", value);
 }
 
-test "e_low_level_lambda - Str.caseless_ascii_equals with empty and non-empty string" {
+test "low_level - Str.caseless_ascii_equals with empty and non-empty string" {
     const src =
         \\x = Str.caseless_ascii_equals("", "test")
     ;
@@ -455,7 +455,7 @@ test "e_low_level_lambda - Str.caseless_ascii_equals with empty and non-empty st
     try testing.expectEqualStrings("False", value);
 }
 
-test "e_low_level_lambda - Str.caseless_ascii_equals with longer strings" {
+test "low_level - Str.caseless_ascii_equals with longer strings" {
     const src =
         \\x = Str.caseless_ascii_equals("This is a longer string that contains about one hundred characters for testing purposes.", "THIS IS A LONGER STRING THAT CONTAINS ABOUT ONE HUNDRED CHARACTERS FOR TESTING purposes.")
     ;
@@ -464,7 +464,7 @@ test "e_low_level_lambda - Str.caseless_ascii_equals with longer strings" {
     try testing.expectEqualStrings("True", value);
 }
 
-test "e_low_level_lambda - Str.caseless_ascii_equals long and small strings" {
+test "low_level - Str.caseless_ascii_equals long and small strings" {
     const src =
         \\x = Str.caseless_ascii_equals("THIS IS A LONGER STRING THAT CONTAINS ABOUT ONE HUNDRED CHARACTERS FOR TESTING purposes.", "This")
     ;
@@ -473,7 +473,7 @@ test "e_low_level_lambda - Str.caseless_ascii_equals long and small strings" {
     try testing.expectEqualStrings("False", value);
 }
 
-test "e_low_level_lambda - Str.caseless_ascii_equals small and long strings" {
+test "low_level - Str.caseless_ascii_equals small and long strings" {
     const src =
         \\x = Str.caseless_ascii_equals("This", "THIS IS A LONGER STRING THAT CONTAINS ABOUT ONE HUNDRED CHARACTERS FOR TESTING purposes.")
     ;
@@ -482,7 +482,7 @@ test "e_low_level_lambda - Str.caseless_ascii_equals small and long strings" {
     try testing.expectEqualStrings("False", value);
 }
 
-test "e_low_level_lambda - Str.caseless_ascii_equals eq with non-ascii chars" {
+test "low_level - Str.caseless_ascii_equals eq with non-ascii chars" {
     const src =
         \\x = Str.caseless_ascii_equals("COFFÉ", "coffÉ")
     ;
@@ -491,7 +491,7 @@ test "e_low_level_lambda - Str.caseless_ascii_equals eq with non-ascii chars" {
     try testing.expectEqualStrings("True", value);
 }
 
-test "e_low_level_lambda - Str.caseless_ascii_equals non-ascii casing difference" {
+test "low_level - Str.caseless_ascii_equals non-ascii casing difference" {
     const src =
         \\x = Str.caseless_ascii_equals("coffé", "coffÉ")
     ;
@@ -500,7 +500,7 @@ test "e_low_level_lambda - Str.caseless_ascii_equals non-ascii casing difference
     try testing.expectEqualStrings("False", value);
 }
 
-test "e_low_level_lambda - Str.with_ascii_lowercased with mixed case" {
+test "low_level - Str.with_ascii_lowercased with mixed case" {
     const src =
         \\x = Str.with_ascii_lowercased("HeLLo")
     ;
@@ -509,7 +509,7 @@ test "e_low_level_lambda - Str.with_ascii_lowercased with mixed case" {
     try testing.expectEqualStrings("\"hello\"", value);
 }
 
-test "e_low_level_lambda - Str.with_ascii_lowercased with already lowercase" {
+test "low_level - Str.with_ascii_lowercased with already lowercase" {
     const src =
         \\x = Str.with_ascii_lowercased("hello")
     ;
@@ -518,7 +518,7 @@ test "e_low_level_lambda - Str.with_ascii_lowercased with already lowercase" {
     try testing.expectEqualStrings("\"hello\"", value);
 }
 
-test "e_low_level_lambda - Str.with_ascii_lowercased with empty string" {
+test "low_level - Str.with_ascii_lowercased with empty string" {
     const src =
         \\x = Str.with_ascii_lowercased("")
     ;
@@ -527,7 +527,7 @@ test "e_low_level_lambda - Str.with_ascii_lowercased with empty string" {
     try testing.expectEqualStrings("\"\"", value);
 }
 
-test "e_low_level_lambda - Str.with_ascii_lowercased with non-ascii chars" {
+test "low_level - Str.with_ascii_lowercased with non-ascii chars" {
     const src =
         \\x = Str.with_ascii_lowercased("COFFÉ")
     ;
@@ -536,7 +536,7 @@ test "e_low_level_lambda - Str.with_ascii_lowercased with non-ascii chars" {
     try testing.expectEqualStrings("\"coffÉ\"", value);
 }
 
-test "e_low_level_lambda - Str.with_ascii_uppercased with mixed case" {
+test "low_level - Str.with_ascii_uppercased with mixed case" {
     const src =
         \\x = Str.with_ascii_uppercased("HeLLo")
     ;
@@ -545,7 +545,7 @@ test "e_low_level_lambda - Str.with_ascii_uppercased with mixed case" {
     try testing.expectEqualStrings("\"HELLO\"", value);
 }
 
-test "e_low_level_lambda - Str.with_ascii_uppercased with already uppercase" {
+test "low_level - Str.with_ascii_uppercased with already uppercase" {
     const src =
         \\x = Str.with_ascii_uppercased("HELLO")
     ;
@@ -554,7 +554,7 @@ test "e_low_level_lambda - Str.with_ascii_uppercased with already uppercase" {
     try testing.expectEqualStrings("\"HELLO\"", value);
 }
 
-test "e_low_level_lambda - Str.with_ascii_uppercased with empty string" {
+test "low_level - Str.with_ascii_uppercased with empty string" {
     const src =
         \\x = Str.with_ascii_uppercased("")
     ;
@@ -563,7 +563,7 @@ test "e_low_level_lambda - Str.with_ascii_uppercased with empty string" {
     try testing.expectEqualStrings("\"\"", value);
 }
 
-test "e_low_level_lambda - Str.with_ascii_uppercased with non-ascii chars" {
+test "low_level - Str.with_ascii_uppercased with non-ascii chars" {
     const src =
         \\x = Str.with_ascii_uppercased("coffÉ")
     ;
@@ -572,7 +572,7 @@ test "e_low_level_lambda - Str.with_ascii_uppercased with non-ascii chars" {
     try testing.expectEqualStrings("\"COFFÉ\"", value);
 }
 
-test "e_low_level_lambda - Str.with_ascii_uppercased long text" {
+test "low_level - Str.with_ascii_uppercased long text" {
     const src =
         \\x = Str.with_ascii_uppercased("coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ")
     ;
@@ -581,7 +581,7 @@ test "e_low_level_lambda - Str.with_ascii_uppercased long text" {
     try testing.expectEqualStrings("\"COFFÉ COFFÉ COFFÉ COFFÉ COFFÉ COFFÉ COFFÉ COFFÉ COFFÉ COFFÉ COFFÉ COFFÉ COFFÉ\"", value);
 }
 
-test "e_low_level_lambda - Str.trim with an empty string" {
+test "low_level - Str.trim with an empty string" {
     const src =
         \\x = Str.trim("")
     ;
@@ -590,7 +590,7 @@ test "e_low_level_lambda - Str.trim with an empty string" {
     try testing.expectEqualStrings("\"\"", value);
 }
 
-test "e_low_level_lambda - Str.trim with a whitespace string" {
+test "low_level - Str.trim with a whitespace string" {
     const src =
         \\x = Str.trim("   ")
     ;
@@ -599,7 +599,7 @@ test "e_low_level_lambda - Str.trim with a whitespace string" {
     try testing.expectEqualStrings("\"\"", value);
 }
 
-test "e_low_level_lambda - Str.trim with a non-whitespace string" {
+test "low_level - Str.trim with a non-whitespace string" {
     const src =
         \\x = Str.trim("  hello  ")
     ;
@@ -608,7 +608,7 @@ test "e_low_level_lambda - Str.trim with a non-whitespace string" {
     try testing.expectEqualStrings("\"hello\"", value);
 }
 
-test "e_low_level_lambda - Str.trim_start with an empty string" {
+test "low_level - Str.trim_start with an empty string" {
     const src =
         \\x = Str.trim_start("")
     ;
@@ -617,7 +617,7 @@ test "e_low_level_lambda - Str.trim_start with an empty string" {
     try testing.expectEqualStrings("\"\"", value);
 }
 
-test "e_low_level_lambda - Str.trim_start with a whitespace string" {
+test "low_level - Str.trim_start with a whitespace string" {
     const src =
         \\x = Str.trim_start("   ")
     ;
@@ -626,7 +626,7 @@ test "e_low_level_lambda - Str.trim_start with a whitespace string" {
     try testing.expectEqualStrings("\"\"", value);
 }
 
-test "e_low_level_lambda - Str.trim_start with a non-whitespace string" {
+test "low_level - Str.trim_start with a non-whitespace string" {
     const src =
         \\x = Str.trim_start("  hello  ")
     ;
@@ -635,7 +635,7 @@ test "e_low_level_lambda - Str.trim_start with a non-whitespace string" {
     try testing.expectEqualStrings("\"hello  \"", value);
 }
 
-test "e_low_level_lambda - Str.trim_end with an empty string" {
+test "low_level - Str.trim_end with an empty string" {
     const src =
         \\x = Str.trim_end("")
     ;
@@ -644,7 +644,7 @@ test "e_low_level_lambda - Str.trim_end with an empty string" {
     try testing.expectEqualStrings("\"\"", value);
 }
 
-test "e_low_level_lambda - Str.trim_end with a whitespace string" {
+test "low_level - Str.trim_end with a whitespace string" {
     const src =
         \\x = Str.trim_end("   ")
     ;
@@ -653,7 +653,7 @@ test "e_low_level_lambda - Str.trim_end with a whitespace string" {
     try testing.expectEqualStrings("\"\"", value);
 }
 
-test "e_low_level_lambda - Str.trim_end with a non-whitespace string" {
+test "low_level - Str.trim_end with a non-whitespace string" {
     const src =
         \\x = Str.trim_end("  hello  ")
     ;
@@ -662,7 +662,7 @@ test "e_low_level_lambda - Str.trim_end with a non-whitespace string" {
     try testing.expectEqualStrings("\"  hello\"", value);
 }
 
-test "e_low_level_lambda - List.concat with two non-empty lists" {
+test "low_level - List.concat with two non-empty lists" {
     const src =
         \\x = List.concat([1, 2], [3, 4])
         \\len = List.len(x)
@@ -673,7 +673,7 @@ test "e_low_level_lambda - List.concat with two non-empty lists" {
     try testing.expectEqual(@as(i128, 4), len_value);
 }
 
-test "e_low_level_lambda - List.concat with empty and non-empty list" {
+test "low_level - List.concat with empty and non-empty list" {
     const src =
         \\x = List.concat([], [1, 2, 3])
         \\len = List.len(x)
@@ -683,7 +683,7 @@ test "e_low_level_lambda - List.concat with empty and non-empty list" {
     try testing.expectEqual(@as(i128, 3), len_value);
 }
 
-test "e_low_level_lambda - List.concat with two empty lists" {
+test "low_level - List.concat with two empty lists" {
     const src =
         \\x : List(U64)
         \\x = List.concat([], [])
@@ -694,7 +694,7 @@ test "e_low_level_lambda - List.concat with two empty lists" {
     try testing.expectEqual(@as(i128, 0), len_value);
 }
 
-test "e_low_level_lambda - List.concat preserves order" {
+test "low_level - List.concat preserves order" {
     const src =
         \\x = List.concat([10, 20], [30, 40, 50])
         \\first = List.first(x)
@@ -705,7 +705,7 @@ test "e_low_level_lambda - List.concat preserves order" {
     try testing.expectEqualStrings("Ok(10.0)", first_value);
 }
 
-test "e_low_level_lambda - List.concat with Str.to_utf8 inside lambda (issue 8618)" {
+test "low_level - List.concat with Str.to_utf8 inside lambda (issue 8618)" {
     const src =
         \\test = |line| {
         \\    bytes = line.to_utf8()
@@ -733,7 +733,7 @@ test "top-level List.concat with Str.to_utf8 (value restriction check)" {
     try testing.expectEqualStrings("[97, 98, 99, 0]", value);
 }
 
-test "e_low_level_lambda - List.concat with strings (refcounted elements)" {
+test "low_level - List.concat with strings (refcounted elements)" {
     const src =
         \\x = List.concat(["hello", "world"], ["foo", "bar"])
         \\len = List.len(x)
@@ -743,7 +743,7 @@ test "e_low_level_lambda - List.concat with strings (refcounted elements)" {
     try testing.expectEqual(@as(i128, 4), len_value);
 }
 
-test "e_low_level_lambda - List.concat with nested lists (refcounted elements)" {
+test "low_level - List.concat with nested lists (refcounted elements)" {
     const src =
         \\x = List.concat([[1, 2], [3]], [[4, 5, 6]])
         \\len = List.len(x)
@@ -753,7 +753,7 @@ test "e_low_level_lambda - List.concat with nested lists (refcounted elements)" 
     try testing.expectEqual(@as(i128, 3), len_value);
 }
 
-test "e_low_level_lambda - List.concat with empty string list" {
+test "low_level - List.concat with empty string list" {
     const src =
         \\x = List.concat([], ["a", "b", "c"])
         \\len = List.len(x)
@@ -763,7 +763,7 @@ test "e_low_level_lambda - List.concat with empty string list" {
     try testing.expectEqual(@as(i128, 3), len_value);
 }
 
-test "e_low_level_lambda - List.concat with zero-sized type" {
+test "low_level - List.concat with zero-sized type" {
     const src =
         \\x : List({})
         \\x = List.concat([{}, {}], [{}, {}, {}])
@@ -774,7 +774,7 @@ test "e_low_level_lambda - List.concat with zero-sized type" {
     try testing.expectEqual(@as(i128, 5), len_value);
 }
 
-test "e_low_level_lambda - List.with_capacity of non refcounted elements creates empty list" {
+test "low_level - List.with_capacity of non refcounted elements creates empty list" {
     const src =
         \\x : List(U64)
         \\x = List.with_capacity(10)
@@ -785,7 +785,7 @@ test "e_low_level_lambda - List.with_capacity of non refcounted elements creates
     try testing.expectEqual(@as(i128, 0), len_value);
 }
 
-test "e_low_level_lambda - List.with_capacity of str (refcounted elements) creates empty list" {
+test "low_level - List.with_capacity of str (refcounted elements) creates empty list" {
     const src =
         \\x : List(Str)
         \\x = List.with_capacity(10)
@@ -796,7 +796,7 @@ test "e_low_level_lambda - List.with_capacity of str (refcounted elements) creat
     try testing.expectEqual(@as(i128, 0), len_value);
 }
 
-test "e_low_level_lambda - List.with_capacity of non refcounted elements can concat" {
+test "low_level - List.with_capacity of non refcounted elements can concat" {
     const src =
         \\y : List(U64)
         \\y = List.with_capacity(10)
@@ -808,7 +808,7 @@ test "e_low_level_lambda - List.with_capacity of non refcounted elements can con
     try testing.expectEqual(@as(i128, 1), len_value);
 }
 
-test "e_low_level_lambda - List.with_capacity of str (refcounted elements) can concat" {
+test "low_level - List.with_capacity of str (refcounted elements) can concat" {
     const src =
         \\y : List(Str)
         \\y = List.with_capacity(10)
@@ -820,7 +820,7 @@ test "e_low_level_lambda - List.with_capacity of str (refcounted elements) can c
     try testing.expectEqual(@as(i128, 2), len_value);
 }
 
-test "e_low_level_lambda - List.with_capacity without capacity, of str (refcounted elements) can concat" {
+test "low_level - List.with_capacity without capacity, of str (refcounted elements) can concat" {
     const src =
         \\y : List(Str)
         \\y = List.with_capacity(0)
@@ -832,7 +832,7 @@ test "e_low_level_lambda - List.with_capacity without capacity, of str (refcount
     try testing.expectEqual(@as(i128, 2), len_value);
 }
 
-test "e_low_level_lambda - List.with_capacity of zero-sized type creates empty list" {
+test "low_level - List.with_capacity of zero-sized type creates empty list" {
     const src =
         \\x : List({})
         \\x = List.with_capacity(10)
@@ -843,7 +843,7 @@ test "e_low_level_lambda - List.with_capacity of zero-sized type creates empty l
     try testing.expectEqual(@as(i128, 0), len_value);
 }
 
-test "e_low_level_lambda - List.append on non-empty list" {
+test "low_level - List.append on non-empty list" {
     const src =
         \\x = List.append([0, 1, 2, 3], 4)
         \\len = List.len(x)
@@ -853,7 +853,7 @@ test "e_low_level_lambda - List.append on non-empty list" {
     try testing.expectEqual(@as(i128, 5), len_value);
 }
 
-test "e_low_level_lambda - List.append on empty list" {
+test "low_level - List.append on empty list" {
     const src =
         \\x = List.append([], 0)
         \\got = List.get(x, 0)
@@ -864,7 +864,7 @@ test "e_low_level_lambda - List.append on empty list" {
     try testing.expectEqualStrings("Ok(0.0)", get_value);
 }
 
-test "e_low_level_lambda - List.append a list on empty list" {
+test "low_level - List.append a list on empty list" {
     const src =
         \\x = List.append([], [])
         \\len = List.len(x)
@@ -875,7 +875,7 @@ test "e_low_level_lambda - List.append a list on empty list" {
     try testing.expectEqual(@as(i128, 1), len_value);
 }
 
-test "e_low_level_lambda - List.append for strings" {
+test "low_level - List.append for strings" {
     const src =
         \\x = List.append(["cat", "chases"], "rat")
         \\len = List.len(x)
@@ -890,7 +890,7 @@ test "e_low_level_lambda - List.append for strings" {
     try testing.expectEqualStrings("Ok(\"rat\")", get_value);
 }
 
-test "e_low_level_lambda - List.append for list of lists" {
+test "low_level - List.append for list of lists" {
     const src =
         \\x = List.append([[0, 1], [2, 3, 4], [5, 6, 7]], [8,9])
         \\len = List.len(x)
@@ -900,7 +900,7 @@ test "e_low_level_lambda - List.append for list of lists" {
     try testing.expectEqual(@as(i128, 4), len_value);
 }
 
-test "e_low_level_lambda - List.append for list of tuples" {
+test "low_level - List.append for list of tuples" {
     const src =
         \\x = List.append([(-1, 0, 1), (2, 3, 4), (5, 6, 7)], (-2, -3, -4))
         \\len = List.len(x)
@@ -910,7 +910,7 @@ test "e_low_level_lambda - List.append for list of tuples" {
     try testing.expectEqual(@as(i128, 4), len_value);
 }
 
-test "e_low_level_lambda - List.append for list of records" {
+test "low_level - List.append for list of records" {
     const src =
         \\x = List.append([{x:"1", y: "1"}, {x: "2", y: "4"}, {x: "5", y: "7"}], {x: "2", y: "4"})
         \\len = List.len(x)
@@ -925,7 +925,7 @@ test "e_low_level_lambda - List.append for list of records" {
     try testing.expectEqualStrings("\"2\"", get_value);
 }
 
-test "e_low_level_lambda - List.append for already refcounted elt" {
+test "low_level - List.append for already refcounted elt" {
     const src =
         \\new = [8, 9]
         \\w = [new, new, new, [10, 11]]
@@ -937,7 +937,7 @@ test "e_low_level_lambda - List.append for already refcounted elt" {
     try testing.expectEqual(@as(i128, 4), len_value);
 }
 
-test "e_low_level_lambda - List.append for list of tuples with strings (issue 8650)" {
+test "low_level - List.append for list of tuples with strings (issue 8650)" {
     // This test reproduces issue #8650 - use-after-free when appending tuples containing strings.
     // The bug was that isRefcounted() returns false for tuples, so strings inside tuples
     // weren't being increffed before the append, leading to use-after-free.
@@ -950,7 +950,7 @@ test "e_low_level_lambda - List.append for list of tuples with strings (issue 86
     try testing.expectEqual(@as(i128, 2), len_value);
 }
 
-test "e_low_level_lambda - List.append tuple to empty list (issue 8758)" {
+test "low_level - List.append tuple to empty list (issue 8758)" {
     // This test reproduces issue #8758 - integer overflow when appending tuples containing
     // strings to an empty list. The bug was that isRefcounted() returns false for tuples,
     // causing allocation to use one memory layout but deallocation to use another, leading
@@ -964,7 +964,7 @@ test "e_low_level_lambda - List.append tuple to empty list (issue 8758)" {
     try testing.expectEqual(@as(i128, 1), len_value);
 }
 
-test "e_low_level_lambda - List.drop_at on an empty list at index 0" {
+test "low_level - List.drop_at on an empty list at index 0" {
     const src =
         \\x = List.drop_at([], 0)
         \\len = List.len(x)
@@ -974,7 +974,7 @@ test "e_low_level_lambda - List.drop_at on an empty list at index 0" {
     try testing.expectEqual(@as(i128, 0), len_value);
 }
 
-test "e_low_level_lambda - List.drop_at on an empty list at index >0" {
+test "low_level - List.drop_at on an empty list at index >0" {
     const src =
         \\x = List.drop_at([], 10)
         \\len = List.len(x)
@@ -984,7 +984,7 @@ test "e_low_level_lambda - List.drop_at on an empty list at index >0" {
     try testing.expectEqual(@as(i128, 0), len_value);
 }
 
-test "e_low_level_lambda - List.drop_at on non-empty list" {
+test "low_level - List.drop_at on non-empty list" {
     const src =
         \\x = List.drop_at([1, 2, 3], 0)
         \\len = List.len(x)
@@ -999,7 +999,7 @@ test "e_low_level_lambda - List.drop_at on non-empty list" {
     try testing.expectEqualStrings("Ok(2.0)", value);
 }
 
-test "e_low_level_lambda - List.drop_at out of bounds on non-empty list" {
+test "low_level - List.drop_at out of bounds on non-empty list" {
     const src =
         \\x = List.drop_at([1, 2, 3, 4, 5], 10)
         \\len = List.len(x)
@@ -1009,7 +1009,7 @@ test "e_low_level_lambda - List.drop_at out of bounds on non-empty list" {
     try testing.expectEqual(@as(i128, 5), len_value);
 }
 
-test "e_low_level_lambda - List.drop_at on refcounted List(Str)" {
+test "low_level - List.drop_at on refcounted List(Str)" {
     const src =
         \\x = List.drop_at(["cat", "chases", "rat"], 1)
         \\len = List.len(x)
@@ -1024,7 +1024,7 @@ test "e_low_level_lambda - List.drop_at on refcounted List(Str)" {
     try testing.expectEqualStrings("Ok(\"rat\")", value);
 }
 
-test "e_low_level_lambda - List.drop_at on refcounted List(List(Str))" {
+test "low_level - List.drop_at on refcounted List(List(Str))" {
     const src =
         \\x = List.drop_at([["two", "words"], [], ["a", "four", "word", "list"]], 1)
         \\len = List.len(x)
@@ -1039,7 +1039,7 @@ test "e_low_level_lambda - List.drop_at on refcounted List(List(Str))" {
     try testing.expectEqual(@as(i128, 4), elt_len_value);
 }
 
-test "e_low_level_lambda - List.sublist on empty list" {
+test "low_level - List.sublist on empty list" {
     const src =
         \\x = List.sublist([], {start: 0, len: 10})
         \\len = List.len(x)
@@ -1049,7 +1049,7 @@ test "e_low_level_lambda - List.sublist on empty list" {
     try testing.expectEqual(@as(i128, 0), len_value);
 }
 
-test "e_low_level_lambda - List.sublist on non-empty list" {
+test "low_level - List.sublist on non-empty list" {
     const src =
         \\x = List.sublist([0, 1, 2, 3, 4], {start: 1, len: 3})
         \\len = List.len(x)
@@ -1069,7 +1069,7 @@ test "e_low_level_lambda - List.sublist on non-empty list" {
     try testing.expectEqualStrings("Ok(3.0)", tail_value);
 }
 
-test "e_low_level_lambda - List.sublist start out of bounds" {
+test "low_level - List.sublist start out of bounds" {
     const src =
         \\x = List.sublist([0, 1, 2, 3, 4], {start: 100, len: 3})
         \\len = List.len(x)
@@ -1079,7 +1079,7 @@ test "e_low_level_lambda - List.sublist start out of bounds" {
     try testing.expectEqual(@as(i128, 0), len_value);
 }
 
-test "e_low_level_lambda - List.sublist requesting beyond end of list gives you input list" {
+test "low_level - List.sublist requesting beyond end of list gives you input list" {
     const src =
         \\x = List.sublist([0, 1, 2, 3, 4], {start: 0, len: 10000})
         \\len = List.len(x)
@@ -1089,7 +1089,7 @@ test "e_low_level_lambda - List.sublist requesting beyond end of list gives you 
     try testing.expectEqual(@as(i128, 5), len_value);
 }
 
-test "e_low_level_lambda - Dec.to_str returns string representation of decimal" {
+test "low_level - Dec.to_str returns string representation of decimal" {
     const src =
         \\a : Dec
         \\a = 123.45dec
@@ -1100,7 +1100,7 @@ test "e_low_level_lambda - Dec.to_str returns string representation of decimal" 
     try testing.expectEqualStrings("\"123.45\"", value);
 }
 
-test "e_low_level_lambda - Dec.to_str with negative decimal" {
+test "low_level - Dec.to_str with negative decimal" {
     const src =
         \\a : Dec
         \\a = -456.78dec
@@ -1111,7 +1111,7 @@ test "e_low_level_lambda - Dec.to_str with negative decimal" {
     try testing.expectEqualStrings("\"-456.78\"", value);
 }
 
-test "e_low_level_lambda - Dec.to_str with zero" {
+test "low_level - Dec.to_str with zero" {
     const src =
         \\a : Dec
         \\a = 0.0dec
@@ -1124,7 +1124,7 @@ test "e_low_level_lambda - Dec.to_str with zero" {
 
 // Integer to_str tests
 
-test "e_low_level_lambda - U8.to_str" {
+test "low_level - U8.to_str" {
     const src =
         \\a : U8
         \\a = 42u8
@@ -1135,7 +1135,7 @@ test "e_low_level_lambda - U8.to_str" {
     try testing.expectEqualStrings("\"42\"", value);
 }
 
-test "e_low_level_lambda - I8.to_str with negative" {
+test "low_level - I8.to_str with negative" {
     const src =
         \\a : I8
         \\a = -42i8
@@ -1146,7 +1146,7 @@ test "e_low_level_lambda - I8.to_str with negative" {
     try testing.expectEqualStrings("\"-42\"", value);
 }
 
-test "e_low_level_lambda - U16.to_str" {
+test "low_level - U16.to_str" {
     const src =
         \\a : U16
         \\a = 1000u16
@@ -1157,7 +1157,7 @@ test "e_low_level_lambda - U16.to_str" {
     try testing.expectEqualStrings("\"1000\"", value);
 }
 
-test "e_low_level_lambda - I16.to_str with negative" {
+test "low_level - I16.to_str with negative" {
     const src =
         \\a : I16
         \\a = -500i16
@@ -1168,7 +1168,7 @@ test "e_low_level_lambda - I16.to_str with negative" {
     try testing.expectEqualStrings("\"-500\"", value);
 }
 
-test "e_low_level_lambda - U32.to_str" {
+test "low_level - U32.to_str" {
     const src =
         \\a : U32
         \\a = 100000u32
@@ -1179,7 +1179,7 @@ test "e_low_level_lambda - U32.to_str" {
     try testing.expectEqualStrings("\"100000\"", value);
 }
 
-test "e_low_level_lambda - I32.to_str with negative" {
+test "low_level - I32.to_str with negative" {
     const src =
         \\a : I32
         \\a = -12345i32
@@ -1190,7 +1190,7 @@ test "e_low_level_lambda - I32.to_str with negative" {
     try testing.expectEqualStrings("\"-12345\"", value);
 }
 
-test "e_low_level_lambda - U64.to_str" {
+test "low_level - U64.to_str" {
     const src =
         \\a : U64
         \\a = 9876543210u64
@@ -1201,7 +1201,7 @@ test "e_low_level_lambda - U64.to_str" {
     try testing.expectEqualStrings("\"9876543210\"", value);
 }
 
-test "e_low_level_lambda - I64.to_str with negative" {
+test "low_level - I64.to_str with negative" {
     const src =
         \\a : I64
         \\a = -9876543210i64
@@ -1212,7 +1212,7 @@ test "e_low_level_lambda - I64.to_str with negative" {
     try testing.expectEqualStrings("\"-9876543210\"", value);
 }
 
-test "e_low_level_lambda - U128.to_str" {
+test "low_level - U128.to_str" {
     const src =
         \\a : U128
         \\a = 12345678901234567890u128
@@ -1223,7 +1223,7 @@ test "e_low_level_lambda - U128.to_str" {
     try testing.expectEqualStrings("\"12345678901234567890\"", value);
 }
 
-test "e_low_level_lambda - I128.to_str with negative" {
+test "low_level - I128.to_str with negative" {
     const src =
         \\a : I128
         \\a = -12345678901234567890i128
@@ -1236,7 +1236,7 @@ test "e_low_level_lambda - I128.to_str with negative" {
 
 // Float to_str tests
 
-test "e_low_level_lambda - F32.to_str" {
+test "low_level - F32.to_str" {
     const src =
         \\a : F32
         \\a = 3.14f32
@@ -1248,7 +1248,7 @@ test "e_low_level_lambda - F32.to_str" {
     try testing.expect(std.mem.startsWith(u8, value, "\"3.14"));
 }
 
-test "e_low_level_lambda - F64.to_str" {
+test "low_level - F64.to_str" {
     const src =
         \\a : F64
         \\a = 3.14159265359f64
@@ -1260,7 +1260,7 @@ test "e_low_level_lambda - F64.to_str" {
     try testing.expect(std.mem.startsWith(u8, value, "\"3.141592"));
 }
 
-test "e_low_level_lambda - F32.to_str with negative" {
+test "low_level - F32.to_str with negative" {
     const src =
         \\a : F32
         \\a = -2.5f32
@@ -1271,7 +1271,7 @@ test "e_low_level_lambda - F32.to_str with negative" {
     try testing.expect(std.mem.startsWith(u8, value, "\"-2.5"));
 }
 
-test "e_low_level_lambda - F64.to_str with negative" {
+test "low_level - F64.to_str with negative" {
     const src =
         \\a : F64
         \\a = -123.456f64
@@ -1284,7 +1284,7 @@ test "e_low_level_lambda - F64.to_str with negative" {
 
 // Str.starts_with tests
 
-test "e_low_level_lambda - Str.starts_with returns True for matching prefix" {
+test "low_level - Str.starts_with returns True for matching prefix" {
     const src =
         \\x = Str.starts_with("hello world", "hello")
     ;
@@ -1293,7 +1293,7 @@ test "e_low_level_lambda - Str.starts_with returns True for matching prefix" {
     try testing.expectEqualStrings("True", value);
 }
 
-test "e_low_level_lambda - Str.starts_with returns False for non-matching prefix" {
+test "low_level - Str.starts_with returns False for non-matching prefix" {
     const src =
         \\x = Str.starts_with("hello world", "world")
     ;
@@ -1302,7 +1302,7 @@ test "e_low_level_lambda - Str.starts_with returns False for non-matching prefix
     try testing.expectEqualStrings("False", value);
 }
 
-test "e_low_level_lambda - Str.starts_with with empty prefix" {
+test "low_level - Str.starts_with with empty prefix" {
     const src =
         \\x = Str.starts_with("hello", "")
     ;
@@ -1311,7 +1311,7 @@ test "e_low_level_lambda - Str.starts_with with empty prefix" {
     try testing.expectEqualStrings("True", value);
 }
 
-test "e_low_level_lambda - Str.starts_with with empty string and empty prefix" {
+test "low_level - Str.starts_with with empty string and empty prefix" {
     const src =
         \\x = Str.starts_with("", "")
     ;
@@ -1320,7 +1320,7 @@ test "e_low_level_lambda - Str.starts_with with empty string and empty prefix" {
     try testing.expectEqualStrings("True", value);
 }
 
-test "e_low_level_lambda - Str.starts_with with prefix longer than string" {
+test "low_level - Str.starts_with with prefix longer than string" {
     const src =
         \\x = Str.starts_with("hi", "hello")
     ;
@@ -1331,7 +1331,7 @@ test "e_low_level_lambda - Str.starts_with with prefix longer than string" {
 
 // Str.ends_with tests
 
-test "e_low_level_lambda - Str.ends_with returns True for matching suffix" {
+test "low_level - Str.ends_with returns True for matching suffix" {
     const src =
         \\x = Str.ends_with("hello world", "world")
     ;
@@ -1340,7 +1340,7 @@ test "e_low_level_lambda - Str.ends_with returns True for matching suffix" {
     try testing.expectEqualStrings("True", value);
 }
 
-test "e_low_level_lambda - Str.ends_with returns False for non-matching suffix" {
+test "low_level - Str.ends_with returns False for non-matching suffix" {
     const src =
         \\x = Str.ends_with("hello world", "hello")
     ;
@@ -1349,7 +1349,7 @@ test "e_low_level_lambda - Str.ends_with returns False for non-matching suffix" 
     try testing.expectEqualStrings("False", value);
 }
 
-test "e_low_level_lambda - Str.ends_with with empty suffix" {
+test "low_level - Str.ends_with with empty suffix" {
     const src =
         \\x = Str.ends_with("hello", "")
     ;
@@ -1358,7 +1358,7 @@ test "e_low_level_lambda - Str.ends_with with empty suffix" {
     try testing.expectEqualStrings("True", value);
 }
 
-test "e_low_level_lambda - Str.ends_with with empty string and empty suffix" {
+test "low_level - Str.ends_with with empty string and empty suffix" {
     const src =
         \\x = Str.ends_with("", "")
     ;
@@ -1367,7 +1367,7 @@ test "e_low_level_lambda - Str.ends_with with empty string and empty suffix" {
     try testing.expectEqualStrings("True", value);
 }
 
-test "e_low_level_lambda - Str.ends_with with suffix longer than string" {
+test "low_level - Str.ends_with with suffix longer than string" {
     const src =
         \\x = Str.ends_with("hi", "hello")
     ;
@@ -1378,7 +1378,7 @@ test "e_low_level_lambda - Str.ends_with with suffix longer than string" {
 
 // Str.repeat tests
 
-test "e_low_level_lambda - Str.repeat basic repetition" {
+test "low_level - Str.repeat basic repetition" {
     const src =
         \\x = Str.repeat("ab", 3)
     ;
@@ -1387,7 +1387,7 @@ test "e_low_level_lambda - Str.repeat basic repetition" {
     try testing.expectEqualStrings("\"ababab\"", value);
 }
 
-test "e_low_level_lambda - Str.repeat with zero count" {
+test "low_level - Str.repeat with zero count" {
     const src =
         \\x = Str.repeat("hello", 0)
     ;
@@ -1396,7 +1396,7 @@ test "e_low_level_lambda - Str.repeat with zero count" {
     try testing.expectEqualStrings("\"\"", value);
 }
 
-test "e_low_level_lambda - Str.repeat with one count" {
+test "low_level - Str.repeat with one count" {
     const src =
         \\x = Str.repeat("hello", 1)
     ;
@@ -1405,7 +1405,7 @@ test "e_low_level_lambda - Str.repeat with one count" {
     try testing.expectEqualStrings("\"hello\"", value);
 }
 
-test "e_low_level_lambda - Str.repeat empty string" {
+test "low_level - Str.repeat empty string" {
     const src =
         \\x = Str.repeat("", 5)
     ;
@@ -1416,7 +1416,7 @@ test "e_low_level_lambda - Str.repeat empty string" {
 
 // Str.with_prefix tests
 
-test "e_low_level_lambda - Str.with_prefix basic" {
+test "low_level - Str.with_prefix basic" {
     const src =
         \\x = Str.with_prefix("world", "hello ")
     ;
@@ -1425,7 +1425,7 @@ test "e_low_level_lambda - Str.with_prefix basic" {
     try testing.expectEqualStrings("\"hello world\"", value);
 }
 
-test "e_low_level_lambda - Str.with_prefix empty prefix" {
+test "low_level - Str.with_prefix empty prefix" {
     const src =
         \\x = Str.with_prefix("hello", "")
     ;
@@ -1434,7 +1434,7 @@ test "e_low_level_lambda - Str.with_prefix empty prefix" {
     try testing.expectEqualStrings("\"hello\"", value);
 }
 
-test "e_low_level_lambda - Str.with_prefix empty string" {
+test "low_level - Str.with_prefix empty string" {
     const src =
         \\x = Str.with_prefix("", "prefix")
     ;
@@ -1443,7 +1443,7 @@ test "e_low_level_lambda - Str.with_prefix empty string" {
     try testing.expectEqualStrings("\"prefix\"", value);
 }
 
-test "e_low_level_lambda - Str.with_prefix both empty" {
+test "low_level - Str.with_prefix both empty" {
     const src =
         \\x = Str.with_prefix("", "")
     ;
@@ -1454,7 +1454,7 @@ test "e_low_level_lambda - Str.with_prefix both empty" {
 
 // Str.drop_prefix tests
 
-test "e_low_level_lambda - Str.drop_prefix removes matching prefix" {
+test "low_level - Str.drop_prefix removes matching prefix" {
     const src =
         \\x = Str.drop_prefix("hello world", "hello ")
     ;
@@ -1463,7 +1463,7 @@ test "e_low_level_lambda - Str.drop_prefix removes matching prefix" {
     try testing.expectEqualStrings("\"world\"", value);
 }
 
-test "e_low_level_lambda - Str.drop_prefix returns original when no match" {
+test "low_level - Str.drop_prefix returns original when no match" {
     const src =
         \\x = Str.drop_prefix("hello world", "goodbye ")
     ;
@@ -1472,7 +1472,7 @@ test "e_low_level_lambda - Str.drop_prefix returns original when no match" {
     try testing.expectEqualStrings("\"hello world\"", value);
 }
 
-test "e_low_level_lambda - Str.drop_prefix with empty prefix" {
+test "low_level - Str.drop_prefix with empty prefix" {
     const src =
         \\x = Str.drop_prefix("hello", "")
     ;
@@ -1481,7 +1481,7 @@ test "e_low_level_lambda - Str.drop_prefix with empty prefix" {
     try testing.expectEqualStrings("\"hello\"", value);
 }
 
-test "e_low_level_lambda - Str.drop_prefix removes entire string" {
+test "low_level - Str.drop_prefix removes entire string" {
     const src =
         \\x = Str.drop_prefix("hello", "hello")
     ;
@@ -1490,7 +1490,7 @@ test "e_low_level_lambda - Str.drop_prefix removes entire string" {
     try testing.expectEqualStrings("\"\"", value);
 }
 
-test "e_low_level_lambda - Str.drop_prefix prefix longer than string" {
+test "low_level - Str.drop_prefix prefix longer than string" {
     const src =
         \\x = Str.drop_prefix("hi", "hello")
     ;
@@ -1501,7 +1501,7 @@ test "e_low_level_lambda - Str.drop_prefix prefix longer than string" {
 
 // Str.drop_suffix tests
 
-test "e_low_level_lambda - Str.drop_suffix removes matching suffix" {
+test "low_level - Str.drop_suffix removes matching suffix" {
     const src =
         \\x = Str.drop_suffix("hello world", " world")
     ;
@@ -1510,7 +1510,7 @@ test "e_low_level_lambda - Str.drop_suffix removes matching suffix" {
     try testing.expectEqualStrings("\"hello\"", value);
 }
 
-test "e_low_level_lambda - Str.drop_suffix returns original when no match" {
+test "low_level - Str.drop_suffix returns original when no match" {
     const src =
         \\x = Str.drop_suffix("hello world", " goodbye")
     ;
@@ -1519,7 +1519,7 @@ test "e_low_level_lambda - Str.drop_suffix returns original when no match" {
     try testing.expectEqualStrings("\"hello world\"", value);
 }
 
-test "e_low_level_lambda - Str.drop_suffix with empty suffix" {
+test "low_level - Str.drop_suffix with empty suffix" {
     const src =
         \\x = Str.drop_suffix("hello", "")
     ;
@@ -1528,7 +1528,7 @@ test "e_low_level_lambda - Str.drop_suffix with empty suffix" {
     try testing.expectEqualStrings("\"hello\"", value);
 }
 
-test "e_low_level_lambda - Str.drop_suffix removes entire string" {
+test "low_level - Str.drop_suffix removes entire string" {
     const src =
         \\x = Str.drop_suffix("hello", "hello")
     ;
@@ -1537,7 +1537,7 @@ test "e_low_level_lambda - Str.drop_suffix removes entire string" {
     try testing.expectEqualStrings("\"\"", value);
 }
 
-test "e_low_level_lambda - Str.drop_suffix suffix longer than string" {
+test "low_level - Str.drop_suffix suffix longer than string" {
     const src =
         \\x = Str.drop_suffix("hi", "hello")
     ;
@@ -1547,7 +1547,7 @@ test "e_low_level_lambda - Str.drop_suffix suffix longer than string" {
 }
 // U8 conversion tests
 
-test "e_low_level_lambda - U8.to_i16 safe widening" {
+test "low_level - U8.to_i16 safe widening" {
     const src =
         \\a : U8
         \\a = 200u8
@@ -1557,7 +1557,7 @@ test "e_low_level_lambda - U8.to_i16 safe widening" {
     try testing.expectEqual(@as(i128, 200), value);
 }
 
-test "e_low_level_lambda - U8.to_i32 safe widening" {
+test "low_level - U8.to_i32 safe widening" {
     const src =
         \\a : U8
         \\a = 255u8
@@ -1567,7 +1567,7 @@ test "e_low_level_lambda - U8.to_i32 safe widening" {
     try testing.expectEqual(@as(i128, 255), value);
 }
 
-test "e_low_level_lambda - U8.to_i64 safe widening" {
+test "low_level - U8.to_i64 safe widening" {
     const src =
         \\a : U8
         \\a = 128u8
@@ -1577,7 +1577,7 @@ test "e_low_level_lambda - U8.to_i64 safe widening" {
     try testing.expectEqual(@as(i128, 128), value);
 }
 
-test "e_low_level_lambda - U8.to_i128 safe widening" {
+test "low_level - U8.to_i128 safe widening" {
     const src =
         \\a : U8
         \\a = 100u8
@@ -1587,7 +1587,7 @@ test "e_low_level_lambda - U8.to_i128 safe widening" {
     try testing.expectEqual(@as(i128, 100), value);
 }
 
-test "e_low_level_lambda - U8.to_u16 safe widening" {
+test "low_level - U8.to_u16 safe widening" {
     const src =
         \\a : U8
         \\a = 200u8
@@ -1597,7 +1597,7 @@ test "e_low_level_lambda - U8.to_u16 safe widening" {
     try testing.expectEqual(@as(i128, 200), value);
 }
 
-test "e_low_level_lambda - U8.to_u32 safe widening" {
+test "low_level - U8.to_u32 safe widening" {
     const src =
         \\a : U8
         \\a = 255u8
@@ -1607,7 +1607,7 @@ test "e_low_level_lambda - U8.to_u32 safe widening" {
     try testing.expectEqual(@as(i128, 255), value);
 }
 
-test "e_low_level_lambda - U8.to_u64 safe widening" {
+test "low_level - U8.to_u64 safe widening" {
     const src =
         \\a : U8
         \\a = 128u8
@@ -1617,7 +1617,7 @@ test "e_low_level_lambda - U8.to_u64 safe widening" {
     try testing.expectEqual(@as(i128, 128), value);
 }
 
-test "e_low_level_lambda - U8.to_u128 safe widening" {
+test "low_level - U8.to_u128 safe widening" {
     const src =
         \\a : U8
         \\a = 50u8
@@ -1627,7 +1627,7 @@ test "e_low_level_lambda - U8.to_u128 safe widening" {
     try testing.expectEqual(@as(i128, 50), value);
 }
 
-test "e_low_level_lambda - U8.to_i8_wrap in range" {
+test "low_level - U8.to_i8_wrap in range" {
     const src =
         \\a : U8
         \\a = 100u8
@@ -1637,7 +1637,7 @@ test "e_low_level_lambda - U8.to_i8_wrap in range" {
     try testing.expectEqual(@as(i128, 100), value);
 }
 
-test "e_low_level_lambda - U8.to_i8_wrap out of range wraps" {
+test "low_level - U8.to_i8_wrap out of range wraps" {
     const src =
         \\a : U8
         \\a = 200u8
@@ -1648,7 +1648,7 @@ test "e_low_level_lambda - U8.to_i8_wrap out of range wraps" {
     try testing.expectEqual(@as(i128, -56), value);
 }
 
-test "e_low_level_lambda - U8.to_i8_try in range returns Ok" {
+test "low_level - U8.to_i8_try in range returns Ok" {
     const src =
         \\a : U8
         \\a = 100u8
@@ -1659,7 +1659,7 @@ test "e_low_level_lambda - U8.to_i8_try in range returns Ok" {
     try testing.expectEqualStrings("Ok(100)", value);
 }
 
-test "e_low_level_lambda - U8.to_i8_try out of range returns Err" {
+test "low_level - U8.to_i8_try out of range returns Err" {
     const src =
         \\a : U8
         \\a = 200u8
@@ -1670,7 +1670,7 @@ test "e_low_level_lambda - U8.to_i8_try out of range returns Err" {
     try testing.expectEqualStrings("Err(OutOfRange)", value);
 }
 
-test "e_low_level_lambda - U8.to_f32" {
+test "low_level - U8.to_f32" {
     const src =
         \\a : U8
         \\a = 42u8
@@ -1681,7 +1681,7 @@ test "e_low_level_lambda - U8.to_f32" {
     try testing.expect(std.mem.startsWith(u8, value, "42"));
 }
 
-test "e_low_level_lambda - U8.to_f64" {
+test "low_level - U8.to_f64" {
     const src =
         \\a : U8
         \\a = 255u8
@@ -1692,7 +1692,7 @@ test "e_low_level_lambda - U8.to_f64" {
     try testing.expect(std.mem.startsWith(u8, value, "255"));
 }
 
-test "e_low_level_lambda - U8.to_dec" {
+test "low_level - U8.to_dec" {
     const src =
         \\a : U8
         \\a = 123u8
@@ -1706,7 +1706,7 @@ test "e_low_level_lambda - U8.to_dec" {
 
 // I8 conversion tests
 
-test "e_low_level_lambda - I8.to_i16 safe widening positive" {
+test "low_level - I8.to_i16 safe widening positive" {
     const src =
         \\a : I8
         \\a = 100i8
@@ -1716,7 +1716,7 @@ test "e_low_level_lambda - I8.to_i16 safe widening positive" {
     try testing.expectEqual(@as(i128, 100), value);
 }
 
-test "e_low_level_lambda - I8.to_i16 safe widening negative" {
+test "low_level - I8.to_i16 safe widening negative" {
     const src =
         \\a : I8
         \\a = -50i8
@@ -1726,7 +1726,7 @@ test "e_low_level_lambda - I8.to_i16 safe widening negative" {
     try testing.expectEqual(@as(i128, -50), value);
 }
 
-test "e_low_level_lambda - I8.to_i32 safe widening" {
+test "low_level - I8.to_i32 safe widening" {
     const src =
         \\a : I8
         \\a = -128i8
@@ -1736,7 +1736,7 @@ test "e_low_level_lambda - I8.to_i32 safe widening" {
     try testing.expectEqual(@as(i128, -128), value);
 }
 
-test "e_low_level_lambda - I8.to_i64 safe widening" {
+test "low_level - I8.to_i64 safe widening" {
     const src =
         \\a : I8
         \\a = 127i8
@@ -1746,7 +1746,7 @@ test "e_low_level_lambda - I8.to_i64 safe widening" {
     try testing.expectEqual(@as(i128, 127), value);
 }
 
-test "e_low_level_lambda - I8.to_i128 safe widening" {
+test "low_level - I8.to_i128 safe widening" {
     const src =
         \\a : I8
         \\a = -1i8
@@ -1756,7 +1756,7 @@ test "e_low_level_lambda - I8.to_i128 safe widening" {
     try testing.expectEqual(@as(i128, -1), value);
 }
 
-test "e_low_level_lambda - I8.to_u8_wrap in range" {
+test "low_level - I8.to_u8_wrap in range" {
     const src =
         \\a : I8
         \\a = 50i8
@@ -1766,7 +1766,7 @@ test "e_low_level_lambda - I8.to_u8_wrap in range" {
     try testing.expectEqual(@as(i128, 50), value);
 }
 
-test "e_low_level_lambda - I8.to_u8_wrap negative wraps" {
+test "low_level - I8.to_u8_wrap negative wraps" {
     const src =
         \\a : I8
         \\a = -1i8
@@ -1777,7 +1777,7 @@ test "e_low_level_lambda - I8.to_u8_wrap negative wraps" {
     try testing.expectEqual(@as(i128, 255), value);
 }
 
-test "e_low_level_lambda - I8.to_u8_try in range returns Ok" {
+test "low_level - I8.to_u8_try in range returns Ok" {
     const src =
         \\a : I8
         \\a = 100i8
@@ -1788,7 +1788,7 @@ test "e_low_level_lambda - I8.to_u8_try in range returns Ok" {
     try testing.expectEqualStrings("Ok(100)", value);
 }
 
-test "e_low_level_lambda - I8.to_u8_try negative returns Err" {
+test "low_level - I8.to_u8_try negative returns Err" {
     const src =
         \\a : I8
         \\a = -10i8
@@ -1799,7 +1799,7 @@ test "e_low_level_lambda - I8.to_u8_try negative returns Err" {
     try testing.expectEqualStrings("Err(OutOfRange)", value);
 }
 
-test "e_low_level_lambda - I8.to_u16_wrap positive" {
+test "low_level - I8.to_u16_wrap positive" {
     const src =
         \\a : I8
         \\a = 100i8
@@ -1809,7 +1809,7 @@ test "e_low_level_lambda - I8.to_u16_wrap positive" {
     try testing.expectEqual(@as(i128, 100), value);
 }
 
-test "e_low_level_lambda - I8.to_u16_wrap negative wraps" {
+test "low_level - I8.to_u16_wrap negative wraps" {
     const src =
         \\a : I8
         \\a = -1i8
@@ -1820,7 +1820,7 @@ test "e_low_level_lambda - I8.to_u16_wrap negative wraps" {
     try testing.expectEqual(@as(i128, 65535), value);
 }
 
-test "e_low_level_lambda - I8.to_u16_try in range returns Ok" {
+test "low_level - I8.to_u16_try in range returns Ok" {
     const src =
         \\a : I8
         \\a = 50i8
@@ -1831,7 +1831,7 @@ test "e_low_level_lambda - I8.to_u16_try in range returns Ok" {
     try testing.expectEqualStrings("Ok(50)", value);
 }
 
-test "e_low_level_lambda - I8.to_u16_try negative returns Err" {
+test "low_level - I8.to_u16_try negative returns Err" {
     const src =
         \\a : I8
         \\a = -5i8
@@ -1842,7 +1842,7 @@ test "e_low_level_lambda - I8.to_u16_try negative returns Err" {
     try testing.expectEqualStrings("Err(OutOfRange)", value);
 }
 
-test "e_low_level_lambda - I8.to_u32_try negative returns Err" {
+test "low_level - I8.to_u32_try negative returns Err" {
     const src =
         \\a : I8
         \\a = -100i8
@@ -1853,7 +1853,7 @@ test "e_low_level_lambda - I8.to_u32_try negative returns Err" {
     try testing.expectEqualStrings("Err(OutOfRange)", value);
 }
 
-test "e_low_level_lambda - I8.to_u64_try positive returns Ok" {
+test "low_level - I8.to_u64_try positive returns Ok" {
     const src =
         \\a : I8
         \\a = 127i8
@@ -1864,7 +1864,7 @@ test "e_low_level_lambda - I8.to_u64_try positive returns Ok" {
     try testing.expectEqualStrings("Ok(127)", value);
 }
 
-test "e_low_level_lambda - I8.to_u128_try zero returns Ok" {
+test "low_level - I8.to_u128_try zero returns Ok" {
     const src =
         \\a : I8
         \\a = 0i8
@@ -1875,7 +1875,7 @@ test "e_low_level_lambda - I8.to_u128_try zero returns Ok" {
     try testing.expectEqualStrings("Ok(0)", value);
 }
 
-test "e_low_level_lambda - I8.to_f32 positive" {
+test "low_level - I8.to_f32 positive" {
     const src =
         \\a : I8
         \\a = 42i8
@@ -1886,7 +1886,7 @@ test "e_low_level_lambda - I8.to_f32 positive" {
     try testing.expect(std.mem.startsWith(u8, value, "42"));
 }
 
-test "e_low_level_lambda - I8.to_f64 negative" {
+test "low_level - I8.to_f64 negative" {
     const src =
         \\a : I8
         \\a = -100i8
@@ -1897,7 +1897,7 @@ test "e_low_level_lambda - I8.to_f64 negative" {
     try testing.expect(std.mem.startsWith(u8, value, "-100"));
 }
 
-test "e_low_level_lambda - I8.to_dec positive" {
+test "low_level - I8.to_dec positive" {
     const src =
         \\a : I8
         \\a = 50i8
@@ -1909,7 +1909,7 @@ test "e_low_level_lambda - I8.to_dec positive" {
     try testing.expectEqualStrings("\"50.0\"", value);
 }
 
-test "e_low_level_lambda - I8.to_dec negative" {
+test "low_level - I8.to_dec negative" {
     const src =
         \\a : I8
         \\a = -25i8
@@ -1922,7 +1922,7 @@ test "e_low_level_lambda - I8.to_dec negative" {
 }
 
 // count_utf8_bytes tests
-test "e_low_level_lambda - Str.count_utf8_bytes empty string" {
+test "low_level - Str.count_utf8_bytes empty string" {
     const src =
         \\x = Str.count_utf8_bytes("")
     ;
@@ -1930,7 +1930,7 @@ test "e_low_level_lambda - Str.count_utf8_bytes empty string" {
     try testing.expectEqual(@as(i128, 0), value);
 }
 
-test "e_low_level_lambda - Str.count_utf8_bytes ASCII string" {
+test "low_level - Str.count_utf8_bytes ASCII string" {
     const src =
         \\x = Str.count_utf8_bytes("hello")
     ;
@@ -1938,7 +1938,7 @@ test "e_low_level_lambda - Str.count_utf8_bytes ASCII string" {
     try testing.expectEqual(@as(i128, 5), value);
 }
 
-test "e_low_level_lambda - Str.count_utf8_bytes multi-byte UTF-8" {
+test "low_level - Str.count_utf8_bytes multi-byte UTF-8" {
     const src =
         \\x = Str.count_utf8_bytes("é")
     ;
@@ -1946,7 +1946,7 @@ test "e_low_level_lambda - Str.count_utf8_bytes multi-byte UTF-8" {
     try testing.expectEqual(@as(i128, 2), value);
 }
 
-test "e_low_level_lambda - Str.count_utf8_bytes emoji" {
+test "low_level - Str.count_utf8_bytes emoji" {
     const src =
         \\x = Str.count_utf8_bytes("🎉")
     ;
@@ -1955,7 +1955,7 @@ test "e_low_level_lambda - Str.count_utf8_bytes emoji" {
 }
 
 // with_capacity tests
-test "e_low_level_lambda - Str.with_capacity returns empty string" {
+test "low_level - Str.with_capacity returns empty string" {
     const src =
         \\x = Str.with_capacity(0)
     ;
@@ -1964,7 +1964,7 @@ test "e_low_level_lambda - Str.with_capacity returns empty string" {
     try testing.expectEqualStrings("\"\"", value);
 }
 
-test "e_low_level_lambda - Str.with_capacity with capacity returns empty string" {
+test "low_level - Str.with_capacity with capacity returns empty string" {
     const src =
         \\x = Str.with_capacity(100)
     ;
@@ -1974,7 +1974,7 @@ test "e_low_level_lambda - Str.with_capacity with capacity returns empty string"
 }
 
 // reserve tests
-test "e_low_level_lambda - Str.reserve preserves content" {
+test "low_level - Str.reserve preserves content" {
     const src =
         \\x = Str.reserve("hello", 100)
     ;
@@ -1983,7 +1983,7 @@ test "e_low_level_lambda - Str.reserve preserves content" {
     try testing.expectEqualStrings("\"hello\"", value);
 }
 
-test "e_low_level_lambda - Str.reserve empty string" {
+test "low_level - Str.reserve empty string" {
     const src =
         \\x = Str.reserve("", 50)
     ;
@@ -1993,7 +1993,7 @@ test "e_low_level_lambda - Str.reserve empty string" {
 }
 
 // release_excess_capacity tests
-test "e_low_level_lambda - Str.release_excess_capacity preserves content" {
+test "low_level - Str.release_excess_capacity preserves content" {
     const src =
         \\x = Str.release_excess_capacity("hello")
     ;
@@ -2002,7 +2002,7 @@ test "e_low_level_lambda - Str.release_excess_capacity preserves content" {
     try testing.expectEqualStrings("\"hello\"", value);
 }
 
-test "e_low_level_lambda - Str.release_excess_capacity empty string" {
+test "low_level - Str.release_excess_capacity empty string" {
     const src =
         \\x = Str.release_excess_capacity("")
     ;
@@ -2012,7 +2012,7 @@ test "e_low_level_lambda - Str.release_excess_capacity empty string" {
 }
 
 // to_utf8 tests (using List.len to verify)
-test "e_low_level_lambda - Str.to_utf8 empty string" {
+test "low_level - Str.to_utf8 empty string" {
     const src =
         \\x = List.len(Str.to_utf8(""))
     ;
@@ -2020,7 +2020,7 @@ test "e_low_level_lambda - Str.to_utf8 empty string" {
     try testing.expectEqual(@as(i128, 0), value);
 }
 
-test "e_low_level_lambda - Str.to_utf8 ASCII string" {
+test "low_level - Str.to_utf8 ASCII string" {
     const src =
         \\x = List.len(Str.to_utf8("hello"))
     ;
@@ -2028,7 +2028,7 @@ test "e_low_level_lambda - Str.to_utf8 ASCII string" {
     try testing.expectEqual(@as(i128, 5), value);
 }
 
-test "e_low_level_lambda - Str.to_utf8 multi-byte UTF-8" {
+test "low_level - Str.to_utf8 multi-byte UTF-8" {
     const src =
         \\x = List.len(Str.to_utf8("é"))
     ;
@@ -2037,7 +2037,7 @@ test "e_low_level_lambda - Str.to_utf8 multi-byte UTF-8" {
 }
 
 // from_utf8_lossy tests (roundtrip through to_utf8)
-test "e_low_level_lambda - Str.from_utf8_lossy roundtrip ASCII" {
+test "low_level - Str.from_utf8_lossy roundtrip ASCII" {
     const src =
         \\x = Str.from_utf8_lossy(Str.to_utf8("hello"))
     ;
@@ -2046,7 +2046,7 @@ test "e_low_level_lambda - Str.from_utf8_lossy roundtrip ASCII" {
     try testing.expectEqualStrings("\"hello\"", value);
 }
 
-test "e_low_level_lambda - Str.from_utf8_lossy roundtrip empty" {
+test "low_level - Str.from_utf8_lossy roundtrip empty" {
     const src =
         \\x = Str.from_utf8_lossy(Str.to_utf8(""))
     ;
@@ -2055,7 +2055,7 @@ test "e_low_level_lambda - Str.from_utf8_lossy roundtrip empty" {
     try testing.expectEqualStrings("\"\"", value);
 }
 
-test "e_low_level_lambda - Str.from_utf8_lossy roundtrip UTF-8" {
+test "low_level - Str.from_utf8_lossy roundtrip UTF-8" {
     const src =
         \\x = Str.from_utf8_lossy(Str.to_utf8("hello 🎉 world"))
     ;
@@ -2065,7 +2065,7 @@ test "e_low_level_lambda - Str.from_utf8_lossy roundtrip UTF-8" {
 }
 
 // split_on tests
-test "e_low_level_lambda - Str.split_on basic split count" {
+test "low_level - Str.split_on basic split count" {
     const src =
         \\x = List.len(Str.split_on("hello world", " "))
     ;
@@ -2073,7 +2073,7 @@ test "e_low_level_lambda - Str.split_on basic split count" {
     try testing.expectEqual(@as(i128, 2), value);
 }
 
-test "e_low_level_lambda - Str.split_on basic split first element" {
+test "low_level - Str.split_on basic split first element" {
     const src =
         \\parts = Str.split_on("hello world", " ")
         \\first = List.first(parts)
@@ -2083,7 +2083,7 @@ test "e_low_level_lambda - Str.split_on basic split first element" {
     try testing.expectEqualStrings("Ok(\"hello\")", value);
 }
 
-test "e_low_level_lambda - Str.split_on multiple delimiters count" {
+test "low_level - Str.split_on multiple delimiters count" {
     const src =
         \\x = List.len(Str.split_on("a,b,c,d", ","))
     ;
@@ -2091,7 +2091,7 @@ test "e_low_level_lambda - Str.split_on multiple delimiters count" {
     try testing.expectEqual(@as(i128, 4), value);
 }
 
-test "e_low_level_lambda - Str.split_on multiple delimiters first element" {
+test "low_level - Str.split_on multiple delimiters first element" {
     const src =
         \\parts = Str.split_on("a,b,c,d", ",")
         \\first = List.first(parts)
@@ -2101,7 +2101,7 @@ test "e_low_level_lambda - Str.split_on multiple delimiters first element" {
     try testing.expectEqualStrings("Ok(\"a\")", value);
 }
 
-test "e_low_level_lambda - Str.split_on no match" {
+test "low_level - Str.split_on no match" {
     const src =
         \\parts = Str.split_on("hello", "x")
         \\first = List.first(parts)
@@ -2111,7 +2111,7 @@ test "e_low_level_lambda - Str.split_on no match" {
     try testing.expectEqualStrings("Ok(\"hello\")", value);
 }
 
-test "e_low_level_lambda - Str.split_on empty string" {
+test "low_level - Str.split_on empty string" {
     const src =
         \\x = List.len(Str.split_on("", ","))
     ;
@@ -2120,7 +2120,7 @@ test "e_low_level_lambda - Str.split_on empty string" {
 }
 
 // join_with tests
-test "e_low_level_lambda - Str.join_with basic join" {
+test "low_level - Str.join_with basic join" {
     const src =
         \\x = Str.join_with(["hello", "world"], " ")
     ;
@@ -2129,7 +2129,7 @@ test "e_low_level_lambda - Str.join_with basic join" {
     try testing.expectEqualStrings("\"hello world\"", value);
 }
 
-test "e_low_level_lambda - Str.join_with multiple elements" {
+test "low_level - Str.join_with multiple elements" {
     const src =
         \\x = Str.join_with(["a", "b", "c", "d"], ",")
     ;
@@ -2138,7 +2138,7 @@ test "e_low_level_lambda - Str.join_with multiple elements" {
     try testing.expectEqualStrings("\"a,b,c,d\"", value);
 }
 
-test "e_low_level_lambda - Str.join_with single element" {
+test "low_level - Str.join_with single element" {
     const src =
         \\x = Str.join_with(["hello"], "-")
     ;
@@ -2147,7 +2147,7 @@ test "e_low_level_lambda - Str.join_with single element" {
     try testing.expectEqualStrings("\"hello\"", value);
 }
 
-test "e_low_level_lambda - Str.join_with empty list" {
+test "low_level - Str.join_with empty list" {
     const src =
         \\x = Str.join_with([], ",")
     ;
@@ -2156,7 +2156,7 @@ test "e_low_level_lambda - Str.join_with empty list" {
     try testing.expectEqualStrings("\"\"", value);
 }
 
-test "e_low_level_lambda - Str.join_with roundtrip with split_on" {
+test "low_level - Str.join_with roundtrip with split_on" {
     const src =
         \\x = Str.join_with(Str.split_on("hello world", " "), " ")
     ;
@@ -2165,7 +2165,7 @@ test "e_low_level_lambda - Str.join_with roundtrip with split_on" {
     try testing.expectEqualStrings("\"hello world\"", value);
 }
 
-test "e_low_level_lambda - U8.plus basic" {
+test "low_level - U8.plus basic" {
     const src =
         \\a : U8
         \\a = 5
@@ -2178,7 +2178,7 @@ test "e_low_level_lambda - U8.plus basic" {
     try testing.expectEqual(@as(i128, 8), value);
 }
 
-test "e_low_level_lambda - U8.plus method call syntax" {
+test "low_level - U8.plus method call syntax" {
     const src =
         \\a : U8
         \\a = 5
@@ -2193,7 +2193,7 @@ test "e_low_level_lambda - U8.plus method call syntax" {
 
 // Bitwise shift operation tests
 
-test "e_low_level_lambda - U8.shift_left_by basic" {
+test "low_level - U8.shift_left_by basic" {
     const src =
         \\a : U8
         \\a = 5
@@ -2203,7 +2203,7 @@ test "e_low_level_lambda - U8.shift_left_by basic" {
     try testing.expectEqual(@as(i128, 20), value); // 5 << 2 = 20
 }
 
-test "e_low_level_lambda - U8.shift_right_by basic" {
+test "low_level - U8.shift_right_by basic" {
     const src =
         \\a : U8
         \\a = 20
@@ -2213,7 +2213,7 @@ test "e_low_level_lambda - U8.shift_right_by basic" {
     try testing.expectEqual(@as(i128, 5), value); // 20 >> 2 = 5
 }
 
-test "e_low_level_lambda - U8.shift_right_zf_by basic" {
+test "low_level - U8.shift_right_zf_by basic" {
     const src =
         \\a : U8
         \\a = 128
@@ -2223,7 +2223,7 @@ test "e_low_level_lambda - U8.shift_right_zf_by basic" {
     try testing.expectEqual(@as(i128, 32), value); // 128 >>> 2 = 32
 }
 
-test "e_low_level_lambda - I8.shift_left_by positive" {
+test "low_level - I8.shift_left_by positive" {
     const src =
         \\a : I8
         \\a = 3
@@ -2233,7 +2233,7 @@ test "e_low_level_lambda - I8.shift_left_by positive" {
     try testing.expectEqual(@as(i128, 24), value); // 3 << 3 = 24
 }
 
-test "e_low_level_lambda - I8.shift_right_by negative arithmetic" {
+test "low_level - I8.shift_right_by negative arithmetic" {
     const src =
         \\a : I8
         \\a = -8
@@ -2243,7 +2243,7 @@ test "e_low_level_lambda - I8.shift_right_by negative arithmetic" {
     try testing.expectEqual(@as(i128, -4), value); // -8 >> 1 = -4 (arithmetic shift)
 }
 
-test "e_low_level_lambda - I8.shift_right_zf_by negative zero_fill" {
+test "low_level - I8.shift_right_zf_by negative zero_fill" {
     const src =
         \\a : I8
         \\a = -8
@@ -2253,7 +2253,7 @@ test "e_low_level_lambda - I8.shift_right_zf_by negative zero_fill" {
     try testing.expectEqual(@as(i128, 124), value); // -8 >>> 1 = 124 (zero-fill shift)
 }
 
-test "e_low_level_lambda - U16.shift_left_by" {
+test "low_level - U16.shift_left_by" {
     const src =
         \\a : U16
         \\a = 1
@@ -2263,7 +2263,7 @@ test "e_low_level_lambda - U16.shift_left_by" {
     try testing.expectEqual(@as(i128, 16), value); // 1 << 4 = 16
 }
 
-test "e_low_level_lambda - I16.shift_right_by positive" {
+test "low_level - I16.shift_right_by positive" {
     const src =
         \\a : I16
         \\a = 64
@@ -2273,7 +2273,7 @@ test "e_low_level_lambda - I16.shift_right_by positive" {
     try testing.expectEqual(@as(i128, 8), value); // 64 >> 3 = 8
 }
 
-test "e_low_level_lambda - I16.shift_right_by negative" {
+test "low_level - I16.shift_right_by negative" {
     const src =
         \\a : I16
         \\a = -16
@@ -2283,7 +2283,7 @@ test "e_low_level_lambda - I16.shift_right_by negative" {
     try testing.expectEqual(@as(i128, -4), value); // -16 >> 2 = -4
 }
 
-test "e_low_level_lambda - U32.shift_left_by" {
+test "low_level - U32.shift_left_by" {
     const src =
         \\a : U32
         \\a = 16
@@ -2293,7 +2293,7 @@ test "e_low_level_lambda - U32.shift_left_by" {
     try testing.expectEqual(@as(i128, 128), value); // 16 << 3 = 128
 }
 
-test "e_low_level_lambda - I32.shift_right_by negative" {
+test "low_level - I32.shift_right_by negative" {
     const src =
         \\a : I32
         \\a = -32
@@ -2303,7 +2303,7 @@ test "e_low_level_lambda - I32.shift_right_by negative" {
     try testing.expectEqual(@as(i128, -4), value); // -32 >> 3 = -4
 }
 
-test "e_low_level_lambda - U64.shift_left_by" {
+test "low_level - U64.shift_left_by" {
     const src =
         \\a : U64
         \\a = 255
@@ -2313,7 +2313,7 @@ test "e_low_level_lambda - U64.shift_left_by" {
     try testing.expectEqual(@as(i128, 65280), value); // 255 << 8 = 65280
 }
 
-test "e_low_level_lambda - I64.shift_right_by negative" {
+test "low_level - I64.shift_right_by negative" {
     const src =
         \\a : I64
         \\a = -1024
@@ -2323,7 +2323,7 @@ test "e_low_level_lambda - I64.shift_right_by negative" {
     try testing.expectEqual(@as(i128, -256), value); // -1024 >> 2 = -256
 }
 
-test "e_low_level_lambda - U128.shift_left_by" {
+test "low_level - U128.shift_left_by" {
     const src =
         \\a : U128
         \\a = 1
@@ -2333,7 +2333,7 @@ test "e_low_level_lambda - U128.shift_left_by" {
     try testing.expectEqual(@as(i128, 1024), value); // 1 << 10 = 1024
 }
 
-test "e_low_level_lambda - I128.shift_right_by negative" {
+test "low_level - I128.shift_right_by negative" {
     const src =
         \\a : I128
         \\a = -256
@@ -2343,7 +2343,7 @@ test "e_low_level_lambda - I128.shift_right_by negative" {
     try testing.expectEqual(@as(i128, -16), value); // -256 >> 4 = -16
 }
 
-test "e_low_level_lambda - shift_left_by with zero shift" {
+test "low_level - shift_left_by with zero shift" {
     const src =
         \\a : U8
         \\a = 42
@@ -2353,7 +2353,7 @@ test "e_low_level_lambda - shift_left_by with zero shift" {
     try testing.expectEqual(@as(i128, 42), value); // 42 << 0 = 42
 }
 
-test "e_low_level_lambda - shift_right_by with zero shift" {
+test "low_level - shift_right_by with zero shift" {
     const src =
         \\a : I8
         \\a = -42
@@ -2363,7 +2363,7 @@ test "e_low_level_lambda - shift_right_by with zero shift" {
     try testing.expectEqual(@as(i128, -42), value); // -42 >> 0 = -42
 }
 
-test "e_low_level_lambda - shift operations preserve type" {
+test "low_level - shift operations preserve type" {
     const src =
         \\a : U32
         \\a = 100
@@ -2375,7 +2375,7 @@ test "e_low_level_lambda - shift operations preserve type" {
     try testing.expectEqual(@as(i128, 100), value); // ((100 << 2) >> 1) >>> 1 = (400 >> 1) >>> 1 = 200 >>> 1 = 100
 }
 
-test "e_low_level_lambda - I8.shift_right_zf_by with -1" {
+test "low_level - I8.shift_right_zf_by with -1" {
     const src =
         \\a : I8
         \\a = -1
@@ -2385,7 +2385,7 @@ test "e_low_level_lambda - I8.shift_right_zf_by with -1" {
     try testing.expectEqual(@as(i128, 15), value); // -1 (0xFF) >>> 4 = 15 (0x0F)
 }
 
-test "e_low_level_lambda - U16.shift_right_zf_by equals shift_right_by for unsigned" {
+test "low_level - U16.shift_right_zf_by equals shift_right_by for unsigned" {
     const src =
         \\a : U16
         \\a = 256
@@ -2400,7 +2400,7 @@ test "e_low_level_lambda - U16.shift_right_zf_by equals shift_right_by for unsig
 
 // Bitwise shift edge case tests
 
-test "e_low_level_lambda - U8.shift_left_by overflow wraps" {
+test "low_level - U8.shift_left_by overflow wraps" {
     const src =
         \\a : U8
         \\a = 128
@@ -2410,7 +2410,7 @@ test "e_low_level_lambda - U8.shift_left_by overflow wraps" {
     try testing.expectEqual(@as(i128, 0), value); // 128 << 1 wraps to 0 in U8
 }
 
-test "e_low_level_lambda - I8.shift_left_by overflow wraps" {
+test "low_level - I8.shift_left_by overflow wraps" {
     const src =
         \\a : I8
         \\a = 64
@@ -2420,7 +2420,7 @@ test "e_low_level_lambda - I8.shift_left_by overflow wraps" {
     try testing.expectEqual(@as(i128, 0), value); // 64 << 2 = 256, wraps to 0 in I8
 }
 
-test "e_low_level_lambda - I8.shift_left_by max value overflow" {
+test "low_level - I8.shift_left_by max value overflow" {
     const src =
         \\a : I8
         \\a = 127
@@ -2430,7 +2430,7 @@ test "e_low_level_lambda - I8.shift_left_by max value overflow" {
     try testing.expectEqual(@as(i128, -2), value); // 127 << 1 = 254 = -2 in I8
 }
 
-test "e_low_level_lambda - U8.shift_right_by max value" {
+test "low_level - U8.shift_right_by max value" {
     const src =
         \\a : U8
         \\a = 255
@@ -2440,7 +2440,7 @@ test "e_low_level_lambda - U8.shift_right_by max value" {
     try testing.expectEqual(@as(i128, 127), value); // 255 >> 1 = 127
 }
 
-test "e_low_level_lambda - I8.shift_right_by min value" {
+test "low_level - I8.shift_right_by min value" {
     const src =
         \\a : I8
         \\a = -128
@@ -2450,7 +2450,7 @@ test "e_low_level_lambda - I8.shift_right_by min value" {
     try testing.expectEqual(@as(i128, -64), value); // -128 >> 1 = -64 (arithmetic)
 }
 
-test "e_low_level_lambda - I8.shift_right_zf_by min value" {
+test "low_level - I8.shift_right_zf_by min value" {
     const src =
         \\a : I8
         \\a = -128
@@ -2460,7 +2460,7 @@ test "e_low_level_lambda - I8.shift_right_zf_by min value" {
     try testing.expectEqual(@as(i128, 64), value); // -128 (0x80) >>> 1 = 64 (0x40)
 }
 
-test "e_low_level_lambda - shift_left_by amount at bit width boundary" {
+test "low_level - shift_left_by amount at bit width boundary" {
     const src =
         \\a : U8
         \\a = 1
@@ -2470,7 +2470,7 @@ test "e_low_level_lambda - shift_left_by amount at bit width boundary" {
     try testing.expectEqual(@as(i128, 128), value); // 1 << 7 = 128 (MSB set)
 }
 
-test "e_low_level_lambda - shift_right_by amount at bit width boundary" {
+test "low_level - shift_right_by amount at bit width boundary" {
     const src =
         \\a : U8
         \\a = 128
@@ -2480,7 +2480,7 @@ test "e_low_level_lambda - shift_right_by amount at bit width boundary" {
     try testing.expectEqual(@as(i128, 1), value); // 128 >> 7 = 1
 }
 
-test "e_low_level_lambda - I8.shift_right_by negative all ones preserves" {
+test "low_level - I8.shift_right_by negative all ones preserves" {
     const src =
         \\a : I8
         \\a = -1
@@ -2490,7 +2490,7 @@ test "e_low_level_lambda - I8.shift_right_by negative all ones preserves" {
     try testing.expectEqual(@as(i128, -1), value); // -1 >> 7 = -1 (sign extends)
 }
 
-test "e_low_level_lambda - I8.shift_right_by negative rounds toward negative infinity" {
+test "low_level - I8.shift_right_by negative rounds toward negative infinity" {
     const src =
         \\a : I8
         \\a = -3
@@ -2500,7 +2500,7 @@ test "e_low_level_lambda - I8.shift_right_by negative rounds toward negative inf
     try testing.expectEqual(@as(i128, -2), value); // -3 >> 1 = -2
 }
 
-test "e_low_level_lambda - U8.shift_right_zf_by all ones pattern" {
+test "low_level - U8.shift_right_zf_by all ones pattern" {
     const src =
         \\a : U8
         \\a = 255
@@ -2510,7 +2510,7 @@ test "e_low_level_lambda - U8.shift_right_zf_by all ones pattern" {
     try testing.expectEqual(@as(i128, 127), value); // 255 >>> 1 = 127
 }
 
-test "e_low_level_lambda - I8.shift_right_zf_by all ones from negative" {
+test "low_level - I8.shift_right_zf_by all ones from negative" {
     const src =
         \\a : I8
         \\a = -1
@@ -2520,7 +2520,7 @@ test "e_low_level_lambda - I8.shift_right_zf_by all ones from negative" {
     try testing.expectEqual(@as(i128, 127), value); // -1 (0xFF) >>> 1 = 127 (0x7F)
 }
 
-test "e_low_level_lambda - shift_left_by with zero value" {
+test "low_level - shift_left_by with zero value" {
     const src =
         \\a : U8
         \\a = 0
@@ -2530,7 +2530,7 @@ test "e_low_level_lambda - shift_left_by with zero value" {
     try testing.expectEqual(@as(i128, 0), value); // 0 << 5 = 0
 }
 
-test "e_low_level_lambda - shift_right_zf_by with zero value" {
+test "low_level - shift_right_zf_by with zero value" {
     const src =
         \\a : I8
         \\a = 0
@@ -2540,7 +2540,7 @@ test "e_low_level_lambda - shift_right_zf_by with zero value" {
     try testing.expectEqual(@as(i128, 0), value); // 0 >>> 3 = 0
 }
 
-test "e_low_level_lambda - shift_left_by large shift amount clamped U8" {
+test "low_level - shift_left_by large shift amount clamped U8" {
     const src =
         \\a : U8
         \\a = 1
@@ -2550,7 +2550,7 @@ test "e_low_level_lambda - shift_left_by large shift amount clamped U8" {
     try testing.expectEqual(@as(i128, 0), value); // 1 << 127 (clamped) wraps to 0
 }
 
-test "e_low_level_lambda - shift_right_by large shift amount clamped" {
+test "low_level - shift_right_by large shift amount clamped" {
     const src =
         \\a : U8
         \\a = 255
@@ -2560,7 +2560,7 @@ test "e_low_level_lambda - shift_right_by large shift amount clamped" {
     try testing.expectEqual(@as(i128, 0), value); // 255 >> 127 (clamped) = 0 (all bits shifted out)
 }
 
-test "e_low_level_lambda - U16.shift_left_by to max representable" {
+test "low_level - U16.shift_left_by to max representable" {
     const src =
         \\a : U16
         \\a = 1
@@ -2570,7 +2570,7 @@ test "e_low_level_lambda - U16.shift_left_by to max representable" {
     try testing.expectEqual(@as(i128, 32768), value); // 1 << 15 = 32768 (MSB set)
 }
 
-test "e_low_level_lambda - U32.shift_left_by power of 2" {
+test "low_level - U32.shift_left_by power of 2" {
     const src =
         \\a : U32
         \\a = 1
@@ -2580,7 +2580,7 @@ test "e_low_level_lambda - U32.shift_left_by power of 2" {
     try testing.expectEqual(@as(i128, 1048576), value); // 1 << 20 = 2^20
 }
 
-test "e_low_level_lambda - U64.shift_left_by large power" {
+test "low_level - U64.shift_left_by large power" {
     const src =
         \\a : U64
         \\a = 1
@@ -2590,7 +2590,7 @@ test "e_low_level_lambda - U64.shift_left_by large power" {
     try testing.expectEqual(@as(i128, 1099511627776), value); // 1 << 40 = 2^40
 }
 
-test "e_low_level_lambda - U128.shift_left_by near max" {
+test "low_level - U128.shift_left_by near max" {
     const src =
         \\a : U128
         \\a = 1
@@ -2600,7 +2600,7 @@ test "e_low_level_lambda - U128.shift_left_by near max" {
     try testing.expectEqual(@as(i128, 1267650600228229401496703205376), value); // 1 << 100 = 2^100
 }
 
-test "e_low_level_lambda - I16.shift_right_by negative large magnitude" {
+test "low_level - I16.shift_right_by negative large magnitude" {
     const src =
         \\a : I16
         \\a = -1024
@@ -2610,7 +2610,7 @@ test "e_low_level_lambda - I16.shift_right_by negative large magnitude" {
     try testing.expectEqual(@as(i128, -32), value); // -1024 >> 5 = -32
 }
 
-test "e_low_level_lambda - I32.shift_right_by min value" {
+test "low_level - I32.shift_right_by min value" {
     const src =
         \\a : I32
         \\a = -2147483648
@@ -2620,7 +2620,7 @@ test "e_low_level_lambda - I32.shift_right_by min value" {
     try testing.expectEqual(@as(i128, -1073741824), value); // I32::MIN >> 1
 }
 
-test "e_low_level_lambda - I32.shift_right_zf_by min value" {
+test "low_level - I32.shift_right_zf_by min value" {
     const src =
         \\a : I32
         \\a = -2147483648
@@ -2630,7 +2630,7 @@ test "e_low_level_lambda - I32.shift_right_zf_by min value" {
     try testing.expectEqual(@as(i128, 1073741824), value); // I32::MIN (0x80000000) >>> 1 = 0x40000000
 }
 
-test "e_low_level_lambda - shift single bit round trip" {
+test "low_level - shift single bit round trip" {
     const src =
         \\a : U8
         \\a = 1
@@ -2641,7 +2641,7 @@ test "e_low_level_lambda - shift single bit round trip" {
     try testing.expectEqual(@as(i128, 1), value); // (1 << 5) >> 5 = 1
 }
 
-test "e_low_level_lambda - I64.shift_right_by negative two" {
+test "low_level - I64.shift_right_by negative two" {
     const src =
         \\a : I64
         \\a = -2
@@ -2651,7 +2651,7 @@ test "e_low_level_lambda - I64.shift_right_by negative two" {
     try testing.expectEqual(@as(i128, -1), value); // -2 >> 1 = -1
 }
 
-test "e_low_level_lambda - U32.shift_left_by shift amount exactly at width" {
+test "low_level - U32.shift_left_by shift amount exactly at width" {
     const src =
         \\a : U32
         \\a = 1
@@ -2661,7 +2661,7 @@ test "e_low_level_lambda - U32.shift_left_by shift amount exactly at width" {
     try testing.expectEqual(@as(i128, 0), value); // 1 << 32 (clamped to 31) = wraps
 }
 
-test "e_low_level_lambda - I8.shift_right_by negative by 7 bits" {
+test "low_level - I8.shift_right_by negative by 7 bits" {
     const src =
         \\a : I8
         \\a = -127
@@ -2671,7 +2671,7 @@ test "e_low_level_lambda - I8.shift_right_by negative by 7 bits" {
     try testing.expectEqual(@as(i128, -2), value); // -127 >> 6 = -2
 }
 
-test "e_low_level_lambda - U64.shift_right_zf_by max value by half" {
+test "low_level - U64.shift_right_zf_by max value by half" {
     const src =
         \\a : U64
         \\a = 18446744073709551615
@@ -2683,7 +2683,7 @@ test "e_low_level_lambda - U64.shift_right_zf_by max value by half" {
 
 // List.sort_with tests
 
-test "e_low_level_lambda - List.sort_with basic ascending sort" {
+test "low_level - List.sort_with basic ascending sort" {
     const src =
         \\x = List.sort_with([3, 1, 2], |a, b| if a < b LT else if a > b GT else EQ)
         \\first = List.first(x)
@@ -2694,7 +2694,7 @@ test "e_low_level_lambda - List.sort_with basic ascending sort" {
     try testing.expectEqualStrings("Ok(1.0)", first_value);
 }
 
-test "e_low_level_lambda - List.sort_with preserves length" {
+test "low_level - List.sort_with preserves length" {
     const src =
         \\x = List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b LT else if a > b GT else EQ)
         \\len = List.len(x)
@@ -2704,7 +2704,7 @@ test "e_low_level_lambda - List.sort_with preserves length" {
     try testing.expectEqual(@as(i128, 5), len_value);
 }
 
-test "e_low_level_lambda - List.sort_with with larger list" {
+test "low_level - List.sort_with with larger list" {
     const src =
         \\x = List.sort_with([5, 2, 8, 1, 9, 3, 7, 4, 6], |a, b| if a < b LT else if a > b GT else EQ)
         \\first = List.first(x)
@@ -2715,7 +2715,7 @@ test "e_low_level_lambda - List.sort_with with larger list" {
     try testing.expectEqualStrings("Ok(1.0)", first_value);
 }
 
-test "e_low_level_lambda - List.sort_with with two elements" {
+test "low_level - List.sort_with with two elements" {
     const src =
         \\x = List.sort_with([2, 1], |a, b| if a < b LT else if a > b GT else EQ)
         \\first = List.first(x)
@@ -2726,7 +2726,7 @@ test "e_low_level_lambda - List.sort_with with two elements" {
     try testing.expectEqualStrings("Ok(1.0)", first_value);
 }
 
-test "e_low_level_lambda - List.sort_with descending order" {
+test "low_level - List.sort_with descending order" {
     const src =
         \\x = List.sort_with([1, 3, 2], |a, b| if a > b LT else if a < b GT else EQ)
         \\first = List.first(x)
@@ -2738,7 +2738,7 @@ test "e_low_level_lambda - List.sort_with descending order" {
     try testing.expectEqualStrings("Ok(3.0)", first_value);
 }
 
-test "e_low_level_lambda - List.sort_with empty list" {
+test "low_level - List.sort_with empty list" {
     const src =
         \\x : List(U64)
         \\x = List.sort_with([], |a, b| if a < b LT else if a > b GT else EQ)
@@ -2749,7 +2749,7 @@ test "e_low_level_lambda - List.sort_with empty list" {
     try testing.expectEqual(@as(i128, 0), len_value);
 }
 
-test "e_low_level_lambda - List.sort_with single element" {
+test "low_level - List.sort_with single element" {
     const src =
         \\x = List.sort_with([42], |a, b| if a < b LT else if a > b GT else EQ)
         \\first = List.first(x)
@@ -2760,7 +2760,7 @@ test "e_low_level_lambda - List.sort_with single element" {
     try testing.expectEqualStrings("Ok(42.0)", first_value);
 }
 
-test "e_low_level_lambda - List.sort_with with duplicates" {
+test "low_level - List.sort_with with duplicates" {
     // TODO: This test is skipped due to stack memory accumulation across eval() calls.
     // The interpreter stores return values in stack memory, and bindings hold references
     // to this memory. When evaluating multiple declarations (x, then first, then len),
@@ -2782,7 +2782,7 @@ test "e_low_level_lambda - List.sort_with with duplicates" {
     try testing.expectEqual(@as(i128, 5), len_value);
 }
 
-test "e_low_level_lambda - List.sort_with already sorted" {
+test "low_level - List.sort_with already sorted" {
     const src =
         \\x = List.sort_with([1, 2, 3, 4, 5], |a, b| if a < b LT else if a > b GT else EQ)
         \\first = List.first(x)
@@ -2793,7 +2793,7 @@ test "e_low_level_lambda - List.sort_with already sorted" {
     try testing.expectEqualStrings("Ok(1.0)", first_value);
 }
 
-test "e_low_level_lambda - List.sort_with reverse sorted" {
+test "low_level - List.sort_with reverse sorted" {
     const src =
         \\x = List.sort_with([5, 4, 3, 2, 1], |a, b| if a < b LT else if a > b GT else EQ)
         \\first = List.first(x)
@@ -2805,7 +2805,7 @@ test "e_low_level_lambda - List.sort_with reverse sorted" {
 }
 // mod_by tests for integer types
 
-test "e_low_level_lambda - U8.mod_by basic" {
+test "low_level - U8.mod_by basic" {
     const src =
         \\a : U8
         \\a = 10
@@ -2818,7 +2818,7 @@ test "e_low_level_lambda - U8.mod_by basic" {
     try testing.expectEqual(@as(i128, 1), value);
 }
 
-test "e_low_level_lambda - U8.mod_by zero remainder" {
+test "low_level - U8.mod_by zero remainder" {
     const src =
         \\a : U8
         \\a = 10
@@ -2831,7 +2831,7 @@ test "e_low_level_lambda - U8.mod_by zero remainder" {
     try testing.expectEqual(@as(i128, 0), value);
 }
 
-test "e_low_level_lambda - I8.mod_by positive positive" {
+test "low_level - I8.mod_by positive positive" {
     const src =
         \\a : I8
         \\a = 10
@@ -2844,7 +2844,7 @@ test "e_low_level_lambda - I8.mod_by positive positive" {
     try testing.expectEqual(@as(i128, 1), value);
 }
 
-test "e_low_level_lambda - I8.mod_by negative positive" {
+test "low_level - I8.mod_by negative positive" {
     const src =
         \\a : I8
         \\a = -10
@@ -2858,7 +2858,7 @@ test "e_low_level_lambda - I8.mod_by negative positive" {
     try testing.expectEqual(@as(i128, 2), value);
 }
 
-test "e_low_level_lambda - I8.mod_by positive negative" {
+test "low_level - I8.mod_by positive negative" {
     const src =
         \\a : I8
         \\a = 10
@@ -2872,7 +2872,7 @@ test "e_low_level_lambda - I8.mod_by positive negative" {
     try testing.expectEqual(@as(i128, -2), value);
 }
 
-test "e_low_level_lambda - I8.mod_by negative negative" {
+test "low_level - I8.mod_by negative negative" {
     const src =
         \\a : I8
         \\a = -10
@@ -2886,7 +2886,7 @@ test "e_low_level_lambda - I8.mod_by negative negative" {
     try testing.expectEqual(@as(i128, -1), value);
 }
 
-test "e_low_level_lambda - U64.mod_by large numbers" {
+test "low_level - U64.mod_by large numbers" {
     const src =
         \\a : U64
         \\a = 1000000
@@ -2899,7 +2899,7 @@ test "e_low_level_lambda - U64.mod_by large numbers" {
     try testing.expectEqual(@as(i128, 1), value);
 }
 
-test "e_low_level_lambda - I64.mod_by with zero result" {
+test "low_level - I64.mod_by with zero result" {
     const src =
         \\a : I64
         \\a = 100

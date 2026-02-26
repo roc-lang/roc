@@ -99,15 +99,14 @@ effect_demo! : Str => {}
 effect_demo! = |msg|
 	Stdout.line!(msg)
 
-# TODO issue #8646
-# question_postfix : List(Str) -> Try(I64, _)
-# question_postfix = |strings| {
-#     # `?` to immediately return the error if there is one
-#     first_str = strings.first()?
-#     first_num = I64.from_str(first_str)?
+question_postfix : List(Str) -> Try(I64, _)
+question_postfix = |strings| {
+	# `?` to immediately return the error if there is one
+	first_str = strings.first()?
+	first_num = I64.from_str(first_str)?
 
-#     Ok(first_num + 1)
-# }
+	Ok(first_num)
+}
 
 # three dots for things you want to fill in later, will crash if implement_me_later(arg) is called
 implement_me_later = |_str| ...
@@ -176,11 +175,11 @@ if_demo = |num| {
 			"NotTwo"
 
 	with_curlies = 
-	    if num == 5 {
-	        "Five"
-	    } else {
-	        "NotFive"
-	    }
+		if num == 5 {
+			"Five"
+		} else {
+			"NotFive"
+		}
 
 	# else if
 	if num == 3
@@ -200,13 +199,13 @@ type_var : List(a) -> List(a)
 type_var = |lst| lst
 
 destructuring = || {
-    tup = ("Roc", 1)
-    (str, num) = tup
+	tup = ("Roc", 1)
+	(str, num) = tup
 
-    rec = { x: 1, y: str } # TODO implement tuple access with `.index` ?
-    { x, y } = rec
+	rec = { x: 1, y: str } # TODO implement tuple access with `.index` ?
+	{ x, y } = rec
 
-    (str, num, x, y)
+	(str, num, x, y)
 }
 
 # TODO not sure if still planned for implementation
@@ -220,7 +219,6 @@ record_update_2 : { name : Str, age : I64 } -> { name : Str, age : I64 }
 record_update_2 = |person| {
 	{ ..person, age: 31 }
 }
-
 
 number_literals = {
 	usage_based: 5, # defaults to Dec
@@ -241,7 +239,22 @@ number_literals = {
 }
 
 # Opaque type
-Username :: Str
+# Useful if you want to hide fields e.g. so users of the type can not access some implementation detail you did not want to expose. 
+Secret :: {
+	key : Str,
+}.{
+	new : Str -> Secret
+	new = |k| { key: k }
+
+	unlock : Secret, Str -> Str
+	unlock = |secret, password| {
+		if password == "open sesame" {
+			"The secret key is: ${secret.key}"
+		} else {
+			"Wrong password!"
+		}
+	}
+}
 
 # Define a nominal type with a custom is_eq method
 Animal := [Dog(Str), Cat(Str)].{
@@ -266,6 +279,16 @@ early_return = |arg| {
 
 my_concat = Str.concat
 
+# Complex pipeline: chaining static dispatch methods with a lambda
+format_names : List(Str) -> Str
+format_names = |names|
+	names
+		.map(|name| name.trim())
+		.join_with(", ")
+		->(|joined| {
+			if joined.is_empty() "No names provided" else "Names: ${joined}"
+		})
+
 # Tags can have multiple payloads
 multi_payload_tag : [Foo(I64, Str), Bar] -> Str
 multi_payload_tag = |tag| match tag {
@@ -286,7 +309,7 @@ color_to_str = |color| match color {
 # str_to_color : Str -> [Red, Green, Blue, Other, ..[]]
 
 # Type alias for an extensible tag union. You can use a type var (`others`) like so:
-Letters(others) : [A, B, ..others]
+Letters(others) : [A, B, ..]
 
 # Use the type alias in a function signature. Pass `[C]` as `others`.
 letter_to_str : Letters([C]) -> Str
@@ -323,7 +346,7 @@ main! = || {
 
 	effect_demo!("This is an effectful function!")
 
-	#Stdout.line!(Str.inspect(question_postfix(["1", "not a number", "100"])))
+	print!(question_postfix(["1", "not a number", "100"]))
 
 	sum = for_loop([1, 2, 3, 4, 5])
 	print!(sum)
@@ -354,9 +377,10 @@ main! = || {
 
 	print!(number_literals)
 
-	# TODO: not implemented yet.
-	# bob = @Username("Bob")
-	# Stdout.line!("Username: ${bob}")
+	secret = Secret.new("my_secret_key")
+	# This print will not expose internal data.
+	print!(secret)
+	print!(secret.unlock("open sesame"))
 
 	dog : Animal
 	dog = Dog("Fido")
@@ -374,6 +398,9 @@ main! = || {
 	# Open tag unions with `..`
 	# This function accepts [Red, Green, ..] so we can pass Blue too
 	print!(color_to_str(Blue))
+
+	# Complex pipeline with arrow lambda
+	print!(format_names(["  Alice ", "Bob  ", " Charlie"]))
 
 	# Type alias for extensible tag union
 	print!(letter_to_str(A))

@@ -6,6 +6,7 @@
 //! and functions that are called from compiled Roc code to handle numeric
 //! operations efficiently and safely.
 const std = @import("std");
+const i128h = @import("compiler_rt_128.zig");
 
 const WithOverflow = @import("utils.zig").WithOverflow;
 const Ordering = @import("utils.zig").Ordering;
@@ -45,36 +46,38 @@ pub const U256 = struct {
 };
 
 /// Multiplies two u128 values, returning a 256-bit result.
+/// Uses i128h.mul_u64_wide for each partial product and i128h.shl/shr for
+/// shifts, so this is compiler-rt-free on all targets including wasm32.
 pub fn mul_u128(a: u128, b: u128) U256 {
-    var hi: u128 = undefined;
-    var lo: u128 = undefined;
+    const wide = i128h.mul_u64_wide;
+    const shift = i128h.shr;
+    const lower_mask: u128 = math.maxInt(u64);
 
-    const bits_in_dword_2: u32 = 64;
-    const lower_mask: u128 = math.maxInt(u128) >> bits_in_dword_2;
+    // Split each u128 into two u64 halves via @bitCast (no shift needed).
+    const a_halves: [2]u64 = @bitCast(a);
+    const b_halves: [2]u64 = @bitCast(b);
+    const a_lo = a_halves[0];
+    const a_hi = a_halves[1];
+    const b_lo = b_halves[0];
+    const b_hi = b_halves[1];
 
-    lo = (a & lower_mask) * (b & lower_mask);
+    var lo: u128 = wide(a_lo, b_lo);
 
-    var t = lo >> bits_in_dword_2;
-
+    var t = shift(lo, 64);
     lo &= lower_mask;
 
-    t += (a >> bits_in_dword_2) * (b & lower_mask);
+    t += wide(a_hi, b_lo);
+    lo += i128h.shl(t & lower_mask, 64);
+    var hi: u128 = shift(t, 64);
 
-    lo += (t & lower_mask) << bits_in_dword_2;
-
-    hi = t >> bits_in_dword_2;
-
-    t = lo >> bits_in_dword_2;
-
+    t = shift(lo, 64);
     lo &= lower_mask;
 
-    t += (b >> bits_in_dword_2) * (a & lower_mask);
+    t += wide(b_hi, a_lo);
+    lo += i128h.shl(t & lower_mask, 64);
+    hi += shift(t, 64);
 
-    lo += (t & lower_mask) << bits_in_dword_2;
-
-    hi += t >> bits_in_dword_2;
-
-    hi += (a >> bits_in_dword_2) * (b >> bits_in_dword_2);
+    hi += wide(a_hi, b_hi);
 
     return .{ .hi = hi, .lo = lo };
 }
@@ -122,7 +125,15 @@ pub fn exportParseFloat(comptime T: type, comptime name: []const u8) void {
 pub fn exportNumToFloatCast(comptime T: type, comptime F: type, comptime name: []const u8) void {
     const f = struct {
         fn func(x: T) callconv(.c) F {
-            return @floatFromInt(x);
+            if (T == i128) {
+                const result = i128h.i128_to_f64(x);
+                return if (F == f32) @floatCast(result) else result;
+            } else if (T == u128) {
+                const result = i128h.u128_to_f64(x);
+                return if (F == f32) @floatCast(result) else result;
+            } else {
+                return @floatFromInt(x);
+            }
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
@@ -143,13 +154,25 @@ pub fn exportPow(
                 // std.math.pow can handle ints via powi, but it turns any errors to unreachable
                 // we want to catch overflow and report a proper error to the user
                 .int => {
-                    if (std.math.powi(T, base, exp)) |value| {
-                        return value;
-                    } else |err| switch (err) {
-                        error.Overflow => {
-                            roc_ops.crash("Integer raised to power overflowed!");
-                        },
-                        error.Underflow => return 0,
+                    if (T == i128 or T == u128) {
+                        // Use custom powi that avoids compiler_rt calls
+                        if (powi128(T, base, exp)) |value| {
+                            return value;
+                        } else |err| switch (err) {
+                            error.Overflow => {
+                                roc_ops.crash("Integer raised to power overflowed!");
+                            },
+                            error.Underflow => return 0,
+                        }
+                    } else {
+                        if (std.math.powi(T, base, exp)) |value| {
+                            return value;
+                        } else |err| switch (err) {
+                            error.Overflow => {
+                                roc_ops.crash("Integer raised to power overflowed!");
+                            },
+                            error.Underflow => return 0,
+                        }
                     }
                 },
                 else => {
@@ -159,6 +182,54 @@ pub fn exportPow(
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
+}
+
+/// Integer power for i128/u128 that avoids compiler_rt calls.
+/// Uses our custom mul_i128/mul_u128_lo instead of native * and @mulWithOverflow.
+fn powi128(comptime T: type, base: T, exp: T) error{ Overflow, Underflow }!T {
+    const info = @typeInfo(T).int;
+    if (info.signedness == .signed and exp < 0) {
+        // Negative exponent: result is 1/base^|exp|, which is 0 for |base|>1
+        if (base == 1) return 1;
+        if (base == -1) return if (@as(u1, @truncate(@as(u128, @bitCast(exp)))) == 0) @as(T, 1) else @as(T, -1);
+        return error.Underflow;
+    }
+
+    if (base == 0) {
+        if (exp == 0) return 1;
+        return 0;
+    }
+
+    var b: u128 = @bitCast(if (info.signedness == .signed) @as(i128, base) else @as(u128, base));
+    var e: u128 = @bitCast(if (info.signedness == .signed) @as(i128, exp) else @as(u128, exp));
+    var result: u128 = 1;
+
+    while (e > 0) {
+        if (e & 1 != 0) {
+            // Check overflow: result * b
+            const prev = result;
+            result = i128h.mul_u128_lo(result, b);
+            if (b != 0 and i128h.divTrunc_u128(result, b) != prev) return error.Overflow;
+        }
+        e = i128h.shr(e, 1);
+        if (e > 0) {
+            const prev = b;
+            b = i128h.mul_u128_lo(b, b);
+            if (prev != 0 and i128h.divTrunc_u128(b, prev) != prev) return error.Overflow;
+        }
+    }
+
+    if (info.signedness == .signed) {
+        const signed_result: i128 = @bitCast(result);
+        if (signed_result < 0 and result != @as(u128, @bitCast(@as(i128, std.math.minInt(i128))))) return error.Overflow;
+        // Negate if base was negative and exponent is odd
+        if (base < 0 and @as(u1, @truncate(@as(u128, @bitCast(@as(i128, exp))))) != 0) {
+            return -@as(T, @bitCast(result));
+        }
+        return @bitCast(result);
+    } else {
+        return result;
+    }
 }
 
 /// Check if a value is NaN.
@@ -345,6 +416,8 @@ pub fn exportDivTrunc(
             if (b == 0) {
                 roc_ops.crash("Integer division by 0!");
             }
+            if (T == i128) return i128h.divTrunc_i128(a, b);
+            if (T == u128) return i128h.divTrunc_u128(a, b);
             return @divTrunc(a, b);
         }
     }.func;
@@ -366,6 +439,8 @@ pub fn exportRemTrunc(
             if (b == 0) {
                 roc_ops.crash("Integer remainder by 0!");
             }
+            if (T == i128) return i128h.rem_i128(a, b);
+            if (T == u128) return i128h.rem_u128(a, b);
             return @rem(a, b);
         }
     }.func;
@@ -377,7 +452,7 @@ pub fn divTruncI128(a: i128, b: i128, roc_ops: *RocOps) callconv(.c) i128 {
     if (b == 0) {
         roc_ops.crash("Integer division by 0!");
     }
-    return @divTrunc(a, b);
+    return i128h.divTrunc_i128(a, b);
 }
 
 /// u128 division truncating towards zero - callable from generated code.
@@ -385,7 +460,7 @@ pub fn divTruncU128(a: u128, b: u128, roc_ops: *RocOps) callconv(.c) u128 {
     if (b == 0) {
         roc_ops.crash("Integer division by 0!");
     }
-    return @divTrunc(a, b);
+    return i128h.divTrunc_u128(a, b);
 }
 
 /// i128 remainder after truncating division - callable from generated code.
@@ -393,7 +468,7 @@ pub fn remTruncI128(a: i128, b: i128, roc_ops: *RocOps) callconv(.c) i128 {
     if (b == 0) {
         roc_ops.crash("Integer remainder by 0!");
     }
-    return @rem(a, b);
+    return i128h.rem_i128(a, b);
 }
 
 /// u128 remainder after truncating division - callable from generated code.
@@ -401,7 +476,7 @@ pub fn remTruncU128(a: u128, b: u128, roc_ops: *RocOps) callconv(.c) u128 {
     if (b == 0) {
         roc_ops.crash("Integer remainder by 0!");
     }
-    return @rem(a, b);
+    return i128h.rem_u128(a, b);
 }
 
 /// Result type for checked integer conversions.
@@ -451,7 +526,7 @@ pub fn isMultipleOf(comptime T: type, lhs: T, rhs: T) bool {
         // Note: lhs % 0 is a runtime panic, so we can't use @mod.
         return (rhs == -1) or (lhs == 0);
     } else {
-        const rem = @mod(lhs, rhs);
+        const rem = if (T == i128) i128h.mod_i128(lhs, rhs) else @mod(lhs, rhs);
         return rem == 0;
     }
 }
@@ -673,6 +748,13 @@ pub fn mulWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
                         return .{ .value = @as(i128, @intCast(answer256.lo)), .has_overflowed = false };
                     }
                 }
+            } else if (T == u128) {
+                const answer256: U256 = mul_u128(self, other);
+                if (answer256.hi != 0) {
+                    return .{ .value = std.math.maxInt(u128), .has_overflowed = true };
+                } else {
+                    return .{ .value = answer256.lo, .has_overflowed = false };
+                }
             } else {
                 const answer = @mulWithOverflow(self, other);
                 return .{ .value = answer[0], .has_overflowed = answer[1] == 1 };
@@ -711,6 +793,8 @@ pub fn exportMulSaturatedInt(comptime T: type, comptime name: []const u8) void {
 pub fn exportMulWrappedInt(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(self: T, other: T) callconv(.c) T {
+            if (T == i128) return i128h.mul_i128(self, other);
+            if (T == u128) return i128h.mul_u128_lo(self, other);
             return self *% other;
         }
     }.func;
@@ -722,7 +806,8 @@ pub fn shiftRightZeroFillI128(self: i128, other: u8) callconv(.c) i128 {
     if (other & 0b1000_0000 > 0) {
         return 0;
     } else {
-        return self >> @as(u7, @intCast(other));
+        // Zero-fill right shift on a signed value: cast to unsigned, shift, cast back.
+        return @bitCast(i128h.shr(@as(u128, @bitCast(self)), @as(u7, @intCast(other))));
     }
 }
 
@@ -731,7 +816,7 @@ pub fn shiftRightZeroFillU128(self: u128, other: u8) callconv(.c) u128 {
     if (other & 0b1000_0000 > 0) {
         return 0;
     } else {
-        return self >> @as(u7, @intCast(other));
+        return i128h.shr(self, @as(u7, @intCast(other)));
     }
 }
 
@@ -1265,10 +1350,10 @@ test "shiftRightZeroFillI128 basic functionality" {
     const result3 = shiftRightZeroFillI128(value, 128);
     try std.testing.expectEqual(@as(i128, 0), result3);
 
-    // Test negative value (arithmetic right shift preserves sign bit)
+    // Test negative value (zero-fill right shift clears the sign bit)
     const neg_value: i128 = -1;
     const result4 = shiftRightZeroFillI128(neg_value, 1);
-    try std.testing.expectEqual(@as(i128, -1), result4);
+    try std.testing.expectEqual(@as(i128, std.math.maxInt(i128)), result4);
 }
 
 test "shiftRightZeroFillU128 basic functionality" {

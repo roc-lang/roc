@@ -1,8 +1,10 @@
 //! Zig module for the roc builtins
 const std = @import("std");
 
+pub const compiler_rt_128 = @import("compiler_rt_128.zig");
 pub const host_abi = @import("host_abi.zig");
 pub const dec = @import("dec.zig");
+pub const dev_wrappers = @import("dev_wrappers.zig");
 pub const handlers = @import("handlers.zig");
 pub const hash = @import("hash.zig");
 pub const list = @import("list.zig");

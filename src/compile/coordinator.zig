@@ -82,11 +82,6 @@ const Mode = compile_package.Mode;
 /// Threading features aren't available when targeting WebAssembly
 const threads_available = builtin.target.cpu.arch != .wasm32;
 const Thread = if (threads_available) std.Thread else struct {};
-const Mutex = if (threads_available) std.Thread.Mutex else struct {
-    pub fn lock(_: *@This()) void {}
-    pub fn unlock(_: *@This()) void {}
-};
-
 /// Allocators for a worker thread. Each worker has its own instance.
 /// This ensures thread-safe allocations without contention.
 ///
@@ -399,15 +394,11 @@ pub const Coordinator = struct {
     /// Result channel from workers to coordinator
     result_channel: Channel(WorkerResult),
 
-    /// Task queue for workers (protected by mutex for multi-threaded)
-    task_queue: std.ArrayList(WorkerTask),
-    task_mutex: Mutex,
+    /// Task channel for workers (ring buffer with proper synchronization)
+    task_channel: Channel(WorkerTask),
 
     /// Worker threads
     workers: std.ArrayList(Thread),
-
-    /// Whether workers should continue running
-    running: bool,
 
     /// Number of tasks currently being processed by workers (atomic for thread safety)
     inflight: std.atomic.Value(usize),
@@ -483,9 +474,8 @@ pub const Coordinator = struct {
         compiler_version: []const u8,
         cache_manager: ?*CacheManager,
     ) !Coordinator {
-        // Pre-allocate task queue with page_allocator for thread safety.
-        // page_allocator is guaranteed thread-safe (uses OS mmap/munmap).
-        // This ensures task queue operations don't race with gpa allocations.
+        // Task channel uses a bounded ring buffer with proper mutex + condition variable
+        // synchronization, matching the proven result_channel implementation.
         const initial_task_capacity = 256;
         return .{
             .gpa = gpa,
@@ -494,10 +484,8 @@ pub const Coordinator = struct {
             .target = target,
             .packages = std.StringHashMap(*PackageState).init(gpa),
             .result_channel = try Channel(WorkerResult).init(gpa, channel.DEFAULT_CAPACITY),
-            .task_queue = try std.ArrayList(WorkerTask).initCapacity(std.heap.page_allocator, initial_task_capacity),
-            .task_mutex = .{},
+            .task_channel = try Channel(WorkerTask).init(if (threads_available) std.heap.page_allocator else gpa, initial_task_capacity),
             .workers = std.ArrayList(Thread).empty,
-            .running = false,
             .inflight = std.atomic.Value(usize).init(0),
             .total_remaining = 0,
             .builtin_modules = builtin_modules,
@@ -560,11 +548,8 @@ pub const Coordinator = struct {
             std.debug.print("[COORD DEINIT] packages done\n", .{});
         }
 
-        // Free remaining tasks (task_queue uses page_allocator for thread safety)
-        for (self.task_queue.items) |*task| {
-            _ = task; // Tasks don't own memory, just references
-        }
-        self.task_queue.deinit(std.heap.page_allocator);
+        // Free task channel
+        self.task_channel.deinit();
 
         // Free cross-package dependents
         var cpd_it = self.cross_package_dependents.iterator();
@@ -635,7 +620,6 @@ pub const Coordinator = struct {
             return;
         }
 
-        self.running = true;
         const n = if (self.max_threads == 0) (std.Thread.getCpuCount() catch 1) else self.max_threads;
 
         try self.workers.ensureTotalCapacity(self.gpa, n);
@@ -650,17 +634,9 @@ pub const Coordinator = struct {
     pub fn shutdown(self: *Coordinator) void {
         if (!threads_available) return;
 
-        // Close the result channel to wake any blocked workers
+        // Close both channels to wake any blocked workers
         self.result_channel.close();
-
-        // Set running = false and send shutdown tasks while holding the lock
-        self.task_mutex.lock();
-        self.running = false;
-        for (self.workers.items) |_| {
-            // Use page_allocator for task queue operations (thread-safe)
-            self.task_queue.append(std.heap.page_allocator, .{ .shutdown = {} }) catch {};
-        }
-        self.task_mutex.unlock();
+        self.task_channel.close();
 
         // Wait for workers to finish
         for (self.workers.items) |w| {
@@ -671,10 +647,6 @@ pub const Coordinator = struct {
 
     /// Enqueue a task for processing
     pub fn enqueueTask(self: *Coordinator, task: WorkerTask) !void {
-        if (threads_available and self.mode == .multi_threaded) {
-            self.task_mutex.lock();
-            defer self.task_mutex.unlock();
-        }
         if (comptime trace_build) {
             switch (task) {
                 .parse => |t| std.debug.print("[COORD] ENQUEUE parse: pkg={s} module={s}\n", .{ t.package_name, t.module_name }),
@@ -683,8 +655,28 @@ pub const Coordinator = struct {
                 .shutdown => std.debug.print("[COORD] ENQUEUE shutdown\n", .{}),
             }
         }
-        // Use page_allocator for task queue operations (thread-safe)
-        try self.task_queue.append(std.heap.page_allocator, task);
+        // Increment inflight BEFORE sending to the channel. This ensures there is
+        // no window where a worker could recv, execute, and the coordinator could
+        // process the result (decrementing inflight) before we increment here.
+        if (threads_available and self.mode == .multi_threaded) {
+            _ = self.inflight.fetchAdd(1, .acquire);
+        }
+        self.task_channel.send(task) catch |err| switch (err) {
+            error.Closed => {
+                // Undo the increment — shutting down, safe to drop
+                if (threads_available and self.mode == .multi_threaded) {
+                    _ = self.inflight.fetchSub(1, .release);
+                }
+                return;
+            },
+            error.Timeout => unreachable, // send() waits indefinitely
+            error.OutOfMemory => {
+                if (threads_available and self.mode == .multi_threaded) {
+                    _ = self.inflight.fetchSub(1, .release);
+                }
+                return error.OutOfMemory;
+            },
+        };
     }
 
     /// Enqueue a parse task for a module
@@ -725,7 +717,7 @@ pub const Coordinator = struct {
 
             if (!threads_available or self.mode == .single_threaded or self.max_threads <= 1) {
                 // Single-threaded: process tasks inline
-                if (self.task_queue.pop()) |task| {
+                if (self.task_channel.tryRecv()) |task| {
                     const result = self.executeTaskInline(task);
                     try self.handleResult(result);
                     made_progress = true;
@@ -752,20 +744,13 @@ pub const Coordinator = struct {
             } else {
                 iterations_without_progress += 1;
                 if (iterations_without_progress > 1000) {
-                    // Lock mutex to safely read task_queue.items.len
-                    const task_count = blk: {
-                        if (threads_available and self.mode == .multi_threaded) {
-                            self.task_mutex.lock();
-                            defer self.task_mutex.unlock();
-                        }
-                        break :blk self.task_queue.items.len;
-                    };
+                    const task_count = self.task_channel.len();
                     std.debug.print("Coordinator stuck: remaining={}, tasks={}, inflight={}\n", .{
                         self.total_remaining,
                         task_count,
                         self.inflight.load(.acquire),
                     });
-                    // Print package/module states
+                    // Print package/module states with detailed diagnostics
                     var pkg_it = self.packages.iterator();
                     while (pkg_it.next()) |entry| {
                         const pkg = entry.value_ptr.*;
@@ -775,12 +760,36 @@ pub const Coordinator = struct {
                             pkg.modules.items.len,
                         });
                         for (pkg.modules.items, 0..) |mod, i| {
-                            std.debug.print("    Module {}: {s} phase={} ext_imports={}\n", .{
+                            std.debug.print("    Module {}: {s} phase=.{s} ext_imports={}\n", .{
                                 i,
                                 mod.name,
-                                mod.phase,
+                                @tagName(mod.phase),
                                 mod.external_imports.items.len,
                             });
+                            // For non-Done modules, print additional diagnostics
+                            if (mod.phase != .Done) {
+                                // Print local imports and their status
+                                if (mod.imports.items.len > 0) {
+                                    std.debug.print("      local_imports ({}):", .{mod.imports.items.len});
+                                    for (mod.imports.items) |imp_id| {
+                                        if (pkg.getModule(imp_id)) |imp_mod| {
+                                            std.debug.print(" {s}(.{s})", .{ imp_mod.name, @tagName(imp_mod.phase) });
+                                        } else {
+                                            std.debug.print(" <invalid id={}>", .{imp_id});
+                                        }
+                                    }
+                                    std.debug.print("\n", .{});
+                                }
+                                // Print external imports and their readiness
+                                if (mod.external_imports.items.len > 0) {
+                                    std.debug.print("      ext_imports ({}):", .{mod.external_imports.items.len});
+                                    for (mod.external_imports.items) |ext_name| {
+                                        const ready = self.isExternalReady(pkg.name, ext_name);
+                                        std.debug.print(" {s}(ready={})", .{ ext_name, ready });
+                                    }
+                                    std.debug.print("\n", .{});
+                                }
+                            }
                         }
                     }
                     @panic("Coordinator stuck in infinite loop");
@@ -809,15 +818,15 @@ pub const Coordinator = struct {
         return any_unblocked;
     }
 
-    /// Check if all work is complete
+    /// Check if all work is complete.
+    ///
+    /// Thread-safety: This is only called from the coordinator thread.
+    /// `total_remaining` is only mutated by the coordinator, so it's always fresh.
+    /// `inflight` is incremented *before* a task enters the channel and decremented
+    /// only when the coordinator processes the result, so there is no window where
+    /// the channel is empty and inflight is 0 while work is still pending.
     pub fn isComplete(self: *Coordinator) bool {
-        // In multi-threaded mode, we need to hold the mutex to read task_queue.items.len
-        if (threads_available and self.mode == .multi_threaded) {
-            self.task_mutex.lock();
-            defer self.task_mutex.unlock();
-            return self.total_remaining == 0 and self.task_queue.items.len == 0 and self.inflight.load(.acquire) == 0;
-        }
-        return self.total_remaining == 0 and self.task_queue.items.len == 0 and self.inflight.load(.acquire) == 0;
+        return self.total_remaining == 0 and self.task_channel.isEmpty() and self.inflight.load(.acquire) == 0;
     }
 
     /// Execute a task inline (for single-threaded mode)
@@ -853,8 +862,18 @@ pub const Coordinator = struct {
         if (comptime trace_build) {
             std.debug.print("[COORD] PARSED: pkg={s} module={s} result_reports={}\n", .{ result.package_name, result.module_name, result.reports.items.len });
         }
-        const pkg = self.packages.get(result.package_name) orelse return;
-        const mod = pkg.getModule(result.module_id) orelse return;
+        const pkg = self.packages.get(result.package_name) orelse {
+            if (builtin.mode == .Debug) std.debug.print("BUG: package '{s}' not found for parsed result (module={s}, id={})\n", .{
+                result.package_name, result.module_name, result.module_id,
+            });
+            unreachable;
+        };
+        const mod = pkg.getModule(result.module_id) orelse {
+            if (builtin.mode == .Debug) std.debug.print("BUG: module id={} not found in package '{s}' for parsed result (module={s})\n", .{
+                result.module_id, result.package_name, result.module_name,
+            });
+            unreachable;
+        };
 
         if (comptime trace_build) {
             std.debug.print("[COORD] PARSED: mod.reports BEFORE: len={} cap={}\n", .{ mod.reports.items.len, mod.reports.capacity });
@@ -908,8 +927,18 @@ pub const Coordinator = struct {
                 result.reports.items.len,
             });
         }
-        const pkg = self.packages.get(result.package_name) orelse return;
-        const mod = pkg.getModule(result.module_id) orelse return;
+        const pkg = self.packages.get(result.package_name) orelse {
+            if (builtin.mode == .Debug) std.debug.print("BUG: package '{s}' not found for canonicalized result (module={s}, id={})\n", .{
+                result.package_name, result.module_name, result.module_id,
+            });
+            unreachable;
+        };
+        const mod = pkg.getModule(result.module_id) orelse {
+            if (builtin.mode == .Debug) std.debug.print("BUG: module id={} not found in package '{s}' for canonicalized result (module={s})\n", .{
+                result.module_id, result.package_name, result.module_name,
+            });
+            unreachable;
+        };
 
         if (comptime trace_build) {
             std.debug.print("[COORD] CANONICALIZED: mod.reports BEFORE: len={} cap={}\n", .{ mod.reports.items.len, mod.reports.capacity });
@@ -977,7 +1006,12 @@ pub const Coordinator = struct {
         for (result.discovered_local_imports.items) |imp| {
             const child_id = try pkg.ensureModule(self.gpa, imp.module_name, imp.path);
             // Refresh mod pointer after potential resize
-            const current_mod = pkg.getModule(result.module_id) orelse return;
+            const current_mod = pkg.getModule(result.module_id) orelse {
+                if (builtin.mode == .Debug) std.debug.print("BUG: module id={} not found in package '{s}' after ensureModule in canonicalized handler (module={s})\n", .{
+                    result.module_id, result.package_name, result.module_name,
+                });
+                unreachable;
+            };
             try current_mod.imports.append(self.gpa, child_id);
 
             const child = pkg.getModule(child_id).?;
@@ -1006,7 +1040,12 @@ pub const Coordinator = struct {
         }
 
         // Refresh mod pointer after potential resizes from local imports
-        const mod_after_imports = pkg.getModule(result.module_id) orelse return;
+        const mod_after_imports = pkg.getModule(result.module_id) orelse {
+            if (builtin.mode == .Debug) std.debug.print("BUG: module id={} not found in package '{s}' after local imports in canonicalized handler (module={s})\n", .{
+                result.module_id, result.package_name, result.module_name,
+            });
+            unreachable;
+        };
 
         // Process discovered external imports
         for (result.discovered_external_imports.items) |ext_imp| {
@@ -1053,8 +1092,18 @@ pub const Coordinator = struct {
         if (comptime trace_build) {
             std.debug.print("[COORD] TYPE_CHECKED: pkg={s} module={s} result_reports={}\n", .{ result.package_name, result.module_name, result.reports.items.len });
         }
-        const pkg = self.packages.get(result.package_name) orelse return;
-        const mod = pkg.getModule(result.module_id) orelse return;
+        const pkg = self.packages.get(result.package_name) orelse {
+            if (builtin.mode == .Debug) std.debug.print("BUG: package '{s}' not found for type_checked result (module={s}, id={})\n", .{
+                result.package_name, result.module_name, result.module_id,
+            });
+            unreachable;
+        };
+        const mod = pkg.getModule(result.module_id) orelse {
+            if (builtin.mode == .Debug) std.debug.print("BUG: module id={} not found in package '{s}' for type_checked result (module={s})\n", .{
+                result.module_id, result.package_name, result.module_name,
+            });
+            unreachable;
+        };
 
         if (comptime trace_build) {
             std.debug.print("[COORD] TYPE_CHECKED: mod.reports BEFORE append: len={} cap={}\n", .{ mod.reports.items.len, mod.reports.capacity });
@@ -1214,8 +1263,18 @@ pub const Coordinator = struct {
         if (comptime trace_build) {
             std.debug.print("[COORD] PARSE FAILED: pkg={s} module={s} reports={}\n", .{ result.package_name, result.module_name, result.reports.items.len });
         }
-        const pkg = self.packages.get(result.package_name) orelse return;
-        const mod = pkg.getModule(result.module_id) orelse return;
+        const pkg = self.packages.get(result.package_name) orelse {
+            if (builtin.mode == .Debug) std.debug.print("BUG: package '{s}' not found for parse_failed result (module={s}, id={})\n", .{
+                result.package_name, result.module_name, result.module_id,
+            });
+            unreachable;
+        };
+        const mod = pkg.getModule(result.module_id) orelse {
+            if (builtin.mode == .Debug) std.debug.print("BUG: module id={} not found in package '{s}' for parse_failed result (module={s})\n", .{
+                result.module_id, result.package_name, result.module_name,
+            });
+            unreachable;
+        };
 
         // Store partial env if available
         if (result.partial_env) |env| {
@@ -1247,8 +1306,18 @@ pub const Coordinator = struct {
 
     /// Handle cycle detection
     fn handleCycleDetected(self: *Coordinator, result: *messages.CycleDetected) !void {
-        const pkg = self.packages.get(result.package_name) orelse return;
-        const mod = pkg.getModule(result.module_id) orelse return;
+        const pkg = self.packages.get(result.package_name) orelse {
+            if (builtin.mode == .Debug) std.debug.print("BUG: package '{s}' not found for cycle_detected result (id={})\n", .{
+                result.package_name, result.module_id,
+            });
+            unreachable;
+        };
+        const mod = pkg.getModule(result.module_id) orelse {
+            if (builtin.mode == .Debug) std.debug.print("BUG: module id={} not found in package '{s}' for cycle_detected result\n", .{
+                result.module_id, result.package_name,
+            });
+            unreachable;
+        };
 
         // Take ownership of module env
         mod.env = result.module_env;
@@ -1278,8 +1347,18 @@ pub const Coordinator = struct {
             });
         }
 
-        const pkg = self.packages.get(result.package_name) orelse return;
-        const mod = pkg.getModule(result.module_id) orelse return;
+        const pkg = self.packages.get(result.package_name) orelse {
+            if (builtin.mode == .Debug) std.debug.print("BUG: package '{s}' not found for cache_hit result (module={s}, id={})\n", .{
+                result.package_name, result.module_name, result.module_id,
+            });
+            unreachable;
+        };
+        const mod = pkg.getModule(result.module_id) orelse {
+            if (builtin.mode == .Debug) std.debug.print("BUG: module id={} not found in package '{s}' for cache_hit result (module={s})\n", .{
+                result.module_id, result.package_name, result.module_name,
+            });
+            unreachable;
+        };
 
         // Store cache buffer to keep it alive for the lifetime of module_env
         // It will be freed when the coordinator is deinitialized
@@ -1345,7 +1424,12 @@ pub const Coordinator = struct {
         self.gpa.free(result.imports);
 
         // Refresh mod pointer after potential resizes from ensureModule calls
-        const mod_after_imports = pkg.getModule(result.module_id) orelse return;
+        const mod_after_imports = pkg.getModule(result.module_id) orelse {
+            if (builtin.mode == .Debug) std.debug.print("BUG: module id={} not found in package '{s}' after imports in cache_hit handler (module={s})\n", .{
+                result.module_id, result.package_name, result.module_name,
+            });
+            unreachable;
+        };
 
         // Wake dependents (they may now be able to use fast path too)
         for (mod_after_imports.dependents.items) |dep_id| {
@@ -1510,6 +1594,21 @@ pub const Coordinator = struct {
         // Note: The module_env stores a reference to source, so we do NOT free source here.
         // The source will be freed when the module is deinitialized.
         mod.env = cache_result.hit.module_env;
+
+        // Override qualified_module_ident for cache correctness.
+        // The cache is keyed by file content, so the serialized value may be
+        // from a different package alias (e.g., "pf.Color" vs "platform.Color").
+        if (mod.env) |env| {
+            // Enable runtime inserts on the deserialized interner so we can add the qualified name.
+            env.common.idents.interner.enableRuntimeInserts(self.gpa) catch {};
+            var qualified_buf: [256]u8 = undefined;
+            if (std.fmt.bufPrint(&qualified_buf, "{s}.{s}", .{ pkg.name, mod.name })) |qname| {
+                env.qualified_module_ident = env.insertIdent(base.Ident.for_text(qname)) catch env.display_module_name_idx;
+            } else |_| {
+                env.qualified_module_ident = env.display_module_name_idx;
+            }
+        }
+
         mod.was_cache_hit = true;
         mod.phase = .Done;
         mod.visit_color = .black;
@@ -1958,6 +2057,20 @@ pub const Coordinator = struct {
         else
             task.module_name;
         env.initCIRFields(module_name_for_env) catch {};
+
+        // Set qualified_module_ident to a package-qualified identifier (e.g., "app.main", "pf.Stdout")
+        // to ensure module identity is unique across packages. Without this, two modules with
+        // the same filename in different packages (e.g., app's main.roc and platform's main.roc)
+        // get the same identity, causing nominal type origin_module collisions.
+        // display_module_name_idx stays as the bare name (for type module validation, error messages, etc.)
+        {
+            var qualified_buf: [256]u8 = undefined;
+            if (std.fmt.bufPrint(&qualified_buf, "{s}.{s}", .{ task.package_name, task.module_name })) |qname| {
+                env.qualified_module_ident = env.insertIdent(base.Ident.for_text(qname)) catch env.display_module_name_idx;
+            } else |_| {
+                env.qualified_module_ident = env.display_module_name_idx;
+            }
+        }
         env.common.calcLineStarts(module_alloc) catch {};
 
         // Parse
@@ -2259,31 +2372,11 @@ pub const Coordinator = struct {
         defer worker_allocs.deinit();
 
         while (true) {
-            // Get next task
-            var task: ?WorkerTask = null;
-
-            if (threads_available) {
-                self.task_mutex.lock();
-                if (self.task_queue.items.len > 0) {
-                    task = self.task_queue.pop();
-                    _ = self.inflight.fetchAdd(1, .acquire);
-                }
-                const running = self.running;
-                self.task_mutex.unlock();
-
-                if (task == null and !running) break;
-                if (task == null) {
-                    // Wait for work or shutdown
-                    std.Thread.sleep(1_000_000); // 1ms
-                    continue;
-                }
-            }
-
-            const t = task.?;
-            if (t == .shutdown) break;
+            // Block until a task is available. Returns null when the channel
+            // is closed and drained, meaning it's time to shut down.
+            const t = self.task_channel.recv() orelse break;
 
             // Execute task
-            // TODO: Pass worker_allocs to execute functions for arena usage
             const result = self.executeTaskInline(t);
 
             // Reset arena between tasks to reclaim temporary allocations
@@ -2311,7 +2404,7 @@ test "Coordinator basic initialization" {
     defer coord.deinit();
 
     try std.testing.expect(coord.total_remaining == 0);
-    try std.testing.expect(coord.task_queue.items.len == 0);
+    try std.testing.expect(coord.task_channel.isEmpty());
     try std.testing.expect(coord.isComplete());
 }
 
@@ -2396,10 +2489,10 @@ test "Coordinator task queue" {
         },
     });
 
-    try std.testing.expectEqual(@as(usize, 1), coord.task_queue.items.len);
+    try std.testing.expectEqual(@as(usize, 1), coord.task_channel.len());
 
-    // Pop the task
-    const task = coord.task_queue.pop();
+    // Receive the task
+    const task = coord.task_channel.tryRecv();
     try std.testing.expect(task != null);
     try std.testing.expect(task.? == .parse);
     try std.testing.expectEqualStrings("app", task.?.parse.package_name);
@@ -2440,7 +2533,7 @@ test "Coordinator isComplete logic" {
     try std.testing.expect(!coord.isComplete());
 
     // Clear task but add inflight
-    _ = coord.task_queue.pop();
+    _ = coord.task_channel.tryRecv();
     coord.inflight.store(1, .release);
     try std.testing.expect(!coord.isComplete());
 
@@ -2513,10 +2606,10 @@ test "Coordinator enqueueParseTask flow" {
     try coord.enqueueParseTask("app", module_id);
 
     // Verify task was queued
-    try std.testing.expectEqual(@as(usize, 1), coord.task_queue.items.len);
+    try std.testing.expectEqual(@as(usize, 1), coord.task_channel.len());
 
     // Verify it's a parse task for the right module
-    const task = coord.task_queue.items[0];
+    const task = coord.task_channel.tryRecv().?;
     try std.testing.expect(task == .parse);
     try std.testing.expectEqualStrings("app", task.parse.package_name);
     try std.testing.expectEqual(@as(ModuleId, 0), task.parse.module_id);
@@ -2555,5 +2648,183 @@ test "Coordinator single-threaded loop with mock result" {
     coord.total_remaining = 0;
 
     // Now the coordinator should be complete
+    try std.testing.expect(coord.isComplete());
+}
+
+test "Coordinator CI failure scenario - app with platform cross-package imports" {
+    // This test mirrors the exact module graph from the CI failure:
+    //   Package app: 1 module (expect_with_main) with 2 external imports (pf.Stdout, pf.Stderr)
+    //   Package pf: 6 modules (main, Stdout, Stderr, Stdin, Builder, Host)
+    //     where main imports Stdout, Stderr, Stdin, Builder, Host locally
+    //
+    // The bug was that result handlers silently dropped results when package/module
+    // lookups failed (orelse return), causing modules to get stuck forever.
+    // This test verifies the module graph setup and completion logic works
+    // for this exact structure.
+
+    const allocator = std.testing.allocator;
+
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        undefined,
+        "test",
+        null, // cache_manager
+    );
+    defer coord.deinit();
+
+    // Set up "app" package
+    const app_pkg = try coord.ensurePackage("app", "/test/app");
+
+    // Set up shorthand: app's "pf" -> package "pf"
+    const sh_key = try allocator.dupe(u8, "pf");
+    const sh_val = try allocator.dupe(u8, "pf");
+    try app_pkg.shorthands.put(sh_key, sh_val);
+
+    const app_mod_id = try app_pkg.ensureModule(allocator, "expect_with_main", "/test/app/expect_with_main.roc");
+    app_pkg.remaining_modules = 1;
+    coord.total_remaining = 1;
+
+    // Set up "pf" package
+    const pf_pkg = try coord.ensurePackage("pf", "/test/pf");
+    const pf_main_id = try pf_pkg.ensureModule(allocator, "main", "/test/pf/main.roc");
+    const pf_stdout_id = try pf_pkg.ensureModule(allocator, "Stdout", "/test/pf/Stdout.roc");
+    const pf_stderr_id = try pf_pkg.ensureModule(allocator, "Stderr", "/test/pf/Stderr.roc");
+    const pf_stdin_id = try pf_pkg.ensureModule(allocator, "Stdin", "/test/pf/Stdin.roc");
+    const pf_builder_id = try pf_pkg.ensureModule(allocator, "Builder", "/test/pf/Builder.roc");
+    const pf_host_id = try pf_pkg.ensureModule(allocator, "Host", "/test/pf/Host.roc");
+    pf_pkg.remaining_modules = 6;
+    coord.total_remaining += 6;
+
+    // Set up local imports for pf.main -> Stdout, Stderr, Stdin, Builder, Host
+    const pf_main = pf_pkg.getModule(pf_main_id).?;
+    try pf_main.imports.append(allocator, pf_stdout_id);
+    try pf_main.imports.append(allocator, pf_stderr_id);
+    try pf_main.imports.append(allocator, pf_stdin_id);
+    try pf_main.imports.append(allocator, pf_builder_id);
+    try pf_main.imports.append(allocator, pf_host_id);
+    pf_main.phase = .WaitingOnImports;
+
+    // Set up external imports for app.expect_with_main -> pf.Stdout, pf.Stderr
+    const app_mod = app_pkg.getModule(app_mod_id).?;
+    try app_mod.external_imports.append(allocator, try allocator.dupe(u8, "pf.Stdout"));
+    try app_mod.external_imports.append(allocator, try allocator.dupe(u8, "pf.Stderr"));
+    app_mod.phase = .WaitingOnImports;
+
+    // Register pf.main as dependent of its local imports
+    const pf_stdout = pf_pkg.getModule(pf_stdout_id).?;
+    try pf_stdout.dependents.append(allocator, pf_main_id);
+    const pf_stderr = pf_pkg.getModule(pf_stderr_id).?;
+    try pf_stderr.dependents.append(allocator, pf_main_id);
+    const pf_stdin = pf_pkg.getModule(pf_stdin_id).?;
+    try pf_stdin.dependents.append(allocator, pf_main_id);
+    const pf_builder = pf_pkg.getModule(pf_builder_id).?;
+    try pf_builder.dependents.append(allocator, pf_main_id);
+    const pf_host = pf_pkg.getModule(pf_host_id).?;
+    try pf_host.dependents.append(allocator, pf_main_id);
+
+    // Verify initial state matches the CI failure scenario
+    try std.testing.expectEqual(@as(usize, 7), coord.total_remaining);
+    try std.testing.expect(!coord.isComplete());
+
+    // Simulate: complete all pf leaf modules (Stdout, Stderr, Stdin, Builder, Host)
+    // Mark them Done and decrement counters (as handleTypeChecked would do)
+    const pf_leaf_ids = [_]ModuleId{ pf_stdout_id, pf_stderr_id, pf_stdin_id, pf_builder_id, pf_host_id };
+    for (pf_leaf_ids) |leaf_id| {
+        const leaf = pf_pkg.getModule(leaf_id).?;
+        leaf.phase = .Done;
+        pf_pkg.remaining_modules -= 1;
+        coord.total_remaining -= 1;
+    }
+
+    // pf.main should still be WaitingOnImports (all imports are now Done but
+    // nobody called tryUnblock yet - in real code handleTypeChecked wakes dependents)
+    try std.testing.expect(pf_pkg.getModule(pf_main_id).?.phase == .WaitingOnImports);
+
+    // Verify external import readiness via the public isExternalReady API
+    // pf.Stdout and pf.Stderr should be ready (they're Done)
+    try std.testing.expect(coord.isExternalReady("app", "pf.Stdout"));
+    try std.testing.expect(coord.isExternalReady("app", "pf.Stderr"));
+
+    // Now simulate completing pf.main
+    pf_pkg.getModule(pf_main_id).?.phase = .Done;
+    pf_pkg.remaining_modules -= 1;
+    coord.total_remaining -= 1;
+
+    // Verify pf is fully complete
+    try std.testing.expectEqual(@as(usize, 0), pf_pkg.remaining_modules);
+
+    // Now simulate completing app.expect_with_main
+    app_pkg.getModule(app_mod_id).?.phase = .Done;
+    app_pkg.remaining_modules -= 1;
+    coord.total_remaining -= 1;
+
+    // Verify everything is complete
+    try std.testing.expectEqual(@as(usize, 0), coord.total_remaining);
+    try std.testing.expectEqual(@as(usize, 0), app_pkg.remaining_modules);
+    try std.testing.expectEqual(@as(usize, 0), pf_pkg.remaining_modules);
+
+    // Verify all modules reached Done
+    for (app_pkg.modules.items) |m| {
+        try std.testing.expect(m.phase == .Done);
+    }
+    for (pf_pkg.modules.items) |m| {
+        try std.testing.expect(m.phase == .Done);
+    }
+
+    try std.testing.expect(coord.isComplete());
+}
+
+test "Coordinator handleParseFailed advances module to Done" {
+    // Verifies that handleParseFailed (which previously had orelse return)
+    // correctly transitions a module to Done and decrements counters.
+    // If the package/module lookup silently returned, the module would
+    // stay in Parsing forever — exactly the bug from CI.
+    const allocator = std.testing.allocator;
+
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        undefined,
+        "test",
+        null, // cache_manager
+    );
+    defer coord.deinit();
+
+    // Create package and module
+    const pkg = try coord.ensurePackage("app", "/test/app");
+    const module_id = try pkg.ensureModule(allocator, "Builder", "/test/app/Builder.roc");
+    pkg.remaining_modules = 1;
+    coord.total_remaining = 1;
+
+    // Set module to Parsing (as enqueueParseTask would do)
+    const mod = pkg.getModule(module_id).?;
+    mod.phase = .Parsing;
+
+    // Feed a parse_failed result through handleResult.
+    // This exercises the package/module lookup that previously used orelse return.
+    const result: WorkerResult = .{
+        .parse_failed = .{
+            .package_name = "app",
+            .module_id = module_id,
+            .module_name = "Builder",
+            .path = "/test/app/Builder.roc",
+            .reports = std.ArrayList(reporting.Report).empty,
+            .partial_env = null,
+        },
+    };
+    try coord.handleResult(result);
+
+    // Verify module advanced to Done (not stuck in Parsing)
+    const mod_after = pkg.getModule(module_id).?;
+    try std.testing.expect(mod_after.phase == .Done);
+
+    // Verify counters decremented
+    try std.testing.expectEqual(@as(usize, 0), pkg.remaining_modules);
+    try std.testing.expectEqual(@as(usize, 0), coord.total_remaining);
     try std.testing.expect(coord.isComplete());
 }

@@ -17,6 +17,7 @@ pub const CliArgs = union(enum) {
     bundle: BundleArgs,
     unbundle: UnbundleArgs,
     repl: ReplArgs,
+    glue: GlueArgs,
     version,
     docs: DocsArgs,
     experimental_lsp: ExperimentalLspArgs,
@@ -86,8 +87,10 @@ pub const CheckArgs = struct {
 pub const BuildArgs = struct {
     path: []const u8, // the path to the roc file to be built
     opt: OptLevel, // the optimization level
+    backend: Backend = .interpreter, // code generation backend (interpreter or dev)
     target: ?[]const u8 = null, // the target to compile for (e.g., x64musl, x64glibc)
     output: ?[]const u8 = null, // the path where the output binary should be created
+    no_link: bool = false, // output object file only, skip linking with host
     debug: bool = false, // include debug information in the output binary
     allow_errors: bool = false, // allow building even if there are type errors
     verbose: bool = false, // enable verbose output including cache statistics
@@ -153,6 +156,13 @@ pub const ReplArgs = struct {
     backend: Backend = .interpreter,
 };
 
+/// Arguments for `roc experimental-glue`
+pub const GlueArgs = struct {
+    glue_spec: []const u8, // path to the glue spec .roc file (REQUIRED)
+    output_dir: []const u8, // path to the output directory for generated glue files (REQUIRED)
+    platform_path: []const u8, // path to the platform .roc file (default: main.roc)
+};
+
 /// Parse a list of arguments.
 pub fn parse(alloc: mem.Allocator, args: []const []const u8) !CliArgs {
     if (args.len == 0) return try parseRun(alloc, args);
@@ -169,6 +179,7 @@ pub fn parse(alloc: mem.Allocator, args: []const []const u8) !CliArgs {
     if (mem.eql(u8, args[0], "fmt")) return try parseFormat(alloc, args[1..]);
     if (mem.eql(u8, args[0], "test")) return parseTest(args[1..]);
     if (mem.eql(u8, args[0], "repl")) return parseRepl(args[1..]);
+    if (mem.eql(u8, args[0], "experimental-glue")) return parseGlue(args[1..]);
     if (mem.eql(u8, args[0], "version")) return parseVersion(args[1..]);
     if (mem.eql(u8, args[0], "docs")) return parseDocs(args[1..]);
     if (mem.eql(u8, args[0], "experimental-lsp")) return parseExperimentalLsp(args[1..]);
@@ -192,6 +203,7 @@ const main_help =
     \\  test             Run all top-level `expect`s in a main module and any modules it imports
     \\  repl             Launch the interactive Read Eval Print Loop (REPL)
     \\  fmt              Format a .roc file or the .roc files contained in a directory using standard Roc formatting
+    \\  experimental-glue Generate native glue code from a Roc platform using a language-specific glue spec
     \\  version          Print the Roc compiler's version
     \\  check            Check the code for problems, but don't build or run it
     \\  docs             Generate documentation for a Roc package or platform
@@ -295,8 +307,10 @@ fn parseCheck(args: []const []const u8) CliArgs {
 fn parseBuild(args: []const []const u8) CliArgs {
     var path: ?[]const u8 = null;
     var opt: OptLevel = .dev;
+    var backend: Backend = .interpreter;
     var target: ?[]const u8 = null;
     var output: ?[]const u8 = null;
+    var no_link: bool = false;
     var debug: bool = false;
     var allow_errors: bool = false;
     var verbose: bool = false;
@@ -320,7 +334,9 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\Options:
             \\      --output=<output>              The full path to the output binary, including filename. To specify directory only, specify a path that ends in a directory separator (e.g. a slash)
             \\      --opt=<size|speed|dev>         Optimize the build process for binary size, execution speed, or compilation speed. Defaults to compilation speed (dev)
+            \\      --backend=<interpreter|dev>    Code generation backend: interpreter (default) embeds bytecode, dev generates native machine code
             \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
+            \\      --no-link                      Output object file only, skip linking with host (useful for debugging or custom toolchains)
             \\      --debug                        Include debug information in the output binary
             \\      --allow-errors                 Allow building even if there are type errors (warnings are always allowed)
             \\      --verbose                      Enable verbose output including cache statistics
@@ -356,6 +372,17 @@ fn parseBuild(args: []const []const u8) CliArgs {
             } else {
                 return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--opt" } } };
             }
+        } else if (mem.startsWith(u8, arg, "--backend=")) {
+            const value = arg["--backend=".len..];
+            backend = Backend.fromString(value) orelse {
+                return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{
+                    .value = value,
+                    .flag = "--backend",
+                    .valid_options = "interpreter, dev",
+                } } };
+            };
+        } else if (mem.eql(u8, arg, "--no-link")) {
+            no_link = true;
         } else if (mem.startsWith(u8, arg, "--z-bench-tokenize")) {
             if (getFlagValue(arg)) |value| {
                 z_bench_tokenize = value;
@@ -419,7 +446,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .allow_errors = allow_errors, .verbose = verbose, .no_cache = no_cache, .max_threads = max_threads, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse, .z_dump_linker = z_dump_linker } };
+    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .backend = backend, .target = target, .output = output, .no_link = no_link, .debug = debug, .allow_errors = allow_errors, .verbose = verbose, .no_cache = no_cache, .max_threads = max_threads, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse, .z_dump_linker = z_dump_linker } };
 }
 
 fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
@@ -692,6 +719,87 @@ fn parseRepl(args: []const []const u8) CliArgs {
         }
     }
     return CliArgs{ .repl = .{ .backend = backend } };
+}
+
+fn parseGlue(args: []const []const u8) CliArgs {
+    var glue_spec: ?[]const u8 = null;
+    var output_dir: ?[]const u8 = null;
+    var platform_path: ?[]const u8 = null;
+
+    for (args) |arg| {
+        if (isHelpFlag(arg)) {
+            return CliArgs{ .help = 
+            \\Generate glue code from a platform using a glue spec
+            \\
+            \\Usage: roc experimental-glue [OPTIONS] <GLUE_SPEC> <GLUE_DIR> [ROC_FILE]
+            \\
+            \\Arguments:
+            \\  <GLUE_SPEC>  The glue spec .roc file that defines how to generate glue code
+            \\  <GLUE_DIR>   The output directory for generated glue files
+            \\  [ROC_FILE]   The platform .roc file to analyze [default: main.roc]
+            \\
+            \\Options:
+            \\  -h, --help  Print help
+            \\
+        };
+        } else {
+            if (glue_spec == null) {
+                glue_spec = arg;
+            } else if (output_dir == null) {
+                output_dir = arg;
+            } else if (platform_path == null) {
+                platform_path = arg;
+            } else {
+                return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "experimental-glue", .arg = arg } } };
+            }
+        }
+    }
+
+    // glue_spec is required
+    if (glue_spec == null) {
+        return CliArgs{ .help = 
+        \\Error: Missing required argument <GLUE_SPEC>
+        \\
+        \\Generate glue code from a platform using a glue spec
+        \\
+        \\Usage: roc experimental-glue [OPTIONS] <GLUE_SPEC> <GLUE_DIR> [ROC_FILE]
+        \\
+        \\Arguments:
+        \\  <GLUE_SPEC>  The glue spec .roc file that defines how to generate glue code
+        \\  <GLUE_DIR>   The output directory for generated glue files
+        \\  [ROC_FILE]   The platform .roc file to analyze [default: main.roc]
+        \\
+        \\Options:
+        \\  -h, --help  Print help
+        \\
+    };
+    }
+
+    // output_dir is required
+    if (output_dir == null) {
+        return CliArgs{ .help = 
+        \\Error: Missing required argument <GLUE_DIR>
+        \\
+        \\Generate glue code from a platform using a glue spec
+        \\
+        \\Usage: roc experimental-glue [OPTIONS] <GLUE_SPEC> <GLUE_DIR> [ROC_FILE]
+        \\
+        \\Arguments:
+        \\  <GLUE_SPEC>  The glue spec .roc file that defines how to generate glue code
+        \\  <GLUE_DIR>   The output directory for generated glue files
+        \\  [ROC_FILE]   The platform .roc file to analyze [default: main.roc]
+        \\
+        \\Options:
+        \\  -h, --help  Print help
+        \\
+    };
+    }
+
+    return CliArgs{ .glue = GlueArgs{
+        .glue_spec = glue_spec.?,
+        .output_dir = output_dir.?,
+        .platform_path = platform_path orelse "main.roc",
+    } };
 }
 
 fn parseVersion(args: []const []const u8) CliArgs {

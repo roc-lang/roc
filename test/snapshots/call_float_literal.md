@@ -39,7 +39,7 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-call
-	(e-dec-small (numerator "0") (denominator-power-of-ten "1") (value "0.0")))
+	(e-dec-small (numerator "0") (denominator-power-of-ten "1") (value "0")))
 ~~~
 # TYPES
 ~~~clojure

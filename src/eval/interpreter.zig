@@ -28,6 +28,7 @@ const stack = @import("stack.zig");
 const StackValue = @import("StackValue.zig");
 const render_helpers = @import("render_helpers.zig");
 const builtins = @import("builtins");
+const i128h = builtins.compiler_rt_128;
 const RocOps = builtins.host_abi.RocOps;
 const RocExpectFailed = builtins.host_abi.RocExpectFailed;
 const RocStr = builtins.str.RocStr;
@@ -625,20 +626,24 @@ pub const Interpreter = struct {
         errdefer translated_module_envs.deinit(allocator);
         const mutable_env_for_idents = result.runtime_layout_store.getMutableEnv().?;
 
-        // Helper to check if a module has a valid module_name_idx
+        // Ensure the mutable env's interner supports insertions (it may be deserialized/read-only
+        // when loaded from the module cache).
+        try mutable_env_for_idents.common.idents.interner.enableRuntimeInserts(allocator);
+
+        // Helper to check if a module has a valid qualified_module_ident
         // (handles both unset NONE and corrupted undefined values from deserialized data)
         const hasValidModuleName = struct {
             fn check(mod_env: *const can.ModuleEnv) bool {
-                if (mod_env.module_name_idx.isNone()) return false;
+                if (mod_env.qualified_module_ident.isNone()) return false;
                 const ident_store_size = mod_env.common.idents.interner.bytes.items.items.len;
-                const idx_val = mod_env.module_name_idx.idx;
+                const idx_val = mod_env.qualified_module_ident.idx;
                 return idx_val < ident_store_size;
             }
         }.check;
 
-        // Add current/root module (skip if module_name_idx is unset, e.g., in tests)
+        // Add current/root module (skip if qualified_module_ident is unset, e.g., in tests)
         if (hasValidModuleName(env)) {
-            const current_name_str = env.getIdent(env.module_name_idx);
+            const current_name_str = env.getIdent(env.qualified_module_ident);
             const translated_current = try mutable_env_for_idents.insertIdent(base_pkg.Ident.for_text(current_name_str));
             try translated_module_envs.put(allocator, translated_current, env);
         }
@@ -646,7 +651,7 @@ pub const Interpreter = struct {
         // Add app module if different from env
         if (app_env) |a_env| {
             if (a_env != env and hasValidModuleName(a_env)) {
-                const app_name_str = a_env.getIdent(a_env.module_name_idx);
+                const app_name_str = a_env.getIdent(a_env.qualified_module_ident);
                 const translated_app = try mutable_env_for_idents.insertIdent(base_pkg.Ident.for_text(app_name_str));
                 try translated_module_envs.put(allocator, translated_app, a_env);
             }
@@ -655,7 +660,7 @@ pub const Interpreter = struct {
         // Add builtin module
         if (builtin_module_env) |bme| {
             if (hasValidModuleName(bme)) {
-                const builtin_name_str = bme.getIdent(bme.module_name_idx);
+                const builtin_name_str = bme.getIdent(bme.qualified_module_ident);
                 const translated_builtin = try mutable_env_for_idents.insertIdent(base_pkg.Ident.for_text(builtin_name_str));
                 try translated_module_envs.put(allocator, translated_builtin, bme);
             }
@@ -664,7 +669,7 @@ pub const Interpreter = struct {
         // Add all other modules
         for (all_module_envs) |mod_env| {
             if (hasValidModuleName(mod_env)) {
-                const mod_name_str = mod_env.getIdent(mod_env.module_name_idx);
+                const mod_name_str = mod_env.getIdent(mod_env.qualified_module_ident);
                 const translated_mod = try mutable_env_for_idents.insertIdent(base_pkg.Ident.for_text(mod_name_str));
                 // Use put to handle potential duplicates (same module might be in multiple places)
                 try translated_module_envs.put(allocator, translated_mod, mod_env);
@@ -679,14 +684,14 @@ pub const Interpreter = struct {
 
         // Translate env's module name
         if (hasValidModuleName(env)) {
-            const env_name_str = env.getIdent(env.module_name_idx);
+            const env_name_str = env.getIdent(env.qualified_module_ident);
             result.translated_env_module = try mutable_env_for_idents.insertIdent(base_pkg.Ident.for_text(env_name_str));
         }
 
         // Translate app's module name
         if (app_env) |a_env| {
             if (a_env != env and hasValidModuleName(a_env)) {
-                const app_name_str = a_env.getIdent(a_env.module_name_idx);
+                const app_name_str = a_env.getIdent(a_env.qualified_module_ident);
                 result.translated_app_module = try mutable_env_for_idents.insertIdent(base_pkg.Ident.for_text(app_name_str));
             }
         }
@@ -1645,7 +1650,7 @@ pub const Interpreter = struct {
                     .int => |v| @intCast(v),
                     .f32 => |v| @intFromFloat(v),
                     .f64 => |v| @intFromFloat(v),
-                    .dec => |v| @intCast(@divTrunc(v.num, RocDec.one_point_zero.num)),
+                    .dec => |v| @intCast(i128h.divTrunc_i128(v.num, RocDec.one_point_zero.num)),
                 };
 
                 // Call repeatC to repeat the string
@@ -2340,14 +2345,13 @@ pub const Interpreter = struct {
                     const closure_header = method_func.asClosure().?;
                     const lambda_expr = closure_header.source_env.store.getExpr(closure_header.lambda_expr_idx);
 
-                    if (lambda_expr == .e_low_level_lambda) {
+                    if (extractLowLevelOp(lambda_expr, closure_header.source_env.store)) |ll_op| {
                         // The to_inspect method is a low-level op - call it directly
-                        const low_level = lambda_expr.e_low_level_lambda;
                         var inner_args = [1]StackValue{value};
-                        const result = try self.callLowLevelBuiltin(low_level.op, &inner_args, roc_ops, null);
+                        const result = try self.callLowLevelBuiltin(ll_op, &inner_args, roc_ops, null);
 
                         // Decref based on ownership semantics
-                        const arg_ownership = low_level.op.getArgOwnership();
+                        const arg_ownership = ll_op.getArgOwnership();
                         if (arg_ownership.len > 0 and arg_ownership[0] == .borrow) {
                             // Don't decref the value - it's borrowed
                         }
@@ -3612,12 +3616,12 @@ pub const Interpreter = struct {
                     .int => |l| switch (rhs) {
                         .int => |r| {
                             if (r == 0) return error.DivisionByZero;
-                            try out.setInt(@divTrunc(l, r));
+                            try out.setInt(i128h.divTrunc_i128(l, r));
                         },
                         .dec => |r| {
                             const r_int = r.toWholeInt();
                             if (r_int == 0) return error.DivisionByZero;
-                            try out.setInt(@divTrunc(l, r_int));
+                            try out.setInt(i128h.divTrunc_i128(l, r_int));
                         },
                         else => return error.TypeMismatch,
                     },
@@ -3664,12 +3668,12 @@ pub const Interpreter = struct {
                     .int => |l| switch (rhs) {
                         .int => |r| {
                             if (r == 0) return error.DivisionByZero;
-                            try out.setInt(@divTrunc(l, r));
+                            try out.setInt(i128h.divTrunc_i128(l, r));
                         },
                         .dec => |r| {
                             const r_int = r.toWholeInt();
                             if (r_int == 0) return error.DivisionByZero;
-                            try out.setInt(@divTrunc(l, r_int));
+                            try out.setInt(i128h.divTrunc_i128(l, r_int));
                         },
                         else => return error.TypeMismatch,
                     },
@@ -3717,12 +3721,12 @@ pub const Interpreter = struct {
                     .int => |l| switch (rhs) {
                         .int => |r| {
                             if (r == 0) return error.DivisionByZero;
-                            try out.setInt(@rem(l, r));
+                            try out.setInt(i128h.rem_i128(l, r));
                         },
                         .dec => |r| {
                             const r_int = r.toWholeInt();
                             if (r_int == 0) return error.DivisionByZero;
-                            try out.setInt(@rem(l, r_int));
+                            try out.setInt(i128h.rem_i128(l, r_int));
                         },
                         else => return error.TypeMismatch,
                     },
@@ -3769,7 +3773,7 @@ pub const Interpreter = struct {
                     .int => |l| switch (rhs) {
                         .int => |r| {
                             if (r == 0) return error.DivisionByZero;
-                            try out.setInt(@mod(l, r));
+                            try out.setInt(i128h.mod_i128(l, r));
                         },
                         else => return error.TypeMismatch,
                     },
@@ -3790,7 +3794,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // rhs must be an integer (U8)
-                const shift_amount_u8 = @as(u8, @intCast(@mod(rhs.int, 256)));
+                const shift_amount_u8 = @as(u8, @intCast(i128h.mod_i128(rhs.int, 256)));
                 const shift_amount = @as(u7, @intCast(@min(shift_amount_u8, 127)));
 
                 switch (lhs) {
@@ -3827,7 +3831,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // rhs must be an integer (U8)
-                const shift_amount_u8 = @as(u8, @intCast(@mod(rhs.int, 256)));
+                const shift_amount_u8 = @as(u8, @intCast(i128h.mod_i128(rhs.int, 256)));
                 const shift_amount = @as(u7, @intCast(@min(shift_amount_u8, 127)));
 
                 switch (lhs) {
@@ -3850,7 +3854,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // rhs must be an integer (U8)
-                const shift_amount_u8 = @as(u8, @intCast(@mod(rhs.int, 256)));
+                const shift_amount_u8 = @as(u8, @intCast(i128h.mod_i128(rhs.int, 256)));
                 const shift_amount = @as(u7, @intCast(@min(shift_amount_u8, 127)));
 
                 // Helper function to perform zero-fill shift for a given type
@@ -4231,9 +4235,9 @@ pub const Interpreter = struct {
                                 // Floating-point and Dec types
                                 const frac_precision = num_layout.data.scalar.data.frac;
                                 const float_value: f64 = if (is_negative)
-                                    -@as(f64, @floatFromInt(value))
+                                    -i128h.u128_to_f64(value)
                                 else
-                                    @as(f64, @floatFromInt(value));
+                                    i128h.u128_to_f64(value);
 
                                 // Handle fractional part for floats
                                 var final_value = float_value;
@@ -4433,9 +4437,9 @@ pub const Interpreter = struct {
                                 // Floating-point and Dec types
                                 const frac_precision = num_layout.data.scalar.data.frac;
                                 const float_value: f64 = if (is_negative)
-                                    -@as(f64, @floatFromInt(value))
+                                    -i128h.u128_to_f64(value)
                                 else
-                                    @as(f64, @floatFromInt(value));
+                                    i128h.u128_to_f64(value);
 
                                 // Handle fractional part for floats
                                 var frac_part: f64 = 0;
@@ -4558,9 +4562,9 @@ pub const Interpreter = struct {
                         } else if (num_layout.tag == .scalar and num_layout.data.scalar.tag == .frac) {
                             const frac_precision = num_layout.data.scalar.data.frac;
                             const float_value: f64 = if (is_negative)
-                                -@as(f64, @floatFromInt(value))
+                                -i128h.u128_to_f64(value)
                             else
-                                @as(f64, @floatFromInt(value));
+                                i128h.u128_to_f64(value);
 
                             var frac_part: f64 = 0;
                             if (digits_after.len > 0) {
@@ -4981,14 +4985,19 @@ pub const Interpreter = struct {
 
         const int_value: T = builtins.utils.readAs(T, int_arg.ptr.?, @src());
 
-        // Use std.fmt to format the integer
+        // Format the integer without using std.fmt (which calls @rem on i128/u128)
         var buf: [40]u8 = undefined; // 40 is enough for i128
-        const result = std.fmt.bufPrint(&buf, "{}", .{int_value}) catch debugUnreachable(roc_ops, "buffer too small for integer formatting", @src());
+        const result: []const u8 = if (T == i128)
+            i128h.i128_to_str(&buf, int_value).str
+        else if (T == u128)
+            i128h.u128_to_str(&buf, int_value).str
+        else
+            std.fmt.bufPrint(&buf, "{}", .{int_value}) catch debugUnreachable(roc_ops, "buffer too small for integer formatting", @src());
 
         const str_rt_var = try self.getCanonicalStrRuntimeVar();
         const value = try self.pushStr(str_rt_var);
         const roc_str_ptr = value.asRocStr().?;
-        roc_str_ptr.* = RocStr.init(&buf, result.len, roc_ops);
+        roc_str_ptr.* = RocStr.init(result.ptr, result.len, roc_ops);
         return value;
     }
 
@@ -4999,14 +5008,16 @@ pub const Interpreter = struct {
 
         const float_value: T = builtins.utils.readAs(T, float_arg.ptr.?, @src());
 
-        // Use std.fmt to format the float
-        var buf: [400]u8 = undefined;
-        const result = std.fmt.bufPrint(&buf, "{d}", .{float_value}) catch debugUnreachable(roc_ops, "buffer too small for float formatting", @src());
+        var float_buf: [400]u8 = undefined;
+        const str_bytes = if (T == f32)
+            i128h.f32_to_str(&float_buf, float_value)
+        else
+            i128h.f64_to_str(&float_buf, float_value);
 
         const str_rt_var = try self.getCanonicalStrRuntimeVar();
         const value = try self.pushStr(str_rt_var);
         const roc_str_ptr = value.asRocStr().?;
-        roc_str_ptr.* = RocStr.init(&buf, result.len, roc_ops);
+        roc_str_ptr.* = RocStr.init(str_bytes.ptr, str_bytes.len, roc_ops);
         return value;
     }
 
@@ -5230,7 +5241,16 @@ pub const Interpreter = struct {
         std.debug.assert(int_arg.ptr != null);
 
         const from_value = builtins.utils.readAs(From, int_arg.ptr.?, @src());
-        const to_value: To = @floatFromInt(from_value);
+        const to_value: To = if (From == i128 and To == f64)
+            i128h.i128_to_f64(from_value)
+        else if (From == i128 and To == f32)
+            i128h.i128_to_f32(from_value)
+        else if (From == u128 and To == f64)
+            i128h.u128_to_f64(from_value)
+        else if (From == u128 and To == f32)
+            i128h.u128_to_f32(from_value)
+        else
+            @floatFromInt(from_value);
 
         const to_layout = Layout.frac(comptime fracTypeFromZigType(To));
         const result_rt_var = try self.runtime_types.fresh();
@@ -5323,7 +5343,13 @@ pub const Interpreter = struct {
         const max_val: From = @floatFromInt(std.math.maxInt(To));
         const in_range = from_value >= min_val and from_value <= max_val;
 
-        const val: To = if (is_int and in_range) @intFromFloat(from_value) else 0;
+        const val: To = if (is_int and in_range) blk: {
+            if (To == i128 or To == u128) {
+                const as_f64: f64 = if (From == f32) @floatCast(from_value) else from_value;
+                break :blk if (To == i128) i128h.f64_to_i128(as_f64) else i128h.f64_to_u128(as_f64);
+            }
+            break :blk @intFromFloat(from_value);
+        } else 0;
 
         // Build the result record: { is_int: Bool, in_range: Bool, val_or_memory_garbage: To }
         return try self.buildIsIntInRangeValRecord(is_int, in_range, To, val);
@@ -5417,7 +5443,7 @@ pub const Interpreter = struct {
         const dec_value = builtins.utils.readAs(RocDec, dec_arg.ptr.?, @src());
 
         // Check if it's an integer (no fractional part)
-        const remainder = @rem(dec_value.num, RocDec.one_point_zero_i128);
+        const remainder = i128h.rem_i128(dec_value.num, RocDec.one_point_zero_i128);
         const is_int = remainder == 0;
 
         // Get the whole number part
@@ -5441,7 +5467,7 @@ pub const Interpreter = struct {
         const dec_value = builtins.utils.readAs(RocDec, dec_arg.ptr.?, @src());
 
         // Check if it's an integer (no fractional part)
-        const remainder = @rem(dec_value.num, RocDec.one_point_zero_i128);
+        const remainder = i128h.rem_i128(dec_value.num, RocDec.one_point_zero_i128);
         const is_int = remainder == 0;
 
         // Get the whole number part - always fits in i128
@@ -5610,6 +5636,10 @@ pub const Interpreter = struct {
         if (value <= min_val) return std.math.minInt(To);
         if (value >= max_val) return std.math.maxInt(To);
 
+        if (To == i128 or To == u128) {
+            const as_f64: f64 = if (From == f32) @floatCast(value) else value;
+            return if (To == i128) i128h.f64_to_i128(as_f64) else i128h.f64_to_u128(as_f64);
+        }
         return @intFromFloat(value);
     }
 
@@ -6224,7 +6254,7 @@ pub const Interpreter = struct {
                 .int => |l| switch (rhs_val) {
                     .int => |r| {
                         if (r == 0) return error.DivisionByZero;
-                        try out.setInt(@divTrunc(l, r));
+                        try out.setInt(i128h.divTrunc_i128(l, r));
                     },
                     else => return error.TypeMismatch,
                 },
@@ -6266,7 +6296,7 @@ pub const Interpreter = struct {
                 .int => |l| switch (rhs_val) {
                     .int => |r| {
                         if (r == 0) return error.DivisionByZero;
-                        try out.setInt(@rem(l, r));
+                        try out.setInt(i128h.rem_i128(l, r));
                     },
                     else => return error.TypeMismatch,
                 },
@@ -6365,11 +6395,11 @@ pub const Interpreter = struct {
         return switch (rhs) {
             .int => std.math.order(lhs, rhs.int),
             .f32 => {
-                const lhs_f: f32 = @floatFromInt(lhs);
+                const lhs_f: f32 = i128h.i128_to_f32(lhs);
                 return std.math.order(lhs_f, rhs.f32);
             },
             .f64 => {
-                const lhs_f: f64 = @floatFromInt(lhs);
+                const lhs_f: f64 = i128h.i128_to_f64(lhs);
                 return std.math.order(lhs_f, rhs.f64);
             },
             .dec => {
@@ -6381,7 +6411,7 @@ pub const Interpreter = struct {
     fn orderF32(_: *Interpreter, lhs: f32, rhs: NumericValue) !std.math.Order {
         return switch (rhs) {
             .int => {
-                const rhs_f: f32 = @floatFromInt(rhs.int);
+                const rhs_f: f32 = i128h.i128_to_f32(rhs.int);
                 return std.math.order(lhs, rhs_f);
             },
             .f32 => std.math.order(lhs, rhs.f32),
@@ -6396,7 +6426,7 @@ pub const Interpreter = struct {
     fn orderF64(_: *Interpreter, lhs: f64, rhs: NumericValue) !std.math.Order {
         return switch (rhs) {
             .int => {
-                const rhs_f: f64 = @floatFromInt(rhs.int);
+                const rhs_f: f64 = i128h.i128_to_f64(rhs.int);
                 return std.math.order(lhs, rhs_f);
             },
             .f32 => {
@@ -6743,11 +6773,10 @@ pub const Interpreter = struct {
         const closure_header = method_func.asClosure().?;
         const lambda_expr = closure_header.source_env.store.getExpr(closure_header.lambda_expr_idx);
 
-        if (lambda_expr == .e_low_level_lambda) {
+        if (extractLowLevelOp(lambda_expr, closure_header.source_env.store)) |ll_op| {
             // Low-level builtin is_eq (e.g., for simple types)
-            const low_level = lambda_expr.e_low_level_lambda;
             var args = [2]StackValue{ lhs, rhs };
-            const result = self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null) catch {
+            const result = self.callLowLevelBuiltin(ll_op, &args, roc_ops, null) catch {
                 return error.NotImplemented;
             };
             defer result.decref(&self.runtime_layout_store, roc_ops);
@@ -8088,6 +8117,7 @@ pub const Interpreter = struct {
                     const inner_pattern_idx = switch (destruct.kind) {
                         .Required => |p_idx| p_idx,
                         .SubPattern => |p_idx| p_idx,
+                        .Rest => |p_idx| p_idx,
                     };
 
                     const before = out_binds.items.len;
@@ -8330,7 +8360,7 @@ pub const Interpreter = struct {
         if (!self.translated_env_module.isNone() and origin_module.idx == self.translated_env_module.idx) {
             return self.root_env;
         }
-        if (self.root_env.module_name_idx == origin_module) {
+        if (self.root_env.qualified_module_ident == origin_module) {
             return self.root_env;
         }
 
@@ -8339,7 +8369,7 @@ pub const Interpreter = struct {
             if (!self.translated_app_module.isNone() and origin_module.idx == self.translated_app_module.idx) {
                 return a_env;
             }
-            if (a_env.module_name_idx == origin_module) {
+            if (a_env.qualified_module_ident == origin_module) {
                 return a_env;
             }
         }
@@ -8358,7 +8388,7 @@ pub const Interpreter = struct {
     /// Returns current_module_id (always 0) for the current module, otherwise looks it up in the module ID map.
     fn getModuleIdForOrigin(self: *const Interpreter, origin_module: base_pkg.Ident.Idx) u32 {
         // Check if it's the current module
-        if (self.env.module_name_idx == origin_module) {
+        if (self.env.qualified_module_ident == origin_module) {
             return self.current_module_id;
         }
         // Look up in imported modules (should always exist if getModuleEnvForOrigin succeeded)
@@ -9783,10 +9813,17 @@ pub const Interpreter = struct {
                         buf[i] = try self.translateTypeVar(module, ct_arg);
                     }
                     // Translate the alias's ident from source module's ident store to runtime ident store
-                    const source_alias_str = module.getIdent(alias.ident.ident_idx);
-                    const rt_alias_ident_idx = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(source_alias_str));
-                    const rt_alias_ident = types.TypeIdent{ .ident_idx = rt_alias_ident_idx };
-                    const content = try self.runtime_types.mkAlias(rt_alias_ident, rt_backing, buf);
+                    const layout_env = self.runtime_layout_store.getMutableEnv().?;
+                    const needs_translation = @intFromPtr(&module.common.idents.interner) != @intFromPtr(&layout_env.common.idents.interner);
+                    const translated_ident = if (needs_translation) ident_blk: {
+                        const type_name_str = module.getIdent(alias.ident.ident_idx);
+                        break :ident_blk types.TypeIdent{ .ident_idx = try layout_env.insertIdent(base_pkg.Ident.for_text(type_name_str)) };
+                    } else alias.ident;
+                    const translated_origin = if (needs_translation) origin_blk: {
+                        const origin_str = module.getIdent(alias.origin_module);
+                        break :origin_blk try layout_env.insertIdent(base_pkg.Ident.for_text(origin_str));
+                    } else alias.origin_module;
+                    const content = try self.runtime_types.mkAlias(translated_ident, rt_backing, buf, translated_origin);
                     break :blk try self.runtime_types.freshFromContent(content);
                 },
                 .flex => |flex| {
@@ -11311,9 +11348,48 @@ pub const Interpreter = struct {
                 try value_stack.push(value);
             },
 
-            .e_low_level_lambda => |lam| {
-                const value = try self.evalLowLevelLambda(expr_idx, expected_rt_var, lam);
-                try value_stack.push(value);
+            .e_run_low_level => |run_ll| {
+                // Evaluate each argument expression (these are e_lookup_local to bound params)
+                const arg_indices = self.env.store.exprSlice(run_ll.args);
+                var args = try self.allocator.alloc(StackValue, arg_indices.len);
+                defer self.allocator.free(args);
+                for (arg_indices, 0..) |arg_idx, i| {
+                    args[i] = try self.eval(arg_idx, roc_ops);
+                }
+
+                // list_sort_with needs continuation-based evaluation
+                if (run_ll.op == .list_sort_with) {
+                    std.debug.assert(args.len == 2);
+                    const list_arg = args[0];
+                    const compare_fn = args[1];
+
+                    switch (try self.setupSortWith(list_arg, compare_fn, null, null, roc_ops, work_stack)) {
+                        .already_sorted => |result_list| {
+                            compare_fn.decref(&self.runtime_layout_store, roc_ops);
+                            try value_stack.push(result_list);
+                        },
+                        .sorting_started => {},
+                    }
+                } else {
+                    // Get return type
+                    const return_rt_var: ?types.Var = blk: {
+                        const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                        break :blk self.translateTypeVar(self.env, ct_var) catch null;
+                    };
+
+                    // Call the low-level builtin
+                    const result = try self.callLowLevelBuiltin(run_ll.op, args, roc_ops, return_rt_var);
+
+                    // Handle ownership: decref borrowed args
+                    const arg_ownership = run_ll.op.getArgOwnership();
+                    for (args, 0..) |arg, i| {
+                        if (i < arg_ownership.len and arg_ownership[i] == .borrow) {
+                            arg.decref(&self.runtime_layout_store, roc_ops);
+                        }
+                    }
+
+                    try value_stack.push(result);
+                }
             },
 
             .e_hosted_lambda => |hosted| {
@@ -11563,12 +11639,11 @@ pub const Interpreter = struct {
 
                     // Check if low-level lambda
                     const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
-                    if (lambda_expr == .e_low_level_lambda) {
-                        const low_level = lambda_expr.e_low_level_lambda;
+                    if (extractLowLevelOp(lambda_expr, self.env.store)) |ll_op| {
                         var no_args = [0]StackValue{};
                         const return_ct_var = can.ModuleEnv.varFrom(expr_idx);
                         const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
-                        const result = try self.callLowLevelBuiltin(low_level.op, &no_args, roc_ops, return_rt_var);
+                        const result = try self.callLowLevelBuiltin(ll_op, &no_args, roc_ops, return_rt_var);
 
                         method_func.decref(&self.runtime_layout_store, roc_ops);
                         self.env = saved_env;
@@ -13146,18 +13221,18 @@ pub const Interpreter = struct {
                         const ptr = builtins.utils.alignedPtrCast(*f32, value.ptr.?, @src());
                         if (num_lit.value.kind == .u128) {
                             const u128_val: u128 = @bitCast(num_lit.value.bytes);
-                            ptr.* = @floatFromInt(u128_val);
+                            ptr.* = i128h.u128_to_f32(u128_val);
                         } else {
-                            ptr.* = @floatFromInt(num_lit.value.toI128());
+                            ptr.* = i128h.i128_to_f32(num_lit.value.toI128());
                         }
                     },
                     .f64 => {
                         const ptr = builtins.utils.alignedPtrCast(*f64, value.ptr.?, @src());
                         if (num_lit.value.kind == .u128) {
                             const u128_val: u128 = @bitCast(num_lit.value.bytes);
-                            ptr.* = @floatFromInt(u128_val);
+                            ptr.* = i128h.u128_to_f64(u128_val);
                         } else {
-                            ptr.* = @floatFromInt(num_lit.value.toI128());
+                            ptr.* = i128h.i128_to_f64(num_lit.value.toI128());
                         }
                     },
                     .dec => {
@@ -13382,18 +13457,18 @@ pub const Interpreter = struct {
                         const ptr = builtins.utils.alignedPtrCast(*f32, value.ptr.?, @src());
                         if (typed_int.value.kind == .u128) {
                             const u128_val: u128 = @bitCast(typed_int.value.bytes);
-                            ptr.* = @floatFromInt(u128_val);
+                            ptr.* = i128h.u128_to_f32(u128_val);
                         } else {
-                            ptr.* = @floatFromInt(typed_int.value.toI128());
+                            ptr.* = i128h.i128_to_f32(typed_int.value.toI128());
                         }
                     },
                     .f64 => {
                         const ptr = builtins.utils.alignedPtrCast(*f64, value.ptr.?, @src());
                         if (typed_int.value.kind == .u128) {
                             const u128_val: u128 = @bitCast(typed_int.value.bytes);
-                            ptr.* = @floatFromInt(u128_val);
+                            ptr.* = i128h.u128_to_f64(u128_val);
                         } else {
-                            ptr.* = @floatFromInt(typed_int.value.toI128());
+                            ptr.* = i128h.i128_to_f64(typed_int.value.toI128());
                         }
                     },
                     .dec => {
@@ -13456,12 +13531,12 @@ pub const Interpreter = struct {
                     .f32 => {
                         const ptr = builtins.utils.alignedPtrCast(*f32, value.ptr.?, @src());
                         // Convert from scaled i128 (10^18) to f32
-                        ptr.* = @as(f32, @floatFromInt(scaled_value)) / @as(f32, @floatFromInt(RocDec.one_point_zero_i128));
+                        ptr.* = i128h.i128_to_f32(scaled_value) / @as(f32, @floatFromInt(RocDec.one_point_zero_i128));
                     },
                     .f64 => {
                         const ptr = builtins.utils.alignedPtrCast(*f64, value.ptr.?, @src());
                         // Convert from scaled i128 (10^18) to f64
-                        ptr.* = @as(f64, @floatFromInt(scaled_value)) / @as(f64, @floatFromInt(RocDec.one_point_zero_i128));
+                        ptr.* = i128h.i128_to_f64(scaled_value) / @as(f64, @floatFromInt(RocDec.one_point_zero_i128));
                     },
                     .dec => {
                         const ptr = builtins.utils.alignedPtrCast(*RocDec, value.ptr.?, @src());
@@ -13471,7 +13546,7 @@ pub const Interpreter = struct {
                 },
                 .int => {
                     // Converting fractional to integer - truncate
-                    const int_val = @divTrunc(scaled_value, RocDec.one_point_zero_i128);
+                    const int_val = i128h.divTrunc_i128(scaled_value, RocDec.one_point_zero_i128);
                     const bytes: [16]u8 = @bitCast(int_val);
                     try value.setIntFromBytes(bytes, false);
                 },
@@ -13875,33 +13950,14 @@ pub const Interpreter = struct {
         return value;
     }
 
-    /// Evaluate a low-level lambda expression (e_low_level_lambda) - creates a closure for builtins
-    fn evalLowLevelLambda(
-        self: *Interpreter,
-        expr_idx: can.CIR.Expr.Idx,
-        expected_rt_var: ?types.Var,
-        lam: @TypeOf(@as(can.CIR.Expr, undefined).e_low_level_lambda),
-    ) Error!StackValue {
-        const rt_var = if (expected_rt_var) |provided_var|
-            provided_var
-        else blk: {
-            const ct_var = can.ModuleEnv.varFrom(expr_idx);
-            break :blk try self.translateTypeVar(self.env, ct_var);
-        };
-        const closure_layout = try self.getRuntimeLayout(rt_var);
-        const value = try self.pushRaw(closure_layout, 0, rt_var);
-        self.registerDefValue(expr_idx, value);
-        if (value.ptr) |ptr| {
-            builtins.utils.writeAs(layout.Closure, ptr, .{
-                .body_idx = lam.body,
-                .params = lam.args,
-                .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
-                .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
-                .lambda_expr_idx = expr_idx,
-                .source_env = self.env,
-            }, @src());
+    /// Extract the LowLevel op from an e_lambda whose body is e_run_low_level.
+    /// Returns the low-level op if found, null otherwise.
+    fn extractLowLevelOp(lambda_expr: can.CIR.Expr, store: anytype) ?can.CIR.Expr.LowLevel {
+        if (lambda_expr == .e_lambda) {
+            const body = store.getExpr(lambda_expr.e_lambda.body);
+            if (body == .e_run_low_level) return body.e_run_low_level.op;
         }
-        return value;
+        return null;
     }
 
     /// Evaluate a hosted lambda expression (e_hosted_lambda) - creates a closure for host dispatch
@@ -14151,7 +14207,7 @@ pub const Interpreter = struct {
 
             // Check both pattern_idx AND source module to avoid cross-module collisions.
             const same_module = (b.source_env == self.env) or
-                (b.source_env.module_name_idx == self.env.module_name_idx);
+                (b.source_env.qualified_module_ident == self.env.qualified_module_ident);
             if (b.pattern_idx == lookup.pattern_idx and same_module) {
                 // Check if this binding came from an e_anno_only expression
                 if (b.expr_idx) |expr_idx| {
@@ -16736,9 +16792,7 @@ pub const Interpreter = struct {
 
                     // Check if this is a low-level lambda
                     const lambda_expr = self.env.store.getExpr(header.lambda_expr_idx);
-                    if (lambda_expr == .e_low_level_lambda) {
-                        const low_level = lambda_expr.e_low_level_lambda;
-
+                    if (extractLowLevelOp(lambda_expr, self.env.store)) |ll_op| {
                         // Determine the return type for this low-level builtin call.
                         //
                         // There are two cases to consider:
@@ -16794,7 +16848,7 @@ pub const Interpreter = struct {
                         };
 
                         // Special handling for list_sort_with which requires continuation-based evaluation
-                        if (low_level.op == .list_sort_with) {
+                        if (ll_op == .list_sort_with) {
                             std.debug.assert(arg_values.len == 2);
                             const list_arg = arg_values[0];
                             const compare_fn = arg_values[1];
@@ -16816,7 +16870,7 @@ pub const Interpreter = struct {
                         }
 
                         // Call the builtin
-                        const result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops, ret_rt_var);
+                        const result = try self.callLowLevelBuiltin(ll_op, arg_values, roc_ops, ret_rt_var);
 
                         // Decref arguments based on ownership semantics.
                         // See src/builtins/OWNERSHIP.md for detailed documentation.
@@ -16824,7 +16878,7 @@ pub const Interpreter = struct {
                         // Simple rule:
                         // - Borrow: decref (we release our copy, builtin didn't take ownership)
                         // - Consume: don't decref (ownership transferred to builtin)
-                        const arg_ownership = low_level.op.getArgOwnership();
+                        const arg_ownership = ll_op.getArgOwnership();
                         for (arg_values, 0..) |arg, arg_idx| {
                             // Only decref borrowed arguments. Consumed arguments have ownership
                             // transferred to the builtin (it handles cleanup or returns the value).
@@ -17210,10 +17264,9 @@ pub const Interpreter = struct {
 
                 // Check if this is a low-level lambda
                 const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
-                if (lambda_expr == .e_low_level_lambda) {
-                    const low_level = lambda_expr.e_low_level_lambda;
+                if (extractLowLevelOp(lambda_expr, self.env.store)) |ll_op| {
                     var args = [1]StackValue{operand};
-                    const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+                    const result = try self.callLowLevelBuiltin(ll_op, &args, roc_ops, null);
 
                     // Note: We do NOT decref the operand here.
                     // The defer statement at the top of unary_op_apply already handles decrefing.
@@ -17602,10 +17655,9 @@ pub const Interpreter = struct {
 
                 // Check if this is a low-level lambda
                 const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
-                if (lambda_expr == .e_low_level_lambda) {
-                    const low_level = lambda_expr.e_low_level_lambda;
+                if (extractLowLevelOp(lambda_expr, self.env.store)) |ll_op| {
                     var args = [2]StackValue{ lhs, rhs };
-                    var result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+                    var result = try self.callLowLevelBuiltin(ll_op, &args, roc_ops, null);
 
                     // Note: We do NOT decref arguments here for borrow semantics.
                     // The defer statements at the top of binop_apply already handle decrefing
@@ -18371,18 +18423,17 @@ pub const Interpreter = struct {
 
                     // Check if low-level lambda
                     const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
-                    if (lambda_expr == .e_low_level_lambda) {
-                        const low_level = lambda_expr.e_low_level_lambda;
+                    if (extractLowLevelOp(lambda_expr, self.env.store)) |ll_op| {
                         var args = [1]StackValue{receiver_value};
                         // Get return type from the dot access expression for low-level builtins that need it.
                         // Use saved_env (the caller's module) since da.expr_idx is from that module,
                         // not from self.env which has been switched to the closure's source module.
                         const return_ct_var = can.ModuleEnv.varFrom(da.expr_idx);
                         const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
-                        const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, return_rt_var);
+                        const result = try self.callLowLevelBuiltin(ll_op, &args, roc_ops, return_rt_var);
 
                         // Decref based on ownership semantics
-                        const arg_ownership = low_level.op.getArgOwnership();
+                        const arg_ownership = ll_op.getArgOwnership();
                         if (arg_ownership.len > 0 and arg_ownership[0] == .borrow) {
                             receiver_value.decref(&self.runtime_layout_store, roc_ops);
                         }
@@ -18674,11 +18725,9 @@ pub const Interpreter = struct {
 
                 // Check if low-level lambda
                 const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
-                if (lambda_expr == .e_low_level_lambda) {
-                    const low_level = lambda_expr.e_low_level_lambda;
-
+                if (extractLowLevelOp(lambda_expr, self.env.store)) |ll_op| {
                     // Special handling for list_sort_with which requires continuation-based evaluation
-                    if (low_level.op == .list_sort_with) {
+                    if (ll_op == .list_sort_with) {
                         std.debug.assert(total_args == 1);
                         const list_arg = receiver_value;
                         const compare_fn = arg_values[0];
@@ -18767,10 +18816,10 @@ pub const Interpreter = struct {
                         break :blk try self.translateTypeVar(saved_env, return_ct_var);
                     };
 
-                    const result = try self.callLowLevelBuiltin(low_level.op, all_args, roc_ops, return_rt_var);
+                    const result = try self.callLowLevelBuiltin(ll_op, all_args, roc_ops, return_rt_var);
 
                     // Decref arguments based on ownership semantics
-                    const arg_ownership = low_level.op.getArgOwnership();
+                    const arg_ownership = ll_op.getArgOwnership();
                     for (all_args, 0..) |arg, arg_idx| {
                         const ownership = if (arg_idx < arg_ownership.len) arg_ownership[arg_idx] else .borrow;
                         if (ownership == .borrow) {
@@ -19036,14 +19085,13 @@ pub const Interpreter = struct {
 
                 // Check if low-level lambda
                 const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
-                if (lambda_expr == .e_low_level_lambda) {
-                    const low_level = lambda_expr.e_low_level_lambda;
+                if (extractLowLevelOp(lambda_expr, self.env.store)) |ll_op| {
                     const return_ct_var = can.ModuleEnv.varFrom(tvdi.expr_idx);
                     const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
-                    const result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops, return_rt_var);
+                    const result = try self.callLowLevelBuiltin(ll_op, arg_values, roc_ops, return_rt_var);
 
                     // Decref based on ownership semantics
-                    const arg_ownership = low_level.op.getArgOwnership();
+                    const arg_ownership = ll_op.getArgOwnership();
                     for (arg_values, 0..) |arg, idx| {
                         if (idx < arg_ownership.len and arg_ownership[idx] == .borrow) {
                             arg.decref(&self.runtime_layout_store, roc_ops);
@@ -20104,7 +20152,7 @@ test "interpreter: translateTypeVar for alias of Str" {
     };
     const ct_str = try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
 
-    const ct_alias_content = try env.types.mkAlias(type_ident, ct_str, &.{});
+    const ct_alias_content = try env.types.mkAlias(type_ident, ct_str, &.{}, alias_name);
     const ct_alias_var = try env.types.freshFromContent(ct_alias_content);
 
     const rt_var = try interp.translateTypeVar(&env, ct_alias_var);
@@ -20377,7 +20425,7 @@ test "interpreter: cross-module method resolution should find methods in origin 
     // Verify we can retrieve module A's environment
     const found_env = interp.getModuleEnvForOrigin(module_a_ident);
     try std.testing.expect(found_env != null);
-    try std.testing.expectEqual(module_a.module_name_idx, found_env.?.module_name_idx);
+    try std.testing.expectEqual(module_a.qualified_module_ident, found_env.?.qualified_module_ident);
 
     // Verify we can retrieve module A's ID
     const found_id = interp.getModuleIdForOrigin(module_a_ident);
@@ -20440,8 +20488,8 @@ test "interpreter: transitive module method resolution (A imports B imports C)" 
     try interp.import_envs.put(interp.allocator, second_import_idx, &module_c);
 
     // Verify we can retrieve all module environments
-    try std.testing.expectEqual(module_b.module_name_idx, interp.getModuleEnvForOrigin(module_b_ident).?.module_name_idx);
-    try std.testing.expectEqual(module_c.module_name_idx, interp.getModuleEnvForOrigin(module_c_ident).?.module_name_idx);
+    try std.testing.expectEqual(module_b.qualified_module_ident, interp.getModuleEnvForOrigin(module_b_ident).?.qualified_module_ident);
+    try std.testing.expectEqual(module_c.qualified_module_ident, interp.getModuleEnvForOrigin(module_c_ident).?.qualified_module_ident);
 
     // Verify we can retrieve all module IDs
     try std.testing.expectEqual(module_b_id, interp.getModuleIdForOrigin(module_b_ident));

@@ -8,7 +8,7 @@
 //! 5. Generating native machine code (x86_64/aarch64)
 //! 6. Executing the generated code
 //!
-//! Code generation uses Mono IR with globally unique MonoSymbol references,
+//! Code generation uses Mono IR with globally unique Symbol references,
 //! eliminating cross-module index collisions.
 
 const std = @import("std");
@@ -21,6 +21,7 @@ const backend = @import("backend");
 const mono = @import("mono");
 const builtin_loading = @import("builtin_loading.zig");
 const builtins = @import("builtins");
+const i128h = builtins.compiler_rt_128;
 
 // Cross-platform setjmp/longjmp for crash recovery.
 const sljmp = @import("sljmp");
@@ -185,7 +186,7 @@ fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoEx
         // Same for if/match — the result_layout may be wrong, but branch bodies
         // should have the correct layout from their own type variables.
         .if_then_else => |ite| ite.result_layout,
-        .when => |w| w.result_layout,
+        .match_expr => |w| w.result_layout,
         .dbg => |d| d.result_layout,
         .expect => |e| e.result_layout,
         .binop => |b| b.result_layout,
@@ -201,7 +202,7 @@ fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoEx
         .field_access => |fa| fa.field_layout,
         .tuple_access => |ta| ta.elem_layout,
         .closure => |c| c.closure_layout,
-        .nominal => |n| n.nominal_layout,
+        .nominal => |n| monoExprResultLayout(store, n.backing_expr) orelse n.nominal_layout,
         // Note: .list and .empty_list store element layout, not the overall list layout.
         // They are handled by the fromTypeVar fallback.
         .i64_literal => .i64,
@@ -212,7 +213,27 @@ fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoEx
         .dec_literal => .dec,
         .str_literal => .str,
         .unary_not => .bool,
-        else => null,
+        // Expressions whose result layout is handled by the fromTypeVar fallback
+        .for_loop,
+        .while_loop,
+        .list,
+        .empty_list,
+        .empty_record,
+        .lambda,
+        .crash,
+        .runtime_error,
+        .str_concat,
+        .int_to_str,
+        .float_to_str,
+        .dec_to_str,
+        .str_escape_and_quote,
+        .discriminant_switch,
+        .tag_payload_access,
+        .hosted_call,
+        .incref,
+        .decref,
+        .free,
+        => null,
     };
 }
 
@@ -665,7 +686,7 @@ pub const DevEvaluator = struct {
         defer mono_store.deinit();
 
         // Find the module index for this module
-        var module_idx: u16 = 0;
+        var module_idx: u32 = 0;
         for (all_module_envs, 0..) |env, i| {
             if (env == module_env) {
                 module_idx = @intCast(i);
@@ -678,7 +699,9 @@ pub const DevEvaluator = struct {
         const layout_store_ptr = try self.ensureGlobalLayoutStore(all_module_envs);
 
         // Create the lowerer with the layout store
-        var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, layout_store_ptr);
+        // Note: app_module_idx is null for JIT evaluation (no platform/app distinction)
+        // Note: hosted_functions is null because dev evaluator uses interpreter for hosted calls
+        var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, layout_store_ptr, null, null);
         defer lowerer.deinit();
 
         // Lower CIR expression to Mono IR
@@ -687,7 +710,7 @@ pub const DevEvaluator = struct {
         };
 
         // Run RC insertion pass on the Mono IR
-        var rc_pass = mono.RcInsert.RcInsertPass.init(self.allocator, &mono_store, layout_store_ptr);
+        var rc_pass = mono.RcInsert.RcInsertPass.init(self.allocator, &mono_store, layout_store_ptr) catch return error.OutOfMemory;
         defer rc_pass.deinit();
         const mono_expr_id = rc_pass.insertRcOps(lowered_expr_id) catch lowered_expr_id;
 
@@ -713,8 +736,8 @@ pub const DevEvaluator = struct {
             1;
 
         // Create the code generator with the layout store
-        // Use NativeMonoExprCodeGen since we're executing on the host machine
-        var codegen = backend.NativeMonoExprCodeGen.init(
+        // Use HostMonoExprCodeGen since we're executing on the host machine
+        var codegen = try backend.HostMonoExprCodeGen.init(
             self.allocator,
             &mono_store,
             layout_store_ptr,
@@ -768,9 +791,18 @@ pub const DevEvaluator = struct {
             switch (self_val) {
                 .i64_val => |v| try writer.print("{}", .{v}),
                 .u64_val => |v| try writer.print("{}", .{v}),
-                .f64_val => |v| try writer.print("{d}", .{v}),
-                .i128_val => |v| try writer.print("{}", .{v}),
-                .u128_val => |v| try writer.print("{}", .{v}),
+                .f64_val => |v| {
+                    var float_buf: [400]u8 = undefined;
+                    try writer.writeAll(i128h.f64_to_str(&float_buf, v));
+                },
+                .i128_val => |v| {
+                    var buf: [40]u8 = undefined;
+                    try writer.writeAll(i128h.i128_to_str(&buf, v).str);
+                },
+                .u128_val => |v| {
+                    var buf: [40]u8 = undefined;
+                    try writer.writeAll(i128h.u128_to_str(&buf, v).str);
+                },
                 .str_val => |v| try writer.print("\"{s}\"", .{v}),
             }
         }

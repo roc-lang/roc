@@ -265,7 +265,7 @@ j = -17011687303715884105728
 			(ty-lookup (name "U32") (builtin))))
 	(d-let
 		(p-assign (ident "e"))
-		(e-frac-f64 (value "3.4028236692093846e39"))
+		(e-frac-f64 (value "3402823669209384600000000000000000000000"))
 		(annotation
 			(ty-lookup (name "U128") (builtin))))
 	(d-let

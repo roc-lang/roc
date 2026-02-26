@@ -651,12 +651,7 @@ pub fn validateBase58Hash(base58_str: []const u8) !?[32]u8 {
         return null;
     }
 
-    var hash: [32]u8 = undefined;
-    base58.decode(base58_str, &hash) catch {
-        return null;
-    };
-
-    return hash;
+    return base58.decode(base58_str) catch return null;
 }
 
 /// Unbundle files from a compressed tar archive to a directory.
