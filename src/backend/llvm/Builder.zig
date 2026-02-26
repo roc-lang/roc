@@ -366,7 +366,7 @@ pub const Type = enum(u32) {
         return switch (item.tag) {
             .named_structure => builder.typeExtraData(Type.NamedStructure, item.data).body
                 .unnamedTag(builder),
-            .simple, .function, .vararg_function, .integer, .pointer, .target, .vector, .scalable_vector, .small_array, .array, .structure, .packed_structure => item.tag,
+            else => item.tag,
         };
     }
 
@@ -375,23 +375,23 @@ pub const Type = enum(u32) {
         return switch (item.tag) {
             .vector, .scalable_vector => builder.typeExtraData(Type.Vector, item.data)
                 .child.tag(builder),
-            .simple, .function, .vararg_function, .integer, .pointer, .target, .small_array, .array, .structure, .packed_structure, .named_structure => item.tag,
+            else => item.tag,
         };
     }
 
     pub fn isFloatingPoint(self: Type) bool {
         return switch (self) {
             .half, .bfloat, .float, .double, .fp128, .x86_fp80, .ppc_fp128 => true,
-            .void, .x86_amx, .x86_mmx, .label, .token, .metadata, .i1, .i8, .i16, .i29, .i32, .i64, .i80, .i128, .ptr, .@"ptr addrspace(4)", .none, ._ => false,
+            else => false,
         };
     }
 
     pub fn isInteger(self: Type, builder: *const Builder) bool {
         return switch (self) {
             .i1, .i8, .i16, .i29, .i32, .i64, .i80, .i128 => true,
-            .void, .half, .bfloat, .float, .double, .fp128, .x86_fp80, .ppc_fp128, .x86_amx, .x86_mmx, .label, .token, .metadata, .ptr, .@"ptr addrspace(4)", .none, ._ => switch (self.tag(builder)) {
+            else => switch (self.tag(builder)) {
                 .integer => true,
-                .simple, .function, .vararg_function, .pointer, .target, .vector, .scalable_vector, .small_array, .array, .structure, .packed_structure, .named_structure => false,
+                else => false,
             },
         };
     }
@@ -399,9 +399,9 @@ pub const Type = enum(u32) {
     pub fn isPointer(self: Type, builder: *const Builder) bool {
         return switch (self) {
             .ptr => true,
-            .void, .half, .bfloat, .float, .double, .fp128, .x86_fp80, .ppc_fp128, .x86_amx, .x86_mmx, .label, .token, .metadata, .i1, .i8, .i16, .i29, .i32, .i64, .i80, .i128, .@"ptr addrspace(4)", .none, ._ => switch (self.tag(builder)) {
+            else => switch (self.tag(builder)) {
                 .pointer => true,
-                .simple, .function, .vararg_function, .integer, .target, .vector, .scalable_vector, .small_array, .array, .structure, .packed_structure, .named_structure => false,
+                else => false,
             },
         };
     }
@@ -409,7 +409,7 @@ pub const Type = enum(u32) {
     pub fn pointerAddrSpace(self: Type, builder: *const Builder) AddrSpace {
         switch (self) {
             .ptr => return .default,
-            .void, .half, .bfloat, .float, .double, .fp128, .x86_fp80, .ppc_fp128, .x86_amx, .x86_mmx, .label, .token, .metadata, .i1, .i8, .i16, .i29, .i32, .i64, .i80, .i128, .@"ptr addrspace(4)", .none, ._ => {
+            else => {
                 const item = builder.type_items.items[@intFromEnum(self)];
                 assert(item.tag == .pointer);
                 return @enumFromInt(item.data);
@@ -420,7 +420,7 @@ pub const Type = enum(u32) {
     pub fn isFunction(self: Type, builder: *const Builder) bool {
         return switch (self.tag(builder)) {
             .function, .vararg_function => true,
-            .simple, .integer, .pointer, .target, .vector, .scalable_vector, .small_array, .array, .structure, .packed_structure, .named_structure => false,
+            else => false,
         };
     }
 
@@ -428,7 +428,7 @@ pub const Type = enum(u32) {
         return switch (self.tag(builder)) {
             .function => .normal,
             .vararg_function => .vararg,
-            .simple, .integer, .pointer, .target, .vector, .scalable_vector, .small_array, .array, .structure, .packed_structure, .named_structure => unreachable,
+            else => unreachable,
         };
     }
 
@@ -441,7 +441,7 @@ pub const Type = enum(u32) {
                 var extra = builder.typeExtraDataTrail(Type.Function, item.data);
                 return extra.trail.next(extra.data.params_len, Type, builder);
             },
-            .simple, .integer, .pointer, .target, .vector, .scalable_vector, .small_array, .array, .structure, .packed_structure, .named_structure => unreachable,
+            else => unreachable,
         }
     }
 
@@ -451,14 +451,14 @@ pub const Type = enum(u32) {
             .function,
             .vararg_function,
             => return builder.typeExtraData(Type.Function, item.data).ret,
-            .simple, .integer, .pointer, .target, .vector, .scalable_vector, .small_array, .array, .structure, .packed_structure, .named_structure => unreachable,
+            else => unreachable,
         }
     }
 
     pub fn isVector(self: Type, builder: *const Builder) bool {
         return switch (self.tag(builder)) {
             .vector, .scalable_vector => true,
-            .simple, .function, .vararg_function, .integer, .pointer, .target, .small_array, .array, .structure, .packed_structure, .named_structure => false,
+            else => false,
         };
     }
 
@@ -466,14 +466,14 @@ pub const Type = enum(u32) {
         return switch (self.tag(builder)) {
             .vector => .normal,
             .scalable_vector => .scalable,
-            .simple, .function, .vararg_function, .integer, .pointer, .target, .small_array, .array, .structure, .packed_structure, .named_structure => unreachable,
+            else => unreachable,
         };
     }
 
     pub fn isStruct(self: Type, builder: *const Builder) bool {
         return switch (self.tag(builder)) {
             .structure, .packed_structure, .named_structure => true,
-            .simple, .function, .vararg_function, .integer, .pointer, .target, .vector, .scalable_vector, .small_array, .array => false,
+            else => false,
         };
     }
 
@@ -481,14 +481,14 @@ pub const Type = enum(u32) {
         return switch (self.unnamedTag(builder)) {
             .structure => .normal,
             .packed_structure => .@"packed",
-            .simple, .function, .vararg_function, .integer, .pointer, .target, .vector, .scalable_vector, .small_array, .array, .named_structure => unreachable,
+            else => unreachable,
         };
     }
 
     pub fn isAggregate(self: Type, builder: *const Builder) bool {
         return switch (self.tag(builder)) {
             .small_array, .array, .structure, .packed_structure, .named_structure => true,
-            .simple, .function, .vararg_function, .integer, .pointer, .target, .vector, .scalable_vector => false,
+            else => false,
         };
     }
 
@@ -504,7 +504,7 @@ pub const Type = enum(u32) {
             .x86_fp80, .i80 => 80,
             .fp128, .ppc_fp128, .i128 => 128,
             .ptr, .@"ptr addrspace(4)" => @panic("TODO: query data layout"),
-            .scalar, .len => {
+            _ => {
                 const item = builder.type_items.items[@intFromEnum(self)];
                 return switch (item.tag) {
                     .simple,
@@ -537,7 +537,7 @@ pub const Type = enum(u32) {
             => builder.typeExtraData(Type.Vector, item.data).child,
             .array => builder.typeExtraData(Type.Array, item.data).child,
             .named_structure => builder.typeExtraData(Type.NamedStructure, item.data).body,
-            .simple, .function, .vararg_function, .integer, .pointer, .target, .structure, .packed_structure => unreachable,
+            else => unreachable,
         };
     }
 
@@ -551,7 +551,7 @@ pub const Type = enum(u32) {
             .vector,
             .scalable_vector,
             => builder.typeExtraData(Type.Vector, item.data).child,
-            .simple, .function, .vararg_function, .target, .small_array, .array, .structure, .packed_structure, .named_structure => unreachable,
+            else => unreachable,
         };
     }
 
@@ -573,12 +573,12 @@ pub const Type = enum(u32) {
                 switch (kind) {
                     .vector => .normal,
                     .scalable_vector => .scalable,
-                    .simple, .function, .vararg_function, .integer, .pointer, .target, .small_array, .array, .structure, .packed_structure, .named_structure => unreachable,
+                    else => unreachable,
                 },
                 builder.typeExtraData(Type.Vector, item.data).len,
                 scalar,
             ),
-            .simple, .function, .vararg_function, .target, .small_array, .array, .structure, .packed_structure, .named_structure => unreachable,
+            else => unreachable,
         };
     }
 
@@ -588,7 +588,7 @@ pub const Type = enum(u32) {
             .vector,
             .scalable_vector,
             => builder.typeExtraData(Type.Vector, item.data).len,
-            .simple, .function, .vararg_function, .integer, .pointer, .target, .small_array, .array, .structure, .packed_structure, .named_structure => unreachable,
+            else => unreachable,
         };
     }
 
@@ -606,7 +606,7 @@ pub const Type = enum(u32) {
                 switch (kind) {
                     .vector => .normal,
                     .scalable_vector => .scalable,
-                    .simple, .function, .vararg_function, .integer, .pointer, .target, .small_array, .array, .structure, .packed_structure, .named_structure => unreachable,
+                    else => unreachable,
                 },
                 len,
                 builder.typeExtraData(Type.Vector, item.data).child,
@@ -619,7 +619,7 @@ pub const Type = enum(u32) {
                 len,
                 builder.typeExtraData(Type.Array, item.data).child,
             ),
-            .simple, .function, .vararg_function, .integer, .pointer, .target, .structure, .packed_structure, .named_structure => unreachable,
+            else => unreachable,
         };
     }
 
@@ -636,7 +636,7 @@ pub const Type = enum(u32) {
             => builder.typeExtraData(Type.Structure, item.data).fields_len,
             .named_structure => builder.typeExtraData(Type.NamedStructure, item.data).body
                 .aggregateLen(builder),
-            .simple, .function, .vararg_function, .integer, .pointer, .target => unreachable,
+            else => unreachable,
         };
     }
 
@@ -651,7 +651,7 @@ pub const Type = enum(u32) {
             },
             .named_structure => return builder.typeExtraData(Type.NamedStructure, item.data).body
                 .structFields(builder),
-            .simple, .function, .vararg_function, .integer, .pointer, .target, .vector, .scalable_vector, .small_array, .array => unreachable,
+            else => unreachable,
         }
     }
 
@@ -672,7 +672,7 @@ pub const Type = enum(u32) {
             },
             .named_structure => builder.typeExtraData(Type.NamedStructure, item.data).body
                 .childTypeAt(indices, builder),
-            .simple, .function, .vararg_function, .integer, .pointer, .target, .vector, .scalable_vector => unreachable,
+            else => unreachable,
         };
     }
 
@@ -721,7 +721,7 @@ pub const Type = enum(u32) {
                     switch (kind) {
                         .function => {},
                         .vararg_function => try w.writeAll("vararg"),
-                        .simple, .integer, .pointer, .target, .vector, .scalable_vector, .small_array, .array, .structure, .packed_structure, .named_structure => unreachable,
+                        else => unreachable,
                     }
                     try w.writeByte('f');
                 },
@@ -742,7 +742,7 @@ pub const Type = enum(u32) {
                         switch (kind) {
                             .vector => "",
                             .scalable_vector => "nx",
-                            .simple, .function, .vararg_function, .integer, .pointer, .target, .small_array, .array, .structure, .packed_structure, .named_structure => unreachable,
+                            else => unreachable,
                         },
                         extra.len,
                         extra.child.fmt(data.builder, .m),
@@ -752,7 +752,7 @@ pub const Type = enum(u32) {
                     const extra = data.builder.typeExtraData(switch (kind) {
                         .small_array => Type.Vector,
                         .array => Type.Array,
-                        .simple, .function, .vararg_function, .integer, .pointer, .target, .vector, .scalable_vector, .structure, .packed_structure, .named_structure => unreachable,
+                        else => unreachable,
                     }, item.data);
                     try w.print("a{d}{f}", .{ extra.length(), extra.child.fmt(data.builder, .m) });
                 },
@@ -792,7 +792,7 @@ pub const Type = enum(u32) {
                             if (params.len > 0) try w.writeAll(", ");
                             try w.writeAll("...");
                         },
-                        .simple, .integer, .pointer, .target, .vector, .scalable_vector, .small_array, .array, .structure, .packed_structure, .named_structure => unreachable,
+                        else => unreachable,
                     }
                     try w.writeByte(')');
                 }
@@ -816,7 +816,7 @@ pub const Type = enum(u32) {
                     switch (kind) {
                         .vector => "",
                         .scalable_vector => "vscale x ",
-                        .simple, .function, .vararg_function, .integer, .pointer, .target, .small_array, .array, .structure, .packed_structure, .named_structure => unreachable,
+                        else => unreachable,
                     },
                     extra.len,
                     extra.child.fmt(data.builder, .percent),
@@ -826,7 +826,7 @@ pub const Type = enum(u32) {
                 const extra = data.builder.typeExtraData(switch (kind) {
                     .small_array => Type.Vector,
                     .array => Type.Array,
-                    .simple, .function, .vararg_function, .integer, .pointer, .target, .vector, .scalable_vector, .structure, .packed_structure, .named_structure => unreachable,
+                    else => unreachable,
                 }, item.data);
                 try w.print("[{d} x {f}]", .{ extra.length(), extra.child.fmt(data.builder, .percent) });
             },
@@ -836,7 +836,7 @@ pub const Type = enum(u32) {
                 switch (kind) {
                     .structure => {},
                     .packed_structure => try w.writeByte('<'),
-                    .simple, .function, .vararg_function, .integer, .pointer, .target, .vector, .scalable_vector, .small_array, .array, .named_structure => unreachable,
+                    else => unreachable,
                 }
                 try w.writeAll("{ ");
                 for (fields, 0..) |field, index| {
@@ -847,7 +847,7 @@ pub const Type = enum(u32) {
                 switch (kind) {
                     .structure => {},
                     .packed_structure => try w.writeByte('>'),
-                    .simple, .function, .vararg_function, .integer, .pointer, .target, .vector, .scalable_vector, .small_array, .array, .named_structure => unreachable,
+                    else => unreachable,
                 }
             },
             .named_structure => {
@@ -856,7 +856,7 @@ pub const Type = enum(u32) {
                     extra.id.fmt(data.builder),
                 }) else switch (extra.body) {
                     .none => try w.writeAll("opaque"),
-                    .void, .half, .bfloat, .float, .double, .fp128, .x86_fp80, .ppc_fp128, .x86_amx, .x86_mmx, .label, .token, .metadata, .i1, .i8, .i16, .i29, .i32, .i64, .i80, .i128, .ptr, .@"ptr addrspace(4)", ._ => try format(.{
+                    else => try format(.{
                         .type = extra.body,
                         .builder = data.builder,
                         .mode = data.mode,
@@ -902,7 +902,7 @@ pub const Type = enum(u32) {
             .@"ptr addrspace(4)",
             => true,
             .none => unreachable,
-            .scalar, .len => {
+            _ => {
                 const item = builder.type_items.items[@intFromEnum(self)];
                 return switch (item.tag) {
                     .simple => unreachable,
@@ -1168,7 +1168,7 @@ pub const Attribute = union(Kind) {
                     });
                 },
                 .string, .none => unreachable,
-                _ => unreachable, // zig-lint-allow: catch-all (Attribute.Kind is non-exhaustive)
+                _ => unreachable,
             };
         }
 
@@ -1888,7 +1888,7 @@ pub const ThreadLocal = enum(u3) {
                     var vecs: [2][]const u8 = .{ p.prefix, "thread_local" };
                     return w.writeVecAll(&vecs);
                 },
-                .localdynamic, .initialexec, .localexec => {
+                else => {
                     var vecs: [4][]const u8 = .{ p.prefix, "thread_local(", @tagName(p.thread_local), ")" };
                     return w.writeVecAll(&vecs);
                 },
@@ -2016,7 +2016,7 @@ pub const AddrSpace = enum(u24) {
         pub fn format(p: Prefixed, w: *Writer) Writer.Error!void {
             switch (p.addr_space) {
                 .default => return,
-                ._ => return w.print("{s}addrspace({d})", .{ p.prefix, p.addr_space }),
+                else => return w.print("{s}addrspace({d})", .{ p.prefix, p.addr_space }),
             }
         }
     };
@@ -2196,7 +2196,7 @@ pub const CallConv = enum(u10) {
             .m68k_rtdcc,
             .riscv_vectorcallcc,
             => try w.print(" {s}", .{@tagName(self)}),
-            .ccc => try w.print(" cc{d}", .{@intFromEnum(self)}),
+            _ => try w.print(" cc{d}", .{@intFromEnum(self)}),
         }
     }
 };
@@ -2463,11 +2463,11 @@ pub const Global = struct {
                 .extern_weak => if (self_ptr.preemption == .implicit_dso_local) {
                     self_ptr.preemption = .dso_local;
                 },
-                .weak, .weak_odr, .linkonce, .linkonce_odr, .available_externally, .appending, .common, .external => switch (self_ptr.visibility) {
+                else => switch (self_ptr.visibility) {
                     .default => if (self_ptr.preemption == .implicit_dso_local) {
                         self_ptr.preemption = .dso_local;
                     },
-                    .hidden, .protected => self_ptr.preemption = .implicit_dso_local,
+                    else => self_ptr.preemption = .implicit_dso_local,
                 },
             }
         }
@@ -2500,7 +2500,7 @@ pub const Global = struct {
         fn getReplacement(self: Index, builder: *const Builder) Index {
             return switch (builder.globals.values()[@intFromEnum(self)].kind) {
                 .replaced => |replacement| replacement,
-                .alias, .variable, .function => .none,
+                else => .none,
             };
         }
     };
@@ -4360,7 +4360,7 @@ pub const Function = struct {
                     .@"or" => .@"or",
                     .xor => .xor,
                     .urem => .urem,
-                    .addrspacecast, .alloca, .@"alloca inalloca", .arg, .atomicrmw, .bitcast, .block, .br, .br_cond, .call, .@"call fast", .cmpxchg, .@"cmpxchg weak", .extractelement, .extractvalue, .@"fcmp false", .@"fcmp fast false", .@"fcmp fast oeq", .@"fcmp fast oge", .@"fcmp fast ogt", .@"fcmp fast ole", .@"fcmp fast olt", .@"fcmp fast one", .@"fcmp fast ord", .@"fcmp fast true", .@"fcmp fast ueq", .@"fcmp fast uge", .@"fcmp fast ugt", .@"fcmp fast ule", .@"fcmp fast ult", .@"fcmp fast une", .@"fcmp fast uno", .@"fcmp oeq", .@"fcmp oge", .@"fcmp ogt", .@"fcmp ole", .@"fcmp olt", .@"fcmp one", .@"fcmp ord", .@"fcmp true", .@"fcmp ueq", .@"fcmp uge", .@"fcmp ugt", .@"fcmp ule", .@"fcmp ult", .@"fcmp une", .@"fcmp uno", .fence, .fneg, .@"fneg fast", .fpext, .fptosi, .fptoui, .fptrunc, .getelementptr, .@"getelementptr inbounds", .@"icmp eq", .@"icmp ne", .@"icmp sge", .@"icmp sgt", .@"icmp sle", .@"icmp slt", .@"icmp uge", .@"icmp ugt", .@"icmp ule", .@"icmp ult", .indirectbr, .insertelement, .insertvalue, .inttoptr, .load, .@"load atomic", .@"musttail call", .@"musttail call fast", .@"notail call", .@"notail call fast", .phi, .@"phi fast", .ptrtoint, .ret, .@"ret void", .select, .@"select fast", .sext, .shufflevector, .sitofp, .store, .@"store atomic", .@"switch", .@"tail call", .@"tail call fast", .trunc, .uitofp, .@"unreachable", .va_arg, .zext => unreachable,
+                    else => unreachable,
                 };
             }
 
@@ -4379,7 +4379,7 @@ pub const Function = struct {
                     .inttoptr => .inttoptr,
                     .bitcast => .bitcast,
                     .addrspacecast => .addrspacecast,
-                    .add, .@"add nsw", .@"add nuw", .@"add nuw nsw", .alloca, .@"alloca inalloca", .@"and", .arg, .ashr, .@"ashr exact", .atomicrmw, .block, .br, .br_cond, .call, .@"call fast", .cmpxchg, .@"cmpxchg weak", .extractelement, .extractvalue, .fadd, .@"fadd fast", .@"fcmp false", .@"fcmp fast false", .@"fcmp fast oeq", .@"fcmp fast oge", .@"fcmp fast ogt", .@"fcmp fast ole", .@"fcmp fast olt", .@"fcmp fast one", .@"fcmp fast ord", .@"fcmp fast true", .@"fcmp fast ueq", .@"fcmp fast uge", .@"fcmp fast ugt", .@"fcmp fast ule", .@"fcmp fast ult", .@"fcmp fast une", .@"fcmp fast uno", .@"fcmp oeq", .@"fcmp oge", .@"fcmp ogt", .@"fcmp ole", .@"fcmp olt", .@"fcmp one", .@"fcmp ord", .@"fcmp true", .@"fcmp ueq", .@"fcmp uge", .@"fcmp ugt", .@"fcmp ule", .@"fcmp ult", .@"fcmp une", .@"fcmp uno", .fdiv, .@"fdiv fast", .fence, .fmul, .@"fmul fast", .fneg, .@"fneg fast", .frem, .@"frem fast", .fsub, .@"fsub fast", .getelementptr, .@"getelementptr inbounds", .@"icmp eq", .@"icmp ne", .@"icmp sge", .@"icmp sgt", .@"icmp sle", .@"icmp slt", .@"icmp uge", .@"icmp ugt", .@"icmp ule", .@"icmp ult", .indirectbr, .insertelement, .insertvalue, .load, .@"load atomic", .lshr, .@"lshr exact", .mul, .@"mul nsw", .@"mul nuw", .@"mul nuw nsw", .@"musttail call", .@"musttail call fast", .@"notail call", .@"notail call fast", .@"or", .phi, .@"phi fast", .ret, .@"ret void", .sdiv, .@"sdiv exact", .select, .@"select fast", .shl, .@"shl nsw", .@"shl nuw", .@"shl nuw nsw", .shufflevector, .srem, .store, .@"store atomic", .sub, .@"sub nsw", .@"sub nuw", .@"sub nuw nsw", .@"switch", .@"tail call", .@"tail call fast", .udiv, .@"udiv exact", .urem, .@"unreachable", .va_arg, .xor => unreachable,
+                    else => unreachable,
                 };
             }
 
@@ -4443,7 +4443,7 @@ pub const Function = struct {
                     .@"icmp ugt" => .icmp_ugt,
                     .@"icmp ule" => .icmp_ule,
                     .@"icmp ult" => .icmp_ult,
-                    .add, .@"add nsw", .@"add nuw", .@"add nuw nsw", .addrspacecast, .alloca, .@"alloca inalloca", .@"and", .arg, .ashr, .@"ashr exact", .atomicrmw, .bitcast, .block, .br, .br_cond, .call, .@"call fast", .cmpxchg, .@"cmpxchg weak", .extractelement, .extractvalue, .fadd, .@"fadd fast", .fdiv, .@"fdiv fast", .fence, .fmul, .@"fmul fast", .fneg, .@"fneg fast", .fpext, .fptosi, .fptoui, .fptrunc, .frem, .@"frem fast", .fsub, .@"fsub fast", .getelementptr, .@"getelementptr inbounds", .indirectbr, .insertelement, .insertvalue, .inttoptr, .load, .@"load atomic", .lshr, .@"lshr exact", .mul, .@"mul nsw", .@"mul nuw", .@"mul nuw nsw", .@"musttail call", .@"musttail call fast", .@"notail call", .@"notail call fast", .@"or", .phi, .@"phi fast", .ptrtoint, .ret, .@"ret void", .sdiv, .@"sdiv exact", .select, .@"select fast", .sext, .shl, .@"shl nsw", .@"shl nuw", .@"shl nuw nsw", .shufflevector, .sitofp, .srem, .store, .@"store atomic", .sub, .@"sub nsw", .@"sub nuw", .@"sub nuw nsw", .@"switch", .@"tail call", .@"tail call fast", .trunc, .udiv, .@"udiv exact", .urem, .uitofp, .@"unreachable", .va_arg, .xor, .zext => unreachable,
+                    else => unreachable,
                 };
             }
         };
@@ -4477,7 +4477,7 @@ pub const Function = struct {
                     .@"switch",
                     .@"unreachable",
                     => true,
-                    .add, .@"add nsw", .@"add nuw", .@"add nuw nsw", .addrspacecast, .alloca, .@"alloca inalloca", .@"and", .arg, .ashr, .@"ashr exact", .atomicrmw, .bitcast, .block, .call, .@"call fast", .cmpxchg, .@"cmpxchg weak", .extractelement, .extractvalue, .fadd, .@"fadd fast", .@"fcmp false", .@"fcmp fast false", .@"fcmp fast oeq", .@"fcmp fast oge", .@"fcmp fast ogt", .@"fcmp fast ole", .@"fcmp fast olt", .@"fcmp fast one", .@"fcmp fast ord", .@"fcmp fast true", .@"fcmp fast ueq", .@"fcmp fast uge", .@"fcmp fast ugt", .@"fcmp fast ule", .@"fcmp fast ult", .@"fcmp fast une", .@"fcmp fast uno", .@"fcmp oeq", .@"fcmp oge", .@"fcmp ogt", .@"fcmp ole", .@"fcmp olt", .@"fcmp one", .@"fcmp ord", .@"fcmp true", .@"fcmp ueq", .@"fcmp uge", .@"fcmp ugt", .@"fcmp ule", .@"fcmp ult", .@"fcmp une", .@"fcmp uno", .fdiv, .@"fdiv fast", .fence, .fmul, .@"fmul fast", .fneg, .@"fneg fast", .fpext, .fptosi, .fptoui, .fptrunc, .frem, .@"frem fast", .fsub, .@"fsub fast", .getelementptr, .@"getelementptr inbounds", .@"icmp eq", .@"icmp ne", .@"icmp sge", .@"icmp sgt", .@"icmp sle", .@"icmp slt", .@"icmp uge", .@"icmp ugt", .@"icmp ule", .@"icmp ult", .insertelement, .insertvalue, .inttoptr, .load, .@"load atomic", .lshr, .@"lshr exact", .mul, .@"mul nsw", .@"mul nuw", .@"mul nuw nsw", .@"musttail call", .@"musttail call fast", .@"notail call", .@"notail call fast", .@"or", .phi, .@"phi fast", .ptrtoint, .sdiv, .@"sdiv exact", .select, .@"select fast", .sext, .shl, .@"shl nsw", .@"shl nuw", .@"shl nuw nsw", .shufflevector, .sitofp, .srem, .store, .@"store atomic", .sub, .@"sub nsw", .@"sub nuw", .@"sub nuw nsw", .@"tail call", .@"tail call fast", .trunc, .udiv, .@"udiv exact", .urem, .uitofp, .va_arg, .xor, .zext => false,
+                    else => false,
                 };
             }
 
@@ -4504,7 +4504,7 @@ pub const Function = struct {
                     .@"tail call",
                     .@"tail call fast",
                     => self.typeOfWip(wip) != .void,
-                    .add, .@"add nsw", .@"add nuw", .@"add nuw nsw", .addrspacecast, .alloca, .@"alloca inalloca", .@"and", .arg, .ashr, .@"ashr exact", .atomicrmw, .bitcast, .cmpxchg, .@"cmpxchg weak", .extractelement, .extractvalue, .fadd, .@"fadd fast", .@"fcmp false", .@"fcmp fast false", .@"fcmp fast oeq", .@"fcmp fast oge", .@"fcmp fast ogt", .@"fcmp fast ole", .@"fcmp fast olt", .@"fcmp fast one", .@"fcmp fast ord", .@"fcmp fast true", .@"fcmp fast ueq", .@"fcmp fast uge", .@"fcmp fast ugt", .@"fcmp fast ule", .@"fcmp fast ult", .@"fcmp fast une", .@"fcmp fast uno", .@"fcmp oeq", .@"fcmp oge", .@"fcmp ogt", .@"fcmp ole", .@"fcmp olt", .@"fcmp one", .@"fcmp ord", .@"fcmp true", .@"fcmp ueq", .@"fcmp uge", .@"fcmp ugt", .@"fcmp ule", .@"fcmp ult", .@"fcmp une", .@"fcmp uno", .fdiv, .@"fdiv fast", .fmul, .@"fmul fast", .fneg, .@"fneg fast", .fpext, .fptosi, .fptoui, .fptrunc, .frem, .@"frem fast", .fsub, .@"fsub fast", .getelementptr, .@"getelementptr inbounds", .@"icmp eq", .@"icmp ne", .@"icmp sge", .@"icmp sgt", .@"icmp sle", .@"icmp slt", .@"icmp uge", .@"icmp ugt", .@"icmp ule", .@"icmp ult", .insertelement, .insertvalue, .inttoptr, .load, .@"load atomic", .lshr, .@"lshr exact", .mul, .@"mul nsw", .@"mul nuw", .@"mul nuw nsw", .@"or", .phi, .@"phi fast", .ptrtoint, .sdiv, .@"sdiv exact", .select, .@"select fast", .sext, .shl, .@"shl nsw", .@"shl nuw", .@"shl nuw nsw", .shufflevector, .sitofp, .srem, .sub, .@"sub nsw", .@"sub nuw", .@"sub nuw nsw", .trunc, .udiv, .@"udiv exact", .urem, .uitofp, .va_arg, .xor, .zext => true,
+                    else => true,
                 };
             }
 
@@ -5449,7 +5449,7 @@ pub const WipFunction = struct {
             .fneg,
             .@"fneg fast",
             => assert(val.typeOfWip(self).scalarType(self.builder).isFloatingPoint()),
-            .add, .@"add nsw", .@"add nuw", .@"add nuw nsw", .addrspacecast, .alloca, .@"alloca inalloca", .@"and", .arg, .ashr, .@"ashr exact", .atomicrmw, .bitcast, .block, .br, .br_cond, .call, .@"call fast", .cmpxchg, .@"cmpxchg weak", .extractelement, .extractvalue, .fadd, .@"fadd fast", .@"fcmp false", .@"fcmp fast false", .@"fcmp fast oeq", .@"fcmp fast oge", .@"fcmp fast ogt", .@"fcmp fast ole", .@"fcmp fast olt", .@"fcmp fast one", .@"fcmp fast ord", .@"fcmp fast true", .@"fcmp fast ueq", .@"fcmp fast uge", .@"fcmp fast ugt", .@"fcmp fast ule", .@"fcmp fast ult", .@"fcmp fast une", .@"fcmp fast uno", .@"fcmp oeq", .@"fcmp oge", .@"fcmp ogt", .@"fcmp ole", .@"fcmp olt", .@"fcmp one", .@"fcmp ord", .@"fcmp true", .@"fcmp ueq", .@"fcmp uge", .@"fcmp ugt", .@"fcmp ule", .@"fcmp ult", .@"fcmp une", .@"fcmp uno", .fdiv, .@"fdiv fast", .fence, .fmul, .@"fmul fast", .fpext, .fptosi, .fptoui, .fptrunc, .frem, .@"frem fast", .fsub, .@"fsub fast", .getelementptr, .@"getelementptr inbounds", .@"icmp eq", .@"icmp ne", .@"icmp sge", .@"icmp sgt", .@"icmp sle", .@"icmp slt", .@"icmp uge", .@"icmp ugt", .@"icmp ule", .@"icmp ult", .indirectbr, .insertelement, .insertvalue, .inttoptr, .load, .@"load atomic", .lshr, .@"lshr exact", .mul, .@"mul nsw", .@"mul nuw", .@"mul nuw nsw", .@"musttail call", .@"musttail call fast", .@"notail call", .@"notail call fast", .@"or", .phi, .@"phi fast", .ptrtoint, .ret, .@"ret void", .sdiv, .@"sdiv exact", .select, .@"select fast", .sext, .shl, .@"shl nsw", .@"shl nuw", .@"shl nuw nsw", .shufflevector, .sitofp, .srem, .store, .@"store atomic", .sub, .@"sub nsw", .@"sub nuw", .@"sub nuw nsw", .@"switch", .@"tail call", .@"tail call fast", .trunc, .udiv, .@"udiv exact", .urem, .uitofp, .@"unreachable", .va_arg, .xor, .zext => unreachable,
+            else => unreachable,
         }
         try self.ensureUnusedExtraCapacity(1, NoExtra, 0);
         const instruction = try self.addInst(name, .{ .tag = tag, .data = @intFromEnum(val) });
@@ -5513,7 +5513,7 @@ pub const WipFunction = struct {
             .urem,
             .xor,
             => assert(lhs.typeOfWip(self) == rhs.typeOfWip(self)),
-            .@"add nuw nsw", .addrspacecast, .alloca, .@"alloca inalloca", .arg, .atomicrmw, .bitcast, .block, .br, .br_cond, .call, .@"call fast", .cmpxchg, .@"cmpxchg weak", .extractelement, .extractvalue, .@"fcmp false", .@"fcmp fast false", .@"fcmp fast oeq", .@"fcmp fast oge", .@"fcmp fast ogt", .@"fcmp fast ole", .@"fcmp fast olt", .@"fcmp fast one", .@"fcmp fast ord", .@"fcmp fast true", .@"fcmp fast ueq", .@"fcmp fast uge", .@"fcmp fast ugt", .@"fcmp fast ule", .@"fcmp fast ult", .@"fcmp fast une", .@"fcmp fast uno", .@"fcmp oeq", .@"fcmp oge", .@"fcmp ogt", .@"fcmp ole", .@"fcmp olt", .@"fcmp one", .@"fcmp ord", .@"fcmp true", .@"fcmp ueq", .@"fcmp uge", .@"fcmp ugt", .@"fcmp ule", .@"fcmp ult", .@"fcmp une", .@"fcmp uno", .fence, .fneg, .@"fneg fast", .fpext, .fptosi, .fptoui, .fptrunc, .getelementptr, .@"getelementptr inbounds", .@"icmp eq", .@"icmp ne", .@"icmp sge", .@"icmp sgt", .@"icmp sle", .@"icmp slt", .@"icmp uge", .@"icmp ugt", .@"icmp ule", .@"icmp ult", .indirectbr, .insertelement, .insertvalue, .inttoptr, .load, .@"load atomic", .@"mul nuw nsw", .@"musttail call", .@"musttail call fast", .@"notail call", .@"notail call fast", .phi, .@"phi fast", .ptrtoint, .ret, .@"ret void", .select, .@"select fast", .sext, .@"shl nuw nsw", .shufflevector, .sitofp, .store, .@"store atomic", .@"sub nuw nsw", .@"switch", .@"tail call", .@"tail call fast", .trunc, .uitofp, .@"unreachable", .va_arg, .zext => unreachable,
+            else => unreachable,
         }
         try self.ensureUnusedExtraCapacity(1, Instruction.Binary, 0);
         const instruction = try self.addInst(name, .{
@@ -5675,7 +5675,7 @@ pub const WipFunction = struct {
                 .type = ty,
                 .len = switch (len) {
                     .none => .@"1",
-                    .false, .true, ._ => len,
+                    else => len,
                 },
                 .info = .{ .alignment = alignment, .addr_space = addr_space },
             }),
@@ -5709,14 +5709,14 @@ pub const WipFunction = struct {
         const instruction = try self.addInst(name, .{
             .tag = switch (ordering) {
                 .none => .load,
-                .unordered, .monotonic, .acquire, .release, .acq_rel, .seq_cst => .@"load atomic",
+                else => .@"load atomic",
             },
             .data = self.addExtraAssumeCapacity(Instruction.Load{
                 .info = .{
                     .access_kind = access_kind,
                     .sync_scope = switch (ordering) {
                         .none => .system,
-                        .unordered, .monotonic, .acquire, .release, .acq_rel, .seq_cst => sync_scope,
+                        else => sync_scope,
                     },
                     .success_ordering = ordering,
                     .alignment = alignment,
@@ -5752,14 +5752,14 @@ pub const WipFunction = struct {
         const instruction = try self.addInst(null, .{
             .tag = switch (ordering) {
                 .none => .store,
-                .unordered, .monotonic, .acquire, .release, .acq_rel, .seq_cst => .@"store atomic",
+                else => .@"store atomic",
             },
             .data = self.addExtraAssumeCapacity(Instruction.Store{
                 .info = .{
                     .access_kind = access_kind,
                     .sync_scope = switch (ordering) {
                         .none => .system,
-                        .unordered, .monotonic, .acquire, .release, .acq_rel, .seq_cst => sync_scope,
+                        else => sync_scope,
                     },
                     .success_ordering = ordering,
                     .alignment = alignment,
@@ -5894,7 +5894,7 @@ pub const WipFunction = struct {
                     else
                         vector_info = index_info;
                 },
-                .simple, .function, .vararg_function, .pointer, .target, .small_array, .array, .structure, .packed_structure, .named_structure => unreachable,
+                else => unreachable,
             }
         }
         if (!base_is_vector) if (vector_info) |info| switch (info.kind) {
@@ -5966,7 +5966,7 @@ pub const WipFunction = struct {
             .uitofp,
             .zext,
             => {},
-            .add, .@"add nsw", .@"add nuw", .@"add nuw nsw", .alloca, .@"alloca inalloca", .@"and", .arg, .ashr, .@"ashr exact", .atomicrmw, .block, .br, .br_cond, .call, .@"call fast", .cmpxchg, .@"cmpxchg weak", .extractelement, .extractvalue, .fadd, .@"fadd fast", .@"fcmp false", .@"fcmp fast false", .@"fcmp fast oeq", .@"fcmp fast oge", .@"fcmp fast ogt", .@"fcmp fast ole", .@"fcmp fast olt", .@"fcmp fast one", .@"fcmp fast ord", .@"fcmp fast true", .@"fcmp fast ueq", .@"fcmp fast uge", .@"fcmp fast ugt", .@"fcmp fast ule", .@"fcmp fast ult", .@"fcmp fast une", .@"fcmp fast uno", .@"fcmp oeq", .@"fcmp oge", .@"fcmp ogt", .@"fcmp ole", .@"fcmp olt", .@"fcmp one", .@"fcmp ord", .@"fcmp true", .@"fcmp ueq", .@"fcmp uge", .@"fcmp ugt", .@"fcmp ule", .@"fcmp ult", .@"fcmp une", .@"fcmp uno", .fdiv, .@"fdiv fast", .fence, .fmul, .@"fmul fast", .fneg, .@"fneg fast", .frem, .@"frem fast", .fsub, .@"fsub fast", .getelementptr, .@"getelementptr inbounds", .@"icmp eq", .@"icmp ne", .@"icmp sge", .@"icmp sgt", .@"icmp sle", .@"icmp slt", .@"icmp uge", .@"icmp ugt", .@"icmp ule", .@"icmp ult", .indirectbr, .insertelement, .insertvalue, .load, .@"load atomic", .lshr, .@"lshr exact", .mul, .@"mul nsw", .@"mul nuw", .@"mul nuw nsw", .@"musttail call", .@"musttail call fast", .@"notail call", .@"notail call fast", .@"or", .phi, .@"phi fast", .ret, .@"ret void", .sdiv, .@"sdiv exact", .select, .@"select fast", .shl, .@"shl nsw", .@"shl nuw", .@"shl nuw nsw", .shufflevector, .srem, .store, .@"store atomic", .sub, .@"sub nsw", .@"sub nuw", .@"sub nuw nsw", .@"switch", .@"tail call", .@"tail call fast", .udiv, .@"udiv exact", .urem, .@"unreachable", .va_arg, .xor => unreachable,
+            else => unreachable,
         }
         if (val.typeOfWip(self) == ty) return val;
         try self.ensureUnusedExtraCapacity(1, Instruction.Cast, 0);
@@ -6089,7 +6089,7 @@ pub const WipFunction = struct {
         try self.ensureUnusedExtraCapacity(1, Instruction.Call, args.len);
         const instruction = try self.addInst(switch (ret_ty) {
             .void => null,
-            .half, .bfloat, .float, .double, .fp128, .x86_fp80, .ppc_fp128, .x86_amx, .x86_mmx, .label, .token, .metadata, .i1, .i8, .i16, .i29, .i32, .i64, .i80, .i128, .ptr, .@"ptr addrspace(4)", .none, ._ => name,
+            else => name,
         }, .{
             .tag = switch (kind) {
                 .normal => .call,
@@ -6408,7 +6408,7 @@ pub const WipFunction = struct {
                         defer wip_name.next_name = @enumFromInt(@intFromEnum(wip_name.next_name) + 1);
                         return wip_name.next_name;
                     },
-                    .first_anon => {
+                    _ => {
                         assert(!name.isAnon());
                         const gop = try wip_name.next_unique_name.getOrPut(name);
                         if (!gop.found_existing) {
@@ -6867,7 +6867,7 @@ pub const WipFunction = struct {
             .@"icmp ule",
             .@"icmp ult",
             => assert(lhs.typeOfWip(self) == rhs.typeOfWip(self)),
-            .add, .@"add nsw", .@"add nuw", .@"add nuw nsw", .addrspacecast, .alloca, .@"alloca inalloca", .@"and", .arg, .ashr, .@"ashr exact", .atomicrmw, .bitcast, .block, .br, .br_cond, .call, .@"call fast", .cmpxchg, .@"cmpxchg weak", .extractelement, .extractvalue, .fadd, .@"fadd fast", .fdiv, .@"fdiv fast", .fence, .fmul, .@"fmul fast", .fneg, .@"fneg fast", .fpext, .fptosi, .fptoui, .fptrunc, .frem, .@"frem fast", .fsub, .@"fsub fast", .getelementptr, .@"getelementptr inbounds", .indirectbr, .insertelement, .insertvalue, .inttoptr, .load, .@"load atomic", .lshr, .@"lshr exact", .mul, .@"mul nsw", .@"mul nuw", .@"mul nuw nsw", .@"musttail call", .@"musttail call fast", .@"notail call", .@"notail call fast", .@"or", .phi, .@"phi fast", .ptrtoint, .ret, .@"ret void", .sdiv, .@"sdiv exact", .select, .@"select fast", .sext, .shl, .@"shl nsw", .@"shl nuw", .@"shl nuw nsw", .shufflevector, .sitofp, .srem, .store, .@"store atomic", .sub, .@"sub nsw", .@"sub nuw", .@"sub nuw nsw", .@"switch", .@"tail call", .@"tail call fast", .trunc, .udiv, .@"udiv exact", .urem, .uitofp, .@"unreachable", .va_arg, .xor, .zext => unreachable,
+            else => unreachable,
         }
         _ = try lhs.typeOfWip(self).changeScalar(.i1, self.builder);
         try self.ensureUnusedExtraCapacity(1, Instruction.Binary, 0);
@@ -6889,7 +6889,7 @@ pub const WipFunction = struct {
     ) Allocator.Error!WipPhi {
         switch (tag) {
             .phi, .@"phi fast" => assert(try ty.isSized(self.builder)),
-            .add, .@"add nsw", .@"add nuw", .@"add nuw nsw", .addrspacecast, .alloca, .@"alloca inalloca", .@"and", .arg, .ashr, .@"ashr exact", .atomicrmw, .bitcast, .block, .br, .br_cond, .call, .@"call fast", .cmpxchg, .@"cmpxchg weak", .extractelement, .extractvalue, .fadd, .@"fadd fast", .@"fcmp false", .@"fcmp fast false", .@"fcmp fast oeq", .@"fcmp fast oge", .@"fcmp fast ogt", .@"fcmp fast ole", .@"fcmp fast olt", .@"fcmp fast one", .@"fcmp fast ord", .@"fcmp fast true", .@"fcmp fast ueq", .@"fcmp fast uge", .@"fcmp fast ugt", .@"fcmp fast ule", .@"fcmp fast ult", .@"fcmp fast une", .@"fcmp fast uno", .@"fcmp oeq", .@"fcmp oge", .@"fcmp ogt", .@"fcmp ole", .@"fcmp olt", .@"fcmp one", .@"fcmp ord", .@"fcmp true", .@"fcmp ueq", .@"fcmp uge", .@"fcmp ugt", .@"fcmp ule", .@"fcmp ult", .@"fcmp une", .@"fcmp uno", .fdiv, .@"fdiv fast", .fence, .fmul, .@"fmul fast", .fneg, .@"fneg fast", .fpext, .fptosi, .fptoui, .fptrunc, .frem, .@"frem fast", .fsub, .@"fsub fast", .getelementptr, .@"getelementptr inbounds", .@"icmp eq", .@"icmp ne", .@"icmp sge", .@"icmp sgt", .@"icmp sle", .@"icmp slt", .@"icmp uge", .@"icmp ugt", .@"icmp ule", .@"icmp ult", .indirectbr, .insertelement, .insertvalue, .inttoptr, .load, .@"load atomic", .lshr, .@"lshr exact", .mul, .@"mul nsw", .@"mul nuw", .@"mul nuw nsw", .@"musttail call", .@"musttail call fast", .@"notail call", .@"notail call fast", .@"or", .ptrtoint, .ret, .@"ret void", .sdiv, .@"sdiv exact", .select, .@"select fast", .sext, .shl, .@"shl nsw", .@"shl nuw", .@"shl nuw nsw", .shufflevector, .sitofp, .srem, .store, .@"store atomic", .sub, .@"sub nsw", .@"sub nuw", .@"sub nuw nsw", .@"switch", .@"tail call", .@"tail call fast", .trunc, .udiv, .@"udiv exact", .urem, .uitofp, .@"unreachable", .va_arg, .xor, .zext => unreachable,
+            else => unreachable,
         }
         const incoming = self.cursor.block.ptrConst(self).incoming;
         assert(incoming > 0);
@@ -6915,7 +6915,7 @@ pub const WipFunction = struct {
                 assert(cond.typeOfWip(self).scalarType(self.builder) == .i1);
                 assert(lhs.typeOfWip(self) == rhs.typeOfWip(self));
             },
-            .add, .@"add nsw", .@"add nuw", .@"add nuw nsw", .addrspacecast, .alloca, .@"alloca inalloca", .@"and", .arg, .ashr, .@"ashr exact", .atomicrmw, .bitcast, .block, .br, .br_cond, .call, .@"call fast", .cmpxchg, .@"cmpxchg weak", .extractelement, .extractvalue, .fadd, .@"fadd fast", .@"fcmp false", .@"fcmp fast false", .@"fcmp fast oeq", .@"fcmp fast oge", .@"fcmp fast ogt", .@"fcmp fast ole", .@"fcmp fast olt", .@"fcmp fast one", .@"fcmp fast ord", .@"fcmp fast true", .@"fcmp fast ueq", .@"fcmp fast uge", .@"fcmp fast ugt", .@"fcmp fast ule", .@"fcmp fast ult", .@"fcmp fast une", .@"fcmp fast uno", .@"fcmp oeq", .@"fcmp oge", .@"fcmp ogt", .@"fcmp ole", .@"fcmp olt", .@"fcmp one", .@"fcmp ord", .@"fcmp true", .@"fcmp ueq", .@"fcmp uge", .@"fcmp ugt", .@"fcmp ule", .@"fcmp ult", .@"fcmp une", .@"fcmp uno", .fdiv, .@"fdiv fast", .fence, .fmul, .@"fmul fast", .fneg, .@"fneg fast", .fpext, .fptosi, .fptoui, .fptrunc, .frem, .@"frem fast", .fsub, .@"fsub fast", .getelementptr, .@"getelementptr inbounds", .@"icmp eq", .@"icmp ne", .@"icmp sge", .@"icmp sgt", .@"icmp sle", .@"icmp slt", .@"icmp uge", .@"icmp ugt", .@"icmp ule", .@"icmp ult", .indirectbr, .insertelement, .insertvalue, .inttoptr, .load, .@"load atomic", .lshr, .@"lshr exact", .mul, .@"mul nsw", .@"mul nuw", .@"mul nuw nsw", .@"musttail call", .@"musttail call fast", .@"notail call", .@"notail call fast", .@"or", .phi, .@"phi fast", .ptrtoint, .ret, .@"ret void", .sdiv, .@"sdiv exact", .sext, .shl, .@"shl nsw", .@"shl nuw", .@"shl nuw nsw", .shufflevector, .sitofp, .srem, .store, .@"store atomic", .sub, .@"sub nsw", .@"sub nuw", .@"sub nuw nsw", .@"switch", .@"tail call", .@"tail call fast", .trunc, .udiv, .@"udiv exact", .urem, .uitofp, .@"unreachable", .va_arg, .xor, .zext => unreachable,
+            else => unreachable,
         }
         try self.ensureUnusedExtraCapacity(1, Instruction.Select, 0);
         const instruction = try self.addInst(name, .{
@@ -7165,7 +7165,7 @@ pub const AtomicOrdering = enum(u3) {
         pub fn format(p: Prefixed, w: *Writer) Writer.Error!void {
             switch (p.atomic_ordering) {
                 .none => return,
-                .unordered, .monotonic, .acquire, .release, .acq_rel, .seq_cst => {
+                else => {
                     var vecs: [2][]const u8 = .{ p.prefix, @tagName(p.atomic_ordering) };
                     return w.writeVecAll(&vecs);
                 },
@@ -7303,7 +7303,7 @@ pub const Constant = enum(u32) {
                 => .sub,
                 .shl => .shl,
                 .xor => .xor,
-                .positive_integer, .negative_integer, .half, .bfloat, .float, .double, .fp128, .x86_fp80, .ppc_fp128, .null, .none, .structure, .packed_structure, .array, .string, .vector, .splat, .zeroinitializer, .undef, .poison, .blockaddress, .dso_local_equivalent, .no_cfi, .trunc, .ptrtoint, .inttoptr, .bitcast, .addrspacecast, .getelementptr, .@"getelementptr inbounds", .@"asm", .@"asm sideeffect", .@"asm alignstack", .@"asm sideeffect alignstack", .@"asm inteldialect", .@"asm sideeffect inteldialect", .@"asm alignstack inteldialect", .@"asm sideeffect alignstack inteldialect", .@"asm unwind", .@"asm sideeffect unwind", .@"asm alignstack unwind", .@"asm sideeffect alignstack unwind", .@"asm inteldialect unwind", .@"asm sideeffect inteldialect unwind", .@"asm alignstack inteldialect unwind", .@"asm sideeffect alignstack inteldialect unwind" => unreachable,
+                else => unreachable,
             };
         }
 
@@ -7314,7 +7314,7 @@ pub const Constant = enum(u32) {
                 .inttoptr => .inttoptr,
                 .bitcast => .bitcast,
                 .addrspacecast => .addrspacecast,
-                .positive_integer, .negative_integer, .half, .bfloat, .float, .double, .fp128, .x86_fp80, .ppc_fp128, .null, .none, .structure, .packed_structure, .array, .string, .vector, .splat, .zeroinitializer, .undef, .poison, .blockaddress, .dso_local_equivalent, .no_cfi, .getelementptr, .@"getelementptr inbounds", .add, .@"add nsw", .@"add nuw", .sub, .@"sub nsw", .@"sub nuw", .shl, .xor, .@"asm", .@"asm sideeffect", .@"asm alignstack", .@"asm sideeffect alignstack", .@"asm inteldialect", .@"asm sideeffect inteldialect", .@"asm alignstack inteldialect", .@"asm sideeffect alignstack inteldialect", .@"asm unwind", .@"asm sideeffect unwind", .@"asm alignstack unwind", .@"asm sideeffect alignstack unwind", .@"asm inteldialect unwind", .@"asm sideeffect inteldialect unwind", .@"asm alignstack inteldialect unwind", .@"asm sideeffect alignstack inteldialect unwind" => unreachable,
+                else => unreachable,
             };
         }
     };
@@ -7546,7 +7546,7 @@ pub const Constant = enum(u32) {
                         return true;
                     },
                     .null, .zeroinitializer => true,
-                    .negative_integer, .none, .structure, .packed_structure, .array, .string, .splat, .undef, .poison, .blockaddress, .dso_local_equivalent, .no_cfi, .trunc, .ptrtoint, .inttoptr, .bitcast, .addrspacecast, .getelementptr, .@"getelementptr inbounds", .add, .@"add nsw", .@"add nuw", .sub, .@"sub nsw", .@"sub nuw", .shl, .xor, .@"asm", .@"asm sideeffect", .@"asm alignstack", .@"asm sideeffect alignstack", .@"asm inteldialect", .@"asm sideeffect inteldialect", .@"asm alignstack inteldialect", .@"asm sideeffect alignstack inteldialect", .@"asm unwind", .@"asm sideeffect unwind", .@"asm alignstack unwind", .@"asm sideeffect alignstack unwind", .@"asm inteldialect unwind", .@"asm sideeffect inteldialect unwind", .@"asm alignstack inteldialect unwind", .@"asm sideeffect alignstack inteldialect unwind" => false,
+                    else => false,
                 };
             },
             .global => return false,
@@ -7577,7 +7577,7 @@ pub const Constant = enum(u32) {
                         if (extra.rhs.getBase(builder) != .none) return .none;
                         cur = extra.lhs;
                     },
-                    .positive_integer, .negative_integer, .half, .bfloat, .float, .double, .fp128, .x86_fp80, .ppc_fp128, .null, .none, .structure, .packed_structure, .array, .string, .vector, .splat, .zeroinitializer, .undef, .poison, .blockaddress, .dso_local_equivalent, .no_cfi, .trunc, .addrspacecast, .@"getelementptr inbounds", .@"add nsw", .@"add nuw", .@"sub nsw", .@"sub nuw", .shl, .xor, .@"asm", .@"asm sideeffect", .@"asm alignstack", .@"asm sideeffect alignstack", .@"asm inteldialect", .@"asm sideeffect inteldialect", .@"asm alignstack inteldialect", .@"asm sideeffect alignstack inteldialect", .@"asm unwind", .@"asm sideeffect unwind", .@"asm alignstack unwind", .@"asm sideeffect alignstack unwind", .@"asm inteldialect unwind", .@"asm sideeffect inteldialect unwind", .@"asm alignstack inteldialect unwind", .@"asm sideeffect alignstack inteldialect unwind" => return .none,
+                    else => return .none,
                 }
             },
             .global => |global| switch (global.ptrConst(builder).kind) {
@@ -7622,7 +7622,7 @@ pub const Constant = enum(u32) {
                             .positive = switch (tag) {
                                 .positive_integer => true,
                                 .negative_integer => false,
-                                .half, .bfloat, .float, .double, .fp128, .x86_fp80, .ppc_fp128, .null, .none, .structure, .packed_structure, .array, .string, .vector, .splat, .zeroinitializer, .undef, .poison, .blockaddress, .dso_local_equivalent, .no_cfi, .trunc, .ptrtoint, .inttoptr, .bitcast, .addrspacecast, .getelementptr, .@"getelementptr inbounds", .add, .@"add nsw", .@"add nuw", .sub, .@"sub nsw", .@"sub nuw", .shl, .xor, .@"asm", .@"asm sideeffect", .@"asm alignstack", .@"asm sideeffect alignstack", .@"asm inteldialect", .@"asm sideeffect inteldialect", .@"asm alignstack inteldialect", .@"asm sideeffect alignstack inteldialect", .@"asm unwind", .@"asm sideeffect unwind", .@"asm alignstack unwind", .@"asm sideeffect alignstack unwind", .@"asm inteldialect unwind", .@"asm sideeffect inteldialect unwind", .@"asm alignstack inteldialect unwind", .@"asm sideeffect alignstack inteldialect unwind" => unreachable,
+                                else => unreachable,
                             },
                         };
                         const ExpectedContents = extern struct {
@@ -7651,11 +7651,11 @@ pub const Constant = enum(u32) {
                     => |tag| try w.print("0x{c}{X:0>4}", .{ @as(u8, switch (tag) {
                         .half => 'H',
                         .bfloat => 'R',
-                        .positive_integer, .negative_integer, .float, .double, .fp128, .x86_fp80, .ppc_fp128, .null, .none, .structure, .packed_structure, .array, .string, .vector, .splat, .zeroinitializer, .undef, .poison, .blockaddress, .dso_local_equivalent, .no_cfi, .trunc, .ptrtoint, .inttoptr, .bitcast, .addrspacecast, .getelementptr, .@"getelementptr inbounds", .add, .@"add nsw", .@"add nuw", .sub, .@"sub nsw", .@"sub nuw", .shl, .xor, .@"asm", .@"asm sideeffect", .@"asm alignstack", .@"asm sideeffect alignstack", .@"asm inteldialect", .@"asm sideeffect inteldialect", .@"asm alignstack inteldialect", .@"asm sideeffect alignstack inteldialect", .@"asm unwind", .@"asm sideeffect unwind", .@"asm alignstack unwind", .@"asm sideeffect alignstack unwind", .@"asm inteldialect unwind", .@"asm sideeffect inteldialect unwind", .@"asm alignstack inteldialect unwind", .@"asm sideeffect alignstack inteldialect unwind" => unreachable,
+                        else => unreachable,
                     }), item.data >> switch (tag) {
                         .half => 0,
                         .bfloat => 16,
-                        .positive_integer, .negative_integer, .float, .double, .fp128, .x86_fp80, .ppc_fp128, .null, .none, .structure, .packed_structure, .array, .string, .vector, .splat, .zeroinitializer, .undef, .poison, .blockaddress, .dso_local_equivalent, .no_cfi, .trunc, .ptrtoint, .inttoptr, .bitcast, .addrspacecast, .getelementptr, .@"getelementptr inbounds", .add, .@"add nsw", .@"add nuw", .sub, .@"sub nsw", .@"sub nuw", .shl, .xor, .@"asm", .@"asm sideeffect", .@"asm alignstack", .@"asm sideeffect alignstack", .@"asm inteldialect", .@"asm sideeffect inteldialect", .@"asm alignstack inteldialect", .@"asm sideeffect alignstack inteldialect", .@"asm unwind", .@"asm sideeffect unwind", .@"asm alignstack unwind", .@"asm sideeffect alignstack unwind", .@"asm inteldialect unwind", .@"asm sideeffect inteldialect unwind", .@"asm alignstack inteldialect unwind", .@"asm sideeffect alignstack inteldialect unwind" => unreachable,
+                        else => unreachable,
                     } }),
                     .float => {
                         const Float = struct {
@@ -7711,7 +7711,7 @@ pub const Constant = enum(u32) {
                             @as(u8, switch (tag) {
                                 .fp128 => 'L',
                                 .ppc_fp128 => 'M',
-                                .positive_integer, .negative_integer, .half, .bfloat, .float, .double, .x86_fp80, .null, .none, .structure, .packed_structure, .array, .string, .vector, .splat, .zeroinitializer, .undef, .poison, .blockaddress, .dso_local_equivalent, .no_cfi, .trunc, .ptrtoint, .inttoptr, .bitcast, .addrspacecast, .getelementptr, .@"getelementptr inbounds", .add, .@"add nsw", .@"add nuw", .sub, .@"sub nsw", .@"sub nuw", .shl, .xor, .@"asm", .@"asm sideeffect", .@"asm alignstack", .@"asm sideeffect alignstack", .@"asm inteldialect", .@"asm sideeffect inteldialect", .@"asm alignstack inteldialect", .@"asm sideeffect alignstack inteldialect", .@"asm unwind", .@"asm sideeffect unwind", .@"asm alignstack unwind", .@"asm sideeffect alignstack unwind", .@"asm inteldialect unwind", .@"asm sideeffect inteldialect unwind", .@"asm alignstack inteldialect unwind", .@"asm sideeffect alignstack inteldialect unwind" => unreachable,
+                                else => unreachable,
                             }),
                             extra.lo_hi,
                             extra.lo_lo,
@@ -7744,7 +7744,7 @@ pub const Constant = enum(u32) {
                             .packed_structure => "<{ ",
                             .array => "[",
                             .vector => "<",
-                            .positive_integer, .negative_integer, .half, .bfloat, .float, .double, .fp128, .x86_fp80, .ppc_fp128, .null, .none, .string, .splat, .zeroinitializer, .undef, .poison, .blockaddress, .dso_local_equivalent, .no_cfi, .trunc, .ptrtoint, .inttoptr, .bitcast, .addrspacecast, .getelementptr, .@"getelementptr inbounds", .add, .@"add nsw", .@"add nuw", .sub, .@"sub nsw", .@"sub nuw", .shl, .xor, .@"asm", .@"asm sideeffect", .@"asm alignstack", .@"asm sideeffect alignstack", .@"asm inteldialect", .@"asm sideeffect inteldialect", .@"asm alignstack inteldialect", .@"asm sideeffect alignstack inteldialect", .@"asm unwind", .@"asm sideeffect unwind", .@"asm alignstack unwind", .@"asm sideeffect alignstack unwind", .@"asm inteldialect unwind", .@"asm sideeffect inteldialect unwind", .@"asm alignstack inteldialect unwind", .@"asm sideeffect alignstack inteldialect unwind" => unreachable,
+                            else => unreachable,
                         });
                         for (vals, 0..) |val, index| {
                             if (index > 0) try w.writeAll(", ");
@@ -7755,7 +7755,7 @@ pub const Constant = enum(u32) {
                             .packed_structure => " }>",
                             .array => "]",
                             .vector => ">",
-                            .positive_integer, .negative_integer, .half, .bfloat, .float, .double, .fp128, .x86_fp80, .ppc_fp128, .null, .none, .string, .splat, .zeroinitializer, .undef, .poison, .blockaddress, .dso_local_equivalent, .no_cfi, .trunc, .ptrtoint, .inttoptr, .bitcast, .addrspacecast, .getelementptr, .@"getelementptr inbounds", .add, .@"add nsw", .@"add nuw", .sub, .@"sub nsw", .@"sub nuw", .shl, .xor, .@"asm", .@"asm sideeffect", .@"asm alignstack", .@"asm sideeffect alignstack", .@"asm inteldialect", .@"asm sideeffect inteldialect", .@"asm alignstack inteldialect", .@"asm sideeffect alignstack inteldialect", .@"asm unwind", .@"asm sideeffect unwind", .@"asm alignstack unwind", .@"asm sideeffect alignstack unwind", .@"asm inteldialect unwind", .@"asm sideeffect inteldialect unwind", .@"asm alignstack inteldialect unwind", .@"asm sideeffect alignstack inteldialect unwind" => unreachable,
+                            else => unreachable,
                         });
                     },
                     .splat => {
@@ -8001,7 +8001,7 @@ pub const Metadata = packed struct(u32) {
             pub fn unwrap(metadata: Metadata.String.Optional) ?Metadata.String {
                 return switch (metadata) {
                     .none => null,
-                    ._ => @enumFromInt(@intFromEnum(metadata)),
+                    else => @enumFromInt(@intFromEnum(metadata)),
                 };
             }
             pub fn toMetadata(metadata: Metadata.String.Optional) Metadata.Optional {
@@ -8216,7 +8216,7 @@ pub const Metadata = packed struct(u32) {
                         try w.print("DIFlag{s}", .{@tagName(@field(self, field.name))});
                     },
                     .int => assert(@field(self, field.name) == 0),
-                    .type, .void, .noreturn, .float, .pointer, .array, .@"struct", .comptime_float, .comptime_int, .undefined, .null, .optional, .error_union, .error_set, .@"union", .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal => @compileError("bad field type: " ++ field.name ++ ": " ++
+                    else => @compileError("bad field type: " ++ field.name ++ ": " ++
                         @typeName(field.type)),
                 }
             }
@@ -8273,7 +8273,7 @@ pub const Metadata = packed struct(u32) {
                             try w.print("DISPFlag{s}", .{@tagName(@field(self, field.name))});
                         },
                         .int => assert(@field(self, field.name) == 0),
-                        .type, .void, .noreturn, .float, .pointer, .array, .@"struct", .comptime_float, .comptime_int, .undefined, .null, .optional, .error_union, .error_set, .@"union", .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal => @compileError("bad field type: " ++ field.name ++ ": " ++
+                        else => @compileError("bad field type: " ++ field.name ++ ": " ++
                             @typeName(field.type)),
                     }
                 }
@@ -8511,7 +8511,7 @@ pub const Metadata = packed struct(u32) {
                             .builder = builder,
                             .flags = data.specialized orelse .{},
                         }, w),
-                        .file, .compile_unit, .@"compile_unit optimized", .subprogram, .@"subprogram local", .@"subprogram definition", .@"subprogram local definition", .@"subprogram optimized", .@"subprogram optimized local", .@"subprogram optimized definition", .@"subprogram optimized local definition", .lexical_block, .location, .basic_bool_type, .basic_unsigned_type, .basic_signed_type, .basic_float_type, .composite_struct_type, .composite_union_type, .composite_enumeration_type, .composite_array_type, .composite_vector_type, .derived_pointer_type, .derived_member_type, .subroutine_type, .enumerator_unsigned, .enumerator_signed_positive, .enumerator_signed_negative, .subrange, .tuple, .local_var, .parameter, .global_var, .@"global_var local", .global_var_expression => unreachable,
+                        else => unreachable,
                     }
                 },
                 .index => |node| try w.print("!{d}", .{node}),
@@ -8522,7 +8522,7 @@ pub const Metadata = packed struct(u32) {
                     .flags = switch (node_tag) {
                         .local_value => data.specialized orelse .{},
                         .local_metadata => .{ .percent = true },
-                        .none, .@"inline", .index, .local_inline, .local_index, .string, .bool, .u32, .u64, .di_flags, .sp_flags, .raw => unreachable,
+                        else => unreachable,
                     },
                 }, w),
                 inline .local_inline, .local_index => |node, node_tag| {
@@ -8557,7 +8557,7 @@ pub const Metadata = packed struct(u32) {
                 else => switch (@typeInfo(Node)) {
                     .optional => Node,
                     .null => ?noreturn,
-                    .type, .void, .bool, .noreturn, .int, .float, .pointer, .array, .@"struct", .comptime_float, .comptime_int, .undefined, .error_union, .error_set, .@"enum", .@"union", .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal => ?Node,
+                    else => ?Node,
                 },
             };
             const Some = @typeInfo(MaybeNode).optional.child;
@@ -8589,12 +8589,12 @@ pub const Metadata = packed struct(u32) {
                     },
                     .int, .comptime_int => .{ .u64 = some },
                     .pointer => .{ .raw = some },
-                    .type, .void, .noreturn, .float, .array, .comptime_float, .undefined, .null, .optional, .error_union, .error_set, .@"union", .@"fn", .@"opaque", .frame, .@"anyframe", .vector => @compileError("unknown type to format: " ++ @typeName(Node)),
+                    else => @compileError("unknown type to format: " ++ @typeName(Node)),
                 } else switch (Node) {
                     Metadata.Optional, Metadata.String.Optional => .none,
                     else => switch (@typeInfo(Node)) {
                         .optional, .null => .none,
-                        .type, .void, .bool, .noreturn, .int, .float, .pointer, .array, .@"struct", .comptime_float, .comptime_int, .undefined, .error_union, .error_set, .@"enum", .@"union", .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal => unreachable,
+                        else => unreachable,
                     },
                 },
                 .specialized = special,
@@ -8620,7 +8620,7 @@ pub const Metadata = packed struct(u32) {
                             .string, .node => switch (try formatter.refUnwrapped(unwrapped)) {
                                 .@"inline" => |node| .{ .local_inline = node },
                                 .index => |node| .{ .local_index = node },
-                                .none, .local_value, .local_metadata, .local_inline, .local_index, .string, .bool, .u32, .u64, .di_flags, .sp_flags, .raw => unreachable,
+                                else => unreachable,
                             },
                             .forward => unreachable,
                             .local => .{ .local_metadata = .{
@@ -8640,7 +8640,7 @@ pub const Metadata = packed struct(u32) {
             const unwrapped_metadata = node.unwrap(builder);
             switch (unwrapped_metadata.tag(builder)) {
                 .expression, .constant => return .{ .@"inline" = unwrapped_metadata },
-                .file, .compile_unit, .@"compile_unit optimized", .subprogram, .@"subprogram local", .@"subprogram definition", .@"subprogram local definition", .@"subprogram optimized", .@"subprogram optimized local", .@"subprogram optimized definition", .@"subprogram optimized local definition", .lexical_block, .location, .basic_bool_type, .basic_unsigned_type, .basic_signed_type, .basic_float_type, .composite_struct_type, .composite_union_type, .composite_enumeration_type, .composite_array_type, .composite_vector_type, .derived_pointer_type, .derived_member_type, .subroutine_type, .enumerator_unsigned, .enumerator_signed_positive, .enumerator_signed_negative, .subrange, .tuple, .local_var, .parameter, .global_var, .@"global_var local", .global_var_expression => |metadata_tag| {
+                else => |metadata_tag| {
                     assert(!metadata_tag.isInline());
                     const gop = try formatter.map.getOrPut(builder.gpa, .{ .metadata = unwrapped_metadata });
                     return .{ .index = @intCast(gop.index) };
@@ -9322,13 +9322,13 @@ pub fn intConst(self: *Builder, ty: Type, value: anytype) Allocator.Error!Consta
     const int_value = switch (@typeInfo(@TypeOf(value))) {
         .int, .comptime_int => value,
         .@"enum" => @intFromEnum(value),
-        .type, .void, .bool, .noreturn, .float, .pointer, .array, .@"struct", .comptime_float, .undefined, .null, .optional, .error_union, .error_set, .@"union", .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal => @compileError("intConst expected an integral value, got " ++ @typeName(@TypeOf(value))),
+        else => @compileError("intConst expected an integral value, got " ++ @typeName(@TypeOf(value))),
     };
     var limbs: [
         switch (@typeInfo(@TypeOf(int_value))) {
             .int => |info| std.math.big.int.calcTwosCompLimbCount(info.bits),
             .comptime_int => std.math.big.int.calcLimbLen(int_value),
-            .type, .void, .bool, .noreturn, .float, .pointer, .array, .@"struct", .comptime_float, .undefined, .null, .optional, .error_union, .error_set, .@"enum", .@"union", .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal => unreachable,
+            else => unreachable,
         }
     ]std.math.big.Limb = undefined;
     return self.bigIntConst(ty, std.math.big.int.Mutable.init(&limbs, int_value).toConst());
@@ -9362,7 +9362,7 @@ pub fn fpConst(self: *Builder, ty: Type, comptime val: comptime_float) Allocator
         .fp128 => try self.fp128Const(val),
         .x86_fp80 => try self.x86_fp80Const(val),
         .ppc_fp128 => try self.ppc_fp128Const(.{ val, -0.0 }),
-        .void, .x86_amx, .x86_mmx, .label, .token, .metadata, .i1, .i8, .i16, .i29, .i32, .i64, .i80, .i128, .ptr, .@"ptr addrspace(4)", .none, ._ => unreachable,
+        else => unreachable,
     };
 }
 
@@ -9381,7 +9381,7 @@ pub fn nanConst(self: *Builder, ty: Type) Allocator.Error!Constant {
         .fp128 => try self.fp128Const(std.math.nan(f128)),
         .x86_fp80 => try self.x86_fp80Const(std.math.nan(f80)),
         .ppc_fp128 => try self.ppc_fp128Const(.{std.math.nan(f64)} ** 2),
-        .void, .x86_amx, .x86_mmx, .label, .token, .metadata, .i1, .i8, .i16, .i29, .i32, .i64, .i80, .i128, .ptr, .@"ptr addrspace(4)", .none, ._ => unreachable,
+        else => unreachable,
     };
 }
 
@@ -10035,7 +10035,7 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
                             extra.type.fmt(self, .percent),
                             Value.fmt(switch (extra.len) {
                                 .@"1" => .none,
-                                .none, .false, .true, ._ => extra.len,
+                                else => extra.len,
                             }, function_index, self, .{
                                 .comma = true,
                                 .percent = true,
@@ -10086,7 +10086,7 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
                         switch (extra.weights) {
                             .none => {},
                             .unpredictable => try w.writeAll("!unpredictable !{}"),
-                            _ => try w.print("{f}", .{ // zig-lint-allow: catch-all (Weights is non-exhaustive)
+                            _ => try w.print("{f}", .{
                                 try metadata_formatter.fmt("!prof ", extra.weights.toMetadata(), null),
                             }),
                         }
@@ -10107,7 +10107,7 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
                         const ret_ty = extra.data.ty.functionReturn(self);
                         switch (ret_ty) {
                             .void => {},
-                            .half, .bfloat, .float, .double, .fp128, .x86_fp80, .ppc_fp128, .x86_amx, .x86_mmx, .label, .token, .metadata, .i1, .i8, .i16, .i29, .i32, .i64, .i80, .i128, .ptr, .@"ptr addrspace(4)", .none, ._ => try w.print("%{f} = ", .{
+                            else => try w.print("%{f} = ", .{
                                 instruction_index.name(&function).fmt(self),
                             }),
                             .none => unreachable,
@@ -10369,7 +10369,7 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
                         switch (extra.data.weights) {
                             .none => {},
                             .unpredictable => try w.writeAll("!unpredictable !{}"),
-                            _ => try w.print("{f}", .{ // zig-lint-allow: catch-all (Weights is non-exhaustive)
+                            _ => try w.print("{f}", .{
                                 try metadata_formatter.fmt("!prof ", extra.data.weights.toMetadata(), null),
                             }),
                         }
@@ -10466,7 +10466,7 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
                         .isOptimized = switch (kind) {
                             .compile_unit => false,
                             .@"compile_unit optimized" => true,
-                            .file, .subprogram, .@"subprogram local", .@"subprogram definition", .@"subprogram local definition", .@"subprogram optimized", .@"subprogram optimized local", .@"subprogram optimized definition", .@"subprogram optimized local definition", .lexical_block, .location, .basic_bool_type, .basic_unsigned_type, .basic_signed_type, .basic_float_type, .composite_struct_type, .composite_union_type, .composite_enumeration_type, .composite_array_type, .composite_vector_type, .derived_pointer_type, .derived_member_type, .subroutine_type, .enumerator_unsigned, .enumerator_signed_positive, .enumerator_signed_negative, .subrange, .tuple, .expression, .local_var, .parameter, .global_var, .@"global_var local", .global_var_expression, .constant => unreachable,
+                            else => unreachable,
                         },
                         .flags = null,
                         .runtimeVersion = 0,
@@ -10560,7 +10560,7 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
                             .basic_unsigned_type => .DW_ATE_unsigned,
                             .basic_signed_type => .DW_ATE_signed,
                             .basic_float_type => .DW_ATE_float,
-                            .file, .compile_unit, .@"compile_unit optimized", .subprogram, .@"subprogram local", .@"subprogram definition", .@"subprogram local definition", .@"subprogram optimized", .@"subprogram optimized local", .@"subprogram optimized definition", .@"subprogram optimized local definition", .lexical_block, .location, .composite_struct_type, .composite_union_type, .composite_enumeration_type, .composite_array_type, .composite_vector_type, .derived_pointer_type, .derived_member_type, .subroutine_type, .enumerator_unsigned, .enumerator_signed_positive, .enumerator_signed_negative, .subrange, .tuple, .expression, .local_var, .parameter, .global_var, .@"global_var local", .global_var_expression, .constant => unreachable,
+                            else => unreachable,
                         }),
                         .flags = null,
                     }, w);
@@ -10583,7 +10583,7 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
                             .composite_union_type => .DW_TAG_union_type,
                             .composite_enumeration_type => .DW_TAG_enumeration_type,
                             .composite_array_type, .composite_vector_type => .DW_TAG_array_type,
-                            .file, .compile_unit, .@"compile_unit optimized", .subprogram, .@"subprogram local", .@"subprogram definition", .@"subprogram local definition", .@"subprogram optimized", .@"subprogram optimized local", .@"subprogram optimized definition", .@"subprogram optimized local definition", .lexical_block, .location, .basic_bool_type, .basic_unsigned_type, .basic_signed_type, .basic_float_type, .derived_pointer_type, .derived_member_type, .subroutine_type, .enumerator_unsigned, .enumerator_signed_positive, .enumerator_signed_negative, .subrange, .tuple, .expression, .local_var, .parameter, .global_var, .@"global_var local", .global_var_expression, .constant => unreachable,
+                            else => unreachable,
                         }),
                         .name = extra.name,
                         .scope = extra.scope,
@@ -10618,7 +10618,7 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
                         }, switch (kind) {
                             .derived_pointer_type => .DW_TAG_pointer_type,
                             .derived_member_type => .DW_TAG_member,
-                            .file, .compile_unit, .@"compile_unit optimized", .subprogram, .@"subprogram local", .@"subprogram definition", .@"subprogram local definition", .@"subprogram optimized", .@"subprogram optimized local", .@"subprogram optimized definition", .@"subprogram optimized local definition", .lexical_block, .location, .basic_bool_type, .basic_unsigned_type, .basic_signed_type, .basic_float_type, .composite_struct_type, .composite_union_type, .composite_enumeration_type, .composite_array_type, .composite_vector_type, .subroutine_type, .enumerator_unsigned, .enumerator_signed_positive, .enumerator_signed_negative, .subrange, .tuple, .expression, .local_var, .parameter, .global_var, .@"global_var local", .global_var_expression, .constant => unreachable,
+                            else => unreachable,
                         }),
                         .name = extra.name,
                         .scope = extra.scope,
@@ -10677,7 +10677,7 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
                             .enumerator_signed_positive,
                             => true,
                             .enumerator_signed_negative => false,
-                            .file, .compile_unit, .@"compile_unit optimized", .subprogram, .@"subprogram local", .@"subprogram definition", .@"subprogram local definition", .@"subprogram optimized", .@"subprogram optimized local", .@"subprogram optimized definition", .@"subprogram optimized local definition", .lexical_block, .location, .basic_bool_type, .basic_unsigned_type, .basic_signed_type, .basic_float_type, .composite_struct_type, .composite_union_type, .composite_enumeration_type, .composite_array_type, .composite_vector_type, .derived_pointer_type, .derived_member_type, .subroutine_type, .subrange, .tuple, .expression, .local_var, .parameter, .global_var, .@"global_var local", .global_var_expression, .constant => unreachable,
+                            else => unreachable,
                         },
                     };
                     const str = try bigint.toStringAlloc(allocator, 10, undefined);
@@ -10691,7 +10691,7 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
                             .enumerator_signed_positive,
                             .enumerator_signed_negative,
                             => false,
-                            .file, .compile_unit, .@"compile_unit optimized", .subprogram, .@"subprogram local", .@"subprogram definition", .@"subprogram local definition", .@"subprogram optimized", .@"subprogram optimized local", .@"subprogram optimized definition", .@"subprogram optimized local definition", .lexical_block, .location, .basic_bool_type, .basic_unsigned_type, .basic_signed_type, .basic_float_type, .composite_struct_type, .composite_union_type, .composite_enumeration_type, .composite_array_type, .composite_vector_type, .derived_pointer_type, .derived_member_type, .subroutine_type, .subrange, .tuple, .expression, .local_var, .parameter, .global_var, .@"global_var local", .global_var_expression, .constant => unreachable,
+                            else => unreachable,
                         },
                     }, w);
                 },
@@ -10755,7 +10755,7 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
                         .isLocal = switch (kind) {
                             .global_var => false,
                             .@"global_var local" => true,
-                            .file, .compile_unit, .@"compile_unit optimized", .subprogram, .@"subprogram local", .@"subprogram definition", .@"subprogram local definition", .@"subprogram optimized", .@"subprogram optimized local", .@"subprogram optimized definition", .@"subprogram optimized local definition", .lexical_block, .location, .basic_bool_type, .basic_unsigned_type, .basic_signed_type, .basic_float_type, .composite_struct_type, .composite_union_type, .composite_enumeration_type, .composite_array_type, .composite_vector_type, .derived_pointer_type, .derived_member_type, .subroutine_type, .enumerator_unsigned, .enumerator_signed_positive, .enumerator_signed_negative, .subrange, .tuple, .expression, .local_var, .parameter, .global_var_expression, .constant => unreachable,
+                            else => unreachable,
                         },
                         .isDefinition = true,
                         .declaration = null,
@@ -11426,10 +11426,10 @@ fn structConstAssumeCapacity(self: *Builder, ty: Type, vals: []const Constant) C
             const body_item = self.type_items.items[@intFromEnum(body_ty)];
             switch (body_item.tag) {
                 .structure, .packed_structure => break :data body_item.data,
-                .simple, .function, .vararg_function, .integer, .pointer, .target, .vector, .scalable_vector, .small_array, .array, .named_structure => unreachable,
+                else => unreachable,
             }
         },
-        .simple, .function, .vararg_function, .integer, .pointer, .target, .vector, .scalable_vector, .small_array, .array => unreachable,
+        else => unreachable,
     });
     const fields = extra.trail.next(extra.data.fields_len, Type, self);
     for (fields, vals) |field, val| assert(field == val.typeOf(self));
@@ -11441,7 +11441,7 @@ fn structConstAssumeCapacity(self: *Builder, ty: Type, vals: []const Constant) C
     const tag: Constant.Tag = switch (ty.unnamedTag(self)) {
         .structure => .structure,
         .packed_structure => .packed_structure,
-        .simple, .function, .vararg_function, .integer, .pointer, .target, .vector, .scalable_vector, .small_array, .array, .named_structure => unreachable,
+        else => unreachable,
     };
     const result = self.getOrPutConstantAggregateAssumeCapacity(tag, ty, vals);
     return result.constant;
@@ -11454,7 +11454,7 @@ fn arrayConstAssumeCapacity(self: *Builder, ty: Type, vals: []const Constant) Co
             const extra = self.typeExtraData(switch (kind) {
                 .small_array => Type.Vector,
                 .array => Type.Array,
-                .simple, .function, .vararg_function, .integer, .pointer, .target, .vector, .scalable_vector, .structure, .packed_structure, .named_structure => unreachable,
+                else => unreachable,
             }, type_item.data);
             break :extra .{ .len = extra.length(), .child = extra.child };
         },
@@ -11543,7 +11543,7 @@ fn zeroInitConstAssumeCapacity(self: *Builder, ty: Type) Constant {
         .ppc_fp128 => return self.ppc_fp128ConstAssumeCapacity(.{ 0.0, 0.0 }),
         .token => return .none,
         .i1 => return .false,
-        .void, .x86_amx, .x86_mmx, .label, .metadata, .i8, .i16, .i29, .i32, .i64, .i80, .i128, .ptr, .@"ptr addrspace(4)", .none, ._ => switch (self.type_items.items[@intFromEnum(ty)].tag) {
+        else => switch (self.type_items.items[@intFromEnum(ty)].tag) {
             .simple,
             .function,
             .vararg_function,
@@ -11575,10 +11575,10 @@ fn undefConstAssumeCapacity(self: *Builder, ty: Type) Constant {
     switch (self.type_items.items[@intFromEnum(ty)].tag) {
         .simple => switch (ty) {
             .void, .label => unreachable,
-            .half, .bfloat, .float, .double, .fp128, .x86_fp80, .ppc_fp128, .x86_amx, .x86_mmx, .token, .metadata, .i1, .i8, .i16, .i29, .i32, .i64, .i80, .i128, .ptr, .@"ptr addrspace(4)", .none, ._ => {},
+            else => {},
         },
         .function, .vararg_function => unreachable,
-        .integer, .pointer, .target, .vector, .scalable_vector, .small_array, .array, .structure, .packed_structure, .named_structure => {},
+        else => {},
     }
     const result = self.getOrPutConstantNoExtraAssumeCapacity(
         .{ .tag = .undef, .data = @intFromEnum(ty) },
@@ -11590,10 +11590,10 @@ fn poisonConstAssumeCapacity(self: *Builder, ty: Type) Constant {
     switch (self.type_items.items[@intFromEnum(ty)].tag) {
         .simple => switch (ty) {
             .void, .label => unreachable,
-            .half, .bfloat, .float, .double, .fp128, .x86_fp80, .ppc_fp128, .x86_amx, .x86_mmx, .token, .metadata, .i1, .i8, .i16, .i29, .i32, .i64, .i80, .i128, .ptr, .@"ptr addrspace(4)", .none, ._ => {},
+            else => {},
         },
         .function, .vararg_function => unreachable,
-        .integer, .pointer, .target, .vector, .scalable_vector, .small_array, .array, .structure, .packed_structure, .named_structure => {},
+        else => {},
     }
     const result = self.getOrPutConstantNoExtraAssumeCapacity(
         .{ .tag = .poison, .data = @intFromEnum(ty) },
@@ -11667,7 +11667,7 @@ fn convTag(
                 .signed => .fptosi,
                 .unneeded => unreachable,
             },
-            .function, .vararg_function, .pointer, .target, .vector, .scalable_vector, .small_array, .array, .structure, .packed_structure, .named_structure => unreachable,
+            else => unreachable,
         },
         .integer => switch (ty.scalarTag(self)) {
             .simple => switch (signedness) {
@@ -11685,14 +11685,14 @@ fn convTag(
                 .gt => .trunc,
             },
             .pointer => .inttoptr,
-            .function, .vararg_function, .target, .vector, .scalable_vector, .small_array, .array, .structure, .packed_structure, .named_structure => unreachable,
+            else => unreachable,
         },
         .pointer => switch (ty.scalarTag(self)) {
             .integer => .ptrtoint,
             .pointer => .addrspacecast,
-            .simple, .function, .vararg_function, .target, .vector, .scalable_vector, .small_array, .array, .structure, .packed_structure, .named_structure => unreachable,
+            else => unreachable,
         },
-        .function, .vararg_function, .target, .vector, .scalable_vector, .small_array, .array, .structure, .packed_structure, .named_structure => unreachable,
+        else => unreachable,
     };
 }
 
@@ -11706,17 +11706,17 @@ fn convConstTag(
         .integer => switch (ty.scalarTag(self)) {
             .integer => switch (std.math.order(val_ty.scalarBits(self), ty.scalarBits(self))) {
                 .gt => .trunc,
-                .default, .m, .lt, .percent => unreachable,
+                else => unreachable,
             },
             .pointer => .inttoptr,
-            .simple, .function, .vararg_function, .target, .vector, .scalable_vector, .small_array, .array, .structure, .packed_structure, .named_structure => unreachable,
+            else => unreachable,
         },
         .pointer => switch (ty.scalarTag(self)) {
             .integer => .ptrtoint,
             .pointer => .addrspacecast,
-            .simple, .function, .vararg_function, .target, .vector, .scalable_vector, .small_array, .array, .structure, .packed_structure, .named_structure => unreachable,
+            else => unreachable,
         },
-        .simple, .function, .vararg_function, .target, .vector, .scalable_vector, .small_array, .array, .structure, .packed_structure, .named_structure => unreachable,
+        else => unreachable,
     };
 }
 
@@ -11795,7 +11795,7 @@ fn gepConstAssumeCapacity(
                 else
                     vector_info = index_info;
             },
-            .simple, .function, .vararg_function, .pointer, .target, .small_array, .array, .structure, .packed_structure, .named_structure => unreachable,
+            else => unreachable,
         }
     }
     if (!base_is_vector) if (vector_info) |info| switch (info.kind) {
@@ -11868,7 +11868,7 @@ fn binConstAssumeCapacity(
         .shl,
         .xor,
         => {},
-        .positive_integer, .negative_integer, .half, .bfloat, .float, .double, .fp128, .x86_fp80, .ppc_fp128, .null, .none, .structure, .packed_structure, .array, .string, .vector, .splat, .zeroinitializer, .undef, .poison, .blockaddress, .dso_local_equivalent, .no_cfi, .trunc, .ptrtoint, .inttoptr, .bitcast, .addrspacecast, .getelementptr, .@"getelementptr inbounds", .@"asm", .@"asm sideeffect", .@"asm alignstack", .@"asm sideeffect alignstack", .@"asm inteldialect", .@"asm sideeffect inteldialect", .@"asm alignstack inteldialect", .@"asm sideeffect alignstack inteldialect", .@"asm unwind", .@"asm sideeffect unwind", .@"asm alignstack unwind", .@"asm sideeffect alignstack unwind", .@"asm inteldialect unwind", .@"asm sideeffect inteldialect unwind", .@"asm alignstack inteldialect unwind", .@"asm sideeffect alignstack inteldialect unwind" => unreachable,
+        else => unreachable,
     }
     const Key = struct { tag: Constant.Tag, extra: Constant.Binary };
     const Adapter = struct {
@@ -11988,7 +11988,7 @@ fn getOrPutConstantAggregateAssumeCapacity(
 ) struct { new: bool, constant: Constant } {
     switch (tag) {
         .structure, .packed_structure, .array, .vector => {},
-        .positive_integer, .negative_integer, .half, .bfloat, .float, .double, .fp128, .x86_fp80, .ppc_fp128, .null, .none, .string, .splat, .zeroinitializer, .undef, .poison, .blockaddress, .dso_local_equivalent, .no_cfi, .trunc, .ptrtoint, .inttoptr, .bitcast, .addrspacecast, .getelementptr, .@"getelementptr inbounds", .add, .@"add nsw", .@"add nuw", .sub, .@"sub nsw", .@"sub nuw", .shl, .xor, .@"asm", .@"asm sideeffect", .@"asm alignstack", .@"asm sideeffect alignstack", .@"asm inteldialect", .@"asm sideeffect inteldialect", .@"asm alignstack inteldialect", .@"asm sideeffect alignstack inteldialect", .@"asm unwind", .@"asm sideeffect unwind", .@"asm alignstack unwind", .@"asm sideeffect alignstack unwind", .@"asm inteldialect unwind", .@"asm sideeffect inteldialect unwind", .@"asm alignstack inteldialect unwind", .@"asm sideeffect alignstack inteldialect unwind" => unreachable,
+        else => unreachable,
     }
     const Key = struct { tag: Constant.Tag, type: Type, vals: []const Constant };
     const Adapter = struct {
@@ -13436,7 +13436,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                         const is_packed = switch (kind) {
                             .structure => false,
                             .packed_structure => true,
-                            .simple, .function, .vararg_function, .integer, .pointer, .target, .vector, .scalable_vector, .small_array, .array, .named_structure => unreachable,
+                            else => unreachable,
                         };
                         var extra = self.typeExtraDataTrail(Type.Structure, item.data);
                         try type_block.writeAbbrev(TypeBlock.StructAnon{
@@ -13452,12 +13452,12 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
 
                         switch (extra.body) {
                             .none => try type_block.writeAbbrev(TypeBlock.Opaque{}),
-                            .void, .half, .bfloat, .float, .double, .fp128, .x86_fp80, .ppc_fp128, .x86_amx, .x86_mmx, .label, .token, .metadata, .i1, .i8, .i16, .i29, .i32, .i64, .i80, .i128, .ptr, .@"ptr addrspace(4)", ._ => {
+                            else => {
                                 const real_struct = self.type_items.items[@intFromEnum(extra.body)];
                                 const is_packed: bool = switch (real_struct.tag) {
                                     .structure => false,
                                     .packed_structure => true,
-                                    .simple, .function, .vararg_function, .integer, .pointer, .target, .vector, .scalable_vector, .small_array, .array, .named_structure => unreachable,
+                                    else => unreachable,
                                 };
 
                                 var real_extra = self.typeExtraDataTrail(Type.Structure, real_struct.data);
@@ -13502,7 +13502,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                         const is_vararg = switch (kind) {
                             .function => false,
                             .vararg_function => true,
-                            .simple, .integer, .pointer, .target, .vector, .scalable_vector, .small_array, .array, .structure, .packed_structure, .named_structure => unreachable,
+                            else => unreachable,
                         };
                         var extra = self.typeExtraDataTrail(Type.Function, item.data);
                         try type_block.writeAbbrev(TypeBlock.Function{
@@ -13962,7 +13962,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                             .positive = switch (tag) {
                                 .positive_integer => true,
                                 .negative_integer => false,
-                                .half, .bfloat, .float, .double, .fp128, .x86_fp80, .ppc_fp128, .null, .none, .structure, .packed_structure, .array, .string, .vector, .splat, .zeroinitializer, .undef, .poison, .blockaddress, .dso_local_equivalent, .no_cfi, .trunc, .ptrtoint, .inttoptr, .bitcast, .addrspacecast, .getelementptr, .@"getelementptr inbounds", .add, .@"add nsw", .@"add nuw", .sub, .@"sub nsw", .@"sub nuw", .shl, .xor, .@"asm", .@"asm sideeffect", .@"asm alignstack", .@"asm sideeffect alignstack", .@"asm inteldialect", .@"asm sideeffect inteldialect", .@"asm alignstack inteldialect", .@"asm sideeffect alignstack inteldialect", .@"asm unwind", .@"asm sideeffect unwind", .@"asm alignstack unwind", .@"asm sideeffect alignstack unwind", .@"asm inteldialect unwind", .@"asm sideeffect inteldialect unwind", .@"asm alignstack inteldialect unwind", .@"asm sideeffect alignstack inteldialect unwind" => unreachable,
+                                else => unreachable,
                             },
                         };
                         const bit_count = extra.type.scalarBits(self);
@@ -14110,7 +14110,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                         try constants_block.writeUnabbrev(switch (tag) {
                             .getelementptr => 12,
                             .@"getelementptr inbounds" => 20,
-                            .positive_integer, .negative_integer, .half, .bfloat, .float, .double, .fp128, .x86_fp80, .ppc_fp128, .null, .none, .structure, .packed_structure, .array, .string, .vector, .splat, .zeroinitializer, .undef, .poison, .blockaddress, .dso_local_equivalent, .no_cfi, .trunc, .ptrtoint, .inttoptr, .bitcast, .addrspacecast, .add, .@"add nsw", .@"add nuw", .sub, .@"sub nsw", .@"sub nuw", .shl, .xor, .@"asm", .@"asm sideeffect", .@"asm alignstack", .@"asm sideeffect alignstack", .@"asm inteldialect", .@"asm sideeffect inteldialect", .@"asm alignstack inteldialect", .@"asm sideeffect alignstack inteldialect", .@"asm unwind", .@"asm sideeffect unwind", .@"asm alignstack unwind", .@"asm sideeffect alignstack unwind", .@"asm inteldialect unwind", .@"asm sideeffect inteldialect unwind", .@"asm alignstack inteldialect unwind", .@"asm sideeffect alignstack inteldialect unwind" => unreachable,
+                            else => unreachable,
                         }, record.items);
                     },
                     .@"asm",
@@ -14155,7 +14155,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                             .@"asm alignstack unwind" => 0b1010,
                             .@"asm inteldialect unwind" => 0b1100,
                             .@"asm alignstack inteldialect unwind" => 0b1110,
-                            .positive_integer, .negative_integer, .half, .bfloat, .float, .double, .fp128, .x86_fp80, .ppc_fp128, .null, .none, .structure, .packed_structure, .array, .string, .vector, .splat, .zeroinitializer, .undef, .poison, .blockaddress, .dso_local_equivalent, .no_cfi, .trunc, .ptrtoint, .inttoptr, .bitcast, .addrspacecast, .getelementptr, .@"getelementptr inbounds", .add, .@"add nsw", .@"add nuw", .sub, .@"sub nsw", .@"sub nuw", .shl, .xor => unreachable,
+                            else => unreachable,
                         });
 
                         record.appendAssumeCapacity(assembly_slice.len);
@@ -14182,7 +14182,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                             .code = switch (tag) {
                                 .dso_local_equivalent => .DSO_LOCAL_EQUIVALENT,
                                 .no_cfi => .NO_CFI_VALUE,
-                                .positive_integer, .negative_integer, .half, .bfloat, .float, .double, .fp128, .x86_fp80, .ppc_fp128, .null, .none, .structure, .packed_structure, .array, .string, .vector, .splat, .zeroinitializer, .undef, .poison, .blockaddress, .trunc, .ptrtoint, .inttoptr, .bitcast, .addrspacecast, .getelementptr, .@"getelementptr inbounds", .add, .@"add nsw", .@"add nuw", .sub, .@"sub nsw", .@"sub nuw", .shl, .xor, .@"asm", .@"asm sideeffect", .@"asm alignstack", .@"asm sideeffect alignstack", .@"asm inteldialect", .@"asm sideeffect inteldialect", .@"asm alignstack inteldialect", .@"asm sideeffect alignstack inteldialect", .@"asm unwind", .@"asm sideeffect unwind", .@"asm alignstack unwind", .@"asm sideeffect alignstack unwind", .@"asm inteldialect unwind", .@"asm sideeffect inteldialect unwind", .@"asm alignstack inteldialect unwind", .@"asm sideeffect alignstack inteldialect unwind" => unreachable,
+                                else => unreachable,
                             },
                             .type_id = function.typeOf(self),
                             .function = constant_adapter.getConstantIndex(function.toConst(self)),
@@ -14310,7 +14310,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                             .is_optimized = switch (kind) {
                                 .compile_unit => false,
                                 .@"compile_unit optimized" => true,
-                                .file, .subprogram, .@"subprogram local", .@"subprogram definition", .@"subprogram local definition", .@"subprogram optimized", .@"subprogram optimized local", .@"subprogram optimized definition", .@"subprogram optimized local definition", .lexical_block, .location, .basic_bool_type, .basic_unsigned_type, .basic_signed_type, .basic_float_type, .composite_struct_type, .composite_union_type, .composite_enumeration_type, .composite_array_type, .composite_vector_type, .derived_pointer_type, .derived_member_type, .subroutine_type, .enumerator_unsigned, .enumerator_signed_positive, .enumerator_signed_negative, .subrange, .tuple, .expression, .local_var, .parameter, .global_var, .@"global_var local", .global_var_expression, .constant => unreachable,
+                                else => unreachable,
                             },
                             .enums = extra.enums,
                             .globals = extra.globals,
@@ -14374,7 +14374,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                                 .basic_unsigned_type => DW.ATE.unsigned,
                                 .basic_signed_type => DW.ATE.signed,
                                 .basic_float_type => DW.ATE.float,
-                                .file, .compile_unit, .@"compile_unit optimized", .subprogram, .@"subprogram local", .@"subprogram definition", .@"subprogram local definition", .@"subprogram optimized", .@"subprogram optimized local", .@"subprogram optimized definition", .@"subprogram optimized local definition", .lexical_block, .location, .composite_struct_type, .composite_union_type, .composite_enumeration_type, .composite_array_type, .composite_vector_type, .derived_pointer_type, .derived_member_type, .subroutine_type, .enumerator_unsigned, .enumerator_signed_positive, .enumerator_signed_negative, .subrange, .tuple, .expression, .local_var, .parameter, .global_var, .@"global_var local", .global_var_expression, .constant => unreachable,
+                                else => unreachable,
                             },
                         }, metadata_adapter);
                     },
@@ -14392,7 +14392,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                                 .composite_union_type => DW.TAG.union_type,
                                 .composite_enumeration_type => DW.TAG.enumeration_type,
                                 .composite_array_type, .composite_vector_type => DW.TAG.array_type,
-                                .file, .compile_unit, .@"compile_unit optimized", .subprogram, .@"subprogram local", .@"subprogram definition", .@"subprogram local definition", .@"subprogram optimized", .@"subprogram optimized local", .@"subprogram optimized definition", .@"subprogram optimized local definition", .lexical_block, .location, .basic_bool_type, .basic_unsigned_type, .basic_signed_type, .basic_float_type, .derived_pointer_type, .derived_member_type, .subroutine_type, .enumerator_unsigned, .enumerator_signed_positive, .enumerator_signed_negative, .subrange, .tuple, .expression, .local_var, .parameter, .global_var, .@"global_var local", .global_var_expression, .constant => unreachable,
+                                else => unreachable,
                             },
                             .name = extra.name,
                             .file = extra.file,
@@ -14413,7 +14413,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                             .tag = switch (kind) {
                                 .derived_pointer_type => DW.TAG.pointer_type,
                                 .derived_member_type => DW.TAG.member,
-                                .file, .compile_unit, .@"compile_unit optimized", .subprogram, .@"subprogram local", .@"subprogram definition", .@"subprogram local definition", .@"subprogram optimized", .@"subprogram optimized local", .@"subprogram optimized definition", .@"subprogram optimized local definition", .lexical_block, .location, .basic_bool_type, .basic_unsigned_type, .basic_signed_type, .basic_float_type, .composite_struct_type, .composite_union_type, .composite_enumeration_type, .composite_array_type, .composite_vector_type, .subroutine_type, .enumerator_unsigned, .enumerator_signed_positive, .enumerator_signed_negative, .subrange, .tuple, .expression, .local_var, .parameter, .global_var, .@"global_var local", .global_var_expression, .constant => unreachable,
+                                else => unreachable,
                             },
                             .name = extra.name,
                             .file = extra.file,
@@ -14444,7 +14444,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                                 .enumerator_signed_positive,
                                 => true,
                                 .enumerator_signed_negative => false,
-                                .file, .compile_unit, .@"compile_unit optimized", .subprogram, .@"subprogram local", .@"subprogram definition", .@"subprogram local definition", .@"subprogram optimized", .@"subprogram optimized local", .@"subprogram optimized definition", .@"subprogram optimized local definition", .lexical_block, .location, .basic_bool_type, .basic_unsigned_type, .basic_signed_type, .basic_float_type, .composite_struct_type, .composite_union_type, .composite_enumeration_type, .composite_array_type, .composite_vector_type, .derived_pointer_type, .derived_member_type, .subroutine_type, .subrange, .tuple, .expression, .local_var, .parameter, .global_var, .@"global_var local", .global_var_expression, .constant => unreachable,
+                                else => unreachable,
                             },
                         };
                         const flags: MetadataBlock.Enumerator.Flags = .{
@@ -14453,7 +14453,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                                 .enumerator_signed_positive,
                                 .enumerator_signed_negative,
                                 => false,
-                                .file, .compile_unit, .@"compile_unit optimized", .subprogram, .@"subprogram local", .@"subprogram definition", .@"subprogram local definition", .@"subprogram optimized", .@"subprogram optimized local", .@"subprogram optimized definition", .@"subprogram optimized local definition", .lexical_block, .location, .basic_bool_type, .basic_unsigned_type, .basic_signed_type, .basic_float_type, .composite_struct_type, .composite_union_type, .composite_enumeration_type, .composite_array_type, .composite_vector_type, .derived_pointer_type, .derived_member_type, .subroutine_type, .subrange, .tuple, .expression, .local_var, .parameter, .global_var, .@"global_var local", .global_var_expression, .constant => unreachable,
+                                else => unreachable,
                             },
                         };
                         const val: i64 = if (bigint.toInt(i64)) |val|
@@ -14580,7 +14580,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                     if (global.dbg.unwrap()) |dbg| {
                         switch (global.kind) {
                             .function => |f| if (f.ptrConst(self).instructions.len != 0) continue,
-                            .alias, .variable, .replaced => {},
+                            else => {},
                         }
 
                         try metadata_block.writeAbbrevAdapted(MetadataBlock.GlobalDeclAttachment{
@@ -14659,7 +14659,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                         Constant => adapter.getOffsetConstantIndex(param),
                         FunctionAttributes => switch (param) {
                             .none => 0,
-                            ._ => @intCast(1 + adapter.metadata_adapter.constant_adapter.builder
+                            else => @intCast(1 + adapter.metadata_adapter.constant_adapter.builder
                                 .function_attributes_set.getIndex(param).?),
                         },
                         else => param,
@@ -14775,7 +14775,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                                     .@"tail call" => .{ .tail = true, .call_conv = call_conv },
                                     .@"musttail call" => .{ .must_tail = true, .call_conv = call_conv },
                                     .@"notail call" => .{ .no_tail = true, .call_conv = call_conv },
-                                    .add, .@"add nsw", .@"add nuw", .@"add nuw nsw", .addrspacecast, .alloca, .@"alloca inalloca", .@"and", .arg, .ashr, .@"ashr exact", .atomicrmw, .bitcast, .block, .br, .br_cond, .@"call fast", .cmpxchg, .@"cmpxchg weak", .extractelement, .extractvalue, .fadd, .@"fadd fast", .@"fcmp false", .@"fcmp fast false", .@"fcmp fast oeq", .@"fcmp fast oge", .@"fcmp fast ogt", .@"fcmp fast ole", .@"fcmp fast olt", .@"fcmp fast one", .@"fcmp fast ord", .@"fcmp fast true", .@"fcmp fast ueq", .@"fcmp fast uge", .@"fcmp fast ugt", .@"fcmp fast ule", .@"fcmp fast ult", .@"fcmp fast une", .@"fcmp fast uno", .@"fcmp oeq", .@"fcmp oge", .@"fcmp ogt", .@"fcmp ole", .@"fcmp olt", .@"fcmp one", .@"fcmp ord", .@"fcmp true", .@"fcmp ueq", .@"fcmp uge", .@"fcmp ugt", .@"fcmp ule", .@"fcmp ult", .@"fcmp une", .@"fcmp uno", .fdiv, .@"fdiv fast", .fence, .fmul, .@"fmul fast", .fneg, .@"fneg fast", .fpext, .fptosi, .fptoui, .fptrunc, .frem, .@"frem fast", .fsub, .@"fsub fast", .getelementptr, .@"getelementptr inbounds", .@"icmp eq", .@"icmp ne", .@"icmp sge", .@"icmp sgt", .@"icmp sle", .@"icmp slt", .@"icmp uge", .@"icmp ugt", .@"icmp ule", .@"icmp ult", .indirectbr, .insertelement, .insertvalue, .inttoptr, .load, .@"load atomic", .lshr, .@"lshr exact", .mul, .@"mul nsw", .@"mul nuw", .@"mul nuw nsw", .@"musttail call fast", .@"notail call fast", .@"or", .phi, .@"phi fast", .ptrtoint, .ret, .@"ret void", .sdiv, .@"sdiv exact", .select, .@"select fast", .sext, .shl, .@"shl nsw", .@"shl nuw", .@"shl nuw nsw", .shufflevector, .sitofp, .srem, .store, .@"store atomic", .sub, .@"sub nsw", .@"sub nuw", .@"sub nuw nsw", .@"switch", .@"tail call fast", .trunc, .udiv, .@"udiv exact", .urem, .uitofp, .@"unreachable", .va_arg, .xor, .zext => unreachable,
+                                    else => unreachable,
                                 },
                                 .type_id = extra.data.ty,
                                 .callee = extra.data.callee,
@@ -14802,7 +14802,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                                     .@"tail call fast" => .{ .tail = true, .call_conv = call_conv },
                                     .@"musttail call fast" => .{ .must_tail = true, .call_conv = call_conv },
                                     .@"notail call fast" => .{ .no_tail = true, .call_conv = call_conv },
-                                    .add, .@"add nsw", .@"add nuw", .@"add nuw nsw", .addrspacecast, .alloca, .@"alloca inalloca", .@"and", .arg, .ashr, .@"ashr exact", .atomicrmw, .bitcast, .block, .br, .br_cond, .call, .cmpxchg, .@"cmpxchg weak", .extractelement, .extractvalue, .fadd, .@"fadd fast", .@"fcmp false", .@"fcmp fast false", .@"fcmp fast oeq", .@"fcmp fast oge", .@"fcmp fast ogt", .@"fcmp fast ole", .@"fcmp fast olt", .@"fcmp fast one", .@"fcmp fast ord", .@"fcmp fast true", .@"fcmp fast ueq", .@"fcmp fast uge", .@"fcmp fast ugt", .@"fcmp fast ule", .@"fcmp fast ult", .@"fcmp fast une", .@"fcmp fast uno", .@"fcmp oeq", .@"fcmp oge", .@"fcmp ogt", .@"fcmp ole", .@"fcmp olt", .@"fcmp one", .@"fcmp ord", .@"fcmp true", .@"fcmp ueq", .@"fcmp uge", .@"fcmp ugt", .@"fcmp ule", .@"fcmp ult", .@"fcmp une", .@"fcmp uno", .fdiv, .@"fdiv fast", .fence, .fmul, .@"fmul fast", .fneg, .@"fneg fast", .fpext, .fptosi, .fptoui, .fptrunc, .frem, .@"frem fast", .fsub, .@"fsub fast", .getelementptr, .@"getelementptr inbounds", .@"icmp eq", .@"icmp ne", .@"icmp sge", .@"icmp sgt", .@"icmp sle", .@"icmp slt", .@"icmp uge", .@"icmp ugt", .@"icmp ule", .@"icmp ult", .indirectbr, .insertelement, .insertvalue, .inttoptr, .load, .@"load atomic", .lshr, .@"lshr exact", .mul, .@"mul nsw", .@"mul nuw", .@"mul nuw nsw", .@"musttail call", .@"notail call", .@"or", .phi, .@"phi fast", .ptrtoint, .ret, .@"ret void", .sdiv, .@"sdiv exact", .select, .@"select fast", .sext, .shl, .@"shl nsw", .@"shl nuw", .@"shl nuw nsw", .shufflevector, .sitofp, .srem, .store, .@"store atomic", .sub, .@"sub nsw", .@"sub nuw", .@"sub nuw nsw", .@"switch", .@"tail call", .trunc, .udiv, .@"udiv exact", .urem, .uitofp, .@"unreachable", .va_arg, .xor, .zext => unreachable,
+                                    else => unreachable,
                                 },
                                 .fast_math = FastMath.fast,
                                 .type_id = extra.data.ty,
@@ -14882,7 +14882,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                                     .@"sub nuw nsw",
                                     .@"shl nuw nsw",
                                     => .{ .no_unsigned_wrap = true, .no_signed_wrap = true },
-                                    .add, .addrspacecast, .alloca, .@"alloca inalloca", .@"and", .arg, .ashr, .@"ashr exact", .atomicrmw, .bitcast, .block, .br, .br_cond, .call, .@"call fast", .cmpxchg, .@"cmpxchg weak", .extractelement, .extractvalue, .fadd, .@"fadd fast", .@"fcmp false", .@"fcmp fast false", .@"fcmp fast oeq", .@"fcmp fast oge", .@"fcmp fast ogt", .@"fcmp fast ole", .@"fcmp fast olt", .@"fcmp fast one", .@"fcmp fast ord", .@"fcmp fast true", .@"fcmp fast ueq", .@"fcmp fast uge", .@"fcmp fast ugt", .@"fcmp fast ule", .@"fcmp fast ult", .@"fcmp fast une", .@"fcmp fast uno", .@"fcmp oeq", .@"fcmp oge", .@"fcmp ogt", .@"fcmp ole", .@"fcmp olt", .@"fcmp one", .@"fcmp ord", .@"fcmp true", .@"fcmp ueq", .@"fcmp uge", .@"fcmp ugt", .@"fcmp ule", .@"fcmp ult", .@"fcmp une", .@"fcmp uno", .fdiv, .@"fdiv fast", .fence, .fmul, .@"fmul fast", .fneg, .@"fneg fast", .fpext, .fptosi, .fptoui, .fptrunc, .frem, .@"frem fast", .fsub, .@"fsub fast", .getelementptr, .@"getelementptr inbounds", .@"icmp eq", .@"icmp ne", .@"icmp sge", .@"icmp sgt", .@"icmp sle", .@"icmp slt", .@"icmp uge", .@"icmp ugt", .@"icmp ule", .@"icmp ult", .indirectbr, .insertelement, .insertvalue, .inttoptr, .load, .@"load atomic", .lshr, .@"lshr exact", .mul, .@"musttail call", .@"musttail call fast", .@"notail call", .@"notail call fast", .@"or", .phi, .@"phi fast", .ptrtoint, .ret, .@"ret void", .sdiv, .@"sdiv exact", .select, .@"select fast", .sext, .shl, .shufflevector, .sitofp, .srem, .store, .@"store atomic", .sub, .@"switch", .@"tail call", .@"tail call fast", .trunc, .udiv, .@"udiv exact", .urem, .uitofp, .@"unreachable", .va_arg, .xor, .zext => unreachable,
+                                    else => unreachable,
                                 },
                             });
                         },
@@ -15300,14 +15300,14 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                     var instr_index: u32 = 0;
                     for (func.instructions.items(.tag), func.instructions.items(.data)) |instr_tag, data| switch (instr_tag) {
                         .arg, .block => {}, // not an actual instruction
-                        .add, .@"add nsw", .@"add nuw", .@"add nuw nsw", .addrspacecast, .alloca, .@"alloca inalloca", .@"and", .ashr, .@"ashr exact", .atomicrmw, .bitcast, .br, .br_cond, .call, .@"call fast", .cmpxchg, .@"cmpxchg weak", .extractelement, .extractvalue, .fadd, .@"fadd fast", .@"fcmp false", .@"fcmp fast false", .@"fcmp fast oeq", .@"fcmp fast oge", .@"fcmp fast ogt", .@"fcmp fast ole", .@"fcmp fast olt", .@"fcmp fast one", .@"fcmp fast ord", .@"fcmp fast true", .@"fcmp fast ueq", .@"fcmp fast uge", .@"fcmp fast ugt", .@"fcmp fast ule", .@"fcmp fast ult", .@"fcmp fast une", .@"fcmp fast uno", .@"fcmp oeq", .@"fcmp oge", .@"fcmp ogt", .@"fcmp ole", .@"fcmp olt", .@"fcmp one", .@"fcmp ord", .@"fcmp true", .@"fcmp ueq", .@"fcmp uge", .@"fcmp ugt", .@"fcmp ule", .@"fcmp ult", .@"fcmp une", .@"fcmp uno", .fdiv, .@"fdiv fast", .fence, .fmul, .@"fmul fast", .fneg, .@"fneg fast", .fpext, .fptosi, .fptoui, .fptrunc, .frem, .@"frem fast", .fsub, .@"fsub fast", .getelementptr, .@"getelementptr inbounds", .@"icmp eq", .@"icmp ne", .@"icmp sge", .@"icmp sgt", .@"icmp sle", .@"icmp slt", .@"icmp uge", .@"icmp ugt", .@"icmp ule", .@"icmp ult", .indirectbr, .insertelement, .insertvalue, .inttoptr, .load, .@"load atomic", .lshr, .@"lshr exact", .mul, .@"mul nsw", .@"mul nuw", .@"mul nuw nsw", .@"musttail call", .@"musttail call fast", .@"notail call", .@"notail call fast", .@"or", .phi, .@"phi fast", .ptrtoint, .ret, .@"ret void", .sdiv, .@"sdiv exact", .select, .@"select fast", .sext, .shl, .@"shl nsw", .@"shl nuw", .@"shl nuw nsw", .shufflevector, .sitofp, .srem, .store, .@"store atomic", .sub, .@"sub nsw", .@"sub nuw", .@"sub nuw nsw", .@"switch", .@"tail call", .@"tail call fast", .trunc, .udiv, .@"udiv exact", .urem, .uitofp, .@"unreachable", .va_arg, .xor, .zext => {
+                        else => {
                             instr_index += 1;
                         },
                         .br_cond, .@"switch" => {
                             const weights = switch (instr_tag) {
                                 .br_cond => func.extraData(Function.Instruction.BrCond, data).weights,
                                 .@"switch" => func.extraData(Function.Instruction.Switch, data).weights,
-                                .add, .@"add nsw", .@"add nuw", .@"add nuw nsw", .addrspacecast, .alloca, .@"alloca inalloca", .@"and", .arg, .ashr, .@"ashr exact", .atomicrmw, .bitcast, .block, .br, .call, .@"call fast", .cmpxchg, .@"cmpxchg weak", .extractelement, .extractvalue, .fadd, .@"fadd fast", .@"fcmp false", .@"fcmp fast false", .@"fcmp fast oeq", .@"fcmp fast oge", .@"fcmp fast ogt", .@"fcmp fast ole", .@"fcmp fast olt", .@"fcmp fast one", .@"fcmp fast ord", .@"fcmp fast true", .@"fcmp fast ueq", .@"fcmp fast uge", .@"fcmp fast ugt", .@"fcmp fast ule", .@"fcmp fast ult", .@"fcmp fast une", .@"fcmp fast uno", .@"fcmp oeq", .@"fcmp oge", .@"fcmp ogt", .@"fcmp ole", .@"fcmp olt", .@"fcmp one", .@"fcmp ord", .@"fcmp true", .@"fcmp ueq", .@"fcmp uge", .@"fcmp ugt", .@"fcmp ule", .@"fcmp ult", .@"fcmp une", .@"fcmp uno", .fdiv, .@"fdiv fast", .fence, .fmul, .@"fmul fast", .fneg, .@"fneg fast", .fpext, .fptosi, .fptoui, .fptrunc, .frem, .@"frem fast", .fsub, .@"fsub fast", .getelementptr, .@"getelementptr inbounds", .@"icmp eq", .@"icmp ne", .@"icmp sge", .@"icmp sgt", .@"icmp sle", .@"icmp slt", .@"icmp uge", .@"icmp ugt", .@"icmp ule", .@"icmp ult", .indirectbr, .insertelement, .insertvalue, .inttoptr, .load, .@"load atomic", .lshr, .@"lshr exact", .mul, .@"mul nsw", .@"mul nuw", .@"mul nuw nsw", .@"musttail call", .@"musttail call fast", .@"notail call", .@"notail call fast", .@"or", .phi, .@"phi fast", .ptrtoint, .ret, .@"ret void", .sdiv, .@"sdiv exact", .select, .@"select fast", .sext, .shl, .@"shl nsw", .@"shl nuw", .@"shl nuw nsw", .shufflevector, .sitofp, .srem, .store, .@"store atomic", .sub, .@"sub nsw", .@"sub nuw", .@"sub nuw nsw", .@"tail call", .@"tail call fast", .trunc, .udiv, .@"udiv exact", .urem, .uitofp, .@"unreachable", .va_arg, .xor, .zext => unreachable,
+                                else => unreachable,
                             };
                             switch (weights) {
                                 .none => {},
@@ -15316,7 +15316,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                                     .kind = .unpredictable,
                                     .metadata = .empty_tuple,
                                 }, metadata_adapter),
-                                _ => try metadata_attach_block.writeAbbrevAdapted(MetadataAttachmentBlock.AttachmentInstructionSingle{ // zig-lint-allow: catch-all (Weights is non-exhaustive)
+                                _ => try metadata_attach_block.writeAbbrevAdapted(MetadataAttachmentBlock.AttachmentInstructionSingle{
                                     .inst = instr_index,
                                     .kind = .prof,
                                     .metadata = weights.toMetadata(),

@@ -66,6 +66,9 @@ pub fn main() !void {
         try walkTree(gpa, "src", &src_zig_files);
 
         for (src_zig_files.items) |file_path| {
+            // Skip vendored files (adapted from upstream projects).
+            if (std.mem.endsWith(u8, file_path, "backend/llvm/Builder.zig")) continue;
+
             const errors = try checkCatchAllSwitchArms(gpa, file_path);
             defer gpa.free(errors);
 
