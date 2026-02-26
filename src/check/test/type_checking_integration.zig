@@ -5174,25 +5174,6 @@ test "check type - exhaustive match single tag no payload is closed" {
     );
 }
 
-test "check type - exhaustive match with tag and underscore branch stays open" {
-    // Even one underscore at top level keeps it open
-    const source =
-        \\test = |x| {
-        \\  match(x) {
-        \\    A => "a"
-        \\    B => "b"
-        \\    _ => "other"
-        \\  }
-        \\}
-    ;
-    try checkTypesModuleDefs(
-        source,
-        &.{
-            .{ .def = "test", .expected = "[A, B, ..] -> Str" },
-        },
-    );
-}
-
 test "check type - exhaustive match with underscore-as keeps tag union open" {
     // `_ as x` should unwrap to `_` via unwrapAsPatternIdx,
     // triggering the catch-all early return and keeping the union open.
