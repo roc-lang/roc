@@ -194,7 +194,7 @@ const BuiltinsObjects = struct {
     pub fn filename(target: roc_target.RocTarget) []const u8 {
         return switch (target.toOsTag()) {
             .windows => "roc_builtins.lib",
-            _ => "libroc_builtins.a",
+            .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .vita, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => "libroc_builtins.a",
         };
     }
 };
@@ -2118,7 +2118,7 @@ fn extractNonPlatformPackages(
                             try packages.put(try ctx.gpa.dupe(u8, shorthand), pkg_abs_path);
                         }
                     },
-                    _ => {},
+                    .int, .frac, .typed_int, .typed_frac, .single_quote, .string_part, .multiline_string, .list, .tuple, .record, .tag, .lambda, .apply, .record_updater, .field_access, .tuple_access, .local_dispatch, .bin_op, .suffix_single_question, .unary_op, .if_then_else, .if_without_else, .match, .ident, .dbg, .record_builder, .ellipsis, .block, .for_expr, .malformed => {},
                 }
             }
         }
@@ -2392,7 +2392,7 @@ fn extractExposedModulesFromPlatform(ctx: *CliContext, roc_file_path: []const u8
                 try exposed_modules.append(ctx.gpa, try ctx.arena.dupe(u8, item_name));
             }
         },
-        _ => {
+        .app, .module, .package, .hosted, .type_module, .default_app, .malformed => {
             return error.NotPlatformFile;
         },
     }
@@ -2406,7 +2406,7 @@ fn validatePlatformHeader(ctx: *CliContext, parse_ast: *const parse.AST, platfor
 
     switch (validation_result) {
         .valid => return true,
-        _ => {
+        .missing_targets_section, .missing_files_directory, .missing_target_file, .extra_file, .empty_targets, .unsupported_target, .missing_cross_compile_host, .unsupported_glibc_cross, .no_platform_found, .invalid_target, .linker_failed, .linker_not_available, .process_crashed, .process_signaled => {
             // Create and render the validation report
             var report = targets_validator.createValidationReport(ctx.gpa, validation_result) catch {
                 std.log.warn("Platform at {s} is missing targets section", .{platform_path});
@@ -2567,7 +2567,7 @@ fn extractPlatformSpecFromApp(ctx: *CliContext, app_file_path: []const u8) ![]co
             };
             return try ctx.arena.dupe(u8, platform_spec);
         },
-        _ => {
+        .module, .package, .platform, .hosted, .type_module, .default_app, .malformed => {
             return ctx.fail(.{ .expected_app_header = .{
                 .path = app_file_path,
                 .found = @tagName(header),
@@ -2591,7 +2591,7 @@ fn stringFromExpr(ast: *parse.AST, expr_idx: parse.AST.Expr.Idx) ![]const u8 {
             }
             return error.ExpectedString;
         },
-        _ => error.ExpectedString,
+        .int, .frac, .typed_int, .typed_frac, .single_quote, .string_part, .multiline_string, .list, .tuple, .record, .tag, .lambda, .apply, .record_updater, .field_access, .tuple_access, .local_dispatch, .bin_op, .suffix_single_question, .unary_op, .if_then_else, .if_without_else, .match, .ident, .dbg, .record_builder, .ellipsis, .block, .for_expr, .malformed => error.ExpectedString,
     };
 }
 
@@ -2830,7 +2830,7 @@ fn extractEntrypointsFromPlatform(ctx: *CliContext, roc_file_path: []const u8, e
                                 const first_part = parse_ast.store.getExpr(parts[0]);
                                 switch (first_part) {
                                     .string_part => |sp| break :blk parse_ast.resolve(sp.token),
-                                    _ => {},
+                                    .int, .frac, .typed_int, .typed_frac, .single_quote, .string, .multiline_string, .list, .tuple, .record, .tag, .lambda, .apply, .record_updater, .field_access, .tuple_access, .local_dispatch, .bin_op, .suffix_single_question, .unary_op, .if_then_else, .if_without_else, .match, .ident, .dbg, .record_builder, .ellipsis, .block, .for_expr, .malformed => {},
                                 }
                             }
                             return error.InvalidProvidesEntry;
@@ -2850,7 +2850,7 @@ fn extractEntrypointsFromPlatform(ctx: *CliContext, roc_file_path: []const u8, e
                 return error.NoEntrypointFound;
             }
         },
-        _ => {
+        .app, .module, .package, .hosted, .type_module, .default_app, .malformed => {
             return error.NotPlatformFile;
         },
     }
@@ -3453,7 +3453,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     const target_os = target.toOsTag();
     switch (target_arch) {
         .x86_64, .aarch64 => {}, // Supported
-        _ => {
+        .aarch64_be, .alpha, .amdgcn, .arc, .arceb, .arm, .armeb, .avr, .bpfeb, .bpfel, .csky, .hexagon, .hppa, .hppa64, .kalimba, .kvx, .lanai, .loongarch32, .loongarch64, .m68k, .microblaze, .microblazeel, .mips, .mipsel, .mips64, .mips64el, .msp430, .nvptx, .nvptx64, .or1k, .powerpc, .powerpcle, .powerpc64, .powerpc64le, .propeller, .riscv32, .riscv32be, .riscv64, .riscv64be, .s390x, .sh, .sheb, .sparc, .sparc64, .spirv32, .spirv64, .thumb, .thumbeb, .ve, .wasm32, .wasm64, .x86_16, .x86, .xcore, .xtensa, .xtensaeb => {
             const stdout = ctx.io.stdout();
             try stdout.print("Note: Dev backend does not support {s} architecture.\n", .{@tagName(target_arch)});
             try stdout.print("Falling back to interpreter mode.\n\n", .{});
@@ -3469,16 +3469,16 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             .exe => switch (target_os) {
                 .windows => ".exe",
                 .freestanding => ".wasm",
-                _ => "",
+                .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .vita, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => "",
             },
             .static_lib => switch (target_os) {
                 .windows => ".lib",
-                _ => ".a",
+                .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .vita, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => ".a",
             },
             .shared_lib => switch (target_os) {
                 .windows => ".dll",
                 .macos => ".dylib",
-                _ => ".so",
+                .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .maccatalyst, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .vita, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => ".so",
             },
         };
         break :blk try std.fmt.allocPrint(ctx.arena, "{s}{s}", .{ output_path, ext });
@@ -3591,7 +3591,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                     .s_decl => |decl| {
                         top_level_patterns.put(decl.pattern, {}) catch {};
                     },
-                    _ => {},
+                    .s_var, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => {},
                 }
             }
 
@@ -3788,7 +3788,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                         break;
                     }
                 },
-                _ => {},
+                .as, .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .underscore, .runtime_error => {},
             }
         }
 
@@ -5691,7 +5691,7 @@ fn parsePlatformHeader(ctx: *CliContext, platform_path: []const u8) !PlatformHea
                 .type_aliases = try type_aliases.toOwnedSlice(ctx.gpa),
             };
         },
-        _ => return error.NotPlatformFile,
+        .app, .module, .package, .hosted, .type_module, .default_app, .malformed => return error.NotPlatformFile,
     }
 }
 
@@ -7132,10 +7132,10 @@ fn extractRecordAssociatedItems(
                 const backing_expr = module_env.store.getExpr(nom.backing_expr);
                 break :blk switch (backing_expr) {
                     .e_record => |rec| try extractRecordAssociatedItems(ctx, module_env, rec.fields),
-                    _ => try ctx.gpa.alloc(AssociatedItem, 0),
+                    .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => try ctx.gpa.alloc(AssociatedItem, 0),
                 };
             },
-            _ => try ctx.gpa.alloc(AssociatedItem, 0),
+            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => try ctx.gpa.alloc(AssociatedItem, 0),
         };
 
         try items.append(.{
@@ -7183,7 +7183,7 @@ fn extractAssociatedItems(
                 const stmt = module_env.store.getStatement(n.nominal_type_decl);
                 break :blk switch (stmt) {
                     .s_nominal_decl => |decl| module_env.store.getTypeHeader(decl.header).name,
-                    _ => continue,
+                    .s_decl, .s_var, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_break, .s_return, .s_import, .s_alias_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => continue,
                 };
             },
             .as, .applied_tag, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .underscore, .runtime_error => continue,
@@ -7202,13 +7202,13 @@ fn extractAssociatedItems(
                         const backing = module_env.store.getExpr(nom_expr.backing_expr);
                         break :blk2 switch (backing) {
                             .e_record => |record| try extractRecordAssociatedItems(ctx, module_env, record.fields),
-                            _ => try ctx.gpa.alloc(AssociatedItem, 0),
+                            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => try ctx.gpa.alloc(AssociatedItem, 0),
                         };
                     },
-                    _ => try ctx.gpa.alloc(AssociatedItem, 0),
+                    .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str_segment, .e_str, .e_lookup_local, .e_lookup_external, .e_lookup_pending, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_unary_not, .e_dot_access, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect, .e_ellipsis, .e_anno_only, .e_return, .e_type_var_dispatch, .e_for, .e_hosted_lambda, .e_run_low_level => try ctx.gpa.alloc(AssociatedItem, 0),
                 };
             },
-            _ => try ctx.gpa.alloc(AssociatedItem, 0),
+            .assign, .as, .applied_tag, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .underscore, .runtime_error => try ctx.gpa.alloc(AssociatedItem, 0),
         };
 
         try items.append(.{
