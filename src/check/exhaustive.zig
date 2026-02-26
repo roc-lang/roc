@@ -2467,9 +2467,10 @@ pub fn checkExhaustiveSketched(
             // Detect exhaustive open unions: all real tags covered, no wildcards.
             // The only "missing" constructor is the synthetic #Open.
             // Record the ext var for closing and recurse into payloads.
+            std.debug.assert(num_found <= num_alts);
             if (ctor_info.union_info.has_flex_extension and
                 !ctor_info.has_wildcards and
-                num_found >= num_alts - 1)
+                num_found == num_alts - 1)
             {
                 try collectFlexExtVars(allocator, type_store, first_col_type, ext_vars_to_close);
 

@@ -342,6 +342,32 @@ test "introduceType API is accessible" {
     try testing.expect(type_lookup.? == stmt_idx);
 }
 
+test "open ext not allowed in type decl" {
+    const source =
+        \\|_| {
+        \\    Counter := [A, B, ..]
+        \\    42
+        \\}
+    ;
+
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
+
+    _ = try test_env.canonicalizeExpr();
+
+    const diagnostics = try test_env.getDiagnostics();
+    defer testing.allocator.free(diagnostics);
+
+    var diag_count: usize = 0;
+    for (diagnostics) |diag| {
+        switch (diag) {
+            .open_ext_not_allowed_in_type_decl => diag_count += 1,
+            else => {},
+        }
+    }
+    try testing.expectEqual(@as(usize, 1), diag_count);
+}
+
 test "local type scoping - not visible after exiting block" {
     const gpa = testing.allocator;
     const source = "";
