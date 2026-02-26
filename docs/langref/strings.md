@@ -6,7 +6,7 @@ If you're interested in the low-level details of their [UTF-8 representation](#l
 
 ## Unicode
 
-Roc strings reprsent text using [Unicode](https://unicode.org), which
+Roc strings represent text using [Unicode](https://unicode.org), which
 is a deep topic. (The [Unicode glossary](http://www.unicode.org/glossary/) has over 500 entries in it!)
 
 This guide will provide a basic overview of Unicode, including the relevant differences between these concepts:
