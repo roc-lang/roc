@@ -11803,192 +11803,195 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 }
             }
 
-            switch (result_layout) {
-                .i64, .i32, .i16, .u64, .u32, .u16, .bool => {
-                    const reg = try self.ensureInGeneralReg(loc);
-                    try self.emitStoreToMem(saved_ptr_reg, reg);
-                },
-                .u8 => {
-                    // Zero-extend to 64 bits before storing, since the register
-                    // may have garbage in the upper bits from mutable variable loads.
-                    // Shift left 56, then logical shift right 56 to clear upper bits.
-                    const reg = try self.ensureInGeneralReg(loc);
-                    try self.emitShlImm(.w64, reg, reg, 56);
-                    try self.emitLsrImm(.w64, reg, reg, 56);
-                    try self.emitStoreToMem(saved_ptr_reg, reg);
-                },
-                .i8 => {
-                    // Sign-extend to 64 bits before storing, since the register
-                    // may have garbage in the upper bits from mutable variable loads.
-                    // Shift left 56, then arithmetic shift right 56 to sign-extend.
-                    const reg = try self.ensureInGeneralReg(loc);
-                    try self.emitShlImm(.w64, reg, reg, 56);
-                    try self.emitAsrImm(.w64, reg, reg, 56);
-                    try self.emitStoreToMem(saved_ptr_reg, reg);
-                },
-                .f64 => {
-                    switch (loc) {
-                        .float_reg => |reg| {
-                            try self.emitStoreFloatToMem(saved_ptr_reg, reg);
-                        },
-                        .immediate_f64 => |val| {
-                            const bits: i64 = @bitCast(val);
-                            const reg = try self.allocTempGeneral();
-                            try self.codegen.emitLoadImm(reg, bits);
-                            try self.emitStoreToMem(saved_ptr_reg, reg);
-                            self.codegen.freeGeneral(reg);
-                        },
-                        .general_reg, .stack, .stack_i128, .stack_str, .list_stack, .immediate_i64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
-                            const reg = try self.ensureInGeneralReg(loc);
-                            try self.emitStoreToMem(saved_ptr_reg, reg);
-                        },
-                    }
-                },
-                .f32 => {
-                    // F32: Convert from F64 and store 4 bytes.
-                    // Note: `stabilize` spills float regs to the stack as 8-byte F64,
-                    // so .stack locations hold F64-encoded values that need conversion.
-                    switch (loc) {
-                        .float_reg => |reg| {
-                            // Convert F64 to F32, then store 4 bytes
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.fcvtFloatFloat(.single, reg, .double, reg);
-                                try self.codegen.emit.fstrRegMemUoff(.single, reg, saved_ptr_reg, 0);
-                            } else {
-                                try self.codegen.emit.cvtsd2ssRegReg(reg, reg);
-                                try self.codegen.emit.movssMemReg(saved_ptr_reg, 0, reg);
-                            }
-                        },
-                        .immediate_f64 => |val| {
-                            // Convert to f32 bits and store 4 bytes
-                            const f32_val: f32 = @floatCast(val);
-                            const bits: u32 = @bitCast(f32_val);
-                            const reg = try self.allocTempGeneral();
-                            try self.codegen.emitLoadImm(reg, @as(i64, bits));
-                            try self.emitStoreToPtr(.w32, reg, saved_ptr_reg, 0);
-                            self.codegen.freeGeneral(reg);
-                        },
-                        .stack => |s| {
-                            const offset = s.offset;
-                            // Value was spilled to stack as F64 by stabilize.
-                            // Load as F64, convert to F32, then store 4 bytes.
-                            const freg = self.codegen.allocFloat() orelse unreachable;
-                            try self.codegen.emitLoadStackF64(freg, offset);
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.fcvtFloatFloat(.single, freg, .double, freg);
-                                try self.codegen.emit.fstrRegMemUoff(.single, freg, saved_ptr_reg, 0);
-                            } else {
-                                try self.codegen.emit.cvtsd2ssRegReg(freg, freg);
-                                try self.codegen.emit.movssMemReg(saved_ptr_reg, 0, freg);
-                            }
-                            self.codegen.freeFloat(freg);
-                        },
-                        .general_reg, .stack_i128, .stack_str, .list_stack, .immediate_i64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
-                            // Store 4 bytes from general register
-                            const reg = try self.ensureInGeneralReg(loc);
-                            try self.emitStoreToPtr(.w32, reg, saved_ptr_reg, 0);
-                        },
-                    }
-                },
-                .i128, .u128, .dec => {
-                    try self.storeI128ToMem(saved_ptr_reg, loc);
-                },
-                .str => {
-                    // Strings are 24 bytes (ptr, len, capacity) - same as lists
-                    switch (loc) {
-                        .stack_str => |stack_offset| {
-                            // Copy 24-byte RocStr struct from stack to result buffer
-                            const temp_reg = try self.allocTempGeneral();
-
-                            // Copy all 24 bytes (3 x 8-byte words)
-                            try self.emitLoad(.w64, temp_reg, frame_ptr, stack_offset);
-                            try self.emitStore(.w64, saved_ptr_reg, 0, temp_reg);
-                            try self.emitLoad(.w64, temp_reg, frame_ptr, stack_offset + 8);
-                            try self.emitStore(.w64, saved_ptr_reg, 8, temp_reg);
-                            try self.emitLoad(.w64, temp_reg, frame_ptr, stack_offset + 16);
-                            try self.emitStore(.w64, saved_ptr_reg, 16, temp_reg);
-
-                            self.codegen.freeGeneral(temp_reg);
-                        },
-                        .stack => |s| {
-                            const stack_offset = s.offset;
-                            // Copy 24-byte RocStr struct from stack to result buffer
-                            const temp_reg = try self.allocTempGeneral();
-
-                            // Copy all 24 bytes (3 x 8-byte words)
-                            try self.emitLoad(.w64, temp_reg, frame_ptr, stack_offset);
-                            try self.emitStore(.w64, saved_ptr_reg, 0, temp_reg);
-                            try self.emitLoad(.w64, temp_reg, frame_ptr, stack_offset + 8);
-                            try self.emitStore(.w64, saved_ptr_reg, 8, temp_reg);
-                            try self.emitLoad(.w64, temp_reg, frame_ptr, stack_offset + 16);
-                            try self.emitStore(.w64, saved_ptr_reg, 16, temp_reg);
-
-                            self.codegen.freeGeneral(temp_reg);
-                        },
-                        .general_reg, .float_reg, .stack_i128, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
-                            // Fallback for non-stack string location
-                            const reg = try self.ensureInGeneralReg(loc);
-                            try self.emitStoreToMem(saved_ptr_reg, reg);
-                        },
-                    }
-                },
-                _ => { // zig-lint-allow: catch-all (layout.Idx is non-exhaustive)
-                    // Check if this is a composite type (record/tuple/list) via layout store
-                    if (self.layout_store) |ls| {
-                        const layout_val = ls.getLayout(result_layout);
-                        switch (layout_val.tag) {
-                            .record => {
-                                const record_data = ls.getRecordData(layout_val.data.record.idx);
-                                try self.copyStackToPtr(loc, saved_ptr_reg, record_data.size);
-                                return;
-                            },
-                            .tuple => {
-                                const tuple_data = ls.getTupleData(layout_val.data.tuple.idx);
-                                try self.copyStackToPtr(loc, saved_ptr_reg, tuple_data.size);
-                                return;
-                            },
-                            .tag_union => {
-                                const tu_data = ls.getTagUnionData(layout_val.data.tag_union.idx);
-                                try self.copyStackToPtr(loc, saved_ptr_reg, tu_data.size);
-                                return;
-                            },
-                            .list, .list_of_zst => {
-                                // Lists are roc_list_size-byte structs (ptr, len, capacity)
-                                try self.copyStackToPtr(loc, saved_ptr_reg, roc_list_size);
-                                return;
-                            },
-                            .scalar => {
-                                const sa = ls.layoutSizeAlign(layout_val);
-                                if (sa.size == roc_str_size) {
-                                    // Str: roc_str_size-byte struct (ptr, len, capacity)
-                                    try self.copyStackToPtr(loc, saved_ptr_reg, roc_str_size);
-                                } else if (sa.size == 16) {
-                                    // i128/u128/Dec
-                                    try self.storeI128ToMem(saved_ptr_reg, loc);
-                                } else if (sa.size > 0) {
-                                    // Small scalars (1-8 bytes)
-                                    const reg = try self.ensureInGeneralReg(loc);
-                                    try self.emitStoreToMem(saved_ptr_reg, reg);
-                                }
-                                return;
-                            },
-                            .zst => {
-                                // Zero-sized type — nothing to store.
-                                return;
-                            },
-                            .closure => {
-                                const sa = ls.layoutSizeAlign(layout_val);
-                                try self.copyStackToPtr(loc, saved_ptr_reg, sa.size);
-                                return;
-                            },
-                            .box, .box_of_zst => {
-                                unreachable;
-                            },
+            // layout.Idx is a non-exhaustive enum: the named variants are builtin
+            // scalars, and unnamed values are dynamic layout store indices for composite
+            // types (records, tuples, tag unions, etc.). This code uses mono, which is
+            // deprecated in favor of LIR, so rather than adding a lint-suppression
+            // mechanism just for this, we use an if-else chain for the non-exhaustive
+            // part instead of a switch.
+            if (result_layout == .u8) {
+                // Zero-extend to 64 bits before storing, since the register
+                // may have garbage in the upper bits from mutable variable loads.
+                // Shift left 56, then logical shift right 56 to clear upper bits.
+                const reg = try self.ensureInGeneralReg(loc);
+                try self.emitShlImm(.w64, reg, reg, 56);
+                try self.emitLsrImm(.w64, reg, reg, 56);
+                try self.emitStoreToMem(saved_ptr_reg, reg);
+            } else if (result_layout == .i8) {
+                // Sign-extend to 64 bits before storing, since the register
+                // may have garbage in the upper bits from mutable variable loads.
+                // Shift left 56, then arithmetic shift right 56 to sign-extend.
+                const reg = try self.ensureInGeneralReg(loc);
+                try self.emitShlImm(.w64, reg, reg, 56);
+                try self.emitAsrImm(.w64, reg, reg, 56);
+                try self.emitStoreToMem(saved_ptr_reg, reg);
+            } else if (result_layout == .f64) {
+                switch (loc) {
+                    .float_reg => |reg| {
+                        try self.emitStoreFloatToMem(saved_ptr_reg, reg);
+                    },
+                    .immediate_f64 => |val| {
+                        const bits: i64 = @bitCast(val);
+                        const reg = try self.allocTempGeneral();
+                        try self.codegen.emitLoadImm(reg, bits);
+                        try self.emitStoreToMem(saved_ptr_reg, reg);
+                        self.codegen.freeGeneral(reg);
+                    },
+                    .general_reg, .stack, .stack_i128, .stack_str, .list_stack, .immediate_i64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
+                        const reg = try self.ensureInGeneralReg(loc);
+                        try self.emitStoreToMem(saved_ptr_reg, reg);
+                    },
+                }
+            } else if (result_layout == .f32) {
+                // F32: Convert from F64 and store 4 bytes.
+                // Note: `stabilize` spills float regs to the stack as 8-byte F64,
+                // so .stack locations hold F64-encoded values that need conversion.
+                switch (loc) {
+                    .float_reg => |reg| {
+                        // Convert F64 to F32, then store 4 bytes
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            try self.codegen.emit.fcvtFloatFloat(.single, reg, .double, reg);
+                            try self.codegen.emit.fstrRegMemUoff(.single, reg, saved_ptr_reg, 0);
+                        } else {
+                            try self.codegen.emit.cvtsd2ssRegReg(reg, reg);
+                            try self.codegen.emit.movssMemReg(saved_ptr_reg, 0, reg);
                         }
-                    } else {
-                        unreachable; // non-scalar layout must have layout store
+                    },
+                    .immediate_f64 => |val| {
+                        // Convert to f32 bits and store 4 bytes
+                        const f32_val: f32 = @floatCast(val);
+                        const bits: u32 = @bitCast(f32_val);
+                        const reg = try self.allocTempGeneral();
+                        try self.codegen.emitLoadImm(reg, @as(i64, bits));
+                        try self.emitStoreToPtr(.w32, reg, saved_ptr_reg, 0);
+                        self.codegen.freeGeneral(reg);
+                    },
+                    .stack => |s| {
+                        const offset = s.offset;
+                        // Value was spilled to stack as F64 by stabilize.
+                        // Load as F64, convert to F32, then store 4 bytes.
+                        const freg = self.codegen.allocFloat() orelse unreachable;
+                        try self.codegen.emitLoadStackF64(freg, offset);
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            try self.codegen.emit.fcvtFloatFloat(.single, freg, .double, freg);
+                            try self.codegen.emit.fstrRegMemUoff(.single, freg, saved_ptr_reg, 0);
+                        } else {
+                            try self.codegen.emit.cvtsd2ssRegReg(freg, freg);
+                            try self.codegen.emit.movssMemReg(saved_ptr_reg, 0, freg);
+                        }
+                        self.codegen.freeFloat(freg);
+                    },
+                    .general_reg, .stack_i128, .stack_str, .list_stack, .immediate_i64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
+                        // Store 4 bytes from general register
+                        const reg = try self.ensureInGeneralReg(loc);
+                        try self.emitStoreToPtr(.w32, reg, saved_ptr_reg, 0);
+                    },
+                }
+            } else if (result_layout == .i128 or result_layout == .u128 or result_layout == .dec) {
+                try self.storeI128ToMem(saved_ptr_reg, loc);
+            } else if (result_layout == .str) {
+                // Strings are 24 bytes (ptr, len, capacity) - same as lists
+                switch (loc) {
+                    .stack_str => |stack_offset| {
+                        // Copy 24-byte RocStr struct from stack to result buffer
+                        const temp_reg = try self.allocTempGeneral();
+
+                        // Copy all 24 bytes (3 x 8-byte words)
+                        try self.emitLoad(.w64, temp_reg, frame_ptr, stack_offset);
+                        try self.emitStore(.w64, saved_ptr_reg, 0, temp_reg);
+                        try self.emitLoad(.w64, temp_reg, frame_ptr, stack_offset + 8);
+                        try self.emitStore(.w64, saved_ptr_reg, 8, temp_reg);
+                        try self.emitLoad(.w64, temp_reg, frame_ptr, stack_offset + 16);
+                        try self.emitStore(.w64, saved_ptr_reg, 16, temp_reg);
+
+                        self.codegen.freeGeneral(temp_reg);
+                    },
+                    .stack => |s| {
+                        const stack_offset = s.offset;
+                        // Copy 24-byte RocStr struct from stack to result buffer
+                        const temp_reg = try self.allocTempGeneral();
+
+                        // Copy all 24 bytes (3 x 8-byte words)
+                        try self.emitLoad(.w64, temp_reg, frame_ptr, stack_offset);
+                        try self.emitStore(.w64, saved_ptr_reg, 0, temp_reg);
+                        try self.emitLoad(.w64, temp_reg, frame_ptr, stack_offset + 8);
+                        try self.emitStore(.w64, saved_ptr_reg, 8, temp_reg);
+                        try self.emitLoad(.w64, temp_reg, frame_ptr, stack_offset + 16);
+                        try self.emitStore(.w64, saved_ptr_reg, 16, temp_reg);
+
+                        self.codegen.freeGeneral(temp_reg);
+                    },
+                    .general_reg, .float_reg, .stack_i128, .list_stack, .immediate_i64, .immediate_f64, .immediate_i128, .lambda_code, .closure_value, .noreturn => {
+                        // Fallback for non-stack string location
+                        const reg = try self.ensureInGeneralReg(loc);
+                        try self.emitStoreToMem(saved_ptr_reg, reg);
+                    },
+                }
+            } else if (result_layout == .zst) {
+                // Zero-sized type — nothing to store.
+            } else if (result_layout == .i64 or result_layout == .i32 or result_layout == .i16 or
+                result_layout == .u64 or result_layout == .u32 or result_layout == .u16 or
+                result_layout == .bool or result_layout == .opaque_ptr)
+            {
+                const reg = try self.ensureInGeneralReg(loc);
+                try self.emitStoreToMem(saved_ptr_reg, reg);
+            } else {
+                // Unnamed layout.Idx value: a dynamic layout store index for a
+                // composite type (record, tuple, tag union, list, closure, etc.).
+                if (self.layout_store) |ls| {
+                    const layout_val = ls.getLayout(result_layout);
+                    switch (layout_val.tag) {
+                        .record => {
+                            const record_data = ls.getRecordData(layout_val.data.record.idx);
+                            try self.copyStackToPtr(loc, saved_ptr_reg, record_data.size);
+                            return;
+                        },
+                        .tuple => {
+                            const tuple_data = ls.getTupleData(layout_val.data.tuple.idx);
+                            try self.copyStackToPtr(loc, saved_ptr_reg, tuple_data.size);
+                            return;
+                        },
+                        .tag_union => {
+                            const tu_data = ls.getTagUnionData(layout_val.data.tag_union.idx);
+                            try self.copyStackToPtr(loc, saved_ptr_reg, tu_data.size);
+                            return;
+                        },
+                        .list, .list_of_zst => {
+                            // Lists are roc_list_size-byte structs (ptr, len, capacity)
+                            try self.copyStackToPtr(loc, saved_ptr_reg, roc_list_size);
+                            return;
+                        },
+                        .scalar => {
+                            const sa = ls.layoutSizeAlign(layout_val);
+                            if (sa.size == roc_str_size) {
+                                // Str: roc_str_size-byte struct (ptr, len, capacity)
+                                try self.copyStackToPtr(loc, saved_ptr_reg, roc_str_size);
+                            } else if (sa.size == 16) {
+                                // i128/u128/Dec
+                                try self.storeI128ToMem(saved_ptr_reg, loc);
+                            } else if (sa.size > 0) {
+                                // Small scalars (1-8 bytes)
+                                const reg = try self.ensureInGeneralReg(loc);
+                                try self.emitStoreToMem(saved_ptr_reg, reg);
+                            }
+                            return;
+                        },
+                        .zst => {
+                            // Zero-sized type — nothing to store.
+                            return;
+                        },
+                        .closure => {
+                            const sa = ls.layoutSizeAlign(layout_val);
+                            try self.copyStackToPtr(loc, saved_ptr_reg, sa.size);
+                            return;
+                        },
+                        .box, .box_of_zst => {
+                            unreachable;
+                        },
                     }
-                },
+                } else {
+                    unreachable; // non-scalar layout must have layout store
+                }
             }
         }
 
