@@ -342,7 +342,7 @@ const Formatter = struct {
         // so flushing here would duplicate the whitespace handling.
         const header_has_own_tokens = switch (header) {
             .type_module, .default_app, .malformed => false,
-            _ => true,
+            .app, .module, .package, .platform, .hosted => true,
         };
         if (header_has_own_tokens) {
             _ = try fmt.flushCommentsBefore(header_region.start);
@@ -953,7 +953,7 @@ const Formatter = struct {
         // Only output the extension type if it's not an anonymous underscore
         switch (ext_anno) {
             .underscore => {}, // Anonymous extension - just output ".."
-            _ => _ = try @as(fn (*Formatter, AST.TypeAnno.Idx) anyerror!AST.TokenizedRegion, Formatter.formatTypeAnno)(fmt, ext),
+            .apply, .ty_var, .underscore_type_var, .ty, .tag_union, .tuple, .record, .@"fn", .parens, .malformed => _ = try @as(fn (*Formatter, AST.TypeAnno.Idx) anyerror!AST.TokenizedRegion, Formatter.formatTypeAnno)(fmt, ext),
         }
         if (record_multiline) {
             try fmt.push(',');
@@ -1041,7 +1041,7 @@ const Formatter = struct {
                         .string_part => |str| {
                             try fmt.pushTokenText(str.token);
                         },
-                        _ => try fmt.formatStringInterpolation(idx),
+                        .int, .frac, .typed_int, .typed_frac, .single_quote, .string, .multiline_string, .list, .tuple, .record, .tag, .lambda, .apply, .record_updater, .field_access, .tuple_access, .local_dispatch, .bin_op, .suffix_single_question, .unary_op, .if_then_else, .if_without_else, .match, .ident, .dbg, .record_builder, .ellipsis, .block, .for_expr, .malformed => try fmt.formatStringInterpolation(idx),
                     }
                 }
                 try fmt.push('"');
@@ -1067,7 +1067,7 @@ const Formatter = struct {
                             add_newline = true;
                             try fmt.pushTokenText(str.token);
                         },
-                        _ => {
+                        .int, .frac, .typed_int, .typed_frac, .single_quote, .string, .multiline_string, .list, .tuple, .record, .tag, .lambda, .apply, .record_updater, .field_access, .tuple_access, .local_dispatch, .bin_op, .suffix_single_question, .unary_op, .if_then_else, .if_without_else, .match, .ident, .dbg, .record_builder, .ellipsis, .block, .for_expr, .malformed => {
                             add_newline = false;
                             try fmt.formatStringInterpolation(idx);
                         },
@@ -2828,7 +2828,7 @@ const Formatter = struct {
                     .expr => |e| {
                         return fmt.nodeWillBeMultiline(AST.Expr.Idx, e.expr);
                     },
-                    _ => return false,
+                    .decl, .@"var", .crash, .dbg, .expect, .@"for", .@"while", .@"return", .@"break", .import, .type_decl, .type_anno, .malformed => return false,
                 }
             },
             AST.TypeHeader.Idx => {
@@ -2867,7 +2867,7 @@ const Formatter = struct {
 
                         return fmt.collectionWillBeMultiline(AST.RecordField.Idx, p.provides);
                     },
-                    _ => return false,
+                    .app, .module, .hosted, .type_module, .default_app, .malformed => return false,
                 }
             },
             else => return false,

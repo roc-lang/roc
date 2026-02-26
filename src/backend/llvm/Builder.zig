@@ -401,7 +401,7 @@ pub const Type = enum(u32) {
             .ptr => true,
             .void, .half, .bfloat, .float, .double, .fp128, .x86_fp80, .ppc_fp128, .x86_amx, .x86_mmx, .label, .token, .metadata, .i1, .i8, .i16, .i29, .i32, .i64, .i80, .i128, .@"ptr addrspace(4)", .none, ._ => switch (self.tag(builder)) {
                 .pointer => true,
-                _ => false,
+                .simple, .function, .vararg_function, .integer, .target, .vector, .scalable_vector, .small_array, .array, .structure, .packed_structure, .named_structure => false,
             },
         };
     }
@@ -14580,7 +14580,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                     if (global.dbg.unwrap()) |dbg| {
                         switch (global.kind) {
                             .function => |f| if (f.ptrConst(self).instructions.len != 0) continue,
-                            _ => {},
+                            .alias, .variable, .replaced => {},
                         }
 
                         try metadata_block.writeAbbrevAdapted(MetadataBlock.GlobalDeclAttachment{
