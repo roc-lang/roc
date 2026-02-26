@@ -2476,9 +2476,16 @@ pub fn checkExhaustiveSketched(
 
                 // Recurse into all real constructors' payloads (skip #Open synthetic).
                 return recurseIntoAllCtors(
-                    allocator, type_store, builtin_idents, matrix, column_types,
-                    ext_vars_to_close, ext_vars_to_keep_open, ctor_info.union_info.alternatives[0 .. num_alts - 1],
-                    ctor_info.union_info, first_col_type,
+                    allocator,
+                    type_store,
+                    builtin_idents,
+                    matrix,
+                    column_types,
+                    ext_vars_to_close,
+                    ext_vars_to_keep_open,
+                    ctor_info.union_info.alternatives[0 .. num_alts - 1],
+                    ctor_info.union_info,
+                    first_col_type,
                 );
             }
 
@@ -2544,9 +2551,16 @@ pub fn checkExhaustiveSketched(
 
             // All constructors covered - check each recursively
             return recurseIntoAllCtors(
-                allocator, type_store, builtin_idents, matrix, column_types,
-                ext_vars_to_close, ext_vars_to_keep_open, ctor_info.union_info.alternatives,
-                ctor_info.union_info, first_col_type,
+                allocator,
+                type_store,
+                builtin_idents,
+                matrix,
+                column_types,
+                ext_vars_to_close,
+                ext_vars_to_keep_open,
+                ctor_info.union_info.alternatives,
+                ctor_info.union_info,
+                first_col_type,
             );
         },
 
