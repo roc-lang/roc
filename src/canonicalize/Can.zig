@@ -10291,11 +10291,10 @@ fn canonicalizeTypeAnnoTagUnion(
             switch (type_anno_ctx.type) {
                 .local_anno => {
                     // Anonymous `..` is shorthand for `..a` where `a` is a
-                    // unique rigid var.
+                    // unique rigid var. We use `#` prefix because it's not
+                    // a valid Roc identifier character, preventing collisions.
                     var buf: [32]u8 = undefined;
-                    const name_text = std.fmt.bufPrint(&buf, "#open_ext_{d}", .{self.anon_open_ext_count}) catch |err| switch (err) {
-                        error.NoSpaceLeft => return error.OutOfMemory,
-                    };
+                    const name_text = std.fmt.bufPrint(&buf, "#open_ext_{d}", .{self.anon_open_ext_count}) catch unreachable;
                     self.anon_open_ext_count += 1;
                     const name_ident = try self.env.insertIdent(base.Ident.for_text(name_text));
                     break :blk try self.env.addTypeAnno(.{ .rigid_var = .{
