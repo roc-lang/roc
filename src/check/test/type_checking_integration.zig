@@ -2031,6 +2031,28 @@ test "check type - record - update - fail 2" {
     );
 }
 
+test "check type - record - pattern destructure rest 1" {
+    const source =
+        \\strip_name = |{ name: _, ..rest}| rest
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "strip_name" } },
+        "{ ..a, name: _field } -> a",
+    );
+}
+
+test "check type - record - pattern destructure rest 2" {
+    const source =
+        \\strip_name = |{ name: _, ..rest}| rest.age
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "strip_name" } },
+        "{ .., age: a, name: _field } -> a",
+    );
+}
+
 // tags //
 
 test "check type - patterns - wrong type" {

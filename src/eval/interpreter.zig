@@ -8114,6 +8114,7 @@ pub const Interpreter = struct {
                     const inner_pattern_idx = switch (destruct.kind) {
                         .Required => |p_idx| p_idx,
                         .SubPattern => |p_idx| p_idx,
+                        .Rest => |p_idx| p_idx,
                     };
 
                     const before = out_binds.items.len;

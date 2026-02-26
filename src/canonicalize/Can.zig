@@ -2900,6 +2900,7 @@ fn collectBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) !void {
                 switch (destruct.kind) {
                     .Required => |sub_pattern_idx| try self.collectBoundVarsToScratch(sub_pattern_idx),
                     .SubPattern => |sub_pattern_idx| try self.collectBoundVarsToScratch(sub_pattern_idx),
+                    .Rest => |sub_pattern_idx| try self.collectBoundVarsToScratch(sub_pattern_idx),
                 }
             }
         },
@@ -8534,7 +8535,10 @@ pub fn canonicalizePattern(
                         const record_destruct = CIR.Pattern.RecordDestruct{
                             .label = field_name_ident,
                             .ident = field_name_ident,
-                            .kind = .{ .Required = assign_pattern_idx },
+                            .kind = if (field.rest)
+                                .{ .Rest = assign_pattern_idx }
+                            else
+                                .{ .Required = assign_pattern_idx },
                         };
 
                         const destruct_idx = try self.env.addRecordDestruct(record_destruct, field_region);

@@ -256,11 +256,17 @@ pub const Pattern = union(enum) {
             /// { address: { city } } => ... # address field has a SubPattern
             /// ```
             SubPattern: Pattern.Idx,
+            /// Pattern to assign the rest of the record fields
+            /// ```roc
+            /// { name, ..rest } => ... # rest is all other fields, except name
+            /// ```
+            Rest: Pattern.Idx,
 
             pub fn toPatternIdx(kind: Kind) Pattern.Idx {
                 switch (kind) {
                     .Required => |p_idx| return p_idx,
                     .SubPattern => |p_idx| return p_idx,
+                    .Rest => |p_idx| return p_idx,
                 }
             }
 
@@ -277,6 +283,14 @@ pub const Pattern = union(enum) {
                     .SubPattern => |pattern_idx| {
                         const begin = tree.beginNode();
                         try tree.pushStaticAtom("sub-pattern");
+                        const attrs = tree.beginNode();
+                        const pattern = ir.store.getPattern(pattern_idx);
+                        try pattern.pushToSExprTree(ir, tree, pattern_idx);
+                        try tree.endNode(begin, attrs);
+                    },
+                    .Rest => |pattern_idx| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("rest-pattern");
                         const attrs = tree.beginNode();
                         const pattern = ir.store.getPattern(pattern_idx);
                         try pattern.pushToSExprTree(ir, tree, pattern_idx);
