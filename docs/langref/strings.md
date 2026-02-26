@@ -150,6 +150,6 @@ The way Roc organizes the `Str` module and supporting packages is designed to he
 For this reason (among others), grapheme functions live in [roc-lang/unicode](https://github.com/roc-lang/unicode) rather than in [`Str`](https://www.roc-lang.org/builtins/Str). They are more niche than they seem, so they should not be reached for all the time! Another reason is that 
 
 
-# Low-Level
+## Low-Level
 
 Since Roc only allows valid UTF-8, surrogate pairs (including individual high and low surrogates) are not valid syntax, not even in single quotes.
