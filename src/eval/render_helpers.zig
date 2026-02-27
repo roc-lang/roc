@@ -18,51 +18,43 @@ fn getSortedTag(
     tag_union: types.TagUnion,
     tag_index: usize,
 ) ?types.Tag {
-    const tags = ctx.runtime_types.getTagsSlice(tag_union.tags);
-    if (tags.len == 0) return null;
+    // Gather tags across the full extension chain.
+    var all_tags = std.array_list.AlignedManaged(types.Tag, null).init(ctx.allocator);
+    defer all_tags.deinit();
 
-    // Fast path: if tags are already sorted, just return directly
-    // (check first two tags - if they're in order, likely all are)
-    if (tags.len <= 1) {
-        return if (tag_index < tags.len)
-            types.Tag{ .name = tags.items(.name)[tag_index], .args = tags.items(.args)[tag_index] }
-        else
-            null;
+    const initial_tags = ctx.runtime_types.getTagsSlice(tag_union.tags);
+    for (initial_tags.items(.name), initial_tags.items(.args)) |name, args| {
+        all_tags.append(.{ .name = name, .args = args }) catch return null;
     }
 
-    // Get ident store for sorting
+    var ext = tag_union.ext;
+    while (true) {
+        const ext_resolved = ctx.runtime_types.resolveVar(ext);
+        switch (ext_resolved.desc.content) {
+            .structure => |st| switch (st) {
+                .tag_union => |ext_tag_union| {
+                    const ext_tags = ctx.runtime_types.getTagsSlice(ext_tag_union.tags);
+                    for (ext_tags.items(.name), ext_tags.items(.args)) |name, args| {
+                        all_tags.append(.{ .name = name, .args = args }) catch return null;
+                    }
+                    ext = ext_tag_union.ext;
+                },
+                .empty_tag_union => break,
+                else => break,
+            },
+            .alias => |alias| {
+                ext = ctx.runtime_types.getAliasBackingVar(alias);
+            },
+            else => break,
+        }
+    }
+
+    if (all_tags.items.len == 0) return null;
+
     const ident_store = ctx.env.common.getIdentStore();
+    std.mem.sort(types.Tag, all_tags.items, ident_store, types.Tag.sortByNameAsc);
 
-    // Always copy and sort to ensure consistent ordering
-    // We cannot rely on storage order because the same source type may be translated
-    // multiple times with different cache generations, resulting in different
-    // runtime type vars with potentially different tag ordering.
-
-    // Tags are NOT sorted - need to copy and sort
-    // Use a stack buffer for small tag unions, allocate for larger ones
-    var stack_buf: [16]types.Tag = undefined;
-    var sorted_tags: []types.Tag = undefined;
-    var heap_allocated = false;
-
-    if (tags.len <= stack_buf.len) {
-        sorted_tags = stack_buf[0..tags.len];
-    } else {
-        sorted_tags = ctx.allocator.alloc(types.Tag, tags.len) catch return null;
-        heap_allocated = true;
-    }
-    defer if (heap_allocated) ctx.allocator.free(sorted_tags);
-
-    // Copy tags
-    const names = tags.items(.name);
-    const args = tags.items(.args);
-    for (names, args, 0..) |name, arg, i| {
-        sorted_tags[i] = types.Tag{ .name = name, .args = arg };
-    }
-
-    // Sort alphabetically
-    std.mem.sort(types.Tag, sorted_tags, ident_store, types.Tag.sortByNameAsc);
-
-    return if (tag_index < sorted_tags.len) sorted_tags[tag_index] else null;
+    return if (tag_index < all_tags.items.len) all_tags.items[tag_index] else null;
 }
 
 fn toVarRange(range: anytype) types.Var.SafeList.Range {
@@ -92,6 +84,27 @@ pub const RenderCtx = struct {
     callback_ctx: ?*anyopaque = null,
 };
 
+fn shouldPreferIntegerLayoutRendering(ctx: *RenderCtx, rt_var: types.Var) bool {
+    var resolved = ctx.runtime_types.resolveVar(rt_var);
+    while (true) {
+        switch (resolved.desc.content) {
+            .alias => |al| {
+                const backing = ctx.runtime_types.getAliasBackingVar(al);
+                resolved = ctx.runtime_types.resolveVar(backing);
+            },
+            // When the type is still generic, trust concrete runtime layout for ints.
+            .flex, .rigid => return true,
+            .structure => |st| switch (st) {
+                .nominal_type => |nt| {
+                    return nt.ident.ident_idx == ctx.env.idents.builtin_numeral;
+                },
+                else => return false,
+            },
+            else => return false,
+        }
+    }
+}
+
 /// Render `value` using the supplied runtime type variable, following alias/nominal backing.
 pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.Var) ![]u8 {
     const gpa = ctx.allocator;
@@ -117,6 +130,18 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
             }
             try buf.append('"');
             return buf.toOwnedSlice();
+        }
+        if (scalar.tag == .int and shouldPreferIntegerLayoutRendering(ctx, rt_var)) {
+            return renderValueRoc(ctx, value);
+        }
+        if (scalar.tag == .frac and scalar.data.frac == .dec and shouldPreferIntegerLayoutRendering(ctx, rt_var)) {
+            const rendered = try renderValueRoc(ctx, value);
+            if (std.mem.endsWith(u8, rendered, ".0")) {
+                const trimmed = try gpa.dupe(u8, rendered[0 .. rendered.len - 2]);
+                gpa.free(rendered);
+                return trimmed;
+            }
+            return rendered;
         }
     }
 
@@ -182,23 +207,6 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                                 const rendered_payload = try renderValueRocWithType(ctx, payload_value, payload_var);
                                 defer gpa.free(rendered_payload);
                                 try out.appendSlice(rendered_payload);
-                            },
-                            .scalar => {
-                                // Box might be stored as a scalar opaque_ptr when inside other structures
-                                // Try to interpret it as a pointer to boxed data
-                                if (value.layout.data.scalar.tag == .opaque_ptr and payload_size > 0) {
-                                    if (value.ptr) |ptr| {
-                                        const data_ptr: *usize = @ptrCast(@alignCast(ptr));
-                                        payload_value.ptr = @as(*anyopaque, @ptrFromInt(data_ptr.*));
-                                        const rendered_payload = try renderValueRocWithType(ctx, payload_value, payload_var);
-                                        defer gpa.free(rendered_payload);
-                                        try out.appendSlice(rendered_payload);
-                                    } else {
-                                        unreachable;
-                                    }
-                                } else {
-                                    unreachable;
-                                }
                             },
                             else => {
                                 unreachable;
@@ -383,8 +391,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                                             var tup_acc2 = try tuple_value.asTuple(ctx.layout_store);
                                             var j: usize = 0;
                                             while (j < arg_vars.len) : (j += 1) {
-                                                const sorted_idx = tup_acc2.findElementIndexByOriginal(j) orelse return error.TypeMismatch;
-                                                const elem_value = try tup_acc2.getElement(sorted_idx, arg_vars[j]);
+                                                const elem_value = try tup_acc2.getElement(j, arg_vars[j]);
                                                 const rendered = try renderValueRocWithType(ctx, elem_value, arg_vars[j]);
                                                 defer gpa.free(rendered);
                                                 try out.appendSlice(rendered);
@@ -524,8 +531,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                                     var tup_acc = try tuple_value.asTuple(ctx.layout_store);
                                     var j: usize = 0;
                                     while (j < arg_vars.len) : (j += 1) {
-                                        const sorted_idx = tup_acc.findElementIndexByOriginal(j) orelse return error.TypeMismatch;
-                                        const elem_value = try tup_acc.getElement(sorted_idx, arg_vars[j]);
+                                        const elem_value = try tup_acc.getElement(j, arg_vars[j]);
                                         const rendered = try renderValueRocWithType(ctx, elem_value, arg_vars[j]);
                                         defer gpa.free(rendered);
                                         try out.appendSlice(rendered);
@@ -656,6 +662,45 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                 return try gpa.dupe(u8, "{}");
             }
             unreachable;
+        },
+        .tuple => |tuple| {
+            const elem_types = ctx.runtime_types.sliceVars(tuple.elems);
+
+            var out = std.array_list.AlignedManaged(u8, null).init(gpa);
+            errdefer out.deinit();
+            try out.append('(');
+
+            const tuple_size = ctx.layout_store.layoutSize(value.layout);
+            if (tuple_size == 0 or value.ptr == null) {
+                // Zero-sized tuple payloads (e.g. all-ZST elements) can have null pointers.
+                for (elem_types, 0..) |elem_type, i| {
+                    const rendered = try renderValueRocWithType(
+                        ctx,
+                        StackValue{
+                            .layout = layout.Layout.zst(),
+                            .ptr = null,
+                            .is_initialized = true,
+                            .rt_var = elem_type,
+                        },
+                        elem_type,
+                    );
+                    defer gpa.free(rendered);
+                    try out.appendSlice(rendered);
+                    if (i + 1 < elem_types.len) try out.appendSlice(", ");
+                }
+            } else {
+                var tup_acc = try value.asTuple(ctx.layout_store);
+                for (elem_types, 0..) |elem_type, i| {
+                    const elem_value = try tup_acc.getElement(i, elem_type);
+                    const rendered = try renderValueRocWithType(ctx, elem_value, elem_type);
+                    defer gpa.free(rendered);
+                    try out.appendSlice(rendered);
+                    if (i + 1 < elem_types.len) try out.appendSlice(", ");
+                }
+            }
+
+            try out.append(')');
+            return out.toOwnedSlice();
         },
         .empty_record => {
             return try gpa.dupe(u8, "{}");

@@ -10369,10 +10369,41 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .general_reg => |reg| {
                     try self.emitStore(.w64, frame_ptr, slot, reg);
                 },
-                .lambda_code, .closure_value => {
-                    // Lambda/closure values must be called/dispatched before storing.
-                    // Reaching here indicates a compiler bug.
-                    unreachable;
+                .lambda_code => |lc| {
+                    // Store callable metadata out-of-band for pointer-sized function layouts,
+                    // and materialize a callable word in the slot.
+                    const current = self.codegen.currentOffset();
+                    const rel: i64 = @as(i64, @intCast(lc.code_offset)) - @as(i64, @intCast(current));
+                    try self.internal_addr_patches.append(self.allocator, .{
+                        .instr_offset = current,
+                        .target_offset = lc.code_offset,
+                    });
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        std.debug.assert(rel >= -1048576 and rel <= 1048575);
+                        try self.codegen.emit.adr(temp_reg, @intCast(rel));
+                    } else {
+                        const lea_size: i64 = 7;
+                        try self.codegen.emit.leaRegRipRel(temp_reg, @intCast(rel - lea_size));
+                    }
+                    try self.emitStore(.w64, frame_ptr, slot, temp_reg);
+                    if (slot_size <= 8) {
+                        try self.callable_stack_values.put(slot, .{ .lambda_code = lc });
+                    }
+                },
+                .closure_value => |cv| {
+                    if (slot_size <= 8) {
+                        try self.callable_stack_values.put(slot, .{ .closure_value = cv });
+                        try self.codegen.emitLoadImm(temp_reg, 0);
+                        try self.emitStore(.w64, frame_ptr, slot, temp_reg);
+                    } else {
+                        const src_slot = try self.ensureOnStack(.{ .closure_value = cv }, slot_size);
+                        var copied: u32 = 0;
+                        while (copied < slot_size) : (copied += 8) {
+                            const chunk_off: i32 = @intCast(copied);
+                            try self.emitLoad(.w64, temp_reg, frame_ptr, src_slot + chunk_off);
+                            try self.emitStore(.w64, frame_ptr, slot + chunk_off, temp_reg);
+                        }
+                    }
                 },
                 .stack_str => |off| {
                     var offset: u32 = 0;
@@ -10513,7 +10544,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         var in_recursive_group = false;
 
                         for (captures) |cap| {
-                            if (cap.layout_idx != .opaque_ptr) {
+                            if (!self.isFunctionLayout(cap.layout_idx)) {
                                 all_captures_are_functionish = false;
                                 break;
                             }
@@ -11202,65 +11233,76 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
         }
 
+        fn isFunctionLayout(self: *Self, layout_idx: layout.Idx) bool {
+            if (layout_idx == layout.Idx.none) return false;
+            if (layout_idx == layout.Idx.named_fn) return true;
+            if (self.layout_store) |ls| {
+                const idx_int = @intFromEnum(layout_idx);
+                if (idx_int >= ls.layouts.len()) return false;
+                return ls.getLayout(layout_idx).tag == .closure;
+            }
+            return false;
+        }
+
         /// Check whether an expression contains a call through a lookup whose
-        /// function layout is opaque_ptr (function-pointer style call).
+        /// function layout is callable-like and resolved through local bindings.
         ///
         /// These calls rely on caller scope bindings and should be inlined instead
         /// of compiled as standalone procedures.
-        fn bodyHasOpaqueLookupCall(self: *Self, expr_id: lir.LirExprId) bool {
+        fn bodyHasCallableLookupCall(self: *Self, expr_id: lir.LirExprId) bool {
             const expr = self.store.getExpr(expr_id);
             return switch (expr) {
                 .call => |c| blk: {
                     const fn_expr = self.store.getExpr(c.fn_expr);
-                    if (fn_expr == .lookup and fn_expr.lookup.layout_idx == .opaque_ptr) break :blk true;
-                    if (self.bodyHasOpaqueLookupCall(c.fn_expr)) break :blk true;
+                    if (fn_expr == .lookup and self.isFunctionLayout(fn_expr.lookup.layout_idx) and self.store.getSymbolDef(fn_expr.lookup.symbol) == null) break :blk true;
+                    if (self.bodyHasCallableLookupCall(c.fn_expr)) break :blk true;
                     const args = self.store.getExprSpan(c.args);
                     for (args) |arg_id| {
-                        if (self.bodyHasOpaqueLookupCall(arg_id)) break :blk true;
+                        if (self.bodyHasCallableLookupCall(arg_id)) break :blk true;
                     }
                     break :blk false;
                 },
                 .block => |b| blk: {
                     const stmts = self.store.getStmts(b.stmts);
                     for (stmts) |stmt| {
-                        if (self.bodyHasOpaqueLookupCall(stmt.binding().expr)) break :blk true;
+                        if (self.bodyHasCallableLookupCall(stmt.binding().expr)) break :blk true;
                     }
-                    break :blk self.bodyHasOpaqueLookupCall(b.final_expr);
+                    break :blk self.bodyHasCallableLookupCall(b.final_expr);
                 },
                 .if_then_else => |ite| blk: {
                     const branches = self.store.getIfBranches(ite.branches);
                     for (branches) |branch| {
-                        if (self.bodyHasOpaqueLookupCall(branch.cond)) break :blk true;
-                        if (self.bodyHasOpaqueLookupCall(branch.body)) break :blk true;
+                        if (self.bodyHasCallableLookupCall(branch.cond)) break :blk true;
+                        if (self.bodyHasCallableLookupCall(branch.body)) break :blk true;
                     }
-                    break :blk self.bodyHasOpaqueLookupCall(ite.final_else);
+                    break :blk self.bodyHasCallableLookupCall(ite.final_else);
                 },
                 .match_expr => |when_expr| blk: {
-                    if (self.bodyHasOpaqueLookupCall(when_expr.value)) break :blk true;
+                    if (self.bodyHasCallableLookupCall(when_expr.value)) break :blk true;
                     const branches = self.store.getMatchBranches(when_expr.branches);
                     for (branches) |branch| {
-                        if (!branch.guard.isNone() and self.bodyHasOpaqueLookupCall(branch.guard)) break :blk true;
-                        if (self.bodyHasOpaqueLookupCall(branch.body)) break :blk true;
+                        if (!branch.guard.isNone() and self.bodyHasCallableLookupCall(branch.guard)) break :blk true;
+                        if (self.bodyHasCallableLookupCall(branch.body)) break :blk true;
                     }
                     break :blk false;
                 },
-                .nominal => |nom| self.bodyHasOpaqueLookupCall(nom.backing_expr),
-                .dbg => |d| self.bodyHasOpaqueLookupCall(d.expr),
-                .expect => |e| self.bodyHasOpaqueLookupCall(e.cond) or self.bodyHasOpaqueLookupCall(e.body),
-                .incref => |inc| self.bodyHasOpaqueLookupCall(inc.value),
-                .decref => |dec| self.bodyHasOpaqueLookupCall(dec.value),
-                .free => |f| self.bodyHasOpaqueLookupCall(f.value),
-                .for_loop => |fl| self.bodyHasOpaqueLookupCall(fl.list_expr) or self.bodyHasOpaqueLookupCall(fl.body),
-                .while_loop => |wl| self.bodyHasOpaqueLookupCall(wl.cond) or self.bodyHasOpaqueLookupCall(wl.body),
+                .nominal => |nom| self.bodyHasCallableLookupCall(nom.backing_expr),
+                .dbg => |d| self.bodyHasCallableLookupCall(d.expr),
+                .expect => |e| self.bodyHasCallableLookupCall(e.cond) or self.bodyHasCallableLookupCall(e.body),
+                .incref => |inc| self.bodyHasCallableLookupCall(inc.value),
+                .decref => |dec| self.bodyHasCallableLookupCall(dec.value),
+                .free => |f| self.bodyHasCallableLookupCall(f.value),
+                .for_loop => |fl| self.bodyHasCallableLookupCall(fl.list_expr) or self.bodyHasCallableLookupCall(fl.body),
+                .while_loop => |wl| self.bodyHasCallableLookupCall(wl.cond) or self.bodyHasCallableLookupCall(wl.body),
                 .discriminant_switch => |sw| blk: {
-                    if (self.bodyHasOpaqueLookupCall(sw.value)) break :blk true;
+                    if (self.bodyHasCallableLookupCall(sw.value)) break :blk true;
                     const branches = self.store.getExprSpan(sw.branches);
                     for (branches) |branch_expr| {
-                        if (self.bodyHasOpaqueLookupCall(branch_expr)) break :blk true;
+                        if (self.bodyHasCallableLookupCall(branch_expr)) break :blk true;
                     }
                     break :blk false;
                 },
-                .tag_payload_access => |tpa| self.bodyHasOpaqueLookupCall(tpa.value),
+                .tag_payload_access => |tpa| self.bodyHasCallableLookupCall(tpa.value),
                 // Do not recurse into nested callable definitions here; only the
                 // current expression's execution path matters for inlining choice.
                 .lambda, .closure => false,
@@ -11769,12 +11811,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             }
                             try self.codegen.emitStoreStack(.w64, base_offset + offset, temp);
                             self.codegen.freeGeneral(temp);
-                            if (capture.layout_idx == .opaque_ptr) {
+                            if (self.isFunctionLayout(capture.layout_idx)) {
                                 try self.callable_stack_values.put(base_offset + offset, .{ .lambda_code = lc });
                             }
                         },
                         .closure_value => |captured_cv| {
-                            if (capture.layout_idx == .opaque_ptr) {
+                            if (self.isFunctionLayout(capture.layout_idx)) {
                                 // Function-typed captures are pointer-sized in layout, but
                                 // the source closure payload may be larger. Preserve callable
                                 // metadata out-of-band and store a harmless placeholder word.
@@ -11841,12 +11883,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 try self.codegen.emitLoadImm(temp, @intCast(lc.code_offset));
                                 try self.codegen.emitStoreStack(.w64, base_offset + offset, temp);
                                 self.codegen.freeGeneral(temp);
-                                if (capture.layout_idx == .opaque_ptr) {
+                                if (self.isFunctionLayout(capture.layout_idx)) {
                                     try self.callable_stack_values.put(base_offset + offset, .{ .lambda_code = lc });
                                 }
                             },
                             .closure_value => |resolved_cv| {
-                                if (capture.layout_idx == .opaque_ptr) {
+                                if (self.isFunctionLayout(capture.layout_idx)) {
                                     try self.callable_stack_values.put(base_offset + offset, .{ .closure_value = resolved_cv });
                                     const temp = try self.allocTempGeneral();
                                     try self.codegen.emitLoadImm(temp, 0);
@@ -12088,7 +12130,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const cap_align = cap_sa.alignment.toByteUnits();
                 offset = @intCast(std.mem.alignForward(usize, @intCast(offset), cap_align));
                 const capture_offset = cv.stack_offset + offset;
-                if (capture.layout_idx == .opaque_ptr) {
+                if (self.isFunctionLayout(capture.layout_idx)) {
                     if (self.callable_stack_values.get(capture_offset)) |callable_loc| {
                         try self.symbol_locations.put(symbol_key, callable_loc);
                         offset += @intCast(capture_size);
@@ -12187,7 +12229,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const cap_align = cap_sa.alignment.toByteUnits();
                 offset = @intCast(std.mem.alignForward(usize, @intCast(offset), cap_align));
                 const capture_offset = captures_offset + offset;
-                if (capture.layout_idx == .opaque_ptr) {
+                if (self.isFunctionLayout(capture.layout_idx)) {
                     if (self.callable_stack_values.get(capture_offset)) |callable_loc| {
                         try self.symbol_locations.put(symbol_key, callable_loc);
                         offset += @intCast(capture_size);
@@ -12549,7 +12591,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // Inline when:
                         // 1. Args contain callables (higher-order calls)
                         // 2. Body returns callable (closure-returning functions)
-                        if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(lambda.body) or self.bodyHasOpaqueLookupCall(lambda.body)) {
+                        if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(lambda.body) or self.bodyHasCallableLookupCall(lambda.body)) {
                             return try self.callLambdaBodyDirect(lambda, args_span);
                         }
                         const offset = try self.compileLambdaAsProc(def_expr_id, lambda);
@@ -12618,7 +12660,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // Unwrap nominal and retry with the inner expression
                         const inner = self.store.getExpr(nom.backing_expr);
                         if (inner == .lambda) {
-                            if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(inner.lambda.body) or self.bodyHasOpaqueLookupCall(inner.lambda.body)) {
+                            if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(inner.lambda.body) or self.bodyHasCallableLookupCall(inner.lambda.body)) {
                                 return try self.callLambdaBodyDirect(inner.lambda, args_span);
                             }
                             const offset = try self.compileLambdaAsProc(nom.backing_expr, inner.lambda);

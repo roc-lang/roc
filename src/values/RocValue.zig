@@ -177,7 +177,6 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
                     },
                 };
             },
-            .opaque_ptr => {},
         }
     }
 
@@ -359,7 +358,6 @@ pub fn equals(self: RocValue, other: RocValue, ctx: FormatContext) bool {
                         .dec => self.readDec().num == other.readDec().num,
                     };
                 },
-                .opaque_ptr => false,
             };
         },
         .zst => return true,

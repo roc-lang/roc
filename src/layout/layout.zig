@@ -38,10 +38,9 @@ const layout_bit_size = 32;
 /// Scalar and Idx using branchless arithmetic instructions. Don't change them
 /// lightly, and make sure to re-run tests if you do!
 pub const ScalarTag = enum(u3) {
-    opaque_ptr = 0, // Maps to Idx 2
-    str = 1, // Maps to Idx 1
-    int = 2, // Maps to Idx 3-12 (depending on precision)
-    frac = 3, // Maps to Idx 13-15 (depending on precision)
+    str = 0, // Maps to Idx 1
+    int = 1, // Maps to Idx 2-11 (depending on precision)
+    frac = 2, // Maps to Idx 12-14 (depending on precision)
 };
 
 /// The union portion of the Scalar packed tagged union.
@@ -50,13 +49,12 @@ pub const ScalarTag = enum(u3) {
 /// such as the precision of a particular int or frac. This union
 /// stores that extra information.
 pub const ScalarUnion = packed union {
-    opaque_ptr: void,
     str: void,
     int: types.Int.Precision,
     frac: types.Frac.Precision,
 };
 
-/// A scalar value such as a str, int, frac, or opaque pointer type.
+/// A scalar value such as a str, int, or frac.
 pub const Scalar = packed struct {
     // This can't be a normal Zig tagged union because it uses a packed union to reduce memory use,
     // and Zig tagged unions don't support being packed.
@@ -83,27 +81,26 @@ pub const Idx = enum(@Type(.{
     // so be careful when changing them! (Changing them will, at a minimum, cause tests to fail.)
     bool = 0,
     str = 1,
-    opaque_ptr = 2,
 
     // ints
-    u8 = 3,
-    i8 = 4,
-    u16 = 5,
-    i16 = 6,
-    u32 = 7,
-    i32 = 8,
-    u64 = 9,
-    i64 = 10,
-    u128 = 11,
-    i128 = 12,
+    u8 = 2,
+    i8 = 3,
+    u16 = 4,
+    i16 = 5,
+    u32 = 6,
+    i32 = 7,
+    u64 = 8,
+    i64 = 9,
+    u128 = 10,
+    i128 = 11,
 
     // fracs
-    f32 = 13,
-    f64 = 14,
-    dec = 15,
+    f32 = 12,
+    f64 = 13,
+    dec = 14,
 
     // zero-sized type
-    zst = 16,
+    zst = 15,
 
     // Regular indices start from here.
     // num_primitives in store.zig must refer to how many variants we had up to this point.
@@ -544,7 +541,7 @@ pub const Layout = packed struct {
             .scalar => switch (self.data.scalar.tag) {
                 .int => self.data.scalar.data.int.alignment(),
                 .frac => self.data.scalar.data.frac.alignment(),
-                .str, .opaque_ptr => target_usize.alignment(),
+                .str => target_usize.alignment(),
             },
             .box, .box_of_zst => target_usize.alignment(),
             .list, .list_of_zst => target_usize.alignment(),
@@ -605,11 +602,6 @@ pub const Layout = packed struct {
         return Layout{ .data = .{ .list_of_zst = {} }, .tag = .list_of_zst };
     }
 
-    /// opaque pointer from the host's perspective (e.g. the void* that we pass to the host for flex vars etc.)
-    pub fn opaquePtr() Layout {
-        return Layout{ .data = .{ .scalar = .{ .data = .{ .opaque_ptr = {} }, .tag = .opaque_ptr } }, .tag = .scalar };
-    }
-
     /// struct layout with the given alignment and struct metadata (e.g. size and field layouts)
     /// Used for both records and tuples — at the layout level they are identical.
     pub fn struct_(struct_alignment: std.mem.Alignment, struct_idx: StructIdx) Layout {
@@ -657,7 +649,7 @@ pub const Layout = packed struct {
         if (self.tag != other.tag) return false;
         return switch (self.tag) {
             .scalar => self.data.scalar.tag == other.data.scalar.tag and switch (self.data.scalar.tag) {
-                .opaque_ptr, .str => true, // No additional data to compare
+                .str => true, // No additional data to compare
                 .int => self.data.scalar.data.int == other.data.scalar.data.int,
                 .frac => self.data.scalar.data.frac == other.data.scalar.data.frac,
             },
@@ -699,7 +691,6 @@ test "Layout.alignment() - scalar types" {
         try testing.expectEqual(std.mem.Alignment.@"16", Layout.frac(.dec).alignment(target_usize));
         try testing.expectEqual(std.mem.Alignment.@"1", Layout.boolType().alignment(target_usize));
         try testing.expectEqual(target_usize.alignment(), Layout.str().alignment(target_usize));
-        try testing.expectEqual(target_usize.alignment(), Layout.opaquePtr().alignment(target_usize));
     }
 }
 
@@ -762,12 +753,6 @@ test "Layout scalar data access" {
     try testing.expectEqual(LayoutTag.scalar, str_layout.tag);
     try testing.expectEqual(ScalarTag.str, str_layout.data.scalar.tag);
     try testing.expectEqual({}, str_layout.data.scalar.data.str);
-
-    // Test opaque_ptr
-    const opaque_ptr_layout = Layout.opaquePtr();
-    try testing.expectEqual(LayoutTag.scalar, opaque_ptr_layout.tag);
-    try testing.expectEqual(ScalarTag.opaque_ptr, opaque_ptr_layout.data.scalar.tag);
-    try testing.expectEqual({}, opaque_ptr_layout.data.scalar.data.opaque_ptr);
 }
 
 test "Layout non-scalar types" {
@@ -802,10 +787,6 @@ test "Layout scalar variants" {
     try testing.expectEqual(ScalarTag.frac, frac_scalar.data.scalar.tag);
     try testing.expectEqual(types.Frac.Precision.f64, frac_scalar.data.scalar.data.frac);
 
-    const opaque_ptr_layout = Layout.opaquePtr();
-    try testing.expectEqual(LayoutTag.scalar, opaque_ptr_layout.tag);
-    try testing.expectEqual(ScalarTag.opaque_ptr, opaque_ptr_layout.data.scalar.tag);
-
     // Test zst variants separately
     const box_zst = Layout.boxOfZst();
     try testing.expectEqual(LayoutTag.box_of_zst, box_zst.tag);
@@ -825,10 +806,6 @@ test "Scalar memory optimization - comprehensive coverage" {
     const str_layout = Layout.str();
     try testing.expectEqual(LayoutTag.scalar, str_layout.tag);
     try testing.expectEqual(ScalarTag.str, str_layout.data.scalar.tag);
-
-    const opaque_ptr_layout = Layout.opaquePtr();
-    try testing.expectEqual(LayoutTag.scalar, opaque_ptr_layout.tag);
-    try testing.expectEqual(ScalarTag.opaque_ptr, opaque_ptr_layout.data.scalar.tag);
 
     // Test ALL integer precisions
     const int_u8 = Layout.int(.u8);

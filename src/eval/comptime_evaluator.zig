@@ -462,8 +462,8 @@ pub const ComptimeEvaluator = struct {
                     },
                 }
             },
-            // Str and opaque_ptr scalars can't be meaningfully folded to simpler expressions
-            .str, .opaque_ptr => return,
+            // Str scalars can't be meaningfully folded to simpler expressions
+            .str => return,
         }
     }
 
@@ -728,6 +728,10 @@ pub const ComptimeEvaluator = struct {
     /// Fold a tuple value by recursively folding each element
     /// Creates constant expressions for each element and replaces the tuple expression
     fn foldTuple(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue) !void {
+        // Unit/empty tuples can be represented with a null pointer; no elements to fold.
+        const struct_info = self.interpreter.runtime_layout_store.getStructInfo(stack_value.layout);
+        if (struct_info.fields.len == 0) return;
+
         // Get the tuple accessor
         var accessor = try stack_value.asTuple(&self.interpreter.runtime_layout_store);
         const elem_count = accessor.getElementCount();
@@ -909,7 +913,7 @@ pub const ComptimeEvaluator = struct {
                     },
                 }
             },
-            .str, .opaque_ptr => return error.NotImplemented,
+            .str => return error.NotImplemented,
         }
     }
 

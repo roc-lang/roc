@@ -123,7 +123,9 @@ pub fn deinit(self: *Self) void {
 
 /// Lower a MIR expression to a LIR expression.
 pub fn lower(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
-    return self.lowerExpr(mir_expr_id);
+    const lowered = try self.lowerExpr(mir_expr_id);
+    self.verifyFunctionLayouts(lowered);
+    return lowered;
 }
 
 /// Copy a string literal from the source CIR module env to the LIR store.
@@ -176,11 +178,67 @@ fn layoutFromMonotypeInner(self: *Self, monotype: Monotype.Monotype) Allocator.E
             const inner_layout = try self.layoutFromMonotype(b.inner);
             break :blk try self.layout_store.insertBox(inner_layout);
         },
-        .func => layout.Idx.opaque_ptr,
+        .func => blk: {
+            // Function values use closure layout semantics after MIR lowering.
+            const empty_captures = try self.layout_store.getEmptyRecordLayout();
+            break :blk try self.layout_store.insertLayout(layout.Layout.closure(empty_captures));
+        },
         .record => |r| try self.layoutFromRecord(r),
         .tuple => |t| try self.layoutFromTuple(t),
         .tag_union => |tu| try self.layoutFromTagUnion(tu),
     };
+}
+
+fn isFunctionLayout(self: *Self, layout_idx: layout.Idx) bool {
+    if (layout_idx == layout.Idx.none) return false;
+    if (layout_idx == layout.Idx.named_fn) return true;
+    const idx_int = @intFromEnum(layout_idx);
+    if (idx_int >= self.layout_store.layouts.len()) return false;
+    return self.layout_store.getLayout(layout_idx).tag == .closure;
+}
+
+fn isCallableExpr(self: *Self, expr_id: LirExprId, depth: u8) bool {
+    if (depth > 64) return false;
+    const expr = self.lir_store.getExpr(expr_id);
+    return switch (expr) {
+        .lambda, .closure => true,
+        .nominal => |nom| self.isCallableExpr(nom.backing_expr, depth + 1),
+        .block => |b| self.isCallableExpr(b.final_expr, depth + 1),
+        .lookup => |lk| blk: {
+            const def_id = self.lir_store.getSymbolDef(lk.symbol) orelse break :blk false;
+            break :blk self.isCallableExpr(def_id, depth + 1);
+        },
+        else => false,
+    };
+}
+
+fn verifyFunctionLayouts(self: *Self, _: LirExprId) void {
+    var i: usize = 0;
+    const count = self.lir_store.exprCount();
+    while (i < count) : (i += 1) {
+        const expr_id: LirExprId = @enumFromInt(@as(u32, @intCast(i)));
+        const expr = self.lir_store.getExpr(expr_id);
+        switch (expr) {
+            .call => |c| {
+                if (!self.isFunctionLayout(c.fn_layout)) {
+                    std.debug.panic("MirToLir invariant violated: non-callable call.fn_layout at expr {}", .{i});
+                }
+            },
+            .lambda => |lam| {
+                if (!self.isFunctionLayout(lam.fn_layout)) {
+                    std.debug.panic("MirToLir invariant violated: non-callable lambda.fn_layout at expr {}", .{i});
+                }
+            },
+            .lookup => |lk| {
+                if (self.lir_store.getSymbolDef(lk.symbol)) |def_id| {
+                    if (self.isCallableExpr(def_id, 0) and !self.isFunctionLayout(lk.layout_idx)) {
+                        std.debug.panic("MirToLir invariant violated: callable lookup has non-callable layout at expr {}", .{i});
+                    }
+                }
+            },
+            else => {},
+        }
+    }
 }
 
 fn layoutFromRecord(self: *Self, record: anytype) Allocator.Error!layout.Idx {
@@ -996,14 +1054,54 @@ fn lowerBlock(self: *Self, block_data: anytype, mono_idx: Monotype.Idx, region: 
 
     const mir_stmts = self.mir_store.getStmts(block_data.stmts);
     const save_stmts_len = self.scratch_lir_stmts.items.len;
+    const save_pattern_ids_len = self.scratch_lir_pattern_ids.items.len;
     defer self.scratch_lir_stmts.shrinkRetainingCapacity(save_stmts_len);
+    defer self.scratch_lir_pattern_ids.shrinkRetainingCapacity(save_pattern_ids_len);
+
+    // Pass 1: Lower all binding patterns first so symbol->layout registrations
+    // are available to all statement expressions (including forward captures in
+    // mutually-recursive closures inside the same block).
     for (mir_stmts) |stmt| {
         const binding = switch (stmt) {
             .decl_const, .decl_var, .mutate_var => |b| b,
         };
         const lir_pat = try self.lowerPattern(binding.pattern);
+        try self.scratch_lir_pattern_ids.append(self.allocator, lir_pat);
+    }
+
+    // Pass 2: Lower expressions and assemble statements using cached patterns.
+    for (mir_stmts, 0..) |stmt, i| {
+        const binding = switch (stmt) {
+            .decl_const, .decl_var, .mutate_var => |b| b,
+        };
         const lir_expr = try self.lowerExpr(binding.expr);
-        const lir_binding: LirStmt.Binding = .{ .pattern = lir_pat, .expr = lir_expr };
+        if (stmt == .decl_const or stmt == .decl_var) {
+            const def_expr = self.lir_store.getExpr(lir_expr);
+            const is_callable_def = switch (def_expr) {
+                .lambda, .closure => true,
+                else => false,
+            };
+            const pat_layout_idx = try self.layoutFromMonotype(self.mir_store.patternTypeOf(binding.pattern));
+            const should_register_def = is_callable_def or self.isFunctionLayout(pat_layout_idx);
+            const mir_pat = self.mir_store.getPattern(binding.pattern);
+            switch (mir_pat) {
+                .bind => |sym| {
+                    if (should_register_def and self.lir_store.getSymbolDef(sym) == null) {
+                        try self.lir_store.registerSymbolDef(sym, lir_expr);
+                    }
+                },
+                .as_pattern => |as_pat| {
+                    if (should_register_def and self.lir_store.getSymbolDef(as_pat.symbol) == null) {
+                        try self.lir_store.registerSymbolDef(as_pat.symbol, lir_expr);
+                    }
+                },
+                else => {},
+            }
+        }
+        const lir_binding: LirStmt.Binding = .{
+            .pattern = self.scratch_lir_pattern_ids.items[save_pattern_ids_len + i],
+            .expr = lir_expr,
+        };
         try self.scratch_lir_stmts.append(self.allocator, switch (stmt) {
             .decl_const, .decl_var => .{ .decl = lir_binding },
             .mutate_var => .{ .mutate = lir_binding },
@@ -2866,6 +2964,29 @@ test "MIR multi-tag union tags get correct discriminants" {
     const foo_lir_expr = env.lir_store.getExpr(lir_foo);
     try testing.expect(foo_lir_expr == .tag);
     try testing.expectEqual(@as(u16, 1), foo_lir_expr.tag.discriminant);
+}
+
+test "MIR function monotype lowers to closure layout" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const arg_span = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{i64_mono});
+    const fn_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .func = .{
+        .args = arg_span,
+        .ret = i64_mono,
+        .effectful = false,
+    } });
+
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, all_envs, env.module_env.idents.true_tag);
+    defer translator.deinit();
+
+    const fn_layout = try translator.layoutFromMonotype(fn_mono);
+    try testing.expectEqual(layout.LayoutTag.closure, env.layout_store.getLayout(fn_layout).tag);
 }
 
 test "MIR lambda with single capture lowers to closure with unwrapped_capture" {

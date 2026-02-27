@@ -1540,6 +1540,11 @@ pub const Interpreter = struct {
 
                 const str_a = args[0];
                 const str_b = args[1];
+                if (str_a.layout.tag != .scalar or str_a.layout.data.scalar.tag != .str or
+                    str_b.layout.tag != .scalar or str_b.layout.data.scalar.tag != .str)
+                {
+                    return error.TypeMismatch;
+                }
                 const roc_str_a = str_a.asRocStr().?;
                 const roc_str_b = str_b.asRocStr().?;
 
@@ -2819,7 +2824,7 @@ pub const Interpreter = struct {
                     // When upgrading from list_of_zst, we need to update the runtime type
                     // to reflect the element's actual type. This is critical for closures
                     // that capture for-loop elements: without the correct runtime type,
-                    // the captured value's layout may be computed as opaquePtr() instead
+                    // the captured value's layout may be computed before all recursive fixups run
                     // of the correct numeric layout. (fixes issue #8946)
                     const upgraded_rt_var = try self.createListTypeWithElement(elt_arg.rt_var);
                     var out = try self.pushRaw(new_list_layout, 0, upgraded_rt_var);
@@ -6206,10 +6211,6 @@ pub const Interpreter = struct {
                     const rhs_str = rhs.asRocStr().?;
                     return lhs_str.eql(rhs_str.*);
                 },
-                else => {
-                    self.triggerCrash("Internal error: unhandled scalar type in equality comparison", false, roc_ops);
-                    return error.TypeMismatch;
-                },
             }
         }
 
@@ -6429,12 +6430,6 @@ pub const Interpreter = struct {
                     const lhs_str = lhs.asRocStr().?;
                     const rhs_str = rhs.asRocStr().?;
                     break :blk lhs_str.eql(rhs_str.*);
-                },
-                .opaque_ptr => blk: {
-                    // Opaque pointer comparison - compare the pointer values directly
-                    if (lhs.ptr == null and rhs.ptr == null) break :blk true;
-                    if (lhs.ptr == null or rhs.ptr == null) break :blk false;
-                    break :blk lhs.ptr.? == rhs.ptr.?;
                 },
             };
         }
@@ -8580,10 +8575,6 @@ pub const Interpreter = struct {
                         const str_content = try self.runtime_types.mkNominal(str_type_ident, str_backing_var, no_type_args, origin_module_id, false);
                         break :blk try self.runtime_types.freshFromContent(str_content);
                     },
-                    else => {
-                        // Default to fresh var for unknown scalar types
-                        break :blk try self.runtime_types.fresh();
-                    },
                 }
             },
             else => {
@@ -8726,6 +8717,13 @@ pub const Interpreter = struct {
             } else {
                 break;
             }
+        }
+
+        // Some polymorphic paths can still surface constrained rigids that have no
+        // active substitution in the current call context. Propagate a typed error
+        // instead of letting layout lowering hit an internal unreachable.
+        if (resolved.desc.content == .rigid and !resolved.desc.content.rigid.constraints.isEmpty()) {
+            return error.TypeMismatch;
         }
 
         const idx: usize = @intFromEnum(resolved.var_);
@@ -12257,42 +12255,7 @@ pub const Interpreter = struct {
                     const inner_layout_idx = layout_val.data.box;
                     const inner_layout = self.runtime_layout_store.getLayout(inner_layout_idx);
 
-                    // For recursive types, the inner layout may be scalar(opaque_ptr).
-                    // In that case, we need to resolve the backing type to get the actual
-                    // tag union structure.
-                    const effective_inner_layout = if (inner_layout.tag == .scalar and inner_layout.data.scalar.tag == .opaque_ptr) blk: {
-                        // Resolve the type variable to find the backing tag union layout.
-                        // For nominal types, vars[0] is the backing type variable.
-                        const box_resolved = self.runtime_types.resolveVar(layout_rt_var);
-                        if (box_resolved.desc.content == .structure) {
-                            const flat = box_resolved.desc.content.structure;
-                            if (flat == .nominal_type) {
-                                const nom = flat.nominal_type;
-                                const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
-                                if (vars.len > 0) {
-                                    const backing_var = vars[0];
-                                    const backing_layout = self.getRuntimeLayout(backing_var) catch break :blk inner_layout;
-                                    break :blk backing_layout;
-                                }
-                            } else if (flat == .tag_union) {
-                                // Direct tag union - try to get the non-boxed layout
-                                // by looking at the tag union's backing type
-                                const tu = flat.tag_union;
-                                const ext_var = tu.ext;
-                                const ext_resolved = self.runtime_types.resolveVar(ext_var);
-                                if (ext_resolved.desc.content == .structure and ext_resolved.desc.content.structure == .nominal_type) {
-                                    const nom = ext_resolved.desc.content.structure.nominal_type;
-                                    const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
-                                    if (vars.len > 0) {
-                                        const backing_var = vars[0];
-                                        const backing_layout = self.getRuntimeLayout(backing_var) catch break :blk inner_layout;
-                                        break :blk backing_layout;
-                                    }
-                                }
-                            }
-                        }
-                        break :blk inner_layout;
-                    } else inner_layout;
+                    const effective_inner_layout = inner_layout;
 
                     const args_exprs = self.env.store.sliceExpr(tag.args);
 
@@ -15884,21 +15847,7 @@ pub const Interpreter = struct {
                         const inner_layout_idx = layout_val.data.box;
                         const raw_inner_layout = self.runtime_layout_store.getLayout(inner_layout_idx);
 
-                        // Resolve opaque_ptr to actual backing layout
-                        const backing_layout = if (raw_inner_layout.tag == .scalar and raw_inner_layout.data.scalar.tag == .opaque_ptr) blk: {
-                            const box_resolved = self.runtime_types.resolveVar(tc.layout_rt_var);
-                            if (box_resolved.desc.content == .structure) {
-                                const flat = box_resolved.desc.content.structure;
-                                if (flat == .nominal_type) {
-                                    const nom = flat.nominal_type;
-                                    const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
-                                    if (vars.len > 0) {
-                                        break :blk self.getRuntimeLayout(vars[0]) catch raw_inner_layout;
-                                    }
-                                }
-                            }
-                            break :blk raw_inner_layout;
-                        } else raw_inner_layout;
+                        const backing_layout = raw_inner_layout;
 
                         // Build the inner tag union value based on the backing layout type
                         if (backing_layout.tag == .struct_ or backing_layout.tag == .tag_union) {
@@ -16716,10 +16665,10 @@ pub const Interpreter = struct {
                         self.rigid_subst = saved;
                     }
 
-                    // Note: Don't restore flex_type_context (same rationale as normal return case)
                     if (cleanup.saved_flex_type_context) |saved| {
-                        var saved_copy = saved;
-                        saved_copy.deinit();
+                        self.flex_type_context.deinit();
+                        self.flex_type_context = saved;
+                        self.poly_context_generation +%= 1;
                     }
 
                     // Restore environment and cleanup bindings
@@ -16791,21 +16740,10 @@ pub const Interpreter = struct {
                     self.rigid_subst = saved;
                 }
 
-                // Note: We intentionally do NOT restore flex_type_context here.
-                // The type mappings need to persist across the call chain for polymorphic
-                // functions from pre-compiled modules like Builtin. When a function returns
-                // a value that is used in subsequent calls (e.g., method dispatch returning
-                // a closure that is then invoked), those later calls need the type mappings
-                // from the original call arguments.
-                //
-                // The mappings are keyed by compile-time type vars, so mappings from different
-                // call sites with different type vars won't conflict. For the same polymorphic
-                // function called multiple times with different concrete types, the later call
-                // will overwrite the mapping with the new concrete type, which is correct.
                 if (cleanup.saved_flex_type_context) |saved| {
-                    // Just free the saved context, don't restore it
-                    var saved_copy = saved;
-                    saved_copy.deinit();
+                    self.flex_type_context.deinit();
+                    self.flex_type_context = saved;
+                    self.poly_context_generation +%= 1;
                 }
 
                 // Restore environment and cleanup bindings
@@ -19049,16 +18987,6 @@ pub const Interpreter = struct {
                 // For 'box' layouts (recursive types), unwrap to get the actual backing layout
                 const effective_elem_layout = if (type_based_elem_layout.tag == .box) blk: {
                     const inner = self.runtime_layout_store.getLayout(type_based_elem_layout.data.box);
-                    if (inner.tag == .scalar and inner.data.scalar.tag == .opaque_ptr) {
-                        // Need to resolve the nominal type to get its backing layout
-                        const resolved = self.runtime_types.resolveVar(elem_rt_var);
-                        if (resolved.desc.content == .structure and resolved.desc.content.structure == .nominal_type) {
-                            const nom = resolved.desc.content.structure.nominal_type;
-                            const backing = self.runtime_types.getNominalBackingVar(nom);
-                            const backing_layout = self.getRuntimeLayout(backing) catch inner;
-                            break :blk backing_layout;
-                        }
-                    }
                     break :blk inner;
                 } else type_based_elem_layout;
 
