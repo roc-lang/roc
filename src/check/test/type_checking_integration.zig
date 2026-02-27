@@ -6120,3 +6120,19 @@ test "check type - annotated open arg not closed even with exhaustive match" {
         \\
     );
 }
+
+test "check type - xxx" {
+    const source =
+        \\bar : [A, B] -> [X, Y]
+        \\bar = |_| X
+        \\
+        \\foo : [A, B] -> [X, Y, ..]
+        \\foo = |tag| bar(tag)
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "bar", .expected = "{ .., status: [Active, Inactive] } -> Str" },
+        },
+    );
+}

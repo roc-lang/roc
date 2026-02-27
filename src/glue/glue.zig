@@ -2220,10 +2220,15 @@ fn printTypeAnnoToBuf(gpa: std.mem.Allocator, env: *ModuleEnv, ast: *const parse
                 }
                 printTypeAnnoToBuf(gpa, env, ast, field.ty, buf);
             }
-            buf.appendSlice(gpa, " }") catch {};
-            if (r.ext) |ext_idx| {
-                printTypeAnnoToBuf(gpa, env, ast, ext_idx, buf);
+            switch (r.ext) {
+                .closed => {},
+                .open => buf.appendSlice(gpa, ", ..") catch {},
+                .named => |named| {
+                    buf.appendSlice(gpa, ", ..") catch {};
+                    printTypeAnnoToBuf(gpa, env, ast, named.anno, buf);
+                },
             }
+            buf.appendSlice(gpa, " }") catch {};
         },
         .tag_union => |tu| {
             buf.append(gpa, '[') catch {};
@@ -2235,9 +2240,9 @@ fn printTypeAnnoToBuf(gpa: std.mem.Allocator, env: *ModuleEnv, ast: *const parse
             switch (tu.ext) {
                 .closed => {},
                 .open => buf.appendSlice(gpa, ", ..") catch {},
-                .named => |ext_idx| {
+                .named => |named| {
                     buf.appendSlice(gpa, ", ..") catch {};
-                    printTypeAnnoToBuf(gpa, env, ast, ext_idx, buf);
+                    printTypeAnnoToBuf(gpa, env, ast, named.anno, buf);
                 },
             }
             buf.append(gpa, ']') catch {};
@@ -2309,7 +2314,7 @@ fn generateStubExprFromTypeAnno(gpa: std.mem.Allocator, env: *ModuleEnv, ast: *c
             if (ret_anno == .record) {
                 const record = ret_anno.record;
                 const fields = ast.store.annoRecordFieldSlice(record.fields);
-                if (fields.len == 0 and record.ext == null) {
+                if (fields.len == 0 and record.ext == .closed) {
                     // Return type is {} (unit) - return empty record
                     buf.appendSlice(gpa, "{}") catch {};
                     return;
