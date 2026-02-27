@@ -369,6 +369,48 @@ fn forkAndExecute(
     }
 }
 
+/// Probe interpreter eval in a forked child so panics/segfaults are
+/// translated into regular test failures instead of aborting the test binary.
+fn probeInterpreterEval(
+    interpreter: *Interpreter,
+    expr_idx: CIR.Expr.Idx,
+    ops: *builtins.host_abi.RocOps,
+) !void {
+    if (!has_fork) return;
+
+    const fork_result = posix.fork() catch {
+        return error.InterpreterForkFailed;
+    };
+
+    if (fork_result == 0) {
+        _ = interpreter.eval(expr_idx, ops) catch {};
+        posix.exit(0);
+    }
+
+    const wait_result = posix.waitpid(fork_result, 0);
+    const status = wait_result.status;
+    const termination_signal: u8 = @truncate(status & 0x7f);
+
+    if (termination_signal != 0) {
+        std.debug.print("\nChild process killed by signal {d} during interpreter execution\n", .{termination_signal});
+        return error.InterpreterChildCrashed;
+    }
+
+    const exit_code: u8 = @truncate((status >> 8) & 0xff);
+    if (exit_code != 0) {
+        return error.InterpreterChildFailed;
+    }
+}
+
+fn evalInterpreterChecked(
+    interpreter: *Interpreter,
+    expr_idx: CIR.Expr.Idx,
+    ops: *builtins.host_abi.RocOps,
+) !StackValue {
+    try probeInterpreterEval(interpreter, expr_idx, ops);
+    return interpreter.eval(expr_idx, ops);
+}
+
 /// Compare Interpreter result string with DevEvaluator result string.
 /// Both sides now use `RocValue.format()` for canonical formatting.
 /// Accepted divergences:
@@ -2148,7 +2190,7 @@ pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: e
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    _ = interpreter.eval(resources.expr_idx, ops) catch |err| {
+    _ = evalInterpreterChecked(&interpreter, resources.expr_idx, ops) catch |err| {
         try std.testing.expectEqual(expected_error, err);
         return;
     };
@@ -2194,7 +2236,7 @@ pub fn runExpectTypeMismatchAndCrash(src: []const u8) !void {
     defer interpreter.deinit();
 
     const ops = test_env_instance.get_ops();
-    _ = interpreter.eval(resources.expr_idx, ops) catch |err| {
+    _ = evalInterpreterChecked(&interpreter, resources.expr_idx, ops) catch |err| {
         // Expected: a crash or type mismatch error at runtime
         switch (err) {
             error.Crash, error.TypeMismatch => return, // Success - we expected a crash
@@ -2231,7 +2273,7 @@ pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: enum { tr
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try interpreter.eval(resources.expr_idx, ops);
+    const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
@@ -2281,7 +2323,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try interpreter.eval(resources.expr_idx, ops);
+    const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
@@ -2330,7 +2372,7 @@ pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { tra
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try interpreter.eval(resources.expr_idx, ops);
+    const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
@@ -2373,7 +2415,7 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { tra
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try interpreter.eval(resources.expr_idx, ops);
+    const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
@@ -2420,7 +2462,7 @@ pub fn runExpectIntDec(src: []const u8, expected_int: i128, should_trace: enum {
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try interpreter.eval(resources.expr_idx, ops);
+    const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
@@ -2464,7 +2506,7 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try interpreter.eval(resources.expr_idx, ops);
+    const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
@@ -2505,7 +2547,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try interpreter.eval(resources.expr_idx, ops);
+    const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer interpreter.bindings.items.len = 0;
 
@@ -2565,7 +2607,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try interpreter.eval(resources.expr_idx, ops);
+    const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
@@ -2626,7 +2668,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try interpreter.eval(resources.expr_idx, ops);
+    const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
@@ -2704,7 +2746,7 @@ pub fn runExpectListZst(src: []const u8, expected_element_count: usize, should_t
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try interpreter.eval(resources.expr_idx, ops);
+    const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
@@ -2747,7 +2789,7 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try interpreter.eval(resources.expr_idx, ops);
+    const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
@@ -2808,7 +2850,7 @@ pub fn runExpectEmptyListI64(src: []const u8, should_trace: enum { trace, no_tra
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try interpreter.eval(resources.expr_idx, ops);
+    const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
@@ -2854,7 +2896,7 @@ pub fn runExpectUnit(src: []const u8, should_trace: enum { trace, no_trace }) !v
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try interpreter.eval(resources.expr_idx, ops);
+    const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
@@ -3198,7 +3240,7 @@ test "eval tag - already primitive" {
     defer interpreter.deinit();
 
     const ops = test_env_instance.get_ops();
-    const result = try interpreter.eval(resources.expr_idx, ops);
+    const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
@@ -3231,7 +3273,7 @@ test "interpreter reuse across multiple evaluations" {
 
         var iteration: usize = 0;
         while (iteration < 2) : (iteration += 1) {
-            const result = try interpreter.eval(resources.expr_idx, ops);
+            const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
             const layout_cache = &interpreter.runtime_layout_store;
             defer result.decref(layout_cache, ops);
             defer interpreter.bindings.items.len = 0;
