@@ -276,7 +276,12 @@ pub const RcInsertPass = struct {
             },
             .closure => |clo_id| {
                 const clo = self.store.getClosureData(clo_id);
-                try self.countUsesInto(clo.lambda, target);
+                // The closure body runs in its own scope and references captures via the
+                // capture payload, not directly from the outer binding. Count only explicit
+                // capture edges into the outer scope to avoid double-counting captured symbols.
+                self.scratch_uses.clearRetainingCapacity();
+                defer self.scratch_uses.clearRetainingCapacity();
+                try self.countUsesInto(clo.lambda, &self.scratch_uses);
                 // Each capture consumes a reference to the captured symbol.
                 const captures = self.store.getCaptures(clo.captures);
                 for (captures) |cap| {
@@ -760,6 +765,11 @@ pub const RcInsertPass = struct {
         var stmt_buf = std.ArrayList(LirStmt).empty;
         defer stmt_buf.deinit(self.allocator);
 
+        // Track the latest declaration layout for each symbol in this block so we can
+        // decref older decl bindings when the same symbol is rebound via another decl.
+        var block_decl_layouts = std.AutoHashMap(u64, LayoutIdx).init(self.allocator);
+        defer block_decl_layouts.deinit();
+
         var changed = false;
 
         // Process each statement
@@ -797,6 +807,13 @@ pub const RcInsertPass = struct {
                 }
             }
 
+            // Shadowing via repeated decls must release the previous binding.
+            if (stmt == .decl) {
+                const before_len = stmt_buf.items.len;
+                try self.emitDeclShadowDecrefsForPattern(b.pattern, &block_decl_layouts, region, &stmt_buf);
+                if (stmt_buf.items.len > before_len) changed = true;
+            }
+
             // Add the (possibly updated) statement, preserving decl/mutate kind
             const new_binding: LirStmt.Binding = .{ .pattern = b.pattern, .expr = new_expr };
             try stmt_buf.append(self.allocator, switch (stmt) {
@@ -809,6 +826,18 @@ pub const RcInsertPass = struct {
             const before_len = stmt_buf.items.len;
             try self.emitBlockIncrefsForPattern(b.pattern, region, &stmt_buf, stmts, stmt_index, final_expr);
             if (stmt_buf.items.len > before_len) changed = true;
+
+            // Shadowed decls can introduce a fresh binding for a symbol whose
+            // global uses were all consumed by the previous binding generation.
+            // Release such unused new bindings immediately.
+            if (stmt == .decl) {
+                const before_shadow_unused = stmt_buf.items.len;
+                try self.emitDeclShadowedUnusedDecrefsForPattern(b.pattern, &block_decl_layouts, region, &stmt_buf);
+                if (stmt_buf.items.len > before_shadow_unused) changed = true;
+            }
+
+            // Update latest decl layout map after processing this binding.
+            try self.recordPatternLayouts(b.pattern, &block_decl_layouts);
         }
 
         // Recursively process the final expression
@@ -1365,9 +1394,10 @@ pub const RcInsertPass = struct {
         defer self.scratch_uses.clearRetainingCapacity();
         try self.countUsesInto(expr_id, &self.scratch_uses);
 
-        var it = self.scratch_uses.keyIterator();
-        while (it.next()) |key| {
-            if (pattern_symbols.contains(key.*)) return true;
+        var it = self.scratch_uses.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.* == 0) continue;
+            if (pattern_symbols.contains(entry.key_ptr.*)) return true;
         }
         return false;
     }
@@ -1652,6 +1682,93 @@ pub const RcInsertPass = struct {
             }
         };
         try walkPatternBinds(self.store, pat_id, Ctx{ .pass = self, .region = region, .stmts = stmts });
+    }
+
+    /// Emit decrefs for prior decl bindings shadowed by this new decl pattern.
+    fn emitDeclShadowDecrefsForPattern(
+        self: *RcInsertPass,
+        pat_id: LirPatternId,
+        prior_decl_layouts: *const std.AutoHashMap(u64, LayoutIdx),
+        region: Region,
+        stmts: *std.ArrayList(LirStmt),
+    ) Allocator.Error!void {
+        const Ctx = struct {
+            pass: *RcInsertPass,
+            prior_decl_layouts: *const std.AutoHashMap(u64, LayoutIdx),
+            region: Region,
+            stmts: *std.ArrayList(LirStmt),
+            fn onBind(ctx: @This(), symbol: Symbol, _: LayoutIdx) Allocator.Error!void {
+                const key = @as(u64, @bitCast(symbol));
+                const previous_layout = ctx.prior_decl_layouts.get(key) orelse return;
+                // If prior statements already consumed this symbol, shadowing should not
+                // decref the old binding again.
+                if ((ctx.pass.block_consumed_uses.get(key) orelse 0) > 0) return;
+                if (ctx.pass.layoutNeedsRc(previous_layout)) {
+                    try ctx.pass.emitDecrefInto(symbol, previous_layout, ctx.region, ctx.stmts);
+                }
+            }
+        };
+        try walkPatternBinds(self.store, pat_id, Ctx{
+            .pass = self,
+            .prior_decl_layouts = prior_decl_layouts,
+            .region = region,
+            .stmts = stmts,
+        });
+    }
+
+    /// Emit decrefs for newly shadowed decl bindings that are immediately unused.
+    /// This handles symbol-key conflation across shadowed generations by using
+    /// consumed-uses progress at the shadow point.
+    fn emitDeclShadowedUnusedDecrefsForPattern(
+        self: *RcInsertPass,
+        pat_id: LirPatternId,
+        prior_decl_layouts: *const std.AutoHashMap(u64, LayoutIdx),
+        region: Region,
+        stmts: *std.ArrayList(LirStmt),
+    ) Allocator.Error!void {
+        const Ctx = struct {
+            pass: *RcInsertPass,
+            prior_decl_layouts: *const std.AutoHashMap(u64, LayoutIdx),
+            region: Region,
+            stmts: *std.ArrayList(LirStmt),
+            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
+                const key = @as(u64, @bitCast(symbol));
+                if (!ctx.prior_decl_layouts.contains(key)) return; // not a shadowing bind
+
+                const resolved_layout = ctx.pass.symbol_layouts.get(key) orelse layout_idx;
+                if (!ctx.pass.layoutNeedsRc(resolved_layout)) return;
+
+                const consumed = ctx.pass.block_consumed_uses.get(key) orelse 0;
+                const total = ctx.pass.symbol_use_counts.get(key) orelse 0;
+                if (consumed >= total) {
+                    try ctx.pass.emitDecrefInto(symbol, resolved_layout, ctx.region, ctx.stmts);
+                }
+            }
+        };
+        try walkPatternBinds(self.store, pat_id, Ctx{
+            .pass = self,
+            .prior_decl_layouts = prior_decl_layouts,
+            .region = region,
+            .stmts = stmts,
+        });
+    }
+
+    /// Record (or update) the resolved layout for each symbol bound by this pattern.
+    fn recordPatternLayouts(
+        self: *RcInsertPass,
+        pat_id: LirPatternId,
+        target: *std.AutoHashMap(u64, LayoutIdx),
+    ) Allocator.Error!void {
+        const Ctx = struct {
+            pass: *RcInsertPass,
+            target: *std.AutoHashMap(u64, LayoutIdx),
+            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
+                const key = @as(u64, @bitCast(symbol));
+                const resolved_layout = ctx.pass.symbol_layouts.get(key) orelse layout_idx;
+                try ctx.target.put(key, resolved_layout);
+            }
+        };
+        try walkPatternBinds(self.store, pat_id, Ctx{ .pass = self, .target = target });
     }
 
     /// Recursively track live RC symbols for early_return cleanup.

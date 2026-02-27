@@ -62,6 +62,7 @@ const listReleaseExcessCapacity = list.listReleaseExcessCapacity;
 const listWithCapacity = list.listWithCapacity;
 const listAppendUnsafe = list.listAppendUnsafe;
 const listAppendSafeC = list.listAppendSafeC;
+const listDecref = list.listDecref;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // String Wrappers
@@ -270,6 +271,14 @@ pub fn roc_builtins_str_escape_and_quote(out: *RocStr, str_bytes: ?[*]u8, str_le
 // List Wrappers
 // ═══════════════════════════════════════════════════════════════════════════
 
+fn strListElementDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
+    if (element == null) return;
+    const ctx = context orelse unreachable;
+    const str_ptr: *RocStr = utils.alignedPtrCast(*RocStr, element.?, @src());
+    const roc_ops: *RocOps = utils.alignedPtrCast(*RocOps, @as([*]u8, @ptrCast(ctx)), @src());
+    str_ptr.decref(roc_ops);
+}
+
 /// Wrapper: listWithCapacity
 pub fn roc_builtins_list_with_capacity(out: *RocList, capacity: u64, alignment: u32, element_width: usize, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
     out.* = listWithCapacity(capacity, alignment, element_width, elements_refcounted, null, @ptrCast(&rcNone), roc_ops);
@@ -316,6 +325,20 @@ pub fn roc_builtins_list_reserve(out: *RocList, list_bytes: ?[*]u8, list_len: us
 pub fn roc_builtins_list_release_excess_capacity(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     out.* = listReleaseExcessCapacity(l, alignment, element_width, elements_refcounted, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), .Immutable, roc_ops);
+}
+
+/// Wrapper: decref a List(Str), including decref of each string element when unique
+pub fn roc_builtins_list_decref_str(list_bytes: ?[*]u8, list_len: usize, list_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    listDecref(
+        l,
+        @alignOf(RocStr),
+        @sizeOf(RocStr),
+        true,
+        @ptrCast(roc_ops),
+        &strListElementDecref,
+        roc_ops,
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

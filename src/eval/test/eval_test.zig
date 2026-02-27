@@ -879,6 +879,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         const deserialized_env = try deserialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa, source, "TestModule");
         // Free the heap-allocated ModuleEnv and its imports map
         defer {
+            deserialized_env.common.idents.interner.deinit(gpa);
             deserialized_env.imports.map.deinit(gpa);
             gpa.destroy(deserialized_env);
         }
