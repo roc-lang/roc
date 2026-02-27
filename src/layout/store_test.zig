@@ -95,7 +95,7 @@ test "fromTypeVar - bool type" {
     try testing.expectEqual(@as(u32, 1), lt.layout_store.layoutSize(retrieved_layout));
 }
 
-test "fromTypeVar - host opaque types compile to opaque_ptr" {
+test "fromTypeVar - unresolved boxed type vars use box_of_zst" {
     var lt = try LayoutTest.initWithIdents(testing.allocator);
     defer lt.deinit();
 
@@ -111,8 +111,7 @@ test "fromTypeVar - host opaque types compile to opaque_ptr" {
     const box_flex_var = try lt.mkBoxType(flex_var, box_ident_idx, builtin_module_idx);
     const box_flex_idx = try lt.layout_store.fromTypeVar(0, box_flex_var, &lt.type_scope, null);
     const box_flex_layout = lt.layout_store.getLayout(box_flex_idx);
-    try testing.expect(box_flex_layout.tag == .box);
-    try testing.expectEqual(layout.Idx.opaque_ptr, box_flex_layout.data.box);
+    try testing.expect(box_flex_layout.tag == .box_of_zst);
 
     // Box of rigid_var
     const ident_idx = try lt.module_env.insertIdent(base.Ident.for_text("a"));
@@ -120,8 +119,7 @@ test "fromTypeVar - host opaque types compile to opaque_ptr" {
     const box_rigid_var = try lt.mkBoxType(rigid_var, box_ident_idx, builtin_module_idx);
     const box_rigid_idx = try lt.layout_store.fromTypeVar(0, box_rigid_var, &lt.type_scope, null);
     const box_rigid_layout = lt.layout_store.getLayout(box_rigid_idx);
-    try testing.expect(box_rigid_layout.tag == .box);
-    try testing.expectEqual(layout.Idx.opaque_ptr, box_rigid_layout.data.box);
+    try testing.expect(box_rigid_layout.tag == .box_of_zst);
 }
 
 test "fromTypeVar - zero-sized types (ZST)" {

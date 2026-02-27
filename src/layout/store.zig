@@ -130,16 +130,15 @@ pub const Store = struct {
 
     // Number of primitive types that are pre-populated in the layout store
     // Must be kept in sync with the sentinel values in layout.zig Idx enum
-    const num_primitives = 17;
+    const num_primitives = 16;
 
     /// Get the sentinel Idx for a given scalar type using pure arithmetic - no branches!
     /// This relies on the careful ordering of ScalarTag and Idx enum values.
     pub fn idxFromScalar(scalar: Scalar) Idx {
         // Map scalar to idx using pure arithmetic:
-        // opaque_ptr (tag 0) -> 2
-        // str (tag 1) -> 1
-        // int (tag 2) with precision p -> 3 + p
-        // frac (tag 3) with precision p -> 13 + (p - 2) = 11 + p
+        // str (tag 0) -> 1
+        // int (tag 1) with precision p -> 2 + p
+        // frac (tag 2) with precision p -> 12 + (p - 2) = 10 + p
 
         const tag = @intFromEnum(scalar.tag);
 
@@ -149,15 +148,14 @@ pub const Store = struct {
         const precision = scalar_bits & 0xF; // Lower 4 bits contain precision for numeric types
 
         // Create masks for different tag ranges
-        // is_numeric: 1 when tag >= 2, else 0
-        const is_numeric = @as(u7, @intFromBool(tag >= 2));
+        // is_numeric: 1 when tag >= 1, else 0
+        const is_numeric = @as(u7, @intFromBool(tag >= 1));
 
         // Calculate the base index based on tag mappings
         const base_idx = switch (scalar.tag) {
-            .opaque_ptr => @as(u7, 2),
             .str => @as(u7, 1),
-            .int => @as(u7, 3),
-            .frac => @as(u7, 11), // 13 - 2 = 11, so 11 + p gives correct result
+            .int => @as(u7, 2),
+            .frac => @as(u7, 10), // 12 - 2 = 10, so 10 + p gives correct result
         };
 
         // Calculate the final index
@@ -182,7 +180,6 @@ pub const Store = struct {
         // Changing the order of these can break things!
         _ = try layouts.append(allocator, Layout.boolType());
         _ = try layouts.append(allocator, Layout.str());
-        _ = try layouts.append(allocator, Layout.opaquePtr());
         _ = try layouts.append(allocator, Layout.int(.u8));
         _ = try layouts.append(allocator, Layout.int(.i8));
         _ = try layouts.append(allocator, Layout.int(.u16));
@@ -1081,10 +1078,6 @@ pub const Store = struct {
                     .size = @intCast(3 * target_usize.size()), // ptr, byte length, capacity
                     .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(target_usize.size())),
                 },
-                .opaque_ptr => .{
-                    .size = @intCast(target_usize.size()), // opaque_ptr is pointer-sized
-                    .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(target_usize.size())),
-                },
             },
             .box, .box_of_zst => .{
                 .size = @intCast(target_usize.size()), // a Box is just a pointer to refcounted memory
@@ -1689,9 +1682,9 @@ pub const Store = struct {
                             if (self.raw_layout_placeholders.get(progress_raw_key)) |raw_idx| {
                                 layout_idx = raw_idx;
                             } else {
-                                // Create a new placeholder for the raw layout.
-                                // Use opaque_ptr as a temporary that can be updated later.
-                                const raw_placeholder = try self.insertLayout(Layout.opaquePtr());
+                                // Create a temporary non-zero-sized placeholder layout.
+                                // This index is updated to the real layout once nominal resolution finishes.
+                                const raw_placeholder = try self.insertLayout(Layout.box(.zst));
                                 try self.raw_layout_placeholders.put(progress_raw_key, raw_placeholder);
                                 layout_idx = raw_placeholder;
                             }
@@ -1749,8 +1742,9 @@ pub const Store = struct {
                     }
 
                     if (inside_heap_container) {
-                        // Valid recursive reference - heap allocation breaks the infinite size
-                        layout_idx = try self.insertLayout(Layout.opaquePtr());
+                        // Valid recursive reference - heap allocation breaks the infinite size.
+                        // Use a temporary non-zero-sized placeholder layout that preserves container sizing.
+                        layout_idx = try self.insertLayout(Layout.box(.zst));
                         skip_layout_computation = true;
                     } else {
                         // Invalid: recursive type without heap allocation would have infinite size.
@@ -1809,9 +1803,9 @@ pub const Store = struct {
                                     if (self.raw_layout_placeholders.get(progress_cache_key)) |raw_idx| {
                                         layout_idx = raw_idx;
                                     } else {
-                                        // Create a new placeholder for the raw layout.
-                                        // Use opaque_ptr as a temporary that can be updated later.
-                                        const raw_placeholder = try self.insertLayout(Layout.opaquePtr());
+                                        // Create a temporary non-zero-sized placeholder layout.
+                                        // This index is updated to the real layout once nominal resolution finishes.
+                                        const raw_placeholder = try self.insertLayout(Layout.box(.zst));
                                         try self.raw_layout_placeholders.put(progress_cache_key, raw_placeholder);
                                         layout_idx = raw_placeholder;
                                     }
@@ -1906,7 +1900,7 @@ pub const Store = struct {
                                 std.debug.assert(type_args.len == 1); // Box must have exactly 1 type parameter
                                 const elem_var = type_args[0];
 
-                                // Check if the element type is a known ZST (but NOT flex/rigid - those need opaque_ptr)
+                                // Check if the element type is a known ZST.
                                 const elem_resolved = self.getTypesStore().resolveVar(elem_var);
                                 const elem_content = elem_resolved.desc.content;
                                 const is_elem_zst = switch (elem_content) {
@@ -1921,8 +1915,7 @@ pub const Store = struct {
                                     // For ZST element types, use box of zero-sized type
                                     break :flat_type Layout.boxOfZst();
                                 } else {
-                                    // Otherwise, add this to the stack of pending work
-                                    // (This includes flex/rigid which will resolve to opaque_ptr)
+                                    // Otherwise, add this to the stack of pending work.
                                     try self.work.pending_containers.append(self.allocator, .{
                                         .var_ = current.var_,
                                         .module_idx = self.current_module_idx,
@@ -2099,11 +2092,11 @@ pub const Store = struct {
 
                             // Reserve a placeholder layout and cache it for the nominal's var.
                             // This allows recursive references to find this layout index.
-                            // We use Box(opaque_ptr) as placeholder because:
+                            // We use Box(ZST) as placeholder because:
                             // 1. It's non-scalar, so it gets inserted (not a sentinel)
                             // 2. It's non-ZST, so isZeroSized() returns false
                             // 3. It can be updated with updateLayout() once the real layout is known
-                            const reserved_idx = try self.insertLayout(Layout.box(.opaque_ptr));
+                            const reserved_idx = try self.insertLayout(Layout.box(.zst));
                             const reserved_cache_key = ModuleVarKey{ .module_idx = self.current_module_idx, .var_ = current.var_ };
                             try self.layouts_by_module_var.put(reserved_cache_key, reserved_idx);
 
@@ -2443,15 +2436,15 @@ pub const Store = struct {
                             break :blk Layout.default_num();
                         }
 
-                        // For flex vars inside containers (list, box), use opaque_ptr
-                        // since the container needs a concrete element layout.
+                        // For unconstrained flex vars inside containers (list, box),
+                        // treat them as zero-sized until type scope resolves them.
                         if (self.work.pending_containers.len > 0) {
                             const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
                             if (pending_item.container == .box or pending_item.container == .list) {
                                 if (!flex.constraints.isEmpty()) {
                                     break :blk Layout.default_num();
                                 }
-                                break :blk Layout.opaquePtr();
+                                break :blk Layout.zst();
                             }
                         }
 
@@ -2509,10 +2502,7 @@ pub const Store = struct {
                         }
 
                         // For rigid vars inside containers (list, box), we need to determine
-                        // the element layout. If the rigid var has any constraints (like is_eq),
-                        // it's likely a numeric type that should default to Dec rather than
-                        // opaquePtr. opaquePtr causes crashes when elements are used in
-                        // numeric comparisons. (fixes issue #8946)
+                        // the element layout. If the rigid var has constraints, default to Dec.
                         if (self.work.pending_containers.len > 0) {
                             const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
                             if (pending_item.container == .box or pending_item.container == .list) {
@@ -2520,7 +2510,7 @@ pub const Store = struct {
                                 if (!rigid.constraints.isEmpty()) {
                                     break :blk Layout.default_num();
                                 }
-                                break :blk Layout.opaquePtr();
+                                break :blk Layout.zst();
                             }
                         }
                         // Unconstrained rigid vars (like from empty list element types) can be ZST.

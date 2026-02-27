@@ -5,9 +5,7 @@ const TestEnv = @import("repl_test_env.zig").TestEnv;
 
 const testing = std.testing;
 
-// Use page_allocator for REPL tests (doesn't track leaks).
-// The interpreter has known memory leak issues that we're not fixing now.
-const alloc = std.heap.page_allocator;
+const alloc = std.testing.allocator;
 
 /// Run expression on interpreter only (for tests with known dev backend bugs).
 fn expectInterpreter(expr: []const u8, expected: []const u8) !void {

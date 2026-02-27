@@ -305,17 +305,13 @@ fn selectCopyFallbackFn(elem_layout: Layout) builtins.list.CopyFallbackFn {
                 .i64 => &builtins.list.copy_i64,
                 .i128 => &builtins.list.copy_i128,
             },
-            .frac => &builtins.list.copy_fallback,
-            .opaque_ptr => &builtins.list.copy_fallback,
+            else => &builtins.list.copy_fallback,
         },
         .box => &builtins.list.copy_box,
         .box_of_zst => &builtins.list.copy_box_zst,
         .list => &builtins.list.copy_list,
         .list_of_zst => &builtins.list.copy_list_zst,
-        .struct_ => &builtins.list.copy_fallback,
-        .closure => &builtins.list.copy_fallback,
-        .zst => &builtins.list.copy_fallback,
-        .tag_union => &builtins.list.copy_fallback,
+        else => &builtins.list.copy_fallback,
     };
 }
 
@@ -1544,6 +1540,11 @@ pub const Interpreter = struct {
 
                 const str_a = args[0];
                 const str_b = args[1];
+                if (str_a.layout.tag != .scalar or str_a.layout.data.scalar.tag != .str or
+                    str_b.layout.tag != .scalar or str_b.layout.data.scalar.tag != .str)
+                {
+                    return error.TypeMismatch;
+                }
                 const roc_str_a = str_a.asRocStr().?;
                 const roc_str_b = str_b.asRocStr().?;
 
@@ -2823,7 +2824,7 @@ pub const Interpreter = struct {
                     // When upgrading from list_of_zst, we need to update the runtime type
                     // to reflect the element's actual type. This is critical for closures
                     // that capture for-loop elements: without the correct runtime type,
-                    // the captured value's layout may be computed as opaquePtr() instead
+                    // the captured value's layout may be computed before all recursive fixups run
                     // of the correct numeric layout. (fixes issue #8946)
                     const upgraded_rt_var = try self.createListTypeWithElement(elt_arg.rt_var);
                     var out = try self.pushRaw(new_list_layout, 0, upgraded_rt_var);
@@ -4778,7 +4779,7 @@ pub const Interpreter = struct {
 
         var float_buf: [400]u8 = undefined;
         const str_bytes = if (T == f32)
-            i128h.f32_to_str(&float_buf, float_value)
+            i128h.f64_to_str(&float_buf, @as(f64, @floatCast(float_value)))
         else
             i128h.f64_to_str(&float_buf, float_value);
 
@@ -5864,6 +5865,176 @@ pub const Interpreter = struct {
         }
     }
 
+    /// Evaluate a binary operation on numeric values (int, f32, f64, or dec)
+    /// This function dispatches to the appropriate type-specific operation.
+    fn evalNumericBinop(
+        self: *Interpreter,
+        op: can.CIR.Expr.Binop.Op,
+        lhs: StackValue,
+        rhs: StackValue,
+        roc_ops: *RocOps,
+    ) !StackValue {
+        const lhs_val = try self.extractNumericValue(lhs);
+        const rhs_val = try self.extractNumericValue(rhs);
+        const result_layout = lhs.layout;
+
+        var out = try self.pushRaw(result_layout, 0, lhs.rt_var);
+        out.is_initialized = false;
+
+        switch (op) {
+            .add => switch (lhs_val) {
+                .int => |l| switch (rhs_val) {
+                    .int => |r| try out.setInt(l + r),
+                    .dec => |r| try out.setInt(l + r.toWholeInt()),
+                    else => return error.TypeMismatch,
+                },
+                .f32 => |l| switch (rhs_val) {
+                    .f32 => |r| out.setF32(l + r),
+                    else => return error.TypeMismatch,
+                },
+                .f64 => |l| switch (rhs_val) {
+                    .f64 => |r| out.setF64(l + r),
+                    else => return error.TypeMismatch,
+                },
+                .dec => |l| switch (rhs_val) {
+                    .dec => |r| out.setDec(RocDec.add(l, r, roc_ops), roc_ops),
+                    .int => |r| out.setDec(RocDec.add(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops),
+                    else => return error.TypeMismatch,
+                },
+            },
+            .sub => switch (lhs_val) {
+                .int => |l| switch (rhs_val) {
+                    .int => |r| try out.setInt(l - r),
+                    .dec => |r| try out.setInt(l - r.toWholeInt()),
+                    else => return error.TypeMismatch,
+                },
+                .f32 => |l| switch (rhs_val) {
+                    .f32 => |r| out.setF32(l - r),
+                    else => return error.TypeMismatch,
+                },
+                .f64 => |l| switch (rhs_val) {
+                    .f64 => |r| out.setF64(l - r),
+                    else => return error.TypeMismatch,
+                },
+                .dec => |l| switch (rhs_val) {
+                    .dec => |r| out.setDec(RocDec.sub(l, r, roc_ops), roc_ops),
+                    .int => |r| out.setDec(RocDec.sub(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops),
+                    else => return error.TypeMismatch,
+                },
+            },
+            .mul => switch (lhs_val) {
+                .int => |l| switch (rhs_val) {
+                    .int => |r| try out.setInt(l * r),
+                    .dec => |r| try out.setInt(l * r.toWholeInt()),
+                    else => return error.TypeMismatch,
+                },
+                .f32 => |l| switch (rhs_val) {
+                    .f32 => |r| out.setF32(l * r),
+                    else => return error.TypeMismatch,
+                },
+                .f64 => |l| switch (rhs_val) {
+                    .f64 => |r| out.setF64(l * r),
+                    else => return error.TypeMismatch,
+                },
+                .dec => |l| switch (rhs_val) {
+                    .dec => |r| out.setDec(RocDec.mul(l, r, roc_ops), roc_ops),
+                    .int => |r| out.setDec(RocDec.mul(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops),
+                    else => return error.TypeMismatch,
+                },
+            },
+            .div, .div_trunc => switch (lhs_val) {
+                .int => |l| switch (rhs_val) {
+                    .int => |r| {
+                        if (r == 0) return error.DivisionByZero;
+                        try out.setInt(i128h.divTrunc_i128(l, r));
+                    },
+                    else => return error.TypeMismatch,
+                },
+                .f32 => |l| switch (rhs_val) {
+                    .f32 => |r| {
+                        if (r == 0) return error.DivisionByZero;
+                        if (op == .div_trunc) {
+                            out.setF32(std.math.trunc(l / r));
+                        } else {
+                            out.setF32(l / r);
+                        }
+                    },
+                    else => return error.TypeMismatch,
+                },
+                .f64 => |l| switch (rhs_val) {
+                    .f64 => |r| {
+                        if (r == 0) return error.DivisionByZero;
+                        if (op == .div_trunc) {
+                            out.setF64(std.math.trunc(l / r));
+                        } else {
+                            out.setF64(l / r);
+                        }
+                    },
+                    else => return error.TypeMismatch,
+                },
+                .dec => |l| switch (rhs_val) {
+                    .dec => |r| {
+                        if (r.num == 0) return error.DivisionByZero;
+                        if (op == .div_trunc) {
+                            const result_num = builtins.dec.divTruncC(l, r, roc_ops);
+                            out.setDec(RocDec{ .num = result_num }, roc_ops);
+                        } else {
+                            out.setDec(RocDec.div(l, r, roc_ops), roc_ops);
+                        }
+                    },
+                    .int => |r| {
+                        if (r == 0) return error.DivisionByZero;
+                        const r_dec = RocDec.fromWholeInt(r).?;
+                        if (op == .div_trunc) {
+                            const result_num = builtins.dec.divTruncC(l, r_dec, roc_ops);
+                            out.setDec(RocDec{ .num = result_num }, roc_ops);
+                        } else {
+                            out.setDec(RocDec.div(l, r_dec, roc_ops), roc_ops);
+                        }
+                    },
+                    else => return error.TypeMismatch,
+                },
+            },
+            .rem => switch (lhs_val) {
+                .int => |l| switch (rhs_val) {
+                    .int => |r| {
+                        if (r == 0) return error.DivisionByZero;
+                        try out.setInt(i128h.rem_i128(l, r));
+                    },
+                    else => return error.TypeMismatch,
+                },
+                .f32 => |l| switch (rhs_val) {
+                    .f32 => |r| {
+                        if (r == 0) return error.DivisionByZero;
+                        out.setF32(@rem(l, r));
+                    },
+                    else => return error.TypeMismatch,
+                },
+                .f64 => |l| switch (rhs_val) {
+                    .f64 => |r| {
+                        if (r == 0) return error.DivisionByZero;
+                        out.setF64(@rem(l, r));
+                    },
+                    else => return error.TypeMismatch,
+                },
+                .dec => |l| switch (rhs_val) {
+                    .dec => |r| {
+                        if (r.num == 0) return error.DivisionByZero;
+                        out.setDec(RocDec.rem(l, r, roc_ops), roc_ops);
+                    },
+                    .int => |r| {
+                        if (r == 0) return error.DivisionByZero;
+                        out.setDec(RocDec.rem(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops);
+                    },
+                    else => return error.TypeMismatch,
+                },
+            },
+            else => return error.TypeMismatch,
+        }
+        out.is_initialized = true;
+        return out;
+    }
+
     const NumericValue = union(enum) {
         int: i128,
         f32: f32,
@@ -6040,17 +6211,13 @@ pub const Interpreter = struct {
                     const rhs_str = rhs.asRocStr().?;
                     return lhs_str.eql(rhs_str.*);
                 },
-                else => {
-                    self.triggerCrash("Internal error: unhandled scalar type in equality comparison", false, roc_ops);
-                    return error.TypeMismatch;
-                },
             }
         }
 
         // Check for nominal types FIRST (before resolveBaseVar) to dispatch to their is_eq method.
         // This is critical because resolveBaseVar follows nominal types to their backing var,
         // but we need to dispatch to the nominal type's is_eq method instead.
-        const direct_resolved = self.runtime_types.resolveVar(lhs_var);
+        const direct_resolved = self.resolveAliasesOnly(lhs_var);
         if (direct_resolved.desc.content == .structure) {
             if (direct_resolved.desc.content.structure == .nominal_type) {
                 const nom = direct_resolved.desc.content.structure.nominal_type;
@@ -6264,12 +6431,6 @@ pub const Interpreter = struct {
                     const rhs_str = rhs.asRocStr().?;
                     break :blk lhs_str.eql(rhs_str.*);
                 },
-                .opaque_ptr => blk: {
-                    // Opaque pointer comparison - compare the pointer values directly
-                    if (lhs.ptr == null and rhs.ptr == null) break :blk true;
-                    if (lhs.ptr == null or rhs.ptr == null) break :blk false;
-                    break :blk lhs.ptr.? == rhs.ptr.?;
-                },
             };
         }
 
@@ -6281,6 +6442,89 @@ pub const Interpreter = struct {
                 return error.TypeMismatch;
             };
             return order == .eq;
+        }
+
+        // Builtin List equality is nominal but semantically structural over elements.
+        // Evaluating List.is_eq via method dispatch can pick the wrong polymorphic context
+        // for nested list comparisons, so compare directly by element here.
+        if ((lhs.layout.tag == .list or lhs.layout.tag == .list_of_zst) and
+            (rhs.layout.tag == .list or rhs.layout.tag == .list_of_zst))
+        {
+            const lhs_list = lhs.asRocList() orelse return error.TypeMismatch;
+            const rhs_list = rhs.asRocList() orelse return error.TypeMismatch;
+            if (lhs_list.len() != rhs_list.len()) return false;
+            const len = lhs_list.len();
+            if (len == 0) return true;
+
+            const nominal_args = self.runtime_types.sliceNominalArgs(nom);
+            const elem_rt_var: types.Var = if (nominal_args.len > 0)
+                nominal_args[0]
+            else
+                return error.TypeMismatch;
+
+            const stored_elem_layout = if (lhs.layout.tag == .list)
+                self.runtime_layout_store.getLayout(lhs.layout.data.list)
+            else if (rhs.layout.tag == .list)
+                self.runtime_layout_store.getLayout(rhs.layout.data.list)
+            else
+                layout.Layout.zst();
+
+            const type_based_elem_layout = self.getRuntimeLayout(elem_rt_var) catch stored_elem_layout;
+            const candidate_elem_layout = if (type_based_elem_layout.tag == .box)
+                self.runtime_layout_store.getLayout(type_based_elem_layout.data.box)
+            else
+                type_based_elem_layout;
+
+            const stored_elem_size = self.runtime_layout_store.layoutSize(stored_elem_layout);
+            // Preserve nominal list layout when available so recursive comparisons route
+            // through list-specific structural equality instead of generic struct paths.
+            const elem_value_layout = switch (candidate_elem_layout.tag) {
+                .list, .list_of_zst => candidate_elem_layout,
+                else => stored_elem_layout,
+            };
+
+            const value_elem_size = self.runtime_layout_store.layoutSize(elem_value_layout);
+            const elem_size: usize = @intCast(@max(stored_elem_size, value_elem_size));
+            if (elem_size == 0) return true;
+
+            const lhs_bytes = lhs_list.bytes orelse return error.TypeMismatch;
+            const rhs_bytes = rhs_list.bytes orelse return error.TypeMismatch;
+
+            var idx: usize = 0;
+            while (idx < len) : (idx += 1) {
+                const elem_offset = idx * elem_size;
+                const lhs_elem = StackValue{
+                    .layout = elem_value_layout,
+                    .ptr = lhs_bytes + elem_offset,
+                    .is_initialized = true,
+                    .rt_var = elem_rt_var,
+                };
+                const rhs_elem = StackValue{
+                    .layout = elem_value_layout,
+                    .ptr = rhs_bytes + elem_offset,
+                    .is_initialized = true,
+                    .rt_var = elem_rt_var,
+                };
+                const elems_equal = try self.valuesStructurallyEqual(lhs_elem, elem_rt_var, rhs_elem, elem_rt_var, roc_ops);
+                if (!elems_equal) return false;
+            }
+            return true;
+        }
+
+        // Method lookup/translation for polymorphic nominal methods mutates
+        // dispatch context. Keep structural equality self-contained so nested
+        // nominal comparisons don't leak mappings into each other.
+        const saved_rigid_subst = try self.rigid_subst.clone();
+        const saved_flex_type_context = self.flex_type_context.clone() catch |err| {
+            var to_deinit = saved_rigid_subst;
+            to_deinit.deinit();
+            return err;
+        };
+        defer {
+            self.rigid_subst.deinit();
+            self.rigid_subst = saved_rigid_subst;
+            self.flex_type_context.deinit();
+            self.flex_type_context = saved_flex_type_context;
         }
 
         // Look up and call the is_eq method on the nominal type
@@ -6416,6 +6660,21 @@ pub const Interpreter = struct {
                         current = self.runtime_types.resolveVar(backing);
                     },
                     else => return current,
+                },
+                else => return current,
+            }
+        }
+    }
+
+    fn resolveAliasesOnly(self: *Interpreter, runtime_var: types.Var) types.store.ResolvedVarDesc {
+        var current = self.runtime_types.resolveVar(runtime_var);
+        var guard = types.debug.IterationGuard.init("resolveAliasesOnly");
+        while (true) {
+            guard.tick();
+            switch (current.desc.content) {
+                .alias => |al| {
+                    const backing = self.runtime_types.getAliasBackingVar(al);
+                    current = self.runtime_types.resolveVar(backing);
                 },
                 else => return current,
             }
@@ -8414,10 +8673,6 @@ pub const Interpreter = struct {
                         const str_content = try self.runtime_types.mkNominal(str_type_ident, str_backing_var, no_type_args, origin_module_id, false);
                         break :blk try self.runtime_types.freshFromContent(str_content);
                     },
-                    else => {
-                        // Default to fresh var for unknown scalar types
-                        break :blk try self.runtime_types.fresh();
-                    },
                 }
             },
             else => {
@@ -8560,6 +8815,13 @@ pub const Interpreter = struct {
             } else {
                 break;
             }
+        }
+
+        // Some polymorphic paths can still surface constrained rigids that have no
+        // active substitution in the current call context. Propagate a typed error
+        // instead of letting layout lowering hit an internal unreachable.
+        if (resolved.desc.content == .rigid and !resolved.desc.content.rigid.constraints.isEmpty()) {
+            return error.TypeMismatch;
         }
 
         const idx: usize = @intFromEnum(resolved.var_);
@@ -12091,42 +12353,7 @@ pub const Interpreter = struct {
                     const inner_layout_idx = layout_val.data.box;
                     const inner_layout = self.runtime_layout_store.getLayout(inner_layout_idx);
 
-                    // For recursive types, the inner layout may be scalar(opaque_ptr).
-                    // In that case, we need to resolve the backing type to get the actual
-                    // tag union structure.
-                    const effective_inner_layout = if (inner_layout.tag == .scalar and inner_layout.data.scalar.tag == .opaque_ptr) blk: {
-                        // Resolve the type variable to find the backing tag union layout.
-                        // For nominal types, vars[0] is the backing type variable.
-                        const box_resolved = self.runtime_types.resolveVar(layout_rt_var);
-                        if (box_resolved.desc.content == .structure) {
-                            const flat = box_resolved.desc.content.structure;
-                            if (flat == .nominal_type) {
-                                const nom = flat.nominal_type;
-                                const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
-                                if (vars.len > 0) {
-                                    const backing_var = vars[0];
-                                    const backing_layout = self.getRuntimeLayout(backing_var) catch break :blk inner_layout;
-                                    break :blk backing_layout;
-                                }
-                            } else if (flat == .tag_union) {
-                                // Direct tag union - try to get the non-boxed layout
-                                // by looking at the tag union's backing type
-                                const tu = flat.tag_union;
-                                const ext_var = tu.ext;
-                                const ext_resolved = self.runtime_types.resolveVar(ext_var);
-                                if (ext_resolved.desc.content == .structure and ext_resolved.desc.content.structure == .nominal_type) {
-                                    const nom = ext_resolved.desc.content.structure.nominal_type;
-                                    const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
-                                    if (vars.len > 0) {
-                                        const backing_var = vars[0];
-                                        const backing_layout = self.getRuntimeLayout(backing_var) catch break :blk inner_layout;
-                                        break :blk backing_layout;
-                                    }
-                                }
-                            }
-                        }
-                        break :blk inner_layout;
-                    } else inner_layout;
+                    const effective_inner_layout = inner_layout;
 
                     const args_exprs = self.env.store.sliceExpr(tag.args);
 
@@ -15718,21 +15945,7 @@ pub const Interpreter = struct {
                         const inner_layout_idx = layout_val.data.box;
                         const raw_inner_layout = self.runtime_layout_store.getLayout(inner_layout_idx);
 
-                        // Resolve opaque_ptr to actual backing layout
-                        const backing_layout = if (raw_inner_layout.tag == .scalar and raw_inner_layout.data.scalar.tag == .opaque_ptr) blk: {
-                            const box_resolved = self.runtime_types.resolveVar(tc.layout_rt_var);
-                            if (box_resolved.desc.content == .structure) {
-                                const flat = box_resolved.desc.content.structure;
-                                if (flat == .nominal_type) {
-                                    const nom = flat.nominal_type;
-                                    const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
-                                    if (vars.len > 0) {
-                                        break :blk self.getRuntimeLayout(vars[0]) catch raw_inner_layout;
-                                    }
-                                }
-                            }
-                            break :blk raw_inner_layout;
-                        } else raw_inner_layout;
+                        const backing_layout = raw_inner_layout;
 
                         // Build the inner tag union value based on the backing layout type
                         if (backing_layout.tag == .struct_ or backing_layout.tag == .tag_union) {
@@ -15844,6 +16057,17 @@ pub const Interpreter = struct {
                                 try inner_dest.setInt(@intCast(tc.tag_index));
                                 inner_dest.is_initialized = true;
                             }
+                            const boxed = try self.makeBoxValueFromLayout(layout_val, inner_dest, roc_ops, tc.rt_var);
+                            for (values) |val| {
+                                val.decref(&self.runtime_layout_store, roc_ops);
+                            }
+                            try value_stack.push(boxed);
+                        } else if (backing_layout.tag == .zst) {
+                            // Some boxed tag payloads collapse to a zero-sized backing layout.
+                            // In that case, payload values are type-level only and the runtime
+                            // representation is just an initialized ZST inner value.
+                            var inner_dest = try self.pushRaw(backing_layout, 0, tc.rt_var);
+                            inner_dest.is_initialized = true;
                             const boxed = try self.makeBoxValueFromLayout(layout_val, inner_dest, roc_ops, tc.rt_var);
                             for (values) |val| {
                                 val.decref(&self.runtime_layout_store, roc_ops);
@@ -16858,12 +17082,42 @@ pub const Interpreter = struct {
                 const lhs = value_stack.pop() orelse return error.Crash;
                 defer lhs.decref(&self.runtime_layout_store, roc_ops);
 
-                // Prefer the runtime type from the evaluated value when concrete.
+                // Prefer the runtime type from the evaluated value if it's more concrete
+                // (i.e., has a structure type rather than flex/rigid from polymorphic calls)
+                // Track if the value came from a polymorphic context (flex/rigid rt_var)
                 var effective_receiver_rt_var = ba.receiver_rt_var;
+                var value_is_polymorphic = false;
+                const receiver_resolved = self.runtime_types.resolveVar(ba.receiver_rt_var);
+                const receiver_is_concrete = receiver_resolved.desc.content == .structure or receiver_resolved.desc.content == .alias;
+
                 const val_rt_var = lhs.rt_var;
                 const val_resolved = self.runtime_types.resolveVar(val_rt_var);
-                if (val_resolved.desc.content == .structure or val_resolved.desc.content == .alias) {
+                if (val_resolved.desc.content == .flex or val_resolved.desc.content == .rigid) {
+                    // The value came from a polymorphic context.
+                    value_is_polymorphic = true;
+                }
+                // Only fall back to the value's runtime type when the call-site receiver type
+                // is unresolved; otherwise keep call-site type identity (e.g. nominal List).
+                if (!receiver_is_concrete and
+                    (val_resolved.desc.content == .structure or val_resolved.desc.content == .alias))
+                {
                     effective_receiver_rt_var = val_rt_var;
+                }
+
+                // Check if effective type is still flex/rigid after trying value's rt_var
+                // Track whether we had to default to Dec so we know to use direct numeric handling
+                var defaulted_to_dec = false;
+                const resolved_check = self.runtime_types.resolveVar(effective_receiver_rt_var);
+                if (resolved_check.desc.content == .flex or resolved_check.desc.content == .rigid) {
+                    // No concrete type info available, default to Dec for numeric operations
+                    const dec_content = try self.mkNumberTypeContentRuntime("Dec");
+                    const dec_var = try self.runtime_types.freshFromContent(dec_content);
+                    effective_receiver_rt_var = dec_var;
+                    defaulted_to_dec = true;
+                } else if (value_is_polymorphic) {
+                    // The value is polymorphic but we have a concrete type from CIR - mark as polymorphic
+                    // so we use direct numeric handling instead of method dispatch
+                    defaulted_to_dec = true;
                 }
 
                 // Resolve the lhs type
@@ -16887,6 +17141,90 @@ pub const Interpreter = struct {
                         const alias = current_resolved.desc.content.alias;
                         current_var = self.runtime_types.getAliasBackingVar(alias);
                         current_resolved = self.runtime_types.resolveVar(current_var);
+                    }
+                }
+
+                // Route nominal equality through the centralized structural-equality dispatcher.
+                // This keeps equality behavior consistent across call sites and avoids ad-hoc
+                // polymorphic context leakage from generic method invocation.
+                if (ba.method_ident == self.root_env.idents.is_eq and
+                    current_resolved.desc.content == .structure and
+                    current_resolved.desc.content.structure == .nominal_type)
+                {
+                    const nom = current_resolved.desc.content.structure.nominal_type;
+                    var result = self.dispatchNominalIsEq(lhs, rhs, nom, roc_ops) catch |err| switch (err) {
+                        error.NotImplemented => {
+                            self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
+                            return error.Crash;
+                        },
+                        else => return err,
+                    };
+                    if (ba.negate_result) result = !result;
+                    const result_val = try self.makeBoolValue(result);
+                    try value_stack.push(result_val);
+                    return true;
+                }
+
+                // Check if we can use low-level numeric comparison based on layout
+                // This handles cases where method dispatch would fail (e.g., polymorphic values)
+                // Only use direct handling when we had to default to Dec due to flex/rigid types
+                const lhs_is_numeric_layout = lhs.layout.tag == .scalar and
+                    (lhs.layout.data.scalar.tag == .int or lhs.layout.data.scalar.tag == .frac);
+                const rhs_is_numeric_layout = rhs.layout.tag == .scalar and
+                    (rhs.layout.data.scalar.tag == .int or rhs.layout.data.scalar.tag == .frac);
+                if (lhs_is_numeric_layout and rhs_is_numeric_layout and defaulted_to_dec) {
+                    // Handle numeric comparisons directly via low-level ops
+                    if (ba.method_ident == self.root_env.idents.is_gt) {
+                        const result = try self.compareNumericValues(lhs, rhs, .gt);
+                        const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
+                        try value_stack.push(result_val);
+                        return true;
+                    } else if (ba.method_ident == self.root_env.idents.is_gte) {
+                        const result = try self.compareNumericValues(lhs, rhs, .gte);
+                        const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
+                        try value_stack.push(result_val);
+                        return true;
+                    } else if (ba.method_ident == self.root_env.idents.is_lt) {
+                        const result = try self.compareNumericValues(lhs, rhs, .lt);
+                        const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
+                        try value_stack.push(result_val);
+                        return true;
+                    } else if (ba.method_ident == self.root_env.idents.is_lte) {
+                        const result = try self.compareNumericValues(lhs, rhs, .lte);
+                        const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
+                        try value_stack.push(result_val);
+                        return true;
+                    } else if (ba.method_ident == self.root_env.idents.is_eq) {
+                        const result = try self.compareNumericValues(lhs, rhs, .eq);
+                        const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
+                        try value_stack.push(result_val);
+                        return true;
+                    }
+                    // Handle numeric arithmetic via type-aware evalNumericBinop
+                    if (ba.method_ident == self.root_env.idents.plus) {
+                        const result = try self.evalNumericBinop(.add, lhs, rhs, roc_ops);
+                        try value_stack.push(result);
+                        return true;
+                    } else if (ba.method_ident == self.root_env.idents.minus) {
+                        const result = try self.evalNumericBinop(.sub, lhs, rhs, roc_ops);
+                        try value_stack.push(result);
+                        return true;
+                    } else if (ba.method_ident == self.root_env.idents.times) {
+                        const result = try self.evalNumericBinop(.mul, lhs, rhs, roc_ops);
+                        try value_stack.push(result);
+                        return true;
+                    } else if (ba.method_ident == self.root_env.idents.div_by) {
+                        const result = try self.evalNumericBinop(.div, lhs, rhs, roc_ops);
+                        try value_stack.push(result);
+                        return true;
+                    } else if (ba.method_ident == self.root_env.idents.div_trunc_by) {
+                        const result = try self.evalNumericBinop(.div_trunc, lhs, rhs, roc_ops);
+                        try value_stack.push(result);
+                        return true;
+                    } else if (ba.method_ident == self.root_env.idents.rem_by) {
+                        const result = try self.evalNumericBinop(.rem, lhs, rhs, roc_ops);
+                        try value_stack.push(result);
+                        return true;
                     }
                 }
 
@@ -16916,14 +17254,128 @@ pub const Interpreter = struct {
                         },
                         else => null,
                     },
-                    .flex, .rigid, .err => {
-                        self.triggerCrash("Unresolved runtime type variable in binary operator dispatch", false, roc_ops);
-                        return error.InvalidMethodReceiver;
+                    // Flex, rigid, and error vars are unresolved type variables (e.g., numeric literals defaulting to Dec,
+                    // or type parameters in generic functions). For is_eq, prefer a numeric scalar fast-path when we can
+                    // prove the scalar is numeric; otherwise fall back to structural equality when the type is structural.
+                    // Error types can occur during generic instantiation when types couldn't be resolved.
+                    .flex, .rigid, .err => blk: {
+                        if (ba.method_ident == self.root_env.idents.is_eq) {
+                            // Numeric scalar fast-path:
+                            // Only use layout-based scalar comparison when both sides are scalar *and*
+                            // the scalar tag is numeric (int/frac). This keeps the optimization
+                            // for numeric flex vars while avoiding crashes for non-numeric scalars
+                            // like strings.
+                            if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
+                                const lhs_tag = lhs.layout.data.scalar.tag;
+                                const rhs_tag = rhs.layout.data.scalar.tag;
+
+                                const lhs_is_numeric = lhs_tag == .int or lhs_tag == .frac;
+                                const rhs_is_numeric = rhs_tag == .int or rhs_tag == .frac;
+
+                                if (lhs_is_numeric and rhs_is_numeric) {
+                                    const order = self.compareNumericScalars(lhs, rhs) catch {
+                                        self.triggerCrash("Failed to compare numeric scalars (flex/rigid is_eq numeric scalar fast-path)", false, roc_ops);
+                                        return error.Crash;
+                                    };
+                                    var result = (order == .eq);
+                                    if (ba.negate_result) result = !result;
+                                    const result_val = try self.makeBoolValue(result);
+                                    try value_stack.push(result_val);
+                                    return true;
+                                }
+                            }
+
+                            // For non-scalar types, we need rt_var to dispatch to the type's is_eq method.
+                            // Values must have rt_var set by the code that created them.
+                            const resolved = self.runtime_types.resolveVar(lhs.rt_var);
+                            if (resolved.desc.content == .structure) {
+                                if (resolved.desc.content.structure == .nominal_type) {
+                                    const nom = resolved.desc.content.structure.nominal_type;
+                                    break :blk .{
+                                        .origin = nom.origin_module,
+                                        .ident = nom.ident.ident_idx,
+                                    };
+                                }
+                            }
+
+                            // Structural equality using effective_receiver_rt_var for proper type tracking
+                            var result = self.valuesStructurallyEqual(lhs, effective_receiver_rt_var, rhs, ba.rhs_rt_var, roc_ops) catch |err| switch (err) {
+                                error.NotImplemented => {
+                                    self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
+                                    return error.Crash;
+                                },
+                                else => return err,
+                            };
+                            // For != operator, negate the result
+                            if (ba.negate_result) result = !result;
+                            const result_val = try self.makeBoolValue(result);
+                            try value_stack.push(result_val);
+                            return true;
+                        }
+
+                        // For non-is_eq binary ops on flex types, we cannot dispatch without
+                        // a concrete type. The binary op setup code (e_binop handling) should have
+                        // already unified flex vars with Dec before reaching here.
+                        break :blk null;
                     },
                     else => null,
                 };
 
                 if (nominal_info == null) {
+                    // Before failing, check if this is a numeric operation we can handle directly
+                    if (lhs_is_numeric_layout and rhs_is_numeric_layout) {
+                        // Handle numeric arithmetic via type-aware evalNumericBinop as fallback
+                        if (ba.method_ident == self.root_env.idents.plus) {
+                            const result = try self.evalNumericBinop(.add, lhs, rhs, roc_ops);
+                            try value_stack.push(result);
+                            return true;
+                        } else if (ba.method_ident == self.root_env.idents.minus) {
+                            const result = try self.evalNumericBinop(.sub, lhs, rhs, roc_ops);
+                            try value_stack.push(result);
+                            return true;
+                        } else if (ba.method_ident == self.root_env.idents.times) {
+                            const result = try self.evalNumericBinop(.mul, lhs, rhs, roc_ops);
+                            try value_stack.push(result);
+                            return true;
+                        } else if (ba.method_ident == self.root_env.idents.div_by) {
+                            const result = try self.evalNumericBinop(.div, lhs, rhs, roc_ops);
+                            try value_stack.push(result);
+                            return true;
+                        } else if (ba.method_ident == self.root_env.idents.div_trunc_by) {
+                            const result = try self.evalNumericBinop(.div_trunc, lhs, rhs, roc_ops);
+                            try value_stack.push(result);
+                            return true;
+                        } else if (ba.method_ident == self.root_env.idents.rem_by) {
+                            const result = try self.evalNumericBinop(.rem, lhs, rhs, roc_ops);
+                            try value_stack.push(result);
+                            return true;
+                        } else if (ba.method_ident == self.root_env.idents.is_gt) {
+                            const result = try self.compareNumericValues(lhs, rhs, .gt);
+                            const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
+                            try value_stack.push(result_val);
+                            return true;
+                        } else if (ba.method_ident == self.root_env.idents.is_gte) {
+                            const result = try self.compareNumericValues(lhs, rhs, .gte);
+                            const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
+                            try value_stack.push(result_val);
+                            return true;
+                        } else if (ba.method_ident == self.root_env.idents.is_lt) {
+                            const result = try self.compareNumericValues(lhs, rhs, .lt);
+                            const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
+                            try value_stack.push(result_val);
+                            return true;
+                        } else if (ba.method_ident == self.root_env.idents.is_lte) {
+                            const result = try self.compareNumericValues(lhs, rhs, .lte);
+                            const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
+                            try value_stack.push(result_val);
+                            return true;
+                        } else if (ba.method_ident == self.root_env.idents.is_eq) {
+                            const result = try self.compareNumericValues(lhs, rhs, .eq);
+                            const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
+                            try value_stack.push(result_val);
+                            return true;
+                        }
+                    }
                     return error.InvalidMethodReceiver;
                 }
 
@@ -18672,16 +19124,6 @@ pub const Interpreter = struct {
                 // For 'box' layouts (recursive types), unwrap to get the actual backing layout
                 const effective_elem_layout = if (type_based_elem_layout.tag == .box) blk: {
                     const inner = self.runtime_layout_store.getLayout(type_based_elem_layout.data.box);
-                    if (inner.tag == .scalar and inner.data.scalar.tag == .opaque_ptr) {
-                        // Need to resolve the nominal type to get its backing layout
-                        const resolved = self.runtime_types.resolveVar(elem_rt_var);
-                        if (resolved.desc.content == .structure and resolved.desc.content.structure == .nominal_type) {
-                            const nom = resolved.desc.content.structure.nominal_type;
-                            const backing = self.runtime_types.getNominalBackingVar(nom);
-                            const backing_layout = self.getRuntimeLayout(backing) catch inner;
-                            break :blk backing_layout;
-                        }
-                    }
                     break :blk inner;
                 } else type_based_elem_layout;
 

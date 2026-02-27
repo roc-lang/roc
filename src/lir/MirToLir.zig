@@ -176,7 +176,11 @@ fn layoutFromMonotypeInner(self: *Self, monotype: Monotype.Monotype) Allocator.E
             const inner_layout = try self.layoutFromMonotype(b.inner);
             break :blk try self.layout_store.insertBox(inner_layout);
         },
-        .func => layout.Idx.opaque_ptr,
+        .func => blk: {
+            // Function values use closure layout semantics after MIR lowering.
+            const empty_captures = try self.layout_store.getEmptyRecordLayout();
+            break :blk try self.layout_store.insertLayout(layout.Layout.closure(empty_captures));
+        },
         .record => |r| try self.layoutFromRecord(r),
         .tuple => |t| try self.layoutFromTuple(t),
         .tag_union => |tu| try self.layoutFromTagUnion(tu),

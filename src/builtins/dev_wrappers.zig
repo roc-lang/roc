@@ -62,6 +62,7 @@ const listReleaseExcessCapacity = list.listReleaseExcessCapacity;
 const listWithCapacity = list.listWithCapacity;
 const listAppendUnsafe = list.listAppendUnsafe;
 const listAppendSafeC = list.listAppendSafeC;
+const listDecref = list.listDecref;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // String Wrappers
@@ -270,6 +271,14 @@ pub fn roc_builtins_str_escape_and_quote(out: *RocStr, str_bytes: ?[*]u8, str_le
 // List Wrappers
 // ═══════════════════════════════════════════════════════════════════════════
 
+fn strListElementDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
+    if (element == null) return;
+    const ctx = context orelse unreachable;
+    const str_ptr: *RocStr = utils.alignedPtrCast(*RocStr, element.?, @src());
+    const roc_ops: *RocOps = utils.alignedPtrCast(*RocOps, @as([*]u8, @ptrCast(ctx)), @src());
+    str_ptr.decref(roc_ops);
+}
+
 /// Wrapper: listWithCapacity
 pub fn roc_builtins_list_with_capacity(out: *RocList, capacity: u64, alignment: u32, element_width: usize, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
     out.* = listWithCapacity(capacity, alignment, element_width, elements_refcounted, null, @ptrCast(&rcNone), roc_ops);
@@ -316,6 +325,20 @@ pub fn roc_builtins_list_reserve(out: *RocList, list_bytes: ?[*]u8, list_len: us
 pub fn roc_builtins_list_release_excess_capacity(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     out.* = listReleaseExcessCapacity(l, alignment, element_width, elements_refcounted, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), .Immutable, roc_ops);
+}
+
+/// Wrapper: decref a List(Str), including decref of each string element when unique
+pub fn roc_builtins_list_decref_str(list_bytes: ?[*]u8, list_len: usize, list_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    listDecref(
+        l,
+        @alignOf(RocStr),
+        @sizeOf(RocStr),
+        true,
+        @ptrCast(roc_ops),
+        &strListElementDecref,
+        roc_ops,
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -733,7 +756,10 @@ fn i128ToStr(buf: []u8, val: i128) []u8 {
         return u128ToStr(buf, @intCast(val));
     }
     buf[0] = '-';
-    const abs: u128 = @intCast(-val);
+    const abs: u128 = if (val == std.math.minInt(i128))
+        @as(u128, @bitCast(val))
+    else
+        @intCast(-val);
     const digits = u128ToStr(buf[1..], abs);
     return buf[0 .. 1 + digits.len];
 }
@@ -776,14 +802,14 @@ pub fn roc_builtins_int_to_str(out: *RocStr, val_low: u64, val_high: u64, int_wi
 /// (u128 div/mod → __udivti3/__umodti3 compiler_rt symbols).
 pub fn roc_builtins_float_to_str(out: *RocStr, val_bits: u64, is_f32: bool, roc_ops: *RocOps) callconv(.c) void {
     var buf: [400]u8 = undefined;
-    const result = formatFloatDecimal(&buf, val_bits, is_f32);
+    const result = if (is_f32) blk: {
+        const f32_val: f32 = @bitCast(@as(u32, @truncate(val_bits)));
+        break :blk i128h.f64_to_str(&buf, @as(f64, @floatCast(f32_val)));
+    } else blk: {
+        const f64_val: f64 = @bitCast(val_bits);
+        break :blk i128h.f64_to_str(&buf, f64_val);
+    };
     out.* = RocStr.init(&buf, result.len, roc_ops);
-}
-
-/// Format a float to decimal string using Ryu's binaryToDecimal (u64-only).
-/// Delegates to compiler_rt_128.formatFloatDecimal.
-fn formatFloatDecimal(buf: []u8, val_bits: u64, is_f32: bool) []u8 {
-    return i128h.formatFloatDecimal(buf, val_bits, is_f32);
 }
 
 // ── Numeric-from-string wrappers ──

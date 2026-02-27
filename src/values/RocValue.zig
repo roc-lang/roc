@@ -13,6 +13,7 @@ const Idx = layout.Idx;
 const RocDec = builtins.dec.RocDec;
 const RocStr = builtins.str.RocStr;
 const RocList = builtins.list.RocList;
+const i128h = builtins.compiler_rt_128;
 const Ident = base.Ident;
 
 const RocValue = @This();
@@ -167,8 +168,16 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
             },
             .frac => {
                 return switch (scalar.data.frac) {
-                    .f32 => try std.fmt.allocPrint(allocator, "{d}", .{@as(f64, self.readF32())}),
-                    .f64 => try std.fmt.allocPrint(allocator, "{d}", .{self.readF64()}),
+                    .f32 => blk: {
+                        var buf: [400]u8 = undefined;
+                        const slice = i128h.f64_to_str(&buf, @as(f64, self.readF32()));
+                        break :blk try allocator.dupe(u8, slice);
+                    },
+                    .f64 => blk: {
+                        var buf: [400]u8 = undefined;
+                        const slice = i128h.f64_to_str(&buf, self.readF64());
+                        break :blk try allocator.dupe(u8, slice);
+                    },
                     .dec => {
                         const dec = self.readDec();
                         var buf: [RocDec.max_str_length]u8 = undefined;
@@ -177,7 +186,6 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
                     },
                 };
             },
-            .opaque_ptr => {},
         }
     }
 
@@ -371,7 +379,6 @@ pub fn equals(self: RocValue, other: RocValue, ctx: FormatContext) bool {
                         .dec => self.readDec().num == other.readDec().num,
                     };
                 },
-                .opaque_ptr => false,
             };
         },
         .zst => return true,

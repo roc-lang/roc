@@ -1,5 +1,6 @@
 //! Tests for the expression evaluator
 const std = @import("std");
+const builtin = @import("builtin");
 const parse = @import("parse");
 const types = @import("types");
 const base = @import("base");
@@ -12,6 +13,7 @@ const layout = @import("layout");
 const roc_target = @import("roc_target");
 const eval_mod = @import("../mod.zig");
 const builtin_loading_mod = eval_mod.builtin_loading;
+const render_helpers = eval_mod.render_helpers;
 const TestEnv = @import("TestEnv.zig");
 const Interpreter = eval_mod.Interpreter;
 const DevEvaluator = eval_mod.DevEvaluator;
@@ -23,13 +25,13 @@ const loadCompiledModule = builtin_loading_mod.loadCompiledModule;
 const backend = @import("backend");
 const bytebox = @import("bytebox");
 const WasmEvaluator = eval_mod.WasmEvaluator;
-const render_helpers = eval_mod.render_helpers;
 const values = @import("values");
 const i128h = builtins.compiler_rt_128;
 
 const posix = std.posix;
 
-const has_fork = false;
+const has_fork = builtin.os.tag != .windows;
+const enable_dev_eval_leak_checks = true;
 
 const Check = check.Check;
 const Can = can.Can;
@@ -57,11 +59,8 @@ fn interpreterFormatCtx(layout_cache: *const layout.Store) values.RocValue.Forma
 // Use std.testing.allocator for dev backend tests (tracks leaks)
 const test_allocator = std.testing.allocator;
 
-/// Use page_allocator for interpreter tests (doesn't track leaks).
-/// The interpreter has known memory leak issues that we're not fixing now.
-/// We want to focus on getting the dev backend working without leaks.
-/// Exported so other test files can use it.
-pub const interpreter_allocator = std.heap.page_allocator;
+/// Use std.testing.allocator for interpreter tests so leaks fail tests.
+pub const interpreter_allocator = test_allocator;
 
 const TestParseError = parse.Parser.Error || error{ TokenizeError, SyntaxError };
 
@@ -155,7 +154,7 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     // Set to true to see the raw bytes for disassembly analysis.
     // Useful for debugging calling convention issues, register allocation, etc.
     // See src/backend/README.md for instructions on running filtered tests with hex dump.
-    const dump_generated_code_hex = true;
+    const dump_generated_code_hex = false;
     if (dump_generated_code_hex and code_result.code.len > 0) {
         std.debug.print("\n=== Generated Code ({} bytes, entry_offset={}) ===\n", .{ code_result.code.len, code_result.entry_offset });
         dumpHex(code_result.code);
@@ -193,23 +192,16 @@ noinline fn executeAndFormat(
     // This is necessary for fork-based test isolation in ReleaseFast builds.
     std.debug.print("", .{});
 
+    if (comptime builtin.mode == .Debug and enable_dev_eval_leak_checks) {
+        builtins.utils.DebugRefcountTracker.enable();
+    }
+    defer if (comptime builtin.mode == .Debug and enable_dev_eval_leak_checks) {
+        builtins.utils.DebugRefcountTracker.disable();
+    };
+
     // Execute with result pointer (512 bytes to accommodate large tuples/records)
     var result_buf: [512]u8 align(16) = undefined;
-    std.debug.print(
-        "DEV exec entry=0x{x} code_size={} entry_offset={}\n",
-        .{ @intFromPtr(executable.entryPtr()), executable.code_size, executable.entry_offset },
-    );
-    dev_eval.callWithCrashProtection(executable, @ptrCast(&result_buf)) catch |err| {
-        switch (err) {
-            error.RocCrashed => {
-                if (dev_eval.getCrashMessage()) |msg| {
-                    std.debug.print("DevEvaluator roc_crashed: {s}\n", .{msg});
-                }
-                return error.RocCrashed;
-            },
-            else => return err,
-        }
-    };
+    try dev_eval.callWithCrashProtection(executable, @ptrCast(&result_buf));
 
     const ls = code_result.layout_store orelse {
         // Scalar-only fallback: construct layout from Idx
@@ -234,43 +226,50 @@ noinline fn executeAndFormat(
         };
     };
     const result_layout = ls.getLayout(code_result.result_layout);
+    var result_value = StackValue{
+        .layout = result_layout,
+        .ptr = @ptrCast(&result_buf),
+        .is_initialized = true,
+        .rt_var = ModuleEnv.varFrom(expr_idx),
+    };
+    var needs_result_decref = true;
+    defer if (needs_result_decref) {
+        result_value.decref(ls, &dev_eval.roc_ops);
+    };
 
-    // Tag unions need type information for stable tag-name rendering (e.g. Ok/Err).
-    if (result_layout.tag == .tag_union) {
-        var type_scope = types.TypeScope.init(alloc);
-        defer type_scope.deinit();
-
+    const formatted = if (result_layout.tag == .tag_union) blk: {
+        var empty_scope = types.TypeScope.init(alloc);
+        defer empty_scope.deinit();
         var render_ctx = render_helpers.RenderCtx{
             .allocator = alloc,
             .env = module_env,
             .runtime_types = &module_env.types,
             .layout_store = ls,
-            .type_scope = &type_scope,
+            .type_scope = &empty_scope,
         };
+        break :blk render_helpers.renderValueRocWithType(&render_ctx, result_value, result_value.rt_var) catch error.UnsupportedLayout;
+    } else blk: {
+        const roc_val = values.RocValue{
+            .ptr = &result_buf,
+            .lay = result_layout,
+            .layout_idx = code_result.result_layout,
+        };
+        const fmt_ctx = values.RocValue.FormatContext{
+            .layout_store = ls,
+        };
+        break :blk roc_val.format(alloc, fmt_ctx) catch error.UnsupportedLayout;
+    };
 
-        const result_rt_var = ModuleEnv.varFrom(expr_idx);
-        const stack_value = StackValue{
-            .layout = result_layout,
-            .ptr = @as(*anyopaque, @ptrCast(&result_buf)),
-            .is_initialized = true,
-            .rt_var = result_rt_var,
-        };
+    result_value.decref(ls, &dev_eval.roc_ops);
+    needs_result_decref = false;
 
-        return render_helpers.renderValueRocWithType(&render_ctx, stack_value, result_rt_var) catch |err| switch (err) {
-            error.OutOfMemory => error.OutOfMemory,
-            else => error.UnsupportedLayout,
-        };
+    if (comptime builtin.mode == .Debug and enable_dev_eval_leak_checks) {
+        if (builtins.utils.DebugRefcountTracker.reportLeaks() != 0) {
+            return error.ChildExecFailed;
+        }
     }
 
-    const roc_val = values.RocValue{
-        .ptr = &result_buf,
-        .lay = result_layout,
-        .layout_idx = code_result.result_layout,
-    };
-    const fmt_ctx = values.RocValue.FormatContext{
-        .layout_store = ls,
-    };
-    return roc_val.format(alloc, fmt_ctx) catch error.UnsupportedLayout;
+    return formatted;
 }
 
 /// Fork a child process to execute compiled code, isolating segfaults from the test process.
@@ -375,142 +374,23 @@ fn forkAndExecute(
     }
 }
 
-/// Probe interpreter eval in a forked child so panics/segfaults are
-/// translated into regular test failures instead of aborting the test binary.
-fn probeInterpreterEval(
-    interpreter: *Interpreter,
-    expr_idx: CIR.Expr.Idx,
-    ops: *builtins.host_abi.RocOps,
-) !void {
-    if (!has_fork) return;
-
-    const fork_result = posix.fork() catch {
-        return error.InterpreterForkFailed;
-    };
-
-    if (fork_result == 0) {
-        _ = interpreter.eval(expr_idx, ops) catch {};
-        posix.exit(0);
-    }
-
-    const wait_result = posix.waitpid(fork_result, 0);
-    const status = wait_result.status;
-    const termination_signal: u8 = @truncate(status & 0x7f);
-
-    if (termination_signal != 0) {
-        std.debug.print("\nChild process killed by signal {d} during interpreter execution\n", .{termination_signal});
-        return error.InterpreterChildCrashed;
-    }
-
-    const exit_code: u8 = @truncate((status >> 8) & 0xff);
-    if (exit_code != 0) {
-        return error.InterpreterChildFailed;
-    }
-}
-
-fn evalInterpreterChecked(
-    interpreter: *Interpreter,
-    expr_idx: CIR.Expr.Idx,
-    ops: *builtins.host_abi.RocOps,
-) !StackValue {
-    try probeInterpreterEval(interpreter, expr_idx, ops);
-    return interpreter.eval(expr_idx, ops);
-}
-
-/// Compare Interpreter result string with DevEvaluator result string.
-/// Both sides now use `RocValue.format()` for canonical formatting.
-/// Accepted divergences:
-/// - f32/f64 epsilon (machine/CPU instruction differences)
-/// - Bool "True"/"1" (Mono IR block result_layout doesn't propagate Idx.bool)
-/// - 1-field record layout unwrapping (`{ field: x }` vs `x`)
-/// - list-of-ZST rendering (`[<n zero-sized elements>]` vs `[{}, ...]`)
-fn singleFieldRecordValueString(s: []const u8) ?[]const u8 {
-    if (s.len < 6) return null; // "{ a: b }" minimum-ish
-    if (!std.mem.startsWith(u8, s, "{ ")) return null;
-    if (!std.mem.endsWith(u8, s, " }")) return null;
-    const inner = s[2 .. s.len - 2];
-    if (std.mem.indexOfScalar(u8, inner, ',') != null) return null;
-    const colon_idx = std.mem.indexOf(u8, inner, ": ") orelse return null;
-    return inner[colon_idx + 2 ..];
-}
-
-fn parseZeroSizedListCount(s: []const u8) ?usize {
-    const prefix = "[<";
-    const suffix = " zero-sized elements>]";
-    if (!std.mem.startsWith(u8, s, prefix)) return null;
-    if (!std.mem.endsWith(u8, s, suffix)) return null;
-    const n_str = s[prefix.len .. s.len - suffix.len];
-    return std.fmt.parseInt(usize, n_str, 10) catch null;
-}
-
-fn countBraceZstListElements(s: []const u8) ?usize {
-    if (!std.mem.startsWith(u8, s, "[")) return null;
-    if (!std.mem.endsWith(u8, s, "]")) return null;
-    const inner = s[1 .. s.len - 1];
-    if (inner.len == 0) return 0;
-
-    var i: usize = 0;
-    var count: usize = 0;
-    while (i < inner.len) {
-        while (i < inner.len and inner[i] == ' ') : (i += 1) {}
-        if (i + 2 > inner.len) return null;
-        if (!std.mem.eql(u8, inner[i .. i + 2], "{}")) return null;
-        i += 2;
-        count += 1;
-        while (i < inner.len and inner[i] == ' ') : (i += 1) {}
-        if (i == inner.len) break;
-        if (inner[i] != ',') return null;
-        i += 1;
-    }
-    return count;
-}
-
 fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !void {
-    const dev_str = devEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env) catch |err| {
-        switch (err) {
-            error.UnsupportedLayout, error.GenerateCodeFailed => return,
-            else => return err,
-        }
-    };
+    const dev_str = try devEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env);
     defer allocator.free(dev_str);
 
-    if (std.mem.eql(u8, interpreter_str, dev_str)) return;
+    const wasm_str = try wasmEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env);
+    defer allocator.free(wasm_str);
 
-    // f32/f64 epsilon: machine/CPU instruction differences can cause
-    // small floating-point divergences between interpreter and dev backend.
-    if (floatStringsWithinEpsilon(interpreter_str, dev_str)) return;
-
-    // 1-field record layout unwrapping in dev backend.
-    if (singleFieldRecordValueString(interpreter_str)) |inner| {
-        if (std.mem.eql(u8, inner, dev_str)) return;
-    }
-    if (singleFieldRecordValueString(dev_str)) |inner| {
-        if (std.mem.eql(u8, inner, interpreter_str)) return;
-    }
-
-    // List-of-ZST rendering divergence in dev formatter.
-    if (parseZeroSizedListCount(interpreter_str)) |expected_count| {
-        if (countBraceZstListElements(dev_str)) |actual_count| {
-            if (expected_count == actual_count) return;
-        }
-    }
-
-    // Bool layout: Mono IR blocks may lose Idx.bool, falling back to int layout.
-    // The layout store correctly returns Idx.bool for Bool nominal types, but
-    // when the lowerer wraps the expression in a block, the block's result_layout
-    // may use the CIR type variable which resolves to an integer type.
-    if ((std.mem.eql(u8, interpreter_str, "True") and std.mem.eql(u8, dev_str, "1")) or
-        (std.mem.eql(u8, interpreter_str, "False") and std.mem.eql(u8, dev_str, "0")))
+    if (!std.mem.eql(u8, interpreter_str, dev_str) or
+        !std.mem.eql(u8, interpreter_str, wasm_str) or
+        !std.mem.eql(u8, dev_str, wasm_str))
     {
-        std.debug.print("KNOWN DIVERGENCE: Bool layout mismatch (True/1 or False/0) - see Mono IR block result_layout issue\n", .{});
-        return;
+        std.debug.print(
+            "\nEvaluator mismatch!\n  interpreter: '{s}'\n  dev:         '{s}'\n  wasm:        '{s}'\n",
+            .{ interpreter_str, dev_str, wasm_str },
+        );
+        return error.EvaluatorMismatch;
     }
-
-    std.debug.print(
-        "\nEvaluator mismatch! Interpreter: {s}, DevEvaluator: {s}\n",
-        .{ interpreter_str, dev_str },
-    );
-    return error.EvaluatorMismatch;
 }
 
 /// Errors that can occur during WasmEvaluator string generation
@@ -2122,60 +2002,6 @@ fn hostStrFromUtf8(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]c
     }
 }
 
-/// Compare Interpreter result string with WasmEvaluator result string.
-/// If the wasm evaluator can't handle the expression (unsupported expr type),
-/// we skip silently since not all expressions are supported yet.
-fn compareWithWasmEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !void {
-    const wasm_str = wasmEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env) catch |err| {
-        switch (err) {
-            error.WasmGenerateCodeFailed, error.WasmExecFailed, error.UnsupportedLayout => return,
-            else => return err,
-        }
-    };
-    defer allocator.free(wasm_str);
-
-    if (!numericStringsEqual(interpreter_str, wasm_str)) {
-        std.debug.print(
-            "\nWasm evaluator mismatch! Interpreter: '{s}' (len={}), WasmEvaluator: '{s}' (len={})\n",
-            .{ interpreter_str, interpreter_str.len, wasm_str, wasm_str.len },
-        );
-        return error.EvaluatorMismatch;
-    }
-}
-
-/// Check if two strings represent the same numeric value.
-/// Handles cases like "42" vs "42.0" or "-5" vs "-5.0".
-fn numericStringsEqual(a: []const u8, b: []const u8) bool {
-    // Fast path: exact match
-    if (std.mem.eql(u8, a, b)) return true;
-
-    // Check if one is the other with ".0" suffix (integer vs Dec format)
-    if (a.len + 2 == b.len and std.mem.endsWith(u8, b, ".0") and std.mem.startsWith(u8, b, a)) {
-        return true;
-    }
-    if (b.len + 2 == a.len and std.mem.endsWith(u8, a, ".0") and std.mem.startsWith(u8, a, b)) {
-        return true;
-    }
-
-    return false;
-}
-
-/// Check if two float-formatted strings represent the same value within epsilon.
-/// Only matches when both strings contain a decimal point or exponent
-/// (i.e., are actual float-formatted values, not Dec or int).
-fn floatStringsWithinEpsilon(a: []const u8, b: []const u8) bool {
-    const fa = std.fmt.parseFloat(f64, a) catch return false;
-    const fb = std.fmt.parseFloat(f64, b) catch return false;
-    // Only tolerate epsilon for actual float values (contain '.' or 'e')
-    const a_is_float = std.mem.indexOfScalar(u8, a, '.') != null or std.mem.indexOfScalar(u8, a, 'e') != null;
-    const b_is_float = std.mem.indexOfScalar(u8, b, '.') != null or std.mem.indexOfScalar(u8, b, 'e') != null;
-    if (!a_is_float and !b_is_float) return false;
-    const diff = @abs(fa - fb);
-    const magnitude = @max(@abs(fa), @abs(fb));
-    const epsilon: f64 = if (magnitude > 1.0) magnitude * 1e-10 else 1e-10;
-    return diff <= epsilon;
-}
-
 /// Helper function to run an expression and expect a specific error.
 pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
@@ -2196,7 +2022,7 @@ pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: e
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    _ = evalInterpreterChecked(&interpreter, resources.expr_idx, ops) catch |err| {
+    _ = interpreter.eval(resources.expr_idx, ops) catch |err| {
         try std.testing.expectEqual(expected_error, err);
         return;
     };
@@ -2242,7 +2068,7 @@ pub fn runExpectTypeMismatchAndCrash(src: []const u8) !void {
     defer interpreter.deinit();
 
     const ops = test_env_instance.get_ops();
-    _ = evalInterpreterChecked(&interpreter, resources.expr_idx, ops) catch |err| {
+    _ = interpreter.eval(resources.expr_idx, ops) catch |err| {
         // Expected: a crash or type mismatch error at runtime
         switch (err) {
             error.Crash, error.TypeMismatch => return, // Success - we expected a crash
@@ -2279,7 +2105,7 @@ pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: enum { tr
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
+    const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
@@ -2302,9 +2128,6 @@ pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: enum { tr
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    compareWithWasmEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env) catch |err| {
-        return err;
-    };
 
     try std.testing.expectEqual(expected_int, int_value);
 }
@@ -2329,7 +2152,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
+    const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
@@ -2352,7 +2175,6 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithWasmEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const bool_val = int_val != 0;
     try std.testing.expectEqual(expected_bool, bool_val);
@@ -2378,7 +2200,7 @@ pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { tra
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
+    const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
@@ -2391,7 +2213,6 @@ pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { tra
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithWasmEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const epsilon: f32 = 0.0001;
     const diff = @abs(actual - expected_f32);
@@ -2421,7 +2242,7 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { tra
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
+    const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
@@ -2434,7 +2255,6 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { tra
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithWasmEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const epsilon: f64 = 0.000000001;
     const diff = @abs(actual - expected_f64);
@@ -2468,7 +2288,7 @@ pub fn runExpectIntDec(src: []const u8, expected_int: i128, should_trace: enum {
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
+    const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
@@ -2481,7 +2301,6 @@ pub fn runExpectIntDec(src: []const u8, expected_int: i128, should_trace: enum {
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithWasmEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const expected_dec = expected_int * dec_scale;
     if (actual_dec.num != expected_dec) {
@@ -2512,7 +2331,7 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
+    const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
@@ -2525,7 +2344,6 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithWasmEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     if (actual_dec.num != expected_dec_num) {
         std.debug.print("Expected Dec({d}), got Dec({d})\n", .{ expected_dec_num, actual_dec.num });
@@ -2553,7 +2371,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
+    const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer interpreter.bindings.items.len = 0;
 
@@ -2569,7 +2387,6 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithWasmEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     try std.testing.expectEqualStrings(expected_str, str_slice);
 
@@ -2613,7 +2430,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
+    const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
@@ -2674,7 +2491,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
+    const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
@@ -2752,7 +2569,7 @@ pub fn runExpectListZst(src: []const u8, expected_element_count: usize, should_t
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
+    const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
@@ -2795,7 +2612,7 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
+    const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
@@ -2856,7 +2673,7 @@ pub fn runExpectEmptyListI64(src: []const u8, should_trace: enum { trace, no_tra
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
+    const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
@@ -2902,7 +2719,7 @@ pub fn runExpectUnit(src: []const u8, should_trace: enum { trace, no_trace }) !v
     defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
-    const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
+    const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
@@ -2927,24 +2744,10 @@ pub fn runExpectUnit(src: []const u8, should_trace: enum { trace, no_trace }) !v
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
-/// Run an expression through the dev evaluator only and assert on the string output.
-/// Unlike runExpectBool which uses the interpreter + cross-check, this directly tests
-/// the dev backend's formatted output string, catching formatting bugs that the
-/// cross-check workarounds might mask.
+/// Legacy helper name kept for existing tests.
+/// Now delegates to strict three-backend parity checks.
 pub fn runDevOnlyExpectStr(src: []const u8, expected_str: []const u8) !void {
-    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
-    defer cleanupParseAndCanonical(test_allocator, resources);
-
-    const dev_str = devEvaluatorStr(test_allocator, resources.module_env, resources.expr_idx, resources.builtin_module.env) catch |err| {
-        std.debug.print("\nDev evaluator failed for '{s}': {}\n", .{ src, err });
-        return err;
-    };
-    defer test_allocator.free(dev_str);
-
-    std.testing.expectEqualStrings(expected_str, dev_str) catch |err| {
-        std.debug.print("\nDev evaluator output mismatch for '{s}':\n  expected: {s}\n  got:      {s}\n", .{ src, expected_str, dev_str });
-        return err;
-    };
+    return runExpectStr(src, expected_str, .no_trace);
 }
 
 /// Parse and canonicalize an expression.
@@ -3246,7 +3049,7 @@ test "eval tag - already primitive" {
     defer interpreter.deinit();
 
     const ops = test_env_instance.get_ops();
-    const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
+    const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
     defer interpreter.bindings.items.len = 0;
@@ -3279,7 +3082,7 @@ test "interpreter reuse across multiple evaluations" {
 
         var iteration: usize = 0;
         while (iteration < 2) : (iteration += 1) {
-            const result = try evalInterpreterChecked(&interpreter, resources.expr_idx, ops);
+            const result = try interpreter.eval(resources.expr_idx, ops);
             const layout_cache = &interpreter.runtime_layout_store;
             defer result.decref(layout_cache, ops);
             defer interpreter.bindings.items.len = 0;

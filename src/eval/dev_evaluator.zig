@@ -662,6 +662,51 @@ pub const DevEvaluator = struct {
             if (!module.is_defunctionalized) {
                 var transformer = can.ClosureTransformer.initWithInference(self.allocator, module, inference);
                 defer transformer.deinit();
+
+                const defs = module.store.sliceDefs(module.all_defs);
+
+                // Track top-level patterns so closure analysis doesn't treat them as captures.
+                for (defs) |def_idx| {
+                    const def = module.store.getDef(def_idx);
+                    transformer.markTopLevel(def.pattern) catch return error.OutOfMemory;
+                }
+
+                // Analyze all top-level defs with lambda-set tracking. We intentionally do
+                // not mutate def expressions in this landing pass; this stage enforces
+                // resolved lambda-set invariants before MIR/LIR lowering.
+                for (defs) |def_idx| {
+                    const def = module.store.getDef(def_idx);
+                    const pattern = module.store.getPattern(def.pattern);
+                    const name_hint: ?base.Ident.Idx = switch (pattern) {
+                        .assign => |a| a.ident,
+                        else => null,
+                    };
+                    const result = transformer.transformExprWithLambdaSet(def.expr, name_hint) catch return error.OutOfMemory;
+                    if (result.lambda_set) |lambda_set| {
+                        transformer.pattern_lambda_sets.put(def.pattern, lambda_set) catch return error.OutOfMemory;
+                    }
+                    if (transformer.lambda_return_sets.get(result.expr)) |return_set| {
+                        const cloned = return_set.clone(self.allocator) catch return error.OutOfMemory;
+                        transformer.pattern_lambda_return_sets.put(def.pattern, cloned) catch return error.OutOfMemory;
+                    }
+                }
+
+                const validation_result = transformer.validateAllResolved();
+                if (!validation_result.is_valid) {
+                    if (validation_result.first_error) |err| {
+                        std.log.err(
+                            "Lambda-set validation failed for module '{s}': unresolved={d}, first={s}",
+                            .{ module.module_name, validation_result.unresolved_count, @tagName(err.kind) },
+                        );
+                    } else {
+                        std.log.err(
+                            "Lambda-set validation failed for module '{s}': unresolved={d}",
+                            .{ module.module_name, validation_result.unresolved_count },
+                        );
+                    }
+                    return error.RuntimeError;
+                }
+
                 module.is_defunctionalized = true;
             }
         }

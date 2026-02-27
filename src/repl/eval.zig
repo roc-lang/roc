@@ -695,6 +695,12 @@ pub const Repl = struct {
             return .{ .type_error = result };
         }
 
+        if (self.backend == .dev) {
+            if (try self.getDeferredCompileCrash(module_env, final_expr_idx)) |crash_msg| {
+                return .{ .eval_error = crash_msg };
+            }
+        }
+
         // Wrap expression in Str.inspect so both backends produce a string
         const inspect_expr = wrapInStrInspect(module_env, final_expr_idx) catch {
             return .{ .eval_error = try self.allocator.dupe(u8, "Failed to wrap expression in Str.inspect") };
@@ -774,6 +780,118 @@ pub const Repl = struct {
         result.decref(&interpreter.runtime_layout_store, self.roc_ops);
         interpreter.cleanupBindings(self.roc_ops);
         return .{ .expression = output };
+    }
+
+    fn getDeferredCompileCrash(self: *Repl, module_env: *ModuleEnv, expr_idx: can.CIR.Expr.Idx) !?[]u8 {
+        const expr = module_env.store.getExpr(expr_idx);
+
+        switch (expr) {
+            .e_runtime_error => |runtime_err| {
+                const msg = try self.runtimeDiagnosticMessage(module_env, runtime_err.diagnostic, false);
+                defer self.allocator.free(msg);
+                const crash = try std.fmt.allocPrint(self.allocator, "Crash: {s}", .{msg});
+                return crash;
+            },
+            .e_anno_only => {
+                const crash = try self.allocator.dupe(u8, "Crash: Compile-time error encountered at runtime");
+                return crash;
+            },
+            .e_call => |call| {
+                if (try self.callTargetCompileError(module_env, call.func)) |msg| {
+                    defer self.allocator.free(msg);
+                    const crash = try std.fmt.allocPrint(self.allocator, "Crash: {s}", .{msg});
+                    return crash;
+                }
+            },
+            else => {},
+        }
+
+        return null;
+    }
+
+    fn callTargetCompileError(self: *Repl, module_env: *ModuleEnv, func_expr_idx: can.CIR.Expr.Idx) !?[]u8 {
+        const func_expr = module_env.store.getExpr(func_expr_idx);
+
+        switch (func_expr) {
+            .e_runtime_error => |runtime_err| {
+                const msg = try self.runtimeDiagnosticMessage(module_env, runtime_err.diagnostic, true);
+                return msg;
+            },
+            .e_anno_only, .e_crash => {
+                const msg = try self.allocator.dupe(u8, "Cannot call function: this function has only a type annotation with no implementation");
+                return msg;
+            },
+            .e_lookup_local => |lookup| {
+                const defs = module_env.store.sliceDefs(module_env.all_defs);
+                for (defs) |def_idx| {
+                    const def = module_env.store.getDef(def_idx);
+                    if (def.pattern != lookup.pattern_idx) continue;
+
+                    const def_expr = module_env.store.getExpr(def.expr);
+                    switch (def_expr) {
+                        .e_runtime_error => |runtime_err| {
+                            const msg = try self.runtimeDiagnosticMessage(module_env, runtime_err.diagnostic, true);
+                            return msg;
+                        },
+                        .e_anno_only, .e_crash => {
+                            const msg = try self.allocator.dupe(u8, "Cannot call function: this function has only a type annotation with no implementation");
+                            return msg;
+                        },
+                        else => {},
+                    }
+                }
+            },
+            else => {},
+        }
+
+        return null;
+    }
+
+    fn runtimeDiagnosticMessage(self: *Repl, module_env: *ModuleEnv, diagnostic_idx: can.CIR.Diagnostic.Idx, for_call: bool) ![]u8 {
+        const diag_int = @intFromEnum(diagnostic_idx);
+        const node_count = module_env.store.nodes.len();
+        if (diag_int >= node_count) {
+            return if (for_call)
+                self.allocator.dupe(u8, "Cannot call function: this function contains a compile-time error")
+            else
+                self.allocator.dupe(u8, "Compile-time error encountered at runtime");
+        }
+
+        const diag = module_env.store.getDiagnostic(diagnostic_idx);
+        if (for_call) {
+            switch (diag) {
+                .not_implemented => |ni| {
+                    const feature = module_env.getString(ni.feature);
+                    return std.fmt.allocPrint(self.allocator, "Cannot call function: {s}", .{feature});
+                },
+                .exposed_but_not_implemented => |e| {
+                    const ident = module_env.getIdent(e.ident);
+                    return std.fmt.allocPrint(self.allocator, "Cannot call '{s}': it is exposed but not implemented", .{ident});
+                },
+                .nested_value_not_found => |nvnf| {
+                    const parent = module_env.getIdent(nvnf.parent_name);
+                    const nested = module_env.getIdent(nvnf.nested_name);
+                    return std.fmt.allocPrint(self.allocator, "Cannot call function: nested value not found: {s}.{s}", .{ parent, nested });
+                },
+                else => {
+                    return std.fmt.allocPrint(self.allocator, "Cannot call function: compile-time error ({s})", .{@tagName(diag)});
+                },
+            }
+        }
+
+        switch (diag) {
+            .not_implemented => |ni| {
+                const feature = module_env.getString(ni.feature);
+                return std.fmt.allocPrint(self.allocator, "Not implemented: {s}", .{feature});
+            },
+            .exposed_but_not_implemented => |e| {
+                const ident = module_env.getIdent(e.ident);
+                return std.fmt.allocPrint(self.allocator, "'{s}' is exposed but not implemented", .{ident});
+            },
+            else => {
+                return self.allocator.dupe(u8, "Compile-time error encountered at runtime");
+            },
+        }
     }
 };
 

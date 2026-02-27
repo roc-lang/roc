@@ -768,7 +768,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// stack locations (e.g. list lookup resolved to scalar slot).
         symbol_locations_by_layout: std.AutoHashMap(u128, ValueLocation),
         /// Layout-disambiguated callable metadata for symbols.
-        /// Needed for higher-order calls where an opaque_ptr symbol should dispatch
+        /// Needed for higher-order calls where a function-typed symbol should dispatch
         /// as a closure rather than raw indirect call.
         symbol_closure_infos_by_layout: std.AutoHashMap(u128, ClosureStackInfo),
         /// Temporarily pre-bound callable arguments for the function currently being
@@ -8643,7 +8643,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .union_repr => |repr| repr.union_layout,
                 .unwrapped_capture => |repr| repr.capture_layout,
                 .struct_captures => |repr| repr.struct_layout,
-                .direct_call => .opaque_ptr,
+                .direct_call => .named_fn,
             };
         }
 
@@ -8678,7 +8678,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const cap_sa = ls.layoutSizeAlign(cap_layout);
                 var capture_size = cap_sa.size;
                 var capture_align = cap_sa.alignment.toByteUnits();
-                if (capture.layout_idx == .opaque_ptr) {
+                if (self.isFunctionLayout(capture.layout_idx)) {
                     if (self.getSymbolLocation(capture.symbol, capture.layout_idx)) |cap_loc| {
                         if (self.closureInfoFromValueLocation(cap_loc)) |info| {
                             capture_size = @max(capture_size, @as(@TypeOf(capture_size), @intCast(self.closureStorageSize(info.representation))));
@@ -11486,10 +11486,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
         }
 
+        fn isFunctionLayout(self: *Self, layout_idx: layout.Idx) bool {
+            if (layout_idx == layout.Idx.none) return false;
+            if (layout_idx == layout.Idx.named_fn) return true;
+            const ls = self.layout_store orelse return false;
+            const idx_int = @intFromEnum(layout_idx);
+            if (idx_int >= ls.layouts.len()) return false;
+            return ls.getLayout(layout_idx).tag == .closure;
+        }
+
         fn capturesCanResolveFromDefs(self: *Self, captures_span: lir.LIR.LirCaptureSpan) bool {
             const captures = self.store.getCaptures(captures_span);
             for (captures) |capture| {
-                if (capture.layout_idx != .opaque_ptr) return false;
+                if (!self.isFunctionLayout(capture.layout_idx)) return false;
                 const def_expr_id = self.getSymbolDefExact(capture.symbol) orelse return false;
                 if (!self.isCallableDefExpr(def_expr_id)) return false;
             }
@@ -11754,7 +11763,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     var capture_size = cap_sa.size;
                     // Align offset to match layout store's putCaptureStruct
                     var cap_align = cap_sa.alignment.toByteUnits();
-                    if (capture.layout_idx == .opaque_ptr) {
+                    if (self.isFunctionLayout(capture.layout_idx)) {
                         if (self.closureInfoFromValueLocation(capture_loc)) |info| {
                             capture_size = @max(capture_size, @as(@TypeOf(capture_size), @intCast(self.closureStorageSize(info.representation))));
                             cap_align = @max(cap_align, self.closureStorageAlignBytes(info.representation));
@@ -11892,7 +11901,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         var capture_size = cap_sa_r.size;
                         // Align offset to match layout store's putCaptureStruct
                         var cap_align_r = cap_sa_r.alignment.toByteUnits();
-                        if (capture.layout_idx == .opaque_ptr) {
+                        if (self.isFunctionLayout(capture.layout_idx)) {
                             if (self.closureInfoFromValueLocation(resolved_loc)) |info| {
                                 capture_size = @max(capture_size, @as(@TypeOf(capture_size), @intCast(self.closureStorageSize(info.representation))));
                                 cap_align_r = @max(cap_align_r, self.closureStorageAlignBytes(info.representation));
@@ -12227,7 +12236,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 else
                     .{ .stack = .{ .offset = capture_offset } };
 
-                if (capture.layout_idx == .opaque_ptr) {
+                if (self.isFunctionLayout(capture.layout_idx)) {
                     if (self.getSymbolClosureInfo(capture.symbol, capture.layout_idx)) |info| {
                         capture_size = @max(capture_size, @as(@TypeOf(capture_size), @intCast(self.closureStorageSize(info.representation))));
                         loc = .{ .closure_value = .{
@@ -13920,7 +13929,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // in the lambda's own symbol_locations scope so that recursive calls
             // within the body can find this procedure via generateLookupCall.
             if (self.current_binding_symbol) |bind_sym| {
-                try self.putSymbolLocation(bind_sym, .opaque_ptr, .{ .lambda_code = .{
+                try self.putSymbolLocation(bind_sym, lambda.fn_layout, .{ .lambda_code = .{
                     .code_offset = body_start,
                     .ret_layout = lambda.ret_layout,
                     .source_expr = lambda_expr_id,
