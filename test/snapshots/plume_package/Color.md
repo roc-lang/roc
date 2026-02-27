@@ -824,7 +824,7 @@ hex = |str| {
 
 	match bytes {
 		['#', a, b, c, d, e, f] => {
-			is_valid =
+			is_valid = 
 				a.is_char_in_hex_range()
 					and b.is_char_in_hex_range()
 						and c.is_char_in_hex_range()
