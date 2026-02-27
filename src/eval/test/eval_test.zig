@@ -3843,11 +3843,11 @@ test "Str.join_with" {
 // but we don't add a standalone test here to avoid DevEvaluator limitations with Result matching.
 
 test "dev: List.last returns tag-union-wrapped result" {
-    try runDevOnlyExpectStr("List.last([1, 2, 3])", "Ok(3)");
+    try runDevOnlyExpectStr("List.last([1, 2, 3])", "Ok(3.0)");
 }
 
 test "dev: List.first returns tag-union-wrapped result" {
-    try runDevOnlyExpectStr("List.first([10, 20, 30])", "Ok(10)");
+    try runDevOnlyExpectStr("List.first([10, 20, 30])", "Ok(10.0)");
 }
 
 test "dev: List.first on empty list returns Err" {
@@ -3947,10 +3947,10 @@ test "direct List.contains I64" {
 test "polymorphic function single call I64" {
     const code =
         \\{
-        \\    has = |list, item| list.contains(item)
+        \\    contains_item = |list, item| list.contains(item)
         \\    a : List(I64)
         \\    a = [1, 2, 3]
-        \\    if has(a, 2) { 1 } else { 0 }
+        \\    if contains_item(a, 2) { 1 } else { 0 }
         \\}
     ;
     try runExpectI64(code, 1, .no_trace);
@@ -3959,10 +3959,10 @@ test "polymorphic function single call I64" {
 test "polymorphic function single call Str" {
     const code =
         \\{
-        \\    has = |list, item| list.contains(item)
+        \\    contains_item = |list, item| list.contains(item)
         \\    b : List(Str)
         \\    b = ["x", "y"]
-        \\    if has(b, "x") { 1 } else { 0 }
+        \\    if contains_item(b, "x") { 1 } else { 0 }
         \\}
     ;
     try runExpectI64(code, 1, .no_trace);
@@ -3972,13 +3972,13 @@ test "polymorphic function with List.contains called with two types" {
     // Test that re-specialization produces correct code for both calls
     const code =
         \\{
-        \\    has = |list, item| list.contains(item)
+        \\    contains_item = |list, item| list.contains(item)
         \\    a : List(I64)
         \\    a = [1, 2, 3]
         \\    b : List(Str)
         \\    b = ["x", "y"]
-        \\    r1 = has(a, 2)
-        \\    r2 = has(b, "x")
+        \\    r1 = contains_item(a, 2)
+        \\    r2 = contains_item(b, "x")
         \\    if r1 and r2 { 1 } else { 0 }
         \\}
     ;
@@ -4011,6 +4011,22 @@ test "polymorphic function with List.contains called with multiple types" {
         \\}
     ;
     try runExpectI64(code, 5, .no_trace);
+}
+
+test "mutable list var resets across function calls" {
+    const code =
+        \\{
+        \\    f = || {
+        \\        var $x = []
+        \\        $x = $x.append(1)
+        \\        List.len($x)
+        \\    }
+        \\    a = f()
+        \\    b = f()
+        \\    a + b
+        \\}
+    ;
+    try runExpectI64(code, 2, .no_trace);
 }
 
 // Focused reproductions of the 10 known dev-backend failures.

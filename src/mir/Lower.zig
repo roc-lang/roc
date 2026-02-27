@@ -345,49 +345,53 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
         // --- Lookups ---
         .e_lookup_local => |lookup| {
             const symbol = try self.patternToSymbol(lookup.pattern_idx);
-
-            // Check for a deferred block-local polymorphic lambda. If found,
-            // seed the definition's type vars from the call-site monotype and
-            // lower with concrete types, patching the block's placeholder stmt.
-            // Check for a deferred block-local polymorphic lambda. If found,
-            // seed the definition's type vars from the call-site monotype and
-            // lower with concrete types, patching the block's placeholder stmt.
             const symbol_key: u64 = @bitCast(symbol);
+
+            // Check for a deferred block-local polymorphic lambda. If found,
+            // seed the definition's type vars from the call-site monotype and
+            // lower with concrete types, patching the block's placeholder stmt.
             if (self.deferred_block_lambdas.get(@intFromEnum(lookup.pattern_idx))) |deferred| {
-                // Remove from deferred BEFORE lowering to prevent infinite
-                // recursion: if the lambda's body references itself (e.g.,
-                // recursive fib), the nested lookup must not re-enter this
-                // deferred path. Mark as in-progress so recursive references
-                // get placeholder lookups via lowerExternalDefWithType's guard.
-                const saved_deferred = deferred;
-                _ = self.deferred_block_lambdas.remove(@intFromEnum(lookup.pattern_idx));
+                // Lower the deferred lambda at first concrete use.
+                if (!self.lowered_symbols.contains(symbol_key) and !self.in_progress_defs.contains(symbol_key)) {
+                    // Remove from deferred BEFORE lowering to prevent infinite
+                    // recursion: if the lambda's body references itself (e.g.,
+                    // recursive fib), the nested lookup must not re-enter this
+                    // deferred path.
+                    const saved_deferred = deferred;
+                    _ = self.deferred_block_lambdas.remove(@intFromEnum(lookup.pattern_idx));
 
-                try self.in_progress_defs.put(symbol_key, {});
+                    try self.in_progress_defs.put(symbol_key, {});
 
-                // Use a fresh type_var_seen scope so the call-site's concrete
-                // types aren't shadowed by stale Dec/unit entries from the
-                // pattern lowering that happened when the block processed the
-                // s_decl statement.
-                const saved_type_var_seen = self.type_var_seen;
-                self.type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
-                defer {
-                    self.type_var_seen.deinit();
-                    self.type_var_seen = saved_type_var_seen;
-                }
-                self.seedTypeVarSeen(ModuleEnv.varFrom(saved_deferred.cir_expr), monotype);
-                const lowered = try self.lowerExpr(saved_deferred.cir_expr);
-                self.scratch_stmts.items.items[saved_deferred.scratch_stmt_idx].decl_const.expr = lowered;
-
-                _ = self.in_progress_defs.remove(symbol_key);
-
-                // Patch any recursion placeholders with the correct monotype.
-                const resolved_monotype = self.store.typeOf(lowered);
-                if (self.recursion_placeholders.getPtr(symbol_key)) |expr_list| {
-                    for (expr_list.items) |expr_id| {
-                        self.store.type_map.items[@intFromEnum(expr_id)] = resolved_monotype;
+                    // Use a fresh type_var_seen scope so call-site concrete
+                    // types aren't shadowed by stale defaults from pattern lowering.
+                    const saved_type_var_seen = self.type_var_seen;
+                    self.type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+                    defer {
+                        self.type_var_seen.deinit();
+                        self.type_var_seen = saved_type_var_seen;
                     }
-                    expr_list.deinit(self.allocator);
-                    _ = self.recursion_placeholders.remove(symbol_key);
+                    self.seedTypeVarSeen(ModuleEnv.varFrom(saved_deferred.cir_expr), monotype);
+                    const lowered = try self.lowerExpr(saved_deferred.cir_expr);
+                    self.scratch_stmts.items.items[saved_deferred.scratch_stmt_idx].decl_const.expr = lowered;
+
+                    _ = self.in_progress_defs.remove(symbol_key);
+
+                    // Patch any recursion placeholders with the correct monotype.
+                    const resolved_monotype = self.store.typeOf(lowered);
+                    if (self.recursion_placeholders.getPtr(symbol_key)) |expr_list| {
+                        for (expr_list.items) |expr_id| {
+                            self.store.type_map.items[@intFromEnum(expr_id)] = resolved_monotype;
+                        }
+                        expr_list.deinit(self.allocator);
+                        _ = self.recursion_placeholders.remove(symbol_key);
+                    }
+
+                    // Cache first specialization monotype for later mismatch checks.
+                    try self.lowered_symbols.put(symbol_key, lowered);
+
+                    // Keep deferred metadata so later calls with different monotypes
+                    // can still synthesize specializations from the same CIR lambda.
+                    try self.deferred_block_lambdas.put(@intFromEnum(lookup.pattern_idx), saved_deferred);
                 }
             }
 
@@ -456,15 +460,24 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
 
                         _ = self.in_progress_defs.remove(spec_symbol_key);
 
+                        const spec_monotype = self.store.typeOf(spec_lowered);
                         try self.lowered_symbols.put(spec_symbol_key, spec_lowered);
                         try self.store.registerSymbolDef(self.allocator, spec_symbol, spec_lowered);
                         try self.poly_specializations.put(spec_key, spec_symbol);
 
-                        // Emit a decl_const for the specialization in the current block.
-                        const spec_pattern = try self.store.addPattern(self.allocator, .{ .bind = spec_symbol }, monotype);
-                        try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = spec_pattern, .expr = spec_lowered } });
+                        const needs_local_binding = switch (self.store.getExpr(spec_lowered)) {
+                            .lambda => |lam| self.store.getCaptures(lam.captures).len > 0,
+                            else => true,
+                        };
 
-                        return try self.store.addExpr(self.allocator, .{ .lookup = spec_symbol }, monotype, region);
+                        if (needs_local_binding) {
+                            // Materialize captured closures in-block so they
+                            // capture from the correct lexical environment.
+                            const spec_pattern = try self.store.addPattern(self.allocator, .{ .bind = spec_symbol }, spec_monotype);
+                            try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = spec_pattern, .expr = spec_lowered } });
+                        }
+
+                        return try self.store.addExpr(self.allocator, .{ .lookup = spec_symbol }, spec_monotype, region);
                     }
                 }
             }

@@ -8177,6 +8177,30 @@ pub const Interpreter = struct {
         return error.MethodNotFound;
     }
 
+    fn rtVarRepresentsStr(self: *const Interpreter, rt_var: types.Var) bool {
+        var resolved = self.runtime_types.resolveVar(rt_var);
+        while (resolved.desc.content == .alias) {
+            const alias = resolved.desc.content.alias;
+            resolved = self.runtime_types.resolveVar(self.runtime_types.getAliasBackingVar(alias));
+        }
+
+        if (resolved.desc.content != .structure) return false;
+        if (resolved.desc.content.structure != .nominal_type) return false;
+
+        const ident = resolved.desc.content.structure.nominal_type.ident.ident_idx;
+        return ident == self.root_env.idents.str or ident == self.root_env.idents.builtin_str;
+    }
+
+    fn rtVarCompatibleWithValueLayout(self: *const Interpreter, rt_var: types.Var, value: StackValue) bool {
+        // We only need a strict guard for Str-vs-non-Str mismatches; other cases can
+        // still use existing nominal/structural dispatch paths.
+        if (value.layout.tag != .scalar) return true;
+
+        const layout_is_str = value.layout.data.scalar.tag == .str;
+        const var_is_str = self.rtVarRepresentsStr(rt_var);
+        return layout_is_str == var_is_str;
+    }
+
     fn resolveMethodFunction(
         self: *Interpreter,
         origin_module: base_pkg.Ident.Idx,
@@ -16716,10 +16740,10 @@ pub const Interpreter = struct {
                         self.rigid_subst = saved;
                     }
 
-                    // Note: Don't restore flex_type_context (same rationale as normal return case)
                     if (cleanup.saved_flex_type_context) |saved| {
-                        var saved_copy = saved;
-                        saved_copy.deinit();
+                        self.flex_type_context.deinit();
+                        self.flex_type_context = saved;
+                        self.poly_context_generation +%= 1;
                     }
 
                     // Restore environment and cleanup bindings
@@ -16791,21 +16815,10 @@ pub const Interpreter = struct {
                     self.rigid_subst = saved;
                 }
 
-                // Note: We intentionally do NOT restore flex_type_context here.
-                // The type mappings need to persist across the call chain for polymorphic
-                // functions from pre-compiled modules like Builtin. When a function returns
-                // a value that is used in subsequent calls (e.g., method dispatch returning
-                // a closure that is then invoked), those later calls need the type mappings
-                // from the original call arguments.
-                //
-                // The mappings are keyed by compile-time type vars, so mappings from different
-                // call sites with different type vars won't conflict. For the same polymorphic
-                // function called multiple times with different concrete types, the later call
-                // will overwrite the mapping with the new concrete type, which is correct.
                 if (cleanup.saved_flex_type_context) |saved| {
-                    // Just free the saved context, don't restore it
-                    var saved_copy = saved;
-                    saved_copy.deinit();
+                    self.flex_type_context.deinit();
+                    self.flex_type_context = saved;
+                    self.poly_context_generation +%= 1;
                 }
 
                 // Restore environment and cleanup bindings
@@ -17044,7 +17057,13 @@ pub const Interpreter = struct {
                 const val_resolved = self.runtime_types.resolveVar(val_rt_var);
                 // Only use the value's type if it's concrete (has structure/alias)
                 if (val_resolved.desc.content == .structure or val_resolved.desc.content == .alias) {
-                    effective_receiver_rt_var = val_rt_var;
+                    if (self.rtVarCompatibleWithValueLayout(val_rt_var, lhs)) {
+                        effective_receiver_rt_var = val_rt_var;
+                    } else {
+                        // Mismatch between inferred rt_var and concrete runtime layout.
+                        // Treat as polymorphic so numeric fast-path can take over.
+                        value_is_polymorphic = true;
+                    }
                 } else if (val_resolved.desc.content == .flex or val_resolved.desc.content == .rigid) {
                     // The value came from a polymorphic context
                     value_is_polymorphic = true;
@@ -17060,6 +17079,19 @@ pub const Interpreter = struct {
                     const dec_var = try self.runtime_types.freshFromContent(dec_content);
                     effective_receiver_rt_var = dec_var;
                     defaulted_to_dec = true;
+                } else if (!self.rtVarCompatibleWithValueLayout(effective_receiver_rt_var, lhs)) {
+                    // Concrete but incompatible (e.g. rt_var says Str while layout is numeric).
+                    // Force numeric fallback only when both operands are numeric scalars.
+                    const lhs_is_numeric_layout = lhs.layout.tag == .scalar and
+                        (lhs.layout.data.scalar.tag == .int or lhs.layout.data.scalar.tag == .frac);
+                    const rhs_is_numeric_layout = rhs.layout.tag == .scalar and
+                        (rhs.layout.data.scalar.tag == .int or rhs.layout.data.scalar.tag == .frac);
+                    if (lhs_is_numeric_layout and rhs_is_numeric_layout) {
+                        const dec_content = try self.mkNumberTypeContentRuntime("Dec");
+                        const dec_var = try self.runtime_types.freshFromContent(dec_content);
+                        effective_receiver_rt_var = dec_var;
+                        defaulted_to_dec = true;
+                    }
                 } else if (value_is_polymorphic) {
                     // The value is polymorphic but we have a concrete type from CIR - mark as polymorphic
                     // so we use direct numeric handling instead of method dispatch

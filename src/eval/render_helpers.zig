@@ -13,19 +13,53 @@ const TypeScope = types.TypeScope;
 /// sorted consistently when the same source type is translated multiple times
 /// with different cache generations. By sorting at render time, we ensure the
 /// discriminant index maps to the correct tag name.
+fn appendTagUnionTags(ctx: *RenderCtx, initial_row: types.TagUnion, out: *std.array_list.AlignedManaged(types.Tag, null)) !void {
+    var row = initial_row;
+
+    rows: while (true) {
+        const tags = ctx.runtime_types.getTagsSlice(row.tags);
+        const names = tags.items(.name);
+        const args = tags.items(.args);
+        for (names, args) |name, arg| {
+            try out.append(.{ .name = name, .args = arg });
+        }
+
+        var ext_var = row.ext;
+        while (true) {
+            const ext_resolved = ctx.runtime_types.resolveVar(ext_var);
+            switch (ext_resolved.desc.content) {
+                .alias => |alias| {
+                    ext_var = ctx.runtime_types.getAliasBackingVar(alias);
+                    continue;
+                },
+                .structure => |flat| switch (flat) {
+                    .tag_union => |next_row| {
+                        row = next_row;
+                        continue :rows;
+                    },
+                    .empty_tag_union => return,
+                    else => return,
+                },
+                else => return,
+            }
+        }
+    }
+}
+
 fn getSortedTag(
     ctx: *RenderCtx,
     tag_union: types.TagUnion,
     tag_index: usize,
 ) ?types.Tag {
-    const tags = ctx.runtime_types.getTagsSlice(tag_union.tags);
-    if (tags.len == 0) return null;
+    var collected = std.array_list.AlignedManaged(types.Tag, null).init(ctx.allocator);
+    defer collected.deinit();
+    appendTagUnionTags(ctx, tag_union, &collected) catch return null;
 
-    // Fast path: if tags are already sorted, just return directly
-    // (check first two tags - if they're in order, likely all are)
-    if (tags.len <= 1) {
-        return if (tag_index < tags.len)
-            types.Tag{ .name = tags.items(.name)[tag_index], .args = tags.items(.args)[tag_index] }
+    if (collected.items.len == 0) return null;
+
+    if (collected.items.len <= 1) {
+        return if (tag_index < collected.items.len)
+            collected.items[tag_index]
         else
             null;
     }
@@ -39,25 +73,20 @@ fn getSortedTag(
     // runtime type vars with potentially different tag ordering.
 
     // Tags are NOT sorted - need to copy and sort
-    // Use a stack buffer for small tag unions, allocate for larger ones
+    // Use a stack buffer for small tag unions, allocate for larger ones.
     var stack_buf: [16]types.Tag = undefined;
     var sorted_tags: []types.Tag = undefined;
     var heap_allocated = false;
 
-    if (tags.len <= stack_buf.len) {
-        sorted_tags = stack_buf[0..tags.len];
+    if (collected.items.len <= stack_buf.len) {
+        sorted_tags = stack_buf[0..collected.items.len];
     } else {
-        sorted_tags = ctx.allocator.alloc(types.Tag, tags.len) catch return null;
+        sorted_tags = ctx.allocator.alloc(types.Tag, collected.items.len) catch return null;
         heap_allocated = true;
     }
     defer if (heap_allocated) ctx.allocator.free(sorted_tags);
 
-    // Copy tags
-    const names = tags.items(.name);
-    const args = tags.items(.args);
-    for (names, args, 0..) |name, arg, i| {
-        sorted_tags[i] = types.Tag{ .name = name, .args = arg };
-    }
+    @memcpy(sorted_tags, collected.items);
 
     // Sort alphabetically
     std.mem.sort(types.Tag, sorted_tags, ident_store, types.Tag.sortByNameAsc);
@@ -491,7 +520,10 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                                     .is_initialized = true,
                                     .rt_var = arg_var,
                                 };
-                                const rendered = try renderValueRocWithType(ctx, payload_value, arg_var);
+                                const rendered = if (stored_payload_layout.tag == .tag_union or stored_payload_layout.tag == .zst)
+                                    try renderValueRocWithType(ctx, payload_value, arg_var)
+                                else
+                                    try renderValueRoc(ctx, payload_value);
                                 defer gpa.free(rendered);
                                 try out.appendSlice(rendered);
                             } else {

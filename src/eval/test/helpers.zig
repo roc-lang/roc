@@ -24,6 +24,7 @@ const loadCompiledModule = builtin_loading_mod.loadCompiledModule;
 const backend = @import("backend");
 const bytebox = @import("bytebox");
 const WasmEvaluator = eval_mod.WasmEvaluator;
+const render_helpers = eval_mod.render_helpers;
 const values = @import("values");
 const i128h = builtins.compiler_rt_128;
 
@@ -184,8 +185,8 @@ noinline fn executeAndFormat(
     dev_eval: *DevEvaluator,
     executable: *backend.ExecutableMemory,
     code_result: *DevEvaluator.CodeResult,
-    _: *ModuleEnv,
-    _: CIR.Expr.Idx,
+    module_env: *ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
 ) DevEvalError![]const u8 {
     // Compiler barrier: std.debug.print with empty string acts as a full
     // memory barrier, ensuring all struct fields are properly materialized
@@ -227,6 +228,34 @@ noinline fn executeAndFormat(
         };
     };
     const result_layout = ls.getLayout(code_result.result_layout);
+
+    // Tag unions need type information for stable tag-name rendering (e.g. Ok/Err).
+    if (result_layout.tag == .tag_union) {
+        var type_scope = types.TypeScope.init(alloc);
+        defer type_scope.deinit();
+
+        var render_ctx = render_helpers.RenderCtx{
+            .allocator = alloc,
+            .env = module_env,
+            .runtime_types = &module_env.types,
+            .layout_store = ls,
+            .type_scope = &type_scope,
+        };
+
+        const result_rt_var = ModuleEnv.varFrom(expr_idx);
+        const stack_value = StackValue{
+            .layout = result_layout,
+            .ptr = @as(*anyopaque, @ptrCast(&result_buf)),
+            .is_initialized = true,
+            .rt_var = result_rt_var,
+        };
+
+        return render_helpers.renderValueRocWithType(&render_ctx, stack_value, result_rt_var) catch |err| switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            else => error.UnsupportedLayout,
+        };
+    }
+
     const roc_val = values.RocValue{
         .ptr = &result_buf,
         .lay = result_layout,
