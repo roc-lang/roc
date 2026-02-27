@@ -30,9 +30,6 @@ const i128h = builtins.compiler_rt_128;
 const posix = std.posix;
 
 const has_fork = builtin.os.tag != .windows;
-// TODO(ANF-RC): Re-enable in-child DebugRefcountTracker leak checks after the
-// LIR true-ANF refactor lands and RC insertion is stabilized.
-const enable_dev_eval_leak_checks = false;
 
 const Check = check.Check;
 const Can = can.Can;
@@ -196,13 +193,6 @@ noinline fn executeAndFormat(
     // This is necessary for fork-based test isolation in ReleaseFast builds.
     std.debug.print("", .{});
 
-    if (comptime builtin.mode == .Debug and enable_dev_eval_leak_checks) {
-        builtins.utils.DebugRefcountTracker.enable();
-    }
-    defer if (comptime builtin.mode == .Debug and enable_dev_eval_leak_checks) {
-        builtins.utils.DebugRefcountTracker.disable();
-    };
-
     // Execute with result pointer (512 bytes to accommodate large tuples/records)
     var result_buf: [512]u8 align(16) = undefined;
     try dev_eval.callWithCrashProtection(executable, @ptrCast(&result_buf));
@@ -230,17 +220,6 @@ noinline fn executeAndFormat(
         };
     };
     const result_layout = ls.getLayout(code_result.result_layout);
-    var result_value = StackValue{
-        .layout = result_layout,
-        .ptr = @ptrCast(&result_buf),
-        .is_initialized = true,
-        .rt_var = undefined,
-    };
-    var needs_result_decref = true;
-    defer if (needs_result_decref) {
-        result_value.decref(ls, &dev_eval.roc_ops);
-    };
-
     const roc_val = values.RocValue{
         .ptr = &result_buf,
         .lay = result_layout,
@@ -249,18 +228,7 @@ noinline fn executeAndFormat(
     const fmt_ctx = values.RocValue.FormatContext{
         .layout_store = ls,
     };
-    const formatted = roc_val.format(alloc, fmt_ctx) catch error.UnsupportedLayout;
-
-    result_value.decref(ls, &dev_eval.roc_ops);
-    needs_result_decref = false;
-
-    if (comptime builtin.mode == .Debug and enable_dev_eval_leak_checks) {
-        if (builtins.utils.DebugRefcountTracker.reportLeaks() != 0) {
-            return error.ChildExecFailed;
-        }
-    }
-
-    return formatted;
+    return roc_val.format(alloc, fmt_ctx) catch error.UnsupportedLayout;
 }
 
 /// Fork a child process to execute compiled code, isolating segfaults from the test process.
