@@ -4381,19 +4381,18 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
             if (i < actual_outputs.items.len) {
                 const interp_output = actual_outputs.items[i];
                 if (!std.mem.eql(u8, interp_output, dev_output)) {
-                    if (!floatStringsWithinEpsilon(interp_output, dev_output)) {
-                        std.debug.print(
-                            "REPL backend mismatch at input {d} in {s}:\n  interpreter: '{s}'\n  dev:         '{s}'{s}\n",
-                            .{ i, snapshot_path, interp_output, dev_display, if (dev_output.len > max_output_len) "... (truncated)" else "" },
-                        );
-                        // Note: mismatches are diagnostic only — they don't fail the
-                        // snapshot check. Set success = false here once the dev backend
-                        // is mature enough that mismatches indicate regressions.
-                    }
+                    std.debug.print(
+                        "REPL backend mismatch at input {d} in {s}:\n  interpreter: '{s}'\n  dev:         '{s}'{s}\n",
+                        .{ i, snapshot_path, interp_output, dev_display, if (dev_output.len > max_output_len) "... (truncated)" else "" },
+                    );
+                    success = false;
                 }
             }
         }
-    } else |_| {} // Dev init failed — skip comparison
+    } else |err| {
+        std.debug.print("Dev REPL init failed in {s}: {}\n", .{ snapshot_path, err });
+        success = false;
+    }
 
     switch (config.output_section_command) {
         .update => {
@@ -4631,22 +4630,6 @@ test "TODO: cross-module function calls - string_ordering_unsupported" {}
 
 test "LambdaLifter" {
     std.testing.refAllDecls(LambdaLifter);
-}
-
-/// Check if two strings represent float values within a small epsilon.
-/// This tolerates small f32/f64 differences between interpreter and dev backend
-/// due to CPU instruction differences.
-fn floatStringsWithinEpsilon(a: []const u8, b: []const u8) bool {
-    const fa = std.fmt.parseFloat(f64, a) catch return false;
-    const fb = std.fmt.parseFloat(f64, b) catch return false;
-    // Only tolerate epsilon for actual float values (contain '.' or 'e')
-    const a_is_float = std.mem.indexOfScalar(u8, a, '.') != null or std.mem.indexOfScalar(u8, a, 'e') != null;
-    const b_is_float = std.mem.indexOfScalar(u8, b, '.') != null or std.mem.indexOfScalar(u8, b, 'e') != null;
-    if (!a_is_float and !b_is_float) return false;
-    const diff = @abs(fa - fb);
-    const magnitude = @max(@abs(fa), @abs(fb));
-    const epsilon: f64 = if (magnitude > 1.0) magnitude * 1e-10 else 1e-10;
-    return diff <= epsilon;
 }
 
 /// An implementation of RocOps for snapshot testing.

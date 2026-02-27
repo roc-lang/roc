@@ -31,9 +31,7 @@ const i128h = builtins.compiler_rt_128;
 const posix = std.posix;
 
 const has_fork = builtin.os.tag != .windows;
-// TODO(ANF-RC): Re-enable in-child DebugRefcountTracker leak checks after the
-// LIR true-ANF refactor lands and RC insertion is stabilized.
-const enable_dev_eval_leak_checks = false;
+const enable_dev_eval_leak_checks = true;
 
 const Check = check.Check;
 const Can = can.Can;
@@ -61,11 +59,8 @@ fn interpreterFormatCtx(layout_cache: *const layout.Store) values.RocValue.Forma
 // Use std.testing.allocator for dev backend tests (tracks leaks)
 const test_allocator = std.testing.allocator;
 
-/// Use page_allocator for interpreter tests (doesn't track leaks).
-/// The interpreter has known memory leak issues that we're not fixing now.
-/// We want to focus on getting the dev backend working without leaks.
-/// Exported so other test files can use it.
-pub const interpreter_allocator = std.heap.page_allocator;
+/// Use std.testing.allocator for interpreter tests so leaks fail tests.
+pub const interpreter_allocator = test_allocator;
 
 const TestParseError = parse.Parser.Error || error{ TokenizeError, SyntaxError };
 
@@ -379,100 +374,23 @@ fn forkAndExecute(
     }
 }
 
-/// Compare Interpreter result string with DevEvaluator result string.
-/// Both sides now use `RocValue.format()` for canonical formatting.
-/// Accepted divergences:
-/// - f32/f64 epsilon (machine/CPU instruction differences)
-/// - Bool "True"/"1" (Mono IR block result_layout doesn't propagate Idx.bool)
-/// - 1-field record layout unwrapping (`{ field: x }` vs `x`)
-/// - list-of-ZST rendering (`[<n zero-sized elements>]` vs `[{}, ...]`)
-fn singleFieldRecordValueString(s: []const u8) ?[]const u8 {
-    if (s.len < 6) return null; // "{ a: b }" minimum-ish
-    if (!std.mem.startsWith(u8, s, "{ ")) return null;
-    if (!std.mem.endsWith(u8, s, " }")) return null;
-    const inner = s[2 .. s.len - 2];
-    if (std.mem.indexOfScalar(u8, inner, ',') != null) return null;
-    const colon_idx = std.mem.indexOf(u8, inner, ": ") orelse return null;
-    return inner[colon_idx + 2 ..];
-}
-
-fn parseZeroSizedListCount(s: []const u8) ?usize {
-    const prefix = "[<";
-    const suffix = " zero-sized elements>]";
-    if (!std.mem.startsWith(u8, s, prefix)) return null;
-    if (!std.mem.endsWith(u8, s, suffix)) return null;
-    const n_str = s[prefix.len .. s.len - suffix.len];
-    return std.fmt.parseInt(usize, n_str, 10) catch null;
-}
-
-fn countBraceZstListElements(s: []const u8) ?usize {
-    if (!std.mem.startsWith(u8, s, "[")) return null;
-    if (!std.mem.endsWith(u8, s, "]")) return null;
-    const inner = s[1 .. s.len - 1];
-    if (inner.len == 0) return 0;
-
-    var i: usize = 0;
-    var count: usize = 0;
-    while (i < inner.len) {
-        while (i < inner.len and inner[i] == ' ') : (i += 1) {}
-        if (i + 2 > inner.len) return null;
-        if (!std.mem.eql(u8, inner[i .. i + 2], "{}")) return null;
-        i += 2;
-        count += 1;
-        while (i < inner.len and inner[i] == ' ') : (i += 1) {}
-        if (i == inner.len) break;
-        if (inner[i] != ',') return null;
-        i += 1;
-    }
-    return count;
-}
-
 fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !void {
-    const dev_str = devEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env) catch |err| {
-        switch (err) {
-            error.UnsupportedLayout, error.GenerateCodeFailed => return,
-            else => return err,
-        }
-    };
+    const dev_str = try devEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env);
     defer allocator.free(dev_str);
 
-    if (std.mem.eql(u8, interpreter_str, dev_str)) return;
+    const wasm_str = try wasmEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env);
+    defer allocator.free(wasm_str);
 
-    // f32/f64 epsilon: machine/CPU instruction differences can cause
-    // small floating-point divergences between interpreter and dev backend.
-    if (floatStringsWithinEpsilon(interpreter_str, dev_str)) return;
-
-    // 1-field record layout unwrapping in dev backend.
-    if (singleFieldRecordValueString(interpreter_str)) |inner| {
-        if (std.mem.eql(u8, inner, dev_str)) return;
-    }
-    if (singleFieldRecordValueString(dev_str)) |inner| {
-        if (std.mem.eql(u8, inner, interpreter_str)) return;
-    }
-
-    // List-of-ZST rendering divergence in dev formatter.
-    if (parseZeroSizedListCount(interpreter_str)) |expected_count| {
-        if (countBraceZstListElements(dev_str)) |actual_count| {
-            if (expected_count == actual_count) return;
-        }
-    }
-
-    // Bool layout: Mono IR blocks may lose Idx.bool, falling back to int layout.
-    // The layout store correctly returns Idx.bool for Bool nominal types, but
-    // when the lowerer wraps the expression in a block, the block's result_layout
-    // may use the CIR type variable which resolves to an integer type.
-    if ((std.mem.eql(u8, interpreter_str, "True") and std.mem.eql(u8, dev_str, "1")) or
-        (std.mem.eql(u8, interpreter_str, "False") and std.mem.eql(u8, dev_str, "0")))
+    if (!std.mem.eql(u8, interpreter_str, dev_str) or
+        !std.mem.eql(u8, interpreter_str, wasm_str) or
+        !std.mem.eql(u8, dev_str, wasm_str))
     {
-        std.debug.print("KNOWN DIVERGENCE: Bool layout mismatch (True/1 or False/0) - see Mono IR block result_layout issue\n", .{});
-        return;
+        std.debug.print(
+            "\nEvaluator mismatch!\n  interpreter: '{s}'\n  dev:         '{s}'\n  wasm:        '{s}'\n",
+            .{ interpreter_str, dev_str, wasm_str },
+        );
+        return error.EvaluatorMismatch;
     }
-
-    std.debug.print(
-        "\nEvaluator mismatch! Interpreter: {s}, DevEvaluator: {s}\n",
-        .{ interpreter_str, dev_str },
-    );
-    return error.EvaluatorMismatch;
 }
 
 /// Errors that can occur during WasmEvaluator string generation
@@ -2084,60 +2002,6 @@ fn hostStrFromUtf8(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]c
     }
 }
 
-/// Compare Interpreter result string with WasmEvaluator result string.
-/// If the wasm evaluator can't handle the expression (unsupported expr type),
-/// we skip silently since not all expressions are supported yet.
-fn compareWithWasmEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !void {
-    const wasm_str = wasmEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env) catch |err| {
-        switch (err) {
-            error.WasmGenerateCodeFailed, error.WasmExecFailed, error.UnsupportedLayout => return,
-            else => return err,
-        }
-    };
-    defer allocator.free(wasm_str);
-
-    if (!numericStringsEqual(interpreter_str, wasm_str)) {
-        std.debug.print(
-            "\nWasm evaluator mismatch! Interpreter: '{s}' (len={}), WasmEvaluator: '{s}' (len={})\n",
-            .{ interpreter_str, interpreter_str.len, wasm_str, wasm_str.len },
-        );
-        return error.EvaluatorMismatch;
-    }
-}
-
-/// Check if two strings represent the same numeric value.
-/// Handles cases like "42" vs "42.0" or "-5" vs "-5.0".
-fn numericStringsEqual(a: []const u8, b: []const u8) bool {
-    // Fast path: exact match
-    if (std.mem.eql(u8, a, b)) return true;
-
-    // Check if one is the other with ".0" suffix (integer vs Dec format)
-    if (a.len + 2 == b.len and std.mem.endsWith(u8, b, ".0") and std.mem.startsWith(u8, b, a)) {
-        return true;
-    }
-    if (b.len + 2 == a.len and std.mem.endsWith(u8, a, ".0") and std.mem.startsWith(u8, a, b)) {
-        return true;
-    }
-
-    return false;
-}
-
-/// Check if two float-formatted strings represent the same value within epsilon.
-/// Only matches when both strings contain a decimal point or exponent
-/// (i.e., are actual float-formatted values, not Dec or int).
-fn floatStringsWithinEpsilon(a: []const u8, b: []const u8) bool {
-    const fa = std.fmt.parseFloat(f64, a) catch return false;
-    const fb = std.fmt.parseFloat(f64, b) catch return false;
-    // Only tolerate epsilon for actual float values (contain '.' or 'e')
-    const a_is_float = std.mem.indexOfScalar(u8, a, '.') != null or std.mem.indexOfScalar(u8, a, 'e') != null;
-    const b_is_float = std.mem.indexOfScalar(u8, b, '.') != null or std.mem.indexOfScalar(u8, b, 'e') != null;
-    if (!a_is_float and !b_is_float) return false;
-    const diff = @abs(fa - fb);
-    const magnitude = @max(@abs(fa), @abs(fb));
-    const epsilon: f64 = if (magnitude > 1.0) magnitude * 1e-10 else 1e-10;
-    return diff <= epsilon;
-}
-
 /// Helper function to run an expression and expect a specific error.
 pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
@@ -2264,9 +2128,6 @@ pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: enum { tr
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    compareWithWasmEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env) catch |err| {
-        return err;
-    };
 
     try std.testing.expectEqual(expected_int, int_value);
 }
@@ -2314,7 +2175,6 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithWasmEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const bool_val = int_val != 0;
     try std.testing.expectEqual(expected_bool, bool_val);
@@ -2353,7 +2213,6 @@ pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { tra
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithWasmEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const epsilon: f32 = 0.0001;
     const diff = @abs(actual - expected_f32);
@@ -2396,7 +2255,6 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { tra
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithWasmEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const epsilon: f64 = 0.000000001;
     const diff = @abs(actual - expected_f64);
@@ -2443,7 +2301,6 @@ pub fn runExpectIntDec(src: []const u8, expected_int: i128, should_trace: enum {
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithWasmEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const expected_dec = expected_int * dec_scale;
     if (actual_dec.num != expected_dec) {
@@ -2487,7 +2344,6 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithWasmEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     if (actual_dec.num != expected_dec_num) {
         std.debug.print("Expected Dec({d}), got Dec({d})\n", .{ expected_dec_num, actual_dec.num });
@@ -2531,7 +2387,6 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithWasmEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     try std.testing.expectEqualStrings(expected_str, str_slice);
 
@@ -2889,24 +2744,10 @@ pub fn runExpectUnit(src: []const u8, should_trace: enum { trace, no_trace }) !v
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
-/// Run an expression through the dev evaluator only and assert on the string output.
-/// Unlike runExpectBool which uses the interpreter + cross-check, this directly tests
-/// the dev backend's formatted output string, catching formatting bugs that the
-/// cross-check workarounds might mask.
+/// Legacy helper name kept for existing tests.
+/// Now delegates to strict three-backend parity checks.
 pub fn runDevOnlyExpectStr(src: []const u8, expected_str: []const u8) !void {
-    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
-    defer cleanupParseAndCanonical(test_allocator, resources);
-
-    const dev_str = devEvaluatorStr(test_allocator, resources.module_env, resources.expr_idx, resources.builtin_module.env) catch |err| {
-        std.debug.print("\nDev evaluator failed for '{s}': {}\n", .{ src, err });
-        return err;
-    };
-    defer test_allocator.free(dev_str);
-
-    std.testing.expectEqualStrings(expected_str, dev_str) catch |err| {
-        std.debug.print("\nDev evaluator output mismatch for '{s}':\n  expected: {s}\n  got:      {s}\n", .{ src, expected_str, dev_str });
-        return err;
-    };
+    return runExpectStr(src, expected_str, .no_trace);
 }
 
 /// Parse and canonicalize an expression.

@@ -788,6 +788,7 @@ pub const Repl = struct {
         switch (expr) {
             .e_runtime_error => |runtime_err| {
                 const msg = try self.runtimeDiagnosticMessage(module_env, runtime_err.diagnostic, false);
+                defer self.allocator.free(msg);
                 const crash = try std.fmt.allocPrint(self.allocator, "Crash: {s}", .{msg});
                 return crash;
             },
@@ -797,6 +798,7 @@ pub const Repl = struct {
             },
             .e_call => |call| {
                 if (try self.callTargetCompileError(module_env, call.func)) |msg| {
+                    defer self.allocator.free(msg);
                     const crash = try std.fmt.allocPrint(self.allocator, "Crash: {s}", .{msg});
                     return crash;
                 }
