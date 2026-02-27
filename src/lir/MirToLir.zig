@@ -1622,10 +1622,19 @@ fn lowerPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Error!LirPatte
                 .prim, .unit, .record, .tuple, .tag_union, .box, .func => unreachable,
             };
             const all_patterns = self.mir_store.getPatternSpan(ld.patterns);
-            const rest_pat = if (ld.rest_pattern.isNone())
-                LirPatternId.none
-            else
-                try self.lowerPattern(ld.rest_pattern);
+            const has_rest = !ld.rest_index.isNone();
+            const rest_pat: LirPatternId = if (!has_rest) rest_blk: {
+                break :rest_blk LirPatternId.none;
+            } else if (!ld.rest_pattern.isNone()) rest_blk: {
+                break :rest_blk try self.lowerPattern(ld.rest_pattern);
+            } else rest_blk: {
+                // Preserve `..` even when it doesn't bind (`[a, ..]`) so lowering
+                // can distinguish it from exact patterns like `[a]`.
+                const list_layout = try self.layoutFromMonotype(mono_idx);
+                break :rest_blk try self.lir_store.addPattern(.{ .wildcard = .{
+                    .layout_idx = list_layout,
+                } }, region);
+            };
 
             // Split patterns into prefix (before ..) and suffix (after ..)
             if (ld.rest_index.isNone()) {
@@ -2175,7 +2184,7 @@ fn inspektTuple(self: *Self, value_expr: LirExprId, tup: anytype, mono_idx: Mono
             .struct_expr = value_expr,
             .struct_layout = struct_layout,
             .field_layout = elem_layout,
-            .field_idx = @intCast(i),
+            .field_idx = self.layoutFieldPositionForSemanticIndex(struct_layout, i),
         } }, region);
 
         const elem_inspected = try self.expandStrInspekt(elem_access, elem_mono, region);
@@ -2186,6 +2195,21 @@ fn inspektTuple(self: *Self, value_expr: LirExprId, tup: anytype, mono_idx: Mono
 
     const parts = self.scratch_lir_expr_ids.items[save_exprs..];
     return self.foldStrConcat(parts, region);
+}
+
+/// Map a semantic field index (source order) to the actual layout field position.
+/// Struct and tuple layouts can reorder fields for alignment.
+fn layoutFieldPositionForSemanticIndex(self: *Self, struct_layout: layout.Idx, semantic_index: usize) u16 {
+    const layout_val = self.layout_store.getLayout(struct_layout);
+    std.debug.assert(layout_val.tag == .struct_);
+    const struct_data = self.layout_store.getStructData(layout_val.data.struct_.idx);
+    const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
+    for (0..layout_fields.len) |li| {
+        if (layout_fields.get(li).index == semantic_index) {
+            return @intCast(li);
+        }
+    }
+    unreachable;
 }
 
 /// Inspect a tag union: discriminant_switch on the tag, producing "TagName" or "TagName(payload)"
@@ -2261,7 +2285,7 @@ fn inspektSingleTag(self: *Self, value_expr: LirExprId, tag: Monotype.Tag, _: Mo
                 .struct_expr = value_expr,
                 .struct_layout = union_layout,
                 .field_layout = payload_layout,
-                .field_idx = @intCast(i),
+                .field_idx = self.layoutFieldPositionForSemanticIndex(union_layout, i),
             } }, region);
             const inspected = try self.expandStrInspekt(payload_access, payload_mono, region);
             try self.scratch_lir_expr_ids.append(self.allocator, inspected);
@@ -2345,7 +2369,7 @@ fn inspektTagBranch(self: *Self, union_value: LirExprId, tag: Monotype.Tag, unio
                 .struct_expr = payload_access,
                 .struct_layout = payload_layout,
                 .field_layout = field_layout,
-                .field_idx = @intCast(i),
+                .field_idx = self.layoutFieldPositionForSemanticIndex(payload_layout, i),
             } }, region);
             const inspected = try self.expandStrInspekt(field_access, payload_mono, region);
             try self.scratch_lir_expr_ids.append(self.allocator, inspected);
@@ -2550,11 +2574,15 @@ fn inspektList(self: *Self, list_expr: LirExprId, list_data: anytype, mono_idx: 
     } }, region);
 }
 
-/// Inspect a box: the inner value is behind a pointer.
-fn inspektBox(self: *Self, _: LirExprId, _: anytype, region: Region) Allocator.Error!LirExprId {
-    // Box inspection requires dereferencing, which needs pointer support.
-    // TODO: implement proper box inspection.
-    return self.emitStrLiteral("<box>", region);
+/// Inspect a box: unbox the inner value, inspect it, then wrap as `Box(...)`.
+fn inspektBox(self: *Self, value_expr: LirExprId, box_data: anytype, region: Region) Allocator.Error!LirExprId {
+    const inner_layout = try self.layoutFromMonotype(box_data.inner);
+    const unboxed = try self.emitLowLevel(.box_unbox, &.{value_expr}, inner_layout, region);
+    const inspected_inner = try self.expandStrInspekt(unboxed, box_data.inner, region);
+
+    const open = try self.emitStrLiteral("Box(", region);
+    const close = try self.emitStrLiteral(")", region);
+    return self.foldStrConcat(&.{ open, inspected_inner, close }, region);
 }
 
 // --- Tests ---

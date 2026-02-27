@@ -1481,6 +1481,12 @@ fn lowerBinop(self: *Self, binop: CIR.Expr.Binop, monotype: Monotype.Idx, region
             };
 
             const lhs = try self.lowerExpr(binop.lhs);
+            const lhs_monotype = try self.resolveMonotype(binop.lhs);
+            if (!lhs_monotype.isNone()) {
+                // Binops dispatch off the LHS nominal method (e.g. U32.plus),
+                // so seed RHS lowering to the same monotype for polymorphic literals.
+                self.seedTypeVarSeen(ModuleEnv.varFrom(binop.rhs), lhs_monotype);
+            }
             const rhs = try self.lowerExpr(binop.rhs);
 
             // Resolve the method via type-directed dispatch on the LHS operand
@@ -1525,13 +1531,7 @@ fn lowerBinop(self: *Self, binop: CIR.Expr.Binop, monotype: Monotype.Idx, region
                 return result;
             };
 
-            const lhs_monotype = try self.resolveMonotype(binop.lhs);
-            const rhs_monotype = try self.resolveMonotype(binop.rhs);
-            const rhs_for_func = if (lhs_monotype != rhs_monotype and self.monotypesStructurallyEqual(lhs_monotype, rhs_monotype))
-                lhs_monotype
-            else
-                rhs_monotype;
-            const func_monotype = try self.buildFuncMonotype(&.{ lhs_monotype, rhs_for_func }, monotype, false);
+            const func_monotype = try self.buildFuncMonotype(&.{ lhs_monotype, lhs_monotype }, monotype, false);
 
             // Ensure the method body is lowered so codegen can find it.
             const lowered_method_symbol = try self.ensureMethodLowered(method_symbol, func_monotype);

@@ -8089,17 +8089,23 @@ fn generateList(self: *Self, l: anytype) Allocator.Error!void {
     const elem_size: u32 = ls.layoutSizeAlign(elem_layout).size;
     const elem_align: u32 = @intCast(ls.layoutSizeAlign(elem_layout).alignment.toByteUnits());
 
-    // Allocate space for all elements on the stack frame
+    // Allocate space for all elements on the heap so list literals remain valid
+    // when returned from functions (callee stack frames are reclaimed on return).
     const total_data_size = elem_size * @as(u32, @intCast(elems.len));
-    const data_offset = try self.allocStackMemory(total_data_size, elem_align);
-
     const data_base = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitFpOffset(data_offset);
-    self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, data_base) catch return error.OutOfMemory;
+    if (total_data_size > 0) {
+        try self.emitHeapAllocConst(total_data_size, elem_align);
+        self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, data_base) catch return error.OutOfMemory;
 
-    // Zero-initialize element data for consistent padding
-    try self.emitZeroInit(data_base, total_data_size);
+        // Zero-initialize element data for consistent padding
+        try self.emitZeroInit(data_base, total_data_size);
+    } else {
+        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+        self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, data_base) catch return error.OutOfMemory;
+    }
 
     // Store each element
     const elem_vt = WasmLayout.resultValTypeWithStore(l.elem_layout, ls);

@@ -1033,14 +1033,15 @@ pub const RcInsertPass = struct {
             guard_added.deinit();
 
             const processed_guard = try self.processExpr(branch.guard);
-            // Re-count body uses for wrapBranchWithRcOps
+            // Re-count body uses for branch RC wrappers
             self.scratch_uses.clearRetainingCapacity();
             try self.countUsesInto(branch.body, &self.scratch_uses);
-            const new_body = try self.wrapBranchWithRcOps(processed_body, &self.scratch_uses, &symbols_in_any_branch, result_layout, region);
+            const outer_rc_body = try self.wrapBranchWithRcOps(processed_body, &self.scratch_uses, &symbols_in_any_branch, result_layout, region);
+            const new_body = try self.wrapExprWithPatternBorrowRcOps(outer_rc_body, branch.pattern, &self.scratch_uses, result_layout, region);
             // Count guard uses for wrapGuardWithIncref
             self.scratch_uses.clearRetainingCapacity();
             try self.countUsesInto(branch.guard, &self.scratch_uses);
-            const new_guard = try self.wrapGuardWithIncref(processed_guard, &self.scratch_uses, &pattern_bound, region);
+            const new_guard = try self.wrapGuardWithIncref(processed_guard, &self.scratch_uses, region);
             try new_branches.append(self.allocator, .{
                 .pattern = branch.pattern,
                 .guard = new_guard,
@@ -1569,7 +1570,6 @@ pub const RcInsertPass = struct {
         self: *RcInsertPass,
         guard: LirExprId,
         guard_uses: *const std.AutoHashMap(u64, u32),
-        pattern_bound: *const std.AutoHashMap(u64, void),
         region: Region,
     ) Allocator.Error!LirExprId {
         if (guard.isNone()) return guard;
@@ -1592,7 +1592,6 @@ pub const RcInsertPass = struct {
         for (sorted_keys) |key| {
             const count = guard_uses.get(key) orelse 0;
             if (count == 0) continue;
-            if (pattern_bound.contains(key)) continue;
             const layout_idx = self.symbol_layouts.get(key) orelse continue;
             if (!self.layoutNeedsRc(layout_idx)) continue;
             const symbol: Symbol = @bitCast(key);
@@ -1606,6 +1605,30 @@ pub const RcInsertPass = struct {
             .stmts = stmts_span,
             .final_expr = guard,
             .result_layout = .bool,
+        } }, region);
+    }
+
+    /// Wrap an expression with borrow-style RC ops for symbols introduced by a pattern.
+    /// Match-pattern bindings borrow from the scrutinee, so each use requires an incref.
+    fn wrapExprWithPatternBorrowRcOps(
+        self: *RcInsertPass,
+        expr: LirExprId,
+        pat_id: LirPatternId,
+        local_uses: *const std.AutoHashMap(u64, u32),
+        result_layout: LayoutIdx,
+        region: Region,
+    ) Allocator.Error!LirExprId {
+        var rc_stmts = std.ArrayList(LirStmt).empty;
+        defer rc_stmts.deinit(self.allocator);
+
+        try self.emitBorrowRcOpsForPatternInto(pat_id, local_uses, region, &rc_stmts);
+        if (rc_stmts.items.len == 0) return expr;
+
+        const stmts_span = try self.store.addStmts(rc_stmts.items);
+        return self.store.addExpr(.{ .block = .{
+            .stmts = stmts_span,
+            .final_expr = expr,
+            .result_layout = result_layout,
         } }, region);
     }
 
@@ -1751,6 +1774,40 @@ pub const RcInsertPass = struct {
             }
         };
         try walkPatternBinds(self.store, pat_id, Ctx{ .pass = self, .local_uses = local_uses, .region = region, .rc_stmts = rc_stmts });
+    }
+
+    /// Recursively emit borrow-style RC ops for symbols bound by a pattern.
+    /// Pattern-bound values in `match` are borrowed from the scrutinee, so:
+    /// - use_count == 0: no action
+    /// - use_count > 0: emit incref(use_count)
+    fn emitBorrowRcOpsForPatternInto(
+        self: *RcInsertPass,
+        pat_id: LirPatternId,
+        local_uses: *const std.AutoHashMap(u64, u32),
+        region: Region,
+        rc_stmts: *std.ArrayList(LirStmt),
+    ) Allocator.Error!void {
+        const Ctx = struct {
+            pass: *RcInsertPass,
+            local_uses: *const std.AutoHashMap(u64, u32),
+            region: Region,
+            rc_stmts: *std.ArrayList(LirStmt),
+            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
+                if (ctx.pass.layoutNeedsRc(layout_idx)) {
+                    const key = @as(u64, @bitCast(symbol));
+                    const use_count = ctx.local_uses.get(key) orelse 0;
+                    if (use_count > 0) {
+                        try ctx.pass.emitIncrefInto(symbol, layout_idx, @intCast(use_count), ctx.region, ctx.rc_stmts);
+                    }
+                }
+            }
+        };
+        try walkPatternBinds(self.store, pat_id, Ctx{
+            .pass = self,
+            .local_uses = local_uses,
+            .region = region,
+            .rc_stmts = rc_stmts,
+        });
     }
 
     /// Emit an incref statement into a given statement list.

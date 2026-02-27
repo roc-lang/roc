@@ -733,7 +733,10 @@ fn i128ToStr(buf: []u8, val: i128) []u8 {
         return u128ToStr(buf, @intCast(val));
     }
     buf[0] = '-';
-    const abs: u128 = @intCast(-val);
+    const abs: u128 = if (val == std.math.minInt(i128))
+        @as(u128, @bitCast(val))
+    else
+        @intCast(-val);
     const digits = u128ToStr(buf[1..], abs);
     return buf[0 .. 1 + digits.len];
 }

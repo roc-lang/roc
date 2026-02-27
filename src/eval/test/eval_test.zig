@@ -3828,11 +3828,11 @@ test "Str.join_with" {
 // but we don't add a standalone test here to avoid DevEvaluator limitations with Result matching.
 
 test "dev: List.last returns tag-union-wrapped result" {
-    try runDevOnlyExpectStr("List.last([1, 2, 3])", "Ok(3)");
+    try runDevOnlyExpectStr("List.last([1, 2, 3])", "Ok(3.0)");
 }
 
 test "dev: List.first returns tag-union-wrapped result" {
-    try runDevOnlyExpectStr("List.first([10, 20, 30])", "Ok(10)");
+    try runDevOnlyExpectStr("List.first([10, 20, 30])", "Ok(10.0)");
 }
 
 test "dev: List.first on empty list returns Err" {

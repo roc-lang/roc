@@ -6217,7 +6217,7 @@ pub const Interpreter = struct {
         // Check for nominal types FIRST (before resolveBaseVar) to dispatch to their is_eq method.
         // This is critical because resolveBaseVar follows nominal types to their backing var,
         // but we need to dispatch to the nominal type's is_eq method instead.
-        const direct_resolved = self.runtime_types.resolveVar(lhs_var);
+        const direct_resolved = self.resolveAliasesOnly(lhs_var);
         if (direct_resolved.desc.content == .structure) {
             if (direct_resolved.desc.content.structure == .nominal_type) {
                 const nom = direct_resolved.desc.content.structure.nominal_type;
@@ -6444,6 +6444,89 @@ pub const Interpreter = struct {
             return order == .eq;
         }
 
+        // Builtin List equality is nominal but semantically structural over elements.
+        // Evaluating List.is_eq via method dispatch can pick the wrong polymorphic context
+        // for nested list comparisons, so compare directly by element here.
+        if ((lhs.layout.tag == .list or lhs.layout.tag == .list_of_zst) and
+            (rhs.layout.tag == .list or rhs.layout.tag == .list_of_zst))
+        {
+            const lhs_list = lhs.asRocList() orelse return error.TypeMismatch;
+            const rhs_list = rhs.asRocList() orelse return error.TypeMismatch;
+            if (lhs_list.len() != rhs_list.len()) return false;
+            const len = lhs_list.len();
+            if (len == 0) return true;
+
+            const nominal_args = self.runtime_types.sliceNominalArgs(nom);
+            const elem_rt_var: types.Var = if (nominal_args.len > 0)
+                nominal_args[0]
+            else
+                return error.TypeMismatch;
+
+            const stored_elem_layout = if (lhs.layout.tag == .list)
+                self.runtime_layout_store.getLayout(lhs.layout.data.list)
+            else if (rhs.layout.tag == .list)
+                self.runtime_layout_store.getLayout(rhs.layout.data.list)
+            else
+                layout.Layout.zst();
+
+            const type_based_elem_layout = self.getRuntimeLayout(elem_rt_var) catch stored_elem_layout;
+            const candidate_elem_layout = if (type_based_elem_layout.tag == .box)
+                self.runtime_layout_store.getLayout(type_based_elem_layout.data.box)
+            else
+                type_based_elem_layout;
+
+            const stored_elem_size = self.runtime_layout_store.layoutSize(stored_elem_layout);
+            // Preserve nominal list layout when available so recursive comparisons route
+            // through list-specific structural equality instead of generic struct paths.
+            const elem_value_layout = switch (candidate_elem_layout.tag) {
+                .list, .list_of_zst => candidate_elem_layout,
+                else => stored_elem_layout,
+            };
+
+            const value_elem_size = self.runtime_layout_store.layoutSize(elem_value_layout);
+            const elem_size: usize = @intCast(@max(stored_elem_size, value_elem_size));
+            if (elem_size == 0) return true;
+
+            const lhs_bytes = lhs_list.bytes orelse return error.TypeMismatch;
+            const rhs_bytes = rhs_list.bytes orelse return error.TypeMismatch;
+
+            var idx: usize = 0;
+            while (idx < len) : (idx += 1) {
+                const elem_offset = idx * elem_size;
+                const lhs_elem = StackValue{
+                    .layout = elem_value_layout,
+                    .ptr = lhs_bytes + elem_offset,
+                    .is_initialized = true,
+                    .rt_var = elem_rt_var,
+                };
+                const rhs_elem = StackValue{
+                    .layout = elem_value_layout,
+                    .ptr = rhs_bytes + elem_offset,
+                    .is_initialized = true,
+                    .rt_var = elem_rt_var,
+                };
+                const elems_equal = try self.valuesStructurallyEqual(lhs_elem, elem_rt_var, rhs_elem, elem_rt_var, roc_ops);
+                if (!elems_equal) return false;
+            }
+            return true;
+        }
+
+        // Method lookup/translation for polymorphic nominal methods mutates
+        // dispatch context. Keep structural equality self-contained so nested
+        // nominal comparisons don't leak mappings into each other.
+        const saved_rigid_subst = try self.rigid_subst.clone();
+        const saved_flex_type_context = self.flex_type_context.clone() catch |err| {
+            var to_deinit = saved_rigid_subst;
+            to_deinit.deinit();
+            return err;
+        };
+        defer {
+            self.rigid_subst.deinit();
+            self.rigid_subst = saved_rigid_subst;
+            self.flex_type_context.deinit();
+            self.flex_type_context = saved_flex_type_context;
+        }
+
         // Look up and call the is_eq method on the nominal type
         const method_func = self.resolveMethodFunction(
             nom.origin_module,
@@ -6577,6 +6660,21 @@ pub const Interpreter = struct {
                         current = self.runtime_types.resolveVar(backing);
                     },
                     else => return current,
+                },
+                else => return current,
+            }
+        }
+    }
+
+    fn resolveAliasesOnly(self: *Interpreter, runtime_var: types.Var) types.store.ResolvedVarDesc {
+        var current = self.runtime_types.resolveVar(runtime_var);
+        var guard = types.debug.IterationGuard.init("resolveAliasesOnly");
+        while (true) {
+            guard.tick();
+            switch (current.desc.content) {
+                .alias => |al| {
+                    const backing = self.runtime_types.getAliasBackingVar(al);
+                    current = self.runtime_types.resolveVar(backing);
                 },
                 else => return current,
             }
@@ -15964,6 +16062,17 @@ pub const Interpreter = struct {
                                 val.decref(&self.runtime_layout_store, roc_ops);
                             }
                             try value_stack.push(boxed);
+                        } else if (backing_layout.tag == .zst) {
+                            // Some boxed tag payloads collapse to a zero-sized backing layout.
+                            // In that case, payload values are type-level only and the runtime
+                            // representation is just an initialized ZST inner value.
+                            var inner_dest = try self.pushRaw(backing_layout, 0, tc.rt_var);
+                            inner_dest.is_initialized = true;
+                            const boxed = try self.makeBoxValueFromLayout(layout_val, inner_dest, roc_ops, tc.rt_var);
+                            for (values) |val| {
+                                val.decref(&self.runtime_layout_store, roc_ops);
+                            }
+                            try value_stack.push(boxed);
                         } else {
                             for (values) |val| {
                                 val.decref(&self.runtime_layout_store, roc_ops);
@@ -16978,14 +17087,21 @@ pub const Interpreter = struct {
                 // Track if the value came from a polymorphic context (flex/rigid rt_var)
                 var effective_receiver_rt_var = ba.receiver_rt_var;
                 var value_is_polymorphic = false;
+                const receiver_resolved = self.runtime_types.resolveVar(ba.receiver_rt_var);
+                const receiver_is_concrete = receiver_resolved.desc.content == .structure or receiver_resolved.desc.content == .alias;
+
                 const val_rt_var = lhs.rt_var;
                 const val_resolved = self.runtime_types.resolveVar(val_rt_var);
-                // Only use the value's type if it's concrete (has structure/alias)
-                if (val_resolved.desc.content == .structure or val_resolved.desc.content == .alias) {
-                    effective_receiver_rt_var = val_rt_var;
-                } else if (val_resolved.desc.content == .flex or val_resolved.desc.content == .rigid) {
-                    // The value came from a polymorphic context
+                if (val_resolved.desc.content == .flex or val_resolved.desc.content == .rigid) {
+                    // The value came from a polymorphic context.
                     value_is_polymorphic = true;
+                }
+                // Only fall back to the value's runtime type when the call-site receiver type
+                // is unresolved; otherwise keep call-site type identity (e.g. nominal List).
+                if (!receiver_is_concrete and
+                    (val_resolved.desc.content == .structure or val_resolved.desc.content == .alias))
+                {
+                    effective_receiver_rt_var = val_rt_var;
                 }
 
                 // Check if effective type is still flex/rigid after trying value's rt_var
@@ -17026,6 +17142,27 @@ pub const Interpreter = struct {
                         current_var = self.runtime_types.getAliasBackingVar(alias);
                         current_resolved = self.runtime_types.resolveVar(current_var);
                     }
+                }
+
+                // Route nominal equality through the centralized structural-equality dispatcher.
+                // This keeps equality behavior consistent across call sites and avoids ad-hoc
+                // polymorphic context leakage from generic method invocation.
+                if (ba.method_ident == self.root_env.idents.is_eq and
+                    current_resolved.desc.content == .structure and
+                    current_resolved.desc.content.structure == .nominal_type)
+                {
+                    const nom = current_resolved.desc.content.structure.nominal_type;
+                    var result = self.dispatchNominalIsEq(lhs, rhs, nom, roc_ops) catch |err| switch (err) {
+                        error.NotImplemented => {
+                            self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
+                            return error.Crash;
+                        },
+                        else => return err,
+                    };
+                    if (ba.negate_result) result = !result;
+                    const result_val = try self.makeBoolValue(result);
+                    try value_stack.push(result_val);
+                    return true;
                 }
 
                 // Check if we can use low-level numeric comparison based on layout
