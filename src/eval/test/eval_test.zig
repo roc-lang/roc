@@ -396,6 +396,10 @@ test "lambdas closures" {
     try runExpectI64("(|y| (|x| (|z| x + y + z)(3.I64))(2.I64))(1.I64)", 6, .no_trace);
 }
 
+test "dev: List.count_if returns 0 when none match" {
+    try runExpectI64("List.count_if([1, 2, 3], |x| x > 10)", 0, .no_trace);
+}
+
 test "lambdas with capture" {
     try runExpectI64(
         \\{

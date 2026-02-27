@@ -520,10 +520,10 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                                     .is_initialized = true,
                                     .rt_var = arg_var,
                                 };
-                                const rendered = if (stored_payload_layout.tag == .tag_union or stored_payload_layout.tag == .zst)
-                                    try renderValueRocWithType(ctx, payload_value, arg_var)
-                                else
-                                    try renderValueRoc(ctx, payload_value);
+                                // Always render payload with type info. Layout-only
+                                // formatting can recurse into nested tag unions and
+                                // abort when tuple elements contain tag unions.
+                                const rendered = try renderValueRocWithType(ctx, payload_value, arg_var);
                                 defer gpa.free(rendered);
                                 try out.appendSlice(rendered);
                             } else {

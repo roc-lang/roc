@@ -531,6 +531,30 @@ test "lowerExpr: lambda" {
     try testing.expectEqual(@as(u16, 1), result.lambda.params.len);
 }
 
+test "lowerExpr: record field call lowers to call(record_access(...), ...)" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    y = 10
+        \\    rec = { f: |x| x + y }
+        \\    rec.f(5)
+        \\}
+    );
+    defer env.deinit();
+
+    const expr = try env.lowerFirstDef();
+    const top = env.mir_store.getExpr(expr);
+    try testing.expect(top == .block);
+
+    const final_expr = env.mir_store.getExpr(top.block.final_expr);
+    try testing.expect(final_expr == .call);
+
+    const call_func = env.mir_store.getExpr(final_expr.call.func);
+    try testing.expect(call_func == .record_access);
+
+    const func_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(final_expr.call.func));
+    try testing.expect(func_mono == .func);
+}
+
 test "lowerExpr: Bool.and short-circuit desugars to match" {
     var env = try MirTestEnv.initExpr(
         \\{

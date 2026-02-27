@@ -305,13 +305,17 @@ fn selectCopyFallbackFn(elem_layout: Layout) builtins.list.CopyFallbackFn {
                 .i64 => &builtins.list.copy_i64,
                 .i128 => &builtins.list.copy_i128,
             },
-            else => @panic("selectCopyFallbackFn: unsupported scalar element layout"),
+            .frac => &builtins.list.copy_fallback,
+            .opaque_ptr => &builtins.list.copy_fallback,
         },
         .box => &builtins.list.copy_box,
         .box_of_zst => &builtins.list.copy_box_zst,
         .list => &builtins.list.copy_list,
         .list_of_zst => &builtins.list.copy_list_zst,
-        else => @panic("selectCopyFallbackFn: unsupported element layout"),
+        .struct_ => &builtins.list.copy_fallback,
+        .closure => &builtins.list.copy_fallback,
+        .zst => &builtins.list.copy_fallback,
+        .tag_union => &builtins.list.copy_fallback,
     };
 }
 
@@ -5858,176 +5862,6 @@ pub const Interpreter = struct {
             self.triggerCrash(msg, false, roc_ops);
             return false;
         }
-    }
-
-    /// Evaluate a binary operation on numeric values (int, f32, f64, or dec)
-    /// This function dispatches to the appropriate type-specific operation.
-    fn evalNumericBinop(
-        self: *Interpreter,
-        op: can.CIR.Expr.Binop.Op,
-        lhs: StackValue,
-        rhs: StackValue,
-        roc_ops: *RocOps,
-    ) !StackValue {
-        const lhs_val = try self.extractNumericValue(lhs);
-        const rhs_val = try self.extractNumericValue(rhs);
-        const result_layout = lhs.layout;
-
-        var out = try self.pushRaw(result_layout, 0, lhs.rt_var);
-        out.is_initialized = false;
-
-        switch (op) {
-            .add => switch (lhs_val) {
-                .int => |l| switch (rhs_val) {
-                    .int => |r| try out.setInt(l + r),
-                    .dec => |r| try out.setInt(l + r.toWholeInt()),
-                    else => return error.TypeMismatch,
-                },
-                .f32 => |l| switch (rhs_val) {
-                    .f32 => |r| out.setF32(l + r),
-                    else => return error.TypeMismatch,
-                },
-                .f64 => |l| switch (rhs_val) {
-                    .f64 => |r| out.setF64(l + r),
-                    else => return error.TypeMismatch,
-                },
-                .dec => |l| switch (rhs_val) {
-                    .dec => |r| out.setDec(RocDec.add(l, r, roc_ops), roc_ops),
-                    .int => |r| out.setDec(RocDec.add(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops),
-                    else => return error.TypeMismatch,
-                },
-            },
-            .sub => switch (lhs_val) {
-                .int => |l| switch (rhs_val) {
-                    .int => |r| try out.setInt(l - r),
-                    .dec => |r| try out.setInt(l - r.toWholeInt()),
-                    else => return error.TypeMismatch,
-                },
-                .f32 => |l| switch (rhs_val) {
-                    .f32 => |r| out.setF32(l - r),
-                    else => return error.TypeMismatch,
-                },
-                .f64 => |l| switch (rhs_val) {
-                    .f64 => |r| out.setF64(l - r),
-                    else => return error.TypeMismatch,
-                },
-                .dec => |l| switch (rhs_val) {
-                    .dec => |r| out.setDec(RocDec.sub(l, r, roc_ops), roc_ops),
-                    .int => |r| out.setDec(RocDec.sub(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops),
-                    else => return error.TypeMismatch,
-                },
-            },
-            .mul => switch (lhs_val) {
-                .int => |l| switch (rhs_val) {
-                    .int => |r| try out.setInt(l * r),
-                    .dec => |r| try out.setInt(l * r.toWholeInt()),
-                    else => return error.TypeMismatch,
-                },
-                .f32 => |l| switch (rhs_val) {
-                    .f32 => |r| out.setF32(l * r),
-                    else => return error.TypeMismatch,
-                },
-                .f64 => |l| switch (rhs_val) {
-                    .f64 => |r| out.setF64(l * r),
-                    else => return error.TypeMismatch,
-                },
-                .dec => |l| switch (rhs_val) {
-                    .dec => |r| out.setDec(RocDec.mul(l, r, roc_ops), roc_ops),
-                    .int => |r| out.setDec(RocDec.mul(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops),
-                    else => return error.TypeMismatch,
-                },
-            },
-            .div, .div_trunc => switch (lhs_val) {
-                .int => |l| switch (rhs_val) {
-                    .int => |r| {
-                        if (r == 0) return error.DivisionByZero;
-                        try out.setInt(i128h.divTrunc_i128(l, r));
-                    },
-                    else => return error.TypeMismatch,
-                },
-                .f32 => |l| switch (rhs_val) {
-                    .f32 => |r| {
-                        if (r == 0) return error.DivisionByZero;
-                        if (op == .div_trunc) {
-                            out.setF32(std.math.trunc(l / r));
-                        } else {
-                            out.setF32(l / r);
-                        }
-                    },
-                    else => return error.TypeMismatch,
-                },
-                .f64 => |l| switch (rhs_val) {
-                    .f64 => |r| {
-                        if (r == 0) return error.DivisionByZero;
-                        if (op == .div_trunc) {
-                            out.setF64(std.math.trunc(l / r));
-                        } else {
-                            out.setF64(l / r);
-                        }
-                    },
-                    else => return error.TypeMismatch,
-                },
-                .dec => |l| switch (rhs_val) {
-                    .dec => |r| {
-                        if (r.num == 0) return error.DivisionByZero;
-                        if (op == .div_trunc) {
-                            const result_num = builtins.dec.divTruncC(l, r, roc_ops);
-                            out.setDec(RocDec{ .num = result_num }, roc_ops);
-                        } else {
-                            out.setDec(RocDec.div(l, r, roc_ops), roc_ops);
-                        }
-                    },
-                    .int => |r| {
-                        if (r == 0) return error.DivisionByZero;
-                        const r_dec = RocDec.fromWholeInt(r).?;
-                        if (op == .div_trunc) {
-                            const result_num = builtins.dec.divTruncC(l, r_dec, roc_ops);
-                            out.setDec(RocDec{ .num = result_num }, roc_ops);
-                        } else {
-                            out.setDec(RocDec.div(l, r_dec, roc_ops), roc_ops);
-                        }
-                    },
-                    else => return error.TypeMismatch,
-                },
-            },
-            .rem => switch (lhs_val) {
-                .int => |l| switch (rhs_val) {
-                    .int => |r| {
-                        if (r == 0) return error.DivisionByZero;
-                        try out.setInt(i128h.rem_i128(l, r));
-                    },
-                    else => return error.TypeMismatch,
-                },
-                .f32 => |l| switch (rhs_val) {
-                    .f32 => |r| {
-                        if (r == 0) return error.DivisionByZero;
-                        out.setF32(@rem(l, r));
-                    },
-                    else => return error.TypeMismatch,
-                },
-                .f64 => |l| switch (rhs_val) {
-                    .f64 => |r| {
-                        if (r == 0) return error.DivisionByZero;
-                        out.setF64(@rem(l, r));
-                    },
-                    else => return error.TypeMismatch,
-                },
-                .dec => |l| switch (rhs_val) {
-                    .dec => |r| {
-                        if (r.num == 0) return error.DivisionByZero;
-                        out.setDec(RocDec.rem(l, r, roc_ops), roc_ops);
-                    },
-                    .int => |r| {
-                        if (r == 0) return error.DivisionByZero;
-                        out.setDec(RocDec.rem(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops);
-                    },
-                    else => return error.TypeMismatch,
-                },
-            },
-            else => return error.TypeMismatch,
-        }
-        out.is_initialized = true;
-        return out;
     }
 
     const NumericValue = union(enum) {

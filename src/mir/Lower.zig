@@ -346,6 +346,15 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
         .e_lookup_local => |lookup| {
             const symbol = try self.patternToSymbol(lookup.pattern_idx);
             const symbol_key: u64 = @bitCast(symbol);
+            const symbol_name = module_env.getIdent(symbol.ident_idx);
+            const debug_append_one = std.mem.eql(u8, symbol_name, "append_one");
+            if (debug_append_one) {
+                std.debug.print(
+                    "lookup_local append_one monotype={}\n",
+                    .{@intFromEnum(monotype)},
+                );
+                self.debugPrintMonotype("  append_one req", monotype);
+            }
 
             // Check for a deferred block-local polymorphic lambda. If found,
             // seed the definition's type vars from the call-site monotype and
@@ -361,6 +370,8 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                     _ = self.deferred_block_lambdas.remove(@intFromEnum(lookup.pattern_idx));
 
                     try self.in_progress_defs.put(symbol_key, {});
+                    try self.in_progress_symbol_monotypes.put(symbol_key, monotype);
+                    defer _ = self.in_progress_symbol_monotypes.remove(symbol_key);
 
                     // Use a fresh type_var_seen scope so call-site concrete
                     // types aren't shadowed by stale defaults from pattern lowering.
@@ -410,7 +421,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                         // instantiated copy (e.g. `a` in `to`), so we seed
                         // before lowering to connect them.
                         self.seedTypeVarSeen(ModuleEnv.varFrom(def.expr), monotype);
-                        _ = try self.lowerExternalDef(symbol, def.expr);
+                        _ = try self.lowerExternalDefWithType(symbol, def.expr, monotype);
                         break;
                     }
                 }
@@ -419,8 +430,18 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                 // re-specialization: the same function called with a different type.
                 const cached_monotype = self.store.typeOf(cached_expr);
                 if (!monotype.isNone() and !self.monotypesStructurallyEqual(cached_monotype, monotype)) {
+                    std.debug.print(
+                        "MIR poly mismatch local {s}: cached={} requested={}\n",
+                        .{ symbol_name, @intFromEnum(cached_monotype), @intFromEnum(monotype) },
+                    );
+                    self.debugPrintMonotype("  cached", cached_monotype);
+                    self.debugPrintMonotype("  requested", monotype);
                     // Check for an existing specialization with this monotype.
                     if (self.lookupPolySpecialization(symbol_key, monotype)) |spec_symbol| {
+                        std.debug.print(
+                            "  reuse specialization {s} -> ident={}\n",
+                            .{ symbol_name, spec_symbol.ident_idx.idx },
+                        );
                         return try self.store.addExpr(self.allocator, .{ .lookup = spec_symbol }, monotype, region);
                     }
 
@@ -446,8 +467,14 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                         const spec_key = polySpecKey(symbol_key, monotype);
                         const spec_symbol = self.makeSyntheticSymbol(symbol);
                         const spec_symbol_key: u64 = @bitCast(spec_symbol);
+                        std.debug.print(
+                            "  create specialization {s} -> ident={} for monotype={}\n",
+                            .{ symbol_name, spec_symbol.ident_idx.idx, @intFromEnum(monotype) },
+                        );
 
                         try self.in_progress_defs.put(spec_symbol_key, {});
+                        try self.in_progress_symbol_monotypes.put(spec_symbol_key, monotype);
+                        defer _ = self.in_progress_symbol_monotypes.remove(spec_symbol_key);
 
                         const saved_type_var_seen = self.type_var_seen;
                         self.type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
@@ -464,6 +491,11 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                         try self.lowered_symbols.put(spec_symbol_key, spec_lowered);
                         try self.store.registerSymbolDef(self.allocator, spec_symbol, spec_lowered);
                         try self.poly_specializations.put(spec_key, spec_symbol);
+                        std.debug.print(
+                            "  cache specialization local {s} symbol={} ident={} monotype={}\n",
+                            .{ self.debugSymbolName(symbol), symbol_key, spec_symbol.ident_idx.idx, @intFromEnum(monotype) },
+                        );
+                        self.debugPrintMonotype("    monotype", monotype);
 
                         const needs_local_binding = switch (self.store.getExpr(spec_lowered)) {
                             .lambda => |lam| self.store.getCaptures(lam.captures).len > 0,
@@ -545,6 +577,11 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                         // so it gets its own cache entry and symbol_def registration.
                         _ = try self.lowerExternalDefWithType(spec_symbol, def.expr, monotype);
                         try self.poly_specializations.put(spec_key, spec_symbol);
+                        std.debug.print(
+                            "  cache specialization external {s} symbol={} ident={} monotype={}\n",
+                            .{ self.debugSymbolName(symbol), symbol_key, spec_symbol.ident_idx.idx, @intFromEnum(monotype) },
+                        );
+                        self.debugPrintMonotype("    monotype", monotype);
 
                         return try self.store.addExpr(self.allocator, .{ .lookup = spec_symbol }, monotype, region);
                     }
@@ -791,6 +828,91 @@ fn monotypesStructurallyEqual(self: *Self, lhs: Monotype.Idx, rhs: Monotype.Idx)
     defer seen.deinit();
 
     return self.monotypesStructurallyEqualRec(lhs, rhs, &seen);
+}
+
+fn debugPrintMonotype(self: *Self, label: []const u8, idx: Monotype.Idx) void {
+    std.debug.print("{s}=", .{label});
+    self.debugPrintMonotypeRec(idx, 0);
+    std.debug.print("\n", .{});
+}
+
+fn debugSymbolName(self: *const Self, symbol: MIR.Symbol) []const u8 {
+    if (symbol.module_idx >= self.all_module_envs.len) return "<bad-module>";
+    const env = self.all_module_envs[symbol.module_idx];
+    const raw_idx: u32 = symbol.ident_idx.idx;
+    const interner_bytes = env.getIdentStoreConst().interner.bytes.items.items.len;
+    if (raw_idx >= interner_bytes) return "<synthetic>";
+    return env.getIdent(symbol.ident_idx);
+}
+
+fn debugPrintMonotypeRec(self: *Self, idx: Monotype.Idx, depth: u8) void {
+    if (depth >= 6) {
+        std.debug.print("...", .{});
+        return;
+    }
+    const mono = self.store.monotype_store.getMonotype(idx);
+    switch (mono) {
+        .unit => std.debug.print("unit", .{}),
+        .prim => |p| std.debug.print("{s}", .{@tagName(p)}),
+        .list => |l| {
+            std.debug.print("List(", .{});
+            self.debugPrintMonotypeRec(l.elem, depth + 1);
+            std.debug.print(")", .{});
+        },
+        .box => |b| {
+            std.debug.print("Box(", .{});
+            self.debugPrintMonotypeRec(b.inner, depth + 1);
+            std.debug.print(")", .{});
+        },
+        .tuple => |t| {
+            const elems = self.store.monotype_store.getIdxSpan(t.elems);
+            std.debug.print("(", .{});
+            for (elems, 0..) |elem, i| {
+                if (i > 0) std.debug.print(", ", .{});
+                self.debugPrintMonotypeRec(elem, depth + 1);
+            }
+            std.debug.print(")", .{});
+        },
+        .func => |f| {
+            const args = self.store.monotype_store.getIdxSpan(f.args);
+            std.debug.print("Fn(", .{});
+            for (args, 0..) |arg, i| {
+                if (i > 0) std.debug.print(", ", .{});
+                self.debugPrintMonotypeRec(arg, depth + 1);
+            }
+            std.debug.print(" -> ", .{});
+            self.debugPrintMonotypeRec(f.ret, depth + 1);
+            std.debug.print(")", .{});
+        },
+        .record => |r| {
+            const fields = self.store.monotype_store.getFields(r.fields);
+            std.debug.print("{{", .{});
+            for (fields, 0..) |field, i| {
+                if (i > 0) std.debug.print(", ", .{});
+                std.debug.print("{}: ", .{@as(u32, @bitCast(field.name))});
+                self.debugPrintMonotypeRec(field.type_idx, depth + 1);
+            }
+            std.debug.print("}}", .{});
+        },
+        .tag_union => |tu| {
+            const tags = self.store.monotype_store.getTags(tu.tags);
+            std.debug.print("[", .{});
+            for (tags, 0..) |tag, i| {
+                if (i > 0) std.debug.print(" | ", .{});
+                std.debug.print("{}", .{@as(u32, @bitCast(tag.name))});
+                const payloads = self.store.monotype_store.getIdxSpan(tag.payloads);
+                if (payloads.len > 0) {
+                    std.debug.print("(", .{});
+                    for (payloads, 0..) |payload, j| {
+                        if (j > 0) std.debug.print(", ", .{});
+                        self.debugPrintMonotypeRec(payload, depth + 1);
+                    }
+                    std.debug.print(")", .{});
+                }
+            }
+            std.debug.print("]", .{});
+        },
+    }
 }
 
 fn monotypesStructurallyEqualRec(
@@ -1182,6 +1304,21 @@ fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Clo
 
     for (cir_capture_indices) |cap_idx| {
         const cap = module_env.store.getCapture(cap_idx);
+        // Top-level defs do not need to be captured in closures: they can be
+        // looked up globally at call sites, which allows polymorphic
+        // re-specialization to pick the correct symbol per instantiation.
+        //
+        // Use exact pattern identity (not ident text) to avoid shadowing bugs.
+        var is_top_level_def = false;
+        const defs = module_env.store.sliceDefs(module_env.all_defs);
+        for (defs) |def_idx| {
+            if (module_env.store.getDef(def_idx).pattern == cap.pattern_idx) {
+                is_top_level_def = true;
+                break;
+            }
+        }
+        if (is_top_level_def) continue;
+
         const symbol = try self.patternToSymbol(cap.pattern_idx);
         try self.scratch_captures.append(.{ .symbol = symbol });
     }
@@ -1563,6 +1700,13 @@ fn lowerBinop(self: *Self, binop: CIR.Expr.Binop, monotype: Monotype.Idx, region
 
             // Ensure the method body is lowered so codegen can find it.
             const lowered_method_symbol = try self.ensureMethodLowered(method_symbol, func_monotype);
+            if (method_ident == module_env.idents.is_eq and std.mem.eql(u8, self.debugSymbolName(method_symbol), "Builtin.List.is_eq")) {
+                std.debug.print(
+                    "lowerBinop List.is_eq call uses ident={} monotype={}\n",
+                    .{ lowered_method_symbol.ident_idx.idx, @intFromEnum(func_monotype) },
+                );
+                self.debugPrintMonotype("    func", func_monotype);
+            }
 
             const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = lowered_method_symbol }, func_monotype, region);
 
@@ -1717,6 +1861,11 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
         };
 
         if (method_symbol_opt == null) {
+            // Dot-call on a record field function: rec.f(arg) -> (rec.f)(arg).
+            if (try self.lowerRecordFieldCall(module_env, receiver, da.field_name, args_span, monotype, region)) |field_call| {
+                return field_call;
+            }
+
             // No nominal method found — check if this is a known structural op
             // (e.g. `is_eq` on a where-clause type var that resolved to a structural type like unit).
             const common = self.currentCommonIdents();
@@ -1779,6 +1928,42 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
             .field_name = da.field_name,
         } }, monotype, region);
     }
+}
+
+fn lowerRecordFieldCall(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    receiver: MIR.ExprId,
+    field_name: Ident.Idx,
+    args_span: CIR.Expr.Span,
+    result_monotype: Monotype.Idx,
+    region: Region,
+) Allocator.Error!?MIR.ExprId {
+    const receiver_monotype = self.store.typeOf(receiver);
+    const field_monotype = switch (self.store.monotype_store.getMonotype(receiver_monotype)) {
+        .record => |record| blk: {
+            for (self.store.monotype_store.getFields(record.fields)) |field| {
+                if (field.name == field_name) break :blk field.type_idx;
+            }
+            break :blk null;
+        },
+        else => null,
+    };
+
+    const func_monotype = field_monotype orelse return null;
+
+    const func_expr = try self.store.addExpr(self.allocator, .{ .record_access = .{
+        .record = receiver,
+        .field_name = field_name,
+    } }, func_monotype, region);
+
+    const args = try self.lowerExprSpan(module_env, args_span);
+    const call_expr = try self.store.addExpr(self.allocator, .{ .call = .{
+        .func = func_expr,
+        .args = args,
+    } }, result_monotype, region);
+
+    return call_expr;
 }
 
 /// Lower a CIR record expression.
@@ -2105,12 +2290,20 @@ fn findDefExprBySymbol(self: *Self, module_idx: u32, ident_idx: Ident.Idx) ?CIR.
 /// be a synthetic symbol unique to (method symbol, caller monotype).
 fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?Monotype.Idx) Allocator.Error!MIR.Symbol {
     const symbol_key: u64 = @bitCast(symbol);
+    const is_debug_list_eq = std.mem.eql(u8, self.debugSymbolName(symbol), "Builtin.List.is_eq");
+    if (is_debug_list_eq and caller_func_monotype != null and !caller_func_monotype.?.isNone()) {
+        std.debug.print("ensureMethodLowered enter List.is_eq monotype={}\n", .{@intFromEnum(caller_func_monotype.?)});
+        self.debugPrintMonotype("    caller", caller_func_monotype.?);
+    }
 
     if (caller_func_monotype) |caller_monotype| {
         if (!caller_monotype.isNone()) {
             const spec_key = polySpecKey(symbol_key, caller_monotype);
 
             if (self.lookupPolySpecialization(symbol_key, caller_monotype)) |spec_symbol| {
+                if (is_debug_list_eq) {
+                    std.debug.print("ensureMethodLowered List.is_eq hit poly cache ident={}\n", .{spec_symbol.ident_idx.idx});
+                }
                 return spec_symbol;
             }
 
@@ -2130,6 +2323,14 @@ fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?M
                         try self.poly_specializations.put(spec_key, spec_symbol);
                         errdefer _ = self.poly_specializations.remove(spec_key);
                         _ = try self.lowerExternalDefWithType(spec_symbol, def_expr, caller_monotype);
+                        std.debug.print(
+                            "  cache specialization ensure(in-progress) {s} symbol={} ident={} monotype={}\n",
+                            .{ self.debugSymbolName(symbol), symbol_key, spec_symbol.ident_idx.idx, @intFromEnum(caller_monotype) },
+                        );
+                        self.debugPrintMonotype("    monotype", caller_monotype);
+                        if (is_debug_list_eq) {
+                            std.debug.print("ensureMethodLowered List.is_eq return in-progress spec ident={}\n", .{spec_symbol.ident_idx.idx});
+                        }
                         return spec_symbol;
                     }
 
@@ -2145,6 +2346,14 @@ fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?M
                         try self.poly_specializations.put(spec_key, spec_symbol);
                         errdefer _ = self.poly_specializations.remove(spec_key);
                         _ = try self.lowerExternalDefWithType(spec_symbol, def_expr, caller_monotype);
+                        std.debug.print(
+                            "  cache specialization ensure(cached-mismatch) {s} symbol={} ident={} monotype={}\n",
+                            .{ self.debugSymbolName(symbol), symbol_key, spec_symbol.ident_idx.idx, @intFromEnum(caller_monotype) },
+                        );
+                        self.debugPrintMonotype("    monotype", caller_monotype);
+                        if (is_debug_list_eq) {
+                            std.debug.print("ensureMethodLowered List.is_eq return cached-mismatch spec ident={}\n", .{spec_symbol.ident_idx.idx});
+                        }
                         return spec_symbol;
                     }
 
@@ -2163,6 +2372,9 @@ fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?M
     // Method not found in target module's defs. This can happen for same-module
     // methods where the definition is accessible through other means (e.g., via
     // e_lookup_local processing when the call func expression is lowered).
+    if (is_debug_list_eq) {
+        std.debug.print("ensureMethodLowered List.is_eq return original ident={}\n", .{symbol.ident_idx.idx});
+    }
     return symbol;
 }
 

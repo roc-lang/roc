@@ -842,10 +842,13 @@ pub fn setDec(self: *StackValue, value: RocDec, roc_ops: *RocOps) void {
 /// Create a TupleAccessor for safe tuple element access
 pub fn asTuple(self: StackValue, layout_cache: *LayoutStore) !TupleAccessor {
     std.debug.assert(self.is_initialized); // Tuple must be initialized before accessing
-    std.debug.assert(self.ptr != null);
     std.debug.assert(self.layout.tag == .struct_);
 
     const struct_info = layout_cache.getStructInfo(self.layout);
+    if (self.ptr == null) {
+        // Empty tuples / all-ZST tuple fields have no backing allocation.
+        std.debug.assert(struct_info.data.size == 0);
+    }
 
     return TupleAccessor{
         .base_value = self,
@@ -868,10 +871,19 @@ pub const TupleAccessor = struct {
         const sorted_index = self.findElementIndexByOriginal(original_index) orelse return error.TupleIndexOutOfBounds;
 
         std.debug.assert(self.base_value.is_initialized);
-        std.debug.assert(self.base_value.ptr != null);
 
         const element_layout_info = self.element_layouts.get(sorted_index);
         const element_layout = self.layout_cache.getLayout(element_layout_info.layout);
+
+        if (self.base_value.ptr == null) {
+            std.debug.assert(self.layout_cache.layoutSize(element_layout) == 0);
+            return StackValue{
+                .layout = element_layout,
+                .ptr = null,
+                .is_initialized = true,
+                .rt_var = elem_rt_var,
+            };
+        }
 
         // Get the offset for this element within the tuple (using sorted index)
         const element_offset = self.layout_cache.getTupleElementOffset(self.tuple_layout.data.struct_.idx, @intCast(sorted_index));
@@ -1076,10 +1088,13 @@ fn storeListElementCount(list: *RocList, elements_refcounted: bool, roc_ops: *Ro
 /// Create a RecordAccessor for safe record field access
 pub fn asRecord(self: StackValue, layout_cache: *LayoutStore) !RecordAccessor {
     std.debug.assert(self.is_initialized); // Record must be initialized before accessing
-    // Note: ptr can be null for records with all ZST fields
     std.debug.assert(self.layout.tag == .struct_);
 
     const struct_info = layout_cache.getStructInfo(self.layout);
+    if (self.ptr == null) {
+        // Records with only ZST fields have no backing allocation.
+        std.debug.assert(struct_info.data.size == 0);
+    }
 
     return RecordAccessor{
         .base_value = self,
@@ -1103,10 +1118,19 @@ pub const RecordAccessor = struct {
         }
 
         std.debug.assert(self.base_value.is_initialized);
-        std.debug.assert(self.base_value.ptr != null);
 
         const field_layout_info = self.field_layouts.get(index);
         const field_layout = self.layout_cache.getLayout(field_layout_info.layout);
+
+        if (self.base_value.ptr == null) {
+            std.debug.assert(self.layout_cache.layoutSize(field_layout) == 0);
+            return StackValue{
+                .layout = field_layout,
+                .ptr = null,
+                .is_initialized = true,
+                .rt_var = field_rt_var,
+            };
+        }
 
         // Get the offset for this field within the record
         const field_offset = self.layout_cache.getRecordFieldOffset(self.record_layout.data.struct_.idx, @intCast(index));
@@ -1148,6 +1172,14 @@ pub const RecordAccessor = struct {
         return self.layout_cache.getLayout(field_layout_info.layout);
     }
 
+    fn bytesEqual(lhs: []const u8, rhs: []const u8) bool {
+        if (lhs.len != rhs.len) return false;
+        for (lhs, rhs) |l, r| {
+            if (l != r) return false;
+        }
+        return true;
+    }
+
     /// Find field index by comparing field name text.
     /// Uses string comparison because ident indices are module-local —
     /// the same field name from different modules has different Ident.Idx values.
@@ -1155,7 +1187,7 @@ pub const RecordAccessor = struct {
         for (0..self.field_layouts.len) |idx| {
             const field = self.field_layouts.get(idx);
             if (field.name == Ident.Idx.NONE) continue;
-            if (std.mem.eql(u8, self.layout_cache.getFieldName(field.name), field_name)) {
+            if (bytesEqual(self.layout_cache.getFieldName(field.name), field_name)) {
                 return idx;
             }
         }

@@ -37,6 +37,7 @@ const LirMatchBranch = LIR.LirMatchBranch;
 const LirExprSpan = LIR.LirExprSpan;
 const LayoutIdx = layout_mod.Idx;
 const Region = base.Region;
+const SymbolUseKey = u128;
 
 /// Inserts reference counting operations (incref/decref) into the mono IR.
 pub const RcInsertPass = struct {
@@ -45,11 +46,11 @@ pub const RcInsertPass = struct {
     layout_store: *const layout_mod.Store,
 
     /// Tracks how many times each symbol is used in the expression tree.
-    /// Keyed by the raw u64 representation of Symbol.
-    symbol_use_counts: std.AutoHashMap(u64, u32),
+    /// Keyed by (symbol, layout) to keep polymorphic specializations distinct.
+    symbol_use_counts: std.AutoHashMap(SymbolUseKey, u32),
 
     /// Tracks layout for each symbol (for generating incref/decref with correct layout).
-    symbol_layouts: std.AutoHashMap(u64, LayoutIdx),
+    symbol_layouts: std.AutoHashMap(SymbolUseKey, LayoutIdx),
 
     /// Tracks live RC symbols across blocks for early_return cleanup.
     live_rc_symbols: std.ArrayList(LiveRcSymbol),
@@ -61,14 +62,14 @@ pub const RcInsertPass = struct {
     /// Tracks how many uses of each RC symbol have been consumed so far
     /// in the current block (by already-processed statements).
     /// Used by processEarlyReturn to compute remaining refs for cleanup.
-    block_consumed_uses: std.AutoHashMap(u64, u32),
+    block_consumed_uses: std.AutoHashMap(SymbolUseKey, u32),
 
     /// Cumulative consumed uses across all enclosing blocks.
     /// When processBlock saves/restores block_consumed_uses, the outer block's
     /// consumed uses are invisible to processEarlyReturn in nested blocks.
     /// This field accumulates uses from all enclosing blocks so that
     /// processEarlyReturn can see the full picture.
-    cumulative_consumed_uses: std.AutoHashMap(u64, u32),
+    cumulative_consumed_uses: std.AutoHashMap(SymbolUseKey, u32),
 
     /// Pending branch-level RC adjustments. When processing a branch body,
     /// wrapBranchWithRcOps will later prepend RC ops for symbols:
@@ -76,16 +77,16 @@ pub const RcInsertPass = struct {
     /// - local_count == 0: decref → negative adjustment (-1)
     /// processEarlyReturn must account for these since they execute before
     /// the early return at runtime.
-    pending_branch_rc_adj: std.AutoHashMap(u64, i32),
+    pending_branch_rc_adj: std.AutoHashMap(SymbolUseKey, i32),
 
     /// Reusable scratch map for counting symbol uses within sub-expressions.
     /// Cleared and reused at each call site, avoiding per-call HashMap allocations.
-    scratch_uses: std.AutoHashMap(u64, u32),
+    scratch_uses: std.AutoHashMap(SymbolUseKey, u32),
 
     /// Reusable scratch buffer for collecting HashMap keys before sorting.
     /// Used by wrapBranchWithRcOps and wrapGuardWithIncref to ensure
     /// deterministic RC op ordering regardless of HashMap iteration order.
-    scratch_keys: base.Scratch(u64),
+    scratch_keys: base.Scratch(SymbolUseKey),
 
     const LiveRcSymbol = struct {
         symbol: Symbol,
@@ -101,16 +102,31 @@ pub const RcInsertPass = struct {
             .allocator = allocator,
             .store = store,
             .layout_store = layout_store,
-            .symbol_use_counts = std.AutoHashMap(u64, u32).init(allocator),
-            .symbol_layouts = std.AutoHashMap(u64, LayoutIdx).init(allocator),
+            .symbol_use_counts = std.AutoHashMap(SymbolUseKey, u32).init(allocator),
+            .symbol_layouts = std.AutoHashMap(SymbolUseKey, LayoutIdx).init(allocator),
             .live_rc_symbols = std.ArrayList(LiveRcSymbol).empty,
             .early_return_scope_base = 0,
-            .block_consumed_uses = std.AutoHashMap(u64, u32).init(allocator),
-            .cumulative_consumed_uses = std.AutoHashMap(u64, u32).init(allocator),
-            .pending_branch_rc_adj = std.AutoHashMap(u64, i32).init(allocator),
-            .scratch_uses = std.AutoHashMap(u64, u32).init(allocator),
-            .scratch_keys = try base.Scratch(u64).init(allocator),
+            .block_consumed_uses = std.AutoHashMap(SymbolUseKey, u32).init(allocator),
+            .cumulative_consumed_uses = std.AutoHashMap(SymbolUseKey, u32).init(allocator),
+            .pending_branch_rc_adj = std.AutoHashMap(SymbolUseKey, i32).init(allocator),
+            .scratch_uses = std.AutoHashMap(SymbolUseKey, u32).init(allocator),
+            .scratch_keys = try base.Scratch(SymbolUseKey).init(allocator),
         };
+    }
+
+    fn makeKey(symbol: Symbol, layout_idx: LayoutIdx) SymbolUseKey {
+        return (@as(SymbolUseKey, @as(u64, @bitCast(symbol))) << 32) |
+            @as(SymbolUseKey, @intFromEnum(layout_idx));
+    }
+
+    fn keyToSymbol(key: SymbolUseKey) Symbol {
+        const raw: u64 = @intCast(key >> 32);
+        return @bitCast(raw);
+    }
+
+    fn keyToLayout(key: SymbolUseKey) LayoutIdx {
+        const raw: u32 = @truncate(key);
+        return @enumFromInt(raw);
     }
 
     pub fn deinit(self: *RcInsertPass) void {
@@ -152,14 +168,14 @@ pub const RcInsertPass = struct {
 
     /// Count how many times each symbol is referenced, writing into `target`.
     /// Also records the layout for each symbol found in bind patterns.
-    fn countUsesInto(self: *RcInsertPass, expr_id: LirExprId, target: *std.AutoHashMap(u64, u32)) Allocator.Error!void {
+    fn countUsesInto(self: *RcInsertPass, expr_id: LirExprId, target: *std.AutoHashMap(SymbolUseKey, u32)) Allocator.Error!void {
         if (expr_id.isNone()) return;
 
         const expr = self.store.getExpr(expr_id);
         switch (expr) {
             .lookup => |lookup| {
                 if (!lookup.symbol.isNone()) {
-                    const key = @as(u64, @bitCast(lookup.symbol));
+                    const key = makeKey(lookup.symbol, lookup.layout_idx);
                     const gop = try target.getOrPut(key);
                     if (gop.found_existing) {
                         gop.value_ptr.* += 1;
@@ -198,9 +214,9 @@ pub const RcInsertPass = struct {
                 }
                 // Count branch body uses into local maps; each branching construct
                 // contributes 1 use per symbol to the enclosing scope.
-                var symbols_in_any_branch = std.AutoHashMap(u64, void).init(self.allocator);
+                var symbols_in_any_branch = std.AutoHashMap(SymbolUseKey, void).init(self.allocator);
                 defer symbols_in_any_branch.deinit();
-                var local = std.AutoHashMap(u64, u32).init(self.allocator);
+                var local = std.AutoHashMap(SymbolUseKey, u32).init(self.allocator);
                 defer local.deinit();
                 for (branches) |branch| {
                     local.clearRetainingCapacity();
@@ -225,9 +241,9 @@ pub const RcInsertPass = struct {
                 const branches = self.store.getMatchBranches(w.branches);
                 // Count branch body uses into local maps; each branching construct
                 // contributes 1 use per symbol to the enclosing scope.
-                var symbols_in_any_branch = std.AutoHashMap(u64, void).init(self.allocator);
+                var symbols_in_any_branch = std.AutoHashMap(SymbolUseKey, void).init(self.allocator);
                 defer symbols_in_any_branch.deinit();
-                var local = std.AutoHashMap(u64, u32).init(self.allocator);
+                var local = std.AutoHashMap(SymbolUseKey, u32).init(self.allocator);
                 defer local.deinit();
                 for (branches) |branch| {
                     try self.registerPatternSymbolInto(branch.pattern, &local);
@@ -248,7 +264,7 @@ pub const RcInsertPass = struct {
                 // attribute 1 use per captured symbol to the outer scope, and
                 // ensure body-local symbols are in self.symbol_use_counts so
                 // processBlock can emit RC ops for them.
-                var local = std.AutoHashMap(u64, u32).init(self.allocator);
+                var local = std.AutoHashMap(SymbolUseKey, u32).init(self.allocator);
                 defer local.deinit();
 
                 const params = self.store.getPatternSpan(lam.params);
@@ -281,7 +297,7 @@ pub const RcInsertPass = struct {
                 const captures = self.store.getCaptures(clo.captures);
                 for (captures) |cap| {
                     if (!cap.symbol.isNone()) {
-                        const key = @as(u64, @bitCast(cap.symbol));
+                        const key = makeKey(cap.symbol, cap.layout_idx);
                         const gop = try target.getOrPut(key);
                         if (gop.found_existing) {
                             gop.value_ptr.* += 1;
@@ -362,9 +378,9 @@ pub const RcInsertPass = struct {
                 try self.countUsesInto(ds.value, target);
                 // Branches are mutually exclusive — use per-branch counting
                 const branches = self.store.getExprSpan(ds.branches);
-                var local = std.AutoHashMap(u64, u32).init(self.allocator);
+                var local = std.AutoHashMap(SymbolUseKey, u32).init(self.allocator);
                 defer local.deinit();
-                var symbols_in_any_branch = std.AutoHashMap(u64, void).init(self.allocator);
+                var symbols_in_any_branch = std.AutoHashMap(SymbolUseKey, void).init(self.allocator);
                 defer symbols_in_any_branch.deinit();
                 for (branches) |br_id| {
                     local.clearRetainingCapacity();
@@ -413,8 +429,19 @@ pub const RcInsertPass = struct {
     /// Walk a pattern tree, calling ctx.onBind(symbol, layout_idx) at each
     /// .bind and .as_pattern leaf. Handles the full recursion over all pattern
     /// variants so callers only need to implement the leaf action.
+    fn ensurePatternIdValid(store: *const LirExprStore, pat_id: LirPatternId, context: []const u8) void {
+        if (pat_id.isNone()) return;
+        if (@intFromEnum(pat_id) >= store.patternCount()) {
+            std.debug.panic(
+                "{s}: invalid pattern id {} (pattern_count={})",
+                .{ context, @intFromEnum(pat_id), store.patternCount() },
+            );
+        }
+    }
+
     fn walkPatternBinds(store: *const LirExprStore, pat_id: LirPatternId, ctx: anytype) Allocator.Error!void {
         if (pat_id.isNone()) return;
+        ensurePatternIdValid(store, pat_id, "walkPatternBinds");
         const pat = store.getPattern(pat_id);
         switch (pat) {
             .bind => |bind| {
@@ -422,36 +449,77 @@ pub const RcInsertPass = struct {
             },
             .as_pattern => |as_pat| {
                 if (!as_pat.symbol.isNone()) try ctx.onBind(as_pat.symbol, as_pat.layout_idx);
+                if (@intFromEnum(as_pat.inner) >= store.patternCount()) {
+                    std.debug.panic(
+                        "walkPatternBinds invalid as_pattern inner={} parent={} pattern_count={}",
+                        .{ @intFromEnum(as_pat.inner), @intFromEnum(pat_id), store.patternCount() },
+                    );
+                }
                 try walkPatternBinds(store, as_pat.inner, ctx);
             },
-            .tag => |t| for (store.getPatternSpan(t.args)) |a| {
+            .tag => |t| for (store.getPatternSpan(t.args), 0..) |a, i| {
+                if (@intFromEnum(a) >= store.patternCount()) {
+                    std.debug.panic(
+                        "walkPatternBinds invalid tag arg child={} parent={} arg_idx={} span_start={} span_len={} pattern_count={}",
+                        .{ @intFromEnum(a), @intFromEnum(pat_id), i, t.args.start, t.args.len, store.patternCount() },
+                    );
+                }
                 try walkPatternBinds(store, a, ctx);
             },
-            .struct_ => |s| for (store.getPatternSpan(s.fields)) |f| {
+            .struct_ => |s| for (store.getPatternSpan(s.fields), 0..) |f, i| {
+                if (@intFromEnum(f) >= store.patternCount()) {
+                    std.debug.panic(
+                        "walkPatternBinds invalid struct field child={} parent={} field_idx={} span_start={} span_len={} pattern_count={}",
+                        .{ @intFromEnum(f), @intFromEnum(pat_id), i, s.fields.start, s.fields.len, store.patternCount() },
+                    );
+                }
                 try walkPatternBinds(store, f, ctx);
             },
             .list => |l| {
-                for (store.getPatternSpan(l.prefix)) |p| try walkPatternBinds(store, p, ctx);
+                for (store.getPatternSpan(l.prefix), 0..) |p, i| {
+                    if (@intFromEnum(p) >= store.patternCount()) {
+                        std.debug.panic(
+                            "walkPatternBinds invalid list prefix child={} parent={} idx={} span_start={} span_len={} pattern_count={}",
+                            .{ @intFromEnum(p), @intFromEnum(pat_id), i, l.prefix.start, l.prefix.len, store.patternCount() },
+                        );
+                    }
+                    try walkPatternBinds(store, p, ctx);
+                }
+                if (!l.rest.isNone() and @intFromEnum(l.rest) >= store.patternCount()) {
+                    std.debug.panic(
+                        "walkPatternBinds invalid list rest child={} parent={} pattern_count={}",
+                        .{ @intFromEnum(l.rest), @intFromEnum(pat_id), store.patternCount() },
+                    );
+                }
                 try walkPatternBinds(store, l.rest, ctx);
-                for (store.getPatternSpan(l.suffix)) |s| try walkPatternBinds(store, s, ctx);
+                for (store.getPatternSpan(l.suffix), 0..) |s, i| {
+                    if (@intFromEnum(s) >= store.patternCount()) {
+                        std.debug.panic(
+                            "walkPatternBinds invalid list suffix child={} parent={} idx={} span_start={} span_len={} pattern_count={}",
+                            .{ @intFromEnum(s), @intFromEnum(pat_id), i, l.suffix.start, l.suffix.len, store.patternCount() },
+                        );
+                    }
+                    try walkPatternBinds(store, s, ctx);
+                }
             },
             .wildcard, .int_literal, .float_literal, .str_literal => {},
         }
     }
 
     /// Register a pattern's bound symbol with its layout into a given target map.
-    fn registerPatternSymbolInto(self: *RcInsertPass, pat_id: LirPatternId, target: *std.AutoHashMap(u64, u32)) Allocator.Error!void {
+    fn registerPatternSymbolInto(self: *RcInsertPass, pat_id: LirPatternId, target: *std.AutoHashMap(SymbolUseKey, u32)) Allocator.Error!void {
         const Ctx = struct {
             pass: *RcInsertPass,
-            target: *std.AutoHashMap(u64, u32),
+            target: *std.AutoHashMap(SymbolUseKey, u32),
             fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
-                const key = @as(u64, @bitCast(symbol));
+                const key = makeKey(symbol, layout_idx);
                 try ctx.pass.symbol_layouts.put(key, layout_idx);
                 if (!ctx.target.contains(key)) {
                     try ctx.target.put(key, 0);
                 }
             }
         };
+        ensurePatternIdValid(self.store, pat_id, "registerPatternSymbolInto");
         try walkPatternBinds(self.store, pat_id, Ctx{ .pass = self, .target = target });
     }
 
@@ -668,8 +736,8 @@ pub const RcInsertPass = struct {
 
     /// Temporarily add an expression's consumed uses into `block_consumed_uses`.
     /// Returns the exact per-symbol deltas so callers can roll them back.
-    fn pushExprUsesToBlockConsumed(self: *RcInsertPass, expr_id: LirExprId) Allocator.Error!std.AutoHashMap(u64, u32) {
-        var added = std.AutoHashMap(u64, u32).init(self.allocator);
+    fn pushExprUsesToBlockConsumed(self: *RcInsertPass, expr_id: LirExprId) Allocator.Error!std.AutoHashMap(SymbolUseKey, u32) {
+        var added = std.AutoHashMap(SymbolUseKey, u32).init(self.allocator);
 
         self.scratch_uses.clearRetainingCapacity();
         try self.countUsesInto(expr_id, &self.scratch_uses);
@@ -692,7 +760,7 @@ pub const RcInsertPass = struct {
         return added;
     }
 
-    fn popExprUsesFromBlockConsumed(self: *RcInsertPass, added: *const std.AutoHashMap(u64, u32)) void {
+    fn popExprUsesFromBlockConsumed(self: *RcInsertPass, added: *const std.AutoHashMap(SymbolUseKey, u32)) void {
         var it = added.iterator();
         while (it.next()) |entry| {
             const key = entry.key_ptr.*;
@@ -742,7 +810,7 @@ pub const RcInsertPass = struct {
         }
         // Snapshot cumulative keys/values so we can restore on exit.
         // We save a copy of the entries we added, to subtract them later.
-        var saved_cumulative_additions = std.AutoHashMap(u64, u32).init(self.allocator);
+        var saved_cumulative_additions = std.AutoHashMap(SymbolUseKey, u32).init(self.allocator);
         {
             var it = self.block_consumed_uses.iterator();
             while (it.next()) |entry| {
@@ -871,7 +939,7 @@ pub const RcInsertPass = struct {
 
         // Collect symbols bound within branch bodies — these are local to their
         // defining branch and must NOT get per-branch RC ops.
-        var body_bound = std.AutoHashMap(u64, void).init(self.allocator);
+        var body_bound = std.AutoHashMap(SymbolUseKey, void).init(self.allocator);
         defer body_bound.deinit();
         for (branches) |branch| {
             try self.collectExprBoundSymbols(branch.body, &body_bound);
@@ -879,7 +947,7 @@ pub const RcInsertPass = struct {
         try self.collectExprBoundSymbols(final_else_id, &body_bound);
 
         // Collect union of all refcounted symbols across all branches (using scratch_uses)
-        var symbols_in_any_branch = std.AutoHashMap(u64, void).init(self.allocator);
+        var symbols_in_any_branch = std.AutoHashMap(SymbolUseKey, void).init(self.allocator);
         defer symbols_in_any_branch.deinit();
 
         for (branches) |branch| {
@@ -972,7 +1040,7 @@ pub const RcInsertPass = struct {
 
         // Collect symbols bound by branch patterns — these are local to each branch
         // and must NOT get per-branch RC ops from the enclosing scope.
-        var pattern_bound = std.AutoHashMap(u64, void).init(self.allocator);
+        var pattern_bound = std.AutoHashMap(SymbolUseKey, void).init(self.allocator);
         defer pattern_bound.deinit();
         for (branches) |branch| {
             try self.collectPatternSymbols(branch.pattern, &pattern_bound);
@@ -980,7 +1048,7 @@ pub const RcInsertPass = struct {
 
         // Collect symbols bound within branch bodies — these are local to their
         // defining branch and must NOT get per-branch RC ops.
-        var body_bound = std.AutoHashMap(u64, void).init(self.allocator);
+        var body_bound = std.AutoHashMap(SymbolUseKey, void).init(self.allocator);
         defer body_bound.deinit();
         for (branches) |branch| {
             try self.collectExprBoundSymbols(branch.body, &body_bound);
@@ -988,7 +1056,7 @@ pub const RcInsertPass = struct {
 
         // Collect union of all refcounted symbols across all branches (using scratch_uses).
         // Both body and guard symbols contribute so unused branches decref.
-        var symbols_in_any_branch = std.AutoHashMap(u64, void).init(self.allocator);
+        var symbols_in_any_branch = std.AutoHashMap(SymbolUseKey, void).init(self.allocator);
         defer symbols_in_any_branch.deinit();
 
         for (branches) |branch| {
@@ -1083,14 +1151,14 @@ pub const RcInsertPass = struct {
 
         // Collect symbols bound within branch bodies — these are local to their
         // defining branch and must NOT get per-branch RC ops.
-        var body_bound = std.AutoHashMap(u64, void).init(self.allocator);
+        var body_bound = std.AutoHashMap(SymbolUseKey, void).init(self.allocator);
         defer body_bound.deinit();
         for (branches) |br_id| {
             try self.collectExprBoundSymbols(br_id, &body_bound);
         }
 
         // Collect union of all refcounted symbols across all branches (using scratch_uses)
-        var symbols_in_any_branch = std.AutoHashMap(u64, void).init(self.allocator);
+        var symbols_in_any_branch = std.AutoHashMap(SymbolUseKey, void).init(self.allocator);
         defer symbols_in_any_branch.deinit();
 
         for (branches) |br_id| {
@@ -1151,6 +1219,21 @@ pub const RcInsertPass = struct {
         // Lambda parameters are live bindings for the whole body and must be
         // included in early_return cleanup.
         const params = self.store.getPatternSpan(lam.params);
+        for (params, 0..) |pat_id, i| {
+            if (@intFromEnum(pat_id) >= self.store.patternCount()) {
+                std.debug.panic(
+                    "processLambda expr={} invalid param[{}]={} (pattern_count={} span_start={} span_len={})",
+                    .{
+                        @intFromEnum(expr_id),
+                        i,
+                        @intFromEnum(pat_id),
+                        self.store.patternCount(),
+                        lam.params.start,
+                        lam.params.len,
+                    },
+                );
+            }
+        }
         for (params) |pat_id| {
             try self.trackLiveRcSymbolsForPattern(pat_id);
         }
@@ -1165,7 +1248,8 @@ pub const RcInsertPass = struct {
         var rc_stmts = std.ArrayList(LirStmt).empty;
         defer rc_stmts.deinit(self.allocator);
 
-        for (params) |pat_id| {
+        const params_after = self.store.getPatternSpan(lam.params);
+        for (params_after) |pat_id| {
             try self.emitRcOpsForPatternInto(pat_id, &self.scratch_uses, region, &rc_stmts);
         }
 
@@ -1215,6 +1299,8 @@ pub const RcInsertPass = struct {
     /// The loop provides 1 reference per element. We emit body-local RC ops
     /// for the element binding similar to lambda params.
     fn processForLoop(self: *RcInsertPass, fl: anytype, region: Region, expr_id: LirExprId) Allocator.Error!LirExprId {
+        ensurePatternIdValid(self.store, fl.elem_pattern, "processForLoop.elem_pattern");
+
         // The loop element binding is live while processing the body and must
         // be considered by early_return cleanup.
         const saved_live_len = self.live_rc_symbols.items.len;
@@ -1295,7 +1381,7 @@ pub const RcInsertPass = struct {
 
         const live_syms = self.live_rc_symbols.items[self.early_return_scope_base..];
         for (live_syms) |live| {
-            const key = @as(u64, @bitCast(live.symbol));
+            const key = makeKey(live.symbol, live.layout_idx);
             const ret_use_count: u32 = self.scratch_uses.get(key) orelse 0;
             // Total refs = global_use_count + pending branch RC adjustments.
             // The branch wrapper will prepend RC ops that execute before
@@ -1354,18 +1440,19 @@ pub const RcInsertPass = struct {
     }
 
     /// Collect all symbols bound by a pattern into a set.
-    fn collectPatternSymbols(self: *const RcInsertPass, pat_id: LirPatternId, set: *std.AutoHashMap(u64, void)) Allocator.Error!void {
+    fn collectPatternSymbols(self: *const RcInsertPass, pat_id: LirPatternId, set: *std.AutoHashMap(SymbolUseKey, void)) Allocator.Error!void {
         const Ctx = struct {
-            set: *std.AutoHashMap(u64, void),
-            fn onBind(ctx: @This(), symbol: Symbol, _: LayoutIdx) Allocator.Error!void {
-                try ctx.set.put(@as(u64, @bitCast(symbol)), {});
+            set: *std.AutoHashMap(SymbolUseKey, void),
+            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
+                try ctx.set.put(makeKey(symbol, layout_idx), {});
             }
         };
+        ensurePatternIdValid(self.store, pat_id, "collectPatternSymbols");
         try walkPatternBinds(self.store, pat_id, Ctx{ .set = set });
     }
 
     fn exprUsesPatternSymbol(self: *RcInsertPass, expr_id: LirExprId, pat_id: LirPatternId) Allocator.Error!bool {
-        var pattern_symbols = std.AutoHashMap(u64, void).init(self.allocator);
+        var pattern_symbols = std.AutoHashMap(SymbolUseKey, void).init(self.allocator);
         defer pattern_symbols.deinit();
         try self.collectPatternSymbols(pat_id, &pattern_symbols);
         if (pattern_symbols.count() == 0) return false;
@@ -1383,7 +1470,7 @@ pub const RcInsertPass = struct {
 
     /// Collect all symbols bound by patterns within an expression tree.
     /// Used to identify locally-defined symbols for branch-aware RC filtering.
-    fn collectExprBoundSymbols(self: *const RcInsertPass, expr_id: LirExprId, set: *std.AutoHashMap(u64, void)) Allocator.Error!void {
+    fn collectExprBoundSymbols(self: *const RcInsertPass, expr_id: LirExprId, set: *std.AutoHashMap(SymbolUseKey, void)) Allocator.Error!void {
         if (expr_id.isNone()) return;
         const expr = self.store.getExpr(expr_id);
         switch (expr) {
@@ -1500,8 +1587,8 @@ pub const RcInsertPass = struct {
     /// - local_count == 0: decref → adjustment = -1
     fn setPendingBranchRcAdj(
         self: *RcInsertPass,
-        local_uses: *const std.AutoHashMap(u64, u32),
-        symbols_in_any_branch: *const std.AutoHashMap(u64, void),
+        local_uses: *const std.AutoHashMap(SymbolUseKey, u32),
+        symbols_in_any_branch: *const std.AutoHashMap(SymbolUseKey, void),
     ) Allocator.Error!void {
         self.pending_branch_rc_adj.clearRetainingCapacity();
         var it = symbols_in_any_branch.keyIterator();
@@ -1528,8 +1615,8 @@ pub const RcInsertPass = struct {
     fn wrapBranchWithRcOps(
         self: *RcInsertPass,
         body: LirExprId,
-        local_uses: *const std.AutoHashMap(u64, u32),
-        symbols_in_any_branch: *const std.AutoHashMap(u64, void),
+        local_uses: *const std.AutoHashMap(SymbolUseKey, u32),
+        symbols_in_any_branch: *const std.AutoHashMap(SymbolUseKey, void),
         result_layout: LayoutIdx,
         region: Region,
     ) Allocator.Error!LirExprId {
@@ -1546,11 +1633,11 @@ pub const RcInsertPass = struct {
             }
         }
         const sorted_keys = self.scratch_keys.sliceFromStart(keys_start);
-        std.mem.sort(u64, sorted_keys, {}, std.sort.asc(u64));
+        std.mem.sort(SymbolUseKey, sorted_keys, {}, std.sort.asc(SymbolUseKey));
 
         for (sorted_keys) |key| {
-            const layout_idx = self.symbol_layouts.get(key) orelse continue;
-            const symbol: Symbol = @bitCast(key);
+            const layout_idx = self.symbol_layouts.get(key) orelse keyToLayout(key);
+            const symbol = keyToSymbol(key);
             const local_count = local_uses.get(key) orelse 0;
 
             if (local_count == 0) {
@@ -1578,8 +1665,8 @@ pub const RcInsertPass = struct {
     fn wrapGuardWithIncref(
         self: *RcInsertPass,
         guard: LirExprId,
-        guard_uses: *const std.AutoHashMap(u64, u32),
-        pattern_bound: *const std.AutoHashMap(u64, void),
+        guard_uses: *const std.AutoHashMap(SymbolUseKey, u32),
+        pattern_bound: *const std.AutoHashMap(SymbolUseKey, void),
         region: Region,
     ) Allocator.Error!LirExprId {
         if (guard.isNone()) return guard;
@@ -1597,15 +1684,15 @@ pub const RcInsertPass = struct {
             }
         }
         const sorted_keys = self.scratch_keys.sliceFromStart(keys_start);
-        std.mem.sort(u64, sorted_keys, {}, std.sort.asc(u64));
+        std.mem.sort(SymbolUseKey, sorted_keys, {}, std.sort.asc(SymbolUseKey));
 
         for (sorted_keys) |key| {
             const count = guard_uses.get(key) orelse 0;
             if (count == 0) continue;
             if (pattern_bound.contains(key)) continue;
-            const layout_idx = self.symbol_layouts.get(key) orelse continue;
+            const layout_idx = self.symbol_layouts.get(key) orelse keyToLayout(key);
             if (!self.layoutNeedsRc(layout_idx)) continue;
-            const symbol: Symbol = @bitCast(key);
+            const symbol = keyToSymbol(key);
             try self.emitIncrefInto(symbol, layout_idx, @intCast(count), region, &rc_stmts);
         }
 
@@ -1631,13 +1718,14 @@ pub const RcInsertPass = struct {
             region: Region,
             stmts: *std.ArrayList(LirStmt),
             fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
-                const key = @as(u64, @bitCast(symbol));
+                const key = makeKey(symbol, layout_idx);
                 const resolved_layout = ctx.pass.symbol_layouts.get(key) orelse layout_idx;
                 if (ctx.pass.layoutNeedsRc(resolved_layout)) {
                     try ctx.pass.emitDecrefInto(symbol, resolved_layout, ctx.region, ctx.stmts);
                 }
             }
         };
+        ensurePatternIdValid(self.store, pat_id, "emitMutateDecrefsForPattern");
         try walkPatternBinds(self.store, pat_id, Ctx{ .pass = self, .region = region, .stmts = stmts });
     }
 
@@ -1662,6 +1750,7 @@ pub const RcInsertPass = struct {
                 }
             }
         };
+        ensurePatternIdValid(self.store, pat_id, "trackLiveRcSymbolsForPattern");
         try walkPatternBinds(self.store, pat_id, Ctx{ .pass = self });
     }
 
@@ -1681,7 +1770,7 @@ pub const RcInsertPass = struct {
             region: Region,
             rc_stmts: *std.ArrayList(LirStmt),
             fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
-                const key = @as(u64, @bitCast(symbol));
+                const key = makeKey(symbol, layout_idx);
                 const resolved_layout = ctx.pass.symbol_layouts.get(key) orelse layout_idx;
                 if (ctx.pass.layoutNeedsRc(resolved_layout)) {
                     const use_count = ctx.pass.symbol_use_counts.get(key) orelse 0;
@@ -1691,6 +1780,7 @@ pub const RcInsertPass = struct {
                 }
             }
         };
+        ensurePatternIdValid(self.store, pat_id, "emitBlockIncrefsForPattern");
         try walkPatternBinds(self.store, pat_id, Ctx{
             .pass = self,
             .region = region,
@@ -1714,7 +1804,7 @@ pub const RcInsertPass = struct {
             region: Region,
             stmts: *std.ArrayList(LirStmt),
             fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
-                const key = @as(u64, @bitCast(symbol));
+                const key = makeKey(symbol, layout_idx);
                 const resolved_layout = ctx.pass.symbol_layouts.get(key) orelse layout_idx;
                 if (ctx.pass.layoutNeedsRc(resolved_layout)) {
                     const use_count = ctx.pass.symbol_use_counts.get(key) orelse 0;
@@ -1724,6 +1814,7 @@ pub const RcInsertPass = struct {
                 }
             }
         };
+        ensurePatternIdValid(self.store, pat_id, "emitBlockDecrefsForPattern");
         try walkPatternBinds(self.store, pat_id, Ctx{
             .pass = self,
             .region = region,
@@ -1739,18 +1830,18 @@ pub const RcInsertPass = struct {
     fn emitRcOpsForPatternInto(
         self: *RcInsertPass,
         pat_id: LirPatternId,
-        local_uses: *const std.AutoHashMap(u64, u32),
+        local_uses: *const std.AutoHashMap(SymbolUseKey, u32),
         region: Region,
         rc_stmts: *std.ArrayList(LirStmt),
     ) Allocator.Error!void {
         const Ctx = struct {
             pass: *RcInsertPass,
-            local_uses: *const std.AutoHashMap(u64, u32),
+            local_uses: *const std.AutoHashMap(SymbolUseKey, u32),
             region: Region,
             rc_stmts: *std.ArrayList(LirStmt),
             fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
                 if (ctx.pass.layoutNeedsRc(layout_idx)) {
-                    const key = @as(u64, @bitCast(symbol));
+                    const key = makeKey(symbol, layout_idx);
                     const use_count = ctx.local_uses.get(key) orelse 0;
                     if (use_count == 0) {
                         try ctx.pass.emitDecrefInto(symbol, layout_idx, ctx.region, ctx.rc_stmts);
@@ -1760,6 +1851,7 @@ pub const RcInsertPass = struct {
                 }
             }
         };
+        ensurePatternIdValid(self.store, pat_id, "emitRcOpsForPatternInto");
         try walkPatternBinds(self.store, pat_id, Ctx{ .pass = self, .local_uses = local_uses, .region = region, .rc_stmts = rc_stmts });
     }
 

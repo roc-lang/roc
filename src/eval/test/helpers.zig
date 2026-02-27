@@ -1,6 +1,5 @@
 //! Tests for the expression evaluator
 const std = @import("std");
-const builtin = @import("builtin");
 const parse = @import("parse");
 const types = @import("types");
 const base = @import("base");
@@ -30,7 +29,7 @@ const i128h = builtins.compiler_rt_128;
 
 const posix = std.posix;
 
-const has_fork = builtin.os.tag != .windows;
+const has_fork = false;
 
 const Check = check.Check;
 const Can = can.Can;
@@ -156,7 +155,7 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     // Set to true to see the raw bytes for disassembly analysis.
     // Useful for debugging calling convention issues, register allocation, etc.
     // See src/backend/README.md for instructions on running filtered tests with hex dump.
-    const dump_generated_code_hex = false;
+    const dump_generated_code_hex = true;
     if (dump_generated_code_hex and code_result.code.len > 0) {
         std.debug.print("\n=== Generated Code ({} bytes, entry_offset={}) ===\n", .{ code_result.code.len, code_result.entry_offset });
         dumpHex(code_result.code);
@@ -196,13 +195,20 @@ noinline fn executeAndFormat(
 
     // Execute with result pointer (512 bytes to accommodate large tuples/records)
     var result_buf: [512]u8 align(16) = undefined;
+    std.debug.print(
+        "DEV exec entry=0x{x} code_size={} entry_offset={}\n",
+        .{ @intFromPtr(executable.entryPtr()), executable.code_size, executable.entry_offset },
+    );
     dev_eval.callWithCrashProtection(executable, @ptrCast(&result_buf)) catch |err| {
-        if (err == error.RocCrashed) {
-            if (dev_eval.getCrashMessage()) |msg| {
-                std.debug.print("DevEvaluator roc_crashed: {s}\n", .{msg});
-            }
+        switch (err) {
+            error.RocCrashed => {
+                if (dev_eval.getCrashMessage()) |msg| {
+                    std.debug.print("DevEvaluator roc_crashed: {s}\n", .{msg});
+                }
+                return error.RocCrashed;
+            },
+            else => return err,
         }
-        return err;
     };
 
     const ls = code_result.layout_store orelse {

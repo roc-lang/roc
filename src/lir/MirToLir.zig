@@ -426,12 +426,12 @@ fn isAtomicExpr(expr: LirExpr) bool {
         // compileLambdaAsProc, which can't return closures.
         .lambda,
         .closure,
+        .struct_access,
         => true,
 
         .call,
         .list,
         .struct_,
-        .struct_access,
         .tag,
         .if_then_else,
         .match_expr,
@@ -803,6 +803,16 @@ fn lowerMatch(self: *Self, match_data: anytype, mono_idx: Monotype.Idx, region: 
     return acc.finish(match_expr, result_layout, region);
 }
 
+fn closureLayoutFromLirExpr(self: *Self, expr_id: LirExprId) ?layout.Idx {
+    const expr = self.lir_store.getExpr(expr_id);
+    return switch (expr) {
+        .closure => |closure_id| self.lir_store.getClosureData(closure_id).closure_layout,
+        .nominal => |nom| self.closureLayoutFromLirExpr(nom.backing_expr),
+        .block => |b| self.closureLayoutFromLirExpr(b.final_expr),
+        else => null,
+    };
+}
+
 fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
     const fn_layout = try self.layoutFromMonotype(mono_idx);
     const monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
@@ -835,8 +845,23 @@ fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, region: Region
                     defer _ = self.propagating_defs.remove(cap_key);
                     const lir_def_id = try self.lowerExpr(def_id);
                     try self.lir_store.registerSymbolDef(cap.symbol, lir_def_id);
+                    if (self.closureLayoutFromLirExpr(lir_def_id)) |closure_layout| {
+                        break :blk closure_layout;
+                    }
+                } else if (self.lir_store.getSymbolDef(cap.symbol)) |lir_def_id| {
+                    if (self.closureLayoutFromLirExpr(lir_def_id)) |closure_layout| {
+                        break :blk closure_layout;
+                    }
                 }
                 break :blk try self.layoutFromMonotype(self.mir_store.typeOf(def_id));
+            } else if (self.lir_store.getSymbolDef(cap.symbol)) |lir_def_id| blk: {
+                if (self.closureLayoutFromLirExpr(lir_def_id)) |closure_layout| {
+                    break :blk closure_layout;
+                }
+                if (self.symbol_layouts.get(cap_key)) |cached_layout| {
+                    break :blk cached_layout;
+                }
+                unreachable;
             } else if (self.symbol_layouts.get(cap_key)) |cached_layout|
                 cached_layout
             else
@@ -1016,12 +1041,45 @@ fn lowerBlock(self: *Self, block_data: anytype, mono_idx: Monotype.Idx, region: 
     const mir_stmts = self.mir_store.getStmts(block_data.stmts);
     const save_stmts_len = self.scratch_lir_stmts.items.len;
     defer self.scratch_lir_stmts.shrinkRetainingCapacity(save_stmts_len);
+
+    // Pre-lower all statement patterns first so symbol_layouts contains forward
+    // references for mutually-recursive closures in the same block.
+    var stmt_patterns = std.ArrayList(LirPatternId).empty;
+    defer stmt_patterns.deinit(self.allocator);
     for (mir_stmts) |stmt| {
         const binding = switch (stmt) {
             .decl_const, .decl_var, .mutate_var => |b| b,
         };
-        const lir_pat = try self.lowerPattern(binding.pattern);
+        try stmt_patterns.append(self.allocator, try self.lowerPattern(binding.pattern));
+    }
+
+    for (mir_stmts, 0..) |stmt, stmt_index| {
+        const binding = switch (stmt) {
+            .decl_const, .decl_var, .mutate_var => |b| b,
+        };
+        const lir_pat = stmt_patterns.items[stmt_index];
         const lir_expr = try self.lowerExpr(binding.expr);
+        const lir_pat_data = self.lir_store.getPattern(lir_pat);
+        if (lir_pat_data == .bind and self.lir_store.getSymbolDef(lir_pat_data.bind.symbol) == null) {
+            const should_register_callable_def = blk: {
+                const expr = self.lir_store.getExpr(lir_expr);
+                break :blk switch (expr) {
+                    .lambda, .closure => true,
+                    .nominal => |nom| blk2: {
+                        const inner = self.lir_store.getExpr(nom.backing_expr);
+                        break :blk2 inner == .lambda or inner == .closure;
+                    },
+                    .block => |b| blk2: {
+                        const inner = self.lir_store.getExpr(b.final_expr);
+                        break :blk2 inner == .lambda or inner == .closure;
+                    },
+                    else => false,
+                };
+            };
+            if (should_register_callable_def) {
+                try self.lir_store.registerSymbolDef(lir_pat_data.bind.symbol, lir_expr);
+            }
+        }
         const lir_binding: LirStmt.Binding = .{ .pattern = lir_pat, .expr = lir_expr };
         try self.scratch_lir_stmts.append(self.allocator, switch (stmt) {
             .decl_const, .decl_var => .{ .decl = lir_binding },

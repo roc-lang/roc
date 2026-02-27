@@ -318,7 +318,19 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
 
     // --- Tag union ---
     if (self.lay.tag == .tag_union) {
-        unreachable; // tag unions must be formatted via formatTagUnion with type info
+        // Layout-only formatting fallback: preserve debuggability without type info.
+        // This is used when callers only have layout data (e.g. nested values inside
+        // tuples) and avoids hard aborts from `unreachable`.
+        if (self.ptr) |ptr| {
+            const tu_idx = self.lay.data.tag_union.idx;
+            const tu_data = ctx.layout_store.getTagUnionData(tu_idx);
+            const disc_offset = ctx.layout_store.getTagUnionDiscriminantOffset(tu_idx);
+            const base_ptr: [*]const u8 = @ptrCast(ptr);
+            const tag_index = tu_data.readDiscriminantFromPtr(base_ptr + disc_offset);
+            return try std.fmt.allocPrint(allocator, "<tag_union variant={d}>", .{tag_index});
+        }
+
+        return try allocator.dupe(u8, "<tag_union>");
     }
 
     // --- ZST ---

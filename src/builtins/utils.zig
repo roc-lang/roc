@@ -462,6 +462,14 @@ pub fn increfDataPtrC(
     // Strip tag bits from the pointer - recursive tag unions may store tag IDs in low bits
     const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
     const masked_ptr = ptr & ~tag_mask;
+    if (comptime builtin.mode == .Debug) {
+        if (masked_ptr < @sizeOf(usize)) {
+            var buf: [128]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "increfDataPtrC invalid ptr=0x{x} masked=0x{x} inc={} ra=0x{x}", .{ ptr, masked_ptr, inc_amount, @returnAddress() }) catch "increfDataPtrC invalid pointer";
+            roc_ops.crash(msg);
+            return;
+        }
+    }
     const rc_addr = masked_ptr - @sizeOf(usize);
 
     // Verify alignment before @ptrFromInt
