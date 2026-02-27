@@ -764,6 +764,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Map from Symbol to value location (register or stack slot)
         symbol_locations: std.AutoHashMap(u64, ValueLocation),
 
+        /// Callable values materialized at specific stack offsets (e.g. closure
+        /// fields inside records). Enables field projection to preserve callable
+        /// dispatch metadata instead of degrading to raw pointers.
+        callable_stack_values: std.AutoHashMap(i32, ValueLocation),
+
         /// Map from mutable variable symbol to fixed stack slot info
         /// Mutable variables need fixed slots so re-bindings can update the value at runtime
         mutable_var_slots: std.AutoHashMap(u64, MutableVarInfo),
@@ -1060,6 +1065,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .layout_store = layout_store_opt,
                 .static_interner = static_interner,
                 .symbol_locations = std.AutoHashMap(u64, ValueLocation).init(allocator),
+                .callable_stack_values = std.AutoHashMap(i32, ValueLocation).init(allocator),
                 .mutable_var_slots = std.AutoHashMap(u64, MutableVarInfo).init(allocator),
                 .join_points = std.AutoHashMap(u32, usize).init(allocator),
                 .current_recursive_symbol = null,
@@ -1086,6 +1092,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         pub fn deinit(self: *Self) void {
             self.codegen.deinit();
             self.symbol_locations.deinit();
+            self.callable_stack_values.deinit();
             self.mutable_var_slots.deinit();
             self.join_points.deinit();
             self.proc_registry.deinit();
@@ -1113,6 +1120,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         pub fn reset(self: *Self) void {
             self.codegen.reset();
             self.symbol_locations.clearRetainingCapacity();
+            self.callable_stack_values.clearRetainingCapacity();
             self.mutable_var_slots.clearRetainingCapacity();
             self.join_points.clearRetainingCapacity();
             self.current_recursive_symbol = null;
@@ -8335,7 +8343,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const field_offset = ls.getStructFieldOffset(struct_layout.data.struct_.idx, @intCast(i));
                 const field_size = ls.getStructFieldSize(struct_layout.data.struct_.idx, @intCast(i));
                 const field_loc = try self.generateExpr(field_expr_id);
-                try self.copyBytesToStackOffset(base_offset + @as(i32, @intCast(field_offset)), field_loc, field_size);
+                const field_base = base_offset + @as(i32, @intCast(field_offset));
+                try self.copyBytesToStackOffset(field_base, field_loc, field_size);
+                try self.maybeRegisterCallableStackValue(field_loc, field_base);
             }
 
             return .{ .stack = .{ .offset = base_offset, .size = ValueSize.fromByteCount(@min(stack_size, 8)) } };
@@ -8380,6 +8390,95 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .stack = .{ .offset = field_base, .size = ValueSize.fromByteCount(field_size) } };
         }
 
+        fn maybeRegisterCallableStackValue(
+            self: *Self,
+            loc: ValueLocation,
+            stack_offset: i32,
+        ) Allocator.Error!void {
+            switch (loc) {
+                .closure_value => |cv| {
+                    // Preserve the original closure capture location. Function-typed
+                    // fields may be pointer-sized in layout, so the copied bytes at
+                    // `stack_offset` are not always a full capture payload.
+                    try self.callable_stack_values.put(stack_offset, .{ .closure_value = cv });
+                },
+                .lambda_code => |lc| {
+                    try self.callable_stack_values.put(stack_offset, .{ .lambda_code = lc });
+                },
+                else => {},
+            }
+        }
+
+        fn resolveStructFieldExpr(
+            self: *Self,
+            struct_expr_id: LirExprId,
+            field_idx: u32,
+            depth: u8,
+        ) ?LirExprId {
+            if (depth > 32) return null;
+            const struct_expr = self.store.getExpr(struct_expr_id);
+            return switch (struct_expr) {
+                .struct_ => |s| blk: {
+                    const fields = self.store.getExprSpan(s.fields);
+                    if (field_idx >= fields.len) break :blk null;
+                    break :blk fields[field_idx];
+                },
+                .lookup => |lk| blk: {
+                    const def_expr_id = self.getSymbolDefRelaxed(lk.symbol) orelse break :blk null;
+                    break :blk self.resolveStructFieldExpr(def_expr_id, field_idx, depth + 1);
+                },
+                .nominal => |nom| self.resolveStructFieldExpr(nom.backing_expr, field_idx, depth + 1),
+                .block => |b| self.resolveStructFieldExpr(b.final_expr, field_idx, depth + 1),
+                else => null,
+            };
+        }
+
+        fn callableLocationFromFieldExpr(
+            self: *Self,
+            field_expr_id: LirExprId,
+            field_base: i32,
+            depth: u8,
+        ) Allocator.Error!?ValueLocation {
+            if (depth > 32) return null;
+            const field_expr = self.store.getExpr(field_expr_id);
+            return switch (field_expr) {
+                .closure => |closure_id| {
+                    const closure = self.store.getClosureData(closure_id);
+                    return .{ .closure_value = .{
+                        .stack_offset = field_base,
+                        .representation = closure.representation,
+                        .lambda = closure.lambda,
+                        .captures = closure.captures,
+                    } };
+                },
+                .lambda => |lam| {
+                    const code_offset = try self.compileLambdaAsProc(field_expr_id, lam);
+                    return .{ .lambda_code = .{
+                        .code_offset = code_offset,
+                        .ret_layout = lam.ret_layout,
+                        .source_expr = field_expr_id,
+                    } };
+                },
+                .lookup => |lk| blk: {
+                    const def_expr_id = self.getSymbolDefRelaxed(lk.symbol) orelse break :blk null;
+                    break :blk try self.callableLocationFromFieldExpr(def_expr_id, field_base, depth + 1);
+                },
+                .nominal => |nom| try self.callableLocationFromFieldExpr(nom.backing_expr, field_base, depth + 1),
+                .block => |b| try self.callableLocationFromFieldExpr(b.final_expr, field_base, depth + 1),
+                else => null,
+            };
+        }
+
+        fn callableLocationFromStructFieldExpr(
+            self: *Self,
+            struct_expr_id: LirExprId,
+            field_idx: u32,
+            field_base: i32,
+        ) Allocator.Error!?ValueLocation {
+            const field_expr_id = self.resolveStructFieldExpr(struct_expr_id, field_idx, 0) orelse return null;
+            return try self.callableLocationFromFieldExpr(field_expr_id, field_base, 0);
+        }
+
         /// Generate code for struct field access (records and tuples).
         /// field_idx is the sorted position in layout.
         fn generateStructAccess(self: *Self, access: anytype) Allocator.Error!ValueLocation {
@@ -8409,15 +8508,33 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return switch (struct_loc) {
                 .stack_str => |sv| {
                     const field_base = sv + @as(i32, @intCast(field_offset));
+                    if (self.callable_stack_values.get(field_base)) |callable_loc| {
+                        return callable_loc;
+                    }
+                    if (try self.callableLocationFromStructFieldExpr(access.struct_expr, access.field_idx, field_base)) |callable_loc| {
+                        return callable_loc;
+                    }
                     return self.fieldLocationFromLayout(field_base, field_size, field_layout_idx);
                 },
                 .stack => |sv| {
                     const field_base = sv.offset + @as(i32, @intCast(field_offset));
+                    if (self.callable_stack_values.get(field_base)) |callable_loc| {
+                        return callable_loc;
+                    }
+                    if (try self.callableLocationFromStructFieldExpr(access.struct_expr, access.field_idx, field_base)) |callable_loc| {
+                        return callable_loc;
+                    }
                     return self.fieldLocationFromLayout(field_base, field_size, field_layout_idx);
                 },
                 .stack_i128 => |sv| {
                     // Struct itself is i128-sized, field access within it
                     const field_base = sv + @as(i32, @intCast(field_offset));
+                    if (self.callable_stack_values.get(field_base)) |callable_loc| {
+                        return callable_loc;
+                    }
+                    if (try self.callableLocationFromStructFieldExpr(access.struct_expr, access.field_idx, field_base)) |callable_loc| {
+                        return callable_loc;
+                    }
                     return self.fieldLocationFromLayout(field_base, field_size, field_layout_idx);
                 },
                 .general_reg => |reg| {
@@ -10380,13 +10497,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (stmts) |stmt| {
                 const b = stmt.binding();
 
-                // For self-recursive closures (e.g., `factorial = |n| ... factorial(n-1) ...`):
-                // The closure captures itself, but the self-capture is only used for recursive
-                // calls. We compile the lambda as a standalone procedure and bind the symbol
-                // to the compiled code directly. This avoids the closure dispatch overhead and
-                // the impossible task of materializing a self-referential capture struct.
-                // Within the compiled procedure, recursive calls find themselves via
-                // current_binding_symbol which is registered in the lambda's own scope.
+                // Recursive closure groups (self or mutual recursion) where captures are only
+                // function-pointer-like values can be compiled as direct lambda_code bindings.
+                // This avoids trying to materialize cyclic closure_value capture graphs.
                 const expr = self.store.getExpr(b.expr);
                 if (expr == .closure) {
                     const pattern = self.store.getPattern(b.pattern);
@@ -10394,14 +10507,54 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const closure = self.store.getClosureData(expr.closure);
                         const bind_key: u64 = @bitCast(pattern.bind.symbol);
                         const captures = self.store.getCaptures(closure.captures);
-                        var is_self_recursive = false;
+
+                        var all_captures_are_functionish = true;
+                        var captures_are_block_recursive = true;
+                        var in_recursive_group = false;
+
                         for (captures) |cap| {
-                            if (@as(u64, @bitCast(cap.symbol)) == bind_key) {
-                                is_self_recursive = true;
+                            if (cap.layout_idx != .opaque_ptr) {
+                                all_captures_are_functionish = false;
+                                break;
+                            }
+
+                            const cap_key: u64 = @bitCast(cap.symbol);
+                            if (cap_key == bind_key) {
+                                in_recursive_group = true;
+                                continue;
+                            }
+
+                            var found_peer_in_block = false;
+                            for (stmts) |peer_stmt| {
+                                const peer_binding = peer_stmt.binding();
+                                const peer_pat = self.store.getPattern(peer_binding.pattern);
+                                if (peer_pat != .bind) continue;
+                                const peer_key: u64 = @bitCast(peer_pat.bind.symbol);
+                                if (peer_key != cap_key) continue;
+
+                                const peer_expr = self.store.getExpr(peer_binding.expr);
+                                if (peer_expr != .closure) continue;
+                                found_peer_in_block = true;
+
+                                const peer_closure = self.store.getClosureData(peer_expr.closure);
+                                const peer_captures = self.store.getCaptures(peer_closure.captures);
+                                for (peer_captures) |peer_cap| {
+                                    if (@as(u64, @bitCast(peer_cap.symbol)) == bind_key) {
+                                        in_recursive_group = true;
+                                        break;
+                                    }
+                                }
+
+                                break;
+                            }
+
+                            if (!found_peer_in_block) {
+                                captures_are_block_recursive = false;
                                 break;
                             }
                         }
-                        if (is_self_recursive) {
+
+                        if (in_recursive_group and all_captures_are_functionish and captures_are_block_recursive) {
                             self.current_binding_symbol = pattern.bind.symbol;
                             const inner = self.store.getExpr(closure.lambda);
                             if (inner == .lambda) {
@@ -11218,13 +11371,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
         }
 
-        fn resolveSymbolToLambdaCode(self: *Self, symbol: Symbol) Allocator.Error!?ValueLocation {
-            if (self.getSymbolDefRelaxed(symbol)) |def_expr_id| {
-                return try self.lambdaCodeFromExpr(def_expr_id);
-            }
-            return null;
-        }
-
         /// Inline a lambda body at the call site, binding parameters directly.
         /// Used for direct lambda calls (e.g., `(|x| x + 1)(5)`) where the
         /// lambda may return closures whose capture data must remain on the
@@ -11623,6 +11769,31 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             }
                             try self.codegen.emitStoreStack(.w64, base_offset + offset, temp);
                             self.codegen.freeGeneral(temp);
+                            if (capture.layout_idx == .opaque_ptr) {
+                                try self.callable_stack_values.put(base_offset + offset, .{ .lambda_code = lc });
+                            }
+                        },
+                        .closure_value => |captured_cv| {
+                            if (capture.layout_idx == .opaque_ptr) {
+                                // Function-typed captures are pointer-sized in layout, but
+                                // the source closure payload may be larger. Preserve callable
+                                // metadata out-of-band and store a harmless placeholder word.
+                                try self.callable_stack_values.put(base_offset + offset, .{ .closure_value = captured_cv });
+                                const temp = try self.allocTempGeneral();
+                                try self.codegen.emitLoadImm(temp, 0);
+                                try self.codegen.emitStoreStack(.w64, base_offset + offset, temp);
+                                self.codegen.freeGeneral(temp);
+                            } else {
+                                const slot = try self.ensureOnStack(.{ .closure_value = captured_cv }, capture_size);
+                                const temp = try self.allocTempGeneral();
+                                var w: u32 = 0;
+                                while (w < num_words) : (w += 1) {
+                                    const word_off: i32 = @intCast(w * 8);
+                                    try self.codegen.emitLoadStack(.w64, temp, slot + word_off);
+                                    try self.codegen.emitStoreStack(.w64, base_offset + offset + word_off, temp);
+                                }
+                                self.codegen.freeGeneral(temp);
+                            }
                         },
                         else => {
                             const slot = try self.ensureOnStack(capture_loc, capture_size);
@@ -11670,6 +11841,28 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 try self.codegen.emitLoadImm(temp, @intCast(lc.code_offset));
                                 try self.codegen.emitStoreStack(.w64, base_offset + offset, temp);
                                 self.codegen.freeGeneral(temp);
+                                if (capture.layout_idx == .opaque_ptr) {
+                                    try self.callable_stack_values.put(base_offset + offset, .{ .lambda_code = lc });
+                                }
+                            },
+                            .closure_value => |resolved_cv| {
+                                if (capture.layout_idx == .opaque_ptr) {
+                                    try self.callable_stack_values.put(base_offset + offset, .{ .closure_value = resolved_cv });
+                                    const temp = try self.allocTempGeneral();
+                                    try self.codegen.emitLoadImm(temp, 0);
+                                    try self.codegen.emitStoreStack(.w64, base_offset + offset, temp);
+                                    self.codegen.freeGeneral(temp);
+                                } else {
+                                    const slot = try self.ensureOnStack(.{ .closure_value = resolved_cv }, capture_size);
+                                    const temp = try self.allocTempGeneral();
+                                    var w: u32 = 0;
+                                    while (w < num_words_r) : (w += 1) {
+                                        const word_off: i32 = @intCast(w * 8);
+                                        try self.codegen.emitLoadStack(.w64, temp, slot + word_off);
+                                        try self.codegen.emitStoreStack(.w64, base_offset + offset + word_off, temp);
+                                    }
+                                    self.codegen.freeGeneral(temp);
+                                }
                             },
                             else => {
                                 const slot = try self.ensureOnStack(resolved_loc, capture_size);
@@ -11896,16 +12089,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 offset = @intCast(std.mem.alignForward(usize, @intCast(offset), cap_align));
                 const capture_offset = cv.stack_offset + offset;
                 if (capture.layout_idx == .opaque_ptr) {
+                    if (self.callable_stack_values.get(capture_offset)) |callable_loc| {
+                        try self.symbol_locations.put(symbol_key, callable_loc);
+                        offset += @intCast(capture_size);
+                        continue;
+                    }
                     if (self.symbol_locations.get(symbol_key)) |existing_loc| {
-                        if (existing_loc == .lambda_code) {
+                        if (existing_loc == .lambda_code or existing_loc == .closure_value) {
                             offset += @intCast(capture_size);
                             continue;
                         }
-                    }
-                    if (try self.resolveSymbolToLambdaCode(capture.symbol)) |lambda_loc| {
-                        try self.symbol_locations.put(symbol_key, lambda_loc);
-                        offset += @intCast(capture_size);
-                        continue;
                     }
                 }
                 // Use the appropriate ValueLocation based on the layout type
@@ -11993,20 +12186,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Align offset to match layout store's putCaptureStruct
                 const cap_align = cap_sa.alignment.toByteUnits();
                 offset = @intCast(std.mem.alignForward(usize, @intCast(offset), cap_align));
+                const capture_offset = captures_offset + offset;
                 if (capture.layout_idx == .opaque_ptr) {
+                    if (self.callable_stack_values.get(capture_offset)) |callable_loc| {
+                        try self.symbol_locations.put(symbol_key, callable_loc);
+                        offset += @intCast(capture_size);
+                        continue;
+                    }
                     if (self.symbol_locations.get(symbol_key)) |existing_loc| {
-                        if (existing_loc == .lambda_code) {
+                        if (existing_loc == .lambda_code or existing_loc == .closure_value) {
                             offset += @intCast(capture_size);
                             continue;
                         }
                     }
-                    if (try self.resolveSymbolToLambdaCode(capture.symbol)) |lambda_loc| {
-                        try self.symbol_locations.put(symbol_key, lambda_loc);
-                        offset += @intCast(capture_size);
-                        continue;
-                    }
                 }
-                try self.symbol_locations.put(symbol_key, .{ .stack = .{ .offset = captures_offset + offset } });
+                try self.symbol_locations.put(symbol_key, .{ .stack = .{ .offset = capture_offset } });
                 offset += @intCast(capture_size);
             }
 
@@ -12163,16 +12357,155 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        fn generateCallFromCallableValue(
+            self: *Self,
+            callee_loc: ValueLocation,
+            args_span: anytype,
+            ret_layout: layout.Idx,
+        ) Allocator.Error!ValueLocation {
+            return switch (callee_loc) {
+                .lambda_code => |lc| try self.generateCallToLambda(lc.code_offset, args_span, ret_layout),
+                .closure_value => |cv| try self.generateClosureDispatch(cv, args_span, ret_layout),
+                .general_reg, .stack, .immediate_i64 => try self.generateIndirectCall(callee_loc, args_span, ret_layout),
+                else => unreachable,
+            };
+        }
+
+        fn generateCallFromCallableExpr(
+            self: *Self,
+            expr_id: LirExprId,
+            args_span: anytype,
+            ret_layout: layout.Idx,
+        ) Allocator.Error!ValueLocation {
+            const callee_loc = try self.generateExpr(expr_id);
+            return try self.generateCallFromCallableValue(callee_loc, args_span, ret_layout);
+        }
+
+        fn generateLookupCallFromIfThenElseDef(
+            self: *Self,
+            ite: anytype,
+            args_span: anytype,
+            ret_layout: layout.Idx,
+        ) Allocator.Error!ValueLocation {
+            const branches = self.store.getIfBranches(ite.branches);
+            const result_size = self.getLayoutSize(ret_layout);
+            const result_slot: ?i32 = if (result_size == 0) null else self.codegen.allocStackSlot(result_size);
+
+            var end_patches = std.ArrayList(usize).empty;
+            defer end_patches.deinit(self.allocator);
+
+            for (branches) |branch| {
+                const cond_loc = try self.generateExpr(branch.cond);
+                const cond_reg = try self.ensureInGeneralReg(cond_loc);
+                const else_patch = try self.emitCmpZeroAndJump(cond_reg);
+                self.codegen.freeGeneral(cond_reg);
+
+                const call_result = try self.generateCallFromCallableExpr(branch.body, args_span, ret_layout);
+                if (result_slot) |slot| {
+                    try self.copyToStackSlot(slot, call_result, result_size);
+                }
+
+                const end_patch = try self.codegen.emitJump();
+                try end_patches.append(self.allocator, end_patch);
+                self.codegen.patchJump(else_patch, self.codegen.currentOffset());
+            }
+
+            const else_result = try self.generateCallFromCallableExpr(ite.final_else, args_span, ret_layout);
+            if (result_slot) |slot| {
+                try self.copyToStackSlot(slot, else_result, result_size);
+            }
+
+            const end_offset = self.codegen.currentOffset();
+            for (end_patches.items) |patch| {
+                self.codegen.patchJump(patch, end_offset);
+            }
+
+            if (result_slot) |slot| {
+                return self.stackLocationForLayout(ret_layout, slot);
+            }
+            return .{ .immediate_i64 = 0 };
+        }
+
+        fn isSimpleTagElseMatch(self: *Self, match_expr: anytype) bool {
+            const branches = self.store.getMatchBranches(match_expr.branches);
+            if (branches.len != 2) return false;
+            if (!branches[0].guard.isNone() or !branches[1].guard.isNone()) return false;
+
+            const first_pat = self.store.getPattern(branches[0].pattern);
+            const second_pat = self.store.getPattern(branches[1].pattern);
+            if (first_pat != .tag or second_pat != .wildcard) return false;
+
+            const tag_args = self.store.getPatternSpan(first_pat.tag.args);
+            return tag_args.len == 0;
+        }
+
+        fn generateLookupCallFromSimpleTagElseMatchDef(
+            self: *Self,
+            match_expr: anytype,
+            args_span: anytype,
+            ret_layout: layout.Idx,
+        ) Allocator.Error!ValueLocation {
+            const branches = self.store.getMatchBranches(match_expr.branches);
+            std.debug.assert(branches.len == 2);
+
+            const first_pat = self.store.getPattern(branches[0].pattern);
+            std.debug.assert(first_pat == .tag);
+            const tag_pattern = first_pat.tag;
+
+            const result_size = self.getLayoutSize(ret_layout);
+            const result_slot: ?i32 = if (result_size == 0) null else self.codegen.allocStackSlot(result_size);
+
+            const scrutinee_loc = try self.generateExpr(match_expr.value);
+            const ls = self.layout_store orelse unreachable;
+            const value_layout_val = ls.getLayout(match_expr.value_layout);
+            const disc_reg = if (value_layout_val.tag == .tag_union) blk: {
+                const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
+                const disc_offset: i32 = @intCast(tu_data.discriminant_offset);
+                // Use .w32 when .w64 would read past the tag union's storage.
+                const disc_use_w32 = (disc_offset + 8 > @as(i32, @intCast(tu_data.size)));
+                break :blk try self.loadAndMaskDiscriminant(
+                    scrutinee_loc,
+                    disc_use_w32,
+                    disc_offset,
+                    tu_data.discriminant_size,
+                );
+            } else try self.ensureInGeneralReg(scrutinee_loc);
+
+            try self.emitCmpImm(disc_reg, @intCast(tag_pattern.discriminant));
+            self.codegen.freeGeneral(disc_reg);
+
+            const else_patch = try self.emitJumpIfNotEqual();
+
+            const then_result = try self.generateCallFromCallableExpr(branches[0].body, args_span, ret_layout);
+            if (result_slot) |slot| {
+                try self.copyToStackSlot(slot, then_result, result_size);
+            }
+            const end_patch = try self.codegen.emitJump();
+
+            self.codegen.patchJump(else_patch, self.codegen.currentOffset());
+
+            const else_result = try self.generateCallFromCallableExpr(branches[1].body, args_span, ret_layout);
+            if (result_slot) |slot| {
+                try self.copyToStackSlot(slot, else_result, result_size);
+            }
+
+            self.codegen.patchJump(end_patch, self.codegen.currentOffset());
+
+            if (result_slot) |slot| {
+                return self.stackLocationForLayout(ret_layout, slot);
+            }
+            return .{ .immediate_i64 = 0 };
+        }
+
         /// Generate code for calling a looked-up function definition.
         fn generateLookupCall(self: *Self, lookup: anytype, args_span: anytype, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
             const symbol_key: u64 = @bitCast(lookup.symbol);
-            const call_has_callable_args_dbg = self.hasCallableArguments(args_span);
+            const call_has_callable_args = self.hasCallableArguments(args_span);
 
             // Check if the function was compiled as a procedure
             if (self.proc_registry.get(symbol_key)) |proc| {
                 // Higher-order calls with callable arguments must stay in the
                 // caller scope so closure stack data remains valid.
-                const call_has_callable_args = call_has_callable_args_dbg;
                 if (call_has_callable_args) {
                     if (self.getSymbolDefRelaxed(lookup.symbol)) |def_expr_id| {
                         const def_expr = self.store.getExpr(def_expr_id);
@@ -12243,6 +12576,43 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             return try self.generateClosureDispatch(block_result.closure_value, args_span, ret_layout);
                         }
                         unreachable;
+                    },
+                    .call => {
+                        // Definition is a call that returns a function/closure value.
+                        const call_result = try self.generateExpr(def_expr_id);
+                        switch (call_result) {
+                            .lambda_code => |lc| {
+                                return try self.generateCallToLambda(lc.code_offset, args_span, ret_layout);
+                            },
+                            .closure_value => |cv| {
+                                return try self.generateClosureDispatch(cv, args_span, ret_layout);
+                            },
+                            .general_reg, .stack, .immediate_i64 => {
+                                return try self.generateIndirectCall(call_result, args_span, ret_layout);
+                            },
+                            else => unreachable,
+                        }
+                    },
+                    .lookup, .struct_access => {
+                        // Definition computes a callable value via alias/field projection.
+                        const callable_result = try self.generateExpr(def_expr_id);
+                        return try self.generateCallFromCallableValue(callable_result, args_span, ret_layout);
+                    },
+                    .if_then_else => |ite| {
+                        return try self.generateLookupCallFromIfThenElseDef(ite, args_span, ret_layout);
+                    },
+                    .match_expr => |match_expr| {
+                        if (self.isSimpleTagElseMatch(match_expr)) {
+                            return try self.generateLookupCallFromSimpleTagElseMatchDef(match_expr, args_span, ret_layout);
+                        }
+                        // Definition computes a callable value via branching.
+                        const branch_result = try self.generateExpr(def_expr_id);
+                        return try self.generateCallFromCallableValue(branch_result, args_span, ret_layout);
+                    },
+                    .discriminant_switch => {
+                        // Definition computes a callable value via branching.
+                        const branch_result = try self.generateExpr(def_expr_id);
+                        return try self.generateCallFromCallableValue(branch_result, args_span, ret_layout);
                     },
                     .nominal => |nom| {
                         // Unwrap nominal and retry with the inner expression
@@ -12414,8 +12784,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Load the closure value from stack
                     try self.codegen.emitLoadStack(.w64, target_reg, cv.stack_offset);
                 },
-                .float_reg, .immediate_f64 => {
-                    unreachable;
+                .float_reg => |freg| {
+                    // Calls use general argument registers; pass float values as raw bits.
+                    const slot = self.codegen.allocStackSlot(8);
+                    try self.codegen.emitStoreStackF64(slot, freg);
+                    try self.codegen.emitLoadStack(.w64, target_reg, slot);
+                },
+                .immediate_f64 => |val| {
+                    const bits: u64 = @bitCast(val);
+                    try self.codegen.emitLoadImm(target_reg, @bitCast(bits));
                 },
                 .noreturn => unreachable,
             }
@@ -12645,8 +13022,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emitLoadStack(.w64, reg, cv.stack_offset);
                     return reg;
                 },
-                .float_reg, .immediate_f64, .lambda_code => {
-                    // Convert float to int or lambda_code to register - this shouldn't happen in normal code
+                .float_reg => |freg| {
+                    // Some call paths pass all args in general regs; preserve float bits.
+                    const reg = try self.allocTempGeneral();
+                    const slot = self.codegen.allocStackSlot(8);
+                    try self.codegen.emitStoreStackF64(slot, freg);
+                    try self.codegen.emitLoadStack(.w64, reg, slot);
+                    return reg;
+                },
+                .immediate_f64 => |val| {
+                    const reg = try self.allocTempGeneral();
+                    const bits: u64 = @bitCast(val);
+                    try self.codegen.emitLoadImm(reg, @bitCast(bits));
+                    return reg;
+                },
+                .lambda_code => {
                     unreachable;
                 },
                 .noreturn => unreachable,

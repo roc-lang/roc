@@ -285,7 +285,8 @@ test "closure: closure stored in record field then called" {
         \\{
         \\    y = 10
         \\    rec = { f: |x| x + y }
-        \\    rec.f(5)
+        \\    f = rec.f
+        \\    f(5)
         \\}
     ;
     try runExpectI64(code, 15, .no_trace);
@@ -297,7 +298,9 @@ test "closure: two closures in record, each with own captures" {
         \\    a = 10
         \\    b = 20
         \\    rec = { add_a: |x| x + a, add_b: |x| x + b }
-        \\    rec.add_a(5) + rec.add_b(5)
+        \\    add_a = rec.add_a
+        \\    add_b = rec.add_b
+        \\    add_a(5) + add_b(5)
         \\}
     ;
     try runExpectI64(code, 40, .no_trace);

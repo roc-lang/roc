@@ -13,6 +13,7 @@ const layout = @import("layout");
 const roc_target = @import("roc_target");
 const eval_mod = @import("../mod.zig");
 const builtin_loading_mod = eval_mod.builtin_loading;
+const render_helpers = eval_mod.render_helpers;
 const TestEnv = @import("TestEnv.zig");
 const Interpreter = eval_mod.Interpreter;
 const DevEvaluator = eval_mod.DevEvaluator;
@@ -187,8 +188,8 @@ noinline fn executeAndFormat(
     dev_eval: *DevEvaluator,
     executable: *backend.ExecutableMemory,
     code_result: *DevEvaluator.CodeResult,
-    _: *ModuleEnv,
-    _: CIR.Expr.Idx,
+    module_env: *ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
 ) DevEvalError![]const u8 {
     // Compiler barrier: std.debug.print with empty string acts as a full
     // memory barrier, ensuring all struct fields are properly materialized
@@ -234,22 +235,35 @@ noinline fn executeAndFormat(
         .layout = result_layout,
         .ptr = @ptrCast(&result_buf),
         .is_initialized = true,
-        .rt_var = undefined,
+        .rt_var = ModuleEnv.varFrom(expr_idx),
     };
     var needs_result_decref = true;
     defer if (needs_result_decref) {
         result_value.decref(ls, &dev_eval.roc_ops);
     };
 
-    const roc_val = values.RocValue{
-        .ptr = &result_buf,
-        .lay = result_layout,
-        .layout_idx = code_result.result_layout,
+    const formatted = if (result_layout.tag == .tag_union) blk: {
+        var empty_scope = types.TypeScope.init(alloc);
+        defer empty_scope.deinit();
+        var render_ctx = render_helpers.RenderCtx{
+            .allocator = alloc,
+            .env = module_env,
+            .runtime_types = &module_env.types,
+            .layout_store = ls,
+            .type_scope = &empty_scope,
+        };
+        break :blk render_helpers.renderValueRocWithType(&render_ctx, result_value, result_value.rt_var) catch error.UnsupportedLayout;
+    } else blk: {
+        const roc_val = values.RocValue{
+            .ptr = &result_buf,
+            .lay = result_layout,
+            .layout_idx = code_result.result_layout,
+        };
+        const fmt_ctx = values.RocValue.FormatContext{
+            .layout_store = ls,
+        };
+        break :blk roc_val.format(alloc, fmt_ctx) catch error.UnsupportedLayout;
     };
-    const fmt_ctx = values.RocValue.FormatContext{
-        .layout_store = ls,
-    };
-    const formatted = roc_val.format(alloc, fmt_ctx) catch error.UnsupportedLayout;
 
     result_value.decref(ls, &dev_eval.roc_ops);
     needs_result_decref = false;
