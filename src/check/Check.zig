@@ -2947,6 +2947,8 @@ fn checkPatternHelp(
             const scratch_records_top = self.scratch_record_fields.top();
             defer self.scratch_record_fields.clearFrom(scratch_records_top);
 
+            var mb_ext_var: ?Var = null;
+
             for (self.cir.store.sliceRecordDestructs(destructure.destructs)) |destruct_idx| {
                 const destruct = self.cir.store.getRecordDestruct(destruct_idx);
                 const destruct_var = ModuleEnv.varFrom(destruct_idx);
@@ -2960,6 +2962,18 @@ fn checkPatternHelp(
                         },
                         .SubPattern => |sub_pattern_idx| {
                             break :blk try self.checkPatternHelp(sub_pattern_idx, env, out_var);
+                        },
+                        .Rest => |sub_pattern_idx| {
+                            // If this pattern is rest pattern:
+                            // eg { name, ...rest }
+                            //               ^^^^
+                            //
+                            // Then capture this as the ext var, then  continue
+                            const ext_var = try self.checkPatternHelp(sub_pattern_idx, env, out_var);
+                            _ = try self.unify(destruct_var, ext_var, env);
+                            mb_ext_var = ext_var;
+
+                            continue;
                         },
                     }
                 };
@@ -2980,9 +2994,18 @@ fn checkPatternHelp(
             const record_fields_range = try self.types.appendRecordFields(record_fields_scratch);
 
             // Update the pattern var
-            try self.unifyWith(pattern_var, .{ .structure = .{
-                .record_unbound = record_fields_range,
-            } }, env);
+            if (mb_ext_var) |ext| {
+                try self.unifyWith(pattern_var, .{ .structure = .{
+                    .record = .{
+                        .fields = record_fields_range,
+                        .ext = ext,
+                    },
+                } }, env);
+            } else {
+                try self.unifyWith(pattern_var, .{ .structure = .{
+                    .record_unbound = record_fields_range,
+                } }, env);
+            }
         },
         // nums //
         .num_literal => |num| {
@@ -3588,18 +3611,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // Check the field value expression
                     does_fx = try self.checkExpr(field.value, env, .no_expectation) or does_fx;
 
-                    // Create a fresh ext var for this field (must be fresh each iteration to avoid cycles)
-                    const ext_var = try self.freshFromContent(.{ .flex = Flex.init() }, env, expr_region);
-
                     // Create an unbound record with this field
                     const single_field_record = try self.freshFromContent(.{ .structure = .{
-                        .record = .{
-                            .fields = try self.types.appendRecordFields(&.{types_mod.RecordField{
-                                .name = field.name,
-                                .var_ = ModuleEnv.varFrom(field.value),
-                            }}),
-                            .ext = ext_var,
-                        },
+                        .record_unbound = try self.types.appendRecordFields(&.{types_mod.RecordField{
+                            .name = field.name,
+                            .var_ = ModuleEnv.varFrom(field.value),
+                        }}),
                     } }, env, expr_region);
 
                     // Unify this record update with the record we're updating

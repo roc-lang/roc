@@ -2206,6 +2206,7 @@ pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.Pattern.RecordD
     const kind_data: Span2 = switch (record_destruct.kind) {
         .Required => |pattern_idx| .{ .start = 0, .len = @intFromEnum(pattern_idx) },
         .SubPattern => |pattern_idx| .{ .start = 1, .len = @intFromEnum(pattern_idx) },
+        .Rest => |pattern_idx| .{ .start = 2, .len = @intFromEnum(pattern_idx) },
     };
     _ = try store.span2_data.append(store.gpa, kind_data);
 
@@ -2810,6 +2811,7 @@ pub fn getRecordDestruct(store: *const NodeStore, idx: CIR.Pattern.RecordDestruc
     const kind = switch (kind_data.start) {
         0 => CIR.Pattern.RecordDestruct.Kind{ .Required = @enumFromInt(kind_data.len) },
         1 => CIR.Pattern.RecordDestruct.Kind{ .SubPattern = @enumFromInt(kind_data.len) },
+        2 => CIR.Pattern.RecordDestruct.Kind{ .Rest = @enumFromInt(kind_data.len) },
         else => unreachable,
     };
 

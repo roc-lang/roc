@@ -434,7 +434,7 @@ fn writeVarWithContext(self: *TypeWriter, writer: *ByteWrite, var_: Var, context
                     _ = try writer.write("(");
                 }
 
-                try self.writeFlatType(writer, flat_type, root_var);
+                try self.writeFlatType(writer, flat_type, resolved.var_, root_var);
 
                 if (should_wrap_in_parens) {
                     _ = try writer.write(")");
@@ -476,7 +476,7 @@ fn writeAlias(self: *TypeWriter, writer: *ByteWrite, alias: Alias, root_var: Var
 }
 
 /// Convert a flat type to a type string
-fn writeFlatType(self: *TypeWriter, writer: *ByteWrite, flat_type: FlatType, root_var: Var) std.mem.Allocator.Error!void {
+fn writeFlatType(self: *TypeWriter, writer: *ByteWrite, flat_type: FlatType, flat_type_var: Var, root_var: Var) std.mem.Allocator.Error!void {
     switch (flat_type) {
         .tuple => |tuple| {
             try self.writeTuple(writer, tuple, root_var);
@@ -497,7 +497,7 @@ fn writeFlatType(self: *TypeWriter, writer: *ByteWrite, flat_type: FlatType, roo
             try self.writeRecord(writer, record, root_var);
         },
         .record_unbound => |fields| {
-            try self.writeRecordFields(writer, fields, root_var);
+            try self.writeRecordUnbound(writer, fields, flat_type_var, root_var);
         },
         .empty_record => {
             _ = try writer.write("{}");
@@ -541,33 +541,6 @@ fn writeNominalType(self: *TypeWriter, writer: *ByteWrite, nominal_type: Nominal
         }
         _ = try writer.write(")");
     }
-}
-
-/// Write record fields without extension
-fn writeRecordFields(self: *TypeWriter, writer: *ByteWrite, fields: RecordField.SafeMultiList.Range, root_var: Var) std.mem.Allocator.Error!void {
-    if (fields.isEmpty()) {
-        _ = try writer.write("{}");
-        return;
-    }
-
-    _ = try writer.write("{ ");
-
-    const fields_slice = self.types.getRecordFieldsSlice(fields);
-
-    // Write first field - we already verified that there's at least one field
-    _ = try writer.write(self.getIdent(fields_slice.items(.name)[0]));
-    _ = try writer.write(": ");
-    try self.writeVarWithContext(writer, fields_slice.items(.var_)[0], .RecordFieldContent, root_var);
-
-    // Write remaining fields
-    for (fields_slice.items(.name)[1..], fields_slice.items(.var_)[1..]) |name, var_| {
-        _ = try writer.write(", ");
-        _ = try writer.write(self.getIdent(name));
-        _ = try writer.write(": ");
-        try self.writeVarWithContext(writer, var_, .RecordFieldContent, root_var);
-    }
-
-    _ = try writer.write(" }");
 }
 
 /// Write a function type with a specific arrow (`->` or `=>`)
@@ -707,6 +680,46 @@ fn gatherRecordFields(self: *TypeWriter, fields: RecordField.SafeMultiList.Range
             else => return .invalid,
         }
     }
+}
+
+/// Write an unbound record
+///
+/// Note that an unbound record is semantically the same as a record with a
+/// `flex` extension var. Because of this, we have to count the occurrences of
+/// this unbound  record appearing in this type, to properly display the ext
+/// type.
+fn writeRecordUnbound(self: *TypeWriter, writer: *ByteWrite, fields: RecordField.SafeMultiList.Range, record_unbound_var: Var, root_var: Var) std.mem.Allocator.Error!void {
+    _ = try writer.write("{ ");
+
+    _ = try writer.write("..");
+    if (record_unbound_var != root_var) {
+        const occurrences = try self.countVarOccurrences(record_unbound_var, root_var);
+        if (occurrences > 1) {
+            try self.writeFlexVarName(writer, record_unbound_var, .RecordExtension, root_var);
+        }
+    }
+
+    const fields_slice = self.types.getRecordFieldsSlice(fields);
+    const num_fields = fields_slice.len;
+
+    if (num_fields > 0) {
+        _ = try writer.write(", ");
+
+        // Write first field - we already verified that there's at least one field
+        _ = try writer.write(self.getIdent(fields_slice.items(.name)[0]));
+        _ = try writer.write(": ");
+        try self.writeVarWithContext(writer, fields_slice.items(.var_)[0], .RecordFieldContent, root_var);
+
+        // Write remaining fields
+        for (fields_slice.items(.name)[1..], fields_slice.items(.var_)[1..]) |name, var_| {
+            _ = try writer.write(", ");
+            _ = try writer.write(self.getIdent(name));
+            _ = try writer.write(": ");
+            try self.writeVarWithContext(writer, var_, .RecordFieldContent, root_var);
+        }
+    }
+
+    _ = try writer.write(" }");
 }
 
 /// Write a tag union type

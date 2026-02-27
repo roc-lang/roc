@@ -20,10 +20,14 @@ jobs:
           use-cache: true
 
       - name: zig lints
-        run: |
-          zig run ci/zig_lints.zig
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: "zig run ci/zig_lints.zig"
+          error_string_contains: "build.zig.zon"
+          retry_count: 3
 
-          zig build check-fmt
+      - name: check formatting
+        run: zig build check-fmt
 
       - name: Check that test is actually wired up
         run: |
@@ -304,7 +308,7 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: zig build -Dtarget=${{ matrix.target }}
-          error_string_contains: "error: bad HTTP response code: '500 Internal Server Error'|TemporaryNameServerFailure|503|Timeout|stuck"
+          error_string_contains: "error: bad HTTP response code: '500 Internal Server Error'|TemporaryNameServerFailure|503|Timeout|stuck|build.zig.zon"
 
   # Test cross-compilation with Roc's cross-compilation system (musl + glibc)
   roc-cross-compile:

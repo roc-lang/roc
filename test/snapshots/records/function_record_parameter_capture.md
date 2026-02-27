@@ -67,7 +67,7 @@ NO CHANGE
 						(required
 							(p-assign (ident "age"))))
 					(record-destruct (label "a") (ident "a")
-						(required
+						(rest-pattern
 							(p-assign (ident "a"))))))))
 	(e-record
 		(fields
@@ -89,7 +89,7 @@ NO CHANGE
 									(required
 										(p-assign (ident "age"))))
 								(record-destruct (label "a") (ident "a")
-									(required
+									(rest-pattern
 										(p-assign (ident "a")))))))))
 			(field (name "is_adult")
 				(e-binop (op "ge")
@@ -99,5 +99,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ a: b, age: Dec, name: Str } -> { full_record: { a: b, age: Dec, name: Str }, greeting: Str, is_adult: Bool }"))
+(expr (type "{ ..b, age: Dec, name: Str } -> { full_record: { ..b, age: Dec, name: Str }, greeting: Str, is_adult: Bool }"))
 ~~~

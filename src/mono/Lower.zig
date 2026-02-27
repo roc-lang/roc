@@ -2209,8 +2209,12 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // the platform's `requires` clause. E.g., `main!` in `requires { main! : ... }`
 
             // Get the app module index (set during lowerer initialization)
-            const app_idx = self.app_module_idx orelse break :blk .{ .runtime_error = {} };
-            if (app_idx >= self.all_module_envs.len) break :blk .{ .runtime_error = {} };
+            const app_idx = self.app_module_idx orelse {
+                break :blk .{ .runtime_error = {} };
+            };
+            if (app_idx >= self.all_module_envs.len) {
+                break :blk .{ .runtime_error = {} };
+            }
 
             const app_env = self.all_module_envs[app_idx];
 
@@ -2286,6 +2290,25 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 const lookup = fn_expr.e_lookup_external;
                 try self.setupExternalCallTypeScope(module_env, lookup, call.args, expr_idx);
             }
+            // Check for local hosted lambda (e.g., echo! injected in default_app modules)
+            if (fn_expr == .e_lookup_local) {
+                const lookup = fn_expr.e_lookup_local;
+                if (self.findDefForPattern(module_env, lookup.pattern_idx)) |def_idx| {
+                    const target_expr = module_env.store.getExpr(module_env.store.getDef(def_idx).expr);
+                    if (target_expr == .e_hosted_lambda) {
+                        const args = try self.lowerExprSpan(module_env, call.args);
+                        const hosted_expr = MonoExpr{
+                            .hosted_call = .{
+                                .index = target_expr.e_hosted_lambda.index,
+                                .args = args,
+                                .ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
+                            },
+                        };
+                        return try self.store.addExpr(hosted_expr, region);
+                    }
+                }
+            }
+
             // For local function calls, set up layout hints so generic parameters
             // get the correct concrete layouts from the call arguments.
             const is_local_call_with_hints = fn_expr == .e_lookup_local;
@@ -3262,6 +3285,9 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 // Get the layout from the function's parameter type, not the pattern's type variable.
                 // The pattern type in hosted lambdas may be generic, but the function type has the
                 // concrete types through the type scope mappings.
+                // For locally-injected hosted lambdas (e.g., echo! in default_app modules), the
+                // function type may not be available. Fall back to using Str layout directly
+                // since default_app hosted functions always take Str arguments.
                 const patt_layout = if (func_type) |ft| layout_blk: {
                     const param_vars = module_env.types.sliceVars(ft.args);
                     if (param_idx < param_vars.len) {
@@ -3269,9 +3295,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                         break :layout_blk ls.fromTypeVar(self.current_module_idx, param_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
                     }
                     unreachable; // Pattern count should match function parameter count
-                } else {
-                    unreachable; // e_hosted_lambda should always have a function type
-                };
+                } else LayoutIdx.str; // default_app hosted lambdas take Str args
                 param_idx += 1;
 
                 const arg_id = try self.store.addExpr(.{
@@ -3773,6 +3797,15 @@ fn lowerCaptures(self: *Self, module_env: *ModuleEnv, captures: CIR.Expr.Capture
 
     for (capture_indices) |capture_idx| {
         const cap = module_env.store.getCapture(capture_idx);
+
+        // Skip captures that reference hosted lambdas (e.g., echo! in default_app modules).
+        // These are handled via direct hosted_call in the lowered body, so the capture
+        // is never actually used at runtime.
+        if (self.findDefForPattern(module_env, cap.pattern_idx)) |def_idx| {
+            const target_expr = module_env.store.getExpr(module_env.store.getDef(def_idx).expr);
+            if (target_expr == .e_hosted_lambda) continue;
+        }
+
         const symbol = self.patternToSymbol(cap.pattern_idx);
 
         // Ensure the captured symbol's definition is lowered if it's a top-level def

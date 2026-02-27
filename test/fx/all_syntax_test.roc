@@ -202,7 +202,7 @@ destructuring = || {
 	tup = ("Roc", 1)
 	(str, num) = tup
 
-	rec = { x: 1, y: str } # TODO implement tuple access with `.index` ?
+	rec = { x: 1, y: tup.1 } # tuple access with `.index`
 	{ x, y } = rec
 
 	(str, num, x, y)

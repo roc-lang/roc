@@ -624,6 +624,10 @@ fn emitPatternValue(self: *Self, pattern: Pattern) EmitError!void {
                             try self.write(": ");
                             try self.emitPattern(pat_idx);
                         },
+                        .Rest => |pat_idx| {
+                            try self.write("..");
+                            try self.emitPattern(pat_idx);
+                        },
                     }
                 }
                 try self.write(" }");

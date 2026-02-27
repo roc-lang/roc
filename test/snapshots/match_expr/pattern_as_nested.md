@@ -156,5 +156,5 @@ match person {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(Error, { city: Str }, Str)"))
+(expr (type "(Error, { .., city: Str }, Str)"))
 ~~~

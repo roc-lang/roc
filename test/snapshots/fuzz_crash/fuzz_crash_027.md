@@ -2041,7 +2041,7 @@ expect {
 												(sub-pattern
 													(p-num (value "2"))))
 											(record-destruct (label "rest") (ident "rest")
-												(required
+												(rest-pattern
 													(p-assign (ident "rest"))))))))
 							(value
 								(e-call

@@ -593,6 +593,7 @@ const DeadFilesDetector = struct {
             "main.zig", // CLI, playground_wasm, interpreter_shim, etc.
             "static_lib.zig", // Builtins static library
             "tracy.zig", // Profiler module (added via b.addModule)
+            "tracy_stub.zig", // No-op tracy stub for standalone static library builds (added via b.addModule)
             "fuzz_sort.zig", // Fuzzing entry point
             "watch.zig", // File watcher entry point
             "fx_platform_test.zig", // FX platform tests

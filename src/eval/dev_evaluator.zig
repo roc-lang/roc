@@ -497,7 +497,7 @@ pub const DevEvaluator = struct {
         // This avoids undefined behavior from using `undefined` for the pointer
         const empty_hosted_fns = struct {
             fn dummyHostedFn(_: *RocOps, _: *anyopaque, _: *anyopaque) callconv(.c) void {}
-            var empty: [1]builtins.host_abi.HostedFn = .{&dummyHostedFn};
+            var empty: [1]builtins.host_abi.HostedFn = .{builtins.host_abi.hostedFn(&dummyHostedFn)};
         };
         const roc_ops = RocOps{
             .env = @ptrCast(roc_env),

@@ -739,6 +739,24 @@ pub const TokenizedRegion = struct {
     }
 };
 
+/// Check whether the parsed file has a top-level `main!` declaration.
+/// Used to distinguish default_app modules (headerless files that provide
+/// a main! entry point) from plain type modules.
+pub fn hasMainBangDecl(self: *const AST) bool {
+    const file = self.store.getFile();
+    for (self.store.statementSlice(file.statements)) |stmt_id| {
+        const stmt = self.store.getStatement(stmt_id);
+        if (stmt == .decl) {
+            const pattern = self.store.getPattern(stmt.decl.pattern);
+            if (pattern == .ident) {
+                const ident_text = self.resolve(pattern.ident.ident_tok);
+                if (std.mem.eql(u8, ident_text, "main!")) return true;
+            }
+        }
+    }
+    return false;
+}
+
 /// Resolve a token index to a string slice from the source code.
 pub fn resolve(self: *const AST, token: Token.Idx) []const u8 {
     const range = self.tokens.resolve(token);

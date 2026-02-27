@@ -1929,11 +1929,17 @@ pub fn canonicalizeFile(
             try self.createExposedScope(h.provides);
         },
         .type_module => {
-            // Set to undefined placeholder - will be properly set during validation
-            // when we find the matching type declaration
-            self.env.module_kind = .{ .type_module = undefined };
-            // Type modules don't have an exposes list
-            // We'll validate the type name matches the module name after processing types
+            // Check if file has a main! function, making it a default app
+            // Don't report errors here - validation will handle that
+            const main_status = try self.checkMainFunction(false);
+            if (main_status == .valid) {
+                self.env.module_kind = .default_app;
+                self.env.defer_numeric_defaults = true;
+            } else {
+                // Set to undefined placeholder - will be properly set during validation
+                // when we find the matching type declaration
+                self.env.module_kind = .{ .type_module = undefined };
+            }
         },
         .default_app => {
             self.env.module_kind = .default_app;
@@ -1952,6 +1958,11 @@ pub fn canonicalizeFile(
     // Track the start of scratch defs and statements
     const scratch_defs_start = self.env.store.scratchDefTop();
     const scratch_statements_start = self.env.store.scratch.?.statements.top();
+
+    // Inject echo! for default_app modules (headerless files with main!)
+    if (self.env.module_kind == .default_app) {
+        try self.injectEchoPlatform();
+    }
 
     // First pass (1a): Process type declarations WITH associated blocks to introduce them into scope
     // Defer associated blocks themselves until after we've created placeholders for top-level items
@@ -2695,7 +2706,7 @@ pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
 
     switch (self.env.module_kind) {
         .type_module => |*main_type_ident| {
-            const main_status = try self.checkMainFunction();
+            const main_status = try self.checkMainFunction(true);
             const matching_type_result = self.findMatchingTypeIdent();
 
             // Check if we found a matching type and whether it's a nominal type
@@ -2741,7 +2752,7 @@ pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
 pub fn validateForExecution(self: *Self) std.mem.Allocator.Error!void {
     switch (self.env.module_kind) {
         .type_module => {
-            const main_status = try self.checkMainFunction();
+            const main_status = try self.checkMainFunction(true);
             if (main_status == .not_found) {
                 try self.reportExecutionRequiresAppOrDefaultApp();
             }
@@ -2900,6 +2911,7 @@ fn collectBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) !void {
                 switch (destruct.kind) {
                     .Required => |sub_pattern_idx| try self.collectBoundVarsToScratch(sub_pattern_idx),
                     .SubPattern => |sub_pattern_idx| try self.collectBoundVarsToScratch(sub_pattern_idx),
+                    .Rest => |sub_pattern_idx| try self.collectBoundVarsToScratch(sub_pattern_idx),
                 }
             }
         },
@@ -8533,7 +8545,10 @@ pub fn canonicalizePattern(
                         const record_destruct = CIR.Pattern.RecordDestruct{
                             .label = field_name_ident,
                             .ident = field_name_ident,
-                            .kind = .{ .Required = assign_pattern_idx },
+                            .kind = if (field.rest)
+                                .{ .Rest = assign_pattern_idx }
+                            else
+                                .{ .Required = assign_pattern_idx },
                         };
 
                         const destruct_idx = try self.env.addRecordDestruct(record_destruct, field_region);
@@ -13182,11 +13197,173 @@ fn generateClosureTagName(self: *Self, hint: ?Ident.Idx) std.mem.Allocator.Error
     return try self.env.insertIdent(base.Ident.for_text(tag_name));
 }
 
+/// Inject `echo!` as a synthetic hosted function for default_app modules.
+/// This creates an `e_hosted_lambda` expression and introduces `echo!` into scope
+/// so that headerless app files can call `echo!` without importing a platform.
+fn injectEchoPlatform(self: *Self) std.mem.Allocator.Error!void {
+    const synthetic_region = Region.zero();
+
+    // Create the echo! identifier
+    const echo_ident = try self.env.insertIdent(base.Ident.for_text("echo!"));
+
+    // Create a parameter pattern for the Str argument
+    const arg_ident = try self.env.insertIdent(base.Ident.for_text("_echo_arg"));
+    const arg_pattern_idx = try self.env.addPattern(.{ .assign = .{ .ident = arg_ident } }, synthetic_region);
+    const patterns_start = self.env.store.scratchTop("patterns");
+    try self.env.store.scratch.?.patterns.append(arg_pattern_idx);
+    const args_span = CIR.Pattern.Span{ .span = .{ .start = @intCast(patterns_start), .len = 1 } };
+
+    // Create a crash body placeholder (never executed — hosted fn ptr is called at runtime)
+    const crash_msg = try self.env.insertString("echo! is a hosted function");
+    const body_idx = try self.env.addExpr(.{ .e_crash = .{ .msg = crash_msg } }, synthetic_region);
+    // Ensure types array has entries for the body expression
+    while (self.env.types.len() <= @intFromEnum(body_idx)) {
+        _ = try self.env.types.fresh();
+    }
+
+    // Create e_hosted_lambda expression with index 0 (sole hosted function)
+    const expr_idx = try self.env.addExpr(.{
+        .e_hosted_lambda = .{
+            .symbol_name = echo_ident,
+            .index = 0,
+            .args = args_span,
+            .body = body_idx,
+        },
+    }, synthetic_region);
+    // Ensure types array has entries for the hosted lambda expression
+    while (self.env.types.len() <= @intFromEnum(expr_idx)) {
+        _ = try self.env.types.fresh();
+    }
+
+    // Build CIR type annotation: echo! : Str => Try({}, [..])
+    // This ensures the type checker properly resolves the type instead of setting it to `err`.
+    // Note: Do NOT set the expression's type variable content directly here, as it conflicts
+    // with the annotation processing in the type checker (causes Str => () vs Str => Try mismatch).
+    const annotation_idx = try self.buildEchoTypeAnnotation(synthetic_region);
+
+    // Create a pattern for the def binding
+    const pattern_idx = try self.env.addPattern(.{ .assign = .{ .ident = echo_ident } }, synthetic_region);
+
+    // Create the def binding echo! to the hosted lambda
+    const def_idx = try self.env.addDef(.{
+        .pattern = pattern_idx,
+        .expr = expr_idx,
+        .annotation = annotation_idx,
+        .kind = .let,
+    }, synthetic_region);
+
+    // Add the def to scratch so it's included in all_defs
+    try self.env.store.addScratchDef(def_idx);
+
+    // Introduce echo! into scope so the body can reference it
+    _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, echo_ident, pattern_idx, false, true);
+}
+
+/// Build the type annotation `Str => Try({}, [..])` for the echo! hosted function.
+/// Returns the Annotation.Idx to attach to the def.
+fn buildEchoTypeAnnotation(self: *Self, region: Region) std.mem.Allocator.Error!CIR.Annotation.Idx {
+    // Look up Str and Try from scope (they are auto-imported external_nominal bindings)
+    const str_ident = try self.env.insertIdent(base.Ident.for_text("Str"));
+    const try_ident = try self.env.insertIdent(base.Ident.for_text("Try"));
+
+    // Build Str type annotation via scope lookup
+    const str_anno_idx = try self.buildExternalTypeLookupAnno(str_ident, region);
+
+    // Build {} (empty record = unit type) type annotation
+    const empty_record_fields_top = self.env.store.scratchAnnoRecordFieldTop();
+    const empty_record_fields = try self.env.store.annoRecordFieldSpanFrom(empty_record_fields_top);
+    const empty_record_idx = try self.env.addTypeAnno(.{ .record = .{ .fields = empty_record_fields, .ext = null } }, region);
+
+    // Build [..] (open tag union with no tags) type annotation
+    const underscore_idx = try self.env.addTypeAnno(.{ .underscore = {} }, region);
+    const empty_tags_scratch_top = self.env.store.scratchTypeAnnoTop();
+    const empty_tags = try self.env.store.typeAnnoSpanFrom(empty_tags_scratch_top);
+    const open_tag_union_idx = try self.env.addTypeAnno(.{ .tag_union = .{
+        .tags = empty_tags,
+        .ext = underscore_idx,
+    } }, region);
+
+    // Build Try({}, [..]) type application
+    const try_base = try self.getExternalTypeBase(try_ident);
+    const try_args_scratch_top = self.env.store.scratchTypeAnnoTop();
+    try self.env.store.addScratchTypeAnno(empty_record_idx);
+    try self.env.store.addScratchTypeAnno(open_tag_union_idx);
+    const try_args_span = try self.env.store.typeAnnoSpanFrom(try_args_scratch_top);
+    const try_apply_idx = try self.env.addTypeAnno(.{ .apply = .{
+        .name = try_ident,
+        .base = try_base,
+        .args = try_args_span,
+    } }, region);
+
+    // Build Str => Try({}, [..]) function type annotation
+    const fn_args_scratch_top = self.env.store.scratchTypeAnnoTop();
+    try self.env.store.addScratchTypeAnno(str_anno_idx);
+    const fn_args_span = try self.env.store.typeAnnoSpanFrom(fn_args_scratch_top);
+    const func_anno_idx = try self.env.addTypeAnno(.{ .@"fn" = .{
+        .args = fn_args_span,
+        .ret = try_apply_idx,
+        .effectful = true,
+    } }, region);
+
+    // Wrap in Annotation struct
+    return try self.env.addAnnotation(CIR.Annotation{
+        .anno = func_anno_idx,
+        .where = null,
+    }, region);
+}
+
+/// Build a type annotation lookup for an external type (Str, Try, etc.) by looking it up in scope.
+fn buildExternalTypeLookupAnno(self: *Self, type_ident: Ident.Idx, region: Region) std.mem.Allocator.Error!CIR.TypeAnno.Idx {
+    const type_base = try self.getExternalTypeBase(type_ident);
+    return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+        .name = type_ident,
+        .base = type_base,
+    } }, region);
+}
+
+/// Get the LocalOrExternal base for an auto-imported type by looking it up in scope.
+fn getExternalTypeBase(self: *Self, type_ident: Ident.Idx) std.mem.Allocator.Error!TypeAnno.LocalOrExternal {
+    if (self.scopeLookupTypeBinding(type_ident)) |binding_location| {
+        const binding = binding_location.binding.*;
+        switch (binding) {
+            .external_nominal => |ext| {
+                if (ext.import_idx) |import_idx| {
+                    if (ext.target_node_idx) |target_node_idx| {
+                        return TypeAnno.LocalOrExternal{ .external = .{
+                            .module_idx = import_idx,
+                            .target_node_idx = target_node_idx,
+                        } };
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+    // Fallback: try auto-imported types from module_envs
+    if (self.module_envs) |envs_map| {
+        if (envs_map.get(type_ident)) |auto_imported_type| {
+            if (auto_imported_type.statement_idx) |stmt_idx| {
+                const module_name_text = auto_imported_type.env.module_name;
+                const import_idx = try self.getOrCreateAutoImport(module_name_text);
+                if (auto_imported_type.env.getExposedNodeIndexByStatementIdx(stmt_idx)) |target_node_idx| {
+                    return TypeAnno.LocalOrExternal{ .external = .{
+                        .module_idx = import_idx,
+                        .target_node_idx = target_node_idx,
+                    } };
+                }
+            }
+        }
+    }
+    // This should not happen for builtin types like Str/Try — if it does,
+    // it indicates a missing type binding in the scope or module_envs.
+    @panic("getExternalTypeBase: type not found in scope or auto-imports");
+}
+
 const MainFunctionStatus = enum { valid, invalid, not_found };
 
 /// Check if this module has a valid main! function (1 argument lambda).
 /// Reports an error if main! exists but has the wrong arity.
-fn checkMainFunction(self: *Self) std.mem.Allocator.Error!MainFunctionStatus {
+fn checkMainFunction(self: *Self, report_errors: bool) std.mem.Allocator.Error!MainFunctionStatus {
     const file = self.parse_ir.store.getFile();
 
     for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
@@ -13210,10 +13387,12 @@ fn checkMainFunction(self: *Self) std.mem.Allocator.Error!MainFunctionStatus {
                         if (params.len == 1) {
                             return .valid;
                         } else {
-                            try self.env.pushDiagnostic(Diagnostic{ .default_app_wrong_arity = .{
-                                .arity = @intCast(params.len),
-                                .region = region,
-                            } });
+                            if (report_errors) {
+                                try self.env.pushDiagnostic(Diagnostic{ .default_app_wrong_arity = .{
+                                    .arity = @intCast(params.len),
+                                    .region = region,
+                                } });
+                            }
                             return .invalid;
                         }
                     }

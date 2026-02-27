@@ -9,22 +9,7 @@
 //! This design makes Roc's ABI very simple; the calling convention is just "Ops pointer,
 //! return pointer, args pointers".
 
-// Tracy is optional - when not available (e.g., standalone static library builds),
-// use a no-op stub to avoid compilation errors.
-const tracy = if (@hasDecl(@import("root"), "tracy_enabled"))
-    @import("tracy")
-else
-    struct {
-        pub const enable_allocation = false;
-        pub fn trace(_: anytype) TracyStub {
-            return .{};
-        }
-        pub fn allocName(_: ?[*]const u8, _: usize) void {}
-        pub fn freeName(_: ?[*]const u8, _: usize) void {}
-        const TracyStub = struct {
-            pub fn end(_: @This()) void {}
-        };
-    };
+const tracy = @import("tracy");
 
 /// todo: describe RocCall
 pub const RocCall = fn (
@@ -51,7 +36,33 @@ pub const RocCall = fn (
 /// inside the Roc compiler itself.
 /// Function pointer type for hosted functions provided by the platform.
 /// All hosted functions follow the RocCall ABI: (ops, ret_ptr, args_ptr).
-pub const HostedFn = *const fn (*RocOps, *anyopaque, *anyopaque) callconv(.c) void;
+///
+/// The first parameter is `*anyopaque` instead of `*RocOps` to break a type-level
+/// dependency loop (HostedFn -> *RocOps -> HostedFunctions -> [*]HostedFn).
+/// Callers should cast the opaque pointer to `*RocOps` as needed.
+/// Use `hostedFn` to type-erase a concrete hosted function pointer.
+pub const HostedFn = *const fn (*anyopaque, *anyopaque, *anyopaque) callconv(.c) void;
+
+/// Type-erase a hosted function pointer to `HostedFn`.
+///
+/// Hosted functions are typically written with concrete parameter types for clarity
+/// (e.g. `*RocOps`, `*RocStr`, `[*]u8`), but must be stored as `HostedFn` which
+/// uses `*anyopaque` for all parameters. This helper performs that cast.
+pub fn hostedFn(func: anytype) HostedFn {
+    const T = @TypeOf(func);
+    const info = @typeInfo(T);
+    if (info == .pointer) {
+        const child = @typeInfo(info.pointer.child);
+        if (child == .@"fn") {
+            const f = child.@"fn";
+            if (f.params.len != 3)
+                @compileError("hostedFn: function must take exactly 3 parameters (ops, ret_ptr, args_ptr)");
+            if (f.return_type != void)
+                @compileError("hostedFn: function must return void");
+        }
+    }
+    return @ptrCast(func);
+}
 
 /// Array of hosted function pointers provided by the platform.
 /// These are sorted alphabetically by function name during canonicalization.

@@ -3272,6 +3272,11 @@ fn addMainExe(
         }),
         .linkage = .static,
     });
+    // Provide a no-op tracy stub so host_abi.zig can do @import("tracy") without
+    // pulling in the real tracy module (which requires build_options).
+    builtins_obj.root_module.addImport("tracy", b.addModule("tracy_stub", .{
+        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
+    }));
     builtins_obj.bundle_compiler_rt = false;
     configureBackend(builtins_obj, target);
 
@@ -3350,6 +3355,11 @@ fn addMainExe(
             }),
             .linkage = .static,
         });
+        // Provide a no-op tracy stub (same as for host builtins above)
+        cross_builtins_obj.root_module.addImport("tracy", b.addModule(
+            b.fmt("tracy_stub_{s}", .{cross_target.name}),
+            .{ .root_source_file = b.path("src/builtins/tracy_stub.zig") },
+        ));
         cross_builtins_obj.bundle_compiler_rt = false;
         configureBackend(cross_builtins_obj, cross_resolved_target);
 

@@ -68,6 +68,17 @@ pub const FileProvider = struct {
         .read = filesystemRead,
     };
 
+    /// Check if a file exists by attempting to read it through the provider.
+    /// This ensures virtual/in-memory files are found the same way as disk files.
+    pub fn fileExists(self: FileProvider, path: []const u8, gpa: Allocator) bool {
+        const data = self.read(self.ctx, path, gpa) catch return false;
+        if (data) |d| {
+            gpa.free(d);
+            return true;
+        }
+        return false;
+    }
+
     fn filesystemRead(_: ?*anyopaque, path: []const u8, gpa: Allocator) Allocator.Error!?[]u8 {
         return std.fs.cwd().readFileAlloc(gpa, path, std.math.maxInt(usize)) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
@@ -868,6 +879,7 @@ pub const PackageEnv = struct {
             self.package_name,
             self.resolver,
             self.additional_known_modules.items,
+            null, // Use filesystem access check
         );
 
         const canon_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
@@ -1133,6 +1145,7 @@ pub const PackageEnv = struct {
         package_name: []const u8,
         resolver: ?ImportResolver,
         additional_known_modules: []const KnownModule,
+        file_provider: ?FileProvider,
     ) !void {
         const gpa = allocators.gpa;
 
@@ -1167,14 +1180,18 @@ pub const PackageEnv = struct {
             const sibling_ident = try env.insertIdent(base.Ident.for_text(sibling_name));
             const qualified_ident = try env.insertIdent(base.Ident.for_text(sibling_name));
 
-            // Check if sibling file exists
+            // Check if sibling file exists (via FileProvider if available, else filesystem)
             const file_name = try std.fmt.allocPrint(gpa, "{s}.roc", .{sibling_name});
             defer gpa.free(file_name);
             const file_path = try std.fs.path.join(gpa, &.{ root_dir, file_name });
             defer gpa.free(file_path);
-            std.fs.cwd().access(file_path, .{}) catch {
-                continue; // Skip non-existent files
+            const exists = if (file_provider) |fp|
+                fp.fileExists(file_path, gpa)
+            else blk: {
+                std.fs.cwd().access(file_path, .{}) catch break :blk false;
+                break :blk true;
             };
+            if (!exists) continue;
 
             // Try to get actual env from resolver if available
             if (resolver) |res| {
