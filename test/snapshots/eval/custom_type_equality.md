@@ -33,8 +33,14 @@ c1 = Color.Red
 c2 : Color
 c2 = Color.Red
 
+c3 : Color
+c3 = Color.Blue
+
 # Test equality - same values should be equal
 expect c1 == c2
+
+# Test inequality - different values should not be equal 
+expect c1 != c3
 ~~~
 # EXPECTED
 NIL
@@ -66,7 +72,10 @@ LowerIdent,OpColon,UpperIdent,
 LowerIdent,OpAssign,UpperIdent,NoSpaceDotUpperIdent,
 LowerIdent,OpColon,UpperIdent,
 LowerIdent,OpAssign,UpperIdent,NoSpaceDotUpperIdent,
+LowerIdent,OpColon,UpperIdent,
+LowerIdent,OpAssign,UpperIdent,NoSpaceDotUpperIdent,
 KwExpect,LowerIdent,OpEquals,LowerIdent,
+KwExpect,LowerIdent,OpNotEquals,LowerIdent,
 EndOfFile,
 ~~~
 # PARSE
@@ -149,10 +158,19 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "c2"))
 			(e-tag (raw "Color.Red")))
+		(s-type-anno (name "c3")
+			(ty (name "Color")))
+		(s-decl
+			(p-ident (raw "c3"))
+			(e-tag (raw "Color.Blue")))
 		(s-expect
 			(e-binop (op "==")
 				(e-ident (raw "c1"))
-				(e-ident (raw "c2"))))))
+				(e-ident (raw "c2"))))
+		(s-expect
+			(e-binop (op "!=")
+				(e-ident (raw "c1"))
+				(e-ident (raw "c3"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -184,8 +202,14 @@ c1 = Color.Red
 c2 : Color
 c2 = Color.Red
 
+c3 : Color
+c3 = Color.Blue
+
 # Test equality - same values should be equal
 expect c1 == c2
+
+# Test inequality - different values should not be equal 
+expect c1 != c3
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -306,6 +330,12 @@ expect c1 == c2
 			(e-tag (name "Red")))
 		(annotation
 			(ty-lookup (name "Color") (local))))
+	(d-let
+		(p-assign (ident "c3"))
+		(e-nominal (nominal "Color")
+			(e-tag (name "Blue")))
+		(annotation
+			(ty-lookup (name "Color") (local))))
 	(s-nominal-decl
 		(ty-header (name "Color"))
 		(ty-tag-union
@@ -317,7 +347,13 @@ expect c1 == c2
 			(e-lookup-local
 				(p-assign (ident "c1")))
 			(e-lookup-local
-				(p-assign (ident "c2"))))))
+				(p-assign (ident "c2")))))
+	(s-expect
+		(e-binop (op "ne")
+			(e-lookup-local
+				(p-assign (ident "c1")))
+			(e-lookup-local
+				(p-assign (ident "c3"))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -325,12 +361,14 @@ expect c1 == c2
 	(defs
 		(patt (type "Color, Color -> Bool"))
 		(patt (type "Color"))
+		(patt (type "Color"))
 		(patt (type "Color")))
 	(type_decls
 		(nominal (type "Color")
 			(ty-header (name "Color"))))
 	(expressions
 		(expr (type "Color, Color -> Bool"))
+		(expr (type "Color"))
 		(expr (type "Color"))
 		(expr (type "Color"))))
 ~~~
