@@ -7100,8 +7100,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
         }
 
-        fn inferAbsDiffInputLayout(self: *Self, a_loc: ValueLocation, b_loc: ValueLocation, ret_layout: layout.Idx, arg_layout: ?layout.Idx) layout.Idx {
-            _ = self;
+        fn inferAbsDiffInputLayout(_: *Self, a_loc: ValueLocation, b_loc: ValueLocation, ret_layout: layout.Idx, arg_layout: ?layout.Idx) layout.Idx {
             if (arg_layout) |al| return al;
 
             if (immediateIsNegative(a_loc) or immediateIsNegative(b_loc)) {

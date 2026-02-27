@@ -779,14 +779,14 @@ pub fn roc_builtins_int_to_str(out: *RocStr, val_low: u64, val_high: u64, int_wi
 /// (u128 div/mod → __udivti3/__umodti3 compiler_rt symbols).
 pub fn roc_builtins_float_to_str(out: *RocStr, val_bits: u64, is_f32: bool, roc_ops: *RocOps) callconv(.c) void {
     var buf: [400]u8 = undefined;
-    const result = formatFloatDecimal(&buf, val_bits, is_f32);
+    const result = if (is_f32) blk: {
+        const f32_val: f32 = @bitCast(@as(u32, @truncate(val_bits)));
+        break :blk i128h.f64_to_str(&buf, @as(f64, @floatCast(f32_val)));
+    } else blk: {
+        const f64_val: f64 = @bitCast(val_bits);
+        break :blk i128h.f64_to_str(&buf, f64_val);
+    };
     out.* = RocStr.init(&buf, result.len, roc_ops);
-}
-
-/// Format a float to decimal string using Ryu's binaryToDecimal (u64-only).
-/// Delegates to compiler_rt_128.formatFloatDecimal.
-fn formatFloatDecimal(buf: []u8, val_bits: u64, is_f32: bool) []u8 {
-    return i128h.formatFloatDecimal(buf, val_bits, is_f32);
 }
 
 // ── Numeric-from-string wrappers ──

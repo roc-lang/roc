@@ -4779,7 +4779,7 @@ pub const Interpreter = struct {
 
         var float_buf: [400]u8 = undefined;
         const str_bytes = if (T == f32)
-            i128h.f32_to_str(&float_buf, float_value)
+            i128h.f64_to_str(&float_buf, @as(f64, @floatCast(float_value)))
         else
             i128h.f64_to_str(&float_buf, float_value);
 
