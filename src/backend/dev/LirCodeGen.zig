@@ -12470,8 +12470,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Load the closure value from stack
                     try self.codegen.emitLoadStack(.w64, target_reg, cv.stack_offset);
                 },
-                .float_reg, .immediate_f64 => {
-                    unreachable;
+                .float_reg => |src_freg| {
+                    // Calls in this pipeline pass scalar arguments through GP registers.
+                    // Preserve float bit-patterns by round-tripping through a stack slot.
+                    const slot = self.codegen.allocStackSlot(8);
+                    try self.codegen.emitStoreStackF64(slot, src_freg);
+                    try self.codegen.emitLoadStack(.w64, target_reg, slot);
+                },
+                .immediate_f64 => |val| {
+                    // Preserve IEEE754 bits when materializing into a GP register.
+                    try self.codegen.emitLoadImm(target_reg, @bitCast(@as(u64, @bitCast(val))));
                 },
                 .noreturn => unreachable,
             }
