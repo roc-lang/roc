@@ -134,15 +134,6 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
         if (scalar.tag == .int and shouldPreferIntegerLayoutRendering(ctx, rt_var)) {
             return renderValueRoc(ctx, value);
         }
-        if (scalar.tag == .frac and scalar.data.frac == .dec and shouldPreferIntegerLayoutRendering(ctx, rt_var)) {
-            const rendered = try renderValueRoc(ctx, value);
-            if (std.mem.endsWith(u8, rendered, ".0")) {
-                const trimmed = try gpa.dupe(u8, rendered[0 .. rendered.len - 2]);
-                gpa.free(rendered);
-                return trimmed;
-            }
-            return rendered;
-        }
     }
 
     // unwrap aliases/nominals, but check for to_inspect callbacks on nominal types first
@@ -665,6 +656,9 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
         },
         .tuple => |tuple| {
             const elem_types = ctx.runtime_types.sliceVars(tuple.elems);
+            if (elem_types.len == 0) {
+                return try gpa.dupe(u8, "{}");
+            }
 
             var out = std.array_list.AlignedManaged(u8, null).init(gpa);
             errdefer out.deinit();
@@ -723,6 +717,14 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
 /// Render `value` using only its layout (without additional type information).
 /// Delegates to the shared `values.RocValue.format()` for canonical formatting.
 pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
+    // Unit values can be represented as zero-sized structs in runtime layouts.
+    // Render these consistently as `{}` for Roc-facing output.
+    if (value.layout.tag == .zst or
+        (value.layout.tag == .struct_ and ctx.layout_store.layoutSize(value.layout) == 0))
+    {
+        return try ctx.allocator.dupe(u8, "{}");
+    }
+
     const values = @import("values");
     const roc_val = values.RocValue{
         .ptr = if (value.ptr) |p| @ptrCast(p) else null,
