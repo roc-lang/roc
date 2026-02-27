@@ -923,50 +923,15 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
                 self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
             }
         },
-        .runtime_error => {
+        .runtime_error => |runtime_err| {
+            try self.emitRocCrashStatic(runtimeErrorMessage(runtime_err));
             self.body.append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
         },
         .crash => |crash| {
-            const msg_bytes = self.store.getString(crash.msg);
-            const data_offset = self.module.addDataSegment(msg_bytes, 1) catch return error.OutOfMemory;
-
-            // Build 8-byte RocCrashed struct on stack: {utf8_bytes: u32, len: u32}
-            const crashed_slot = try self.allocStackMemory(8, 4);
-
-            // Write utf8_bytes pointer
-            try self.emitFpOffset(crashed_slot);
-            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(data_offset)) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i32_store) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, 2) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-
-            // Write len
-            try self.emitFpOffset(crashed_slot);
-            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(msg_bytes.len)) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i32_store) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, 2) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, 4) catch return error.OutOfMemory;
-
-            // Push call_indirect args: (crashed_args_ptr, env_ptr)
-            try self.emitFpOffset(crashed_slot);
-            try self.emitLocalGet(self.roc_ops_local);
-            self.body.append(self.allocator, Op.i32_load) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, 2) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-
-            // Load roc_crashed table index from roc_ops_ptr offset 24
-            try self.emitLocalGet(self.roc_ops_local);
-            self.body.append(self.allocator, Op.i32_load) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, 2) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, 24) catch return error.OutOfMemory;
-
-            // call_indirect
-            self.body.append(self.allocator, Op.call_indirect) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, self.roc_ops_type_idx) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-
+            try self.generateExpr(crash.msg_expr);
+            const str_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(str_local);
+            try self.emitRocCrashFromStrLocal(str_local);
             self.body.append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
         },
         .early_return => |er| {
@@ -9642,6 +9607,11 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
         // Crash
         .crash => {
+            std.debug.assert(args.len >= 1);
+            try self.generateExpr(args[0]);
+            const str_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(str_local);
+            try self.emitRocCrashFromStrLocal(str_local);
             self.body.append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
         },
 
@@ -11606,6 +11576,76 @@ fn generateEmptyStr(self: *Self) Allocator.Error!void {
 
     // Push pointer to the result
     try self.emitFpOffset(base_offset);
+}
+
+fn runtimeErrorMessage(runtime_err: LIR.RuntimeErrorData) []const u8 {
+    return switch (runtime_err.kind) {
+        .can_diagnostic => "runtime error (diagnostic)",
+        .type_error => "runtime type error",
+        .ellipsis => "hit ... (ellipsis) at runtime",
+        .annotation_only => "called an annotation-only definition at runtime",
+        .internal => "internal runtime error",
+    };
+}
+
+fn emitRocCrashStatic(self: *Self, msg_bytes: []const u8) Allocator.Error!void {
+    const data_offset = self.module.addDataSegment(msg_bytes, 1) catch return error.OutOfMemory;
+    const ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const len_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+
+    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(data_offset)) catch return error.OutOfMemory;
+    try self.emitLocalSet(ptr_local);
+
+    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(msg_bytes.len)) catch return error.OutOfMemory;
+    try self.emitLocalSet(len_local);
+
+    try self.emitRocCrashFromPtrLenLocals(ptr_local, len_local);
+}
+
+fn emitRocCrashFromStrLocal(self: *Self, str_local: u32) Allocator.Error!void {
+    const ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const len_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitExtractStrPtrLen(str_local, ptr_local, len_local);
+    try self.emitRocCrashFromPtrLenLocals(ptr_local, len_local);
+}
+
+fn emitRocCrashFromPtrLenLocals(self: *Self, ptr_local: u32, len_local: u32) Allocator.Error!void {
+    // Build 8-byte RocCrashed struct on stack: {utf8_bytes: u32, len: u32}
+    const crashed_slot = try self.allocStackMemory(8, 4);
+
+    // Write utf8_bytes pointer
+    try self.emitFpOffset(crashed_slot);
+    try self.emitLocalGet(ptr_local);
+    self.body.append(self.allocator, Op.i32_store) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, 2) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+
+    // Write len
+    try self.emitFpOffset(crashed_slot);
+    try self.emitLocalGet(len_local);
+    self.body.append(self.allocator, Op.i32_store) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, 2) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, 4) catch return error.OutOfMemory;
+
+    // Push call_indirect args: (crashed_args_ptr, env_ptr)
+    try self.emitFpOffset(crashed_slot);
+    try self.emitLocalGet(self.roc_ops_local);
+    self.body.append(self.allocator, Op.i32_load) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, 2) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+
+    // Load roc_crashed table index from roc_ops_ptr offset 24
+    try self.emitLocalGet(self.roc_ops_local);
+    self.body.append(self.allocator, Op.i32_load) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, 2) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, 24) catch return error.OutOfMemory;
+
+    // call_indirect
+    self.body.append(self.allocator, Op.call_indirect) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, self.roc_ops_type_idx) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
 }
 
 /// Extract the byte pointer and length from a RocStr.

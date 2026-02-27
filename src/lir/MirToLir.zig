@@ -501,12 +501,31 @@ fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
         .tuple_access => |ta| self.lowerTupleAccess(ta, mir_expr_id, region),
         .run_low_level => |ll| self.lowerLowLevel(ll, mono_idx, region),
         .hosted => |h| self.lowerHosted(h, mono_idx, region),
-        .runtime_err_can, .runtime_err_type, .runtime_err_ellipsis, .runtime_err_anno_only => {
-            return self.lir_store.addExpr(.runtime_error, region);
+        .runtime_err_can => |re| {
+            return self.lir_store.addExpr(.{ .runtime_error = .{
+                .kind = .can_diagnostic,
+                .diagnostic_id = @intFromEnum(re.diagnostic),
+            } }, region);
+        },
+        .runtime_err_type => {
+            return self.lir_store.addExpr(.{ .runtime_error = .{
+                .kind = .type_error,
+            } }, region);
+        },
+        .runtime_err_ellipsis => {
+            return self.lir_store.addExpr(.{ .runtime_error = .{
+                .kind = .ellipsis,
+            } }, region);
+        },
+        .runtime_err_anno_only => {
+            return self.lir_store.addExpr(.{ .runtime_error = .{
+                .kind = .annotation_only,
+            } }, region);
         },
         .crash => |s| blk: {
             const lir_str_idx = try self.copyStringToLir(s);
-            break :blk self.lir_store.addExpr(.{ .crash = .{ .msg = lir_str_idx } }, region);
+            const msg_expr = try self.lir_store.addExpr(.{ .str_literal = lir_str_idx }, region);
+            break :blk self.lir_store.addExpr(.{ .crash = .{ .msg_expr = msg_expr } }, region);
         },
         .dbg_expr => |d| self.lowerDbg(d, mono_idx, region),
         .expect => |e| self.lowerExpect(e, mono_idx, region),
@@ -3634,6 +3653,8 @@ test "MIR crash lowers to LIR crash" {
     const lir_expr = env.lir_store.getExpr(lir_id);
 
     try testing.expect(lir_expr == .crash);
+    const msg_expr = env.lir_store.getExpr(lir_expr.crash.msg_expr);
+    try testing.expect(msg_expr == .str_literal);
 }
 
 test "MIR return_expr lowers to LIR early_return" {

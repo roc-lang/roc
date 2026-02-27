@@ -1521,13 +1521,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 // Crash and runtime errors
                 .crash => |crash| {
-                    const msg = self.store.getString(crash.msg);
-                    try self.emitRocCrash(msg);
+                    const msg_loc = try self.generateExpr(crash.msg_expr);
+                    try self.emitRocCrashFromStr(msg_loc);
                     try self.emitTrap();
                     return .noreturn;
                 },
-                .runtime_error => {
-                    try self.emitRocCrash("hit a runtime error");
+                .runtime_error => |runtime_err| {
+                    try self.emitRocCrash(runtimeErrorMessage(runtime_err));
                     try self.emitTrap();
                     return .noreturn;
                 },
@@ -3801,10 +3801,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                 },
                 .crash => {
-                    // Runtime crash: call roc_crashed via RocOps.
-                    // TODO: Pass the user's crash message string from the args
-                    // instead of this static message.
-                    try self.emitRocCrash("Roc crashed");
+                    std.debug.assert(args.len >= 1);
+                    const msg_loc = try self.generateExpr(args[0]);
+                    try self.emitRocCrashFromStr(msg_loc);
                     try self.emitTrap();
                     return .noreturn;
                 },
@@ -9694,9 +9693,76 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return try self.generateExpr(expect_expr.body);
         }
 
+        fn runtimeErrorMessage(runtime_err: lir.LIR.RuntimeErrorData) []const u8 {
+            return switch (runtime_err.kind) {
+                .can_diagnostic => "runtime error (diagnostic)",
+                .type_error => "runtime type error",
+                .ellipsis => "hit ... (ellipsis) at runtime",
+                .annotation_only => "called an annotation-only definition at runtime",
+                .internal => "internal runtime error",
+            };
+        }
+
+        /// Emit a roc_crashed call using a RocStr value produced at runtime.
+        fn emitRocCrashFromStr(self: *Self, msg_loc: ValueLocation) Allocator.Error!void {
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const base_offset: i32 = switch (msg_loc) {
+                .stack => |s| s.offset,
+                .stack_str => |off| off,
+                else => try self.ensureOnStack(msg_loc, roc_str_size),
+            };
+
+            const ptr_reg = try self.allocTempGeneral();
+            const len_reg = try self.allocTempGeneral();
+            const cap_reg = try self.allocTempGeneral();
+            const mask_reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(mask_reg);
+            defer self.codegen.freeGeneral(cap_reg);
+            defer self.codegen.freeGeneral(len_reg);
+            defer self.codegen.freeGeneral(ptr_reg);
+
+            // Small strings are inlined in RocStr; large strings use bytes/len fields.
+            try self.emitLoad(.w64, cap_reg, frame_ptr, base_offset + 16);
+            const small_patch = blk: {
+                if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                    try self.codegen.emit.cmpRegImm12(.w64, cap_reg, 0);
+                    const patch_loc = self.codegen.currentOffset();
+                    try self.codegen.emit.bcond(.mi, 0);
+                    break :blk patch_loc;
+                } else {
+                    try self.codegen.emit.testRegReg(.w64, cap_reg, cap_reg);
+                    break :blk try self.codegen.emitCondJump(.sign);
+                }
+            };
+
+            // Large-string path: ptr/len are direct fields.
+            try self.emitLoad(.w64, ptr_reg, frame_ptr, base_offset);
+            try self.emitLoad(.w64, len_reg, frame_ptr, base_offset + 8);
+            const done_patch = try self.codegen.emitJump();
+
+            // Small-string path: bytes are inline, len is low 7 bits of final byte.
+            self.codegen.patchJump(small_patch, self.codegen.currentOffset());
+            try self.emitLeaStack(ptr_reg, base_offset);
+            try self.emitLoadW8(len_reg, frame_ptr, base_offset + @as(i32, @intCast(roc_str_size - 1)));
+            try self.codegen.emitLoadImm(mask_reg, 0x7F);
+            try self.emitAndRegs(.w64, len_reg, len_reg, mask_reg);
+
+            self.codegen.patchJump(done_patch, self.codegen.currentOffset());
+
+            const crashed_slot = self.codegen.allocStackSlot(16);
+            try self.emitStore(.w64, frame_ptr, crashed_slot, ptr_reg);
+            try self.emitStore(.w64, frame_ptr, crashed_slot + 8, len_reg);
+
+            const fn_ptr_reg: GeneralReg = if (comptime arch == .aarch64 or arch == .aarch64_be) .X10 else .RAX;
+            try self.emitLoad(.w64, fn_ptr_reg, roc_ops_reg, 48);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(frame_ptr, crashed_slot);
+            try builder.addMemArg(roc_ops_reg, 0); // env from RocOps offset 0
+            try builder.callReg(fn_ptr_reg);
+        }
+
         /// Emit a roc_crashed call via RocOps with a static message.
-        /// Used for runtime_error expressions (dead code paths that should
-        /// never execute, e.g. the Err branch of `?` at the top level).
         fn emitRocCrash(self: *Self, msg: []const u8) Allocator.Error!void {
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
@@ -12282,9 +12348,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                         unreachable;
                     },
-                    .runtime_error => {
+                    .runtime_error => |runtime_err| {
                         // Dead code path in a call — emit roc_crashed and return dummy.
-                        try self.emitRocCrash("hit a runtime error in call (dead code path)");
+                        try self.emitRocCrash(runtimeErrorMessage(runtime_err));
                         return .{ .immediate_i64 = 0 };
                     },
                     else => @panic("generateLookupCall: unexpected def expr type in symbol_defs"),

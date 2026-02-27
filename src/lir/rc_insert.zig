@@ -381,6 +381,9 @@ pub const RcInsertPass = struct {
             .tag_payload_access => |tpa| {
                 try self.countUsesInto(tpa.value, target);
             },
+            .crash => |crash| {
+                try self.countUsesInto(crash.msg_expr, target);
+            },
             .for_loop => |fl| {
                 try self.countUsesInto(fl.list_expr, target);
                 try self.registerPatternSymbolInto(fl.elem_pattern, target);
@@ -401,7 +404,6 @@ pub const RcInsertPass = struct {
             .bool_literal,
             .empty_list,
             .zero_arg_tag,
-            .crash,
             .runtime_error,
             .break_expr,
             => {},
@@ -604,6 +606,13 @@ pub const RcInsertPass = struct {
                     .payload_layout = tpa.payload_layout,
                 } }, region);
             },
+            .crash => |crash| {
+                const new_msg = try self.processExpr(crash.msg_expr);
+                if (new_msg == crash.msg_expr) return expr_id;
+                return self.store.addExpr(.{ .crash = .{
+                    .msg_expr = new_msg,
+                } }, region);
+            },
             .hosted_call => |hc| {
                 const args_res = try self.processExprSpan(hc.args);
                 if (!args_res.changed) return expr_id;
@@ -627,7 +636,6 @@ pub const RcInsertPass = struct {
             .empty_list,
             .zero_arg_tag,
             .break_expr,
-            .crash,
             .runtime_error,
             .incref,
             .decref,
@@ -1335,7 +1343,9 @@ pub const RcInsertPass = struct {
         const stmts_span = try self.store.addStmts(cleanup_stmts.items);
         // The block's final_expr is never reached (early_return diverges),
         // but we need a distinct valid expr — not early_ret_id which is already used as a stmt.
-        const dead_final = try self.store.addExpr(.{ .runtime_error = {} }, region);
+        const dead_final = try self.store.addExpr(.{ .runtime_error = .{
+            .kind = .internal,
+        } }, region);
         return self.store.addExpr(.{ .block = .{
             .stmts = stmts_span,
             .final_expr = dead_final,
@@ -1460,6 +1470,7 @@ pub const RcInsertPass = struct {
             .dec_to_str => |d| try self.collectExprBoundSymbols(d, set),
             .str_escape_and_quote => |s| try self.collectExprBoundSymbols(s, set),
             .tag_payload_access => |tpa| try self.collectExprBoundSymbols(tpa.value, set),
+            .crash => |crash| try self.collectExprBoundSymbols(crash.msg_expr, set),
             // Lambda/closure are separate scopes in LIR — don't recurse.
             .lambda, .closure => {},
             // Terminals and RC ops — no sub-expressions, no bindings
@@ -1474,7 +1485,6 @@ pub const RcInsertPass = struct {
             .empty_list,
             .zero_arg_tag,
             .break_expr,
-            .crash,
             .runtime_error,
             .incref,
             .decref,
@@ -2150,6 +2160,11 @@ fn countRcOps(store: *const LirExprStore, expr_id: LirExprId) RcOpCounts {
             increfs += sub.increfs;
             decrefs += sub.decrefs;
         },
+        .crash => |crash| {
+            const sub = countRcOps(store, crash.msg_expr);
+            increfs += sub.increfs;
+            decrefs += sub.decrefs;
+        },
         .i64_literal,
         .i128_literal,
         .f64_literal,
@@ -2161,7 +2176,6 @@ fn countRcOps(store: *const LirExprStore, expr_id: LirExprId) RcOpCounts {
         .empty_list,
         .zero_arg_tag,
         .break_expr,
-        .crash,
         .runtime_error,
         .free,
         => {},

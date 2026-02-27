@@ -39,6 +39,22 @@ const CalledVia = base.CalledVia;
 
 pub const Symbol = mir.Symbol;
 
+/// Category of compiler-generated runtime error.
+pub const RuntimeErrorKind = enum(u8) {
+    can_diagnostic,
+    type_error,
+    ellipsis,
+    annotation_only,
+    internal,
+};
+
+/// Payload for runtime_error expressions so downstream passes can preserve context.
+pub const RuntimeErrorData = struct {
+    kind: RuntimeErrorKind,
+    /// Optional diagnostic ID (currently only set for can_diagnostic errors).
+    diagnostic_id: ?u32 = null,
+};
+
 /// Index into LirExprStore.exprs
 pub const LirExprId = enum(u32) {
     _,
@@ -477,11 +493,12 @@ pub const LirExpr = union(enum) {
 
     /// Crash with message
     crash: struct {
-        msg: StringLiteral.Idx,
+        /// Message expression (typically Str) evaluated at runtime.
+        msg_expr: LirExprId,
     },
 
     /// Runtime error (unreachable code)
-    runtime_error: void,
+    runtime_error: RuntimeErrorData,
 
     /// Nominal wrapper (transparent at runtime)
     nominal: struct {
