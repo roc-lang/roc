@@ -305,13 +305,13 @@ fn selectCopyFallbackFn(elem_layout: Layout) builtins.list.CopyFallbackFn {
                 .i64 => &builtins.list.copy_i64,
                 .i128 => &builtins.list.copy_i128,
             },
-            else => &builtins.list.copy_fallback,
+            else => @panic("selectCopyFallbackFn: unsupported scalar element layout"),
         },
         .box => &builtins.list.copy_box,
         .box_of_zst => &builtins.list.copy_box_zst,
         .list => &builtins.list.copy_list,
         .list_of_zst => &builtins.list.copy_list_zst,
-        else => &builtins.list.copy_fallback,
+        else => @panic("selectCopyFallbackFn: unsupported element layout"),
     };
 }
 
@@ -8175,30 +8175,6 @@ pub const Interpreter = struct {
         }
 
         return error.MethodNotFound;
-    }
-
-    fn rtVarRepresentsStr(self: *const Interpreter, rt_var: types.Var) bool {
-        var resolved = self.runtime_types.resolveVar(rt_var);
-        while (resolved.desc.content == .alias) {
-            const alias = resolved.desc.content.alias;
-            resolved = self.runtime_types.resolveVar(self.runtime_types.getAliasBackingVar(alias));
-        }
-
-        if (resolved.desc.content != .structure) return false;
-        if (resolved.desc.content.structure != .nominal_type) return false;
-
-        const ident = resolved.desc.content.structure.nominal_type.ident.ident_idx;
-        return ident == self.root_env.idents.str or ident == self.root_env.idents.builtin_str;
-    }
-
-    fn rtVarCompatibleWithValueLayout(self: *const Interpreter, rt_var: types.Var, value: StackValue) bool {
-        // We only need a strict guard for Str-vs-non-Str mismatches; other cases can
-        // still use existing nominal/structural dispatch paths.
-        if (value.layout.tag != .scalar) return true;
-
-        const layout_is_str = value.layout.data.scalar.tag == .str;
-        const var_is_str = self.rtVarRepresentsStr(rt_var);
-        return layout_is_str == var_is_str;
     }
 
     fn resolveMethodFunction(
@@ -17048,54 +17024,12 @@ pub const Interpreter = struct {
                 const lhs = value_stack.pop() orelse return error.Crash;
                 defer lhs.decref(&self.runtime_layout_store, roc_ops);
 
-                // Prefer the runtime type from the evaluated value if it's more concrete
-                // (i.e., has a structure type rather than flex/rigid from polymorphic calls)
-                // Track if the value came from a polymorphic context (flex/rigid rt_var)
+                // Prefer the runtime type from the evaluated value when concrete.
                 var effective_receiver_rt_var = ba.receiver_rt_var;
-                var value_is_polymorphic = false;
                 const val_rt_var = lhs.rt_var;
                 const val_resolved = self.runtime_types.resolveVar(val_rt_var);
-                // Only use the value's type if it's concrete (has structure/alias)
                 if (val_resolved.desc.content == .structure or val_resolved.desc.content == .alias) {
-                    if (self.rtVarCompatibleWithValueLayout(val_rt_var, lhs)) {
-                        effective_receiver_rt_var = val_rt_var;
-                    } else {
-                        // Mismatch between inferred rt_var and concrete runtime layout.
-                        // Treat as polymorphic so numeric fast-path can take over.
-                        value_is_polymorphic = true;
-                    }
-                } else if (val_resolved.desc.content == .flex or val_resolved.desc.content == .rigid) {
-                    // The value came from a polymorphic context
-                    value_is_polymorphic = true;
-                }
-
-                // Check if effective type is still flex/rigid after trying value's rt_var
-                // Track whether we had to default to Dec so we know to use direct numeric handling
-                var defaulted_to_dec = false;
-                const resolved_check = self.runtime_types.resolveVar(effective_receiver_rt_var);
-                if (resolved_check.desc.content == .flex or resolved_check.desc.content == .rigid) {
-                    // No concrete type info available, default to Dec for numeric operations
-                    const dec_content = try self.mkNumberTypeContentRuntime("Dec");
-                    const dec_var = try self.runtime_types.freshFromContent(dec_content);
-                    effective_receiver_rt_var = dec_var;
-                    defaulted_to_dec = true;
-                } else if (!self.rtVarCompatibleWithValueLayout(effective_receiver_rt_var, lhs)) {
-                    // Concrete but incompatible (e.g. rt_var says Str while layout is numeric).
-                    // Force numeric fallback only when both operands are numeric scalars.
-                    const lhs_is_numeric_layout = lhs.layout.tag == .scalar and
-                        (lhs.layout.data.scalar.tag == .int or lhs.layout.data.scalar.tag == .frac);
-                    const rhs_is_numeric_layout = rhs.layout.tag == .scalar and
-                        (rhs.layout.data.scalar.tag == .int or rhs.layout.data.scalar.tag == .frac);
-                    if (lhs_is_numeric_layout and rhs_is_numeric_layout) {
-                        const dec_content = try self.mkNumberTypeContentRuntime("Dec");
-                        const dec_var = try self.runtime_types.freshFromContent(dec_content);
-                        effective_receiver_rt_var = dec_var;
-                        defaulted_to_dec = true;
-                    }
-                } else if (value_is_polymorphic) {
-                    // The value is polymorphic but we have a concrete type from CIR - mark as polymorphic
-                    // so we use direct numeric handling instead of method dispatch
-                    defaulted_to_dec = true;
+                    effective_receiver_rt_var = val_rt_var;
                 }
 
                 // Resolve the lhs type
@@ -17119,69 +17053,6 @@ pub const Interpreter = struct {
                         const alias = current_resolved.desc.content.alias;
                         current_var = self.runtime_types.getAliasBackingVar(alias);
                         current_resolved = self.runtime_types.resolveVar(current_var);
-                    }
-                }
-
-                // Check if we can use low-level numeric comparison based on layout
-                // This handles cases where method dispatch would fail (e.g., polymorphic values)
-                // Only use direct handling when we had to default to Dec due to flex/rigid types
-                const lhs_is_numeric_layout = lhs.layout.tag == .scalar and
-                    (lhs.layout.data.scalar.tag == .int or lhs.layout.data.scalar.tag == .frac);
-                const rhs_is_numeric_layout = rhs.layout.tag == .scalar and
-                    (rhs.layout.data.scalar.tag == .int or rhs.layout.data.scalar.tag == .frac);
-                if (lhs_is_numeric_layout and rhs_is_numeric_layout and defaulted_to_dec) {
-                    // Handle numeric comparisons directly via low-level ops
-                    if (ba.method_ident == self.root_env.idents.is_gt) {
-                        const result = try self.compareNumericValues(lhs, rhs, .gt);
-                        const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
-                        try value_stack.push(result_val);
-                        return true;
-                    } else if (ba.method_ident == self.root_env.idents.is_gte) {
-                        const result = try self.compareNumericValues(lhs, rhs, .gte);
-                        const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
-                        try value_stack.push(result_val);
-                        return true;
-                    } else if (ba.method_ident == self.root_env.idents.is_lt) {
-                        const result = try self.compareNumericValues(lhs, rhs, .lt);
-                        const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
-                        try value_stack.push(result_val);
-                        return true;
-                    } else if (ba.method_ident == self.root_env.idents.is_lte) {
-                        const result = try self.compareNumericValues(lhs, rhs, .lte);
-                        const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
-                        try value_stack.push(result_val);
-                        return true;
-                    } else if (ba.method_ident == self.root_env.idents.is_eq) {
-                        const result = try self.compareNumericValues(lhs, rhs, .eq);
-                        const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
-                        try value_stack.push(result_val);
-                        return true;
-                    }
-                    // Handle numeric arithmetic via type-aware evalNumericBinop
-                    if (ba.method_ident == self.root_env.idents.plus) {
-                        const result = try self.evalNumericBinop(.add, lhs, rhs, roc_ops);
-                        try value_stack.push(result);
-                        return true;
-                    } else if (ba.method_ident == self.root_env.idents.minus) {
-                        const result = try self.evalNumericBinop(.sub, lhs, rhs, roc_ops);
-                        try value_stack.push(result);
-                        return true;
-                    } else if (ba.method_ident == self.root_env.idents.times) {
-                        const result = try self.evalNumericBinop(.mul, lhs, rhs, roc_ops);
-                        try value_stack.push(result);
-                        return true;
-                    } else if (ba.method_ident == self.root_env.idents.div_by) {
-                        const result = try self.evalNumericBinop(.div, lhs, rhs, roc_ops);
-                        try value_stack.push(result);
-                        return true;
-                    } else if (ba.method_ident == self.root_env.idents.div_trunc_by) {
-                        const result = try self.evalNumericBinop(.div_trunc, lhs, rhs, roc_ops);
-                        try value_stack.push(result);
-                        return true;
-                    } else if (ba.method_ident == self.root_env.idents.rem_by) {
-                        const result = try self.evalNumericBinop(.rem, lhs, rhs, roc_ops);
-                        try value_stack.push(result);
-                        return true;
                     }
                 }
 
@@ -17211,128 +17082,14 @@ pub const Interpreter = struct {
                         },
                         else => null,
                     },
-                    // Flex, rigid, and error vars are unresolved type variables (e.g., numeric literals defaulting to Dec,
-                    // or type parameters in generic functions). For is_eq, prefer a numeric scalar fast-path when we can
-                    // prove the scalar is numeric; otherwise fall back to structural equality when the type is structural.
-                    // Error types can occur during generic instantiation when types couldn't be resolved.
-                    .flex, .rigid, .err => blk: {
-                        if (ba.method_ident == self.root_env.idents.is_eq) {
-                            // Numeric scalar fast-path:
-                            // Only use layout-based scalar comparison when both sides are scalar *and*
-                            // the scalar tag is numeric (int/frac). This keeps the optimization
-                            // for numeric flex vars while avoiding crashes for non-numeric scalars
-                            // like strings.
-                            if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
-                                const lhs_tag = lhs.layout.data.scalar.tag;
-                                const rhs_tag = rhs.layout.data.scalar.tag;
-
-                                const lhs_is_numeric = lhs_tag == .int or lhs_tag == .frac;
-                                const rhs_is_numeric = rhs_tag == .int or rhs_tag == .frac;
-
-                                if (lhs_is_numeric and rhs_is_numeric) {
-                                    const order = self.compareNumericScalars(lhs, rhs) catch {
-                                        self.triggerCrash("Failed to compare numeric scalars (flex/rigid is_eq numeric scalar fast-path)", false, roc_ops);
-                                        return error.Crash;
-                                    };
-                                    var result = (order == .eq);
-                                    if (ba.negate_result) result = !result;
-                                    const result_val = try self.makeBoolValue(result);
-                                    try value_stack.push(result_val);
-                                    return true;
-                                }
-                            }
-
-                            // For non-scalar types, we need rt_var to dispatch to the type's is_eq method.
-                            // Values must have rt_var set by the code that created them.
-                            const resolved = self.runtime_types.resolveVar(lhs.rt_var);
-                            if (resolved.desc.content == .structure) {
-                                if (resolved.desc.content.structure == .nominal_type) {
-                                    const nom = resolved.desc.content.structure.nominal_type;
-                                    break :blk .{
-                                        .origin = nom.origin_module,
-                                        .ident = nom.ident.ident_idx,
-                                    };
-                                }
-                            }
-
-                            // Structural equality using effective_receiver_rt_var for proper type tracking
-                            var result = self.valuesStructurallyEqual(lhs, effective_receiver_rt_var, rhs, ba.rhs_rt_var, roc_ops) catch |err| switch (err) {
-                                error.NotImplemented => {
-                                    self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
-                                    return error.Crash;
-                                },
-                                else => return err,
-                            };
-                            // For != operator, negate the result
-                            if (ba.negate_result) result = !result;
-                            const result_val = try self.makeBoolValue(result);
-                            try value_stack.push(result_val);
-                            return true;
-                        }
-
-                        // For non-is_eq binary ops on flex types, we cannot dispatch without
-                        // a concrete type. The binary op setup code (e_binop handling) should have
-                        // already unified flex vars with Dec before reaching here.
-                        break :blk null;
+                    .flex, .rigid, .err => {
+                        self.triggerCrash("Unresolved runtime type variable in binary operator dispatch", false, roc_ops);
+                        return error.InvalidMethodReceiver;
                     },
                     else => null,
                 };
 
                 if (nominal_info == null) {
-                    // Before failing, check if this is a numeric operation we can handle directly
-                    if (lhs_is_numeric_layout and rhs_is_numeric_layout) {
-                        // Handle numeric arithmetic via type-aware evalNumericBinop as fallback
-                        if (ba.method_ident == self.root_env.idents.plus) {
-                            const result = try self.evalNumericBinop(.add, lhs, rhs, roc_ops);
-                            try value_stack.push(result);
-                            return true;
-                        } else if (ba.method_ident == self.root_env.idents.minus) {
-                            const result = try self.evalNumericBinop(.sub, lhs, rhs, roc_ops);
-                            try value_stack.push(result);
-                            return true;
-                        } else if (ba.method_ident == self.root_env.idents.times) {
-                            const result = try self.evalNumericBinop(.mul, lhs, rhs, roc_ops);
-                            try value_stack.push(result);
-                            return true;
-                        } else if (ba.method_ident == self.root_env.idents.div_by) {
-                            const result = try self.evalNumericBinop(.div, lhs, rhs, roc_ops);
-                            try value_stack.push(result);
-                            return true;
-                        } else if (ba.method_ident == self.root_env.idents.div_trunc_by) {
-                            const result = try self.evalNumericBinop(.div_trunc, lhs, rhs, roc_ops);
-                            try value_stack.push(result);
-                            return true;
-                        } else if (ba.method_ident == self.root_env.idents.rem_by) {
-                            const result = try self.evalNumericBinop(.rem, lhs, rhs, roc_ops);
-                            try value_stack.push(result);
-                            return true;
-                        } else if (ba.method_ident == self.root_env.idents.is_gt) {
-                            const result = try self.compareNumericValues(lhs, rhs, .gt);
-                            const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
-                            try value_stack.push(result_val);
-                            return true;
-                        } else if (ba.method_ident == self.root_env.idents.is_gte) {
-                            const result = try self.compareNumericValues(lhs, rhs, .gte);
-                            const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
-                            try value_stack.push(result_val);
-                            return true;
-                        } else if (ba.method_ident == self.root_env.idents.is_lt) {
-                            const result = try self.compareNumericValues(lhs, rhs, .lt);
-                            const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
-                            try value_stack.push(result_val);
-                            return true;
-                        } else if (ba.method_ident == self.root_env.idents.is_lte) {
-                            const result = try self.compareNumericValues(lhs, rhs, .lte);
-                            const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
-                            try value_stack.push(result_val);
-                            return true;
-                        } else if (ba.method_ident == self.root_env.idents.is_eq) {
-                            const result = try self.compareNumericValues(lhs, rhs, .eq);
-                            const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
-                            try value_stack.push(result_val);
-                            return true;
-                        }
-                    }
                     return error.InvalidMethodReceiver;
                 }
 

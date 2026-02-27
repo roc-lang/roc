@@ -4878,7 +4878,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             // Symbol not found - it might be a top-level definition
-            if (self.getSymbolDefRelaxed(symbol)) |def_expr_id| {
+            if (self.getSymbolDefExact(symbol)) |def_expr_id| {
                 const def_expr = self.store.getExpr(def_expr_id);
 
                 // For closures, compile the lambda as a proc and pre-register as lambda_code.
@@ -4911,19 +4911,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             unreachable;
         }
 
-        /// Look up a symbol definition, tolerating identifier attribute drift
-        /// by falling back to matching `(module_idx, ident_idx.idx)`.
-        fn getSymbolDefRelaxed(self: *Self, symbol: Symbol) ?LirExprId {
-            if (self.store.getSymbolDef(symbol)) |expr_id| return expr_id;
-
-            var it = self.store.symbol_defs.iterator();
-            while (it.next()) |entry| {
-                const key_symbol: Symbol = @bitCast(entry.key_ptr.*);
-                if (key_symbol.module_idx == symbol.module_idx and key_symbol.ident_idx.idx == symbol.ident_idx.idx) {
-                    return entry.value_ptr.*;
-                }
-            }
-            return null;
+        /// Look up a symbol definition by exact symbol identity.
+        fn getSymbolDefExact(self: *Self, symbol: Symbol) ?LirExprId {
+            return self.store.getSymbolDef(symbol);
         }
 
         /// Generate integer binary operation
@@ -11285,7 +11275,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn resolveSymbolToLambdaCode(self: *Self, symbol: Symbol) Allocator.Error!?ValueLocation {
-            if (self.getSymbolDefRelaxed(symbol)) |def_expr_id| {
+            if (self.getSymbolDefExact(symbol)) |def_expr_id| {
                 return try self.lambdaCodeFromExpr(def_expr_id);
             }
             return null;
@@ -12240,7 +12230,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // caller scope so closure stack data remains valid.
                 const call_has_callable_args = call_has_callable_args_dbg;
                 if (call_has_callable_args) {
-                    if (self.getSymbolDefRelaxed(lookup.symbol)) |def_expr_id| {
+                    if (self.getSymbolDefExact(lookup.symbol)) |def_expr_id| {
                         const def_expr = self.store.getExpr(def_expr_id);
                         switch (def_expr) {
                             .lambda => |lambda| {
@@ -12274,7 +12264,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             // Look up the function in top-level definitions
-            if (self.getSymbolDefRelaxed(lookup.symbol)) |def_expr_id| {
+            if (self.getSymbolDefExact(lookup.symbol)) |def_expr_id| {
                 const def_expr = self.store.getExpr(def_expr_id);
 
                 return switch (def_expr) {

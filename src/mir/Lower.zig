@@ -567,7 +567,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
         },
         .e_lookup_required => |lookup| {
             const app_idx = self.app_module_idx orelse {
-                return try self.store.addExpr(self.allocator, .runtime_err_type, monotype, region);
+                std.debug.panic("MIR lower error: required lookup without app module (requires_idx={})", .{@intFromEnum(lookup.requires_idx)});
             };
             const required_type = module_env.requires_types.get(lookup.requires_idx);
             const required_name = module_env.getIdent(required_type.ident);
@@ -589,7 +589,10 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                     else => {},
                 }
             }
-            return try self.store.addExpr(self.allocator, .runtime_err_type, monotype, region);
+            std.debug.panic(
+                "MIR lower error: required lookup `{s}` not found in app exports",
+                .{required_name},
+            );
         },
 
         // --- Control flow ---
@@ -1730,7 +1733,10 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
                 }
             }
 
-            return try self.store.addExpr(self.allocator, .runtime_err_type, monotype, region);
+            std.debug.panic(
+                "MIR lower error: unresolved method symbol for dot access field `{s}`",
+                .{module_env.getIdent(da.field_name)},
+            );
         }
 
         const method_symbol = method_symbol_opt.?;
@@ -1912,7 +1918,10 @@ fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR
     }
     const func_monotype = try self.buildFuncMonotype(self.mono_scratches.idxs.sliceFromStart(mono_top), monotype, false);
 
-    const resolved_symbol = method_symbol orelse return try self.store.addExpr(self.allocator, .runtime_err_type, monotype, region);
+    const resolved_symbol = method_symbol orelse std.debug.panic(
+        "MIR lower error: unresolved type-var dispatch method `{s}` for expr {}",
+        .{ module_env.getIdent(tvd.method_name), @intFromEnum(expr_idx) },
+    );
     const args = try self.lowerExprSpan(module_env, tvd.args);
     const lowered_method_symbol = try self.ensureMethodLowered(resolved_symbol, func_monotype);
     const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = lowered_method_symbol }, func_monotype, region);
