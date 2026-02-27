@@ -195,7 +195,14 @@ noinline fn executeAndFormat(
 
     // Execute with result pointer (512 bytes to accommodate large tuples/records)
     var result_buf: [512]u8 align(16) = undefined;
-    try dev_eval.callWithCrashProtection(executable, @ptrCast(&result_buf));
+    dev_eval.callWithCrashProtection(executable, @ptrCast(&result_buf)) catch |err| {
+        if (err == error.RocCrashed) {
+            if (dev_eval.getCrashMessage()) |msg| {
+                std.debug.print("DevEvaluator roc_crashed: {s}\n", .{msg});
+            }
+        }
+        return err;
+    };
 
     const ls = code_result.layout_store orelse {
         // Scalar-only fallback: construct layout from Idx

@@ -3516,6 +3516,65 @@ test "polymorphic tag union payload substitution: multiple type vars" {
     , "hello", .no_trace);
 }
 
+test "diag: monomorphic tag union payload extraction" {
+    try runExpectI64(
+        \\{
+        \\    second : [Left(I64), Right(I64)] -> I64
+        \\    second = |either| match either {
+        \\        Left(_) => 0i64
+        \\        Right(val) => val
+        \\    }
+        \\
+        \\    input : [Left(I64), Right(I64)]
+        \\    input = Right(42i64)
+        \\    second(input)
+        \\}
+    , 42, .no_trace);
+}
+
+test "diag: polymorphic tag union passthrough then monomorphic match" {
+    try runExpectI64(
+        \\{
+        \\    passthrough : [Left(a), Right(b)] -> [Left(a), Right(b)]
+        \\    passthrough = |either| either
+        \\
+        \\    input : [Left(I64), Right(I64)]
+        \\    input = Right(42i64)
+        \\    match passthrough(input) {
+        \\        Left(_) => 0i64
+        \\        Right(val) => val
+        \\    }
+        \\}
+    , 42, .no_trace);
+}
+
+test "diag: direct result match chooses Err branch in wasm" {
+    try runExpectStr(
+        \\{
+        \\    match Err("hello") {
+        \\        Ok(_) => ""
+        \\        Err(e) => e
+        \\    }
+        \\}
+    , "hello", .no_trace);
+}
+
+test "diag: monomorphic get_err function in wasm" {
+    try runExpectStr(
+        \\{
+        \\    get_err : [Ok(I64), Err(Str)] -> Str
+        \\    get_err = |result| match result {
+        \\        Ok(_) => ""
+        \\        Err(e) => e
+        \\    }
+        \\
+        \\    val : [Ok(I64), Err(Str)]
+        \\    val = Err("hello")
+        \\    get_err(val)
+        \\}
+    , "hello", .no_trace);
+}
+
 test "polymorphic tag union: erroneous match branch crashes at runtime" {
     // The Ok branch returns "" (Str) but the return type requires `e` (I64 when called with Ok(I64)).
     // The type checker marks this branch as erroneous. When the Ok branch is actually taken

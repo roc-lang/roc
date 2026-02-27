@@ -1119,10 +1119,17 @@ fn generateMatch(self: *Self, w: anytype) Allocator.Error!void {
     WasmModule.leb128WriteU32(self.allocator, &self.body, temp_local) catch return error.OutOfMemory;
 
     // Generate cascading if/else for each branch
-    try self.generateMatchBranches(branches, temp_local, value_vt, bt);
+    try self.generateMatchBranches(branches, temp_local, value_vt, w.value_layout, bt);
 }
 
-fn generateMatchBranches(self: *Self, branches: []const LIR.LirMatchBranch, value_local: u32, value_vt: ValType, bt: BlockType) Allocator.Error!void {
+fn generateMatchBranches(
+    self: *Self,
+    branches: []const LIR.LirMatchBranch,
+    value_local: u32,
+    value_vt: ValType,
+    value_layout_idx: layout.Idx,
+    bt: BlockType,
+) Allocator.Error!void {
     if (branches.len == 0) {
         // Fallthrough — unreachable
         self.body.append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
@@ -1179,40 +1186,65 @@ fn generateMatchBranches(self: *Self, branches: []const LIR.LirMatchBranch, valu
             self.body.append(self.allocator, @intFromEnum(bt)) catch return error.OutOfMemory;
             try self.generateExpr(branch.body);
             self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
-            try self.generateMatchBranches(remaining, value_local, value_vt, bt);
+            try self.generateMatchBranches(remaining, value_local, value_vt, value_layout_idx, bt);
             self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
         },
         .tag => |tag_pat| {
             // Match on tag discriminant
             const arg_patterns = self.store.getPatternSpan(tag_pat.args);
 
-            // For tag unions that fit in a single i32 (discriminant only, no payload),
-            // value_local holds the discriminant directly. For larger tag unions,
-            // value_local holds a pointer to the tag union in memory.
-            const is_pointer = blk: {
-                if (self.layout_store) |ls| {
-                    const wl = WasmLayout.wasmReprWithStore(tag_pat.union_layout, ls);
-                    break :blk switch (wl) {
-                        .stack_memory => true,
-                        .primitive => false,
+            // Determine how to read discriminants/payload from the matched value.
+            const ls = self.getLayoutStore();
+            const value_layout = ls.getLayout(value_layout_idx);
+            const disc_info: struct {
+                from_pointer: bool,
+                disc_offset: u32,
+                disc_size: u32,
+            } = switch (value_layout.tag) {
+                .tag_union => blk: {
+                    const tu_data = ls.getTagUnionData(value_layout.data.tag_union.idx);
+                    const tu_size = ls.layoutSize(value_layout);
+                    if (tu_size <= 4 and tu_data.discriminant_offset == 0) {
+                        break :blk .{
+                            .from_pointer = false,
+                            .disc_offset = 0,
+                            .disc_size = tu_data.discriminant_size,
+                        };
+                    }
+                    break :blk .{
+                        .from_pointer = true,
+                        .disc_offset = tu_data.discriminant_offset,
+                        .disc_size = tu_data.discriminant_size,
                     };
-                }
-                break :blk false;
+                },
+                .box => blk: {
+                    const inner = ls.getLayout(value_layout.data.box);
+                    if (inner.tag == .tag_union) {
+                        const tu_data = ls.getTagUnionData(inner.data.tag_union.idx);
+                        break :blk .{
+                            .from_pointer = true,
+                            .disc_offset = tu_data.discriminant_offset,
+                            .disc_size = tu_data.discriminant_size,
+                        };
+                    }
+                    break :blk .{
+                        .from_pointer = false,
+                        .disc_offset = 0,
+                        .disc_size = 1,
+                    };
+                },
+                else => .{
+                    .from_pointer = false,
+                    .disc_offset = 0,
+                    .disc_size = 1,
+                },
             };
-            if (is_pointer) {
-                // Load discriminant from memory at discriminant_offset
-                const ls = self.getLayoutStore();
-                const l = ls.getLayout(tag_pat.union_layout);
-                std.debug.assert(l.tag == .tag_union);
-                const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
-                const disc_offset = tu_data.discriminant_offset;
-                const disc_size: u32 = tu_data.discriminant_size;
-                // Load discriminant: value_local[disc_offset]
+
+            if (disc_info.from_pointer) {
                 self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                 WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
-                try self.emitLoadOpSized(.i32, disc_size, disc_offset);
+                try self.emitLoadOpSized(.i32, disc_info.disc_size, disc_info.disc_offset);
             } else {
-                // Value is the discriminant itself
                 self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                 WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
             }
@@ -1227,7 +1259,7 @@ fn generateMatchBranches(self: *Self, branches: []const LIR.LirMatchBranch, valu
             self.body.append(self.allocator, @intFromEnum(bt)) catch return error.OutOfMemory;
 
             // Bind any sub-pattern arguments (load payload from memory)
-            if (is_pointer and arg_patterns.len > 0) {
+            if (disc_info.from_pointer and arg_patterns.len > 0) {
                 var payload_offset: u32 = 0;
                 for (arg_patterns) |arg_pat_id| {
                     const arg_pat = self.store.getPattern(arg_pat_id);
@@ -1237,8 +1269,8 @@ fn generateMatchBranches(self: *Self, branches: []const LIR.LirMatchBranch, valu
                             const bind_byte_size = self.layoutByteSize(bind.layout_idx);
                             const local_idx = self.storage.allocLocal(bind.symbol, bind_vt) catch return error.OutOfMemory;
 
-                            const wasm_repr = if (self.layout_store) |ls|
-                                WasmLayout.wasmReprWithStore(bind.layout_idx, ls)
+                            const wasm_repr = if (self.layout_store) |layout_store_ptr|
+                                WasmLayout.wasmReprWithStore(bind.layout_idx, layout_store_ptr)
                             else
                                 WasmLayout.wasmRepr(bind.layout_idx);
 
@@ -1309,7 +1341,7 @@ fn generateMatchBranches(self: *Self, branches: []const LIR.LirMatchBranch, valu
 
             try self.generateExpr(branch.body);
             self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
-            try self.generateMatchBranches(remaining, value_local, value_vt, bt);
+            try self.generateMatchBranches(remaining, value_local, value_vt, value_layout_idx, bt);
             self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
         },
         .struct_ => |struct_pat| {
@@ -1414,7 +1446,7 @@ fn generateMatchBranches(self: *Self, branches: []const LIR.LirMatchBranch, valu
             self.body.append(self.allocator, @intFromEnum(bt)) catch return error.OutOfMemory;
             try self.generateExpr(branch.body);
             self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
-            try self.generateMatchBranches(remaining, value_local, value_vt, bt);
+            try self.generateMatchBranches(remaining, value_local, value_vt, value_layout_idx, bt);
             self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
         },
         .str_literal => |str_idx| {
@@ -1437,7 +1469,7 @@ fn generateMatchBranches(self: *Self, branches: []const LIR.LirMatchBranch, valu
             self.body.append(self.allocator, @intFromEnum(bt)) catch return error.OutOfMemory;
             try self.generateExpr(branch.body);
             self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
-            try self.generateMatchBranches(remaining, value_local, value_vt, bt);
+            try self.generateMatchBranches(remaining, value_local, value_vt, value_layout_idx, bt);
             self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
         },
         .list => |list_pat| {
@@ -1575,7 +1607,7 @@ fn generateMatchBranches(self: *Self, branches: []const LIR.LirMatchBranch, valu
 
             try self.generateExpr(branch.body);
             self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
-            try self.generateMatchBranches(remaining, value_local, value_vt, bt);
+            try self.generateMatchBranches(remaining, value_local, value_vt, value_layout_idx, bt);
             self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
         },
     }

@@ -257,17 +257,8 @@ fn copyStringToMir(self: *Self, module_env: *const ModuleEnv, cir_str_idx: Strin
 pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId {
     const module_env = self.all_module_envs[self.current_module_idx];
     const region = module_env.store.getExprRegion(expr_idx);
-
-    // Error types from the type checker become runtime_error nodes.
-    // This early return ensures resolveMonotype (below) is never called
-    // on error types, which could otherwise fail or produce nonsense.
-    const type_var = ModuleEnv.varFrom(expr_idx);
-    const resolved = self.types_store.resolveVar(type_var);
-    if (resolved.desc.content == .err) {
-        return try self.store.addExpr(self.allocator, .{ .runtime_err_type = {} }, self.store.monotype_store.unit_idx, region);
-    }
-
     const expr = module_env.store.getExpr(expr_idx);
+
     const monotype = try self.resolveMonotype(expr_idx);
 
     return switch (expr) {
@@ -964,6 +955,26 @@ fn lowerPattern(self: *Self, module_env: *const ModuleEnv, pattern_idx: CIR.Patt
             } }, monotype);
         },
         .applied_tag => |tag| {
+            // For tag-pattern payloads, seed child pattern vars from the parent
+            // tag union monotype so payload binders get concrete layouts instead
+            // of falling back to unit for unresolved flex/rigid vars.
+            const cir_arg_patterns = module_env.store.slicePatterns(tag.args);
+            if (cir_arg_patterns.len > 0) {
+                const mono = self.store.monotype_store.getMonotype(monotype);
+                if (mono == .tag_union) {
+                    const mono_tags = self.store.monotype_store.getTags(mono.tag_union.tags);
+                    for (mono_tags) |mono_tag| {
+                        if (mono_tag.name == tag.name) {
+                            const payload_monos = self.store.monotype_store.getIdxSpan(mono_tag.payloads);
+                            const n = @min(cir_arg_patterns.len, payload_monos.len);
+                            for (cir_arg_patterns[0..n], payload_monos[0..n]) |arg_pat_idx, payload_mono| {
+                                self.forceSeedTypeVarSeen(ModuleEnv.varFrom(arg_pat_idx), payload_mono);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
             const args = try self.lowerPatternSpan(module_env, tag.args);
             return try self.store.addPattern(self.allocator, .{ .tag = .{
                 .name = tag.name,
@@ -1103,8 +1114,33 @@ fn lowerMatch(self: *Self, module_env: *const ModuleEnv, match_expr: CIR.Expr.Ma
     } }, monotype, region);
 }
 
+fn seedLambdaFromMonotype(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    args_span: CIR.Pattern.Span,
+    body_expr: CIR.Expr.Idx,
+    monotype: Monotype.Idx,
+) void {
+    if (monotype.isNone()) return;
+    const mono = self.store.monotype_store.getMonotype(monotype);
+    if (mono != .func) return;
+
+    const cir_args = module_env.store.slicePatterns(args_span);
+    const mono_args = self.store.monotype_store.getIdxSpan(mono.func.args);
+    const n = @min(cir_args.len, mono_args.len);
+    for (cir_args[0..n], mono_args[0..n]) |arg_pat_idx, arg_mono| {
+        self.seedTypeVarSeen(ModuleEnv.varFrom(arg_pat_idx), arg_mono);
+    }
+
+    // The lambda body can remain `.err` in polymorphic definitions with
+    // branch-local type errors. Force-seed it from the instantiated return
+    // monotype so the non-err branch keeps a concrete runtime layout.
+    self.forceSeedTypeVarSeen(ModuleEnv.varFrom(body_expr), mono.func.ret);
+}
+
 /// Lower `e_lambda` to MIR lambda (no captures).
 fn lowerLambda(self: *Self, module_env: *const ModuleEnv, lambda: CIR.Expr.Lambda, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
+    self.seedLambdaFromMonotype(module_env, lambda.args, lambda.body, monotype);
     const params = try self.lowerPatternSpan(module_env, lambda.args);
     const body = try self.lowerExpr(lambda.body);
     return try self.store.addExpr(self.allocator, .{ .lambda = .{
@@ -1119,6 +1155,7 @@ fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Clo
     // Lower the inner lambda
     const inner_lambda_expr = module_env.store.getExpr(closure.lambda_idx);
     const lambda = inner_lambda_expr.e_lambda;
+    self.seedLambdaFromMonotype(module_env, lambda.args, lambda.body, monotype);
     const params = try self.lowerPatternSpan(module_env, lambda.args);
     const body = try self.lowerExpr(lambda.body);
 
@@ -1158,28 +1195,66 @@ fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype:
         }
     }
 
-    var func = try self.lowerExpr(call.func);
     const args = try self.lowerExprSpan(module_env, call.args);
+
+    const mono_top = self.mono_scratches.idxs.top();
+    defer self.mono_scratches.idxs.clearFrom(mono_top);
+    const cir_args = module_env.store.sliceExpr(call.args);
+    for (cir_args) |arg_idx| {
+        try self.mono_scratches.idxs.append(try self.resolveMonotype(arg_idx));
+    }
+    const arg_monotypes = self.mono_scratches.idxs.sliceFromStart(mono_top);
+
+    var desired_func_monotype = try self.resolveMonotype(call.func);
+    var effectful = false;
+    var needs_rebuild = true;
+
+    if (!desired_func_monotype.isNone()) {
+        switch (self.store.monotype_store.getMonotype(desired_func_monotype)) {
+            .func => |func_mono| {
+                effectful = func_mono.effectful;
+                const expected_args = self.store.monotype_store.getIdxSpan(func_mono.args);
+                if (expected_args.len == arg_monotypes.len and
+                    self.monotypesStructurallyEqual(func_mono.ret, monotype))
+                {
+                    var all_args_match = true;
+                    for (expected_args, arg_monotypes) |expected_arg, actual_arg| {
+                        if (!self.monotypesStructurallyEqual(expected_arg, actual_arg)) {
+                            all_args_match = false;
+                            break;
+                        }
+                    }
+                    if (all_args_match) {
+                        needs_rebuild = false;
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+
+    if (desired_func_monotype.isNone() or needs_rebuild) {
+        desired_func_monotype = try self.buildFuncMonotype(
+            arg_monotypes,
+            monotype,
+            effectful,
+        );
+    }
+
+    if (!desired_func_monotype.isNone()) {
+        // Ensure lookup lowering sees the concrete call-site instantiation
+        // for polymorphic/local defs.
+        const resolved_func_var = self.types_store.resolveVar(ModuleEnv.varFrom(call.func));
+        _ = self.type_var_seen.remove(resolved_func_var.var_);
+        self.seedTypeVarSeen(ModuleEnv.varFrom(call.func), desired_func_monotype);
+    }
+
+    var func = try self.lowerExpr(call.func);
 
     // If call target lowered to a symbol lookup, route through method lowering
     // so polymorphic recursive calls can get a distinct specialization symbol.
     if (self.store.getExpr(func) == .lookup) {
         const callee_symbol = self.store.getExpr(func).lookup;
-
-        var desired_func_monotype = try self.resolveMonotype(call.func);
-        if (desired_func_monotype.isNone()) {
-            const mono_top = self.mono_scratches.idxs.top();
-            defer self.mono_scratches.idxs.clearFrom(mono_top);
-            const cir_args = module_env.store.sliceExpr(call.args);
-            for (cir_args) |arg_idx| {
-                try self.mono_scratches.idxs.append(try self.resolveMonotype(arg_idx));
-            }
-            desired_func_monotype = try self.buildFuncMonotype(
-                self.mono_scratches.idxs.sliceFromStart(mono_top),
-                monotype,
-                false,
-            );
-        }
 
         if (!desired_func_monotype.isNone()) {
             const lowered_symbol = try self.ensureMethodLowered(callee_symbol, desired_func_monotype);
@@ -2204,6 +2279,18 @@ fn seedTypeVarSeen(self: *Self, type_var: types.Var, monotype: Monotype.Idx) voi
     }
 }
 
+fn forceSeedTypeVarSeen(self: *Self, type_var: types.Var, monotype: Monotype.Idx) void {
+    if (monotype.isNone()) return;
+
+    var resolved = self.types_store.resolveVar(type_var);
+    while (resolved.desc.content == .alias) {
+        const alias = resolved.desc.content.alias;
+        resolved = self.types_store.resolveVar(self.types_store.getAliasBackingVar(alias));
+    }
+
+    self.type_var_seen.put(resolved.var_, monotype) catch return;
+}
+
 fn monotypeCompatibleWithFlatType(self: *Self, flat_type: types.FlatType, monotype: Monotype.Idx) bool {
     if (monotype.isNone()) return false;
 
@@ -2335,8 +2422,10 @@ fn seedTypeVarSeenStructure(self: *Self, flat_type: types.FlatType, monotype: Mo
                     const mono_tags = self.store.monotype_store.getTags(mtu.tags);
 
                     // Follow the tag union extension chain to match ALL tags.
+                    // Extension vars can be alias-wrapped, so resolve aliases
+                    // transparently while walking the chain.
                     var current_row = tag_union_row;
-                    while (true) {
+                    rows: while (true) {
                         const type_tags = self.types_store.getTagsSlice(current_row.tags);
                         const type_tag_names = type_tags.items(.name);
                         const type_tag_args = type_tags.items(.args);
@@ -2355,18 +2444,25 @@ fn seedTypeVarSeenStructure(self: *Self, flat_type: types.FlatType, monotype: Mo
                             }
                         }
 
-                        // Follow extension variable
-                        const ext_resolved = self.types_store.resolveVar(current_row.ext);
-                        switch (ext_resolved.desc.content) {
-                            .structure => |ext_flat| switch (ext_flat) {
-                                .tag_union => |next_row| {
-                                    current_row = next_row;
+                        // Follow extension variable.
+                        var ext_var = current_row.ext;
+                        while (true) {
+                            const ext_resolved = self.types_store.resolveVar(ext_var);
+                            switch (ext_resolved.desc.content) {
+                                .alias => |alias| {
+                                    ext_var = self.types_store.getAliasBackingVar(alias);
                                     continue;
                                 },
-                                .empty_tag_union => break,
-                                else => break,
-                            },
-                            else => break,
+                                .structure => |ext_flat| switch (ext_flat) {
+                                    .tag_union => |next_row| {
+                                        current_row = next_row;
+                                        continue :rows;
+                                    },
+                                    .empty_tag_union => break :rows,
+                                    else => break :rows,
+                                },
+                                else => break :rows,
+                            }
                         }
                     }
                 },

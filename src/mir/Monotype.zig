@@ -363,9 +363,10 @@ pub const Store = struct {
             .structure => |flat_type| {
                 return try self.fromFlatType(allocator, types_store, resolved.var_, flat_type, common_idents, seen, scratches);
             },
-            // Error types are caught in lowerExpr before resolveMonotype;
-            // reaching here means a compiler bug in an earlier phase.
-            .err => unreachable,
+            // `.err` is a poison type from type-checking failures.
+            // Lower it to unit so MIR lowering can continue and preserve
+            // diagnostics/runtime error behavior instead of crashing.
+            .err => self.unit_idx,
         };
     }
 
@@ -515,7 +516,7 @@ pub const Store = struct {
                 // Roc's type system represents tag unions as linked rows:
                 // [Ok a | ext] where ext -> [Err b | ext2] where ext2 -> empty_tag_union
                 var current_row = tag_union_row;
-                while (true) {
+                rows: while (true) {
                     const tags_slice = types_store.getTagsSlice(current_row.tags);
                     const tag_names = tags_slice.items(.name);
                     const tag_args = tags_slice.items(.args);
@@ -534,18 +535,26 @@ pub const Store = struct {
                         try scratches.tags.append(.{ .name = name, .payloads = payloads_span });
                     }
 
-                    // Follow extension variable to find more tags
-                    const ext_resolved = types_store.resolveVar(current_row.ext);
-                    switch (ext_resolved.desc.content) {
-                        .structure => |ext_flat| switch (ext_flat) {
-                            .tag_union => |next_row| {
-                                current_row = next_row;
+                    // Follow extension variable to find more tags, transparently
+                    // resolving aliases in the extension chain.
+                    var ext_var = current_row.ext;
+                    while (true) {
+                        const ext_resolved = types_store.resolveVar(ext_var);
+                        switch (ext_resolved.desc.content) {
+                            .alias => |alias| {
+                                ext_var = types_store.getAliasBackingVar(alias);
                                 continue;
                             },
-                            .empty_tag_union => break,
-                            else => break,
-                        },
-                        else => break, // flex/rigid/alias/err → end of chain
+                            .structure => |ext_flat| switch (ext_flat) {
+                                .tag_union => |next_row| {
+                                    current_row = next_row;
+                                    continue :rows;
+                                },
+                                .empty_tag_union => break :rows,
+                                else => break :rows,
+                            },
+                            else => break :rows, // flex/rigid/err -> end of known chain
+                        }
                     }
                 }
 
