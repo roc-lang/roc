@@ -173,7 +173,7 @@ test = |{}| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str => {  }"))
+		(patt (type "Str => {}"))
 		(patt (type "_arg -> {}"))
 		(patt (type "Error"))
 		(patt (type "{ .. } -> Error")))
@@ -181,7 +181,7 @@ test = |{}| {
 		(nominal (type "Error")
 			(ty-header (name "Utf8Format"))))
 	(expressions
-		(expr (type "Str => {  }"))
+		(expr (type "Str => {}"))
 		(expr (type "_arg -> {}"))
 		(expr (type "Error, Error -> List(U8)"))
 		(expr (type "{ .. } -> Error"))))

@@ -1003,7 +1003,7 @@ It has the type:
 
 But the function's return type is:
 
-    Try({  }, _d)
+    Try({}, _d)
 
 **Hint:** All `return` statements and the final expression in a function must have the same type.
 
@@ -2768,7 +2768,7 @@ expect {
 		(patt (type "Bool -> Dec"))
 		(patt (type "Error -> U64"))
 		(patt (type "[Red, ..[Blue, Green, ..]], _arg -> Error"))
-		(patt (type "List(Error) -> Try({  }, _d)"))
+		(patt (type "List(Error) -> Try({}, _d)"))
 		(patt (type "{}"))
 		(patt (type "Error")))
 	(type_decls
@@ -2814,7 +2814,7 @@ expect {
 		(expr (type "Bool -> Dec"))
 		(expr (type "Error -> U64"))
 		(expr (type "[Red, ..[Blue, Green, ..]], _arg -> Error"))
-		(expr (type "List(Error) -> Try({  }, _d)"))
+		(expr (type "List(Error) -> Try({}, _d)"))
 		(expr (type "{}"))
 		(expr (type "Error"))))
 ~~~

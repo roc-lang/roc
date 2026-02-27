@@ -575,24 +575,55 @@ fn writeRecord(self: *TypeWriter, writer: *ByteWrite, record: Record, root_var: 
 
     std.mem.sort(types_mod.RecordField, gathered_fields, self.idents, comptime types_mod.RecordField.sortByNameAsc);
 
+    var flex_ext_occurrences: usize = 0;
+    var unbound_ext_occurrences: usize = 0;
+
+    if (num_fields == 0) {
+        const has_ext = switch (ext) {
+            .flex => |flex| blk: {
+                if (flex.payload.name) |_| {
+                    break :blk true;
+                } else {
+                    flex_ext_occurrences = try self.countVarOccurrences(record.ext, root_var);
+                    break :blk flex_ext_occurrences > 1;
+                }
+            },
+            .rigid => |_| blk: {
+                break :blk true;
+            },
+            .unbound => |unbound_var| blk: {
+                unbound_ext_occurrences = try self.countVarOccurrences(unbound_var, root_var);
+                break :blk unbound_ext_occurrences > 1;
+            },
+            .invalid, .empty_record => false,
+        };
+        if (!has_ext) {
+            _ = try writer.write("{}");
+            return;
+        }
+    }
+
     _ = try writer.write("{ ");
+
+    for (gathered_fields, 0..) |field, i| {
+        _ = try writer.write(self.getIdent(field.name));
+        _ = try writer.write(": ");
+        try self.writeVarWithContext(writer, field.var_, .RecordFieldContent, root_var);
+
+        if (i != gathered_fields.len - 1) _ = try writer.write(", ");
+    }
 
     switch (ext) {
         .flex => |flex| {
-            if (flex.payload.name) |ident_idx| {
-                _ = try writer.write("..");
-                _ = try writer.write(self.getIdent(ident_idx));
-                if (num_fields > 0) _ = try writer.write(", ");
-            } else if (true) {
-                // TODO: ^ here, we should consider polarity
+            if (num_fields > 0) _ = try writer.write(", ");
+            _ = try writer.write("..");
 
-                _ = try writer.write("..");
-                const occurrences = try self.countVarOccurrences(record.ext, root_var);
-                if (occurrences > 1) {
+            if (flex.payload.name) |ident_idx| {
+                _ = try writer.write(self.getIdent(ident_idx));
+            } else {
+                if (flex_ext_occurrences > 1) {
                     try self.writeFlexVarName(writer, flex.var_, .RecordExtension, root_var);
                 }
-
-                if (num_fields > 0) _ = try writer.write(", ");
             }
 
             // Since don't recurse above, we must capture the static dispatch
@@ -602,9 +633,9 @@ fn writeRecord(self: *TypeWriter, writer: *ByteWrite, record: Record, root_var: 
             }
         },
         .rigid => |rigid| {
+            if (num_fields > 0) _ = try writer.write(", ");
             _ = try writer.write("..");
             _ = try writer.write(self.getIdent(rigid.name));
-            if (num_fields > 0) _ = try writer.write(", ");
 
             // Since don't recurse above, we must capture the static dispatch
             // constraints directly
@@ -612,15 +643,15 @@ fn writeRecord(self: *TypeWriter, writer: *ByteWrite, record: Record, root_var: 
                 try self.appendStaticDispatchConstraint(record.ext, constraint);
             }
         },
-        .unbound, .invalid, .empty_record => {},
-    }
+        .unbound => |unbound_var| {
+            if (num_fields > 0) _ = try writer.write(", ");
+            _ = try writer.write("..");
 
-    for (gathered_fields, 0..) |field, i| {
-        _ = try writer.write(self.getIdent(field.name));
-        _ = try writer.write(": ");
-        try self.writeVarWithContext(writer, field.var_, .RecordFieldContent, root_var);
-
-        if (i != gathered_fields.len - 1) _ = try writer.write(", ");
+            if (unbound_ext_occurrences > 1) {
+                try self.writeFlexVarName(writer, unbound_var, .RecordExtension, root_var);
+            }
+        },
+        .invalid, .empty_record => {},
     }
 
     _ = try writer.write(" }");
@@ -631,7 +662,7 @@ fn gatherRecordFields(self: *TypeWriter, fields: RecordField.SafeMultiList.Range
     flex: struct { var_: Var, payload: types_mod.Flex },
     rigid: types_mod.Rigid,
     empty_record,
-    unbound,
+    unbound: Var,
     invalid,
 } {
     const slice = self.types.getRecordFieldsSlice(fields);
@@ -671,7 +702,7 @@ fn gatherRecordFields(self: *TypeWriter, fields: RecordField.SafeMultiList.Range
                         for (ext_slice.items(.name), ext_slice.items(.var_)) |name, var_| {
                             self.scratch_record_fields.appendAssumeCapacity(.{ .name = name, .var_ = var_ });
                         }
-                        return .unbound;
+                        return .{ .unbound = resolved.var_ };
                     },
                     .empty_record => return .empty_record,
                     else => return .invalid,
@@ -689,21 +720,17 @@ fn gatherRecordFields(self: *TypeWriter, fields: RecordField.SafeMultiList.Range
 /// this unbound  record appearing in this type, to properly display the ext
 /// type.
 fn writeRecordUnbound(self: *TypeWriter, writer: *ByteWrite, fields: RecordField.SafeMultiList.Range, record_unbound_var: Var, root_var: Var) std.mem.Allocator.Error!void {
-    _ = try writer.write("{ ");
-
-    _ = try writer.write("..");
+    var unbound_ext_occurrences: usize = 0;
     if (record_unbound_var != root_var) {
-        const occurrences = try self.countVarOccurrences(record_unbound_var, root_var);
-        if (occurrences > 1) {
-            try self.writeFlexVarName(writer, record_unbound_var, .RecordExtension, root_var);
-        }
+        unbound_ext_occurrences = try self.countVarOccurrences(record_unbound_var, root_var);
     }
+
+    _ = try writer.write("{ ");
 
     const fields_slice = self.types.getRecordFieldsSlice(fields);
     const num_fields = fields_slice.len;
 
     if (num_fields > 0) {
-        _ = try writer.write(", ");
 
         // Write first field - we already verified that there's at least one field
         _ = try writer.write(self.getIdent(fields_slice.items(.name)[0]));
@@ -717,6 +744,12 @@ fn writeRecordUnbound(self: *TypeWriter, writer: *ByteWrite, fields: RecordField
             _ = try writer.write(": ");
             try self.writeVarWithContext(writer, var_, .RecordFieldContent, root_var);
         }
+        _ = try writer.write(", ");
+    }
+
+    _ = try writer.write("..");
+    if (unbound_ext_occurrences > 1) {
+        try self.writeFlexVarName(writer, record_unbound_var, .RecordExtension, root_var);
     }
 
     _ = try writer.write(" }");

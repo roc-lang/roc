@@ -137,7 +137,7 @@ main_for_host = |result|
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Try({  }, [Exit(I32), ..others]) -> Str")))
+		(patt (type "Try({}, [Exit(I32), ..others]) -> Str")))
 	(expressions
-		(expr (type "Try({  }, [Exit(I32), ..others]) -> Str"))))
+		(expr (type "Try({}, [Exit(I32), ..others]) -> Str"))))
 ~~~
