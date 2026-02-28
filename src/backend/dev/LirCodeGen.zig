@@ -11863,7 +11863,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             if (self.closureValueFromStackOffset(s.offset)) |closure_loc| {
                                 return try self.generateClosureDispatch(closure_loc.closure_value, call.args, call.ret_layout);
                             }
-                            return try self.generateIndirectCall(fn_loc, call.args, call.ret_layout);
+                            std.debug.panic("generateCall: struct field callable missing closure metadata at stack offset={}", .{
+                                s.offset,
+                            });
                         },
                         .stack_i128 => |off| {
                             if (self.closureValueFromStackOffset(off)) |closure_loc| {
@@ -11876,7 +11878,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             }
                         },
                         .general_reg, .immediate_i64 => {
-                            return try self.generateIndirectCall(fn_loc, call.args, call.ret_layout);
+                            std.debug.panic("generateCall: struct field callable resolved to non-defunctionalized register/immediate location", .{});
                         },
                         else => {},
                     }
@@ -12567,8 +12569,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     defer capture_infos.deinit(self.allocator);
                     try self.appendCaptureArgInfos(&capture_infos, captures_span, captures_offset);
 
-                    return self.generateLambdaOrIndirectCall(
-                        .{ .direct = code_offset },
+                    return self.generateLambdaCall(
+                        code_offset,
                         args_span,
                         wrapper_ret_layout,
                         returned_closure_info,
@@ -12910,10 +12912,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             @intFromEnum(lookup.layout_idx),
                         });
                     },
-                    // Function pointer: the value is an absolute address that we can call
-                    // indirectly via BLR (aarch64) or CALL reg (x86_64).
-                    // This happens when a lambda is passed as an argument to a higher-order
-                    // function — the caller computes the address via ADR/LEA and passes it.
+                    // Non-defunctionalized callable value. Indirect-call fallback is
+                    // intentionally removed; this is now an internal compiler bug.
                     .general_reg, .immediate_i64 => {
                         std.debug.panic("generateLookupCall: register/immediate callable requires defunctionalization symbol={} layout={}", .{
                             @as(u64, @bitCast(lookup.symbol)),
@@ -15426,13 +15426,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// registers (X2-X7) that were already loaded with arg[0]'s data.
         ///
         /// When registers are exhausted, spills remaining arguments to the stack.
-        /// Call target for lambda calls: either a direct code offset or an
-        /// indirect function pointer (for higher-order function arguments).
-        const CallTarget = union(enum) {
-            direct: usize,
-            indirect: ValueLocation,
-        };
-
         fn generateCallToLambdaWithSource(
             self: *Self,
             code_offset: usize,
@@ -15467,8 +15460,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
 
-            return self.generateLambdaOrIndirectCall(
-                .{ .direct = call_code_offset },
+            return self.generateLambdaCall(
+                call_code_offset,
                 args_span,
                 call_ret_layout,
                 returned_closure_info,
@@ -15490,16 +15483,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
         }
 
-        fn generateIndirectCall(self: *Self, fn_ptr_loc: ValueLocation, args_span: anytype, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
-            return self.generateLambdaOrIndirectCall(.{ .indirect = fn_ptr_loc }, args_span, ret_layout, null, null);
-        }
-
-        /// Unified implementation for direct lambda calls and indirect (function pointer) calls.
-        /// Both follow the same calling convention: args in registers with pass-by-pointer
-        /// for overflowing multi-reg args, roc_ops as the final argument.
-        fn generateLambdaOrIndirectCall(
+        /// Shared implementation for direct lambda/proc calls.
+        /// Uses the same calling convention as all internal Roc calls:
+        /// args in registers with pass-by-pointer for overflowing multi-reg args,
+        /// roc_ops as the final argument.
+        fn generateLambdaCall(
             self: *Self,
-            call_target: CallTarget,
+            code_offset: usize,
             args_span: anytype,
             ret_layout: layout.Idx,
             returned_closure_info: ?ClosureStackInfo,
@@ -15507,36 +15497,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!ValueLocation {
             const args = self.store.getExprSpan(args_span);
 
-            // For indirect calls, save the function pointer before arg setup
-            // since arg register loading might clobber it.
-            var fn_ptr_stack: i32 = 0;
-            if (call_target == .indirect) {
-                fn_ptr_stack = self.codegen.allocStackSlot(8);
-                switch (call_target.indirect) {
-                    .general_reg => |reg| {
-                        try self.codegen.emitStoreStack(.w64, fn_ptr_stack, reg);
-                    },
-                    .stack => |s| {
-                        const temp = try self.allocTempGeneral();
-                        try self.codegen.emitLoadStack(.w64, temp, s.offset);
-                        try self.codegen.emitStoreStack(.w64, fn_ptr_stack, temp);
-                        self.codegen.freeGeneral(temp);
-                    },
-                    .immediate_i64 => |val| {
-                        const temp = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(temp, @bitCast(val));
-                        try self.codegen.emitStoreStack(.w64, fn_ptr_stack, temp);
-                        self.codegen.freeGeneral(temp);
-                    },
-                    else => unreachable,
-                }
-            }
-
             // Pass 1: Generate all argument expressions and calculate register needs.
-            // When a closure_value is passed as an argument to a higher-order function,
-            // the callee will call it through a function pointer (BLR/CALL reg).
-            // We compile the lambda as a proc and pass the code address,
-            // not the raw closure data (tag bytes, captures, etc).
             const arg_infos_start = self.scratch_arg_infos.top();
             defer self.scratch_arg_infos.clearFrom(arg_infos_start);
 
@@ -15619,23 +15580,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .emit_roc_ops = true,
             });
 
-            // Emit call instruction
-            switch (call_target) {
-                .direct => |code_offset| try self.emitCallToOffset(code_offset),
-                .indirect => {
-                    // Load function pointer from saved stack slot and call indirectly.
-                    // Use a dedicated scratch register that can never be an argument register,
-                    // since the argument registers (X0-X7 / RDI,RSI,RDX,RCX,R8,R9) are
-                    // already loaded with call arguments at this point.
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emitLoadStack(.w64, .IP0, fn_ptr_stack);
-                        try self.codegen.emit.blrReg(.IP0);
-                    } else {
-                        try self.codegen.emitLoadStack(.w64, .R10, fn_ptr_stack);
-                        try self.codegen.emit.callReg(.R10);
-                    }
-                },
-            }
+            // Emit direct call instruction.
+            try self.emitCallToOffset(code_offset);
 
             // Clean up stack space for spilled arguments
             if (stack_spill_size > 0) {

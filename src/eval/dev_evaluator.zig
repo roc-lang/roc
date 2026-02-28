@@ -667,6 +667,68 @@ pub const DevEvaluator = struct {
         self.builtin_module.deinit();
     }
 
+    fn appendLiftedFunctionsToModule(
+        module: *ModuleEnv,
+        lifter: *const can.LambdaLifter,
+        lifted_patterns_by_name: *const std.AutoHashMap(base.Ident.Idx, CIR.Pattern.Idx),
+    ) !void {
+        const lifted_functions = lifter.getLiftedFunctions();
+        if (lifted_functions.len == 0) return;
+
+        const defs_start = module.store.scratchDefTop();
+        for (module.store.sliceDefs(module.all_defs)) |def_idx| {
+            try module.store.addScratchDef(def_idx);
+        }
+
+        const stmts_start = module.store.scratchTop("statements");
+        for (module.store.sliceStatements(module.all_statements)) |stmt_idx| {
+            try module.store.addScratchStatement(stmt_idx);
+        }
+
+        for (lifted_functions) |lifted_fn| {
+            const args_start = module.store.scratchPatternTop();
+            for (module.store.slicePatterns(lifted_fn.args)) |arg_pattern| {
+                try module.store.addScratchPattern(arg_pattern);
+            }
+            if (lifted_fn.captures_pattern) |captures_pattern| {
+                try module.store.addScratchPattern(captures_pattern);
+            }
+            const full_args = try module.store.patternSpanFrom(args_start);
+
+            const lambda_expr = try module.store.addExpr(.{
+                .e_lambda = .{
+                    .args = full_args,
+                    .body = lifted_fn.body,
+                },
+            }, base.Region.zero());
+
+            const fn_pattern = lifted_patterns_by_name.get(lifted_fn.name) orelse try module.store.addPattern(
+                .{ .assign = .{ .ident = lifted_fn.name } },
+                base.Region.zero(),
+            );
+
+            const def_idx = try module.store.addDef(.{
+                .pattern = fn_pattern,
+                .expr = lambda_expr,
+                .annotation = null,
+                .kind = .let,
+            }, base.Region.zero());
+            try module.store.addScratchDef(def_idx);
+
+            const stmt_idx = try module.store.addStatement(.{
+                .s_decl = .{
+                    .pattern = fn_pattern,
+                    .expr = lambda_expr,
+                    .anno = null,
+                },
+            }, base.Region.zero());
+            try module.store.addScratchStatement(stmt_idx);
+        }
+
+        module.all_defs = try module.store.defSpanFrom(defs_start);
+        module.all_statements = try module.store.statementSpanFrom(stmts_start);
+    }
+
     /// Prepare modules for code generation by running the closure pipeline.
     ///
     /// This runs:
@@ -722,9 +784,11 @@ pub const DevEvaluator = struct {
                     transformer.markTopLevel(def.pattern) catch return error.OutOfMemory;
                 }
 
-                // Analyze all top-level defs with lambda-set tracking. We intentionally do
-                // not mutate def expressions in this landing pass; this stage enforces
-                // resolved lambda-set invariants before MIR/LIR lowering.
+                var lifted_patterns_by_name = std.AutoHashMap(base.Ident.Idx, CIR.Pattern.Idx).init(self.allocator);
+                defer lifted_patterns_by_name.deinit();
+
+                // Analyze all top-level defs with lambda-set tracking and persist transformed
+                // expressions so MIR/LIR consume the defunctionalized CIR.
                 for (defs) |def_idx| {
                     const def = module.store.getDef(def_idx);
                     const pattern = module.store.getPattern(def.pattern);
@@ -740,11 +804,57 @@ pub const DevEvaluator = struct {
                         const cloned = return_set.clone(self.allocator) catch return error.OutOfMemory;
                         transformer.pattern_lambda_return_sets.put(def.pattern, cloned) catch return error.OutOfMemory;
                     }
+
+                    module.store.setDefExpr(def_idx, result.expr);
                 }
 
                 const validation_result = transformer.validateAllResolved();
                 if (!validation_result.is_valid) {
                     return error.RuntimeError;
+                }
+
+                const has_any_closures = transformer.closures.count() > 0 or transformer.pattern_lambda_sets.count() > 0;
+                if (has_any_closures) {
+                    var lifter = can.LambdaLifter.init(self.allocator, module, &transformer.top_level_patterns);
+                    defer lifter.deinit();
+
+                    var lifted_tags = std.AutoHashMap(base.Ident.Idx, void).init(self.allocator);
+                    defer lifted_tags.deinit();
+
+                    var closure_iter = transformer.closures.iterator();
+                    while (closure_iter.next()) |entry| {
+                        const closure_idx = entry.key_ptr.*;
+                        const closure_info = entry.value_ptr.*;
+                        try lifter.liftClosure(closure_idx, closure_info.tag_name);
+                        try lifted_tags.put(closure_info.tag_name, {});
+
+                        if (closure_info.lifted_fn_pattern) |fn_pattern| {
+                            const fn_pattern_node = module.store.getPattern(fn_pattern);
+                            if (fn_pattern_node == .assign) {
+                                try lifted_patterns_by_name.put(fn_pattern_node.assign.ident, fn_pattern);
+                            }
+                        }
+                    }
+
+                    var lambda_set_iter = transformer.pattern_lambda_sets.iterator();
+                    while (lambda_set_iter.next()) |entry| {
+                        const lambda_set = entry.value_ptr;
+                        for (lambda_set.closures.items) |closure_info| {
+                            if (!lifted_tags.contains(closure_info.tag_name)) {
+                                try lifter.liftFromInfo(closure_info);
+                                try lifted_tags.put(closure_info.tag_name, {});
+                            }
+
+                            if (closure_info.lifted_fn_pattern) |fn_pattern| {
+                                const fn_pattern_node = module.store.getPattern(fn_pattern);
+                                if (fn_pattern_node == .assign) {
+                                    try lifted_patterns_by_name.put(fn_pattern_node.assign.ident, fn_pattern);
+                                }
+                            }
+                        }
+                    }
+
+                    try appendLiftedFunctionsToModule(module, &lifter, &lifted_patterns_by_name);
                 }
 
                 module.is_defunctionalized = true;

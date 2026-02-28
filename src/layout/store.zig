@@ -124,6 +124,7 @@ pub const Store = struct {
     interned_tuples_by_hash: std.AutoHashMap(u64, IdxBucket),
     interned_tag_unions_by_hash: std.AutoHashMap(u64, IdxBucket),
     interned_capture_structs_by_hash: std.AutoHashMap(u64, IdxBucket),
+    empty_struct_layout: ?Idx,
 
     // Reusable work stack for fromTypeVar (so it can be stack-safe instead of recursing)
     work: work.Work,
@@ -250,6 +251,7 @@ pub const Store = struct {
             .interned_tuples_by_hash = std.AutoHashMap(u64, IdxBucket).init(allocator),
             .interned_tag_unions_by_hash = std.AutoHashMap(u64, IdxBucket).init(allocator),
             .interned_capture_structs_by_hash = std.AutoHashMap(u64, IdxBucket).init(allocator),
+            .empty_struct_layout = null,
             .work = try Work.initCapacity(allocator, 32),
             .builtin_str_ident = builtin_str_ident,
             .builtin_str_plain_ident = env.idents.str,
@@ -1360,23 +1362,40 @@ pub const Store = struct {
 
     /// Get or create an empty struct layout (for closures with no captures, empty records, etc.)
     fn getEmptyStructLayout(self: *Self) !Idx {
-        // Check if we already have an empty struct layout
-        for (self.struct_data.items.items, 0..) |sd, i| {
+        if (self.empty_struct_layout) |cached| return cached;
+
+        // Reuse an existing empty struct layout if one is already present.
+        for (self.layouts.items.items, 0..) |layout_val, i| {
+            if (layout_val.tag != .struct_) continue;
+            const sd = self.getStructData(layout_val.data.struct_.idx);
             if (sd.size == 0 and sd.fields.count == 0) {
-                const struct_idx = StructIdx{ .int_idx = @intCast(i) };
-                const empty_layout = Layout.struct_(std.mem.Alignment.@"1", struct_idx);
-                return try self.insertLayout(empty_layout);
+                const existing: Idx = @enumFromInt(@as(u32, @intCast(i)));
+                self.empty_struct_layout = existing;
+                return existing;
             }
         }
 
-        // Create new empty struct layout
-        const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
-        _ = try self.struct_data.append(self.allocator, .{
-            .size = 0,
-            .fields = collections.NonEmptyRange{ .start = 0, .count = 0 },
-        });
-        const empty_layout = Layout.struct_(std.mem.Alignment.@"1", struct_idx);
-        return try self.insertLayout(empty_layout);
+        // Create new empty struct metadata if needed.
+        var struct_idx: ?StructIdx = null;
+        for (self.struct_data.items.items, 0..) |sd, i| {
+            if (sd.size == 0 and sd.fields.count == 0) {
+                struct_idx = StructIdx{ .int_idx = @intCast(i) };
+                break;
+            }
+        }
+        if (struct_idx == null) {
+            struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
+            _ = try self.struct_data.append(self.allocator, .{
+                .size = 0,
+                .fields = collections.NonEmptyRange{ .start = 0, .count = 0 },
+            });
+        }
+
+        // Insert one canonical empty struct layout.
+        const empty_layout = Layout.struct_(std.mem.Alignment.@"1", struct_idx.?);
+        const inserted = try self.insertLayout(empty_layout);
+        self.empty_struct_layout = inserted;
+        return inserted;
     }
 
     /// Backwards-compat alias
