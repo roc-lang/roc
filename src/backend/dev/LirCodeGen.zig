@@ -4985,6 +4985,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn generateLookup(self: *Self, symbol: Symbol, layout_idx: layout.Idx) Allocator.Error!ValueLocation {
             // Check if we have a location for this symbol
             if (self.getSymbolLocation(symbol, layout_idx)) |loc| {
+                const key = symbolKey(symbol);
+                if (self.mutable_var_slots.get(key)) |var_info| {
+                    std.debug.print(
+                        "lookup mutable symbol_key=0x{x} layout={d} -> loc={any} (slot={d}, size={d})\n",
+                        .{ key, @intFromEnum(layout_idx), loc, var_info.slot, var_info.size },
+                    );
+                } else {
+                    std.debug.print(
+                        "lookup symbol_key=0x{x} layout={d} -> loc={any}\n",
+                        .{ key, @intFromEnum(layout_idx), loc },
+                    );
+                }
                 if (loc == .list_stack) {} else if (loc == .stack) {}
                 return loc;
             }
@@ -8586,6 +8598,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        fn callHasCallableArgSpecialization(self: *Self, params_span: lir.LirPatternSpan, args_span: anytype) bool {
+            const params = self.store.getPatternSpan(params_span);
+            const args = self.store.getExprSpan(args_span);
+            const len = @min(params.len, args.len);
+
+            var i: usize = 0;
+            while (i < len) : (i += 1) {
+                const pat = self.store.getPattern(params[i]);
+                if (pat != .bind) continue;
+                if (self.preboundCallableFromExprId(args[i]) != null) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         fn hasPreboundCallableForParams(self: *Self, params_span: lir.LirPatternSpan) bool {
             const params = self.store.getPatternSpan(params_span);
             for (params) |pat_id| {
@@ -8619,6 +8647,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.putSymbolClosureInfo(cap_symbol, cap_layout, cap_info);
                 }
             }
+        }
+
+        fn preboundCallableInfo(self: *Self, symbol: Symbol, layout_idx: layout.Idx) ?ClosureStackInfo {
+            const key = symbolLayoutKey(symbol, layout_idx);
+            const pb = self.prebound_callables_by_layout.get(key) orelse return null;
+            return pb.info;
+        }
+
+        fn preboundCallableStorageSize(self: *Self, symbol: Symbol, layout_idx: layout.Idx) ?u32 {
+            const info = self.preboundCallableInfo(symbol, layout_idx) orelse return null;
+            return self.closureStorageSize(info.representation);
+        }
+
+        fn preboundCallableIsI128Like(self: *Self, symbol: Symbol, layout_idx: layout.Idx) bool {
+            const info = self.preboundCallableInfo(symbol, layout_idx) orelse return false;
+            return switch (info.representation) {
+                .unwrapped_capture => |u| u.capture_layout == .dec or u.capture_layout == .i128 or u.capture_layout == .u128,
+                else => false,
+            };
         }
 
         /// If calling the given callable expression can return a closure value,
@@ -9917,10 +9964,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate code for a while loop
         /// Executes body while condition is true
         fn generateWhileLoop(self: *Self, while_loop: anytype) Allocator.Error!ValueLocation {
+            // Mutations inside the loop body must write back to stable stack slots
+            // that the loop condition/body both reference. Promote any currently-
+            // bound mutated symbols before emitting the loop condition.
+            var mutated_symbols = std.AutoHashMap(u64, void).init(self.allocator);
+            defer mutated_symbols.deinit();
+            try self.collectMutatedSymbolsFromExpr(while_loop.body, &mutated_symbols);
+            try self.promoteMutatedSymbolsToMutableSlots(&mutated_symbols);
+
             // Record loop start position for the backward jump
             const loop_start = self.codegen.currentOffset();
 
             // Evaluate condition
+            const cond_expr_dbg = self.store.getExpr(while_loop.cond);
+            std.debug.print("while cond expr tag={s}\n", .{@tagName(cond_expr_dbg)});
             const cond_loc = try self.generateExpr(while_loop.cond);
 
             // Get condition value into a register for comparison
@@ -9987,6 +10044,101 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // While loops return unit (empty record)
             return .{ .immediate_i64 = 0 };
+        }
+
+        fn collectMutatedSymbolsFromExpr(
+            self: *Self,
+            expr_id: LirExprId,
+            out: *std.AutoHashMap(u64, void),
+        ) Allocator.Error!void {
+            const expr = self.store.getExpr(expr_id);
+            switch (expr) {
+                .block => |b| {
+                    const stmts = self.store.getStmts(b.stmts);
+                    for (stmts) |stmt| {
+                        const binding = stmt.binding();
+                        if (stmt == .mutate) {
+                            const pat = self.store.getPattern(binding.pattern);
+                            if (pat == .bind) {
+                                try out.put(@bitCast(pat.bind.symbol), {});
+                            }
+                        }
+                        try self.collectMutatedSymbolsFromExpr(binding.expr, out);
+                    }
+                    try self.collectMutatedSymbolsFromExpr(b.final_expr, out);
+                },
+                .nominal => |n| try self.collectMutatedSymbolsFromExpr(n.backing_expr, out),
+                .while_loop => |w| {
+                    try self.collectMutatedSymbolsFromExpr(w.cond, out);
+                    try self.collectMutatedSymbolsFromExpr(w.body, out);
+                },
+                .for_loop => |f| {
+                    try self.collectMutatedSymbolsFromExpr(f.list_expr, out);
+                    try self.collectMutatedSymbolsFromExpr(f.body, out);
+                },
+                .if_then_else => |ite| {
+                    const branches = self.store.getIfBranches(ite.branches);
+                    for (branches) |br| {
+                        try self.collectMutatedSymbolsFromExpr(br.cond, out);
+                        try self.collectMutatedSymbolsFromExpr(br.body, out);
+                    }
+                    try self.collectMutatedSymbolsFromExpr(ite.final_else, out);
+                },
+                .match_expr => |m| {
+                    try self.collectMutatedSymbolsFromExpr(m.value, out);
+                    const branches = self.store.getMatchBranches(m.branches);
+                    for (branches) |br| {
+                        try self.collectMutatedSymbolsFromExpr(br.guard, out);
+                        try self.collectMutatedSymbolsFromExpr(br.body, out);
+                    }
+                },
+                else => {},
+            }
+        }
+
+        fn promoteMutatedSymbolsToMutableSlots(
+            self: *Self,
+            mutated_symbols: *const std.AutoHashMap(u64, void),
+        ) Allocator.Error!void {
+            const ls = self.layout_store orelse return;
+            var it = mutated_symbols.iterator();
+            while (it.next()) |entry| {
+                const symbol_key = entry.key_ptr.*;
+                if (self.mutable_var_slots.contains(symbol_key)) continue;
+
+                var promoted = false;
+                var promoted_slot: i32 = 0;
+                var promoted_size: u32 = 0;
+                var fallback_loc: ?ValueLocation = null;
+                var loc_it = self.symbol_locations_by_layout.iterator();
+                while (loc_it.next()) |loc_entry| {
+                    const key128: u128 = loc_entry.key_ptr.*;
+                    const key_sym: u64 = @truncate(key128 >> @as(u7, 64));
+                    if (key_sym != symbol_key) continue;
+
+                    const layout_raw: u64 = @truncate(key128);
+                    const layout_idx: layout.Idx = @enumFromInt(@as(u32, @truncate(layout_raw)));
+                    const layout_val = ls.getLayout(layout_idx);
+                    const size = ls.layoutSizeAlign(layout_val).size;
+
+                    if (!promoted) {
+                        promoted_slot = self.codegen.allocStackSlot(size);
+                        promoted_size = size;
+                        try self.copyBytesToStackOffset(promoted_slot, loc_entry.value_ptr.*, size);
+                        try self.updateClosureStackInfoForCopy(promoted_slot, loc_entry.value_ptr.*);
+                        try self.mutable_var_slots.put(symbol_key, .{ .slot = promoted_slot, .size = promoted_size });
+                        promoted = true;
+                    }
+
+                    const promoted_loc = self.stackLocationForLayout(layout_idx, promoted_slot);
+                    loc_entry.value_ptr.* = promoted_loc;
+                    fallback_loc = promoted_loc;
+                }
+
+                if (fallback_loc) |loc| {
+                    try self.symbol_locations.put(symbol_key, loc);
+                }
+            }
         }
 
         /// Generate code for early return
@@ -10291,8 +10443,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
             const base_reg = frame_ptr;
 
-            // Get float value as u64 bits
-            const val_bits_reg = try self.ensureInGeneralReg(val_loc);
+            // Floats are represented internally as f64 in the dev backend.
+            // Always materialize through a float register, then bitcast to u64
+            // via a stack round-trip so we preserve IEEE bits (including NaNs).
+            const val_freg = try self.ensureInFloatReg(val_loc);
+            const val_bits_slot = self.codegen.allocStackSlot(8);
+            try self.codegen.emitStoreStackF64(val_bits_slot, val_freg);
+            self.codegen.freeFloat(val_freg);
+
+            const val_bits_reg = try self.allocTempGeneral();
+            try self.codegen.emitLoadStack(.w64, val_bits_reg, val_bits_slot);
             const is_f32: bool = (fts.float_precision == .f32);
 
             // roc_builtins_float_to_str(out, val_bits, is_f32, roc_ops)
@@ -10332,6 +10492,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Generic stack location with 16 bytes
                 .stack => |s| .{ .on_stack = s.offset },
 
+                // Some polymorphic/block paths can preserve an i128 value in a
+                // generic stack slot that is tracked as stack_str. The bytes are
+                // still contiguous low/high words, so decode as stack-backed i128.
+                .stack_str => |offset| .{ .on_stack = offset },
+
                 // Compile-time known i128 value
                 .immediate_i128 => |val| .{
                     .immediate = .{
@@ -10361,7 +10526,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 // These types should never appear for Dec values
                 .float_reg => unreachable, // Dec is not a float register type
-                .stack_str => unreachable, // Dec is not a string
                 .list_stack => unreachable, // Dec is not a list
                 .lambda_code => unreachable, // Dec is not a lambda
                 .closure_value => unreachable, // Dec is not a closure
@@ -10807,10 +10971,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate code for a block
         fn generateBlock(self: *Self, block: anytype) Allocator.Error!ValueLocation {
             const stmts = self.store.getStmts(block.stmts);
+            var mutated_symbols = std.AutoHashMap(u64, void).init(self.allocator);
+            defer mutated_symbols.deinit();
+
+            // Pre-scan mutations so decls that are later mutated are lowered as
+            // runtime-mutable slots from the start of the block.
+            for (stmts) |stmt| {
+                if (stmt == .mutate) {
+                    const pat = self.store.getPattern(stmt.binding().pattern);
+                    if (pat == .bind) {
+                        const key: u64 = @bitCast(pat.bind.symbol);
+                        std.debug.print("prescan mutate symbol_key=0x{x}\n", .{key});
+                        try mutated_symbols.put(key, {});
+                    }
+                }
+            }
 
             // Process each statement
             for (stmts) |stmt| {
                 const b = stmt.binding();
+                const dbg_pat = self.store.getPattern(b.pattern);
 
                 // For self-recursive closures (e.g., `factorial = |n| ... factorial(n-1) ...`):
                 // The closure captures itself, but the self-capture is only used for recursive
@@ -10856,10 +11036,30 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const expr_loc = try self.generateExpr(b.expr);
                 // Get the expression's layout (for mutable variable binding with correct size)
                 const expr_layout = self.getExprLayout(b.expr);
+                const stmt_pat = self.store.getPattern(b.pattern);
+                const force_mutable = blk: {
+                    if (stmt == .mutate) break :blk true;
+                    if (stmt == .decl and stmt_pat == .bind) {
+                        break :blk mutated_symbols.contains(@bitCast(stmt_pat.bind.symbol));
+                    }
+                    break :blk false;
+                };
+                if (dbg_pat == .bind) {
+                    std.debug.print(
+                        "generateBlock stmt={s} symbol_key=0x{x} ident={d} reassignable={any} force_mutable={any}\n",
+                        .{
+                            if (stmt == .mutate) "mutate" else "decl",
+                            @as(u64, @bitCast(dbg_pat.bind.symbol)),
+                            dbg_pat.bind.symbol.ident_idx.idx,
+                            dbg_pat.bind.symbol.ident_idx.attributes.reassignable,
+                            force_mutable,
+                        },
+                    );
+                }
                 // Bind the result to the pattern, using expr layout for mutable vars
-                try self.bindPatternWithLayout(b.pattern, expr_loc, expr_layout);
+                try self.bindPatternWithLayoutMode(b.pattern, expr_loc, expr_layout, force_mutable);
                 // Track direct symbol bindings for callable recovery on lookups.
-                const pattern = self.store.getPattern(b.pattern);
+                const pattern = stmt_pat;
                 if (pattern == .bind) {
                     const symbol_key: u64 = @bitCast(pattern.bind.symbol);
                     try self.symbol_source_exprs.put(symbol_key, b.expr);
@@ -10879,6 +11079,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Bind a value to a pattern with an optional expression layout override
         fn bindPatternWithLayout(self: *Self, pattern_id: LirPatternId, value_loc: ValueLocation, expr_layout_override: ?layout.Idx) Allocator.Error!void {
+            return self.bindPatternWithLayoutMode(pattern_id, value_loc, expr_layout_override, false);
+        }
+
+        /// Bind a value to a pattern with optional layout override and mutable forcing.
+        fn bindPatternWithLayoutMode(
+            self: *Self,
+            pattern_id: LirPatternId,
+            value_loc: ValueLocation,
+            expr_layout_override: ?layout.Idx,
+            force_mutable: bool,
+        ) Allocator.Error!void {
             const pattern = self.store.getPattern(pattern_id);
 
             switch (pattern) {
@@ -10887,9 +11098,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (value_loc == .list_stack) {} else if (value_loc == .stack) {}
 
                     // Check if this is a reassignable (mutable) variable
-                    if (bind.symbol.ident_idx.attributes.reassignable) {
+                    if (force_mutable or bind.symbol.ident_idx.attributes.reassignable) {
                         // Mutable variables need fixed stack slots for runtime updates
                         if (self.mutable_var_slots.get(symbol_key)) |var_info| {
+                            std.debug.print(
+                                "mutable rebind symbol_key=0x{x} slot={d} size={d}\n",
+                                .{ symbol_key, var_info.slot, var_info.size },
+                            );
                             // Re-binding: copy new value to the fixed slot at runtime
                             try self.copyBytesToStackOffset(var_info.slot, value_loc, var_info.size);
                             try self.updateClosureStackInfoForCopy(var_info.slot, value_loc);
@@ -10912,6 +11127,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                             // Allocate a fixed stack slot for this mutable variable
                             const fixed_slot = self.codegen.allocStackSlot(size);
+                            std.debug.print(
+                                "mutable first-bind symbol_key=0x{x} slot={d} size={d}\n",
+                                .{ symbol_key, fixed_slot, size },
+                            );
 
                             // Copy the initial value to the fixed slot
                             try self.copyBytesToStackOffset(fixed_slot, value_loc, size);
@@ -10920,29 +11139,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             // Record the fixed slot info for future re-bindings
                             try self.mutable_var_slots.put(symbol_key, .{ .slot = fixed_slot, .size = size });
 
-                            // Point symbol_locations to the fixed slot
-                            // IMPORTANT: Preserve the correct ValueLocation type so that
-                            // subsequent code correctly handles multi-register values
-                            if (value_loc == .list_stack) {
-                                try self.putSymbolLocation(bind.symbol, bind.layout_idx, .{ .list_stack = .{
-                                    .struct_offset = fixed_slot,
-                                    .data_offset = 0,
-                                    .num_elements = 0,
-                                } });
-                            } else if (value_loc == .stack_str or size == roc_str_size) {
-                                // Strings are roc_str_size bytes - preserve .stack_str so return handling
-                                // loads all 3 registers (ptr, len, capacity)
-                                try self.putSymbolLocation(bind.symbol, bind.layout_idx, .{ .stack_str = fixed_slot });
-                            } else if (value_loc == .stack_i128 or size == 16) {
-                                // Dec/i128 values are 16 bytes - preserve .stack_i128
-                                try self.putSymbolLocation(bind.symbol, bind.layout_idx, .{ .stack_i128 = fixed_slot });
-                            } else {
-                                try self.putSymbolLocation(bind.symbol, bind.layout_idx, .{ .stack = .{ .offset = fixed_slot } });
-                            }
+                            // Point symbol_locations to the fixed slot using the binding
+                            // layout so narrow integer widths preserve their load width.
+                            try self.putSymbolLocation(bind.symbol, bind.layout_idx, self.stackLocationForLayout(bind.layout_idx, fixed_slot));
                         }
                     } else {
                         // Non-mutable: just record the location as before
-                        try self.putSymbolLocation(bind.symbol, bind.layout_idx, value_loc);
+                        const stable_loc = try self.stabilizeBindingLocation(bind.layout_idx, value_loc);
+                        try self.putSymbolLocation(bind.symbol, bind.layout_idx, stable_loc);
                     }
                 },
                 .wildcard => {
@@ -11206,6 +11410,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // They are used for matching in match expressions, not for binding
                 },
             }
+        }
+
+        fn stabilizeBindingLocation(
+            self: *Self,
+            layout_idx: layout.Idx,
+            loc: ValueLocation,
+        ) Allocator.Error!ValueLocation {
+            return switch (loc) {
+                .general_reg, .float_reg => blk: {
+                    const size = self.getLayoutSize(layout_idx);
+                    if (size == 0) break :blk .{ .immediate_i64 = 0 };
+                    const slot = self.codegen.allocStackSlot(size);
+                    try self.copyBytesToStackOffset(slot, loc, size);
+                    break :blk self.stackLocationForLayout(layout_idx, slot);
+                },
+                else => loc,
+            };
         }
 
         /// Map a layout index to the correct ValueLocation for a value on the stack.
@@ -12463,74 +12684,47 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate code for calling a looked-up function definition.
         fn generateLookupCall(self: *Self, lookup: anytype, args_span: anytype, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
             const symbol_key: u64 = @bitCast(lookup.symbol);
-            const debug_sym_name: []const u8 = blk: {
-                if (self.layout_store) |ls| {
-                    if (lookup.symbol.module_idx < ls.all_module_envs.len) {
-                        const env = ls.all_module_envs[lookup.symbol.module_idx];
-                        if (lookup.symbol.ident_idx.idx < env.common.idents.interner.bytes.len()) {
-                            break :blk env.getIdent(lookup.symbol.ident_idx);
-                        }
-                    }
-                }
-                break :blk "<synthetic>";
-            };
-            const debug_symbol = symbol_key == 152213640970241 or symbol_key == 871362965012481 or symbol_key == 49821620633601 or symbol_key == 23570780520449;
-            if (debug_symbol) {
-                std.debug.print(
-                    "lookup-call name={s} symbol={} argc={} ret_layout={}\n",
-                    .{ debug_sym_name, symbol_key, self.store.getExprSpan(args_span).len, @intFromEnum(ret_layout) },
-                );
-                for (self.store.getExprSpan(args_span), 0..) |arg_id, i| {
-                    const arg_layout = self.getExprLayout(arg_id);
-                    const arg_expr = self.store.getExpr(arg_id);
-                    std.debug.print(
-                        "  arg{} expr={} layout={?} expr_tag={s}\n",
-                        .{ i, @intFromEnum(arg_id), if (arg_layout) |l| @intFromEnum(l) else null, @tagName(arg_expr) },
-                    );
-                    if (arg_expr == .closure) {
-                        const clo = self.store.getClosureData(arg_expr.closure);
-                        std.debug.print("    closure.repr={s} lambda={} captures={}\n", .{
-                            @tagName(clo.representation),
-                            @intFromEnum(clo.lambda),
-                            clo.captures.len,
-                        });
+            var debug_name: []const u8 = "<unknown>";
+            if (self.layout_store) |ls| {
+                if (lookup.symbol.module_idx < ls.all_module_envs.len) {
+                    const env = ls.all_module_envs[lookup.symbol.module_idx];
+                    if (lookup.symbol.ident_idx.idx < env.common.idents.interner.bytes.len()) {
+                        debug_name = env.getIdent(lookup.symbol.ident_idx);
                     }
                 }
             }
+            std.debug.print(
+                "lookup-call symbol_key=0x{x} name={s} arg_count={d} ret_layout={d}\n",
+                .{ symbol_key, debug_name, self.store.getExprSpan(args_span).len, @intFromEnum(ret_layout) },
+            );
+            if (try self.tryGenerateBuiltinNumMethodCall(debug_name, args_span, ret_layout)) |direct| {
+                return direct;
+            }
 
-            // Check if the function was compiled as a procedure
+            // Check if the function was compiled as a procedure.
+            // For higher-order lambdas receiving callable arguments, prefer
+            // the symbol-def lambda path below so we can prebind callables and
+            // compile the specialized callable dispatch variant.
             if (self.proc_registry.get(symbol_key)) |proc| {
-                if (debug_symbol) {
-                    std.debug.print("  path=proc_registry code_start={}\n", .{proc.code_start});
+                var use_compiled_proc = true;
+                if (self.getSymbolDefExact(lookup.symbol)) |def_expr_id| {
+                    const def_expr = self.store.getExpr(def_expr_id);
+                    if (def_expr == .lambda) {
+                        const has_callable_args = self.callHasCallableArgSpecialization(def_expr.lambda.params, args_span);
+                        use_compiled_proc = !has_callable_args;
+                    }
                 }
-                return try self.generateCallToCompiledProc(proc, args_span, ret_layout);
+                if (use_compiled_proc) {
+                    return try self.generateCallToCompiledProc(proc, args_span, ret_layout);
+                }
             }
 
             // Look up the function in top-level definitions
             if (self.getSymbolDefExact(lookup.symbol)) |def_expr_id| {
                 const def_expr = self.store.getExpr(def_expr_id);
-                if (debug_symbol) {
-                    std.debug.print("  path=symbol_def expr={} tag={s}\n", .{ @intFromEnum(def_expr_id), @tagName(def_expr) });
-                }
 
                 return switch (def_expr) {
                     .lambda => |lambda| {
-                        if (debug_symbol) {
-                            std.debug.print("  path=symbol_def.lambda ret_layout={}\n", .{@intFromEnum(lambda.ret_layout)});
-                            const pats = self.store.getPatternSpan(lambda.params);
-                            for (pats, 0..) |pat_id, i| {
-                                const pat = self.store.getPattern(pat_id);
-                                if (pat == .bind) {
-                                    std.debug.print("    param[{}] bind layout={}\n", .{ i, @intFromEnum(pat.bind.layout_idx) });
-                                } else if (pat == .wildcard) {
-                                    std.debug.print("    param[{}] wild layout={}\n", .{ i, @intFromEnum(pat.wildcard.layout_idx) });
-                                } else {
-                                    std.debug.print("    param[{}] tag={s}\n", .{ i, @tagName(pat) });
-                                }
-                            }
-                            const maybe_closure = self.returnedClosureInfoFromCallableExpr(def_expr_id);
-                            std.debug.print("    returned_closure={s}\n", .{if (maybe_closure == null) "null" else "some"});
-                        }
                         var saved_prebound = self.prebound_callables_by_layout.clone() catch return error.OutOfMemory;
                         defer saved_prebound.deinit();
                         defer {
@@ -12549,9 +12743,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         unreachable;
                     },
                     .block => {
-                        if (debug_symbol) {
-                            std.debug.print("  path=symbol_def.block\n", .{});
-                        }
                         // Definition is a block — evaluate the block which may produce a lambda/closure
                         const block_result = try self.generateExpr(def_expr_id);
                         if (block_result == .lambda_code) {
@@ -12616,9 +12807,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Check if the function is a locally-bound value (e.g., a lambda parameter
             // in a higher-order function like `apply = |f, x| f(x)`)
             if (self.getSymbolLocation(lookup.symbol, lookup.layout_idx)) |loc| {
-                if (debug_symbol) {
-                    std.debug.print("  path=symbol_location loc={s}\n", .{@tagName(loc)});
-                }
                 switch (loc) {
                     .lambda_code => |lc| {
                         return try self.generateCallToLambdaWithSource(lc.code_offset, args_span, ret_layout, lc.source_expr);
@@ -12628,9 +12816,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     },
                     .stack => |s| {
                         if (self.getSymbolClosureInfo(lookup.symbol, lookup.layout_idx)) |info| {
-                            if (debug_symbol) {
-                                std.debug.print("  path=symbol_location.stack => symbol_closure_dispatch\n", .{});
-                            }
                             return try self.generateClosureDispatch(.{
                                 .stack_offset = s.offset,
                                 .representation = info.representation,
@@ -12639,21 +12824,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             }, args_span, ret_layout);
                         }
                         if (self.closureValueFromStackOffset(s.offset)) |closure_loc| {
-                            if (debug_symbol) {
-                                std.debug.print("  path=symbol_location.stack => closure_dispatch\n", .{});
-                            }
                             return try self.generateClosureDispatch(closure_loc.closure_value, args_span, ret_layout);
-                        }
-                        if (debug_symbol) {
-                            std.debug.print("  path=symbol_location.stack => indirect_call\n", .{});
                         }
                         return try self.generateIndirectCall(loc, args_span, ret_layout);
                     },
                     .stack_i128 => |off| {
                         if (self.getSymbolClosureInfo(lookup.symbol, lookup.layout_idx)) |info| {
-                            if (debug_symbol) {
-                                std.debug.print("  path=symbol_location.stack_i128 => symbol_closure_dispatch\n", .{});
-                            }
                             return try self.generateClosureDispatch(.{
                                 .stack_offset = off,
                                 .representation = info.representation,
@@ -12662,17 +12838,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             }, args_span, ret_layout);
                         }
                         if (self.closureValueFromStackOffset(off)) |closure_loc| {
-                            if (debug_symbol) {
-                                std.debug.print("  path=symbol_location.stack_i128 => closure_dispatch\n", .{});
-                            }
                             return try self.generateClosureDispatch(closure_loc.closure_value, args_span, ret_layout);
                         }
                     },
                     .stack_str => |off| {
                         if (self.getSymbolClosureInfo(lookup.symbol, lookup.layout_idx)) |info| {
-                            if (debug_symbol) {
-                                std.debug.print("  path=symbol_location.stack_str => symbol_closure_dispatch\n", .{});
-                            }
                             return try self.generateClosureDispatch(.{
                                 .stack_offset = off,
                                 .representation = info.representation,
@@ -12681,9 +12851,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             }, args_span, ret_layout);
                         }
                         if (self.closureValueFromStackOffset(off)) |closure_loc| {
-                            if (debug_symbol) {
-                                std.debug.print("  path=symbol_location.stack_str => closure_dispatch\n", .{});
-                            }
                             return try self.generateClosureDispatch(closure_loc.closure_value, args_span, ret_layout);
                         }
                     },
@@ -12704,9 +12871,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (self.store.getProcs()) |proc| {
                 const proc_key: u64 = @bitCast(proc.name);
                 if (proc_key != symbol_key) continue;
-                if (debug_symbol) {
-                    std.debug.print("  path=lazy-proc compile\n", .{});
-                }
                 try self.compileProc(proc);
                 if (self.proc_registry.get(symbol_key)) |compiled_proc| {
                     return try self.generateCallToCompiledProc(compiled_proc, args_span, ret_layout);
@@ -12735,6 +12899,69 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             );
         }
 
+        fn builtinNumOperandLayout(type_name: []const u8) ?layout.Idx {
+            if (std.mem.eql(u8, type_name, "U8")) return .u8;
+            if (std.mem.eql(u8, type_name, "I8")) return .i8;
+            if (std.mem.eql(u8, type_name, "U16")) return .u16;
+            if (std.mem.eql(u8, type_name, "I16")) return .i16;
+            if (std.mem.eql(u8, type_name, "U32")) return .u32;
+            if (std.mem.eql(u8, type_name, "I32")) return .i32;
+            if (std.mem.eql(u8, type_name, "U64")) return .u64;
+            if (std.mem.eql(u8, type_name, "I64")) return .i64;
+            if (std.mem.eql(u8, type_name, "U128")) return .u128;
+            if (std.mem.eql(u8, type_name, "I128")) return .i128;
+            return null;
+        }
+
+        fn builtinNumMethodOp(method_name: []const u8) ?LirExpr.LowLevel {
+            if (std.mem.eql(u8, method_name, "plus")) return .num_add;
+            if (std.mem.eql(u8, method_name, "minus")) return .num_sub;
+            if (std.mem.eql(u8, method_name, "times")) return .num_mul;
+            if (std.mem.eql(u8, method_name, "div_by")) return .num_div;
+            if (std.mem.eql(u8, method_name, "div_trunc_by")) return .num_div_trunc;
+            if (std.mem.eql(u8, method_name, "rem_by")) return .num_rem;
+            if (std.mem.eql(u8, method_name, "mod_by")) return .num_mod;
+            if (std.mem.eql(u8, method_name, "is_eq")) return .num_is_eq;
+            if (std.mem.eql(u8, method_name, "is_lt")) return .num_is_lt;
+            if (std.mem.eql(u8, method_name, "is_lte")) return .num_is_lte;
+            if (std.mem.eql(u8, method_name, "is_gt")) return .num_is_gt;
+            if (std.mem.eql(u8, method_name, "is_gte")) return .num_is_gte;
+            return null;
+        }
+
+        fn tryGenerateBuiltinNumMethodCall(
+            self: *Self,
+            symbol_name: []const u8,
+            args_span: anytype,
+            ret_layout: layout.Idx,
+        ) Allocator.Error!?ValueLocation {
+            if (!std.mem.startsWith(u8, symbol_name, "Builtin.Num.")) return null;
+
+            const suffix = symbol_name["Builtin.Num.".len..];
+            const dot_idx = std.mem.lastIndexOfScalar(u8, suffix, '.') orelse return null;
+            const type_name = suffix[0..dot_idx];
+            const method_name = suffix[dot_idx + 1 ..];
+
+            const operand_layout = builtinNumOperandLayout(type_name) orelse return null;
+
+            const args = self.store.getExprSpan(args_span);
+            if (args.len != 2) return null;
+
+            const lhs_loc = try self.generateExpr(args[0]);
+            const rhs_loc = try self.generateExpr(args[1]);
+
+            if (std.mem.eql(u8, method_name, "abs_diff")) {
+                return try self.generateAbsDiff(lhs_loc, rhs_loc, ret_layout, operand_layout);
+            }
+            const op = builtinNumMethodOp(method_name) orelse return null;
+
+            if (operand_layout == .i128 or operand_layout == .u128) {
+                return try self.generateI128Binop(op, lhs_loc, rhs_loc, operand_layout);
+            }
+
+            return try self.generateIntBinop(op, lhs_loc, rhs_loc, operand_layout);
+        }
+
         /// Generate a call to an already-compiled procedure.
         /// This is used for recursive functions that were compiled via compileAllProcs.
         fn generateCallToCompiledProc(self: *Self, proc: CompiledProc, args_span: anytype, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
@@ -12745,9 +12972,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.scratch_arg_infos.clearFrom(arg_infos_start);
 
             for (args) |arg_id| {
-                const arg_loc = try self.generateExpr(arg_id);
+                const arg_loc_raw = try self.generateExpr(arg_id);
                 const arg_layout = self.getExprLayout(arg_id);
-                const num_regs: u8 = self.calcArgRegCount(arg_loc, arg_layout);
+                const num_regs: u8 = self.calcArgRegCount(arg_loc_raw, arg_layout);
+                const arg_loc = try self.stabilizeCallArgLocation(arg_loc_raw, num_regs);
                 try self.scratch_arg_infos.append(.{ .loc = arg_loc, .layout_idx = arg_layout, .num_regs = num_regs });
             }
             const arg_infos = self.scratch_arg_infos.sliceFromStart(arg_infos_start);
@@ -12785,7 +13013,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .stack => |s| {
                     const offset = s.offset;
-                    try self.codegen.emitLoadStack(.w64, target_reg, offset);
+                    try self.emitSizedLoadStack(target_reg, offset, s.size);
                 },
                 .stack_i128 => |offset| {
                     // Only load low 64 bits
@@ -12824,10 +13052,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Calculate the number of registers an argument needs based on its location and layout.
         fn calcArgRegCount(self: *Self, arg_loc: ValueLocation, arg_layout: ?layout.Idx) u8 {
+            if (arg_loc == .closure_value) {
+                const repr = arg_loc.closure_value.representation;
+                if (repr == .unwrapped_capture) {
+                    const cap_layout = repr.unwrapped_capture.capture_layout;
+                    if (cap_layout == .dec or cap_layout == .i128 or cap_layout == .u128) {
+                        return 2;
+                    }
+                }
+                const closure_size = self.closureStorageSize(repr);
+                return @max(1, @as(u8, @intCast((closure_size + 7) / 8)));
+            }
+
             // Check for 128-bit types (i128, u128, Dec) - need 2 registers
-            const is_i128_arg = (arg_loc == .stack_i128 or arg_loc == .immediate_i128) or
-                (arg_loc == .stack and arg_layout != null and
-                    (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128));
+            const is_i128_layout = arg_layout != null and
+                (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128);
+            const is_i128_arg = (arg_loc == .stack_i128 or arg_loc == .immediate_i128) or is_i128_layout;
             if (is_i128_arg) return 2;
 
             // Check for list/string types - need 3 registers (24 bytes: ptr, len, capacity)
@@ -12867,11 +13107,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .stack => |s| {
                     const src_offset = s.offset;
-                    // Copy from local stack to argument stack area
+                    if (num_regs == 1 and s.size != .qword) {
+                        // Preserve narrow scalar width by zero-extending before spilling.
+                        try self.emitSizedLoadStack(temp_reg, src_offset, s.size);
+                        try self.emitStore(.w64, stack_ptr, stack_offset, temp_reg);
+                    } else {
+                        // Copy from local stack to argument stack area
+                        var ri: u8 = 0;
+                        while (ri < num_regs) : (ri += 1) {
+                            const off: i32 = @as(i32, ri) * 8;
+                            try self.emitLoad(.w64, temp_reg, frame_ptr, src_offset + off);
+                            try self.emitStore(.w64, stack_ptr, stack_offset + off, temp_reg);
+                        }
+                    }
+                },
+                .closure_value => |cv| {
+                    // Closure payload is stack-backed; copy the requested words.
                     var ri: u8 = 0;
                     while (ri < num_regs) : (ri += 1) {
                         const off: i32 = @as(i32, ri) * 8;
-                        try self.emitLoad(.w64, temp_reg, frame_ptr, src_offset + off);
+                        try self.emitLoad(.w64, temp_reg, frame_ptr, cv.stack_offset + off);
                         try self.emitStore(.w64, stack_ptr, stack_offset + off, temp_reg);
                     }
                 },
@@ -13549,28 +13804,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// callee-saved registers are used, then prepends prologue and adjusts relocations.
         fn compileProc(self: *Self, proc: LirProc) Allocator.Error!void {
             const key: u64 = @bitCast(proc.name);
-            if (key == 152213640970241) {
-                const arg_layouts = self.store.getLayoutIdxSpan(proc.arg_layouts);
-                std.debug.print("compileProc List.fold key={} ret_layout={} argc={}\n", .{
-                    key,
-                    @intFromEnum(proc.ret_layout),
-                    arg_layouts.len,
-                });
-                for (arg_layouts, 0..) |li, i| {
-                    std.debug.print("  arg_layout[{}]={}\n", .{ i, @intFromEnum(li) });
-                }
-                const pats = self.store.getPatternSpan(proc.args);
-                for (pats, 0..) |pat_id, i| {
-                    const p = self.store.getPattern(pat_id);
-                    if (p == .bind) {
-                        std.debug.print("  arg_pat[{}].bind_layout={}\n", .{ i, @intFromEnum(p.bind.layout_idx) });
-                    } else if (p == .wildcard) {
-                        std.debug.print("  arg_pat[{}].wild_layout={}\n", .{ i, @intFromEnum(p.wildcard.layout_idx) });
-                    } else {
-                        std.debug.print("  arg_pat[{}].tag={s}\n", .{ i, @tagName(p) });
-                    }
-                }
-            }
 
             // Save current state - procedure has its own scope that shouldn't pollute caller
             const saved_stack_offset = self.codegen.stack_offset;
@@ -14373,10 +14606,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Check if this argument fits in registers
                 if (reg_idx + info.num_regs <= max_arg_regs) {
                     // Handle i128/Dec arguments (need two registers, even-aligned on aarch64)
-                    const is_i128_arg = (arg_loc == .stack_i128 or arg_loc == .immediate_i128) or
-                        (arg_loc == .stack and arg_layout != null and
-                            (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128));
-                    if (is_i128_arg) {
+                    const is_i128_layout = arg_layout != null and
+                        (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128);
+                    const is_i128_closure = switch (arg_loc) {
+                        .closure_value => |cv| switch (cv.representation) {
+                            .unwrapped_capture => |u| u.capture_layout == .dec or u.capture_layout == .i128 or u.capture_layout == .u128,
+                            else => false,
+                        },
+                        else => false,
+                    };
+                    const is_i128_arg = (arg_loc == .stack_i128 or arg_loc == .immediate_i128) or is_i128_layout;
+                    if (is_i128_arg or is_i128_closure) {
                         if (comptime target.toCpuArch() == .aarch64) {
                             if (reg_idx % 2 != 0) {
                                 reg_idx += 1;
@@ -14398,6 +14638,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
                                 try self.codegen.emitLoadImm(low_reg, @bitCast(low));
                                 try self.codegen.emitLoadImm(high_reg, @bitCast(high));
+                            },
+                            .closure_value => |cv| {
+                                try self.codegen.emitLoadStack(.w64, low_reg, cv.stack_offset);
+                                try self.codegen.emitLoadStack(.w64, high_reg, cv.stack_offset + 8);
                             },
                             else => unreachable,
                         }
@@ -14424,6 +14668,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // Multi-register struct (record > 8 bytes)
                         const offset: i32 = switch (arg_loc) {
                             .stack => |s| s.offset,
+                            .closure_value => |cv| cv.stack_offset,
                             else => {
                                 const arg_reg = self.getArgumentRegister(reg_idx);
                                 try self.moveToReg(arg_loc, arg_reg);
@@ -14447,7 +14692,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 }
                             },
                             .stack => |s| {
-                                try self.codegen.emitLoadStack(.w64, arg_reg, s.offset);
+                                try self.emitSizedLoadStack(arg_reg, s.offset, s.size);
                             },
                             .immediate_i64 => |val| {
                                 try self.codegen.emitLoadImm(arg_reg, @bitCast(val));
@@ -14560,7 +14805,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 for (pattern_ids, 0..) |pid, pi| {
                     const pat = self.store.getPattern(pid);
                     const nr: u8 = switch (pat) {
-                        .bind => |b| self.calcParamRegCount(b.layout_idx),
+                        .bind => |b| blk: {
+                            if (self.preboundCallableStorageSize(b.symbol, b.layout_idx)) |closure_size| {
+                                break :blk @max(1, @as(u8, @intCast((closure_size + 7) / 8)));
+                            }
+                            break :blk self.calcParamRegCount(b.layout_idx);
+                        },
                         .wildcard => |w| self.calcParamRegCount(w.layout_idx),
                         .struct_ => |s| blk: {
                             const ls = self.layout_store orelse break :blk 1;
@@ -14611,7 +14861,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const pattern = self.store.getPattern(pattern_id);
                 switch (pattern) {
                     .bind => |bind| {
-                        const num_regs = self.calcParamRegCount(bind.layout_idx);
+                        const prebound_size = self.preboundCallableStorageSize(bind.symbol, bind.layout_idx);
+                        const prebound_i128 = self.preboundCallableIsI128Like(bind.symbol, bind.layout_idx);
+                        const num_regs: u8 = if (prebound_size) |closure_size|
+                            @max(1, @as(u8, @intCast((closure_size + 7) / 8)))
+                        else
+                            self.calcParamRegCount(bind.layout_idx);
+
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            if (prebound_i128 and reg_idx % 2 != 0) {
+                                reg_idx += 1;
+                            }
+                        }
 
                         // Check if this param is passed by pointer (pre-computed)
                         if (param_pass_by_ptr[param_idx]) {
@@ -14630,7 +14891,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             }
 
                             // Set up symbol location based on type
-                            if (bind.layout_idx == .str) {
+                            if (prebound_size != null) {
+                                if (prebound_i128) {
+                                    try self.putSymbolLocation(bind.symbol, bind.layout_idx, .{ .stack_i128 = local_stack_offset });
+                                } else {
+                                    try self.putSymbolLocation(bind.symbol, bind.layout_idx, .{ .stack = .{ .offset = local_stack_offset } });
+                                }
+                            } else if (bind.layout_idx == .str) {
                                 try self.putSymbolLocation(bind.symbol, bind.layout_idx, .{ .stack_str = local_stack_offset });
                             } else if (self.layout_store) |ls| {
                                 if (@intFromEnum(bind.layout_idx) < ls.layouts.len()) {
@@ -14705,6 +14972,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                         } });
                                         try self.applyPreboundCallableForBinding(bind.symbol, bind.layout_idx, stack_offset);
                                         reg_idx += 3;
+                                        continue;
+                                    }
+                                    if (prebound_size != null and num_regs > 1) {
+                                        const stack_offset = self.codegen.allocStackSlot(@as(u32, num_regs) * 8);
+                                        var ri: u8 = 0;
+                                        while (ri < num_regs) : (ri += 1) {
+                                            const arg_r = self.getArgumentRegister(reg_idx + ri);
+                                            try self.codegen.emitStoreStack(.w64, stack_offset + @as(i32, ri) * 8, arg_r);
+                                        }
+                                        if (prebound_i128) {
+                                            try self.putSymbolLocation(bind.symbol, bind.layout_idx, .{ .stack_i128 = stack_offset });
+                                        } else {
+                                            try self.putSymbolLocation(bind.symbol, bind.layout_idx, .{ .stack = .{ .offset = stack_offset } });
+                                        }
+                                        try self.applyPreboundCallableForBinding(bind.symbol, bind.layout_idx, stack_offset);
+                                        reg_idx += num_regs;
                                         continue;
                                     }
                                     if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
@@ -15165,10 +15448,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             for (args) |arg_id| {
-                const arg_loc = try self.generateExpr(arg_id);
+                const arg_loc_raw = try self.generateExpr(arg_id);
                 const arg_layout = self.getExprLayout(arg_id);
-                const num_regs = self.calcArgRegCount(arg_loc, arg_layout);
-                if (arg_loc == .list_stack) {} else if (arg_loc == .stack) {}
+                const num_regs = self.calcArgRegCount(arg_loc_raw, arg_layout);
+                const arg_loc = try self.stabilizeCallArgLocation(arg_loc_raw, num_regs);
                 try self.scratch_arg_infos.append(.{ .loc = arg_loc, .layout_idx = arg_layout, .num_regs = num_regs });
             }
             const arg_infos = self.scratch_arg_infos.sliceFromStart(arg_infos_start);
@@ -15263,6 +15546,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return self.saveCallReturnValue(ret_layout, needs_ret_ptr, ret_buffer_offset, returned_closure_info);
         }
 
+        /// Stabilize ephemeral call-argument locations so later argument evaluation
+        /// cannot clobber earlier arguments that currently live in registers.
+        fn stabilizeCallArgLocation(self: *Self, arg_loc: ValueLocation, num_regs: u8) Allocator.Error!ValueLocation {
+            return switch (arg_loc) {
+                .general_reg => blk: {
+                    const spill_size: u32 = @max(@as(u32, 8), @as(u32, num_regs) * 8);
+                    const off = try self.ensureOnStack(arg_loc, spill_size);
+                    break :blk .{ .stack = .{ .offset = off } };
+                },
+                else => arg_loc,
+            };
+        }
+
         /// Bind procedure parameters to argument registers.
         /// Handles stack spilling when arguments exceed available registers.
         fn bindProcParams(self: *Self, params: lir.LirPatternSpan, param_layouts: LayoutIdxSpan) Allocator.Error!void {
@@ -15354,9 +15650,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             } else {
                                 // Normal 64-bit or smaller parameter
                                 const arg_reg = self.getArgumentRegister(reg_idx);
-                                const stack_offset = self.codegen.allocStackSlot(8);
-                                try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg);
-                                try self.putSymbolLocation(bind.symbol, param_layout_idx, .{ .stack = .{ .offset = stack_offset } });
+                                const scalar_size = self.getLayoutSize(param_layout_idx);
+                                const slot_size: u32 = if (scalar_size == 0) 1 else scalar_size;
+                                const stack_offset = self.codegen.allocStackSlot(slot_size);
+                                if (scalar_size > 0) {
+                                    switch (scalar_size) {
+                                        1 => try self.emitStoreStackW8(stack_offset, arg_reg),
+                                        2 => try self.emitStoreStackW16(stack_offset, arg_reg),
+                                        4 => try self.codegen.emitStoreStack(.w32, stack_offset, arg_reg),
+                                        else => try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg),
+                                    }
+                                }
+                                try self.putSymbolLocation(bind.symbol, param_layout_idx, self.stackLocationForLayout(param_layout_idx, stack_offset));
                                 try self.applyPreboundCallableForBinding(bind.symbol, param_layout_idx, stack_offset);
                                 reg_idx += 1;
                             }
@@ -15378,7 +15683,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                     .num_elements = 0,
                                 } });
                             } else {
-                                try self.putSymbolLocation(bind.symbol, param_layout_idx, .{ .stack = .{ .offset = local_stack_offset } });
+                                try self.putSymbolLocation(bind.symbol, param_layout_idx, self.stackLocationForLayout(param_layout_idx, local_stack_offset));
                             }
                             try self.applyPreboundCallableForBinding(bind.symbol, param_layout_idx, local_stack_offset);
 
