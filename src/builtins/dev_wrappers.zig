@@ -797,18 +797,18 @@ pub fn roc_builtins_int_to_str(out: *RocStr, val_low: u64, val_high: u64, int_wi
 }
 
 /// Unified float-to-string wrapper: dispatches on is_f32.
+/// `val_bits` is the bit pattern of the dev backend's internal f64 value.
+/// For f32, we first narrow that value to f32, then format it.
 /// Uses Ryu's binaryToDecimal directly and formats manually to avoid
 /// pulling in std.fmt.float.formatDecimal which references isPowerOf10
 /// (u128 div/mod → __udivti3/__umodti3 compiler_rt symbols).
 pub fn roc_builtins_float_to_str(out: *RocStr, val_bits: u64, is_f32: bool, roc_ops: *RocOps) callconv(.c) void {
     var buf: [400]u8 = undefined;
+    const f64_val: f64 = @bitCast(val_bits);
     const result = if (is_f32) blk: {
-        const f32_val: f32 = @bitCast(@as(u32, @truncate(val_bits)));
+        const f32_val: f32 = @floatCast(f64_val);
         break :blk i128h.f64_to_str(&buf, @as(f64, @floatCast(f32_val)));
-    } else blk: {
-        const f64_val: f64 = @bitCast(val_bits);
-        break :blk i128h.f64_to_str(&buf, f64_val);
-    };
+    } else i128h.f64_to_str(&buf, f64_val);
     out.* = RocStr.init(&buf, result.len, roc_ops);
 }
 

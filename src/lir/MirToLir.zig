@@ -2142,6 +2142,15 @@ fn inspektTuple(self: *Self, value_expr: LirExprId, tup: anytype, mono_idx: Mono
     if (elems.len == 0) return self.emitStrLiteral("()", region);
 
     const struct_layout = try self.layoutFromMonotype(mono_idx);
+    const struct_layout_val = self.layout_store.getLayout(struct_layout);
+    const struct_data = if (struct_layout_val.tag == .struct_)
+        self.layout_store.getStructData(struct_layout_val.data.struct_.idx)
+    else
+        null;
+    const layout_fields = if (struct_data) |sd|
+        self.layout_store.struct_fields.sliceRange(sd.getFields())
+    else
+        @panic("inspektTuple expected struct layout for non-empty tuple");
 
     const save_exprs = self.scratch_lir_expr_ids.items.len;
     defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
@@ -2153,12 +2162,19 @@ fn inspektTuple(self: *Self, value_expr: LirExprId, tup: anytype, mono_idx: Mono
             try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(", ", region));
         }
 
+        var layout_field_idx: ?u16 = null;
+        for (0..layout_fields.len) |li| {
+            if (layout_fields.get(li).index == i) {
+                layout_field_idx = @intCast(li);
+                break;
+            }
+        }
         const elem_layout = try self.layoutFromMonotype(elem_mono);
         const elem_access = try self.lir_store.addExpr(.{ .struct_access = .{
             .struct_expr = value_expr,
             .struct_layout = struct_layout,
             .field_layout = elem_layout,
-            .field_idx = @intCast(i),
+            .field_idx = layout_field_idx orelse unreachable,
         } }, region);
 
         const elem_inspected = try self.expandStrInspekt(elem_access, elem_mono, region);
@@ -2235,16 +2251,28 @@ fn inspektSingleTag(self: *Self, value_expr: LirExprId, tag: Monotype.Tag, _: Mo
         try self.scratch_lir_expr_ids.append(self.allocator, inspected);
     } else {
         // Multiple payloads: value_expr is a struct, access each field
+        const union_layout_val = self.layout_store.getLayout(union_layout);
+        std.debug.assert(union_layout_val.tag == .struct_);
+        const union_struct_data = self.layout_store.getStructData(union_layout_val.data.struct_.idx);
+        const union_layout_fields = self.layout_store.struct_fields.sliceRange(union_struct_data.getFields());
+
         for (payloads, 0..) |payload_mono, i| {
             if (i > 0) {
                 try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(", ", region));
+            }
+            var layout_field_idx: ?u16 = null;
+            for (0..union_layout_fields.len) |li| {
+                if (union_layout_fields.get(li).index == i) {
+                    layout_field_idx = @intCast(li);
+                    break;
+                }
             }
             const payload_layout = try self.layoutFromMonotype(payload_mono);
             const payload_access = try self.lir_store.addExpr(.{ .struct_access = .{
                 .struct_expr = value_expr,
                 .struct_layout = union_layout,
                 .field_layout = payload_layout,
-                .field_idx = @intCast(i),
+                .field_idx = layout_field_idx orelse unreachable,
             } }, region);
             const inspected = try self.expandStrInspekt(payload_access, payload_mono, region);
             try self.scratch_lir_expr_ids.append(self.allocator, inspected);
@@ -2319,16 +2347,28 @@ fn inspektTagBranch(self: *Self, union_value: LirExprId, tag: Monotype.Tag, unio
         try self.scratch_lir_expr_ids.append(self.allocator, inspected);
     } else {
         // Multiple payloads: payload is a struct, access each field
+        const payload_layout_val = self.layout_store.getLayout(payload_layout);
+        std.debug.assert(payload_layout_val.tag == .struct_);
+        const payload_struct_data = self.layout_store.getStructData(payload_layout_val.data.struct_.idx);
+        const payload_layout_fields = self.layout_store.struct_fields.sliceRange(payload_struct_data.getFields());
+
         for (payloads, 0..) |payload_mono, i| {
             if (i > 0) {
                 try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(", ", region));
+            }
+            var layout_field_idx: ?u16 = null;
+            for (0..payload_layout_fields.len) |li| {
+                if (payload_layout_fields.get(li).index == i) {
+                    layout_field_idx = @intCast(li);
+                    break;
+                }
             }
             const field_layout = try self.layoutFromMonotype(payload_mono);
             const field_access = try self.lir_store.addExpr(.{ .struct_access = .{
                 .struct_expr = payload_access,
                 .struct_layout = payload_layout,
                 .field_layout = field_layout,
-                .field_idx = @intCast(i),
+                .field_idx = layout_field_idx orelse unreachable,
             } }, region);
             const inspected = try self.expandStrInspekt(field_access, payload_mono, region);
             try self.scratch_lir_expr_ids.append(self.allocator, inspected);

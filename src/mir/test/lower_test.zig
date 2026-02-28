@@ -1763,6 +1763,8 @@ test "cross-module type resolution: U32.to dispatches with concrete U32 function
 
     // Verify the function DEFINITION body was also lowered with concrete types.
     const method_symbol = func_expr.lookup;
+    const method_env = env.lower.all_module_envs[method_symbol.module_idx];
+    try testing.expectEqualStrings("Builtin.Num.U32.to", method_env.getIdent(method_symbol.ident_idx));
     const sym_key: u64 = @bitCast(method_symbol);
     const def_expr_id = env.mir_store.symbol_defs.get(sym_key) orelse
         return error.TestUnexpectedResult;
@@ -1842,6 +1844,105 @@ test "polymorphic lambda in block: fn called via arrow syntax gets correct type"
     const call_monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(result.block.final_expr));
     try testing.expect(call_monotype == .prim);
     try testing.expectEqual(Monotype.Prim.u64, call_monotype.prim);
+}
+
+test "repl arrow desugaring: full fn0/fn1/fn2/fn3 program lowers to ordinary calls" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    fn0 = |a| a + 1
+        \\    fn1 = |a, b| a + b
+        \\    fn2 = |a, b, c| a + b + c
+        \\    fn3 = |a, b, c, d| a + b + c + d
+        \\
+        \\    r0 = 10->fn0
+        \\    r1 = 10->fn1(20)
+        \\    r2 = 10->fn2(20, 30)
+        \\    r3 = 10->fn3(20, 30, 40)
+        \\
+        \\    (r0, r1, r2, r3)
+        \\}
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const top = env.mir_store.getExpr(expr);
+    try testing.expect(top == .block);
+
+    const stmts = env.mir_store.getStmts(top.block.stmts);
+    try testing.expectEqual(@as(usize, 8), stmts.len);
+
+    const expected_plus_call_counts = [_]usize{ 1, 1, 2, 3 };
+    const expected_call_arg_lens = [_]usize{ 1, 2, 3, 4 };
+    var fn_symbols: [4]MIR.Symbol = undefined;
+
+    // fn0..fn3 definitions: each should be a lambda whose `+` chain lowers as call(s)
+    for (0..4) |i| {
+        const stmt = stmts[i];
+        try testing.expect(stmt == .decl_const);
+        const dc = stmt.decl_const;
+
+        const pat = env.mir_store.getPattern(dc.pattern);
+        try testing.expect(pat == .bind);
+        fn_symbols[i] = pat.bind;
+
+        const def_expr = env.mir_store.getExpr(dc.expr);
+        try testing.expect(def_expr == .lambda);
+
+        const call_count = try struct {
+            fn count(env_: *MirTestEnv, expr_id: MIR.ExprId) !usize {
+                const e = env_.mir_store.getExpr(expr_id);
+                return switch (e) {
+                    .call => |c| blk: {
+                        const fn_expr = env_.mir_store.getExpr(c.func);
+                        try testing.expect(fn_expr == .lookup);
+                        const args = env_.mir_store.getExprSpan(c.args);
+                        try testing.expectEqual(@as(usize, 2), args.len);
+
+                        // For this test, default numerals in `+` should resolve to Dec.
+                        const ret_mono = env_.mir_store.monotype_store.getMonotype(env_.mir_store.typeOf(expr_id));
+                        try testing.expect(ret_mono == .prim);
+                        try testing.expectEqual(Monotype.Prim.dec, ret_mono.prim);
+
+                        var total: usize = 1;
+                        for (args) |arg| {
+                            if (env_.mir_store.getExpr(arg) == .call) {
+                                total += try count(env_, arg);
+                            }
+                        }
+                        break :blk total;
+                    },
+                    else => error.TestUnexpectedResult,
+                };
+            }
+        }.count(&env, def_expr.lambda.body);
+
+        try testing.expectEqual(expected_plus_call_counts[i], call_count);
+    }
+
+    // r0..r3: each arrow form should desugar to a plain function call.
+    for (0..4) |i| {
+        const stmt = stmts[4 + i];
+        try testing.expect(stmt == .decl_const);
+        const dc = stmt.decl_const;
+        const call_expr = env.mir_store.getExpr(dc.expr);
+        try testing.expect(call_expr == .call);
+
+        const fn_expr = env.mir_store.getExpr(call_expr.call.func);
+        try testing.expect(fn_expr == .lookup);
+        try testing.expectEqual(fn_symbols[i], fn_expr.lookup);
+
+        const call_args = env.mir_store.getExprSpan(call_expr.call.args);
+        try testing.expectEqual(expected_call_arg_lens[i], call_args.len);
+
+        const ret_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(dc.expr));
+        try testing.expect(ret_mono == .prim);
+        try testing.expectEqual(Monotype.Prim.dec, ret_mono.prim);
+    }
+
+    // Final expression is the tuple of the four call results.
+    const final_expr = env.mir_store.getExpr(top.block.final_expr);
+    try testing.expect(final_expr == .tuple);
+    const final_elems = env.mir_store.getExprSpan(final_expr.tuple.elems);
+    try testing.expectEqual(@as(usize, 4), final_elems.len);
 }
 
 test "polymorphic lambda with literal in body: a + b + 0 called with U64" {

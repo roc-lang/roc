@@ -14909,13 +14909,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                             .num_elements = 0,
                                         } });
                                     } else {
-                                        try self.putSymbolLocation(bind.symbol, bind.layout_idx, .{ .stack = .{ .offset = local_stack_offset } });
+                                        try self.putSymbolLocation(bind.symbol, bind.layout_idx, self.stackLocationForLayout(bind.layout_idx, local_stack_offset));
                                     }
                                 } else {
-                                    try self.putSymbolLocation(bind.symbol, bind.layout_idx, .{ .stack = .{ .offset = local_stack_offset } });
+                                    try self.putSymbolLocation(bind.symbol, bind.layout_idx, self.stackLocationForLayout(bind.layout_idx, local_stack_offset));
                                 }
                             } else {
-                                try self.putSymbolLocation(bind.symbol, bind.layout_idx, .{ .stack = .{ .offset = local_stack_offset } });
+                                try self.putSymbolLocation(bind.symbol, bind.layout_idx, self.stackLocationForLayout(bind.layout_idx, local_stack_offset));
                             }
                             try self.applyPreboundCallableForBinding(bind.symbol, bind.layout_idx, local_stack_offset);
                             reg_idx += 1;
@@ -15006,19 +15006,37 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                         }
                                     }
                                 }
-                                // Default: single 8-byte value
+                                // Default: scalar single-register value
                                 const arg_reg = self.getArgumentRegister(reg_idx);
-                                const stack_offset = self.codegen.allocStackSlot(8);
-                                try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg);
-                                try self.putSymbolLocation(bind.symbol, bind.layout_idx, .{ .stack = .{ .offset = stack_offset } });
+                                const scalar_size = self.getLayoutSize(bind.layout_idx);
+                                const slot_size: u32 = if (scalar_size == 0) 1 else scalar_size;
+                                const stack_offset = self.codegen.allocStackSlot(slot_size);
+                                if (scalar_size > 0) {
+                                    switch (scalar_size) {
+                                        1 => try self.emitStoreStackW8(stack_offset, arg_reg),
+                                        2 => try self.emitStoreStackW16(stack_offset, arg_reg),
+                                        4 => try self.codegen.emitStoreStack(.w32, stack_offset, arg_reg),
+                                        else => try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg),
+                                    }
+                                }
+                                try self.putSymbolLocation(bind.symbol, bind.layout_idx, self.stackLocationForLayout(bind.layout_idx, stack_offset));
                                 try self.applyPreboundCallableForBinding(bind.symbol, bind.layout_idx, stack_offset);
                                 reg_idx += 1;
                             } else {
-                                // Default: single 8-byte value
+                                // Default: scalar single-register value
                                 const arg_reg = self.getArgumentRegister(reg_idx);
-                                const stack_offset = self.codegen.allocStackSlot(8);
-                                try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg);
-                                try self.putSymbolLocation(bind.symbol, bind.layout_idx, .{ .stack = .{ .offset = stack_offset } });
+                                const scalar_size = self.getLayoutSize(bind.layout_idx);
+                                const slot_size: u32 = if (scalar_size == 0) 1 else scalar_size;
+                                const stack_offset = self.codegen.allocStackSlot(slot_size);
+                                if (scalar_size > 0) {
+                                    switch (scalar_size) {
+                                        1 => try self.emitStoreStackW8(stack_offset, arg_reg),
+                                        2 => try self.emitStoreStackW16(stack_offset, arg_reg),
+                                        4 => try self.codegen.emitStoreStack(.w32, stack_offset, arg_reg),
+                                        else => try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg),
+                                    }
+                                }
+                                try self.putSymbolLocation(bind.symbol, bind.layout_idx, self.stackLocationForLayout(bind.layout_idx, stack_offset));
                                 try self.applyPreboundCallableForBinding(bind.symbol, bind.layout_idx, stack_offset);
                                 reg_idx += 1;
                             }
@@ -15027,7 +15045,28 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const size: u32 = @as(u32, num_regs) * 8;
                             const local_stack_offset = self.codegen.allocStackSlot(@intCast(size));
                             try self.copyFromCallerStack(stack_arg_offset, local_stack_offset, num_regs);
-                            try self.putSymbolLocation(bind.symbol, bind.layout_idx, .{ .stack = .{ .offset = local_stack_offset } });
+                            if (bind.layout_idx == .str) {
+                                try self.putSymbolLocation(bind.symbol, bind.layout_idx, .{ .stack_str = local_stack_offset });
+                            } else if (bind.layout_idx == .i128 or bind.layout_idx == .u128 or bind.layout_idx == .dec) {
+                                try self.putSymbolLocation(bind.symbol, bind.layout_idx, .{ .stack_i128 = local_stack_offset });
+                            } else if (self.layout_store) |ls| {
+                                if (@intFromEnum(bind.layout_idx) < ls.layouts.len()) {
+                                    const layout_val = ls.getLayout(bind.layout_idx);
+                                    if (layout_val.tag == .list or layout_val.tag == .list_of_zst) {
+                                        try self.putSymbolLocation(bind.symbol, bind.layout_idx, .{ .list_stack = .{
+                                            .struct_offset = local_stack_offset,
+                                            .data_offset = 0,
+                                            .num_elements = 0,
+                                        } });
+                                    } else {
+                                        try self.putSymbolLocation(bind.symbol, bind.layout_idx, self.stackLocationForLayout(bind.layout_idx, local_stack_offset));
+                                    }
+                                } else {
+                                    try self.putSymbolLocation(bind.symbol, bind.layout_idx, self.stackLocationForLayout(bind.layout_idx, local_stack_offset));
+                                }
+                            } else {
+                                try self.putSymbolLocation(bind.symbol, bind.layout_idx, self.stackLocationForLayout(bind.layout_idx, local_stack_offset));
+                            }
                             try self.applyPreboundCallableForBinding(bind.symbol, bind.layout_idx, local_stack_offset);
                             stack_arg_offset += @as(i32, num_regs) * 8;
                             reg_idx = max_arg_regs; // Mark all registers as consumed

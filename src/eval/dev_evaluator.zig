@@ -246,6 +246,9 @@ const DevRocEnv = struct {
     crash_message: ?[]const u8 = null,
     /// Jump buffer for unwinding from roc_crashed back to the call site.
     jmp_buf: JmpBuf = undefined,
+    /// Current executable code range for debug attribution of host callbacks.
+    current_code_base: usize = 0,
+    current_code_size: usize = 0,
 
     const AllocInfo = struct {
         len: usize,
@@ -290,13 +293,17 @@ const DevRocEnv = struct {
     /// NOTE: threadlocal is required because snapshot tests run in parallel —
     /// without it, concurrent threads corrupt each other's allocations.
     const StaticAlloc = struct {
-        threadlocal var buffer: [1024 * 1024]u8 align(16) = undefined; // 1MB static buffer
+        threadlocal var buffer: [16 * 1024 * 1024]u8 align(16) = undefined; // 16MB static buffer
         threadlocal var offset: usize = 0;
         // Track allocation sizes for realloc (simple array of ptr -> size pairs)
         const max_allocs = 4096;
         threadlocal var alloc_ptrs: [max_allocs]usize = [_]usize{0} ** max_allocs;
         threadlocal var alloc_sizes: [max_allocs]usize = [_]usize{0} ** max_allocs;
         threadlocal var alloc_count: usize = 0;
+        const max_sites = 64;
+        threadlocal var alloc_sites: [max_sites]usize = [_]usize{0} ** max_sites;
+        threadlocal var alloc_site_counts: [max_sites]usize = [_]usize{0} ** max_sites;
+        threadlocal var alloc_site_count: usize = 0;
 
         fn recordAlloc(ptr: usize, size: usize) void {
             if (alloc_count < max_allocs) {
@@ -321,11 +328,29 @@ const DevRocEnv = struct {
         fn reset() void {
             offset = 0;
             alloc_count = 0;
+            alloc_site_count = 0;
+        }
+
+        fn recordAllocSite(ret_addr: usize) void {
+            var i: usize = 0;
+            while (i < alloc_site_count) : (i += 1) {
+                if (alloc_sites[i] == ret_addr) {
+                    alloc_site_counts[i] += 1;
+                    return;
+                }
+            }
+            if (alloc_site_count < max_sites) {
+                alloc_sites[alloc_site_count] = ret_addr;
+                alloc_site_counts[alloc_site_count] = 1;
+                alloc_site_count += 1;
+            }
         }
     };
 
     /// Allocation function for RocOps.
     fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.c) void {
+        const ret_addr = @returnAddress();
+        StaticAlloc.recordAllocSite(ret_addr);
         // Align the offset to the requested alignment
         const alignment = roc_alloc.alignment;
         const mask = alignment - 1;
@@ -335,7 +360,40 @@ const DevRocEnv = struct {
             const self: *DevRocEnv = @ptrCast(@alignCast(env));
             self.crashed = true;
             if (self.crash_message) |old| self.allocator.free(old);
-            self.crash_message = self.allocator.dupe(u8, "static buffer overflow in alloc") catch null;
+            std.debug.print("rocAlloc overflow site histogram ({} unique):\n", .{StaticAlloc.alloc_site_count});
+            var i: usize = 0;
+            while (i < StaticAlloc.alloc_site_count) : (i += 1) {
+                const site = StaticAlloc.alloc_sites[i];
+                const in_code = self.current_code_base != 0 and
+                    site >= self.current_code_base and
+                    site < (self.current_code_base + self.current_code_size);
+                if (in_code) {
+                    std.debug.print(
+                        "  site=0x{x} (code+0x{x}) count={d}\n",
+                        .{
+                            site,
+                            site - self.current_code_base,
+                            StaticAlloc.alloc_site_counts[i],
+                        },
+                    );
+                } else {
+                    std.debug.print("  site=0x{x} count={d}\n", .{ site, StaticAlloc.alloc_site_counts[i] });
+                }
+            }
+            std.debug.print("rocAlloc overflow stack trace:\n", .{});
+            std.debug.dumpCurrentStackTrace(@returnAddress());
+            self.crash_message = std.fmt.allocPrint(
+                self.allocator,
+                "static buffer overflow in alloc (len={d}, align={d}, offset={d}, aligned_offset={d}, buffer_len={d}, alloc_count={d})",
+                .{
+                    roc_alloc.length,
+                    roc_alloc.alignment,
+                    StaticAlloc.offset,
+                    aligned_offset,
+                    StaticAlloc.buffer.len,
+                    StaticAlloc.alloc_count,
+                },
+            ) catch null;
             longjmp(&self.jmp_buf, 1);
         }
 
@@ -357,6 +415,7 @@ const DevRocEnv = struct {
     /// Reallocation function for RocOps.
     /// With static buffer, we allocate new space and copy data (old space is not reclaimed).
     fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.c) void {
+        StaticAlloc.recordAllocSite(@returnAddress());
         // Align the offset to the requested alignment
         const alignment = roc_realloc.alignment;
         const mask = alignment - 1;
@@ -366,7 +425,17 @@ const DevRocEnv = struct {
             const self: *DevRocEnv = @ptrCast(@alignCast(env));
             self.crashed = true;
             if (self.crash_message) |old| self.allocator.free(old);
-            self.crash_message = self.allocator.dupe(u8, "static buffer overflow in realloc") catch null;
+            self.crash_message = std.fmt.allocPrint(
+                self.allocator,
+                "static buffer overflow in realloc (new_len={d}, align={d}, offset={d}, aligned_offset={d}, buffer_len={d})",
+                .{
+                    roc_realloc.new_length,
+                    roc_realloc.alignment,
+                    StaticAlloc.offset,
+                    aligned_offset,
+                    StaticAlloc.buffer.len,
+                },
+            ) catch null;
             longjmp(&self.jmp_buf, 1);
         }
 
@@ -573,6 +642,12 @@ pub const DevEvaluator = struct {
     /// On Windows, we use Vectored Exception Handling (VEH) since fork() is not available.
     pub fn callWithCrashProtection(self: *DevEvaluator, executable: *const backend.ExecutableMemory, result_ptr: *anyopaque) error{ RocCrashed, Segfault }!void {
         self.roc_env.crashed = false;
+        self.roc_env.current_code_base = @intFromPtr(executable.codePtr());
+        self.roc_env.current_code_size = executable.code_size;
+        defer {
+            self.roc_env.current_code_base = 0;
+            self.roc_env.current_code_size = 0;
+        }
 
         if (comptime builtin.mode == .Debug) {
             builtins.utils.DebugRefcountTracker.enable();

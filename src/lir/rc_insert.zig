@@ -129,6 +129,32 @@ pub const RcInsertPass = struct {
         return @enumFromInt(raw);
     }
 
+    /// Sum all use counts for a symbol across every layout key.
+    fn sumSymbolUses(self: *RcInsertPass, uses: *const std.AutoHashMap(SymbolUseKey, u32), symbol: Symbol) u32 {
+        _ = self;
+        var total: u32 = 0;
+        var it = uses.iterator();
+        while (it.next()) |entry| {
+            if (std.meta.eql(keyToSymbol(entry.key_ptr.*), symbol)) {
+                total +|= entry.value_ptr.*;
+            }
+        }
+        return total;
+    }
+
+    /// Sum all signed RC adjustments for a symbol across every layout key.
+    fn sumSymbolAdj(self: *RcInsertPass, adjs: *const std.AutoHashMap(SymbolUseKey, i32), symbol: Symbol) i32 {
+        _ = self;
+        var total: i32 = 0;
+        var it = adjs.iterator();
+        while (it.next()) |entry| {
+            if (std.meta.eql(keyToSymbol(entry.key_ptr.*), symbol)) {
+                total +%= entry.value_ptr.*;
+            }
+        }
+        return total;
+    }
+
     pub fn deinit(self: *RcInsertPass) void {
         self.symbol_use_counts.deinit();
         self.symbol_layouts.deinit();
@@ -836,6 +862,17 @@ pub const RcInsertPass = struct {
         var stmt_buf = std.ArrayList(LirStmt).empty;
         defer stmt_buf.deinit(self.allocator);
 
+        // Symbols that are assigned via `mutate` in this block. Treat these as
+        // mutable bindings: global multi-use incref insertion is unsound for them,
+        // because each assignment creates a fresh runtime value.
+        var mutated_symbol_ids = std.AutoHashMap(u64, void).init(self.allocator);
+        defer mutated_symbol_ids.deinit();
+        for (stmts) |stmt| {
+            if (stmt == .mutate) {
+                try self.collectPatternSymbolIds(stmt.binding().pattern, &mutated_symbol_ids);
+            }
+        }
+
         var changed = false;
 
         // Process each statement
@@ -882,9 +919,12 @@ pub const RcInsertPass = struct {
 
             // Track live RC symbols and emit increfs for multi-use bindings
             try self.trackLiveRcSymbolsForPattern(b.pattern);
-            const before_len = stmt_buf.items.len;
-            try self.emitBlockIncrefsForPattern(b.pattern, region, &stmt_buf, stmts, stmt_index, final_expr);
-            if (stmt_buf.items.len > before_len) changed = true;
+            const is_mutated_binding = try self.patternBindsAnySymbolId(b.pattern, &mutated_symbol_ids);
+            if (!is_mutated_binding) {
+                const before_len = stmt_buf.items.len;
+                try self.emitBlockIncrefsForPattern(b.pattern, region, &stmt_buf, stmts, stmt_index, final_expr);
+                if (stmt_buf.items.len > before_len) changed = true;
+            }
         }
 
         // Recursively process the final expression
@@ -1381,25 +1421,27 @@ pub const RcInsertPass = struct {
 
         const live_syms = self.live_rc_symbols.items[self.early_return_scope_base..];
         for (live_syms) |live| {
-            const key = makeKey(live.symbol, live.layout_idx);
-            const ret_use_count: u32 = self.scratch_uses.get(key) orelse 0;
+            const ret_use_count: u32 = self.sumSymbolUses(&self.scratch_uses, live.symbol);
             // Total refs = global_use_count + pending branch RC adjustments.
             // The branch wrapper will prepend RC ops that execute before
             // the early return: increfs (positive adj) add refs to clean up,
             // decrefs (negative adj) reduce refs since they're already handled.
-            const global_count = self.symbol_use_counts.get(key) orelse 1;
+            const global_count = blk: {
+                const n = self.sumSymbolUses(&self.symbol_use_counts, live.symbol);
+                break :blk if (n == 0) 1 else n;
+            };
             // Mutable bindings are re-bound over time; global symbol use counts
             // over-approximate live refs for the current value at an early_return.
             // Treat the current mutable binding as owning exactly one live ref.
             const base_count: u32 = if (live.symbol.ident_idx.attributes.reassignable) 1 else global_count;
-            const branch_adj: i32 = self.pending_branch_rc_adj.get(key) orelse 0;
+            const branch_adj: i32 = self.sumSymbolAdj(&self.pending_branch_rc_adj, live.symbol);
             const effective_signed: i32 = @as(i32, @intCast(base_count)) + branch_adj;
             if (effective_signed <= 0) continue; // branch wrapper decrefs handle all refs
             const effective_count: u32 = @intCast(effective_signed);
             // Include uses consumed by outer enclosing blocks (cumulative)
             // plus uses consumed by the current inner block's prior statements.
-            const consumed_before = (self.cumulative_consumed_uses.get(key) orelse 0) +
-                (self.block_consumed_uses.get(key) orelse 0);
+            const consumed_before = self.sumSymbolUses(&self.cumulative_consumed_uses, live.symbol) +
+                self.sumSymbolUses(&self.block_consumed_uses, live.symbol);
             const total_consumed = consumed_before + ret_use_count;
             if (total_consumed >= effective_count) continue; // all refs accounted for
             const remaining = effective_count - total_consumed;
@@ -1451,10 +1493,45 @@ pub const RcInsertPass = struct {
         try walkPatternBinds(self.store, pat_id, Ctx{ .set = set });
     }
 
+    /// Collect bound symbol IDs (without layout) for mutation-aware logic.
+    fn collectPatternSymbolIds(self: *const RcInsertPass, pat_id: LirPatternId, set: *std.AutoHashMap(u64, void)) Allocator.Error!void {
+        const Ctx = struct {
+            set: *std.AutoHashMap(u64, void),
+            fn onBind(ctx: @This(), symbol: Symbol, _: LayoutIdx) Allocator.Error!void {
+                try ctx.set.put(@bitCast(symbol), {});
+            }
+        };
+        ensurePatternIdValid(self.store, pat_id, "collectPatternSymbolIds");
+        try walkPatternBinds(self.store, pat_id, Ctx{ .set = set });
+    }
+
+    fn patternBindsAnySymbolId(self: *const RcInsertPass, pat_id: LirPatternId, set: *const std.AutoHashMap(u64, void)) Allocator.Error!bool {
+        var found = false;
+        const Ctx = struct {
+            set: *const std.AutoHashMap(u64, void),
+            found: *bool,
+            fn onBind(ctx: @This(), symbol: Symbol, _: LayoutIdx) Allocator.Error!void {
+                if (!ctx.found.* and ctx.set.contains(@bitCast(symbol))) {
+                    ctx.found.* = true;
+                }
+            }
+        };
+        ensurePatternIdValid(self.store, pat_id, "patternBindsAnySymbolId");
+        try walkPatternBinds(self.store, pat_id, Ctx{ .set = set, .found = &found });
+        return found;
+    }
+
     fn exprUsesPatternSymbol(self: *RcInsertPass, expr_id: LirExprId, pat_id: LirPatternId) Allocator.Error!bool {
-        var pattern_symbols = std.AutoHashMap(SymbolUseKey, void).init(self.allocator);
+        var pattern_symbols = std.AutoHashMap(u64, void).init(self.allocator);
         defer pattern_symbols.deinit();
-        try self.collectPatternSymbols(pat_id, &pattern_symbols);
+        const Ctx = struct {
+            set: *std.AutoHashMap(u64, void),
+            fn onBind(ctx: @This(), symbol: Symbol, _: LayoutIdx) Allocator.Error!void {
+                try ctx.set.put(@bitCast(symbol), {});
+            }
+        };
+        ensurePatternIdValid(self.store, pat_id, "exprUsesPatternSymbol");
+        try walkPatternBinds(self.store, pat_id, Ctx{ .set = &pattern_symbols });
         if (pattern_symbols.count() == 0) return false;
 
         self.scratch_uses.clearRetainingCapacity();
@@ -1463,7 +1540,7 @@ pub const RcInsertPass = struct {
 
         var it = self.scratch_uses.keyIterator();
         while (it.next()) |key| {
-            if (pattern_symbols.contains(key.*)) return true;
+            if (pattern_symbols.contains(@bitCast(keyToSymbol(key.*)))) return true;
         }
         return false;
     }
@@ -1773,7 +1850,7 @@ pub const RcInsertPass = struct {
                 const key = makeKey(symbol, layout_idx);
                 const resolved_layout = ctx.pass.symbol_layouts.get(key) orelse layout_idx;
                 if (ctx.pass.layoutNeedsRc(resolved_layout)) {
-                    const use_count = ctx.pass.symbol_use_counts.get(key) orelse 0;
+                    const use_count = ctx.pass.sumSymbolUses(&ctx.pass.symbol_use_counts, symbol);
                     if (use_count > 1) {
                         try ctx.pass.emitIncrefInto(symbol, resolved_layout, @intCast(use_count - 1), ctx.region, ctx.rc_stmts);
                     }
@@ -1807,7 +1884,7 @@ pub const RcInsertPass = struct {
                 const key = makeKey(symbol, layout_idx);
                 const resolved_layout = ctx.pass.symbol_layouts.get(key) orelse layout_idx;
                 if (ctx.pass.layoutNeedsRc(resolved_layout)) {
-                    const use_count = ctx.pass.symbol_use_counts.get(key) orelse 0;
+                    const use_count = ctx.pass.sumSymbolUses(&ctx.pass.symbol_use_counts, symbol);
                     if (use_count == 0) {
                         try ctx.pass.emitDecrefInto(symbol, resolved_layout, ctx.region, ctx.stmts);
                     }
@@ -1841,8 +1918,7 @@ pub const RcInsertPass = struct {
             rc_stmts: *std.ArrayList(LirStmt),
             fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
                 if (ctx.pass.layoutNeedsRc(layout_idx)) {
-                    const key = makeKey(symbol, layout_idx);
-                    const use_count = ctx.local_uses.get(key) orelse 0;
+                    const use_count = ctx.pass.sumSymbolUses(ctx.local_uses, symbol);
                     if (use_count == 0) {
                         try ctx.pass.emitDecrefInto(symbol, layout_idx, ctx.region, ctx.rc_stmts);
                     } else if (use_count > 1) {
@@ -2849,6 +2925,99 @@ test "RC mutation: reassigning refcounted var emits decref before mutation" {
         if (stmt == .mutate and found_decref) found_decref_before_mutate = true;
     }
     try std.testing.expect(found_decref_before_mutate);
+}
+
+test "RC mutation: self-read with layout mismatch does not decref old value" {
+    // Simulate a polymorphic/layout-mismatched RHS read of the same symbol:
+    // { var s = "hello"; s = (lookup s as non-str layout); s }
+    // Even with differing layout keys, this is still a self-read and must not
+    // decref old s before mutation (which can trigger use-after-free for aliasing RHS).
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const sym_s = makeSymbol(1);
+    const str_layout: LayoutIdx = .str;
+    const mismatched_layout: LayoutIdx = .u64;
+
+    const str_hello = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
+    const rhs_lookup_mismatch = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_s,
+        .layout_idx = mismatched_layout,
+    } }, Region.zero());
+    const final_lookup = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_s,
+        .layout_idx = str_layout,
+    } }, Region.zero());
+
+    const pat_s_decl = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_s,
+        .layout_idx = str_layout,
+    } }, Region.zero());
+    const pat_s_mut = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_s,
+        .layout_idx = str_layout,
+    } }, Region.zero());
+
+    const stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = pat_s_decl, .expr = str_hello } },
+        .{ .mutate = .{ .pattern = pat_s_mut, .expr = rhs_lookup_mismatch } },
+    });
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = final_lookup,
+        .result_layout = str_layout,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+    const rc = countRcOps(&env.lir_store, result);
+    try std.testing.expectEqual(@as(u32, 0), rc.decrefs);
+}
+
+test "RC block: layout-mismatched symbol use is not treated as unused" {
+    // { s = "hello"; (lookup s as non-str layout) }
+    // Even if the lookup key layout differs, the symbol is still used and
+    // must not get a synthetic "unused binding" decref.
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const sym_s = makeSymbol(1);
+    const str_layout: LayoutIdx = .str;
+    const mismatched_layout: LayoutIdx = .u64;
+
+    const str_hello = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
+    const final_lookup = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_s,
+        .layout_idx = mismatched_layout,
+    } }, Region.zero());
+    const pat_s_decl = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_s,
+        .layout_idx = str_layout,
+    } }, Region.zero());
+
+    const stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = pat_s_decl, .expr = str_hello } },
+    });
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = final_lookup,
+        .result_layout = mismatched_layout,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+    const rc = countRcOps(&env.lir_store, result);
+    try std.testing.expectEqual(@as(u32, 0), rc.decrefs);
 }
 
 test "RC for_loop: unused refcounted elem gets decref" {
