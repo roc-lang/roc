@@ -1063,6 +1063,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .box => (@as(u64, 1) << 62) | (@as(u64, @intFromEnum(lay.data.box)) << 1),
                         .box_of_zst => (@as(u64, 1) << 62) | 1,
                         .closure => (@as(u64, 1) << 61) | (@as(u64, @intFromEnum(lay.data.closure.captures_layout_idx)) << 1),
+                        .struct_ => blk: {
+                            // Treat transparent one-field structs as the same representation
+                            // as their field layout for symbol-location lookup.
+                            const sd = ls.getStructData(lay.data.struct_.idx);
+                            const fields = ls.struct_fields.sliceRange(sd.getFields());
+                            if (fields.len == 1 and fields.get(0).layout != layout_idx) {
+                                const field_layout = fields.get(0).layout;
+                                const field_off = ls.getStructFieldOffset(lay.data.struct_.idx, 0);
+                                const field_size = ls.layoutSizeAlign(ls.getLayout(field_layout)).size;
+                                if (field_off == 0 and field_size == sd.size) {
+                                    break :blk self.normalizedLayoutKey(field_layout);
+                                }
+                            }
+                            break :blk @intFromEnum(layout_idx);
+                        },
                         else => @intFromEnum(layout_idx),
                     };
                 }
@@ -1114,31 +1129,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn getSymbolLocation(self: *Self, symbol: Symbol, layout_idx: ?layout.Idx) ?ValueLocation {
             if (layout_idx) |li| {
-                if (self.symbol_locations_by_layout.get(self.symbolLayoutKey(symbol, li))) |loc| return loc;
-                if (self.symbol_locations.get(symbolKey(symbol))) |fallback_loc_raw| {
-                    const fallback_loc = self.adaptLocationForLayout(fallback_loc_raw, li);
-                    if (self.locationMatchesLayout(fallback_loc, li)) {
-                        return fallback_loc;
-                    }
-                    var debug_name: []const u8 = "<unknown>";
-                    if (self.layout_store) |ls| {
-                        if (symbol.module_idx < ls.all_module_envs.len) {
-                            const env = ls.all_module_envs[symbol.module_idx];
-                            if (symbol.ident_idx.idx < env.common.idents.interner.bytes.len()) {
-                                debug_name = env.getIdent(symbol.ident_idx);
-                            }
-                        }
-                    }
-                    std.debug.panic(
-                        "getSymbolLocation: missing layout-specialized location for symbol={} name={s} layout={}",
-                        .{
-                            @as(u64, @bitCast(symbol)),
-                            debug_name,
-                            @intFromEnum(li),
-                        },
-                    );
-                }
-                return null;
+                return self.symbol_locations_by_layout.get(self.symbolLayoutKey(symbol, li));
             }
             return self.symbol_locations.get(symbolKey(symbol));
         }
@@ -8873,9 +8864,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (struct_layout.tag != .struct_) {
                 // Cross-module layout index mismatch: the struct_layout index from
                 // a builtin module may map to a different layout in the current module.
-                // When field_idx is 0, just return the value as-is (first field = whole value).
+                // For field_idx 0, reinterpret the base location as the requested field layout.
                 if (access.field_idx == 0) {
-                    return struct_loc;
+                    return switch (struct_loc) {
+                        .stack => |s| self.stackLocationForLayout(access.field_layout, s.offset),
+                        .stack_i128 => |off| self.stackLocationForLayout(access.field_layout, off),
+                        .stack_str => |off| self.stackLocationForLayout(access.field_layout, off),
+                        .list_stack => |li| self.stackLocationForLayout(access.field_layout, li.struct_offset),
+                        else => self.adaptLocationForLayout(struct_loc, access.field_layout),
+                    };
                 }
                 // Any other field access on non-struct is a compiler bug
                 unreachable;
@@ -11190,13 +11187,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             // First binding: allocate a fixed slot and copy value there
                             const ls = self.layout_store orelse unreachable;
 
-                            // Prefer the concrete source-location width when available.
-                            // This prevents widening copies from reading garbage upper bytes
-                            // when layout metadata is stale relative to the produced value.
-                            const size: u32 = blk: {
-                                if (self.exactSizeFromLoc(value_loc)) |loc_size| {
-                                    break :blk loc_size;
-                                }
+                            // Determine declared size from expression layout first (when available),
+                            // then fall back to the binding layout.
+                            // For composite values (>8 bytes), trust the declared layout size.
+                            // For small scalars, prefer exact source width to avoid widening reads.
+                            const declared_size: u32 = blk: {
                                 if (expr_layout_override) |expr_layout| {
                                     if (@intFromEnum(expr_layout) < ls.layouts.len()) {
                                         const expr_layout_val = ls.getLayout(expr_layout);
@@ -11206,6 +11201,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 }
                                 const layout_val = ls.getLayout(bind.layout_idx);
                                 break :blk ls.layoutSizeAlign(layout_val).size;
+                            };
+
+                            const size: u32 = blk: {
+                                if (declared_size > 8) break :blk declared_size;
+                                if (self.exactSizeFromLoc(value_loc)) |loc_size| {
+                                    if (loc_size > 0) break :blk loc_size;
+                                }
+                                break :blk if (declared_size == 0) 1 else declared_size;
                             };
 
                             // Allocate a fixed stack slot for this mutable variable
@@ -15986,140 +15989,33 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const pattern_ids = self.store.getPatternSpan(params);
             const layouts = self.store.getLayoutIdxSpan(param_layouts);
 
-            var reg_idx: u8 = 0;
-
-            // For each parameter, allocate a register or stack slot
+            // Join-point params are local loop/state variables, not call ABI params.
+            // Initialize them from any currently-bound symbol value, then rebind on jumps.
             for (pattern_ids, 0..) |pattern_id, param_idx| {
                 const pattern = self.store.getPattern(pattern_id);
                 switch (pattern) {
                     .bind => |bind| {
                         const param_layout_idx = if (param_idx < layouts.len) layouts[param_idx] else bind.layout_idx;
+                        const copy_info = self.paramCopyInfoForLayout(param_layout_idx);
+                        const slot_size: u32 = if (copy_info.size == 0) 1 else copy_info.size;
+                        const stack_offset = self.codegen.allocStackSlot(slot_size);
 
-                        // Check if this parameter is a 128-bit type
-                        const is_128bit = param_layout_idx == .i128 or param_layout_idx == .u128 or param_layout_idx == .dec;
-
-                        if (is_128bit) {
-                            // 128-bit types need two consecutive registers
-                            const low_reg = self.getArgumentRegister(reg_idx);
-                            const high_reg = self.getArgumentRegister(reg_idx + 1);
-
-                            // Allocate 16-byte stack slot
-                            const stack_offset = self.codegen.allocStack(16);
-
-                            // Store both registers to stack
-                            try self.codegen.emitStoreStack(.w64, stack_offset, low_reg);
-                            try self.codegen.emitStoreStack(.w64, stack_offset + 8, high_reg);
-
-                            // Track as stack_i128
-                            try self.putSymbolLocation(bind.symbol, param_layout_idx, .{ .stack_i128 = stack_offset });
-                            reg_idx += 2;
-                        } else {
-                            // Check if this is a string type (24 bytes)
-                            const is_str = param_layout_idx == .str;
-
-                            // Check if this is a list type (24 bytes)
-                            const is_list = blk: {
-                                if (self.layout_store) |ls| {
-                                    // Bounds check for cross-module layouts
-                                    if (@intFromEnum(param_layout_idx) >= ls.layouts.len()) {
-                                        break :blk false;
-                                    }
-                                    const layout_val = ls.getLayout(param_layout_idx);
-                                    break :blk layout_val.tag == .list or layout_val.tag == .list_of_zst;
-                                }
-                                break :blk false;
-                            };
-
-                            if (is_str) {
-                                // String types need 3 consecutive registers (24 bytes)
-                                const stack_offset = self.codegen.allocStackSlot(roc_str_size);
-
-                                const reg0 = self.getArgumentRegister(reg_idx);
-                                const reg1 = self.getArgumentRegister(reg_idx + 1);
-                                const reg2 = self.getArgumentRegister(reg_idx + 2);
-
-                                try self.emitStore(.w64, frame_ptr, stack_offset, reg0);
-                                try self.emitStore(.w64, frame_ptr, stack_offset + 8, reg1);
-                                try self.emitStore(.w64, frame_ptr, stack_offset + 16, reg2);
-
-                                try self.putSymbolLocation(bind.symbol, param_layout_idx, .{ .stack_str = stack_offset });
-                                reg_idx += 3;
-                            } else if (is_list) {
-                                // List types need 3 consecutive registers
-                                const stack_offset = self.codegen.allocStackSlot(roc_str_size);
-
-                                const reg0 = self.getArgumentRegister(reg_idx);
-                                const reg1 = self.getArgumentRegister(reg_idx + 1);
-                                const reg2 = self.getArgumentRegister(reg_idx + 2);
-
-                                try self.emitStore(.w64, frame_ptr, stack_offset, reg0);
-                                try self.emitStore(.w64, frame_ptr, stack_offset + 8, reg1);
-                                try self.emitStore(.w64, frame_ptr, stack_offset + 16, reg2);
-
-                                // Store as .list_stack so that when this parameter is used as an argument
-                                // or returned, it's properly detected as a list
-                                try self.putSymbolLocation(bind.symbol, param_layout_idx, .{
-                                    .list_stack = .{
-                                        .struct_offset = stack_offset,
-                                        .data_offset = 0, // Data location is stored in the list struct itself
-                                        .num_elements = 0, // Unknown at compile time
-                                    },
-                                });
-                                reg_idx += 3;
+                        if (copy_info.size > 0) {
+                            if (self.getSymbolLocation(bind.symbol, param_layout_idx)) |existing_loc| {
+                                try self.copyBytesToStackOffset(stack_offset, existing_loc, copy_info.size);
+                                try self.updateClosureStackInfoForCopy(stack_offset, existing_loc);
                             } else {
-                                // Scalar parameter — preserve its actual width in the join slot.
-                                const arg_reg = self.getArgumentRegister(reg_idx);
-                                const scalar_size = self.getLayoutSize(param_layout_idx);
-                                const slot_size: u32 = if (scalar_size == 0) 1 else scalar_size;
-                                const stack_offset = self.codegen.allocStackSlot(slot_size);
-                                if (scalar_size > 0) {
-                                    switch (scalar_size) {
-                                        1 => try self.emitStoreStackW8(stack_offset, arg_reg),
-                                        2 => try self.emitStoreStackW16(stack_offset, arg_reg),
-                                        4 => try self.codegen.emitStoreStack(.w32, stack_offset, arg_reg),
-                                        else => try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg),
-                                    }
-                                }
-                                try self.putSymbolLocation(bind.symbol, param_layout_idx, self.stackLocationForLayout(param_layout_idx, stack_offset));
-                                reg_idx += 1;
+                                try self.zeroStackArea(stack_offset, slot_size);
                             }
                         }
+
+                        try self.putSymbolLocation(
+                            bind.symbol,
+                            param_layout_idx,
+                            self.stackLocationForLayout(param_layout_idx, stack_offset),
+                        );
                     },
-                    .wildcard => {
-                        // Consume register slots for this param to maintain correct
-                        // register indexing, but don't bind any symbol.
-                        const is_128bit = if (param_idx < layouts.len) blk: {
-                            const param_layout = layouts[param_idx];
-                            break :blk param_layout == .i128 or param_layout == .u128 or param_layout == .dec;
-                        } else false;
-
-                        if (is_128bit) {
-                            reg_idx += 2;
-                        } else {
-                            const is_str = if (param_idx < layouts.len)
-                                layouts[param_idx] == .str
-                            else
-                                false;
-
-                            const is_list = if (param_idx < layouts.len) blk: {
-                                const param_layout = layouts[param_idx];
-                                if (self.layout_store) |ls| {
-                                    if (@intFromEnum(param_layout) >= ls.layouts.len()) {
-                                        break :blk false;
-                                    }
-                                    const layout_val = ls.getLayout(param_layout);
-                                    break :blk layout_val.tag == .list or layout_val.tag == .list_of_zst;
-                                }
-                                break :blk false;
-                            } else false;
-
-                            if (is_str or is_list) {
-                                reg_idx += 3;
-                            } else {
-                                reg_idx += 1;
-                            }
-                        }
-                    },
+                    .wildcard => {},
                     .int_literal, .float_literal, .str_literal, .tag, .struct_, .list, .as_pattern => unreachable, // Join point params must be simple bindings or wildcards
                 }
             }
@@ -16144,7 +16040,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // (e.g., `jump jp(b, a)` swaps params)
 
             // Phase 1: Copy all sources to temp stack slots
-            const TempInfo = struct { offset: i32, size: u8 };
+            const TempInfo = struct { offset: i32, size: u32 };
             var temp_infos: std.ArrayListUnmanaged(TempInfo) = .empty;
             defer temp_infos.deinit(self.allocator);
 
@@ -16164,25 +16060,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .int_literal, .float_literal, .str_literal, .tag, .struct_, .list, .as_pattern => unreachable,
                 }
 
-                const dst_loc = (switch (pattern) {
-                    .bind => |bind| self.getSymbolLocation(bind.symbol, bind.layout_idx),
+                const bind = switch (pattern) {
+                    .bind => |b| b,
                     else => unreachable,
-                }) orelse {
-                    try temp_infos.append(self.allocator, .{ .offset = 0, .size = 0 });
-                    continue;
                 };
 
-                const is_i128 = dst_loc == .stack_i128;
-                const size: u8 = switch (dst_loc) {
-                    .stack => |s| s.size.byteCount(),
-                    .stack_i128 => 16,
-                    .stack_str, .list_stack => 24,
-                    .general_reg, .float_reg, .immediate_i64, .immediate_i128, .immediate_f64, .closure_value, .lambda_code, .noreturn => unreachable,
-                };
+                if (self.getSymbolLocation(bind.symbol, bind.layout_idx) == null) {
+                    try temp_infos.append(self.allocator, .{ .offset = 0, .size = 0 });
+                    continue;
+                }
+
+                const copy_info = self.paramCopyInfoForLayout(bind.layout_idx);
+                const size = copy_info.size;
+                if (size == 0) {
+                    try temp_infos.append(self.allocator, .{ .offset = 0, .size = 0 });
+                    continue;
+                }
                 const temp_offset = self.codegen.allocStackSlot(size);
 
                 // Copy source to temp
-                try self.copyParamValueToStack(loc, temp_offset, size, is_i128);
+                try self.copyParamValueToStack(loc, temp_offset, size);
 
                 try temp_infos.append(self.allocator, .{ .offset = temp_offset, .size = size });
             }
@@ -16206,76 +16103,41 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .general_reg, .float_reg, .immediate_i64, .immediate_i128, .immediate_f64, .closure_value, .lambda_code, .noreturn => unreachable,
                 };
 
-                const is_i128 = resolved_dst_loc == .stack_i128;
                 const temp_loc: ValueLocation = .{
                     .stack = .{
                         .offset = temp_info.offset,
                         .size = ValueSize.fromByteCount(temp_info.size),
                     },
                 };
-                try self.copyParamValueToStack(temp_loc, dst_offset, temp_info.size, is_i128);
+                try self.copyParamValueToStack(temp_loc, dst_offset, temp_info.size);
             }
         }
 
-        /// Copy a value to a stack slot (helper for rebindJoinPointParams)
-        fn copyParamValueToStack(self: *Self, loc: ValueLocation, dst_offset: i32, size: u8, is_i128: bool) Allocator.Error!void {
-            if (size == 24 or (size == 16 and !is_i128)) {
-                // 24-byte (list/str) or generic stack copy
-                const src_offset: i32 = switch (loc) {
-                    .stack => |s| s.offset,
-                    .list_stack => |ls_info| ls_info.struct_offset,
-                    .stack_str => |off| off,
-                    else => unreachable,
-                };
-                const temp_reg = try self.allocTempGeneral();
-                var off: i32 = 0;
-                while (off < size) : (off += 8) {
-                    try self.emitLoad(.w64, temp_reg, frame_ptr, src_offset + off);
-                    try self.emitStore(.w64, frame_ptr, dst_offset + off, temp_reg);
-                }
-                self.codegen.freeGeneral(temp_reg);
-            } else if (is_i128) {
-                switch (loc) {
-                    .stack_i128 => |src_offset| {
-                        const temp_reg = try self.allocTempGeneral();
-                        try self.emitLoad(.w64, temp_reg, frame_ptr, src_offset);
-                        try self.emitStore(.w64, frame_ptr, dst_offset, temp_reg);
-                        try self.emitLoad(.w64, temp_reg, frame_ptr, src_offset + 8);
-                        try self.emitStore(.w64, frame_ptr, dst_offset + 8, temp_reg);
-                        self.codegen.freeGeneral(temp_reg);
-                    },
-                    .immediate_i128 => |val| {
-                        const low: u64 = @truncate(@as(u128, @bitCast(val)));
-                        const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
-                        const temp_reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(temp_reg, @bitCast(low));
-                        try self.codegen.emitStoreStack(.w64, dst_offset, temp_reg);
-                        try self.codegen.emitLoadImm(temp_reg, @bitCast(high));
-                        try self.codegen.emitStoreStack(.w64, dst_offset + 8, temp_reg);
-                        self.codegen.freeGeneral(temp_reg);
-                    },
-                    .stack => |s| {
-                        const src_offset = s.offset;
-                        const temp_reg = try self.allocTempGeneral();
-                        try self.emitLoad(.w64, temp_reg, frame_ptr, src_offset);
-                        try self.emitStore(.w64, frame_ptr, dst_offset, temp_reg);
-                        try self.emitLoad(.w64, temp_reg, frame_ptr, src_offset + 8);
-                        try self.emitStore(.w64, frame_ptr, dst_offset + 8, temp_reg);
-                        self.codegen.freeGeneral(temp_reg);
-                    },
-                    else => unreachable,
-                }
-            } else {
-                // Scalar value (1/2/4/8 bytes)
-                const src_reg = try self.ensureInGeneralReg(loc);
-                switch (size) {
-                    1 => try self.emitStoreStackW8(dst_offset, src_reg),
-                    2 => try self.emitStoreStackW16(dst_offset, src_reg),
-                    4 => try self.codegen.emitStoreStack(.w32, dst_offset, src_reg),
-                    else => try self.emitStore(.w64, frame_ptr, dst_offset, src_reg),
-                }
-                self.codegen.freeGeneral(src_reg);
+        fn paramCopyInfoForLayout(self: *Self, layout_idx: layout.Idx) struct { size: u32, is_i128: bool } {
+            if (layout_idx == .i128 or layout_idx == .u128 or layout_idx == .dec) {
+                return .{ .size = 16, .is_i128 = true };
             }
+            if (layout_idx == .str) {
+                return .{ .size = roc_str_size, .is_i128 = false };
+            }
+
+            if (self.layout_store) |ls| {
+                if (@intFromEnum(layout_idx) < ls.layouts.len()) {
+                    const layout_val = ls.getLayout(layout_idx);
+                    if (layout_val.tag == .list or layout_val.tag == .list_of_zst) {
+                        return .{ .size = roc_list_size, .is_i128 = false };
+                    }
+                    return .{ .size = ls.layoutSizeAlign(layout_val).size, .is_i128 = false };
+                }
+            }
+
+            return .{ .size = self.getLayoutSize(layout_idx), .is_i128 = false };
+        }
+
+        /// Copy a value to a stack slot (helper for rebindJoinPointParams)
+        fn copyParamValueToStack(self: *Self, loc: ValueLocation, dst_offset: i32, size: u32) Allocator.Error!void {
+            if (size == 0) return;
+            try self.copyBytesToStackOffset(dst_offset, loc, size);
         }
 
         /// Fast path for single-param rebind (no clobbering possible)
@@ -16284,12 +16146,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (param_idx >= pattern_ids.len) continue;
 
                 const pattern = self.store.getPattern(pattern_ids[param_idx]);
-                const dst_loc = switch (pattern) {
-                    .bind => |bind| self.getSymbolLocation(bind.symbol, bind.layout_idx),
+                const bind = switch (pattern) {
+                    .bind => |b| b,
                     .wildcard => continue,
                     .int_literal, .float_literal, .str_literal, .tag, .struct_, .list, .as_pattern => unreachable,
                 };
-                const resolved_dst_loc = dst_loc orelse continue;
+                const resolved_dst_loc = self.getSymbolLocation(bind.symbol, bind.layout_idx) orelse continue;
 
                 const dst_offset: i32 = switch (resolved_dst_loc) {
                     .stack => |s| s.offset,
@@ -16299,14 +16161,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .general_reg, .float_reg, .immediate_i64, .immediate_i128, .immediate_f64, .closure_value, .lambda_code, .noreturn => unreachable,
                 };
 
-                const is_i128 = resolved_dst_loc == .stack_i128;
-                const size: u8 = switch (resolved_dst_loc) {
-                    .stack => |s| s.size.byteCount(),
-                    .stack_i128 => 16,
-                    .stack_str, .list_stack => 24,
-                    .general_reg, .float_reg, .immediate_i64, .immediate_i128, .immediate_f64, .closure_value, .lambda_code, .noreturn => unreachable,
-                };
-                try self.copyParamValueToStack(loc, dst_offset, size, is_i128);
+                const copy_info = self.paramCopyInfoForLayout(bind.layout_idx);
+                if (copy_info.size == 0) continue;
+                try self.copyParamValueToStack(loc, dst_offset, copy_info.size);
             }
         }
 

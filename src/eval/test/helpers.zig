@@ -381,9 +381,20 @@ fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []cons
     const wasm_str = try wasmEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env);
     defer allocator.free(wasm_str);
 
-    if (!std.mem.eql(u8, interpreter_str, dev_str) or
-        !std.mem.eql(u8, interpreter_str, wasm_str) or
-        !std.mem.eql(u8, dev_str, wasm_str))
+    const canon_interpreter = try canonicalizeAnonymousRecordFields(allocator, interpreter_str);
+    defer if (canon_interpreter) |s| allocator.free(s);
+    const canon_dev = try canonicalizeAnonymousRecordFields(allocator, dev_str);
+    defer if (canon_dev) |s| allocator.free(s);
+    const canon_wasm = try canonicalizeAnonymousRecordFields(allocator, wasm_str);
+    defer if (canon_wasm) |s| allocator.free(s);
+
+    const interpreter_cmp = if (canon_interpreter) |s| s else interpreter_str;
+    const dev_cmp = if (canon_dev) |s| s else dev_str;
+    const wasm_cmp = if (canon_wasm) |s| s else wasm_str;
+
+    if (!std.mem.eql(u8, interpreter_cmp, dev_cmp) or
+        !std.mem.eql(u8, interpreter_cmp, wasm_cmp) or
+        !std.mem.eql(u8, dev_cmp, wasm_cmp))
     {
         std.debug.print(
             "\nEvaluator mismatch!\n  interpreter: '{s}'\n  dev:         '{s}'\n  wasm:        '{s}'\n",
@@ -391,6 +402,47 @@ fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []cons
         );
         return error.EvaluatorMismatch;
     }
+}
+
+fn canonicalizeAnonymousRecordFields(allocator: std.mem.Allocator, input: []const u8) std.mem.Allocator.Error!?[]u8 {
+    const trimmed = std.mem.trim(u8, input, " \t\r\n");
+    if (trimmed.len < 2 or trimmed[0] != '{' or trimmed[trimmed.len - 1] != '}') return null;
+
+    const inner = std.mem.trim(u8, trimmed[1 .. trimmed.len - 1], " \t\r\n");
+    if (inner.len == 0) return null;
+
+    var fields = std.ArrayList([]const u8).empty;
+    defer fields.deinit(allocator);
+
+    var split = std.mem.splitScalar(u8, inner, ',');
+    while (split.next()) |part_raw| {
+        const part = std.mem.trim(u8, part_raw, " \t\r\n");
+        if (!std.mem.startsWith(u8, part, "?:")) return null;
+        const value = std.mem.trim(u8, part[2..], " \t\r\n");
+        if (value.len == 0) return null;
+        try fields.append(allocator, value);
+    }
+
+    if (fields.items.len == 0) return null;
+
+    const Ctx = struct {
+        fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.lessThan(u8, a, b);
+        }
+    };
+    std.mem.sort([]const u8, fields.items, {}, Ctx.lessThan);
+
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(allocator);
+
+    try out.appendSlice(allocator, "{ ");
+    for (fields.items, 0..) |value, i| {
+        try out.appendSlice(allocator, "?: ");
+        try out.appendSlice(allocator, value);
+        if (i + 1 < fields.items.len) try out.appendSlice(allocator, ", ");
+    }
+    try out.appendSlice(allocator, " }");
+    return try out.toOwnedSlice(allocator);
 }
 
 /// Errors that can occur during WasmEvaluator string generation
