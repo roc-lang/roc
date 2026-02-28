@@ -774,7 +774,7 @@ fn makeSyntheticSymbol(self: *Self, original: MIR.Symbol) MIR.Symbol {
 
 /// Compute the composite cache key for call-site specializations.
 fn callSiteSpecKey(symbol_key: u64, monotype: Monotype.Idx) u128 {
-    return (@as(u128, symbol_key) << 32) | @as(u128, @intFromEnum(monotype));
+    return (@as(u128, symbol_key) << 64) | @as(u128, @intFromEnum(monotype));
 }
 
 fn lookupCallSiteSpecialization(self: *Self, symbol_key: u64, caller_monotype: Monotype.Idx) ?MIR.Symbol {
@@ -1047,6 +1047,7 @@ fn lowerIf(self: *Self, module_env: *const ModuleEnv, if_expr: anytype, monotype
 /// Lower `e_match` to MIR match.
 fn lowerMatch(self: *Self, module_env: *const ModuleEnv, match_expr: CIR.Expr.Match, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
     const cond = try self.lowerExpr(match_expr.cond);
+    const cond_mono = self.store.typeOf(cond);
     const cir_branch_indices = module_env.store.sliceMatchBranches(match_expr.branches);
 
     const branches_top = self.scratch_branches.top();
@@ -1055,6 +1056,9 @@ fn lowerMatch(self: *Self, module_env: *const ModuleEnv, match_expr: CIR.Expr.Ma
     for (cir_branch_indices) |branch_idx| {
         const cir_branch = module_env.store.getMatchBranch(branch_idx);
         const body = try self.lowerExpr(cir_branch.value);
+        var body_lookup_monos = std.AutoHashMap(u64, Monotype.Idx).init(self.allocator);
+        defer body_lookup_monos.deinit();
+        try self.collectLookupMonotypesFromExpr(body, &body_lookup_monos);
         const guard = if (cir_branch.guard) |guard_idx|
             try self.lowerExpr(guard_idx)
         else
@@ -1067,7 +1071,14 @@ fn lowerMatch(self: *Self, module_env: *const ModuleEnv, match_expr: CIR.Expr.Ma
 
         for (cir_bp_indices) |bp_idx| {
             const cir_bp = module_env.store.getMatchBranchPattern(bp_idx);
+            // Match-pattern roots must have the same type as the scrutinee.
+            // This keeps alternative patterns from drifting to unit/fallback
+            // monotypes when only one alternative's bindings are used by the body.
+            self.forceSeedTypeVarSeen(ModuleEnv.varFrom(cir_bp.pattern), cond_mono);
             const pat = try self.lowerPattern(module_env, cir_bp.pattern);
+            if (body_lookup_monos.count() > 0) {
+                self.retypePatternBindsFromMap(pat, &body_lookup_monos);
+            }
             try self.scratch_branch_patterns.append(.{ .pattern = pat, .degenerate = cir_bp.degenerate });
         }
 
@@ -1080,6 +1091,159 @@ fn lowerMatch(self: *Self, module_env: *const ModuleEnv, match_expr: CIR.Expr.Ma
         .cond = cond,
         .branches = branch_span,
     } }, monotype, region);
+}
+
+fn collectLookupMonotypesFromExpr(
+    self: *Self,
+    expr_id: MIR.ExprId,
+    out: *std.AutoHashMap(u64, Monotype.Idx),
+) Allocator.Error!void {
+    const expr = self.store.getExpr(expr_id);
+    switch (expr) {
+        .lookup => |sym| {
+            const key: u64 = @bitCast(sym);
+            if (!out.contains(key)) {
+                try out.put(key, self.store.typeOf(expr_id));
+            }
+        },
+        .list => |l| {
+            const elems = self.store.getExprSpan(l.elems);
+            for (elems) |elem_id| {
+                try self.collectLookupMonotypesFromExpr(elem_id, out);
+            }
+        },
+        .record => |r| {
+            const fields = self.store.getExprSpan(r.fields);
+            for (fields) |field_id| {
+                try self.collectLookupMonotypesFromExpr(field_id, out);
+            }
+        },
+        .tuple => |t| {
+            const elems = self.store.getExprSpan(t.elems);
+            for (elems) |elem_id| {
+                try self.collectLookupMonotypesFromExpr(elem_id, out);
+            }
+        },
+        .tag => |t| {
+            const args = self.store.getExprSpan(t.args);
+            for (args) |arg_id| {
+                try self.collectLookupMonotypesFromExpr(arg_id, out);
+            }
+        },
+        .match_expr => |m| {
+            try self.collectLookupMonotypesFromExpr(m.cond, out);
+            const branches = self.store.getBranches(m.branches);
+            for (branches) |branch| {
+                try self.collectLookupMonotypesFromExpr(branch.body, out);
+                if (!branch.guard.isNone()) {
+                    try self.collectLookupMonotypesFromExpr(branch.guard, out);
+                }
+            }
+        },
+        .lambda => |l| try self.collectLookupMonotypesFromExpr(l.body, out),
+        .call => |c| {
+            try self.collectLookupMonotypesFromExpr(c.func, out);
+            const args = self.store.getExprSpan(c.args);
+            for (args) |arg_id| {
+                try self.collectLookupMonotypesFromExpr(arg_id, out);
+            }
+        },
+        .block => |b| {
+            const stmts = self.store.getStmts(b.stmts);
+            for (stmts) |stmt| {
+                const bound = switch (stmt) {
+                    .decl_const => |s| s.expr,
+                    .decl_var => |s| s.expr,
+                    .mutate_var => |s| s.expr,
+                };
+                try self.collectLookupMonotypesFromExpr(bound, out);
+            }
+            try self.collectLookupMonotypesFromExpr(b.final_expr, out);
+        },
+        .record_access => |ra| try self.collectLookupMonotypesFromExpr(ra.record, out),
+        .tuple_access => |ta| try self.collectLookupMonotypesFromExpr(ta.tuple, out),
+        .run_low_level => |ll| {
+            const args = self.store.getExprSpan(ll.args);
+            for (args) |arg_id| {
+                try self.collectLookupMonotypesFromExpr(arg_id, out);
+            }
+        },
+        .hosted => |h| try self.collectLookupMonotypesFromExpr(h.body, out),
+        .dbg_expr => |d| try self.collectLookupMonotypesFromExpr(d.expr, out),
+        .expect => |e| try self.collectLookupMonotypesFromExpr(e.body, out),
+        .for_loop => |f| {
+            try self.collectLookupMonotypesFromExpr(f.list, out);
+            try self.collectLookupMonotypesFromExpr(f.body, out);
+        },
+        .while_loop => |w| {
+            try self.collectLookupMonotypesFromExpr(w.cond, out);
+            try self.collectLookupMonotypesFromExpr(w.body, out);
+        },
+        .return_expr => |r| try self.collectLookupMonotypesFromExpr(r.expr, out),
+        .int,
+        .frac_f32,
+        .frac_f64,
+        .dec,
+        .str,
+        .runtime_err_can,
+        .runtime_err_type,
+        .runtime_err_ellipsis,
+        .runtime_err_anno_only,
+        .crash,
+        .break_expr,
+        => {},
+    }
+}
+
+fn retypePatternBindsFromMap(
+    self: *Self,
+    pattern_id: MIR.PatternId,
+    source_bind_monos: *const std.AutoHashMap(u64, Monotype.Idx),
+) void {
+    const pattern = self.store.getPattern(pattern_id);
+    switch (pattern) {
+        .bind => |sym| {
+            const key: u64 = @bitCast(sym);
+            if (source_bind_monos.get(key)) |mono| {
+                self.store.pattern_type_map.items[@intFromEnum(pattern_id)] = mono;
+            }
+        },
+        .as_pattern => |as_pat| {
+            const key: u64 = @bitCast(as_pat.symbol);
+            if (source_bind_monos.get(key)) |mono| {
+                self.store.pattern_type_map.items[@intFromEnum(pattern_id)] = mono;
+            }
+            self.retypePatternBindsFromMap(as_pat.pattern, source_bind_monos);
+        },
+        .tag => |tag_pat| {
+            const args = self.store.getPatternSpan(tag_pat.args);
+            for (args) |arg_id| {
+                self.retypePatternBindsFromMap(arg_id, source_bind_monos);
+            }
+        },
+        .record_destructure => |rd| {
+            const destructs = self.store.getPatternSpan(rd.destructs);
+            for (destructs) |destruct_id| {
+                self.retypePatternBindsFromMap(destruct_id, source_bind_monos);
+            }
+        },
+        .tuple_destructure => |td| {
+            const elems = self.store.getPatternSpan(td.elems);
+            for (elems) |elem_id| {
+                self.retypePatternBindsFromMap(elem_id, source_bind_monos);
+            }
+        },
+        .list_destructure => |ld| {
+            const elems = self.store.getPatternSpan(ld.patterns);
+            for (elems) |elem_id| {
+                self.retypePatternBindsFromMap(elem_id, source_bind_monos);
+            }
+            if (!ld.rest_pattern.isNone()) {
+                self.retypePatternBindsFromMap(ld.rest_pattern, source_bind_monos);
+            }
+        },
+        .wildcard, .int_literal, .str_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .runtime_error => {},
+    }
 }
 
 fn seedLambdaFromMonotype(

@@ -813,16 +813,107 @@ fn closureLayoutFromLirExpr(self: *Self, expr_id: LirExprId) ?layout.Idx {
     };
 }
 
+/// Resolve the concrete runtime layout for callable values returned by an expression.
+/// Returns null when the expression does not resolve to a callable value with known shape.
+fn callableReturnLayoutFromExpr(self: *Self, expr_id: LirExprId) ?layout.Idx {
+    return self.callableReturnLayoutFromExprWithDepth(expr_id, 0);
+}
+
+fn callableReturnLayoutFromExprWithDepth(self: *Self, expr_id: LirExprId, depth: u16) ?layout.Idx {
+    if (depth > 64) return null;
+
+    const expr = self.lir_store.getExpr(expr_id);
+    return switch (expr) {
+        .closure => |closure_id| self.lir_store.getClosureData(closure_id).closure_layout,
+        .lambda => |lam| self.callableReturnLayoutFromExprWithDepth(lam.body, depth + 1),
+        .nominal => |nom| self.callableReturnLayoutFromExprWithDepth(nom.backing_expr, depth + 1),
+        .block => |b| self.callableReturnLayoutFromExprWithDepth(b.final_expr, depth + 1),
+        .lookup => |lookup| blk: {
+            const def_expr_id = self.lir_store.getSymbolDef(lookup.symbol) orelse break :blk null;
+            break :blk self.callableReturnLayoutFromExprWithDepth(def_expr_id, depth + 1);
+        },
+        .call => |call| if (self.layoutIsFunctionLike(call.ret_layout)) call.ret_layout else null,
+        .hosted_call => |call| if (self.layoutIsFunctionLike(call.ret_layout)) call.ret_layout else null,
+        .if_then_else => |ite| blk: {
+            const resolved = self.callableReturnLayoutFromExprWithDepth(ite.final_else, depth + 1) orelse break :blk null;
+            const branches = self.lir_store.getIfBranches(ite.branches);
+            for (branches) |branch| {
+                const body_layout = self.callableReturnLayoutFromExprWithDepth(branch.body, depth + 1) orelse break :blk null;
+                if (body_layout != resolved) break :blk null;
+            }
+            break :blk resolved;
+        },
+        .match_expr => |m| blk: {
+            const branches = self.lir_store.getMatchBranches(m.branches);
+            if (branches.len == 0) break :blk null;
+            const resolved = self.callableReturnLayoutFromExprWithDepth(branches[0].body, depth + 1) orelse break :blk null;
+            for (branches[1..]) |branch| {
+                const body_layout = self.callableReturnLayoutFromExprWithDepth(branch.body, depth + 1) orelse break :blk null;
+                if (body_layout != resolved) break :blk null;
+            }
+            break :blk resolved;
+        },
+        .discriminant_switch => |sw| blk: {
+            const branches = self.lir_store.getExprSpan(sw.branches);
+            if (branches.len == 0) break :blk null;
+            const resolved = self.callableReturnLayoutFromExprWithDepth(branches[0], depth + 1) orelse break :blk null;
+            for (branches[1..]) |branch_expr_id| {
+                const body_layout = self.callableReturnLayoutFromExprWithDepth(branch_expr_id, depth + 1) orelse break :blk null;
+                if (body_layout != resolved) break :blk null;
+            }
+            break :blk resolved;
+        },
+        else => null,
+    };
+}
+
+/// Resolve the expression produced by applying a callable expression exactly once.
+/// This is used to concretize curried call return layouts from the callee expression.
+fn applyCallableExprOnce(self: *Self, expr_id: LirExprId) ?LirExprId {
+    return self.applyCallableExprOnceWithDepth(expr_id, 0);
+}
+
+fn applyCallableExprOnceWithDepth(self: *Self, expr_id: LirExprId, depth: u16) ?LirExprId {
+    if (depth > 64) return null;
+
+    const expr = self.lir_store.getExpr(expr_id);
+    return switch (expr) {
+        .lambda => |lam| lam.body,
+        .closure => |closure_id| blk: {
+            const closure = self.lir_store.getClosureData(closure_id);
+            break :blk self.applyCallableExprOnceWithDepth(closure.lambda, depth + 1);
+        },
+        .nominal => |nom| self.applyCallableExprOnceWithDepth(nom.backing_expr, depth + 1),
+        .block => |b| self.applyCallableExprOnceWithDepth(b.final_expr, depth + 1),
+        .lookup => |lookup| blk: {
+            const def_expr_id = self.lir_store.getSymbolDef(lookup.symbol) orelse break :blk null;
+            break :blk self.applyCallableExprOnceWithDepth(def_expr_id, depth + 1);
+        },
+        .call => |call| blk: {
+            const first_application = self.applyCallableExprOnceWithDepth(call.fn_expr, depth + 1) orelse break :blk null;
+            break :blk self.applyCallableExprOnceWithDepth(first_application, depth + 1);
+        },
+        else => null,
+    };
+}
+
+fn layoutIsFunctionLike(self: *Self, layout_idx: layout.Idx) bool {
+    const idx_int = @intFromEnum(layout_idx);
+    if (idx_int >= self.layout_store.layouts.len()) return false;
+    return self.layout_store.getLayout(layout_idx).tag == .closure;
+}
+
 fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
     const fn_layout = try self.layoutFromMonotype(mono_idx);
     const monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
-    const ret_layout = switch (monotype) {
+    const default_ret_layout = switch (monotype) {
         .func => |f| try self.layoutFromMonotype(f.ret),
         .prim, .unit, .record, .tuple, .tag_union, .list, .box => unreachable, // Lambda expressions always have .func monotype
     };
 
     const lir_params = try self.lowerPatternSpan(self.mir_store.getPatternSpan(lam.params));
     const lir_body = try self.lowerExpr(lam.body);
+    const ret_layout = default_ret_layout;
 
     // Check if this lambda has captures → closure
     const mir_captures = self.mir_store.getCaptures(lam.captures);
@@ -836,6 +927,9 @@ fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, region: Region
             // enclosing scopes that were registered during pattern lowering).
             const cap_key: u64 = @bitCast(cap.symbol);
             const cap_layout = if (self.mir_store.getSymbolDef(cap.symbol)) |def_id| blk: {
+                const def_mono_idx = self.mir_store.typeOf(def_id);
+                const def_mono = self.mir_store.monotype_store.getMonotype(def_mono_idx);
+
                 // Propagate the captured symbol's definition to the LIR store
                 // so codegen can find it when materializing captures.
                 if (self.lir_store.getSymbolDef(cap.symbol) == null and
@@ -845,16 +939,28 @@ fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, region: Region
                     defer _ = self.propagating_defs.remove(cap_key);
                     const lir_def_id = try self.lowerExpr(def_id);
                     try self.lir_store.registerSymbolDef(cap.symbol, lir_def_id);
-                    if (self.closureLayoutFromLirExpr(lir_def_id)) |closure_layout| {
-                        break :blk closure_layout;
-                    }
-                } else if (self.lir_store.getSymbolDef(cap.symbol)) |lir_def_id| {
+                }
+
+                // Callable captures keep their semantic function layout.
+                // Storage size/shape differences are carried separately via closure metadata.
+                if (def_mono == .func) {
+                    break :blk try self.layoutFromMonotype(def_mono_idx);
+                }
+
+                if (self.lir_store.getSymbolDef(cap.symbol)) |lir_def_id| {
                     if (self.closureLayoutFromLirExpr(lir_def_id)) |closure_layout| {
                         break :blk closure_layout;
                     }
                 }
-                break :blk try self.layoutFromMonotype(self.mir_store.typeOf(def_id));
+
+                break :blk try self.layoutFromMonotype(def_mono_idx);
             } else if (self.lir_store.getSymbolDef(cap.symbol)) |lir_def_id| blk: {
+                if (self.mir_store.getSymbolDef(cap.symbol)) |mir_def_id| {
+                    const def_mono_idx = self.mir_store.typeOf(mir_def_id);
+                    if (self.mir_store.monotype_store.getMonotype(def_mono_idx) == .func) {
+                        break :blk try self.layoutFromMonotype(def_mono_idx);
+                    }
+                }
                 if (self.closureLayoutFromLirExpr(lir_def_id)) |closure_layout| {
                     break :blk closure_layout;
                 }
@@ -961,7 +1067,8 @@ fn lowerCall(self: *Self, call_data: anytype, mono_idx: Monotype.Idx, region: Re
     const fn_mono = self.mir_store.typeOf(call_data.func);
     const fn_layout = try self.layoutFromMonotype(fn_mono);
     const fn_expr = try acc.ensureSymbol(fn_expr_raw, fn_layout, region);
-    const ret_layout = try self.layoutFromMonotype(mono_idx);
+    const default_ret_layout = try self.layoutFromMonotype(mono_idx);
+    const ret_layout = default_ret_layout;
 
     const mir_args = self.mir_store.getExprSpan(call_data.args);
     const lir_args = try self.lowerAnfSpan(&acc, mir_args, region);

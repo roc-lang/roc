@@ -805,9 +805,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Used to find call targets during second pass
         proc_registry: std.AutoHashMap(u64, CompiledProc),
 
-        /// Registry of compiled lambdas by expression ID.
+        /// Registry of compiled lambdas by cache key.
         /// Used when a lambda is called - we compile it once and reuse.
-        /// Key is @intFromEnum(LirExprId), value is code start offset.
         compiled_lambdas: std.AutoHashMap(u32, usize),
 
         /// Pending calls that need to be patched after all procedures are compiled
@@ -1051,37 +1050,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn normalizedLayoutKey(self: *Self, layout_idx: layout.Idx) u64 {
-            if (self.layout_store) |ls| {
-                if (@intFromEnum(layout_idx) < ls.layouts.len()) {
-                    const lay = ls.getLayout(layout_idx);
-                    return switch (lay.tag) {
-                        // Layout store indices are not globally canonical for
-                        // list/box composites; normalize by shape so equivalent
-                        // layouts share the same symbol-location key.
-                        .list => (@as(u64, 1) << 63) | (@as(u64, @intFromEnum(lay.data.list)) << 1),
-                        .list_of_zst => (@as(u64, 1) << 63) | 1,
-                        .box => (@as(u64, 1) << 62) | (@as(u64, @intFromEnum(lay.data.box)) << 1),
-                        .box_of_zst => (@as(u64, 1) << 62) | 1,
-                        .closure => (@as(u64, 1) << 61) | (@as(u64, @intFromEnum(lay.data.closure.captures_layout_idx)) << 1),
-                        .struct_ => blk: {
-                            // Treat transparent one-field structs as the same representation
-                            // as their field layout for symbol-location lookup.
-                            const sd = ls.getStructData(lay.data.struct_.idx);
-                            const fields = ls.struct_fields.sliceRange(sd.getFields());
-                            if (fields.len == 1 and fields.get(0).layout != layout_idx) {
-                                const field_layout = fields.get(0).layout;
-                                const field_off = ls.getStructFieldOffset(lay.data.struct_.idx, 0);
-                                const field_size = ls.layoutSizeAlign(ls.getLayout(field_layout)).size;
-                                if (field_off == 0 and field_size == sd.size) {
-                                    break :blk self.normalizedLayoutKey(field_layout);
-                                }
-                            }
-                            break :blk @intFromEnum(layout_idx);
-                        },
-                        else => @intFromEnum(layout_idx),
-                    };
-                }
-            }
+            _ = self;
             return @intFromEnum(layout_idx);
         }
 
@@ -1125,11 +1094,43 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     _ = self.symbol_closure_infos_by_layout.remove(key);
                 }
             }
+
+            // Callable bindings should always be available under the lambda's
+            // semantic function layout key as well, even when the pattern's
+            // stored layout idx differs.
+            if (loc == .closure_value) {
+                const lambda_expr = self.store.getExpr(loc.closure_value.lambda);
+                if (lambda_expr == .lambda) {
+                    const fn_layout = lambda_expr.lambda.fn_layout;
+                    if (layout_idx == null or layout_idx.? != fn_layout) {
+                        const fn_key = self.symbolLayoutKey(symbol, fn_layout);
+                        try self.symbol_locations_by_layout.put(fn_key, loc);
+                        if (self.closureInfoFromValueLocation(loc)) |info| {
+                            try self.symbol_closure_infos_by_layout.put(fn_key, info);
+                        } else {
+                            _ = self.symbol_closure_infos_by_layout.remove(fn_key);
+                        }
+                    }
+                }
+            }
         }
 
         fn getSymbolLocation(self: *Self, symbol: Symbol, layout_idx: ?layout.Idx) ?ValueLocation {
             if (layout_idx) |li| {
-                return self.symbol_locations_by_layout.get(self.symbolLayoutKey(symbol, li));
+                if (li == layout.Idx.none) {
+                    return self.symbol_locations.get(symbolKey(symbol));
+                }
+                if (self.symbol_locations_by_layout.get(self.symbolLayoutKey(symbol, li))) |loc| {
+                    return loc;
+                }
+                if (self.isFunctionLayout(li)) {
+                    if (self.symbol_locations.get(symbolKey(symbol))) |loc| {
+                        if (loc == .closure_value or loc == .lambda_code) {
+                            return loc;
+                        }
+                    }
+                }
+                return null;
             }
             return self.symbol_locations.get(symbolKey(symbol));
         }
@@ -1140,7 +1141,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn getSymbolClosureInfo(self: *Self, symbol: Symbol, layout_idx: ?layout.Idx) ?ClosureStackInfo {
             if (layout_idx) |li| {
-                return self.symbol_closure_infos_by_layout.get(self.symbolLayoutKey(symbol, li));
+                if (li == layout.Idx.none) {
+                    if (self.symbol_locations.get(symbolKey(symbol))) |loc| {
+                        return self.closureInfoFromValueLocation(loc);
+                    }
+                    return null;
+                }
+                if (self.symbol_closure_infos_by_layout.get(self.symbolLayoutKey(symbol, li))) |info| {
+                    return info;
+                }
+                if (self.isFunctionLayout(li)) {
+                    if (self.symbol_locations.get(symbolKey(symbol))) |loc| {
+                        return self.closureInfoFromValueLocation(loc);
+                    }
+                }
+                return null;
             }
             return null;
         }
@@ -3816,7 +3831,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             // Compile the closure's lambda body as a proc
                             const inner = self.store.getExpr(cv.lambda);
                             switch (inner) {
-                                .lambda => |lam| break :blk try self.compileLambdaAsProc(cv.lambda, lam),
+                                .lambda => |lam| break :blk try self.compileLambdaAsProc(cv.lambda, lam, .{}),
                                 else => unreachable,
                             }
                         },
@@ -5053,26 +5068,39 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return loc;
             }
 
+            // Callable symbols can be bound under their semantic function layout
+            // while a capture expects a concrete closure storage layout.
+            if (self.isFunctionLayout(layout_idx)) {
+                if (self.getSymbolLocation(symbol, null)) |loc| {
+                    if (self.closureInfoFromValueLocation(loc) != null) {
+                        const adapted = self.adaptLocationForLayout(loc, layout_idx);
+                        try self.putSymbolLocation(symbol, layout_idx, adapted);
+                        return adapted;
+                    }
+                }
+            }
+
             // Symbol not found - it might be a top-level definition
             if (self.getSymbolDefExact(symbol)) |def_expr_id| {
                 const def_expr = self.store.getExpr(def_expr_id);
 
-                // For closures, compile the lambda as a proc and pre-register as lambda_code.
-                // This breaks recursive capture cycles: if a closure captures itself (recursive
-                // function), the self-reference is found in symbol_locations on the second lookup
-                // instead of triggering infinite recursion through materializeCaptures.
+                // For capture-free closures, compile the lambda as a proc and pre-register
+                // as lambda_code. Closures with captures must be materialized as closure
+                // values so their environment is available at call sites.
                 if (def_expr == .closure) {
                     const closure = self.store.getClosureData(def_expr.closure);
-                    const inner = self.store.getExpr(closure.lambda);
-                    if (inner == .lambda) {
-                        const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
-                        const lambda_loc: ValueLocation = .{ .lambda_code = .{
-                            .code_offset = code_offset,
-                            .ret_layout = inner.lambda.ret_layout,
-                            .source_expr = closure.lambda,
-                        } };
-                        try self.putSymbolLocation(symbol, layout_idx, lambda_loc);
-                        return lambda_loc;
+                    if (self.store.getCaptures(closure.captures).len == 0) {
+                        const inner = self.store.getExpr(closure.lambda);
+                        if (inner == .lambda) {
+                            const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda, .{});
+                            const lambda_loc: ValueLocation = .{ .lambda_code = .{
+                                .code_offset = code_offset,
+                                .ret_layout = inner.lambda.ret_layout,
+                                .source_expr = closure.lambda,
+                            } };
+                            try self.putSymbolLocation(symbol, layout_idx, lambda_loc);
+                            return lambda_loc;
+                        }
                     }
                 }
 
@@ -5083,8 +5111,27 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (loc == .list_stack) {} else if (loc == .stack) {}
                 return loc;
             }
-
-            unreachable;
+            var sym_name: []const u8 = "<unknown>";
+            if (self.layout_store) |ls| {
+                if (symbol.module_idx < ls.all_module_envs.len) {
+                    const env = ls.all_module_envs[symbol.module_idx];
+                    if (symbol.ident_idx.idx < env.common.idents.interner.bytes.len()) {
+                        sym_name = env.getIdent(symbol.ident_idx);
+                    }
+                }
+            }
+            std.debug.panic(
+                "generateLookup: unresolved symbol={} module={} ident={} name={s} layout={} has_untyped={} has_def={}",
+                .{
+                    @as(u64, @bitCast(symbol)),
+                    symbol.module_idx,
+                    symbol.ident_idx.idx,
+                    sym_name,
+                    @intFromEnum(layout_idx),
+                    self.getSymbolLocation(symbol, null) != null,
+                    self.getSymbolDefExact(symbol) != null,
+                },
+            );
         }
 
         /// Look up a symbol definition by exact symbol identity.
@@ -7581,18 +7628,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         switch (value_loc) {
                             .stack => |s| {
                                 const base_offset = s.offset;
-                                var bind_layout_idx = arg_bind.layout_idx;
                                 const arg_loc: ValueLocation = if (payload_is_tuple and variant_payload_layout != null) plblk: {
                                     // Multi-arg tag: payload is a tuple, use tuple element offsets/layouts
                                     const pl_val = ls.getLayout(variant_payload_layout.?);
                                     const elem_offset = ls.getStructFieldOffsetByOriginalIndex(pl_val.data.struct_.idx, @intCast(arg_idx));
                                     const elem_layout = ls.getStructFieldLayoutByOriginalIndex(pl_val.data.struct_.idx, @intCast(arg_idx));
-                                    bind_layout_idx = elem_layout;
                                     const arg_offset = base_offset + @as(i32, @intCast(elem_offset));
                                     break :plblk self.stackLocationForLayout(elem_layout, arg_offset);
                                 } else if (variant_payload_layout) |pl| plblk: {
                                     // Single-arg tag: use variant payload layout directly
-                                    bind_layout_idx = pl;
                                     const payload_offset = base_offset;
                                     if (pl == .i128 or pl == .u128 or pl == .dec) {
                                         break :plblk .{ .stack_i128 = payload_offset };
@@ -7638,11 +7682,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                         break :plblk .{ .stack = .{ .offset = payload_offset } };
                                     }
                                 } else .{ .stack = .{ .offset = base_offset + @as(i32, @intCast(arg_idx)) * 8 } };
-                                try self.putSymbolLocation(arg_bind.symbol, bind_layout_idx, arg_loc);
+                                try self.putSymbolLocation(arg_bind.symbol, arg_bind.layout_idx, arg_loc);
                             },
                             else => {
-                                const bind_layout_idx = variant_payload_layout orelse arg_bind.layout_idx;
-                                try self.putSymbolLocation(arg_bind.symbol, bind_layout_idx, value_loc);
+                                try self.putSymbolLocation(arg_bind.symbol, arg_bind.layout_idx, value_loc);
                             },
                         }
                     },
@@ -8596,8 +8639,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn closureInfoFromExprId(self: *Self, expr_id: LirExprId) ?ClosureStackInfo {
+            return self.closureInfoFromExprIdWithExpectation(expr_id, false);
+        }
+
+        fn closureInfoFromExprIdWithExpectation(
+            self: *Self,
+            expr_id: LirExprId,
+            expect_callable: bool,
+        ) ?ClosureStackInfo {
             const expr = self.store.getExpr(expr_id);
             return switch (expr) {
+                .lambda => .{
+                    .representation = .{ .no_captures = {} },
+                    .lambda = expr_id,
+                    .captures = lir.LIR.LirCaptureSpan.empty(),
+                },
                 .closure => |closure_id| blk: {
                     const closure = self.store.getClosureData(closure_id);
                     break :blk .{
@@ -8606,8 +8662,62 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .captures = closure.captures,
                     };
                 },
-                .nominal => |nom| self.closureInfoFromExprId(nom.backing_expr),
-                .block => |b| self.closureInfoFromExprId(b.final_expr),
+                .lookup => |lookup| blk: {
+                    const lookup_expects_callable = expect_callable or self.isFunctionLayout(lookup.layout_idx);
+                    if (self.getSymbolClosureInfo(lookup.symbol, lookup.layout_idx)) |info| {
+                        break :blk info;
+                    }
+                    if (self.getSymbolLocation(lookup.symbol, lookup.layout_idx)) |loc| {
+                        if (self.closureInfoFromValueLocation(loc)) |info| {
+                            break :blk info;
+                        }
+                    }
+                    if (self.preboundCallableInfo(lookup.symbol, lookup.layout_idx)) |info| {
+                        break :blk info;
+                    }
+                    if (self.getSymbolDefExact(lookup.symbol)) |def_expr_id| {
+                        break :blk self.closureInfoFromExprIdWithExpectation(def_expr_id, lookup_expects_callable);
+                    }
+                    break :blk null;
+                },
+                .call => |call| blk: {
+                    if (!self.isFunctionLayout(call.ret_layout)) break :blk null;
+                    break :blk self.returnedClosureInfoFromCallableExpr(call.fn_expr);
+                },
+                .if_then_else => |ite| blk: {
+                    const merged = self.closureInfoFromExprIdWithExpectation(ite.final_else, expect_callable) orelse break :blk null;
+                    const branches = self.store.getIfBranches(ite.branches);
+                    for (branches) |branch| {
+                        const branch_info = self.closureInfoFromExprIdWithExpectation(branch.body, expect_callable) orelse break :blk null;
+                        if (!std.meta.eql(branch_info, merged)) break :blk null;
+                    }
+                    break :blk merged;
+                },
+                .match_expr => |m| blk: {
+                    const branches = self.store.getMatchBranches(m.branches);
+                    if (branches.len == 0) break :blk null;
+                    const merged = self.closureInfoFromExprIdWithExpectation(branches[0].body, expect_callable) orelse break :blk null;
+                    for (branches[1..]) |branch| {
+                        const branch_info = self.closureInfoFromExprIdWithExpectation(branch.body, expect_callable) orelse break :blk null;
+                        if (!std.meta.eql(branch_info, merged)) break :blk null;
+                    }
+                    break :blk merged;
+                },
+                .discriminant_switch => |sw| blk: {
+                    const branches = self.store.getExprSpan(sw.branches);
+                    if (branches.len == 0) break :blk null;
+                    const merged = self.closureInfoFromExprIdWithExpectation(branches[0], expect_callable) orelse break :blk null;
+                    for (branches[1..]) |branch_expr_id| {
+                        const branch_info = self.closureInfoFromExprIdWithExpectation(branch_expr_id, expect_callable) orelse break :blk null;
+                        if (!std.meta.eql(branch_info, merged)) break :blk null;
+                    }
+                    break :blk merged;
+                },
+                .nominal => |nom| self.closureInfoFromExprIdWithExpectation(nom.backing_expr, expect_callable),
+                .block => |b| self.closureInfoFromExprIdWithExpectation(
+                    b.final_expr,
+                    expect_callable or self.isFunctionLayout(b.result_layout),
+                ),
                 else => null,
             };
         }
@@ -8627,12 +8737,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (closure.representation == .one_capture) {
                         const captures = self.store.getCaptures(closure.captures);
                         if (captures.len == 1) {
-                            pb.capture_alias_symbol = captures[0].symbol;
-                            pb.capture_alias_layout = captures[0].layout_idx;
-                            if (self.getSymbolClosureInfo(captures[0].symbol, captures[0].layout_idx)) |info| {
-                                pb.capture_alias_info = info;
-                            } else if (self.getSymbolLocation(captures[0].symbol, captures[0].layout_idx)) |loc| {
-                                pb.capture_alias_info = self.closureInfoFromValueLocation(loc);
+                            const cap = captures[0];
+                            if (self.isFunctionLayout(cap.layout_idx)) {
+                                pb.capture_alias_symbol = cap.symbol;
+                                pb.capture_alias_layout = cap.layout_idx;
+                                if (self.getSymbolClosureInfo(cap.symbol, cap.layout_idx)) |cap_info| {
+                                    pb.capture_alias_info = cap_info;
+                                } else if (self.getSymbolLocation(cap.symbol, cap.layout_idx)) |cap_loc| {
+                                    pb.capture_alias_info = self.closureInfoFromValueLocation(cap_loc);
+                                }
                             }
                         }
                     }
@@ -8649,6 +8762,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (self.getSymbolClosureInfo(lookup.symbol, lookup.layout_idx)) |info| {
                         break :blk .{ .info = info };
                     }
+                    if (!self.isFunctionLayout(lookup.layout_idx)) break :blk null;
                     if (self.getSymbolDefExact(lookup.symbol)) |def_expr_id| {
                         break :blk self.preboundCallableFromExprId(def_expr_id);
                     }
@@ -8715,11 +8829,52 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const key = self.symbolLayoutKey(symbol, layout_idx);
             const pb = self.prebound_callables_by_layout.get(key) orelse return;
 
+            const closure_loc: ValueLocation = .{ .closure_value = .{
+                .stack_offset = stack_offset,
+                .representation = pb.info.representation,
+                .lambda = pb.info.lambda,
+                .captures = pb.info.captures,
+            } };
+
+            // Keep callable bindings available under both storage and semantic fn layouts.
+            try self.putSymbolLocation(symbol, layout_idx, closure_loc);
             try self.putSymbolClosureInfo(symbol, layout_idx, pb.info);
-            try self.closure_stack_info.put(stack_offset, pb.info);
+            const lambda_expr = self.store.getExpr(pb.info.lambda);
+            if (lambda_expr == .lambda) {
+                const fn_layout = lambda_expr.lambda.fn_layout;
+                if (fn_layout != layout_idx) {
+                    try self.putSymbolLocation(symbol, fn_layout, closure_loc);
+                    try self.putSymbolClosureInfo(symbol, fn_layout, pb.info);
+                }
+            }
+
+            var mapped_underlying_capture = false;
+            if (pb.info.representation == .one_capture) {
+                const captures = self.store.getCaptures(pb.info.captures);
+                if (captures.len == 1) {
+                    const cap = captures[0];
+                    if (self.isFunctionLayout(cap.layout_idx)) {
+                        if (self.getSymbolClosureInfo(cap.symbol, cap.layout_idx)) |cap_info| {
+                            try self.closure_stack_info.put(stack_offset, cap_info);
+                            mapped_underlying_capture = true;
+                        } else if (self.getSymbolLocation(cap.symbol, cap.layout_idx)) |cap_loc| {
+                            if (self.closureInfoFromValueLocation(cap_loc)) |cap_info| {
+                                try self.closure_stack_info.put(stack_offset, cap_info);
+                                mapped_underlying_capture = true;
+                            }
+                        }
+                    }
+                }
+            }
+            if (!mapped_underlying_capture) {
+                try self.closure_stack_info.put(stack_offset, pb.info);
+            }
 
             if (pb.capture_alias_symbol) |cap_symbol| {
                 const cap_layout = pb.capture_alias_layout orelse return;
+                if (!self.isFunctionLayout(cap_layout) and pb.capture_alias_info == null) {
+                    return;
+                }
                 const alias_loc = self.stackLocationForLayout(cap_layout, stack_offset);
                 try self.putSymbolLocation(cap_symbol, cap_layout, alias_loc);
                 if (pb.capture_alias_info) |cap_info| {
@@ -8750,26 +8905,60 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// If calling the given callable expression can return a closure value,
         /// return the closure metadata that should be attached to the call result.
         fn returnedClosureInfoFromCallableExpr(self: *Self, expr_id: LirExprId) ?ClosureStackInfo {
+            const returned_expr_id = self.applyCallableExprOnce(expr_id, 0) orelse return null;
+            return self.closureInfoFromExprIdWithExpectation(returned_expr_id, false);
+        }
+
+        fn applyCallableExprOnce(self: *Self, expr_id: LirExprId, depth: u16) ?LirExprId {
+            if (depth > 64) return null;
+
             const expr = self.store.getExpr(expr_id);
             return switch (expr) {
-                .lambda => |lam| self.closureInfoFromExprId(lam.body),
+                .lambda => |lam| lam.body,
                 .closure => |closure_id| blk: {
                     const closure = self.store.getClosureData(closure_id);
-                    break :blk self.returnedClosureInfoFromCallableExpr(closure.lambda);
+                    break :blk self.applyCallableExprOnce(closure.lambda, depth + 1);
                 },
-                .nominal => |nom| self.returnedClosureInfoFromCallableExpr(nom.backing_expr),
-                .block => |b| self.returnedClosureInfoFromCallableExpr(b.final_expr),
+                .nominal => |nom| self.applyCallableExprOnce(nom.backing_expr, depth + 1),
+                .block => |b| self.applyCallableExprOnce(b.final_expr, depth + 1),
+                .lookup => |lookup| blk: {
+                    if (self.getSymbolClosureInfo(lookup.symbol, lookup.layout_idx)) |info| {
+                        break :blk self.applyCallableExprOnce(info.lambda, depth + 1);
+                    }
+                    if (self.getSymbolLocation(lookup.symbol, lookup.layout_idx)) |loc| {
+                        if (self.closureInfoFromValueLocation(loc)) |info| {
+                            break :blk self.applyCallableExprOnce(info.lambda, depth + 1);
+                        }
+                    }
+                    if (self.preboundCallableInfo(lookup.symbol, lookup.layout_idx)) |info| {
+                        break :blk self.applyCallableExprOnce(info.lambda, depth + 1);
+                    }
+                    if (self.getSymbolDefExact(lookup.symbol)) |def_expr_id| {
+                        break :blk self.applyCallableExprOnce(def_expr_id, depth + 1);
+                    }
+                    break :blk null;
+                },
+                .call => |inner_call| blk: {
+                    const first_result = self.applyCallableExprOnce(inner_call.fn_expr, depth + 1) orelse break :blk null;
+                    break :blk self.applyCallableExprOnce(first_result, depth + 2);
+                },
                 else => null,
             };
         }
 
-        fn closureResultLayoutFromInfo(info: ClosureStackInfo) layout.Idx {
+        fn closureResultLayoutFromInfo(self: *Self, info: ClosureStackInfo) layout.Idx {
             return switch (info.representation) {
                 .enum_no_captures => .u64,
                 .tagged_union_captures => |repr| repr.union_layout,
                 .one_capture => |repr| repr.capture_layout,
                 .multiple_captures => |repr| repr.struct_layout,
-                .no_captures => .named_fn,
+                .no_captures => blk: {
+                    const lambda_expr = self.store.getExpr(info.lambda);
+                    if (lambda_expr == .lambda) {
+                        break :blk lambda_expr.lambda.fn_layout;
+                    }
+                    break :blk .named_fn;
+                },
             };
         }
 
@@ -11124,7 +11313,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             self.current_binding_symbol = pattern.bind.symbol;
                             const inner = self.store.getExpr(closure.lambda);
                             if (inner == .lambda) {
-                                const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
+                                const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda, .{});
                                 try self.putSymbolLocation(pattern.bind.symbol, pattern.bind.layout_idx, .{ .lambda_code = .{
                                     .code_offset = code_offset,
                                     .ret_layout = inner.lambda.ret_layout,
@@ -11802,7 +11991,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const expr = self.store.getExpr(expr_id);
             return switch (expr) {
                 .lambda => |lam| blk: {
-                    const code_offset = try self.compileLambdaAsProc(expr_id, lam);
+                    const code_offset = try self.compileLambdaAsProc(expr_id, lam, .{});
                     break :blk .{ .lambda_code = .{
                         .code_offset = code_offset,
                         .ret_layout = lam.ret_layout,
@@ -11813,7 +12002,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const closure = self.store.getClosureData(closure_id);
                     const inner = self.store.getExpr(closure.lambda);
                     if (inner != .lambda) break :blk null;
-                    const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
+                    const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda, .{});
                     break :blk .{ .lambda_code = .{
                         .code_offset = code_offset,
                         .ret_layout = inner.lambda.ret_layout,
@@ -11825,16 +12014,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
         }
 
-        fn isCallableDefExpr(self: *Self, expr_id: LirExprId) bool {
-            const expr = self.store.getExpr(expr_id);
-            return switch (expr) {
-                .lambda, .closure => true,
-                .nominal => |nom| self.isCallableDefExpr(nom.backing_expr),
-                .block => |b| self.isCallableDefExpr(b.final_expr),
-                else => false,
-            };
-        }
-
         fn isFunctionLayout(self: *Self, layout_idx: layout.Idx) bool {
             if (layout_idx == layout.Idx.none) return false;
             if (layout_idx == layout.Idx.named_fn) return true;
@@ -11842,16 +12021,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const idx_int = @intFromEnum(layout_idx);
             if (idx_int >= ls.layouts.len()) return false;
             return ls.getLayout(layout_idx).tag == .closure;
-        }
-
-        fn capturesCanResolveFromDefs(self: *Self, captures_span: lir.LIR.LirCaptureSpan) bool {
-            const captures = self.store.getCaptures(captures_span);
-            for (captures) |capture| {
-                if (!self.isFunctionLayout(capture.layout_idx)) return false;
-                const def_expr_id = self.getSymbolDefExact(capture.symbol) orelse return false;
-                if (!self.isCallableDefExpr(def_expr_id)) return false;
-            }
-            return true;
         }
 
         /// Generate code for a function call
@@ -12048,7 +12217,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // outer closure would create self-dispatch loops.
                     var mapped_underlying_closure = false;
                     const captures = self.store.getCaptures(closure.captures);
-                    if (captures.len == 1) {
+                    if (captures.len == 1 and self.isFunctionLayout(captures[0].layout_idx)) {
                         if (self.getSymbolLocation(captures[0].symbol, captures[0].layout_idx)) |cap_loc| {
                             if (self.closureInfoFromValueLocation(cap_loc)) |info| {
                                 try self.closure_stack_info.put(slot, info);
@@ -12087,7 +12256,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Direct call - compile as procedure for direct calling
                     const inner = self.store.getExpr(closure.lambda);
                     if (inner != .lambda) unreachable;
-                    const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
+                    const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda, .{});
                     return .{ .lambda_code = .{
                         .code_offset = code_offset,
                         .ret_layout = inner.lambda.ret_layout,
@@ -12475,10 +12644,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             args_span: anytype,
             ret_layout: layout.Idx,
         ) Allocator.Error!ValueLocation {
-            if (self.capturesCanResolveFromDefs(cv.captures)) {
-                return try self.compileLambdaAndCall(cv.lambda, args_span, ret_layout);
-            }
-            return self.compileLambdaAndCallViaCaptureWrapper(
+            return self.compileLambdaAndCallWithCaptureArgs(
                 cv.lambda,
                 cv.captures,
                 cv.stack_offset,
@@ -12505,8 +12671,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         self.prebound_callables_by_layout.deinit();
                         self.prebound_callables_by_layout = saved_prebound.clone() catch unreachable;
                     }
+                    self.prebound_callables_by_layout.clearRetainingCapacity();
                     try self.prebindCallableArgsForLambdaCall(lambda.params, args_span);
-                    const code_offset = try self.compileLambdaAsProc(lambda_body, lambda);
+                    const code_offset = try self.compileLambdaAsProc(lambda_body, lambda, .{});
                     return try self.generateCallToLambdaWithSource(code_offset, args_span, ret_layout, lambda_body);
                 },
                 .closure => |closure_id| {
@@ -12519,52 +12686,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             self.prebound_callables_by_layout.deinit();
                             self.prebound_callables_by_layout = saved_prebound.clone() catch unreachable;
                         }
+                        self.prebound_callables_by_layout.clearRetainingCapacity();
                         try self.prebindCallableArgsForLambdaCall(inner.lambda.params, args_span);
-                        const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
+                        const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda, .{});
                         return try self.generateCallToLambdaWithSource(code_offset, args_span, ret_layout, closure.lambda);
                     }
                     unreachable;
                 },
                 else => unreachable,
             }
-        }
-
-        fn makeCaptureWrapperLambda(
-            self: *Self,
-            lambda_expr_id: lir.LirExprId,
-            lambda: anytype,
-            captures_span: lir.LIR.LirCaptureSpan,
-            wrapper_ret_layout: layout.Idx,
-        ) Allocator.Error!lir.LirExprId {
-            const captures = self.store.getCaptures(captures_span);
-            if (captures.len == 0 and wrapper_ret_layout == lambda.ret_layout) return lambda_expr_id;
-
-            const mutable_store: *LirExprStore = @constCast(self.store);
-            const region = self.store.getExprRegion(lambda_expr_id);
-            var wrapped_pattern_ids = std.ArrayList(lir.LirPatternId).empty;
-            defer wrapped_pattern_ids.deinit(self.allocator);
-            try wrapped_pattern_ids.ensureTotalCapacity(self.allocator, captures.len + self.store.getPatternSpan(lambda.params).len);
-
-            for (captures) |capture| {
-                const pat = try mutable_store.addPattern(.{ .bind = .{
-                    .symbol = capture.symbol,
-                    .layout_idx = capture.layout_idx,
-                } }, region);
-                try wrapped_pattern_ids.append(self.allocator, pat);
-            }
-
-            const params = self.store.getPatternSpan(lambda.params);
-            for (params) |param| {
-                try wrapped_pattern_ids.append(self.allocator, param);
-            }
-            const wrapped_params = try mutable_store.addPatternSpan(wrapped_pattern_ids.items);
-
-            return mutable_store.addExpr(.{ .lambda = .{
-                .fn_layout = lambda.fn_layout,
-                .params = wrapped_params,
-                .body = lambda.body,
-                .ret_layout = wrapper_ret_layout,
-            } }, region);
         }
 
         fn appendCaptureArgInfos(
@@ -12628,7 +12758,34 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn compileLambdaAndCallViaCaptureWrapper(
+        fn prebindCallableCaptures(
+            self: *Self,
+            captures_span: lir.LIR.LirCaptureSpan,
+            capture_infos: []const ArgInfo,
+        ) Allocator.Error!void {
+            const captures = self.store.getCaptures(captures_span);
+            const n = @min(captures.len, capture_infos.len);
+            var i: usize = 0;
+            while (i < n) : (i += 1) {
+                const capture = captures[i];
+                const loc = capture_infos[i].loc;
+                const info_opt: ?ClosureStackInfo = switch (loc) {
+                    .closure_value => self.closureInfoFromValueLocation(loc),
+                    else => if (self.isFunctionLayout(capture.layout_idx))
+                        self.closureInfoFromValueLocation(loc)
+                    else
+                        null,
+                };
+                if (info_opt) |info| {
+                    try self.prebound_callables_by_layout.put(
+                        self.symbolLayoutKey(capture.symbol, capture.layout_idx),
+                        .{ .info = info },
+                    );
+                }
+            }
+        }
+
+        fn compileLambdaAndCallWithCaptureArgs(
             self: *Self,
             lambda_expr_id: lir.LirExprId,
             captures_span: lir.LIR.LirCaptureSpan,
@@ -12636,36 +12793,67 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             args_span: anytype,
             ret_layout: layout.Idx,
         ) Allocator.Error!ValueLocation {
-            const expr = self.store.getExpr(lambda_expr_id);
-            switch (expr) {
+            switch (self.store.getExpr(lambda_expr_id)) {
                 .lambda => |lambda| {
                     const returned_closure_info = self.returnedClosureInfoFromCallableExpr(lambda_expr_id);
-                    const wrapper_ret_layout = if (returned_closure_info) |info|
-                        closureResultLayoutFromInfo(info)
-                    else
-                        lambda.ret_layout;
-                    const wrapped_lambda_expr = try self.makeCaptureWrapperLambda(lambda_expr_id, lambda, captures_span, wrapper_ret_layout);
-                    const wrapped_lambda = self.store.getExpr(wrapped_lambda_expr).lambda;
-                    const code_offset = try self.compileLambdaAsProc(wrapped_lambda_expr, wrapped_lambda);
+                    const call_ret_layout = ret_layout;
+                    if (lambda.ret_layout != call_ret_layout) {
+                        const lambda_body_id = @intFromEnum(lambda.body);
+                        const fn_layout_id = @intFromEnum(lambda.fn_layout);
+                        const lambda_tag = if (self.layout_store) |ls|
+                            if (@intFromEnum(lambda.ret_layout) < ls.layouts.len()) @tagName(ls.getLayout(lambda.ret_layout).tag) else "out_of_range"
+                        else
+                            "no_layout_store";
+                        const call_tag = if (self.layout_store) |ls|
+                            if (@intFromEnum(call_ret_layout) < ls.layouts.len()) @tagName(ls.getLayout(call_ret_layout).tag) else "out_of_range"
+                        else
+                            "no_layout_store";
+                        std.debug.panic(
+                            "compileLambdaAndCallWithCaptureArgs: lambda return layout mismatch expr={} body={} fn_layout={} lambda={}({s}) call={}({s})",
+                            .{
+                                @intFromEnum(lambda_expr_id),
+                                lambda_body_id,
+                                fn_layout_id,
+                                @intFromEnum(lambda.ret_layout),
+                                lambda_tag,
+                                @intFromEnum(call_ret_layout),
+                                call_tag,
+                            },
+                        );
+                    }
 
                     var capture_infos = std.ArrayList(ArgInfo).empty;
                     defer capture_infos.deinit(self.allocator);
                     try self.appendCaptureArgInfos(&capture_infos, captures_span, captures_offset);
 
+                    var saved_prebound = self.prebound_callables_by_layout.clone() catch return error.OutOfMemory;
+                    defer saved_prebound.deinit();
+                    defer {
+                        self.prebound_callables_by_layout.deinit();
+                        self.prebound_callables_by_layout = saved_prebound.clone() catch unreachable;
+                    }
+
+                    self.prebound_callables_by_layout.clearRetainingCapacity();
+                    try self.prebindCallableCaptures(captures_span, capture_infos.items);
+                    try self.prebindCallableArgsForLambdaCall(lambda.params, args_span);
+                    const code_offset = try self.compileLambdaAsProc(lambda_expr_id, lambda, .{
+                        .capture_params = captures_span,
+                    });
+
                     return self.generateLambdaCall(
                         code_offset,
                         args_span,
-                        wrapper_ret_layout,
+                        call_ret_layout,
                         returned_closure_info,
                         capture_infos.items,
                     );
                 },
                 .closure => |closure_id| {
                     const closure = self.store.getClosureData(closure_id);
-                    return self.compileLambdaAndCallViaCaptureWrapper(closure.lambda, captures_span, captures_offset, args_span, ret_layout);
+                    return self.compileLambdaAndCallWithCaptureArgs(closure.lambda, captures_span, captures_offset, args_span, ret_layout);
                 },
                 .nominal => |nom| {
-                    return self.compileLambdaAndCallViaCaptureWrapper(nom.backing_expr, captures_span, captures_offset, args_span, ret_layout);
+                    return self.compileLambdaAndCallWithCaptureArgs(nom.backing_expr, captures_span, captures_offset, args_span, ret_layout);
                 },
                 else => unreachable,
             }
@@ -12680,7 +12868,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             args_span: anytype,
             ret_layout: layout.Idx,
         ) Allocator.Error!ValueLocation {
-            return self.compileLambdaAndCallViaCaptureWrapper(
+            return self.compileLambdaAndCallWithCaptureArgs(
                 member.lambda_body,
                 member.captures,
                 captures_offset,
@@ -12838,93 +13026,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return direct;
             }
 
-            const def_expr_id_opt = self.getSymbolDefExact(lookup.symbol);
-
-            // Prefer definition-based dispatch when available. proc_registry is keyed
-            // by symbol only and can represent a different specialization than this
-            // call site; symbol_defs preserve the currently-lowered specialization.
-            if (def_expr_id_opt == null) {
-                if (self.proc_registry.get(symbol_key)) |proc| {
-                    return try self.generateCallToCompiledProc(proc, args_span, ret_layout);
-                }
-            }
-
-            // Look up the function in top-level definitions
-            if (def_expr_id_opt) |def_expr_id| {
-                const def_expr = self.store.getExpr(def_expr_id);
-
-                return switch (def_expr) {
-                    .lambda => |_| try self.compileLambdaAndCall(def_expr_id, args_span, ret_layout),
-                    .closure => |_| {
-                        const closure_loc = try self.generateExpr(def_expr_id);
-                        if (closure_loc == .closure_value) {
-                            return try self.generateClosureDispatch(closure_loc.closure_value, args_span, ret_layout);
-                        }
-                        unreachable;
-                    },
-                    .block => {
-                        // Definition is a block — evaluate the block which may produce a lambda/closure
-                        const block_result = try self.generateExpr(def_expr_id);
-                        if (block_result == .lambda_code) {
-                            return try self.generateCallToLambdaWithSource(
-                                block_result.lambda_code.code_offset,
-                                args_span,
-                                ret_layout,
-                                block_result.lambda_code.source_expr,
-                            );
-                        }
-                        if (block_result == .closure_value) {
-                            return try self.generateClosureDispatch(block_result.closure_value, args_span, ret_layout);
-                        }
-                        unreachable;
-                    },
-                    .nominal => |nom| {
-                        // Unwrap nominal and retry with the inner expression
-                        const inner = self.store.getExpr(nom.backing_expr);
-                        if (inner == .lambda) {
-                            return try self.compileLambdaAndCall(nom.backing_expr, args_span, ret_layout);
-                        }
-                        if (inner == .closure) {
-                            const inner_loc = try self.generateExpr(nom.backing_expr);
-                            if (inner_loc == .closure_value) {
-                                return try self.generateClosureDispatch(inner_loc.closure_value, args_span, ret_layout);
-                            }
-                            if (inner_loc == .lambda_code) {
-                                return try self.generateCallToLambdaWithSource(
-                                    inner_loc.lambda_code.code_offset,
-                                    args_span,
-                                    ret_layout,
-                                    inner_loc.lambda_code.source_expr,
-                                );
-                            }
-                        }
-                        if (inner == .block) {
-                            const block_result = try self.generateExpr(nom.backing_expr);
-                            if (block_result == .lambda_code) {
-                                return try self.generateCallToLambdaWithSource(
-                                    block_result.lambda_code.code_offset,
-                                    args_span,
-                                    ret_layout,
-                                    block_result.lambda_code.source_expr,
-                                );
-                            }
-                            if (block_result == .closure_value) {
-                                return try self.generateClosureDispatch(block_result.closure_value, args_span, ret_layout);
-                            }
-                        }
-                        unreachable;
-                    },
-                    .runtime_error => |runtime_err| {
-                        // Dead code path in a call — emit roc_crashed and return dummy.
-                        try self.emitRocCrash(runtimeErrorMessage(runtime_err));
-                        return .{ .immediate_i64 = 0 };
-                    },
-                    else => @panic("generateLookupCall: unexpected def expr type in symbol_defs"),
-                };
-            }
-
-            // Check if the function is a locally-bound value (e.g., a lambda parameter
-            // in a higher-order function like `apply = |f, x| f(x)`)
+            // Prefer a locally-bound callable value (lambda parameter / captured closure)
+            // over top-level symbol defs.
             if (self.getSymbolLocation(lookup.symbol, lookup.layout_idx)) |loc| {
                 switch (loc) {
                     .lambda_code => |lc| {
@@ -12994,6 +13097,105 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     },
                     else => {},
                 }
+            }
+
+            const def_expr_id_opt = self.getSymbolDefExact(lookup.symbol);
+
+            // Prefer definition-based dispatch when available. proc_registry is keyed
+            // by symbol only and can represent a different specialization than this
+            // call site; symbol_defs preserve the currently-lowered specialization.
+            if (def_expr_id_opt == null) {
+                if (self.proc_registry.get(symbol_key)) |proc| {
+                    return try self.generateCallToCompiledProc(proc, args_span, ret_layout);
+                }
+            }
+
+            // Look up the function in top-level definitions
+            if (def_expr_id_opt) |def_expr_id| {
+                const def_expr = self.store.getExpr(def_expr_id);
+
+                return switch (def_expr) {
+                    .lambda => |lam| blk: {
+                        if (lam.ret_layout != ret_layout) {
+                            std.debug.panic(
+                                "generateLookupCall: lambda def layout mismatch symbol={} name={s} def_expr={} lambda_ret={} call_ret={}",
+                                .{
+                                    symbol_key,
+                                    debug_name,
+                                    @intFromEnum(def_expr_id),
+                                    @intFromEnum(lam.ret_layout),
+                                    @intFromEnum(ret_layout),
+                                },
+                            );
+                        }
+                        break :blk try self.compileLambdaAndCall(def_expr_id, args_span, ret_layout);
+                    },
+                    .closure => |_| {
+                        const closure_loc = try self.generateExpr(def_expr_id);
+                        if (closure_loc == .closure_value) {
+                            return try self.generateClosureDispatch(closure_loc.closure_value, args_span, ret_layout);
+                        }
+                        unreachable;
+                    },
+                    .block => {
+                        // Definition is a block — evaluate the block which may produce a lambda/closure
+                        const block_result = try self.generateExpr(def_expr_id);
+                        if (block_result == .lambda_code) {
+                            return try self.generateCallToLambdaWithSource(
+                                block_result.lambda_code.code_offset,
+                                args_span,
+                                ret_layout,
+                                block_result.lambda_code.source_expr,
+                            );
+                        }
+                        if (block_result == .closure_value) {
+                            return try self.generateClosureDispatch(block_result.closure_value, args_span, ret_layout);
+                        }
+                        unreachable;
+                    },
+                    .nominal => |nom| {
+                        // Unwrap nominal and retry with the inner expression
+                        const inner = self.store.getExpr(nom.backing_expr);
+                        if (inner == .lambda) {
+                            return try self.compileLambdaAndCall(nom.backing_expr, args_span, ret_layout);
+                        }
+                        if (inner == .closure) {
+                            const inner_loc = try self.generateExpr(nom.backing_expr);
+                            if (inner_loc == .closure_value) {
+                                return try self.generateClosureDispatch(inner_loc.closure_value, args_span, ret_layout);
+                            }
+                            if (inner_loc == .lambda_code) {
+                                return try self.generateCallToLambdaWithSource(
+                                    inner_loc.lambda_code.code_offset,
+                                    args_span,
+                                    ret_layout,
+                                    inner_loc.lambda_code.source_expr,
+                                );
+                            }
+                        }
+                        if (inner == .block) {
+                            const block_result = try self.generateExpr(nom.backing_expr);
+                            if (block_result == .lambda_code) {
+                                return try self.generateCallToLambdaWithSource(
+                                    block_result.lambda_code.code_offset,
+                                    args_span,
+                                    ret_layout,
+                                    block_result.lambda_code.source_expr,
+                                );
+                            }
+                            if (block_result == .closure_value) {
+                                return try self.generateClosureDispatch(block_result.closure_value, args_span, ret_layout);
+                            }
+                        }
+                        unreachable;
+                    },
+                    .runtime_error => |runtime_err| {
+                        // Dead code path in a call — emit roc_crashed and return dummy.
+                        try self.emitRocCrash(runtimeErrorMessage(runtime_err));
+                        return .{ .immediate_i64 = 0 };
+                    },
+                    else => @panic("generateLookupCall: unexpected def expr type in symbol_defs"),
+                };
             }
 
             // Fallback: lazy-compile a matching LirProc by symbol.
@@ -13074,7 +13276,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const method_name = suffix[dot_idx + 1 ..];
 
             const operand_layout = builtinNumOperandLayout(type_name) orelse return null;
-
             const args = self.store.getExprSpan(args_span);
             if (args.len != 2) return null;
 
@@ -13444,7 +13645,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// based on the expected return layout.
         fn normalizeResultLocForLayout(self: *Self, loc: ValueLocation, ret_layout: layout.Idx) ValueLocation {
             return switch (loc) {
-                .closure_value => |cv| self.stackLocationForLayout(ret_layout, cv.stack_offset),
+                .closure_value => loc,
                 .stack => |s| self.stackLocationForLayout(ret_layout, s.offset),
                 else => loc,
             };
@@ -14198,13 +14399,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.closure_stack_info = saved_closure_stack_info.clone() catch return error.OutOfMemory;
         }
 
+        const LambdaCompileOptions = struct {
+            capture_params: lir.LIR.LirCaptureSpan = lir.LIR.LirCaptureSpan.empty(),
+        };
+
         /// Compile a lambda expression as a standalone procedure.
         /// Returns the code offset where the procedure starts.
         /// If the lambda was already compiled, returns the cached offset.
         /// Uses deferred prologue pattern for x86_64 to properly save callee-saved registers.
-        fn compileLambdaAsProc(self: *Self, lambda_expr_id: LirExprId, lambda: anytype) Allocator.Error!usize {
+        fn compileLambdaAsProc(self: *Self, lambda_expr_id: LirExprId, lambda: anytype, options: LambdaCompileOptions) Allocator.Error!usize {
+            const proc_ret_layout = lambda.ret_layout;
+            const use_cache = self.store.getCaptures(options.capture_params).len == 0 and !self.hasPreboundCallableForParams(lambda.params);
             const key = @intFromEnum(lambda_expr_id);
-            const use_cache = !self.hasPreboundCallableForParams(lambda.params);
 
             // Check if already compiled
             if (use_cache) {
@@ -14302,7 +14508,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (self.current_binding_symbol) |bind_sym| {
                 try self.putSymbolLocation(bind_sym, lambda.fn_layout, .{ .lambda_code = .{
                     .code_offset = body_start,
-                    .ret_layout = lambda.ret_layout,
+                    .ret_layout = proc_ret_layout,
                     .source_expr = lambda_expr_id,
                 } });
                 self.current_binding_symbol = null;
@@ -14336,7 +14542,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             // Check if return type needs return-by-pointer (exceeds register limit)
-            const needs_ret_ptr = self.needsInternalReturnByPointer(lambda.ret_layout);
+            const needs_ret_ptr = self.needsInternalReturnByPointer(proc_ret_layout);
             if (needs_ret_ptr) {
                 // The first argument register contains a hidden return pointer.
                 // Save it to a local stack slot for use after body generation.
@@ -14349,20 +14555,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Bind parameters from argument registers
             // When needs_ret_ptr, arg registers are shifted by 1 (hidden ptr is arg 0)
-            try self.bindLambdaParams(lambda.params, if (needs_ret_ptr) 1 else 0);
+            try self.bindLambdaParamsWithCaptures(lambda_expr_id, options.capture_params, lambda.params, if (needs_ret_ptr) 1 else 0);
 
             // Set early return state so generateEarlyReturn can emit jumps
-            self.early_return_ret_layout = lambda.ret_layout;
+            self.early_return_ret_layout = proc_ret_layout;
 
             // Generate the body
             const result_loc = try self.generateExpr(lambda.body);
-            const normalized_result_loc = self.normalizeResultLocForLayout(result_loc, lambda.ret_layout);
+            const normalized_result_loc = self.normalizeResultLocForLayout(result_loc, proc_ret_layout);
 
             // Move result to return register or copy to return pointer
             if (self.ret_ptr_slot) |ret_slot| {
-                try self.copyResultToReturnPointer(normalized_result_loc, lambda.ret_layout, ret_slot);
+                try self.copyResultToReturnPointer(normalized_result_loc, proc_ret_layout, ret_slot);
             } else {
-                try self.moveToReturnRegisterWithLayout(normalized_result_loc, lambda.ret_layout);
+                try self.moveToReturnRegisterWithLayout(normalized_result_loc, proc_ret_layout);
             }
 
             // Record epilogue location (relative to body, will adjust after prepending prologue)
@@ -14579,10 +14785,46 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             ret_buffer_offset: i32,
             returned_closure_info: ?ClosureStackInfo,
         ) Allocator.Error!ValueLocation {
+            if (returned_closure_info != null and !self.isFunctionLayout(ret_layout)) {
+                std.debug.panic("saveCallReturnValue: closure metadata on non-callable return layout={}", .{
+                    @intFromEnum(ret_layout),
+                });
+            }
+
             // If we used return-by-pointer, the callee has written the result
             // to our pre-allocated buffer. No register saving needed.
             if (needs_ret_ptr) {
                 return self.callReturnLocation(ret_buffer_offset, ret_layout, returned_closure_info);
+            }
+
+            if (returned_closure_info) |info| {
+                const closure_size = self.closureStorageSize(info.representation);
+                if (closure_size > 8) {
+                    const stack_offset = self.codegen.allocStackSlot(closure_size);
+                    const num_regs = (closure_size + 7) / 8;
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        const regs = [_]@TypeOf(GeneralReg.X0){ .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7, .XR, .X9, .X10, .X11, .X12, .X13, .X14, .X15 };
+                        if (num_regs > regs.len) {
+                            std.debug.panic("saveCallReturnValue: closure return exceeds register return capacity size={}", .{
+                                closure_size,
+                            });
+                        }
+                        for (0..num_regs) |i| {
+                            try self.codegen.emit.strRegMemSoff(.w64, regs[i], .FP, stack_offset + @as(i32, @intCast(i * 8)));
+                        }
+                    } else {
+                        const regs = [_]@TypeOf(GeneralReg.RAX){ .RAX, .RDX, .RCX, .R8, .R9, .R10, .R11, .RDI, .RSI };
+                        if (num_regs > regs.len) {
+                            std.debug.panic("saveCallReturnValue: closure return exceeds register return capacity size={}", .{
+                                closure_size,
+                            });
+                        }
+                        for (0..num_regs) |i| {
+                            try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + @as(i32, @intCast(i * 8)), regs[i]);
+                        }
+                    }
+                    return self.callReturnLocation(stack_offset, ret_layout, returned_closure_info);
+                }
             }
 
             // Handle i128/Dec return values (returned in two registers)
@@ -14922,6 +15164,69 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitLoad(.w64, temp_reg, frame_ptr, caller_offset + off);
                 try self.emitStore(.w64, frame_ptr, local_offset + off, temp_reg);
             }
+        }
+
+        fn aliasLambdaParamSymbolsBySourceExpr(
+            self: *Self,
+            params: lir.LirPatternSpan,
+            saved_symbol_source_exprs: *const std.AutoHashMap(u64, LirExprId),
+        ) Allocator.Error!void {
+            const pattern_ids = self.store.getPatternSpan(params);
+
+            for (pattern_ids) |pattern_id| {
+                const pattern = self.store.getPattern(pattern_id);
+                if (pattern != .bind) continue;
+
+                const bind = pattern.bind;
+                const bind_key = symbolKey(bind.symbol);
+                const source_expr_id = saved_symbol_source_exprs.get(bind_key) orelse continue;
+                const bound_loc = self.getSymbolLocation(bind.symbol, bind.layout_idx) orelse continue;
+
+                var it = saved_symbol_source_exprs.iterator();
+                while (it.next()) |entry| {
+                    if (entry.value_ptr.* != source_expr_id) continue;
+                    const alias_key = entry.key_ptr.*;
+                    if (alias_key == bind_key) continue;
+
+                    const alias_symbol: Symbol = @bitCast(alias_key);
+                    try self.putSymbolLocation(alias_symbol, bind.layout_idx, bound_loc);
+                }
+            }
+        }
+
+        fn bindLambdaParamsWithCaptures(
+            self: *Self,
+            lambda_expr_id: LirExprId,
+            captures_span: lir.LIR.LirCaptureSpan,
+            params: lir.LirPatternSpan,
+            initial_reg_idx: u8,
+        ) Allocator.Error!void {
+            const captures = self.store.getCaptures(captures_span);
+            if (captures.len == 0) {
+                return self.bindLambdaParams(params, initial_reg_idx);
+            }
+
+            const mutable_store: *LirExprStore = @constCast(self.store);
+            const region = self.store.getExprRegion(lambda_expr_id);
+            const params_ids = self.store.getPatternSpan(params);
+
+            var pattern_ids = std.ArrayList(lir.LirPatternId).empty;
+            defer pattern_ids.deinit(self.allocator);
+            try pattern_ids.ensureTotalCapacity(self.allocator, captures.len + params_ids.len);
+
+            for (captures) |capture| {
+                const pat = try mutable_store.addPattern(.{ .bind = .{
+                    .symbol = capture.symbol,
+                    .layout_idx = capture.layout_idx,
+                } }, region);
+                try pattern_ids.append(self.allocator, pat);
+            }
+            for (params_ids) |param_id| {
+                try pattern_ids.append(self.allocator, param_id);
+            }
+
+            const combined_params = try mutable_store.addPatternSpan(pattern_ids.items);
+            return self.bindLambdaParams(combined_params, initial_reg_idx);
         }
 
         fn bindLambdaParams(self: *Self, params: lir.LirPatternSpan, initial_reg_idx: u8) Allocator.Error!void {
@@ -15338,6 +15643,44 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Move a value to the return register(s), using layout information for proper sizing.
         fn moveToReturnRegisterWithLayout(self: *Self, loc: ValueLocation, ret_layout: layout.Idx) Allocator.Error!void {
+            if (loc == .closure_value) {
+                const cv = loc.closure_value;
+                const closure_size = self.closureStorageSize(cv.representation);
+                if (closure_size == 0) {
+                    try self.codegen.emitLoadImm(ret_reg_0, 0);
+                    return;
+                }
+                if (closure_size <= 8) {
+                    try self.codegen.emitLoadStack(.w64, ret_reg_0, cv.stack_offset);
+                    return;
+                }
+                {
+                    const num_regs = (closure_size + 7) / 8;
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        const regs = [_]@TypeOf(GeneralReg.X0){ .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7, .XR, .X9, .X10, .X11, .X12, .X13, .X14, .X15 };
+                        if (num_regs > regs.len) {
+                            std.debug.panic("moveToReturnRegisterWithLayout: closure return exceeds register return capacity size={}", .{
+                                closure_size,
+                            });
+                        }
+                        for (0..num_regs) |i| {
+                            try self.codegen.emitLoadStack(.w64, regs[i], cv.stack_offset + @as(i32, @intCast(i * 8)));
+                        }
+                    } else {
+                        const regs = [_]@TypeOf(GeneralReg.RAX){ .RAX, .RDX, .RCX, .R8, .R9, .R10, .R11, .RDI, .RSI };
+                        if (num_regs > regs.len) {
+                            std.debug.panic("moveToReturnRegisterWithLayout: closure return exceeds register return capacity size={}", .{
+                                closure_size,
+                            });
+                        }
+                        for (0..num_regs) |i| {
+                            try self.codegen.emitLoadStack(.w64, regs[i], cv.stack_offset + @as(i32, @intCast(i * 8)));
+                        }
+                    }
+                    return;
+                }
+            }
+
             // First check if the layout tells us this is a multi-register type > 8 bytes
             if (self.layout_store) |ls| {
                 const layout_val = ls.getLayout(ret_layout);
@@ -15517,26 +15860,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             else
                 null;
 
-            var call_code_offset = code_offset;
-            var call_ret_layout = ret_layout;
+            const call_code_offset = code_offset;
+            const call_ret_layout = ret_layout;
 
             if (returned_closure_info) |info| {
-                call_ret_layout = closureResultLayoutFromInfo(info);
                 if (source_expr) |expr_id| {
                     if (self.unwrapCallableLambdaExpr(expr_id)) |lambda_expr_id| {
                         const lambda_expr = self.store.getExpr(lambda_expr_id);
                         if (lambda_expr == .lambda and lambda_expr.lambda.ret_layout != call_ret_layout) {
-                            const wrapped_lambda_expr = try self.makeCaptureWrapperLambda(
-                                lambda_expr_id,
-                                lambda_expr.lambda,
-                                lir.LIR.LirCaptureSpan.empty(),
-                                call_ret_layout,
+                            std.debug.panic(
+                                "generateCallToLambdaWithSource: lambda return layout mismatch expr={} lambda={} call={}",
+                                .{
+                                    @intFromEnum(lambda_expr_id),
+                                    @intFromEnum(lambda_expr.lambda.ret_layout),
+                                    @intFromEnum(call_ret_layout),
+                                },
                             );
-                            const wrapped_lambda = self.store.getExpr(wrapped_lambda_expr).lambda;
-                            call_code_offset = try self.compileLambdaAsProc(wrapped_lambda_expr, wrapped_lambda);
                         }
                     }
                 }
+                _ = info;
             }
 
             return self.generateLambdaCall(

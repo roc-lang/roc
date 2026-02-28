@@ -897,6 +897,77 @@ test "lowerExpr: match with pattern alternatives preserves all patterns" {
     try testing.expect(branches.len >= 1);
     const first_branch_patterns = env.mir_store.getBranchPatterns(branches[0].patterns);
     try testing.expect(first_branch_patterns.len >= 2);
+
+    const pat0 = env.mir_store.getPattern(first_branch_patterns[0].pattern);
+    const pat1 = env.mir_store.getPattern(first_branch_patterns[1].pattern);
+    try testing.expect(pat0 == .tag);
+    try testing.expect(pat1 == .tag);
+
+    const pat0_args = env.mir_store.getPatternSpan(pat0.tag.args);
+    const pat1_args = env.mir_store.getPatternSpan(pat1.tag.args);
+    try testing.expectEqual(@as(usize, 1), pat0_args.len);
+    try testing.expectEqual(@as(usize, 1), pat1_args.len);
+
+    const arg0 = pat0_args[0];
+    const arg1 = pat1_args[0];
+    const arg0_pat = env.mir_store.getPattern(arg0);
+    const arg1_pat = env.mir_store.getPattern(arg1);
+    try testing.expect(arg0_pat == .bind);
+    try testing.expect(arg1_pat == .bind);
+    try testing.expect(arg0_pat.bind.eql(arg1_pat.bind));
+
+    const arg0_mono = env.mir_store.patternTypeOf(arg0);
+    const arg1_mono = env.mir_store.patternTypeOf(arg1);
+    try testing.expectEqual(arg0_mono, arg1_mono);
+    try testing.expect(env.mir_store.monotype_store.getMonotype(arg0_mono) != .unit);
+
+    const body_expr = env.mir_store.getExpr(branches[0].body);
+    try testing.expect(body_expr == .lookup);
+    const body_mono = env.mir_store.typeOf(branches[0].body);
+    try testing.expectEqual(arg0_mono, body_mono);
+}
+
+test "lowerExpr: match alternatives keep payload bind monotypes for Err scrutinee" {
+    var env = try MirTestEnv.initExpr(
+        \\match Err(42) { Ok(x) | Err(x) => x, _ => 0 }
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .match_expr);
+
+    const branches = env.mir_store.getBranches(result.match_expr.branches);
+    try testing.expect(branches.len >= 1);
+    const first_branch_patterns = env.mir_store.getBranchPatterns(branches[0].patterns);
+    try testing.expect(first_branch_patterns.len >= 2);
+
+    const pat0 = env.mir_store.getPattern(first_branch_patterns[0].pattern);
+    const pat1 = env.mir_store.getPattern(first_branch_patterns[1].pattern);
+    try testing.expect(pat0 == .tag);
+    try testing.expect(pat1 == .tag);
+
+    const pat0_args = env.mir_store.getPatternSpan(pat0.tag.args);
+    const pat1_args = env.mir_store.getPatternSpan(pat1.tag.args);
+    try testing.expectEqual(@as(usize, 1), pat0_args.len);
+    try testing.expectEqual(@as(usize, 1), pat1_args.len);
+
+    const arg0 = pat0_args[0];
+    const arg1 = pat1_args[0];
+    const arg0_pat = env.mir_store.getPattern(arg0);
+    const arg1_pat = env.mir_store.getPattern(arg1);
+    try testing.expect(arg0_pat == .bind);
+    try testing.expect(arg1_pat == .bind);
+    try testing.expect(arg0_pat.bind.eql(arg1_pat.bind));
+
+    const arg0_mono = env.mir_store.patternTypeOf(arg0);
+    const arg1_mono = env.mir_store.patternTypeOf(arg1);
+    try testing.expectEqual(arg0_mono, arg1_mono);
+
+    const body_expr = env.mir_store.getExpr(branches[0].body);
+    try testing.expect(body_expr == .lookup);
+    const body_mono = env.mir_store.typeOf(branches[0].body);
+    try testing.expectEqual(arg0_mono, body_mono);
+    try testing.expect(env.mir_store.monotype_store.getMonotype(arg0_mono) != .unit);
 }
 
 test "lowerExpr: tuple access" {
@@ -911,6 +982,62 @@ test "lowerExpr: tuple access" {
     const result = env.mir_store.getExpr(expr);
     try testing.expect(result == .block);
     try testing.expect(env.mir_store.getExpr(result.block.final_expr) == .tuple_access);
+}
+
+test "lowerExpr: closure forwarding keeps inner/outer symbols callable" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    y = 5
+        \\    inner = |x| x + y
+        \\    outer = |x| inner(x)
+        \\    outer(10)
+        \\}
+    );
+    defer env.deinit();
+
+    const expr = try env.lowerFirstDef();
+    const top = env.mir_store.getExpr(expr);
+    try testing.expect(top == .block);
+
+    const stmts = env.mir_store.getStmts(top.block.stmts);
+    try testing.expect(stmts.len >= 3);
+
+    var inner_sym: ?MIR.Symbol = null;
+    var outer_sym: ?MIR.Symbol = null;
+
+    for (stmts) |stmt| {
+        const binding = switch (stmt) {
+            .decl_const => |b| b,
+            .decl_var, .mutate_var => continue,
+        };
+        const pat = env.mir_store.getPattern(binding.pattern);
+        if (pat != .bind) continue;
+
+        const rhs = env.mir_store.getExpr(binding.expr);
+        if (rhs == .lambda) {
+            const rhs_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(binding.expr));
+            try testing.expect(rhs_mono == .func);
+
+            const lam = rhs.lambda;
+            const captures = env.mir_store.getCaptures(lam.captures);
+            if (captures.len == 1) {
+                const body = env.mir_store.getExpr(lam.body);
+                if (body == .call) {
+                    // outer = |x| inner(x)
+                    outer_sym = pat.bind;
+                    const fn_expr = env.mir_store.getExpr(body.call.func);
+                    try testing.expect(fn_expr == .lookup);
+                    inner_sym = fn_expr.lookup;
+                } else {
+                    // inner = |x| x + y
+                    inner_sym = pat.bind;
+                }
+            }
+        }
+    }
+
+    try testing.expect(inner_sym != null);
+    try testing.expect(outer_sym != null);
 }
 
 test "lowerExpr: typed F64 fractional via dot syntax" {

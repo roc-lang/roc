@@ -45,6 +45,9 @@ fp_local: u32 = 0,
 compiled_lambdas: std.AutoHashMap(u32, u32),
 /// Map from Symbol → ClosureValue (for all callable bindings).
 closure_values: std.AutoHashMap(u64, ClosureValue),
+/// Map from Symbol → bound expression id for local let/mutate bindings.
+/// Used to recover callable metadata for synthetic ANF symbols.
+local_binding_exprs: std.AutoHashMap(u64, LirExprId),
 /// Type index for the RocOps function signature: (i32, i32) -> void.
 roc_ops_type_idx: u32 = 0,
 /// Table indices for RocOps functions (used with call_indirect).
@@ -177,6 +180,7 @@ pub fn init(allocator: Allocator, store: *const LirExprStore, layout_store: ?*co
         .fp_local = 0,
         .compiled_lambdas = std.AutoHashMap(u32, u32).init(allocator),
         .closure_values = std.AutoHashMap(u64, ClosureValue).init(allocator),
+        .local_binding_exprs = std.AutoHashMap(u64, LirExprId).init(allocator),
         .join_point_depths = std.AutoHashMap(u32, u32).init(allocator),
         .join_point_param_locals = std.AutoHashMap(u32, []u32).init(allocator),
         .forwarded_func_captures = std.AutoHashMap(u32, []ForwardedCapture).init(allocator),
@@ -202,6 +206,7 @@ pub fn deinit(self: *Self) void {
     }
     self.forwarded_func_captures.deinit();
     self.closure_values.deinit();
+    self.local_binding_exprs.deinit();
 }
 
 /// Register host function imports. Must be called before any addFunction calls
@@ -628,6 +633,8 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
                                         (self.storage.allocLocal(bind.symbol, vt2) catch return error.OutOfMemory);
                                     self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
                                     WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
+                                    const key: u64 = @bitCast(bind.symbol);
+                                    try self.local_binding_exprs.put(key, stmt.expr);
                                     continue;
                                 }
                                 unreachable;
@@ -673,6 +680,8 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
                                     const local_idx = self.storage.getLocal(bind.symbol) orelse
                                         (self.storage.allocLocal(bind.symbol, .i32) catch return error.OutOfMemory);
                                     try self.emitLocalSet(local_idx);
+                                    const key: u64 = @bitCast(bind.symbol);
+                                    try self.local_binding_exprs.put(key, stmt.expr);
                                     continue;
                                 }
 
@@ -699,6 +708,8 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
                                 const local_idx = self.storage.getLocal(bind.symbol) orelse
                                     (self.storage.allocLocal(bind.symbol, .i32) catch return error.OutOfMemory);
                                 try self.emitLocalSet(local_idx);
+                                const key: u64 = @bitCast(bind.symbol);
+                                try self.local_binding_exprs.put(key, stmt.expr);
                                 continue;
                             }
                             // Determine the target wasm type using layout store
@@ -725,6 +736,7 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
                                         .func_idx = null,
                                         .bound_symbol = bind.symbol,
                                     });
+                                    try self.local_binding_exprs.put(key, stmt.expr);
                                     continue;
                                 }
                             }
@@ -755,7 +767,9 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
                                 (self.storage.allocLocal(bind.symbol, vt) catch return error.OutOfMemory);
                             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
                             WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
-                            try self.maybeRegisterCallableBinding(bind.symbol, stmt.expr);
+                            const key: u64 = @bitCast(bind.symbol);
+                            try self.local_binding_exprs.put(key, stmt.expr);
+                            try self.maybeRegisterCallableBinding(bind.symbol, stmt.expr, bind.layout_idx);
                         }
                     },
                     .wildcard => {
@@ -1498,7 +1512,7 @@ fn generateMatchBranches(
         },
         .list => |list_pat| {
             // List destructuring in match branch
-            // Check if length matches prefix count (exact match when no rest pattern)
+            // Check if length matches prefix count (exact when there is no `..`)
             const prefix_patterns = self.store.getPatternSpan(list_pat.prefix);
             const prefix_count: u32 = @intCast(prefix_patterns.len);
 
@@ -1511,7 +1525,7 @@ fn generateMatchBranches(
             self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
             WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(prefix_count)) catch return error.OutOfMemory;
 
-            if (list_pat.rest.isNone()) {
+            if (!list_pat.has_rest) {
                 // Exact match: length == prefix_count
                 self.body.append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
             } else {
@@ -1840,6 +1854,15 @@ fn isCompositeLayout(self: *const Self, layout_idx: layout.Idx) bool {
         };
     }
     return false;
+}
+
+fn isFunctionLayout(self: *const Self, layout_idx: layout.Idx) bool {
+    if (layout_idx == layout.Idx.none) return false;
+    if (layout_idx == layout.Idx.named_fn) return true;
+    const ls = self.layout_store orelse return false;
+    const idx_int = @intFromEnum(layout_idx);
+    if (idx_int >= ls.layouts.len()) return false;
+    return ls.getLayout(layout_idx).tag == .closure;
 }
 
 /// Generate structural equality comparison for two composite values (records, tuples, tag unions).
@@ -6159,6 +6182,28 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
                     // Compilation failed (e.g., body has callback param calls).
                     std.debug.panic("Failed to compile function for symbol lookup: {}", .{err});
                 }
+            } else if (self.local_binding_exprs.get(key)) |bound_expr_id| {
+                // Synthetic/local ANF symbol: recover callable metadata from the
+                // bound expression and dispatch through closure_values.
+                try self.maybeRegisterCallableBinding(lookup.symbol, bound_expr_id, lookup.layout_idx);
+                if (self.closure_values.get(key)) |cv| {
+                    if (cv.func_idx == null) {
+                        const fn_def = self.store.getExpr(cv.lambda_expr);
+                        try self.preBindCallableArgs(fn_def, c.args);
+                    }
+                    try self.dispatchClosureCall(cv, c.args, c.ret_layout);
+                    return;
+                }
+                std.debug.panic(
+                    "generateCall.lookup local callable missing closure metadata symbol={} module={} ident={} layout={} expr={}",
+                    .{
+                        @as(u64, @bitCast(lookup.symbol)),
+                        lookup.symbol.module_idx,
+                        lookup.symbol.ident_idx.idx,
+                        @intFromEnum(lookup.layout_idx),
+                        @intFromEnum(bound_expr_id),
+                    },
+                );
             } else if (!self.in_proc) {
                 std.debug.panic(
                     "generateCall.lookup unresolved callable at top-level symbol={} module={} ident={} layout={}",
@@ -6460,109 +6505,55 @@ fn emitForwardedCaptures(self: *Self, func_idx: u32) Allocator.Error!void {
 /// Examine a function expression to see if calling it returns a closure.
 /// For chained calls, we need to know statically what the inner call returns.
 fn returnedClosureOfCallableExpr(self: *const Self, callable_expr_id: LirExprId) ?ReturnedClosureInfo {
-    const callable_expr = self.store.getExpr(callable_expr_id);
-    switch (callable_expr) {
-        .closure => |c| {
-            const lam = self.store.getExpr(self.store.getClosureData(c).lambda);
-            return switch (lam) {
-                .lambda => |l| self.getClosureInfoFromExpr(l.body),
-                else => null,
-            };
-        },
-        .lambda => |l| {
-            return self.getClosureInfoFromExpr(l.body);
-        },
-        .nominal => |nom| {
-            return self.returnedClosureOfCallableExpr(nom.backing_expr);
-        },
-        else => return null,
-    }
+    const returned_expr_id = self.applyCallableExprOnce(callable_expr_id, 0) orelse return null;
+    return self.getClosureInfoFromExprWithExpectation(returned_expr_id, false);
 }
 
 fn getReturnedClosureInfo(self: *const Self, fn_expr_id: LirExprId) ?ReturnedClosureInfo {
-    const fn_expr = self.store.getExpr(fn_expr_id);
-    switch (fn_expr) {
-        .lambda => |lambda| {
-            return self.getClosureInfoFromExpr(lambda.body);
-        },
-        .closure => |closure_id| {
+    return self.returnedClosureOfCallableExpr(fn_expr_id);
+}
+
+fn applyCallableExprOnce(self: *const Self, expr_id: LirExprId, depth: u16) ?LirExprId {
+    if (depth > 64) return null;
+
+    const expr = self.store.getExpr(expr_id);
+    return switch (expr) {
+        .lambda => |lam| lam.body,
+        .closure => |closure_id| blk: {
             const closure = self.store.getClosureData(closure_id);
-            const inner = self.store.getExpr(closure.lambda);
-            if (inner == .lambda) {
-                return self.getClosureInfoFromExpr(inner.lambda.body);
-            }
-            return null;
+            break :blk self.applyCallableExprOnce(closure.lambda, depth + 1);
         },
-        .nominal => |nom| {
-            return self.getReturnedClosureInfo(nom.backing_expr);
-        },
-        .call => |inner_call| {
-            // When fn_expr is itself a .call, the recursive generateCall
-            // dispatches on the inner closure, so the result on the stack
-            // is the return value of THAT closure (one level deeper).
-            const inner_fn_expr = self.store.getExpr(inner_call.fn_expr);
-            if (inner_fn_expr == .call) {
-                const dispatched = self.getReturnedClosureInfo(inner_call.fn_expr) orelse return null;
-                // The dispatch calls `dispatched`, so the result is what `dispatched` returns
-                const dispatch_expr = self.store.getExpr(dispatched.lambda_expr);
-                return switch (dispatch_expr) {
-                    .closure => |c| blk: {
-                        const lam = self.store.getExpr(self.store.getClosureData(c).lambda);
-                        break :blk if (lam == .lambda) self.getClosureInfoFromExpr(lam.lambda.body) else null;
-                    },
-                    .lambda => |l| self.getClosureInfoFromExpr(l.body),
-                    else => null,
-                };
-            } else {
-                return self.getReturnedClosureInfo(inner_call.fn_expr);
-            }
-        },
-        .lookup => |lookup| {
+        .nominal => |nom| self.applyCallableExprOnce(nom.backing_expr, depth + 1),
+        .block => |b| self.applyCallableExprOnce(b.final_expr, depth + 1),
+        .lookup => |lookup| blk: {
             const key: u64 = @bitCast(lookup.symbol);
             if (self.closure_values.get(key)) |cv| {
-                if (self.returnedClosureOfCallableExpr(cv.lambda_expr)) |returned| {
-                    return returned;
-                }
-                return self.getReturnedClosureInfo(cv.lambda_expr);
+                break :blk self.applyCallableExprOnce(cv.lambda_expr, depth + 1);
             }
-            // Follow the symbol definition to find what calling this function returns
-            if (self.store.getSymbolDef(lookup.symbol)) |def_id| {
-                const def_expr = self.store.getExpr(def_id);
-                if (def_expr == .call) {
-                    // Symbol is bound to a call result (e.g., add5 = make_adder(5)).
-                    // First find what the call returns — that's what this symbol IS.
-                    const call_result_info = self.getReturnedClosureInfo(def_expr.call.fn_expr) orelse return null;
-                    // call_result_info describes the closure this symbol evaluates to.
-                    // Now find what CALLING that closure returns.
-                    const inner_expr = self.store.getExpr(call_result_info.lambda_expr);
-                    const result = switch (inner_expr) {
-                        .closure => |c| blk: {
-                            const lam = self.store.getExpr(self.store.getClosureData(c).lambda);
-                            break :blk if (lam == .lambda) self.getClosureInfoFromExpr(lam.lambda.body) else null;
-                        },
-                        .lambda => |l| self.getClosureInfoFromExpr(l.body),
-                        else => null,
-                    };
-                    return result;
-                }
-                if (self.getClosureInfoFromExpr(def_id)) |callable_info| {
-                    if (self.returnedClosureOfCallableExpr(callable_info.lambda_expr)) |returned| {
-                        return returned;
-                    }
-                }
-                return self.getReturnedClosureInfo(def_id);
+            if (self.local_binding_exprs.get(key)) |bound_expr_id| {
+                break :blk self.applyCallableExprOnce(bound_expr_id, depth + 1);
             }
-            return null;
+            const def_expr_id = self.store.getSymbolDef(lookup.symbol) orelse break :blk null;
+            break :blk self.applyCallableExprOnce(def_expr_id, depth + 1);
         },
-        .block => |b| {
-            return self.getReturnedClosureInfo(b.final_expr);
+        .call => |inner_call| blk: {
+            const first_application = self.applyCallableExprOnce(inner_call.fn_expr, depth + 1) orelse break :blk null;
+            break :blk self.applyCallableExprOnce(first_application, depth + 1);
         },
-        else => return null,
-    }
+        else => null,
+    };
 }
 
 /// Extract closure info from an expression (the body/return value of a lambda).
 fn getClosureInfoFromExpr(self: *const Self, expr_id: LirExprId) ?ReturnedClosureInfo {
+    return self.getClosureInfoFromExprWithExpectation(expr_id, false);
+}
+
+fn getClosureInfoFromExprWithExpectation(
+    self: *const Self,
+    expr_id: LirExprId,
+    expect_callable: bool,
+) ?ReturnedClosureInfo {
     const expr = self.store.getExpr(expr_id);
     switch (expr) {
         .lambda => {
@@ -6581,10 +6572,67 @@ fn getClosureInfoFromExpr(self: *const Self, expr_id: LirExprId) ?ReturnedClosur
             };
         },
         .block => |b| {
-            return self.getClosureInfoFromExpr(b.final_expr);
+            return self.getClosureInfoFromExprWithExpectation(
+                b.final_expr,
+                expect_callable or self.isFunctionLayout(b.result_layout),
+            );
         },
-        .call => {
-            return self.getReturnedClosureInfo(expr_id);
+        .call => |call| {
+            if (!self.isFunctionLayout(call.ret_layout)) return null;
+            // A call expression's value is the result of applying call.fn_expr.
+            // Derive closure info from that application (not by re-applying the result).
+            return self.getReturnedClosureInfo(call.fn_expr);
+        },
+        .lookup => |lk| {
+            const key: u64 = @bitCast(lk.symbol);
+            const lookup_expects_callable = expect_callable or self.isFunctionLayout(lk.layout_idx);
+            if (self.closure_values.get(key)) |cv| {
+                return .{
+                    .representation = cv.representation,
+                    .lambda_expr = cv.lambda_expr,
+                    .captures = cv.captures,
+                };
+            }
+            if (self.local_binding_exprs.get(key)) |bound_expr_id| {
+                return self.getClosureInfoFromExprWithExpectation(bound_expr_id, lookup_expects_callable);
+            }
+            if (self.store.getSymbolDef(lk.symbol)) |def_id| {
+                return self.getClosureInfoFromExprWithExpectation(def_id, lookup_expects_callable);
+            }
+            return null;
+        },
+        .nominal => |nom| {
+            return self.getClosureInfoFromExprWithExpectation(nom.backing_expr, expect_callable);
+        },
+        else => return null,
+    }
+}
+
+fn getClosureInfoFromExpectedCallableExpr(self: *const Self, expr_id: LirExprId, depth: u16) ?ReturnedClosureInfo {
+    if (depth > 64) return null;
+
+    const expr = self.store.getExpr(expr_id);
+    switch (expr) {
+        .lambda => {
+            return .{
+                .representation = .{ .no_captures = {} },
+                .lambda_expr = expr_id,
+                .captures = LIR.LirCaptureSpan.empty(),
+            };
+        },
+        .closure => |closure_id| {
+            const closure = self.store.getClosureData(closure_id);
+            return .{
+                .representation = closure.representation,
+                .lambda_expr = expr_id,
+                .captures = closure.captures,
+            };
+        },
+        .block => |b| {
+            return self.getClosureInfoFromExpectedCallableExpr(b.final_expr, depth + 1);
+        },
+        .call => |call| {
+            return self.getReturnedClosureInfo(call.fn_expr);
         },
         .lookup => |lk| {
             const key: u64 = @bitCast(lk.symbol);
@@ -6595,13 +6643,16 @@ fn getClosureInfoFromExpr(self: *const Self, expr_id: LirExprId) ?ReturnedClosur
                     .captures = cv.captures,
                 };
             }
+            if (self.local_binding_exprs.get(key)) |bound_expr_id| {
+                return self.getClosureInfoFromExpectedCallableExpr(bound_expr_id, depth + 1);
+            }
             if (self.store.getSymbolDef(lk.symbol)) |def_id| {
-                return self.getClosureInfoFromExpr(def_id);
+                return self.getClosureInfoFromExpectedCallableExpr(def_id, depth + 1);
             }
             return null;
         },
         .nominal => |nom| {
-            return self.getClosureInfoFromExpr(nom.backing_expr);
+            return self.getClosureInfoFromExpectedCallableExpr(nom.backing_expr, depth + 1);
         },
         else => return null,
     }
@@ -6609,8 +6660,10 @@ fn getClosureInfoFromExpr(self: *const Self, expr_id: LirExprId) ?ReturnedClosur
 
 /// After binding a value to `symbol`, register callable metadata (if any) so
 /// lookup-call dispatch can resolve synthetic/local symbols without symbol defs.
-fn maybeRegisterCallableBinding(self: *Self, symbol: Symbol, expr_id: LirExprId) Allocator.Error!void {
-    const closure_info = self.getClosureInfoFromExpr(expr_id) orelse return;
+fn maybeRegisterCallableBinding(self: *Self, symbol: Symbol, expr_id: LirExprId, expected_layout: layout.Idx) Allocator.Error!void {
+    if (!self.isFunctionLayout(expected_layout)) return;
+    const closure_info = self.getClosureInfoFromExprWithExpectation(expr_id, true) orelse
+        self.getClosureInfoFromExpectedCallableExpr(expr_id, 0) orelse return;
     const key: u64 = @bitCast(symbol);
 
     var bound_symbol: ?Symbol = null;
