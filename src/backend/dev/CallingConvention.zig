@@ -159,6 +159,8 @@ pub fn CallBuilder(comptime EmitType: type) type {
 
     // Maximum stack arguments we support (should be plenty for any real call)
     const MAX_STACK_ARGS = 16;
+    // Maximum number of total args we support in packed-call mode.
+    const MAX_PACKED_ARGS = 32;
 
     return struct {
         const Self = @This();
@@ -169,6 +171,9 @@ pub fn CallBuilder(comptime EmitType: type) type {
         float_arg_index: usize = 0,
         stack_arg_count: usize = 0,
         stack_args: [MAX_STACK_ARGS]ArgSource = undefined,
+        packed_arg_count: usize = 0,
+        packed_args: [MAX_PACKED_ARGS]ArgSource = undefined,
+        has_float_args: bool = false,
         return_by_ptr: bool = false,
         /// RBP-relative offset where R12 is saved (only used on Windows x64)
         /// Set via saveR12 before adding arguments that might clobber R12
@@ -221,8 +226,15 @@ pub fn CallBuilder(comptime EmitType: type) type {
             try self.addLeaArg(CC_EMIT.BASE_PTR, offset);
         }
 
+        fn recordPackedArg(self: *Self, src: ArgSource) void {
+            std.debug.assert(self.packed_arg_count < MAX_PACKED_ARGS);
+            self.packed_args[self.packed_arg_count] = src;
+            self.packed_arg_count += 1;
+        }
+
         /// Add argument from a general register
         pub fn addRegArg(self: *Self, src_reg: GeneralReg) !void {
+            self.recordPackedArg(.{ .from_reg = src_reg });
             if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
                 self.reg_args[self.reg_arg_count] = .{
                     .dst_index = @intCast(self.int_arg_index),
@@ -240,6 +252,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
 
         /// Add argument by loading a pointer (LEA) to a stack location
         pub fn addLeaArg(self: *Self, base_reg: GeneralReg, offset: i32) !void {
+            self.recordPackedArg(.{ .from_lea = .{ .base = base_reg, .offset = offset } });
             if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
                 self.reg_args[self.reg_arg_count] = .{
                     .dst_index = @intCast(self.int_arg_index),
@@ -257,6 +270,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
 
         /// Add argument by loading from stack memory
         pub fn addMemArg(self: *Self, base_reg: GeneralReg, offset: i32) !void {
+            self.recordPackedArg(.{ .from_mem = .{ .base = base_reg, .offset = offset } });
             if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
                 self.reg_args[self.reg_arg_count] = .{
                     .dst_index = @intCast(self.int_arg_index),
@@ -274,6 +288,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
 
         /// Add immediate value argument
         pub fn addImmArg(self: *Self, value: i64) !void {
+            self.recordPackedArg(.{ .from_imm = value });
             if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
                 self.reg_args[self.reg_arg_count] = .{
                     .dst_index = @intCast(self.int_arg_index),
@@ -313,6 +328,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
         ///              A float arg at position 1 goes in XMM1, consuming both int and float slots.
         /// System V: Uses separate float register pool (XMM0-7 independent of integer regs).
         pub fn addFloatRegArg(self: *Self, src_reg: FloatReg, is_f64: bool) !void {
+            self.has_float_args = true;
             if (comptime is_windows) {
                 // Windows: float args use same position as int args
                 // XMM0 for arg 0, XMM1 for arg 1, etc.
@@ -363,6 +379,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// Windows x64: Uses position-based registers (XMM0-3 mirror arg positions 0-3).
         /// System V: Uses separate float register pool (XMM0-7).
         pub fn addFloatMemArg(self: *Self, base_reg: GeneralReg, offset: i32, is_f64: bool) !void {
+            self.has_float_args = true;
             if (comptime is_windows) {
                 // Windows: float args use same position as int args
                 if (self.int_arg_index < CC_EMIT.FLOAT_PARAM_REGS.len) {
@@ -465,10 +482,15 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     try self.emit.strRegMemUoff(.w64, CC_EMIT.SCRATCH_REG, CC_EMIT.STACK_PTR, uoffset);
                 },
                 .from_lea => |lea| {
-                    if (lea.offset >= 0)
-                        try self.emit.addRegRegImm12(.w64, CC_EMIT.SCRATCH_REG, lea.base, @intCast(lea.offset))
-                    else
+                    if (lea.offset >= 0 and lea.offset <= 4095) {
+                        try self.emit.addRegRegImm12(.w64, CC_EMIT.SCRATCH_REG, lea.base, @intCast(lea.offset));
+                    } else if (lea.offset < 0 and -lea.offset <= 4095) {
                         try self.emit.subRegRegImm12(.w64, CC_EMIT.SCRATCH_REG, lea.base, @intCast(-lea.offset));
+                    } else {
+                        // Offset too large for imm12: materialize signed offset and add.
+                        try self.emit.movRegImm64(CC_EMIT.SCRATCH_REG, @bitCast(@as(i64, lea.offset)));
+                        try self.emit.addRegRegReg(.w64, CC_EMIT.SCRATCH_REG, lea.base, CC_EMIT.SCRATCH_REG);
+                    }
                     try self.emit.strRegMemUoff(.w64, CC_EMIT.SCRATCH_REG, CC_EMIT.STACK_PTR, uoffset);
                 },
                 .from_mem => |mem| {
@@ -794,6 +816,211 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     try self.emit.addRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));
                 }
 
+                if (self.r12_save_offset) |offset| {
+                    try self.emit.movRegMem(.w64, .R12, CC_EMIT.BASE_PTR, offset);
+                }
+            } else if (comptime is_aarch64) {
+                if (total_space > 0) {
+                    try self.emit.addRegRegImm12(.w64, CC_EMIT.STACK_PTR, CC_EMIT.STACK_PTR, @intCast(total_space));
+                }
+            }
+        }
+
+        fn emitArgSourceToStackX86(self: *Self, arg: ArgSource, stack_offset: i32) !void {
+            switch (arg) {
+                .from_reg => |reg| {
+                    try self.emit.movMemReg(.w64, CC_EMIT.STACK_PTR, stack_offset, reg);
+                },
+                .from_imm => |value| {
+                    try self.emit.movRegImm64(CC_EMIT.SCRATCH_REG, value);
+                    try self.emit.movMemReg(.w64, CC_EMIT.STACK_PTR, stack_offset, CC_EMIT.SCRATCH_REG);
+                },
+                .from_lea => |lea| {
+                    try self.emit.leaRegMem(CC_EMIT.SCRATCH_REG, lea.base, lea.offset);
+                    try self.emit.movMemReg(.w64, CC_EMIT.STACK_PTR, stack_offset, CC_EMIT.SCRATCH_REG);
+                },
+                .from_mem => |mem| {
+                    try self.emit.movRegMem(.w64, CC_EMIT.SCRATCH_REG, mem.base, mem.offset);
+                    try self.emit.movMemReg(.w64, CC_EMIT.STACK_PTR, stack_offset, CC_EMIT.SCRATCH_REG);
+                },
+            }
+        }
+
+        fn emitArgSourceToStackAarch64(self: *Self, arg: ArgSource, stack_word_offset: u12) !void {
+            try self.emitStackArgAarch64(arg, stack_word_offset);
+        }
+
+        /// Pack all added integer/pointer args into a contiguous stack struct and call `fn_addr`
+        /// with a single pointer argument to that struct.
+        pub fn callPacked(self: *Self, fn_addr: usize) !void {
+            std.debug.assert(!self.has_float_args);
+
+            const pack_words: usize = if (self.packed_arg_count == 0) 1 else self.packed_arg_count;
+            const pack_bytes: u32 = @intCast(pack_words * 8);
+            const total_unaligned: u32 = CC_EMIT.SHADOW_SPACE + pack_bytes;
+            const total_space: u32 = (total_unaligned + 15) & ~@as(u32, 15);
+            const pack_base: i32 = @intCast(CC_EMIT.SHADOW_SPACE);
+
+            std.debug.assert(total_space % 16 == 0);
+
+            if (comptime is_x86_64) {
+                if (total_space > 0) {
+                    try self.emit.subRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));
+                }
+
+                if (self.packed_arg_count == 0) {
+                    try self.emit.movRegImm64(CC_EMIT.SCRATCH_REG, 0);
+                    try self.emit.movMemReg(.w64, CC_EMIT.STACK_PTR, pack_base, CC_EMIT.SCRATCH_REG);
+                } else {
+                    // Preserve values sourced from the scratch register before any
+                    // arg emission that may clobber that register.
+                    for (self.packed_args[0..self.packed_arg_count], 0..) |arg, i| {
+                        if (arg == .from_reg and arg.from_reg == CC_EMIT.SCRATCH_REG) {
+                            const stack_offset: i32 = pack_base + @as(i32, @intCast(i * 8));
+                            try self.emit.movMemReg(.w64, CC_EMIT.STACK_PTR, stack_offset, CC_EMIT.SCRATCH_REG);
+                        }
+                    }
+                    for (self.packed_args[0..self.packed_arg_count], 0..) |arg, i| {
+                        if (arg == .from_reg and arg.from_reg == CC_EMIT.SCRATCH_REG) continue;
+                        const stack_offset: i32 = pack_base + @as(i32, @intCast(i * 8));
+                        try self.emitArgSourceToStackX86(arg, stack_offset);
+                    }
+                }
+            } else if (comptime is_aarch64) {
+                if (total_space > 0) {
+                    try self.emit.subRegRegImm12(.w64, CC_EMIT.STACK_PTR, CC_EMIT.STACK_PTR, @intCast(total_space));
+                }
+
+                const pack_word_base: u12 = @intCast(CC_EMIT.SHADOW_SPACE / 8);
+                if (self.packed_arg_count == 0) {
+                    try self.emit.movRegImm64(CC_EMIT.SCRATCH_REG, 0);
+                    try self.emit.strRegMemUoff(.w64, CC_EMIT.SCRATCH_REG, .ZRSP, pack_word_base);
+                } else {
+                    // Preserve scratch-sourced args before any helper path clobbers scratch.
+                    for (self.packed_args[0..self.packed_arg_count], 0..) |arg, i| {
+                        if (arg == .from_reg and arg.from_reg == CC_EMIT.SCRATCH_REG) {
+                            try self.emitArgSourceToStackAarch64(arg, @intCast(pack_word_base + i));
+                        }
+                    }
+                    for (self.packed_args[0..self.packed_arg_count], 0..) |arg, i| {
+                        if (arg == .from_reg and arg.from_reg == CC_EMIT.SCRATCH_REG) continue;
+                        try self.emitArgSourceToStackAarch64(arg, @intCast(pack_word_base + i));
+                    }
+                }
+            }
+
+            // First parameter: pointer to packed arg struct
+            try self.emitArgInst(CC_EMIT.PARAM_REGS[0], .{
+                .from_lea = .{ .base = CC_EMIT.STACK_PTR, .offset = pack_base },
+            });
+
+            if (comptime is_aarch64) {
+                try self.emit.movRegImm64(CC_EMIT.SCRATCH_REG, fn_addr);
+                try self.emit.blrReg(CC_EMIT.SCRATCH_REG);
+            } else {
+                try self.emit.movRegImm64(CC_EMIT.SCRATCH_REG, @bitCast(@as(i64, @intCast(fn_addr))));
+                try self.emit.callReg(CC_EMIT.SCRATCH_REG);
+            }
+
+            if (comptime is_x86_64) {
+                if (total_space > 0) {
+                    try self.emit.addRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));
+                }
+                if (self.r12_save_offset) |offset| {
+                    try self.emit.movRegMem(.w64, .R12, CC_EMIT.BASE_PTR, offset);
+                }
+            } else if (comptime is_aarch64) {
+                if (total_space > 0) {
+                    try self.emit.addRegRegImm12(.w64, CC_EMIT.STACK_PTR, CC_EMIT.STACK_PTR, @intCast(total_space));
+                }
+            }
+        }
+
+        /// Packed-arg variant of `callRelocatable`.
+        pub fn callRelocatablePacked(self: *Self, symbol_name: []const u8, allocator: std.mem.Allocator, relocations: *std.ArrayList(Relocation)) !void {
+            std.debug.assert(!self.has_float_args);
+
+            const pack_words: usize = if (self.packed_arg_count == 0) 1 else self.packed_arg_count;
+            const pack_bytes: u32 = @intCast(pack_words * 8);
+            const total_unaligned: u32 = CC_EMIT.SHADOW_SPACE + pack_bytes;
+            const total_space: u32 = (total_unaligned + 15) & ~@as(u32, 15);
+            const pack_base: i32 = @intCast(CC_EMIT.SHADOW_SPACE);
+
+            std.debug.assert(total_space % 16 == 0);
+
+            if (comptime is_x86_64) {
+                if (total_space > 0) {
+                    try self.emit.subRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));
+                }
+
+                if (self.packed_arg_count == 0) {
+                    try self.emit.movRegImm64(CC_EMIT.SCRATCH_REG, 0);
+                    try self.emit.movMemReg(.w64, CC_EMIT.STACK_PTR, pack_base, CC_EMIT.SCRATCH_REG);
+                } else {
+                    // Preserve values sourced from the scratch register before any
+                    // arg emission that may clobber that register.
+                    for (self.packed_args[0..self.packed_arg_count], 0..) |arg, i| {
+                        if (arg == .from_reg and arg.from_reg == CC_EMIT.SCRATCH_REG) {
+                            const stack_offset: i32 = pack_base + @as(i32, @intCast(i * 8));
+                            try self.emit.movMemReg(.w64, CC_EMIT.STACK_PTR, stack_offset, CC_EMIT.SCRATCH_REG);
+                        }
+                    }
+                    for (self.packed_args[0..self.packed_arg_count], 0..) |arg, i| {
+                        if (arg == .from_reg and arg.from_reg == CC_EMIT.SCRATCH_REG) continue;
+                        const stack_offset: i32 = pack_base + @as(i32, @intCast(i * 8));
+                        try self.emitArgSourceToStackX86(arg, stack_offset);
+                    }
+                }
+            } else if (comptime is_aarch64) {
+                if (total_space > 0) {
+                    try self.emit.subRegRegImm12(.w64, CC_EMIT.STACK_PTR, CC_EMIT.STACK_PTR, @intCast(total_space));
+                }
+
+                const pack_word_base: u12 = @intCast(CC_EMIT.SHADOW_SPACE / 8);
+                if (self.packed_arg_count == 0) {
+                    try self.emit.movRegImm64(CC_EMIT.SCRATCH_REG, 0);
+                    try self.emit.strRegMemUoff(.w64, CC_EMIT.SCRATCH_REG, .ZRSP, pack_word_base);
+                } else {
+                    // Preserve scratch-sourced args before any helper path clobbers scratch.
+                    for (self.packed_args[0..self.packed_arg_count], 0..) |arg, i| {
+                        if (arg == .from_reg and arg.from_reg == CC_EMIT.SCRATCH_REG) {
+                            try self.emitArgSourceToStackAarch64(arg, @intCast(pack_word_base + i));
+                        }
+                    }
+                    for (self.packed_args[0..self.packed_arg_count], 0..) |arg, i| {
+                        if (arg == .from_reg and arg.from_reg == CC_EMIT.SCRATCH_REG) continue;
+                        try self.emitArgSourceToStackAarch64(arg, @intCast(pack_word_base + i));
+                    }
+                }
+            }
+
+            try self.emitArgInst(CC_EMIT.PARAM_REGS[0], .{
+                .from_lea = .{ .base = CC_EMIT.STACK_PTR, .offset = pack_base },
+            });
+
+            const code_offset = self.emit.buf.items.len;
+            if (comptime is_aarch64) {
+                try self.emit.bl(0);
+                try relocations.append(allocator, .{
+                    .linked_function = .{
+                        .offset = @intCast(code_offset),
+                        .name = symbol_name,
+                    },
+                });
+            } else {
+                try self.emit.callRel32(0);
+                try relocations.append(allocator, .{
+                    .linked_function = .{
+                        .offset = @intCast(code_offset + 1),
+                        .name = symbol_name,
+                    },
+                });
+            }
+
+            if (comptime is_x86_64) {
+                if (total_space > 0) {
+                    try self.emit.addRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));
+                }
                 if (self.r12_save_offset) |offset| {
                     try self.emit.movRegMem(.w64, .R12, CC_EMIT.BASE_PTR, offset);
                 }

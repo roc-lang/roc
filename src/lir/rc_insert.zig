@@ -130,8 +130,7 @@ pub const RcInsertPass = struct {
     }
 
     /// Sum all use counts for a symbol across every layout key.
-    fn sumSymbolUses(self: *RcInsertPass, uses: *const std.AutoHashMap(SymbolUseKey, u32), symbol: Symbol) u32 {
-        _ = self;
+    fn sumSymbolUses(_: *RcInsertPass, uses: *const std.AutoHashMap(SymbolUseKey, u32), symbol: Symbol) u32 {
         var total: u32 = 0;
         var it = uses.iterator();
         while (it.next()) |entry| {
@@ -143,8 +142,7 @@ pub const RcInsertPass = struct {
     }
 
     /// Sum all signed RC adjustments for a symbol across every layout key.
-    fn sumSymbolAdj(self: *RcInsertPass, adjs: *const std.AutoHashMap(SymbolUseKey, i32), symbol: Symbol) i32 {
-        _ = self;
+    fn sumSymbolAdj(_: *RcInsertPass, adjs: *const std.AutoHashMap(SymbolUseKey, i32), symbol: Symbol) i32 {
         var total: i32 = 0;
         var it = adjs.iterator();
         while (it.next()) |entry| {

@@ -52,6 +52,8 @@ const strDropSuffix = str.strDropSuffix;
 const strWithAsciiLowercased = str.strWithAsciiLowercased;
 const strWithAsciiUppercased = str.strWithAsciiUppercased;
 const fromUtf8Lossy = str.fromUtf8Lossy;
+const fromUtf8C = str.fromUtf8C;
+const FromUtf8Try = str.FromUtf8Try;
 
 const listConcat = list.listConcat;
 const listPrepend = list.listPrepend;
@@ -215,6 +217,13 @@ pub fn roc_builtins_str_from_utf8_lossy(out: *RocStr, list_bytes: ?[*]u8, list_l
     out.* = fromUtf8Lossy(l, roc_ops);
 }
 
+/// Wrapper: fromUtf8C(RocList, UpdateMode, *RocOps) -> FromUtf8Try
+pub fn roc_builtins_str_from_utf8(out: [*]u8, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    const result = fromUtf8C(l, .Immutable, roc_ops);
+    @as(*FromUtf8Try, @ptrCast(@alignCast(out))).* = result;
+}
+
 /// Wrapper for str_with_prefix: strConcatC(prefix, string, *RocOps) -> RocStr
 pub fn roc_builtins_str_with_prefix(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, pfx_bytes: ?[*]u8, pfx_len: usize, pfx_cap: usize, roc_ops: *RocOps) callconv(.c) void {
     const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
@@ -327,6 +336,95 @@ pub fn roc_builtins_list_release_excess_capacity(out: *RocList, list_bytes: ?[*]
     out.* = listReleaseExcessCapacity(l, alignment, element_width, elements_refcounted, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), .Immutable, roc_ops);
 }
 
+/// Context passed through the opaque `cmp_data` pointer to the sort comparison trampoline.
+const SortCmpContext = extern struct {
+    roc_fn_addr: usize,
+    element_width: usize,
+};
+
+/// C-callable comparison trampoline for listSortWith.
+/// Loads element values from pointers and calls the compiled Roc comparison function.
+fn sortCmpTrampoline(cmp_data: ?[*]u8, a_ptr: ?[*]u8, b_ptr: ?[*]u8) callconv(.c) u8 {
+    const ctx: *const SortCmpContext = @ptrCast(@alignCast(cmp_data));
+    const ew = ctx.element_width;
+
+    if (ew <= 8) {
+        const cmp_fn: *const fn (u64, u64) callconv(.c) u8 = @ptrFromInt(ctx.roc_fn_addr);
+        var a_val: u64 = 0;
+        var b_val: u64 = 0;
+        if (a_ptr) |ap| @memcpy(@as([*]u8, @ptrCast(&a_val))[0..ew], ap[0..ew]);
+        if (b_ptr) |bp| @memcpy(@as([*]u8, @ptrCast(&b_val))[0..ew], bp[0..ew]);
+        return cmp_fn(a_val, b_val);
+    } else if (ew <= 16) {
+        const cmp_fn: *const fn (u128, u128) callconv(.c) u8 = @ptrFromInt(ctx.roc_fn_addr);
+        var a_val: u128 = 0;
+        var b_val: u128 = 0;
+        if (a_ptr) |ap| @memcpy(@as([*]u8, @ptrCast(&a_val))[0..ew], ap[0..ew]);
+        if (b_ptr) |bp| @memcpy(@as([*]u8, @ptrCast(&b_val))[0..ew], bp[0..ew]);
+        return cmp_fn(a_val, b_val);
+    } else {
+        const cmp_fn: *const fn (?[*]u8, ?[*]u8) callconv(.c) u8 = @ptrFromInt(ctx.roc_fn_addr);
+        return cmp_fn(a_ptr, b_ptr);
+    }
+}
+
+/// Wrapper: listSortWith — sorts a list using a compiled Roc comparison function.
+/// Uses insertion sort to avoid ABI complexity while keeping deterministic behavior.
+pub fn roc_builtins_list_sort_with(
+    out: *RocList,
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    cmp_fn_addr: usize,
+    alignment: u32,
+    element_width: usize,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    if (list_len < 2) {
+        out.* = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+        return;
+    }
+
+    const total_bytes = list_len * element_width;
+    const sorted_bytes = allocateWithRefcountC(total_bytes, alignment, false, roc_ops);
+    if (list_bytes) |src| {
+        @memcpy(sorted_bytes[0..total_bytes], src[0..total_bytes]);
+    }
+
+    const cmp_ctx = SortCmpContext{
+        .roc_fn_addr = cmp_fn_addr,
+        .element_width = element_width,
+    };
+
+    var temp_buf: [256]u8 align(16) = undefined;
+
+    var i: usize = 1;
+    while (i < list_len) : (i += 1) {
+        const elem_i = sorted_bytes + i * element_width;
+        @memcpy(temp_buf[0..element_width], elem_i[0..element_width]);
+
+        var j: usize = i;
+        while (j > 0) {
+            const elem_j_minus_1 = sorted_bytes + (j - 1) * element_width;
+            const cmp_result = sortCmpTrampoline(@ptrCast(@constCast(&cmp_ctx)), &temp_buf, elem_j_minus_1);
+            if (cmp_result != 2) break;
+
+            const elem_j = sorted_bytes + j * element_width;
+            @memcpy(elem_j[0..element_width], elem_j_minus_1[0..element_width]);
+            j -= 1;
+        }
+
+        const insert_pos = sorted_bytes + j * element_width;
+        @memcpy(insert_pos[0..element_width], temp_buf[0..element_width]);
+    }
+
+    out.* = RocList{
+        .bytes = sorted_bytes,
+        .length = list_len,
+        .capacity_or_alloc_ptr = list_len,
+    };
+}
+
 /// Wrapper: decref a List(Str), including decref of each string element when unique
 pub fn roc_builtins_list_decref_str(list_bytes: ?[*]u8, list_len: usize, list_cap: usize, roc_ops: *RocOps) callconv(.c) void {
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
@@ -351,18 +449,24 @@ pub fn roc_builtins_allocate_with_refcount(data_bytes: usize, element_alignment:
 }
 
 /// Re-export increfDataPtrC
-pub fn roc_builtins_incref_data_ptr(ptr: [*]u8, amount: isize, roc_ops: *RocOps) callconv(.c) void {
-    increfDataPtrC(ptr, amount, roc_ops);
+pub fn roc_builtins_incref_data_ptr(ptr: ?[*]u8, amount: isize, roc_ops: *RocOps) callconv(.c) void {
+    if (ptr) |p| {
+        increfDataPtrC(p, amount, roc_ops);
+    }
 }
 
 /// Re-export decrefDataPtrC
-pub fn roc_builtins_decref_data_ptr(ptr: [*]u8, alignment: u32, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
-    decrefDataPtrC(ptr, alignment, elements_refcounted, roc_ops);
+pub fn roc_builtins_decref_data_ptr(ptr: ?[*]u8, alignment: u32, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
+    if (ptr) |p| {
+        decrefDataPtrC(p, alignment, elements_refcounted, roc_ops);
+    }
 }
 
 /// Re-export freeDataPtrC
-pub fn roc_builtins_free_data_ptr(ptr: [*]u8, alignment: u32, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
-    freeDataPtrC(ptr, alignment, elements_refcounted, roc_ops);
+pub fn roc_builtins_free_data_ptr(ptr: ?[*]u8, alignment: u32, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
+    if (ptr) |p| {
+        freeDataPtrC(p, alignment, elements_refcounted, roc_ops);
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -898,4 +1002,358 @@ pub fn roc_builtins_float_from_str(
         8 => writeFloatParseResult(f64, out, disc_offset, roc_str),
         else => unreachable,
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Packed-Argument Adapters
+// ═══════════════════════════════════════════════════════════════════════════
+
+fn packedReturnType(comptime func: anytype) type {
+    const fn_info = @typeInfo(@TypeOf(func)).@"fn";
+    return fn_info.return_type orelse void;
+}
+
+fn pointerFromWord(comptime T: type, raw: usize) T {
+    @setRuntimeSafety(false);
+    return @ptrFromInt(raw);
+}
+
+fn slotToArg(comptime T: type, raw: usize) T {
+    return switch (@typeInfo(T)) {
+        .bool => raw != 0,
+        .int => |info| blk: {
+            if (info.bits > @bitSizeOf(usize)) {
+                @compileError("packed builtin adapter does not support integer args wider than usize");
+            }
+            if (info.signedness == .signed) {
+                const Unsigned = std.meta.Int(.unsigned, info.bits);
+                const bits: Unsigned = @truncate(raw);
+                break :blk @bitCast(bits);
+            } else {
+                break :blk @as(T, @truncate(raw));
+            }
+        },
+        .float => blk: {
+            if (T == f32) {
+                const bits: u32 = @truncate(raw);
+                break :blk @bitCast(bits);
+            }
+            if (T == f64) {
+                const bits: u64 = @intCast(raw);
+                break :blk @bitCast(bits);
+            }
+            @compileError("unsupported packed builtin float arg type");
+        },
+        .pointer => pointerFromWord(T, raw),
+        .optional => |opt| blk: {
+            if (raw == 0) break :blk @as(T, null);
+            break :blk switch (@typeInfo(opt.child)) {
+                .pointer => @as(T, pointerFromWord(opt.child, raw)),
+                else => @compileError("packed builtin optional args only support pointer child types"),
+            };
+        },
+        .@"enum" => @enumFromInt(@as(std.meta.Tag(T), @truncate(raw))),
+        else => @compileError("unsupported packed builtin arg type"),
+    };
+}
+
+fn invokePacked(comptime func: anytype, args: [*]const usize) packedReturnType(func) {
+    const fn_type = @TypeOf(func);
+    const fn_info = @typeInfo(fn_type).@"fn";
+    var tuple: std.meta.ArgsTuple(fn_type) = undefined;
+
+    inline for (fn_info.params, 0..) |param, i| {
+        const ParamTy = param.type orelse @compileError("packed adapter requires concrete parameter types");
+        @field(tuple, std.fmt.comptimePrint("{d}", .{i})) = slotToArg(ParamTy, args[i]);
+    }
+
+    return @call(.auto, func, tuple);
+}
+/// Packed-arg adapters: each builtin receives a single pointer to a word-packed arg struct.
+pub fn roc_builtins_str_to_utf8_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_str_to_utf8) {
+    return invokePacked(roc_builtins_str_to_utf8, args);
+}
+
+pub fn roc_builtins_str_concat_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_str_concat) {
+    return invokePacked(roc_builtins_str_concat, args);
+}
+
+pub fn roc_builtins_str_contains_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_str_contains) {
+    return invokePacked(roc_builtins_str_contains, args);
+}
+
+pub fn roc_builtins_str_starts_with_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_str_starts_with) {
+    return invokePacked(roc_builtins_str_starts_with, args);
+}
+
+pub fn roc_builtins_str_ends_with_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_str_ends_with) {
+    return invokePacked(roc_builtins_str_ends_with, args);
+}
+
+pub fn roc_builtins_str_is_empty_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_str_is_empty) {
+    return invokePacked(roc_builtins_str_is_empty, args);
+}
+
+pub fn roc_builtins_str_equal_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_str_equal) {
+    return invokePacked(roc_builtins_str_equal, args);
+}
+
+pub fn roc_builtins_str_count_utf8_bytes_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_str_count_utf8_bytes) {
+    return invokePacked(roc_builtins_str_count_utf8_bytes, args);
+}
+
+pub fn roc_builtins_str_caseless_ascii_equals_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_str_caseless_ascii_equals) {
+    return invokePacked(roc_builtins_str_caseless_ascii_equals, args);
+}
+
+pub fn roc_builtins_str_repeat_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_str_repeat) {
+    return invokePacked(roc_builtins_str_repeat, args);
+}
+
+pub fn roc_builtins_str_trim_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_str_trim) {
+    return invokePacked(roc_builtins_str_trim, args);
+}
+
+pub fn roc_builtins_str_trim_start_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_str_trim_start) {
+    return invokePacked(roc_builtins_str_trim_start, args);
+}
+
+pub fn roc_builtins_str_trim_end_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_str_trim_end) {
+    return invokePacked(roc_builtins_str_trim_end, args);
+}
+
+pub fn roc_builtins_str_split_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_str_split) {
+    return invokePacked(roc_builtins_str_split, args);
+}
+
+pub fn roc_builtins_str_join_with_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_str_join_with) {
+    return invokePacked(roc_builtins_str_join_with, args);
+}
+
+pub fn roc_builtins_str_reserve_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_str_reserve) {
+    return invokePacked(roc_builtins_str_reserve, args);
+}
+
+pub fn roc_builtins_str_release_excess_capacity_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_str_release_excess_capacity) {
+    return invokePacked(roc_builtins_str_release_excess_capacity, args);
+}
+
+pub fn roc_builtins_str_with_capacity_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_str_with_capacity) {
+    return invokePacked(roc_builtins_str_with_capacity, args);
+}
+
+pub fn roc_builtins_str_drop_prefix_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_str_drop_prefix) {
+    return invokePacked(roc_builtins_str_drop_prefix, args);
+}
+
+pub fn roc_builtins_str_drop_suffix_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_str_drop_suffix) {
+    return invokePacked(roc_builtins_str_drop_suffix, args);
+}
+
+pub fn roc_builtins_str_with_ascii_lowercased_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_str_with_ascii_lowercased) {
+    return invokePacked(roc_builtins_str_with_ascii_lowercased, args);
+}
+
+pub fn roc_builtins_str_with_ascii_uppercased_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_str_with_ascii_uppercased) {
+    return invokePacked(roc_builtins_str_with_ascii_uppercased, args);
+}
+
+pub fn roc_builtins_str_from_utf8_lossy_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_str_from_utf8_lossy) {
+    return invokePacked(roc_builtins_str_from_utf8_lossy, args);
+}
+
+pub fn roc_builtins_str_from_utf8_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_str_from_utf8) {
+    return invokePacked(roc_builtins_str_from_utf8, args);
+}
+
+pub fn roc_builtins_str_with_prefix_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_str_with_prefix) {
+    return invokePacked(roc_builtins_str_with_prefix, args);
+}
+
+pub fn roc_builtins_str_escape_and_quote_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_str_escape_and_quote) {
+    return invokePacked(roc_builtins_str_escape_and_quote, args);
+}
+
+pub fn roc_builtins_list_with_capacity_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_list_with_capacity) {
+    return invokePacked(roc_builtins_list_with_capacity, args);
+}
+
+pub fn roc_builtins_list_append_unsafe_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_list_append_unsafe) {
+    return invokePacked(roc_builtins_list_append_unsafe, args);
+}
+
+pub fn roc_builtins_list_concat_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_list_concat) {
+    return invokePacked(roc_builtins_list_concat, args);
+}
+
+pub fn roc_builtins_list_prepend_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_list_prepend) {
+    return invokePacked(roc_builtins_list_prepend, args);
+}
+
+pub fn roc_builtins_list_sublist_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_list_sublist) {
+    return invokePacked(roc_builtins_list_sublist, args);
+}
+
+pub fn roc_builtins_list_replace_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_list_replace) {
+    return invokePacked(roc_builtins_list_replace, args);
+}
+
+pub fn roc_builtins_list_reserve_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_list_reserve) {
+    return invokePacked(roc_builtins_list_reserve, args);
+}
+
+pub fn roc_builtins_list_release_excess_capacity_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_list_release_excess_capacity) {
+    return invokePacked(roc_builtins_list_release_excess_capacity, args);
+}
+
+pub fn roc_builtins_list_sort_with_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_list_sort_with) {
+    return invokePacked(roc_builtins_list_sort_with, args);
+}
+
+pub fn roc_builtins_list_decref_str_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_list_decref_str) {
+    return invokePacked(roc_builtins_list_decref_str, args);
+}
+
+pub fn roc_builtins_allocate_with_refcount_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_allocate_with_refcount) {
+    return invokePacked(roc_builtins_allocate_with_refcount, args);
+}
+
+pub fn roc_builtins_incref_data_ptr_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_incref_data_ptr) {
+    return invokePacked(roc_builtins_incref_data_ptr, args);
+}
+
+pub fn roc_builtins_decref_data_ptr_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_decref_data_ptr) {
+    return invokePacked(roc_builtins_decref_data_ptr, args);
+}
+
+pub fn roc_builtins_free_data_ptr_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_free_data_ptr) {
+    return invokePacked(roc_builtins_free_data_ptr, args);
+}
+
+pub fn roc_builtins_dec_to_str_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_dec_to_str) {
+    return invokePacked(roc_builtins_dec_to_str, args);
+}
+
+pub fn roc_builtins_dec_to_i64_trunc_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_dec_to_i64_trunc) {
+    return invokePacked(roc_builtins_dec_to_i64_trunc, args);
+}
+
+pub fn roc_builtins_i64_to_dec_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_i64_to_dec) {
+    return invokePacked(roc_builtins_i64_to_dec, args);
+}
+
+pub fn roc_builtins_u64_to_dec_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_u64_to_dec) {
+    return invokePacked(roc_builtins_u64_to_dec, args);
+}
+
+pub fn roc_builtins_dec_to_f64_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_dec_to_f64) {
+    return invokePacked(roc_builtins_dec_to_f64, args);
+}
+
+pub fn roc_builtins_i128_to_f64_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_i128_to_f64) {
+    return invokePacked(roc_builtins_i128_to_f64, args);
+}
+
+pub fn roc_builtins_u128_to_f64_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_u128_to_f64) {
+    return invokePacked(roc_builtins_u128_to_f64, args);
+}
+
+pub fn roc_builtins_f64_to_i128_trunc_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_f64_to_i128_trunc) {
+    return invokePacked(roc_builtins_f64_to_i128_trunc, args);
+}
+
+pub fn roc_builtins_f64_to_u128_trunc_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_f64_to_u128_trunc) {
+    return invokePacked(roc_builtins_f64_to_u128_trunc, args);
+}
+
+pub fn roc_builtins_i128_try_convert_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_i128_try_convert) {
+    return invokePacked(roc_builtins_i128_try_convert, args);
+}
+
+pub fn roc_builtins_u128_try_convert_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_u128_try_convert) {
+    return invokePacked(roc_builtins_u128_try_convert, args);
+}
+
+pub fn roc_builtins_int_try_signed_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_int_try_signed) {
+    return invokePacked(roc_builtins_int_try_signed, args);
+}
+
+pub fn roc_builtins_int_try_unsigned_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_int_try_unsigned) {
+    return invokePacked(roc_builtins_int_try_unsigned, args);
+}
+
+pub fn roc_builtins_dec_to_int_try_unsafe_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_dec_to_int_try_unsafe) {
+    return invokePacked(roc_builtins_dec_to_int_try_unsafe, args);
+}
+
+pub fn roc_builtins_f64_to_int_try_unsafe_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_f64_to_int_try_unsafe) {
+    return invokePacked(roc_builtins_f64_to_int_try_unsafe, args);
+}
+
+pub fn roc_builtins_dec_to_f32_try_unsafe_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_dec_to_f32_try_unsafe) {
+    return invokePacked(roc_builtins_dec_to_f32_try_unsafe, args);
+}
+
+pub fn roc_builtins_f64_to_f32_try_unsafe_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_f64_to_f32_try_unsafe) {
+    return invokePacked(roc_builtins_f64_to_f32_try_unsafe, args);
+}
+
+pub fn roc_builtins_i128_to_dec_try_unsafe_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_i128_to_dec_try_unsafe) {
+    return invokePacked(roc_builtins_i128_to_dec_try_unsafe, args);
+}
+
+pub fn roc_builtins_u128_to_dec_try_unsafe_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_u128_to_dec_try_unsafe) {
+    return invokePacked(roc_builtins_u128_to_dec_try_unsafe, args);
+}
+
+pub fn roc_builtins_dec_mul_saturated_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_dec_mul_saturated) {
+    return invokePacked(roc_builtins_dec_mul_saturated, args);
+}
+
+pub fn roc_builtins_dec_div_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_dec_div) {
+    return invokePacked(roc_builtins_dec_div, args);
+}
+
+pub fn roc_builtins_dec_div_trunc_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_dec_div_trunc) {
+    return invokePacked(roc_builtins_dec_div_trunc, args);
+}
+
+pub fn roc_builtins_num_div_trunc_u128_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_num_div_trunc_u128) {
+    return invokePacked(roc_builtins_num_div_trunc_u128, args);
+}
+
+pub fn roc_builtins_num_div_trunc_i128_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_num_div_trunc_i128) {
+    return invokePacked(roc_builtins_num_div_trunc_i128, args);
+}
+
+pub fn roc_builtins_num_rem_trunc_u128_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_num_rem_trunc_u128) {
+    return invokePacked(roc_builtins_num_rem_trunc_u128, args);
+}
+
+pub fn roc_builtins_num_rem_trunc_i128_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_num_rem_trunc_i128) {
+    return invokePacked(roc_builtins_num_rem_trunc_i128, args);
+}
+
+pub fn roc_builtins_list_append_safe_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_list_append_safe) {
+    return invokePacked(roc_builtins_list_append_safe, args);
+}
+
+pub fn roc_builtins_int_to_str_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_int_to_str) {
+    return invokePacked(roc_builtins_int_to_str, args);
+}
+
+pub fn roc_builtins_float_to_str_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_float_to_str) {
+    return invokePacked(roc_builtins_float_to_str, args);
+}
+
+pub fn roc_builtins_int_from_str_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_int_from_str) {
+    return invokePacked(roc_builtins_int_from_str, args);
+}
+
+pub fn roc_builtins_dec_from_str_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_dec_from_str) {
+    return invokePacked(roc_builtins_dec_from_str, args);
+}
+
+pub fn roc_builtins_float_from_str_packed(args: [*]const usize) callconv(.c) packedReturnType(roc_builtins_float_from_str) {
+    return invokePacked(roc_builtins_float_from_str, args);
 }

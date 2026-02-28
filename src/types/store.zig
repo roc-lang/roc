@@ -306,8 +306,7 @@ pub const Store = struct {
     }
 
     fn maybeSeedNominalRecMeta(self: *Self, var_: Var, content: Content) Allocator.Error!void {
-        const nominal = content.unwrapNominalType() orelse return;
-        _ = nominal;
+        if (content.unwrapNominalType() == null) return;
         const idx = @intFromEnum(var_);
         if (idx >= self.nominal_rec_meta_by_var.items.len) {
             return;
@@ -321,8 +320,7 @@ pub const Store = struct {
     }
 
     fn maybeSeedNominalRecMetaAssumeCapacity(self: *Self, var_: Var, content: Content) void {
-        const nominal = content.unwrapNominalType() orelse return;
-        _ = nominal;
+        if (content.unwrapNominalType() == null) return;
         const idx = @intFromEnum(var_);
         if (idx < self.nominal_rec_meta_by_var.items.len and self.nominal_rec_meta_by_var.items[idx] == null) {
             self.nominal_rec_meta_by_var.items[idx] = NominalRecMeta{
