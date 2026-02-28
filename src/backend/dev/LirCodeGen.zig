@@ -15301,6 +15301,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitSubImm(.w64, stack_ptr, stack_ptr, stack_spill_size);
             }
 
+            // Pre-materialize all pass-by-pointer args before loading any argument
+            // registers. Otherwise, ensureOnStack for a later pbp arg can allocate
+            // and clobber registers already populated for earlier args.
+            var pbp_stack_offsets = std.ArrayListUnmanaged(i32).empty;
+            defer pbp_stack_offsets.deinit(self.allocator);
+            if (config.pass_by_ptr) |pbp| {
+                try pbp_stack_offsets.resize(self.allocator, arg_infos.len);
+                @memset(pbp_stack_offsets.items, 0);
+                for (arg_infos, 0..) |ai, i| {
+                    if (!pbp[i]) continue;
+                    const arg_size: u32 = @as(u32, ai.num_regs) * 8;
+                    pbp_stack_offsets.items[i] = try self.ensureOnStack(ai.loc, arg_size);
+                }
+            }
+
             // Place arguments in registers or on stack
             var reg_idx: u8 = 0;
             var stack_arg_offset: i32 = 0;
@@ -15319,8 +15334,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Check if this argument is passed by pointer
                 if (config.pass_by_ptr) |pbp| {
                     if (pbp[i]) {
-                        const arg_size: u32 = @as(u32, info.num_regs) * 8;
-                        const arg_offset = try self.ensureOnStack(arg_loc, arg_size);
+                        const arg_offset = pbp_stack_offsets.items[i];
                         if (reg_idx < max_arg_regs) {
                             const arg_reg = self.getArgumentRegister(reg_idx);
                             try self.emitLeaStack(arg_reg, arg_offset);
