@@ -1004,3 +1004,58 @@ test "getRecordFieldOffsetByName - alignment overrides alphabetical order" {
     try testing.expectEqual(@as(u32, 0), lt.layout_store.getRecordFieldOffsetByName(rid, start_ident));
     try testing.expectEqual(@as(u32, 8), lt.layout_store.getRecordFieldOffsetByName(rid, len_ident));
 }
+
+test "internRecord reuses equivalent layouts" {
+    var lt = try LayoutTest.init(testing.allocator);
+    try lt.initLayoutStore();
+    defer lt.deinit();
+
+    const x_ident = try lt.module_env.insertIdent(Ident.for_text("x"));
+    const y_ident = try lt.module_env.insertIdent(Ident.for_text("y"));
+
+    const first = try lt.layout_store.internRecord(
+        &.{ .u64, .str },
+        &.{ x_ident, y_ident },
+    );
+    const second = try lt.layout_store.internRecord(
+        &.{ .u64, .str },
+        &.{ x_ident, y_ident },
+    );
+
+    try testing.expectEqual(first, second);
+}
+
+test "internTuple reuses equivalent layouts" {
+    var lt = try LayoutTest.init(testing.allocator);
+    try lt.initLayoutStore();
+    defer lt.deinit();
+
+    const first = try lt.layout_store.internTuple(&.{ .u8, .u64, .str });
+    const second = try lt.layout_store.internTuple(&.{ .u8, .u64, .str });
+
+    try testing.expectEqual(first, second);
+}
+
+test "internTagUnion reuses equivalent layouts" {
+    var lt = try LayoutTest.init(testing.allocator);
+    try lt.initLayoutStore();
+    defer lt.deinit();
+
+    const tuple_payload = try lt.layout_store.internTuple(&.{ .u32, .str });
+
+    const first = try lt.layout_store.internTagUnion(&.{ .zst, tuple_payload });
+    const second = try lt.layout_store.internTagUnion(&.{ .zst, tuple_payload });
+
+    try testing.expectEqual(first, second);
+}
+
+test "internCaptureStruct reuses equivalent layouts" {
+    var lt = try LayoutTest.init(testing.allocator);
+    try lt.initLayoutStore();
+    defer lt.deinit();
+
+    const first = try lt.layout_store.internCaptureStruct(&.{ .u64, .str, .bool });
+    const second = try lt.layout_store.internCaptureStruct(&.{ .u64, .str, .bool });
+
+    try testing.expectEqual(first, second);
+}

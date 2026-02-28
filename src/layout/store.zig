@@ -41,6 +41,29 @@ const StructInfo = layout_mod.StructInfo;
 const TagUnionInfo = layout_mod.TagUnionInfo;
 const ScalarInfo = layout_mod.ScalarInfo;
 const Work = work.Work;
+const IdxBucket = std.ArrayListUnmanaged(Idx);
+
+fn deinitIdxBuckets(
+    allocator: std.mem.Allocator,
+    buckets: *std.AutoHashMap(u64, IdxBucket),
+) void {
+    var it = buckets.iterator();
+    while (it.next()) |entry| {
+        entry.value_ptr.deinit(allocator);
+    }
+    buckets.deinit();
+}
+
+fn clearIdxBuckets(
+    allocator: std.mem.Allocator,
+    buckets: *std.AutoHashMap(u64, IdxBucket),
+) void {
+    var it = buckets.iterator();
+    while (it.next()) |entry| {
+        entry.value_ptr.deinit(allocator);
+    }
+    buckets.clearRetainingCapacity();
+}
 
 /// Errors that can occur during layout computation
 /// Stores Layout instances by Idx.
@@ -90,6 +113,17 @@ pub const Store = struct {
     // This is because the Box/List container itself provides the boxing.
     // Keyed by (module_idx, var) for cross-module correctness.
     raw_layout_placeholders: std.AutoHashMap(ModuleVarKey, Idx),
+
+    // Canonical layout interners for MIR -> LIR lowering.
+    // These are intentionally separate from fromTypeVar caches to avoid
+    // coupling recursive placeholder mutation with canonical layout reuse.
+    interned_list_by_elem: std.AutoHashMap(Idx, Idx),
+    interned_box_by_elem: std.AutoHashMap(Idx, Idx),
+    interned_closure_by_captures: std.AutoHashMap(Idx, Idx),
+    interned_records_by_hash: std.AutoHashMap(u64, IdxBucket),
+    interned_tuples_by_hash: std.AutoHashMap(u64, IdxBucket),
+    interned_tag_unions_by_hash: std.AutoHashMap(u64, IdxBucket),
+    interned_capture_structs_by_hash: std.AutoHashMap(u64, IdxBucket),
 
     // Reusable work stack for fromTypeVar (so it can be stack-safe instead of recursing)
     work: work.Work,
@@ -209,6 +243,13 @@ pub const Store = struct {
             .layouts_by_module_var = std.AutoHashMap(ModuleVarKey, Idx).init(allocator),
             .recursive_boxed_layouts = std.AutoHashMap(ModuleVarKey, Idx).init(allocator),
             .raw_layout_placeholders = std.AutoHashMap(ModuleVarKey, Idx).init(allocator),
+            .interned_list_by_elem = std.AutoHashMap(Idx, Idx).init(allocator),
+            .interned_box_by_elem = std.AutoHashMap(Idx, Idx).init(allocator),
+            .interned_closure_by_captures = std.AutoHashMap(Idx, Idx).init(allocator),
+            .interned_records_by_hash = std.AutoHashMap(u64, IdxBucket).init(allocator),
+            .interned_tuples_by_hash = std.AutoHashMap(u64, IdxBucket).init(allocator),
+            .interned_tag_unions_by_hash = std.AutoHashMap(u64, IdxBucket).init(allocator),
+            .interned_capture_structs_by_hash = std.AutoHashMap(u64, IdxBucket).init(allocator),
             .work = try Work.initCapacity(allocator, 32),
             .builtin_str_ident = builtin_str_ident,
             .builtin_str_plain_ident = env.idents.str,
@@ -278,6 +319,13 @@ pub const Store = struct {
         self.layouts_by_module_var.deinit();
         self.recursive_boxed_layouts.deinit();
         self.raw_layout_placeholders.deinit();
+        self.interned_list_by_elem.deinit();
+        self.interned_box_by_elem.deinit();
+        self.interned_closure_by_captures.deinit();
+        deinitIdxBuckets(self.allocator, &self.interned_records_by_hash);
+        deinitIdxBuckets(self.allocator, &self.interned_tuples_by_hash);
+        deinitIdxBuckets(self.allocator, &self.interned_tag_unions_by_hash);
+        deinitIdxBuckets(self.allocator, &self.interned_capture_structs_by_hash);
         self.work.deinit(self.allocator);
     }
 
@@ -290,6 +338,13 @@ pub const Store = struct {
         self.layouts_by_module_var.clearRetainingCapacity();
         self.recursive_boxed_layouts.clearRetainingCapacity();
         self.raw_layout_placeholders.clearRetainingCapacity();
+        self.interned_list_by_elem.clearRetainingCapacity();
+        self.interned_box_by_elem.clearRetainingCapacity();
+        self.interned_closure_by_captures.clearRetainingCapacity();
+        clearIdxBuckets(self.allocator, &self.interned_records_by_hash);
+        clearIdxBuckets(self.allocator, &self.interned_tuples_by_hash);
+        clearIdxBuckets(self.allocator, &self.interned_tag_unions_by_hash);
+        clearIdxBuckets(self.allocator, &self.interned_capture_structs_by_hash);
         self.work.in_progress_vars.clearRetainingCapacity();
         self.work.in_progress_nominals.clearRetainingCapacity();
     }
@@ -322,6 +377,14 @@ pub const Store = struct {
         return try self.insertLayout(layout);
     }
 
+    /// Canonically intern a Box layout for MIR monotype lowering.
+    pub fn internBox(self: *Self, elem_idx: Idx) std.mem.Allocator.Error!Idx {
+        if (self.interned_box_by_elem.get(elem_idx)) |cached| return cached;
+        const inserted = try self.insertBox(elem_idx);
+        try self.interned_box_by_elem.put(elem_idx, inserted);
+        return inserted;
+    }
+
     /// Insert a List layout with the given element layout.
     ///
     /// Note: A List of a zero-sized type doesn't need to (and can't) be inserted,
@@ -330,6 +393,326 @@ pub const Store = struct {
     pub fn insertList(self: *Self, elem_idx: Idx) std.mem.Allocator.Error!Idx {
         const layout = Layout.list(elem_idx);
         return try self.insertLayout(layout);
+    }
+
+    /// Canonically intern a List layout for MIR monotype lowering.
+    pub fn internList(self: *Self, elem_idx: Idx) std.mem.Allocator.Error!Idx {
+        if (self.interned_list_by_elem.get(elem_idx)) |cached| return cached;
+        const inserted = try self.insertList(elem_idx);
+        try self.interned_list_by_elem.put(elem_idx, inserted);
+        return inserted;
+    }
+
+    /// Canonically intern a closure layout by capture layout.
+    pub fn internClosure(self: *Self, captures_layout_idx: Idx) std.mem.Allocator.Error!Idx {
+        if (self.interned_closure_by_captures.get(captures_layout_idx)) |cached| return cached;
+        const inserted = try self.insertLayout(Layout.closure(captures_layout_idx));
+        try self.interned_closure_by_captures.put(captures_layout_idx, inserted);
+        return inserted;
+    }
+
+    fn getOrInitIdxBucket(_: *Self, map: *std.AutoHashMap(u64, IdxBucket), hash: u64) std.mem.Allocator.Error!*IdxBucket {
+        if (map.getPtr(hash)) |bucket| return bucket;
+        try map.put(hash, .empty);
+        return map.getPtr(hash).?;
+    }
+
+    fn hashUpdateInt(hasher: *std.hash.Wyhash, value: anytype) void {
+        var local = value;
+        hasher.update(std.mem.asBytes(&local));
+    }
+
+    fn hashRecordKey(field_layout_idxs: []const Idx, field_names: []const Ident.Idx) u64 {
+        var hasher = std.hash.Wyhash.init(0x93d0d2612a54f231);
+        hashUpdateInt(&hasher, @as(u32, @intCast(field_layout_idxs.len)));
+        for (field_layout_idxs, field_names) |layout_idx, field_name| {
+            hashUpdateInt(&hasher, @as(u32, @bitCast(field_name)));
+            hashUpdateInt(&hasher, @as(u32, @intFromEnum(layout_idx)));
+        }
+        return hasher.final();
+    }
+
+    fn hashTupleKey(element_layout_idxs: []const Idx) u64 {
+        var hasher = std.hash.Wyhash.init(0x6ab77f9ea26d1c4b);
+        hashUpdateInt(&hasher, @as(u32, @intCast(element_layout_idxs.len)));
+        for (element_layout_idxs) |layout_idx| {
+            hashUpdateInt(&hasher, @as(u32, @intFromEnum(layout_idx)));
+        }
+        return hasher.final();
+    }
+
+    fn hashTagUnionKey(variant_layouts: []const Idx) u64 {
+        var hasher = std.hash.Wyhash.init(0x1f3ce65d28a7b491);
+        hashUpdateInt(&hasher, @as(u32, @intCast(variant_layouts.len)));
+        for (variant_layouts) |layout_idx| {
+            hashUpdateInt(&hasher, @as(u32, @intFromEnum(layout_idx)));
+        }
+        return hasher.final();
+    }
+
+    fn hashCaptureStructKey(capture_layout_idxs: []const Idx) u64 {
+        var hasher = std.hash.Wyhash.init(0xd8b4175f9e2a36c1);
+        hashUpdateInt(&hasher, @as(u32, @intCast(capture_layout_idxs.len)));
+        for (capture_layout_idxs) |layout_idx| {
+            hashUpdateInt(&hasher, @as(u32, @intFromEnum(layout_idx)));
+        }
+        return hasher.final();
+    }
+
+    fn recordLayoutMatches(self: *const Self, candidate_idx: Idx, field_layout_idxs: []const Idx, field_names: []const Ident.Idx) bool {
+        const candidate_layout = self.getLayout(candidate_idx);
+        if (candidate_layout.tag != .struct_) return false;
+        const fields = self.struct_fields.sliceRange(self.getStructData(candidate_layout.data.struct_.idx).getFields());
+        if (fields.len != field_layout_idxs.len) return false;
+
+        for (0..fields.len) |i| {
+            const field = fields.get(@intCast(i));
+            const original_index: usize = field.index;
+            if (original_index >= field_layout_idxs.len) return false;
+            if (field.layout != field_layout_idxs[original_index]) return false;
+            if (field.name != field_names[original_index]) return false;
+        }
+        return true;
+    }
+
+    fn tupleLayoutMatches(self: *const Self, candidate_idx: Idx, element_layout_idxs: []const Idx) bool {
+        const candidate_layout = self.getLayout(candidate_idx);
+        if (candidate_layout.tag != .struct_) return false;
+        const fields = self.struct_fields.sliceRange(self.getStructData(candidate_layout.data.struct_.idx).getFields());
+        if (fields.len != element_layout_idxs.len) return false;
+
+        for (0..fields.len) |i| {
+            const field = fields.get(@intCast(i));
+            const original_index: usize = field.index;
+            if (original_index >= element_layout_idxs.len) return false;
+            if (field.layout != element_layout_idxs[original_index]) return false;
+        }
+        return true;
+    }
+
+    fn tagUnionLayoutMatches(self: *const Self, candidate_idx: Idx, variant_layouts: []const Idx) bool {
+        const candidate_layout = self.getLayout(candidate_idx);
+        if (candidate_layout.tag != .tag_union) return false;
+        const tu_data = self.getTagUnionData(candidate_layout.data.tag_union.idx);
+        const variants = self.getTagUnionVariants(tu_data);
+        if (variants.len != variant_layouts.len) return false;
+
+        for (0..variants.len) |i| {
+            if (variants.get(@intCast(i)).payload_layout != variant_layouts[i]) return false;
+        }
+        return true;
+    }
+
+    fn captureStructLayoutMatches(self: *const Self, candidate_idx: Idx, capture_layout_idxs: []const Idx) bool {
+        const candidate_layout = self.getLayout(candidate_idx);
+        if (candidate_layout.tag != .struct_) return false;
+        const fields = self.struct_fields.sliceRange(self.getStructData(candidate_layout.data.struct_.idx).getFields());
+        if (fields.len != capture_layout_idxs.len) return false;
+
+        for (0..fields.len) |i| {
+            const field = fields.get(@intCast(i));
+            if (field.index != @as(u16, @intCast(i))) return false;
+            if (field.layout != capture_layout_idxs[i]) return false;
+        }
+        return true;
+    }
+
+    fn putRecordFromLayoutIdxs(self: *Self, field_layout_idxs: []const Idx, field_names: []const Ident.Idx) std.mem.Allocator.Error!Idx {
+        // Build temp_fields with sequential indices, then sort by alignment+name.
+        const SortEntry = struct {
+            index: u16,
+            layout: Idx,
+            name: Ident.Idx,
+        };
+        var temp_entries = std.ArrayList(SortEntry).empty;
+        defer temp_entries.deinit(self.allocator);
+
+        for (field_layout_idxs, field_names, 0..) |field_layout_idx, field_name, i| {
+            try temp_entries.append(self.allocator, .{
+                .index = @intCast(i),
+                .layout = field_layout_idx,
+                .name = field_name,
+            });
+        }
+
+        const AlignmentSortCtx = struct {
+            store: *Self,
+            target_usize: target.TargetUsize,
+            pub fn lessThan(ctx: @This(), lhs: SortEntry, rhs: SortEntry) bool {
+                const lhs_layout = ctx.store.getLayout(lhs.layout);
+                const rhs_layout = ctx.store.getLayout(rhs.layout);
+                const lhs_alignment = lhs_layout.alignment(ctx.target_usize);
+                const rhs_alignment = rhs_layout.alignment(ctx.target_usize);
+                if (lhs_alignment.toByteUnits() != rhs_alignment.toByteUnits()) {
+                    return lhs_alignment.toByteUnits() > rhs_alignment.toByteUnits();
+                }
+                return @as(u32, @bitCast(lhs.name)) < @as(u32, @bitCast(rhs.name));
+            }
+        };
+
+        std.mem.sort(
+            SortEntry,
+            temp_entries.items,
+            AlignmentSortCtx{ .store = self, .target_usize = self.targetUsize() },
+            AlignmentSortCtx.lessThan,
+        );
+
+        const fields_start = self.struct_fields.items.len;
+        for (temp_entries.items) |entry| {
+            _ = try self.struct_fields.append(self.allocator, .{
+                .index = entry.index,
+                .layout = entry.layout,
+                .name = entry.name,
+            });
+        }
+
+        var max_alignment: usize = 1;
+        var current_offset: u32 = 0;
+        for (temp_entries.items) |entry| {
+            const field_layout = self.getLayout(entry.layout);
+            const field_size_align = self.layoutSizeAlign(field_layout);
+            const field_alignment = field_size_align.alignment.toByteUnits();
+            max_alignment = @max(max_alignment, field_alignment);
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment))));
+            current_offset += field_size_align.size;
+        }
+
+        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment)))));
+        const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(temp_entries.items.len) };
+        const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
+        _ = try self.struct_data.append(self.allocator, .{
+            .size = total_size,
+            .fields = fields_range,
+        });
+
+        return try self.insertLayout(Layout.struct_(std.mem.Alignment.fromByteUnits(max_alignment), struct_idx));
+    }
+
+    fn putTupleFromLayoutIdxs(self: *Self, element_layout_idxs: []const Idx) std.mem.Allocator.Error!Idx {
+        var temp_fields = std.ArrayList(StructField).empty;
+        defer temp_fields.deinit(self.allocator);
+
+        for (element_layout_idxs, 0..) |elem_layout_idx, i| {
+            try temp_fields.append(self.allocator, .{ .index = @intCast(i), .layout = elem_layout_idx });
+        }
+
+        const AlignmentSortCtx = struct {
+            store: *Self,
+            target_usize: target.TargetUsize,
+            pub fn lessThan(ctx: @This(), lhs: StructField, rhs: StructField) bool {
+                const lhs_layout = ctx.store.getLayout(lhs.layout);
+                const rhs_layout = ctx.store.getLayout(rhs.layout);
+                const lhs_alignment = lhs_layout.alignment(ctx.target_usize);
+                const rhs_alignment = rhs_layout.alignment(ctx.target_usize);
+                if (lhs_alignment.toByteUnits() != rhs_alignment.toByteUnits()) {
+                    return lhs_alignment.toByteUnits() > rhs_alignment.toByteUnits();
+                }
+                return lhs.index < rhs.index;
+            }
+        };
+
+        std.mem.sort(
+            StructField,
+            temp_fields.items,
+            AlignmentSortCtx{ .store = self, .target_usize = self.targetUsize() },
+            AlignmentSortCtx.lessThan,
+        );
+
+        const fields_start = self.struct_fields.items.len;
+        for (temp_fields.items) |sorted_field| {
+            _ = try self.struct_fields.append(self.allocator, sorted_field);
+        }
+
+        var max_alignment: usize = 1;
+        var current_offset: u32 = 0;
+        for (temp_fields.items) |tf| {
+            const field_layout = self.getLayout(tf.layout);
+            const field_size_align = self.layoutSizeAlign(field_layout);
+            const field_alignment = field_size_align.alignment.toByteUnits();
+            max_alignment = @max(max_alignment, field_alignment);
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment))));
+            current_offset += field_size_align.size;
+        }
+
+        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment)))));
+        const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(temp_fields.items.len) };
+        const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
+        _ = try self.struct_data.append(self.allocator, StructData{ .size = total_size, .fields = fields_range });
+        return try self.insertLayout(Layout.struct_(std.mem.Alignment.fromByteUnits(max_alignment), struct_idx));
+    }
+
+    pub fn internRecord(self: *Self, field_layout_idxs: []const Idx, field_names: []const Ident.Idx) std.mem.Allocator.Error!Idx {
+        std.debug.assert(field_layout_idxs.len == field_names.len);
+        if (field_layout_idxs.len == 0) return self.getEmptyStructLayout();
+        if (field_layout_idxs.len == 1) return field_layout_idxs[0];
+
+        const hash = hashRecordKey(field_layout_idxs, field_names);
+        if (self.interned_records_by_hash.getPtr(hash)) |bucket| {
+            for (bucket.items) |candidate| {
+                if (self.recordLayoutMatches(candidate, field_layout_idxs, field_names)) {
+                    return candidate;
+                }
+            }
+        }
+
+        const inserted = try self.putRecordFromLayoutIdxs(field_layout_idxs, field_names);
+        const bucket = try self.getOrInitIdxBucket(&self.interned_records_by_hash, hash);
+        try bucket.append(self.allocator, inserted);
+        return inserted;
+    }
+
+    pub fn internTuple(self: *Self, element_layout_idxs: []const Idx) std.mem.Allocator.Error!Idx {
+        if (element_layout_idxs.len == 0) return .zst;
+
+        const hash = hashTupleKey(element_layout_idxs);
+        if (self.interned_tuples_by_hash.getPtr(hash)) |bucket| {
+            for (bucket.items) |candidate| {
+                if (self.tupleLayoutMatches(candidate, element_layout_idxs)) {
+                    return candidate;
+                }
+            }
+        }
+
+        const inserted = try self.putTupleFromLayoutIdxs(element_layout_idxs);
+        const bucket = try self.getOrInitIdxBucket(&self.interned_tuples_by_hash, hash);
+        try bucket.append(self.allocator, inserted);
+        return inserted;
+    }
+
+    pub fn internTagUnion(self: *Self, variant_layouts: []const Idx) std.mem.Allocator.Error!Idx {
+        if (variant_layouts.len == 0) return .zst;
+
+        const hash = hashTagUnionKey(variant_layouts);
+        if (self.interned_tag_unions_by_hash.getPtr(hash)) |bucket| {
+            for (bucket.items) |candidate| {
+                if (self.tagUnionLayoutMatches(candidate, variant_layouts)) {
+                    return candidate;
+                }
+            }
+        }
+
+        const inserted = try self.putTagUnion(variant_layouts);
+        const bucket = try self.getOrInitIdxBucket(&self.interned_tag_unions_by_hash, hash);
+        try bucket.append(self.allocator, inserted);
+        return inserted;
+    }
+
+    pub fn internCaptureStruct(self: *Self, capture_layout_idxs: []const Idx) std.mem.Allocator.Error!Idx {
+        if (capture_layout_idxs.len == 0) return self.getEmptyStructLayout();
+
+        const hash = hashCaptureStructKey(capture_layout_idxs);
+        if (self.interned_capture_structs_by_hash.getPtr(hash)) |bucket| {
+            for (bucket.items) |candidate| {
+                if (self.captureStructLayoutMatches(candidate, capture_layout_idxs)) {
+                    return candidate;
+                }
+            }
+        }
+
+        const inserted = try self.putCaptureStruct(capture_layout_idxs);
+        const bucket = try self.getOrInitIdxBucket(&self.interned_capture_structs_by_hash, hash);
+        try bucket.append(self.allocator, inserted);
+        return inserted;
     }
 
     /// Insert a struct layout with the given alignment and struct metadata
