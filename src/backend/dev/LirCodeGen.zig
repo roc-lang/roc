@@ -1324,6 +1324,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Clear any leftover state from compileAllProcs
             self.symbol_locations.clearRetainingCapacity();
             self.symbol_locations_by_layout.clearRetainingCapacity();
+            self.symbol_closure_infos_by_layout.clearRetainingCapacity();
+            self.prebound_callables_by_layout.clearRetainingCapacity();
             self.symbol_source_exprs.clearRetainingCapacity();
             self.mutable_var_slots.clearRetainingCapacity();
             self.closure_stack_info.clearRetainingCapacity();
@@ -12074,27 +12076,29 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Update the patch's recorded position (it shifted)
                     patch.call_offset += prologue_size;
 
-                    // If the target is outside the shifted range (at or before body_start),
-                    // we need to re-patch the instruction because the relative offset changed.
-                    // Targets within the body shifted by the same amount, so they're fine.
-                    // Note: target_offset == body_start covers self-recursive calls within
-                    // compileLambdaAsProc, where the call targets the function's own entry point.
-                    if (patch.target_offset <= body_start) {
-                        const new_rel: i32 = @intCast(@as(i64, @intCast(patch.target_offset)) - @as(i64, @intCast(patch.call_offset)));
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            // Patch BL instruction (4 bytes at call_offset)
-                            // BL encoding: imm26 = offset / 4
-                            const imm26: u26 = @bitCast(@as(i26, @intCast(@divExact(new_rel, 4))));
-                            const bl_opcode: u32 = (0b100101 << 26) | @as(u32, imm26);
-                            const bytes: [4]u8 = @bitCast(bl_opcode);
-                            @memcpy(buf[patch.call_offset..][0..4], &bytes);
-                        } else {
-                            // Patch CALL rel32 instruction (5 bytes: 0xE8 + 4-byte offset)
-                            // The offset is relative to the instruction AFTER the call (call_offset + 5)
-                            const call_rel: i32 = new_rel - 5;
-                            const bytes: [4]u8 = @bitCast(call_rel);
-                            @memcpy(buf[patch.call_offset + 1 ..][0..4], &bytes);
-                        }
+                    // Update shifted targets inside the moved range. Relative call
+                    // immediates remain valid in that case, so no patching needed.
+                    if (patch.target_offset >= body_start and patch.target_offset < body_end) {
+                        patch.target_offset += prologue_size;
+                        continue;
+                    }
+
+                    // Target remained outside the shifted range, so the relative
+                    // offset changed and we must patch the instruction.
+                    const new_rel: i32 = @intCast(@as(i64, @intCast(patch.target_offset)) - @as(i64, @intCast(patch.call_offset)));
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        // Patch BL instruction (4 bytes at call_offset)
+                        // BL encoding: imm26 = offset / 4
+                        const imm26: u26 = @bitCast(@as(i26, @intCast(@divExact(new_rel, 4))));
+                        const bl_opcode: u32 = (0b100101 << 26) | @as(u32, imm26);
+                        const bytes: [4]u8 = @bitCast(bl_opcode);
+                        @memcpy(buf[patch.call_offset..][0..4], &bytes);
+                    } else {
+                        // Patch CALL rel32 instruction (5 bytes: 0xE8 + 4-byte offset)
+                        // The offset is relative to the instruction AFTER the call (call_offset + 5)
+                        const call_rel: i32 = new_rel - 5;
+                        const bytes: [4]u8 = @bitCast(call_rel);
+                        @memcpy(buf[patch.call_offset + 1 ..][0..4], &bytes);
                     }
                 }
             }
@@ -12110,34 +12114,50 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Update the patch's recorded position (it shifted)
                     patch.instr_offset += prologue_size;
 
-                    // If the target is outside the shifted range (at or before body_start), re-patch.
-                    // target_offset == body_start covers self-recursive calls.
-                    if (patch.target_offset <= body_start) {
-                        const new_rel: i64 = @as(i64, @intCast(patch.target_offset)) - @as(i64, @intCast(patch.instr_offset));
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            // ADR instruction: rd | immhi(19) << 5 | 10000 << 24 | immlo(2) << 29 | 0 << 31
-                            // We need to preserve rd and just update the immediate
-                            const existing: u32 = @bitCast(buf[patch.instr_offset..][0..4].*);
-                            const rd_bits: u32 = existing & 0x1F; // bottom 5 bits = Rd
-                            const imm: u21 = @bitCast(@as(i21, @intCast(new_rel)));
-                            const immlo: u2 = @truncate(imm);
-                            const immhi: u19 = @truncate(imm >> 2);
-                            const inst: u32 = (0 << 31) |
-                                (@as(u32, immlo) << 29) |
-                                (0b10000 << 24) |
-                                (@as(u32, immhi) << 5) |
-                                rd_bits;
-                            const bytes: [4]u8 = @bitCast(inst);
-                            @memcpy(buf[patch.instr_offset..][0..4], &bytes);
-                        } else {
-                            // LEA reg, [RIP + disp32] — 7 bytes: REX + 0x8D + ModRM + disp32
-                            // disp32 is at bytes [3..7], relative to end of instruction (instr_offset + 7)
-                            const lea_size: i64 = 7;
-                            const disp: i32 = @intCast(new_rel - lea_size);
-                            const bytes: [4]u8 = @bitCast(disp);
-                            @memcpy(buf[patch.instr_offset + 3 ..][0..4], &bytes);
-                        }
+                    // Targets inside the shifted range move by the same amount,
+                    // so only metadata needs updating.
+                    if (patch.target_offset >= body_start and patch.target_offset < body_end) {
+                        patch.target_offset += prologue_size;
+                        continue;
                     }
+
+                    // Target stayed outside the shifted range, so patch immediate.
+                    const new_rel: i64 = @as(i64, @intCast(patch.target_offset)) - @as(i64, @intCast(patch.instr_offset));
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        // ADR instruction: rd | immhi(19) << 5 | 10000 << 24 | immlo(2) << 29 | 0 << 31
+                        // We need to preserve rd and just update the immediate
+                        const existing: u32 = @bitCast(buf[patch.instr_offset..][0..4].*);
+                        const rd_bits: u32 = existing & 0x1F; // bottom 5 bits = Rd
+                        const imm: u21 = @bitCast(@as(i21, @intCast(new_rel)));
+                        const immlo: u2 = @truncate(imm);
+                        const immhi: u19 = @truncate(imm >> 2);
+                        const inst: u32 = (0 << 31) |
+                            (@as(u32, immlo) << 29) |
+                            (0b10000 << 24) |
+                            (@as(u32, immhi) << 5) |
+                            rd_bits;
+                        const bytes: [4]u8 = @bitCast(inst);
+                        @memcpy(buf[patch.instr_offset..][0..4], &bytes);
+                    } else {
+                        // LEA reg, [RIP + disp32] — 7 bytes: REX + 0x8D + ModRM + disp32
+                        // disp32 is at bytes [3..7], relative to end of instruction (instr_offset + 7)
+                        const lea_size: i64 = 7;
+                        const disp: i32 = @intCast(new_rel - lea_size);
+                        const bytes: [4]u8 = @bitCast(disp);
+                        @memcpy(buf[patch.instr_offset + 3 ..][0..4], &bytes);
+                    }
+                }
+            }
+        }
+
+        /// Shift cached lambda code offsets when a body region is moved forward.
+        /// compileLambdaAsProc prepends a prologue and relocates the whole body,
+        /// so any previously-cached lambda entries inside that region must shift.
+        fn shiftCachedLambdaOffsets(self: *Self, body_start: usize, body_end: usize, prologue_size: usize) void {
+            var it = self.compiled_lambdas.iterator();
+            while (it.next()) |entry| {
+                if (entry.value_ptr.* >= body_start and entry.value_ptr.* < body_end) {
+                    entry.value_ptr.* += prologue_size;
                 }
             }
         }
@@ -12866,8 +12886,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const capture_layout = ls.getLayout(capture.layout_idx);
                 const cap_sa = ls.layoutSizeAlign(capture_layout);
                 var capture_size = cap_sa.size;
-                const cap_align = cap_sa.alignment.toByteUnits();
-                offset = @intCast(std.mem.alignForward(usize, @intCast(offset), cap_align));
+                var capture_align = cap_sa.alignment.toByteUnits();
+                var callable_info_opt: ?ClosureStackInfo = null;
+
+                if (self.isFunctionLayout(capture.layout_idx)) {
+                    callable_info_opt = self.callableInfoForSymbol(capture.symbol, capture.layout_idx);
+                    if (callable_info_opt) |callable_info| {
+                        capture_size = @max(capture_size, @as(@TypeOf(capture_size), @intCast(self.closureStorageSize(callable_info.representation))));
+                        capture_align = @max(capture_align, self.closureStorageAlignBytes(callable_info.representation));
+                    }
+                }
+
+                offset = @intCast(std.mem.alignForward(usize, @intCast(offset), capture_align));
                 const capture_offset = captures_offset + offset;
 
                 var loc: ValueLocation = if (capture.layout_idx == .i128 or capture.layout_idx == .u128 or capture.layout_idx == .dec)
@@ -12884,7 +12914,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .{ .stack = .{ .offset = capture_offset } };
 
                 if (self.isFunctionLayout(capture.layout_idx)) {
-                    if (self.getSymbolClosureInfo(capture.symbol, capture.layout_idx)) |info| {
+                    if (callable_info_opt) |info| {
                         capture_size = @max(capture_size, @as(@TypeOf(capture_size), @intCast(self.closureStorageSize(info.representation))));
                         loc = .{ .closure_value = .{
                             .stack_offset = capture_offset,
@@ -13203,8 +13233,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         if (self.closureValueFromStackOffset(s.offset)) |closure_loc| {
                             return try self.generateClosureDispatch(closure_loc.closure_value, args_span, ret_layout);
                         }
-                        std.debug.panic("generateLookupCall: missing closure info for stack callable symbol={} layout={}", .{
+                        std.debug.panic("generateLookupCall: missing closure info for stack callable symbol={} name={s} layout={}", .{
                             @as(u64, @bitCast(lookup.symbol)),
+                            debug_name,
                             @intFromEnum(lookup.layout_idx),
                         });
                     },
@@ -14770,6 +14801,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Re-patch internal calls/addr whose targets are outside the shifted body
                 self.repatchInternalCalls(body_start, body_end, prologue_size);
                 self.repatchInternalAddrPatches(body_start, body_end, prologue_size);
+                self.shiftCachedLambdaOffsets(body_start, body_end, prologue_size);
 
                 // Adjust early return patches (they point to locations within the body)
                 for (self.early_return_patches.items[saved_early_return_patches_len..]) |*patch| {
@@ -14843,6 +14875,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Re-patch internal calls/addr whose targets are outside the shifted body
                 self.repatchInternalCalls(body_start, body_end, prologue_size);
                 self.repatchInternalAddrPatches(body_start, body_end, prologue_size);
+                self.shiftCachedLambdaOffsets(body_start, body_end, prologue_size);
 
                 // Adjust early return patches
                 for (self.early_return_patches.items[saved_early_return_patches_len..]) |*patch| {
@@ -14919,7 +14952,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             returned_closure_info: ?ClosureStackInfo,
         ) Allocator.Error!ValueLocation {
             if (returned_closure_info) |info| {
-                try self.closure_stack_info.put(stack_offset, info);
+                try self.registerReturnedCallableCaptureInfos(stack_offset, info);
+                // Preserve the outer closure info unless offset 0 is already
+                // occupied by a callable capture's concrete metadata.
+                if (self.closure_stack_info.get(stack_offset) == null) {
+                    try self.closure_stack_info.put(stack_offset, info);
+                }
                 return .{ .closure_value = .{
                     .stack_offset = stack_offset,
                     .representation = info.representation,
@@ -14928,6 +14966,52 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 } };
             }
             return self.stackLocationForLayout(ret_layout, stack_offset);
+        }
+
+        fn callableInfoForSymbol(self: *Self, symbol: Symbol, layout_idx: layout.Idx) ?ClosureStackInfo {
+            if (self.getSymbolClosureInfo(symbol, layout_idx)) |info| return info;
+            if (self.preboundCallableInfo(symbol, layout_idx)) |info| return info;
+            if (self.getSymbolLocation(symbol, layout_idx)) |loc| {
+                if (self.closureInfoFromValueLocation(loc)) |info| return info;
+            }
+            if (self.getSymbolDefExact(symbol)) |def_expr_id| {
+                if (self.closureInfoFromExprIdWithExpectation(def_expr_id, true)) |info| return info;
+            }
+            return null;
+        }
+
+        fn registerReturnedCallableCaptureInfos(
+            self: *Self,
+            closure_base_offset: i32,
+            info: ClosureStackInfo,
+        ) Allocator.Error!void {
+            const ls = self.layout_store orelse return;
+            const captures = self.store.getCaptures(info.captures);
+            var offset: i32 = 0;
+
+            for (captures) |capture| {
+                const cap_layout = ls.getLayout(capture.layout_idx);
+                const cap_sa = ls.layoutSizeAlign(cap_layout);
+                var capture_size = cap_sa.size;
+                var capture_align = cap_sa.alignment.toByteUnits();
+
+                var callable_info_opt: ?ClosureStackInfo = null;
+                if (self.isFunctionLayout(capture.layout_idx)) {
+                    callable_info_opt = self.callableInfoForSymbol(capture.symbol, capture.layout_idx);
+                    if (callable_info_opt) |callable_info| {
+                        capture_size = @max(capture_size, @as(@TypeOf(capture_size), @intCast(self.closureStorageSize(callable_info.representation))));
+                        capture_align = @max(capture_align, self.closureStorageAlignBytes(callable_info.representation));
+                    }
+                }
+
+                offset = @intCast(std.mem.alignForward(usize, @intCast(offset), capture_align));
+                if (callable_info_opt) |callable_info| {
+                    const cap_offset = closure_base_offset + offset;
+                    try self.closure_stack_info.put(cap_offset, callable_info);
+                    try self.putSymbolClosureInfo(capture.symbol, capture.layout_idx, callable_info);
+                }
+                offset += @intCast(capture_size);
+            }
         }
 
         /// Save the return value from a call into a stack-based ValueLocation.
