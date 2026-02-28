@@ -706,6 +706,29 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
                             // Generate the expression value
                             try self.generateExpr(stmt.expr);
 
+                            // One-capture closures carry the capture value itself at runtime.
+                            // Bind such values using the capture's wasm type, not the function
+                            // layout type, so later direct dispatch can pass the right arg type.
+                            if (self.getClosureInfoFromExpr(stmt.expr)) |closure_info| {
+                                if (closure_info.representation == .one_capture) {
+                                    const cap_vt = self.resolveValType(closure_info.representation.one_capture.capture_layout);
+                                    const cap_local = self.storage.getLocal(bind.symbol) orelse
+                                        (self.storage.allocLocal(bind.symbol, cap_vt) catch return error.OutOfMemory);
+                                    try self.emitLocalSet(cap_local);
+
+                                    const key: u64 = @bitCast(bind.symbol);
+                                    try self.closure_values.put(key, .{
+                                        .representation = closure_info.representation,
+                                        .stack_offset = 0,
+                                        .lambda_expr = closure_info.lambda_expr,
+                                        .captures = closure_info.captures,
+                                        .func_idx = null,
+                                        .bound_symbol = bind.symbol,
+                                    });
+                                    continue;
+                                }
+                            }
+
                             // After a function call returns a composite value (record, list,
                             // string), the result pointer references the callee's now-freed
                             // stack frame. Copy to the caller's frame so subsequent calls
@@ -732,6 +755,7 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
                                 (self.storage.allocLocal(bind.symbol, vt) catch return error.OutOfMemory);
                             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
                             WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
+                            try self.maybeRegisterCallableBinding(bind.symbol, stmt.expr);
                         }
                     },
                     .wildcard => {
@@ -5184,12 +5208,7 @@ fn tryBindFunction(self: *Self, expr_id: LirExprId, expr: LirExpr, symbol: Symbo
                 fn_result_info;
 
             // Compile the returned closure's function (may already be compiled)
-            const inner_fn_expr = self.store.getExpr(closure_info.lambda_expr);
-            const func_idx = switch (inner_fn_expr) {
-                .closure => |closure_id| try self.compileClosure(closure_info.lambda_expr, self.store.getClosureData(closure_id)),
-                .lambda => |lambda| try self.compileLambda(closure_info.lambda_expr, lambda),
-                else => return false,
-            };
+            const func_idx = self.compileCallableWithCaptures(closure_info.lambda_expr, closure_info.captures) catch return false;
 
             // Generate the call — leaves closure value on the wasm stack
             try self.generateCall(call_expr);
@@ -6226,12 +6245,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
             try self.generateCall(inner_call);
 
             // Compile the inner closure function
-            const inner_fn_expr = self.store.getExpr(inner_closure_info.lambda_expr);
-            const func_idx = switch (inner_fn_expr) {
-                .closure => |closure_id| try self.compileClosure(inner_closure_info.lambda_expr, self.store.getClosureData(closure_id)),
-                .lambda => |lambda| try self.compileLambda(inner_closure_info.lambda_expr, lambda),
-                else => unreachable,
-            };
+            const func_idx = try self.compileCallableWithCaptures(inner_closure_info.lambda_expr, inner_closure_info.captures);
 
             switch (inner_closure_info.representation) {
                 .no_captures => {
@@ -6593,6 +6607,44 @@ fn getClosureInfoFromExpr(self: *const Self, expr_id: LirExprId) ?ReturnedClosur
     }
 }
 
+/// After binding a value to `symbol`, register callable metadata (if any) so
+/// lookup-call dispatch can resolve synthetic/local symbols without symbol defs.
+fn maybeRegisterCallableBinding(self: *Self, symbol: Symbol, expr_id: LirExprId) Allocator.Error!void {
+    const closure_info = self.getClosureInfoFromExpr(expr_id) orelse return;
+    const key: u64 = @bitCast(symbol);
+
+    var bound_symbol: ?Symbol = null;
+    if (self.storage.locals.get(key)) |local_info| {
+        switch (closure_info.representation) {
+            .no_captures => {
+                // No runtime payload required.
+            },
+            .one_capture => |repr| {
+                // Only bind through the symbol local if that local actually stores
+                // the capture payload type (not a closure-layout placeholder).
+                if (local_info.val_type == self.resolveValType(repr.capture_layout)) {
+                    bound_symbol = symbol;
+                }
+            },
+            .multiple_captures, .enum_no_captures, .tagged_union_captures => {
+                // These representations carry an i32 pointer payload at runtime.
+                if (local_info.val_type == .i32) {
+                    bound_symbol = symbol;
+                }
+            },
+        }
+    }
+
+    try self.closure_values.put(key, .{
+        .representation = closure_info.representation,
+        .stack_offset = 0,
+        .lambda_expr = closure_info.lambda_expr,
+        .captures = closure_info.captures,
+        .func_idx = null,
+        .bound_symbol = bound_symbol,
+    });
+}
+
 /// Find the closure representation from an expression (recursing through blocks/nominals).
 fn findClosureReprInExpr(self: *const Self, expr_id: LirExprId) ?LIR.ClosureRepresentation {
     const expr = self.store.getExpr(expr_id);
@@ -6839,6 +6891,31 @@ fn resolveCaptureThroughClosureImpl(self: *Self, symbol: Symbol, depth: u32) ?u3
         self.resolveCaptureThroughClosureImpl(inner_caps[0].symbol, depth + 1);
 }
 
+/// Compile a callable expression for closure dispatch, honoring explicit captures.
+/// If `lambda_expr_id` is a `.lambda` and `captures` is non-empty, compile it as
+/// a closure-shaped function (captures as leading params).
+fn compileCallableWithCaptures(
+    self: *Self,
+    lambda_expr_id: LirExprId,
+    captures: LIR.LirCaptureSpan,
+) Allocator.Error!u32 {
+    const expr = self.store.getExpr(lambda_expr_id);
+    return switch (expr) {
+        .closure => |closure_id| try self.compileClosure(lambda_expr_id, self.store.getClosureData(closure_id)),
+        .lambda => |lambda| blk: {
+            if (self.store.getCaptures(captures).len > 0) {
+                break :blk try self.compileClosure(lambda_expr_id, .{
+                    .lambda = lambda_expr_id,
+                    .captures = captures,
+                });
+            }
+            break :blk try self.compileLambda(lambda_expr_id, lambda);
+        },
+        .nominal => |nom| try self.compileCallableWithCaptures(nom.backing_expr, captures),
+        else => unreachable,
+    };
+}
+
 /// Dispatch a closure call based on its ClosureValue.
 /// For multi-function lambda sets, generates a switch on the tag.
 fn dispatchClosureCall(
@@ -6849,20 +6926,27 @@ fn dispatchClosureCall(
 ) Allocator.Error!void {
     switch (cv.representation) {
         .enum_no_captures => |repr| {
+            if (cv.bound_symbol) |bsym| {
+                if (self.storage.getLocal(bsym)) |ptr_local| {
+                    try self.dispatchEnumClosureFromPtr(ptr_local, repr.lambda_set, args, ret_layout);
+                    return;
+                }
+            }
             try self.dispatchEnumClosure(cv.stack_offset, repr.lambda_set, args, ret_layout);
         },
         .tagged_union_captures => |repr| {
+            if (cv.bound_symbol) |bsym| {
+                if (self.storage.getLocal(bsym)) |ptr_local| {
+                    try self.dispatchUnionClosureFromPtr(ptr_local, repr.lambda_set, args, ret_layout);
+                    return;
+                }
+            }
             try self.dispatchUnionClosure(cv.stack_offset, repr.lambda_set, args, ret_layout);
         },
         .one_capture, .multiple_captures, .no_captures => {
             // Single function - compile and call directly
             const func_idx = if (cv.func_idx) |fid| fid else blk: {
-                const fn_expr = self.store.getExpr(cv.lambda_expr);
-                break :blk switch (fn_expr) {
-                    .closure => |closure_id| try self.compileClosure(cv.lambda_expr, self.store.getClosureData(closure_id)),
-                    .lambda => |lambda| try self.compileLambda(cv.lambda_expr, lambda),
-                    else => unreachable,
-                };
+                break :blk try self.compileCallableWithCaptures(cv.lambda_expr, cv.captures);
             };
 
             // Push roc_ops_ptr first
@@ -6872,7 +6956,22 @@ fn dispatchClosureCall(
             // For factory-produced closures, use the bound symbol to find
             // the capture local (avoids collisions between factory instances).
             const captures = self.store.getCaptures(cv.captures);
+            const bound_ptr_local = if (cv.representation == .multiple_captures and cv.bound_symbol != null)
+                self.storage.getLocal(cv.bound_symbol.?)
+            else
+                null;
+            var bound_ptr_field_offset: u32 = 0;
             for (captures) |cap| {
+                if (bound_ptr_local) |ptr_local| {
+                    // For multiple_captures values rebound as a symbol local, the local
+                    // holds a pointer to the captures struct. Load each capture field.
+                    try self.emitLocalGet(ptr_local);
+                    const cap_vt = self.resolveValType(cap.layout_idx);
+                    try self.emitLoadOp(cap_vt, bound_ptr_field_offset);
+                    const vs: u32 = valTypeSize(cap_vt);
+                    bound_ptr_field_offset += if (vs < 8) 8 else vs;
+                    continue;
+                }
                 if (cv.bound_symbol) |bsym| {
                     if (self.storage.getLocal(bsym)) |local_idx| {
                         try self.emitLocalGet(local_idx);
@@ -6901,6 +7000,131 @@ fn dispatchClosureCall(
             try self.generateCallArgs(args);
             try self.emitCall(func_idx);
         },
+    }
+}
+
+/// Dispatch an enum closure where the closure value is in a local pointer.
+fn dispatchEnumClosureFromPtr(
+    self: *Self,
+    ptr_local: u32,
+    lambda_set: LIR.LambdaSetMemberSpan,
+    args: LIR.LirExprSpan,
+    ret_layout: layout.Idx,
+) Allocator.Error!void {
+    const members = self.store.getLambdaSetMembers(lambda_set);
+
+    if (members.len == 0) {
+        self.body.append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
+        return;
+    }
+
+    if (members.len == 1) {
+        try self.compileLambdaSetMemberAndCall(members[0], args);
+        return;
+    }
+
+    try self.emitLocalGet(ptr_local);
+    try self.emitLoadOp(.i32, 0);
+    const tag_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(tag_local);
+
+    const bt = valTypeToBlockType(self.resolveValType(ret_layout));
+
+    for (members, 0..) |member, i| {
+        const is_last = (i == members.len - 1);
+        if (!is_last) {
+            try self.emitLocalGet(tag_local);
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(member.tag)) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+            self.body.append(self.allocator, @intFromEnum(bt)) catch return error.OutOfMemory;
+            try self.compileLambdaSetMemberAndCall(member, args);
+            self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+        } else {
+            try self.compileLambdaSetMemberAndCall(member, args);
+        }
+    }
+
+    for (0..members.len - 1) |_| {
+        self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
+    }
+}
+
+/// Bind captures from a closure payload pointer local.
+fn bindCapturesFromPtr(
+    self: *Self,
+    captures_span: LIR.LirCaptureSpan,
+    ptr_local: u32,
+    payload_offset: u32,
+) Allocator.Error!void {
+    const captures = self.store.getCaptures(captures_span);
+    var field_offset: u32 = 0;
+    for (captures) |cap| {
+        const cap_vt = self.resolveValType(cap.layout_idx);
+        try self.emitLocalGet(ptr_local);
+        if (payload_offset + field_offset > 0) {
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(payload_offset + field_offset)) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+        }
+        try self.emitLoadOp(cap_vt, 0);
+        const local_idx = self.storage.allocLocal(cap.symbol, cap_vt) catch return error.OutOfMemory;
+        try self.emitLocalSet(local_idx);
+        const vs: u32 = valTypeSize(cap_vt);
+        field_offset += if (vs < 8) 8 else vs;
+    }
+}
+
+/// Dispatch a union closure where the closure value is in a local pointer.
+fn dispatchUnionClosureFromPtr(
+    self: *Self,
+    ptr_local: u32,
+    lambda_set: LIR.LambdaSetMemberSpan,
+    args: LIR.LirExprSpan,
+    ret_layout: layout.Idx,
+) Allocator.Error!void {
+    const members = self.store.getLambdaSetMembers(lambda_set);
+
+    if (members.len == 0) {
+        self.body.append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
+        return;
+    }
+
+    if (members.len == 1) {
+        const member = members[0];
+        try self.bindCapturesFromPtr(member.captures, ptr_local, 8);
+        try self.compileLambdaSetMemberAndCall(member, args);
+        return;
+    }
+
+    try self.emitLocalGet(ptr_local);
+    try self.emitLoadOp(.i32, 0);
+    const tag_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(tag_local);
+
+    const bt = valTypeToBlockType(self.resolveValType(ret_layout));
+
+    for (members, 0..) |member, i| {
+        const is_last = (i == members.len - 1);
+        if (!is_last) {
+            try self.emitLocalGet(tag_local);
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(member.tag)) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+            self.body.append(self.allocator, @intFromEnum(bt)) catch return error.OutOfMemory;
+            try self.bindCapturesFromPtr(member.captures, ptr_local, 8);
+            try self.compileLambdaSetMemberAndCall(member, args);
+            self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+        } else {
+            try self.bindCapturesFromPtr(member.captures, ptr_local, 8);
+            try self.compileLambdaSetMemberAndCall(member, args);
+        }
+    }
+
+    for (0..members.len - 1) |_| {
+        self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
     }
 }
 
