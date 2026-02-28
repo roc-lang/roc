@@ -808,6 +808,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Registry of compiled lambdas by cache key.
         /// Used when a lambda is called - we compile it once and reuse.
         compiled_lambdas: std.AutoHashMap(u32, usize),
+        /// Lambdas currently being compiled (temporary body-start offsets).
+        /// This breaks recursive compilation cycles when lambda caching is disabled.
+        in_progress_lambdas: std.AutoHashMap(u32, usize),
+        /// Closures currently being materialized (layout-disambiguated symbol key -> location).
+        /// Used to resolve mutually-recursive closure captures without re-entering
+        /// closure materialization recursively.
+        in_progress_closures_by_layout: std.AutoHashMap(u128, ValueLocation),
 
         /// Pending calls that need to be patched after all procedures are compiled
         pending_calls: std.ArrayList(PendingCall),
@@ -1230,6 +1237,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .current_binding_symbol = null,
                 .proc_registry = std.AutoHashMap(u64, CompiledProc).init(allocator),
                 .compiled_lambdas = std.AutoHashMap(u32, usize).init(allocator),
+                .in_progress_lambdas = std.AutoHashMap(u32, usize).init(allocator),
+                .in_progress_closures_by_layout = std.AutoHashMap(u128, ValueLocation).init(allocator),
                 .pending_calls = std.ArrayList(PendingCall).empty,
                 .join_point_jumps = std.AutoHashMap(u32, std.ArrayList(JumpRecord)).init(allocator),
                 .join_point_param_layouts = std.AutoHashMap(u32, LayoutIdxSpan).init(allocator),
@@ -1258,6 +1267,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.join_points.deinit();
             self.proc_registry.deinit();
             self.compiled_lambdas.deinit();
+            self.in_progress_lambdas.deinit();
+            self.in_progress_closures_by_layout.deinit();
             self.pending_calls.deinit(self.allocator);
             // Clean up the nested ArrayLists in join_point_jumps
             var it = self.join_point_jumps.valueIterator();
@@ -1294,6 +1305,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.current_binding_symbol = null;
             self.proc_registry.clearRetainingCapacity();
             self.compiled_lambdas.clearRetainingCapacity();
+            self.in_progress_lambdas.clearRetainingCapacity();
+            self.in_progress_closures_by_layout.clearRetainingCapacity();
             self.pending_calls.clearRetainingCapacity();
             // Clear nested ArrayLists
             var it = self.join_point_jumps.valueIterator();
@@ -1330,6 +1343,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.mutable_var_slots.clearRetainingCapacity();
             self.closure_stack_info.clearRetainingCapacity();
             self.active_closure_base = null;
+            self.in_progress_lambdas.clearRetainingCapacity();
+            self.in_progress_closures_by_layout.clearRetainingCapacity();
             self.codegen.callee_saved_used = 0;
 
             // Initialize stack_offset to reserve space for callee-saved area
@@ -1654,7 +1669,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Lambdas and closures as first-class values (stored to variables)
                 .lambda => |_| try self.generateNoCapturesClosureValue(expr_id),
                 .closure => |closure_id| {
-                    return try self.generateClosure(self.store.getClosureData(closure_id));
+                    return try self.generateClosure(self.store.getClosureData(closure_id), null);
                 },
 
                 // Structs (records, tuples, empty records)
@@ -5062,12 +5077,30 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .immediate_i128 = val };
         }
 
+        const ClosureSymbolBinding = struct {
+            symbol: Symbol,
+            layout_idx: layout.Idx,
+        };
+
         /// Generate code for a symbol lookup
         fn generateLookup(self: *Self, symbol: Symbol, layout_idx: layout.Idx) Allocator.Error!ValueLocation {
             // Check if we have a location for this symbol
             if (self.getSymbolLocation(symbol, layout_idx)) |loc| {
                 if (loc == .list_stack) {} else if (loc == .stack) {}
                 return loc;
+            }
+
+            if (self.in_progress_closures_by_layout.get(self.symbolLayoutKey(symbol, layout_idx))) |loc| {
+                return loc;
+            }
+            if (self.isFunctionLayout(layout_idx)) {
+                var in_progress_it = self.in_progress_closures_by_layout.iterator();
+                while (in_progress_it.next()) |entry| {
+                    const key_symbol_bits: u64 = @truncate(entry.key_ptr.* >> 64);
+                    if (key_symbol_bits == symbolKey(symbol)) {
+                        return self.adaptLocationForLayout(entry.value_ptr.*, layout_idx);
+                    }
+                }
             }
 
             // Callable symbols can be bound under their semantic function layout
@@ -5086,24 +5119,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (self.getSymbolDefExact(symbol)) |def_expr_id| {
                 const def_expr = self.store.getExpr(def_expr_id);
 
-                // For capture-free closures, compile the lambda as a proc and pre-register
-                // as lambda_code. Closures with captures must be materialized as closure
-                // values so their environment is available at call sites.
                 if (def_expr == .closure) {
                     const closure = self.store.getClosureData(def_expr.closure);
-                    if (self.store.getCaptures(closure.captures).len == 0) {
-                        const inner = self.store.getExpr(closure.lambda);
-                        if (inner == .lambda) {
-                            const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda, .{});
-                            const lambda_loc: ValueLocation = .{ .lambda_code = .{
-                                .code_offset = code_offset,
-                                .ret_layout = inner.lambda.ret_layout,
-                                .source_expr = closure.lambda,
-                            } };
-                            try self.putSymbolLocation(symbol, layout_idx, lambda_loc);
-                            return lambda_loc;
-                        }
-                    }
+                    const loc = try self.generateClosure(closure, .{
+                        .symbol = symbol,
+                        .layout_idx = layout_idx,
+                    });
+                    try self.putSymbolLocation(symbol, layout_idx, loc);
+                    return loc;
                 }
 
                 // Generate code for the definition
@@ -12076,11 +12099,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Update the patch's recorded position (it shifted)
                     patch.call_offset += prologue_size;
 
-                    // Update shifted targets inside the moved range. Relative call
-                    // immediates remain valid in that case, so no patching needed.
+                    // Targets in the moved body range shift with the call site, except
+                    // body_start itself: prepend places the prologue at body_start, so
+                    // entry targets must stay fixed at that offset.
                     if (patch.target_offset >= body_start and patch.target_offset < body_end) {
-                        patch.target_offset += prologue_size;
-                        continue;
+                        if (patch.target_offset != body_start) {
+                            patch.target_offset += prologue_size;
+                            continue;
+                        }
                     }
 
                     // Target remained outside the shifted range, so the relative
@@ -12114,11 +12140,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Update the patch's recorded position (it shifted)
                     patch.instr_offset += prologue_size;
 
-                    // Targets inside the shifted range move by the same amount,
-                    // so only metadata needs updating.
+                    // Targets inside the shifted range move by the same amount, except
+                    // body_start itself: prepend places the prologue at body_start, so
+                    // entry targets must stay fixed and require immediate re-patching.
                     if (patch.target_offset >= body_start and patch.target_offset < body_end) {
-                        patch.target_offset += prologue_size;
-                        continue;
+                        if (patch.target_offset != body_start) {
+                            patch.target_offset += prologue_size;
+                            continue;
+                        }
                     }
 
                     // Target stayed outside the shifted range, so patch immediate.
@@ -12210,7 +12239,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Direct closure call.
                 .closure => |closure_id| {
                     const closure = self.store.getClosureData(closure_id);
-                    const closure_loc = try self.generateClosure(closure);
+                    const closure_loc = try self.generateClosure(closure, null);
                     if (closure_loc == .closure_value) {
                         return try self.generateClosureDispatch(
                             closure_loc.closure_value,
@@ -12328,7 +12357,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Generate code for a closure expression.
         /// Handles different closure representations based on the lambda set.
-        fn generateClosure(self: *Self, closure: anytype) Allocator.Error!ValueLocation {
+        fn generateClosure(
+            self: *Self,
+            closure: anytype,
+            symbol_binding: ?ClosureSymbolBinding,
+        ) Allocator.Error!ValueLocation {
             switch (closure.representation) {
                 .enum_no_captures => |repr| {
                     // Multiple functions, no captures - just store the tag byte
@@ -12359,14 +12392,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emitLoadImm(temp, repr.tag);
                     try self.codegen.emitStoreStack(.w64, slot, temp);
                     self.codegen.freeGeneral(temp);
-                    // Materialize captures at payload offset (+8 for tag with padding)
-                    try self.materializeCaptures(closure.captures, slot + 8);
                     const cv: ValueLocation = .{ .closure_value = .{
                         .stack_offset = slot,
                         .representation = closure.representation,
                         .lambda = closure.lambda,
                         .captures = closure.captures,
                     } };
+                    var in_progress_key_opt: ?u128 = null;
+                    if (symbol_binding) |binding| {
+                        const in_progress_key = self.symbolLayoutKey(binding.symbol, binding.layout_idx);
+                        try self.in_progress_closures_by_layout.put(in_progress_key, cv);
+                        in_progress_key_opt = in_progress_key;
+                    }
+                    defer if (in_progress_key_opt) |in_progress_key| {
+                        _ = self.in_progress_closures_by_layout.remove(in_progress_key);
+                    };
+                    // Materialize captures at payload offset (+8 for tag with padding)
+                    try self.materializeCaptures(closure.captures, slot + 8);
                     try self.updateClosureStackInfoForCopy(slot, cv);
                     return cv;
                 },
@@ -12379,13 +12421,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const dynamic_capture_size = self.captureStorageSizeInScope(closure.captures);
                     const capture_size = @max(declared_capture_size, dynamic_capture_size);
                     const slot = self.codegen.allocStackSlot(@intCast(capture_size));
-                    try self.materializeCaptures(closure.captures, slot);
                     const cv: ValueLocation = .{ .closure_value = .{
                         .stack_offset = slot,
                         .representation = closure.representation,
                         .lambda = closure.lambda,
                         .captures = closure.captures,
                     } };
+                    var in_progress_key_opt: ?u128 = null;
+                    if (symbol_binding) |binding| {
+                        const in_progress_key = self.symbolLayoutKey(binding.symbol, binding.layout_idx);
+                        try self.in_progress_closures_by_layout.put(in_progress_key, cv);
+                        in_progress_key_opt = in_progress_key;
+                    }
+                    defer if (in_progress_key_opt) |in_progress_key| {
+                        _ = self.in_progress_closures_by_layout.remove(in_progress_key);
+                    };
+                    try self.materializeCaptures(closure.captures, slot);
                     // If the unwrapped capture is itself a closure value, keep the
                     // underlying closure metadata at this offset. The bytes in the
                     // slot are exactly the capture bytes, so tagging them as the
@@ -12413,13 +12464,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const dynamic_struct_size = self.captureStorageSizeInScope(closure.captures);
                     const struct_size = @max(declared_struct_size, dynamic_struct_size);
                     const slot = self.codegen.allocStackSlot(@intCast(struct_size));
-                    try self.materializeCaptures(closure.captures, slot);
                     const cv: ValueLocation = .{ .closure_value = .{
                         .stack_offset = slot,
                         .representation = closure.representation,
                         .lambda = closure.lambda,
                         .captures = closure.captures,
                     } };
+                    var in_progress_key_opt: ?u128 = null;
+                    if (symbol_binding) |binding| {
+                        const in_progress_key = self.symbolLayoutKey(binding.symbol, binding.layout_idx);
+                        try self.in_progress_closures_by_layout.put(in_progress_key, cv);
+                        in_progress_key_opt = in_progress_key;
+                    }
+                    defer if (in_progress_key_opt) |in_progress_key| {
+                        _ = self.in_progress_closures_by_layout.remove(in_progress_key);
+                    };
+                    try self.materializeCaptures(closure.captures, slot);
                     // Preserve first-capture callable metadata at slot 0 when present.
                     // This avoids clobbering nested callable captures that share the base offset.
                     if (self.closure_stack_info.get(slot) == null) {
@@ -12432,11 +12492,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const inner = self.store.getExpr(closure.lambda);
                     if (inner != .lambda) unreachable;
                     const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda, .{});
-                    return .{ .lambda_code = .{
+                    const lambda_loc: ValueLocation = .{ .lambda_code = .{
                         .code_offset = code_offset,
                         .ret_layout = inner.lambda.ret_layout,
                         .source_expr = closure.lambda,
                     } };
+                    return lambda_loc;
                 },
             }
         }
@@ -12455,8 +12516,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     var capture_size = cap_sa.size;
                     // Align offset to match layout store's putCaptureStruct
                     var cap_align = cap_sa.alignment.toByteUnits();
+                    var callable_info_opt: ?ClosureStackInfo = null;
                     if (self.isFunctionLayout(capture.layout_idx)) {
-                        if (self.closureInfoFromValueLocation(capture_loc)) |info| {
+                        callable_info_opt = self.callableInfoForSymbol(capture.symbol, capture.layout_idx);
+                        if (callable_info_opt == null) {
+                            callable_info_opt = self.closureInfoFromValueLocation(capture_loc);
+                        }
+                        if (callable_info_opt) |info| {
                             capture_size = @max(capture_size, @as(@TypeOf(capture_size), @intCast(self.closureStorageSize(info.representation))));
                             cap_align = @max(cap_align, self.closureStorageAlignBytes(info.representation));
                         }
@@ -12580,7 +12646,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             self.codegen.freeGeneral(temp);
                         },
                     }
-                    try self.updateClosureStackInfoForCopy(base_offset + offset, capture_loc);
+                    if (callable_info_opt) |info| {
+                        try self.closure_stack_info.put(base_offset + offset, info);
+                        try self.putSymbolClosureInfo(capture.symbol, capture.layout_idx, info);
+                    } else {
+                        try self.updateClosureStackInfoForCopy(base_offset + offset, capture_loc);
+                    }
                     offset += @intCast(capture_size);
                 } else {
                     // Symbol not found in symbol_locations. Try generateLookup which
@@ -12593,8 +12664,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         var capture_size = cap_sa_r.size;
                         // Align offset to match layout store's putCaptureStruct
                         var cap_align_r = cap_sa_r.alignment.toByteUnits();
+                        var callable_info_opt: ?ClosureStackInfo = null;
                         if (self.isFunctionLayout(capture.layout_idx)) {
-                            if (self.closureInfoFromValueLocation(resolved_loc)) |info| {
+                            callable_info_opt = self.callableInfoForSymbol(capture.symbol, capture.layout_idx);
+                            if (callable_info_opt == null) {
+                                callable_info_opt = self.closureInfoFromValueLocation(resolved_loc);
+                            }
+                            if (callable_info_opt) |info| {
                                 capture_size = @max(capture_size, @as(@TypeOf(capture_size), @intCast(self.closureStorageSize(info.representation))));
                                 cap_align_r = @max(cap_align_r, self.closureStorageAlignBytes(info.representation));
                             }
@@ -12634,7 +12710,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 self.codegen.freeGeneral(temp);
                             },
                         }
-                        try self.updateClosureStackInfoForCopy(base_offset + offset, resolved_loc);
+                        if (callable_info_opt) |info| {
+                            try self.closure_stack_info.put(base_offset + offset, info);
+                            try self.putSymbolClosureInfo(capture.symbol, capture.layout_idx, info);
+                        } else {
+                            try self.updateClosureStackInfoForCopy(base_offset + offset, resolved_loc);
+                        }
                         offset += @intCast(capture_size);
                     } else |_| {
                         unreachable;
@@ -14598,6 +14679,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const use_cache = self.store.getCaptures(options.capture_params).len == 0 and !self.hasPreboundCallableForParams(lambda.params);
             const key = @intFromEnum(lambda_expr_id);
 
+            // Recursive lambda compilation must resolve to the in-flight body start
+            // to avoid unbounded re-entry (e.g. mutually-recursive closures).
+            if (self.in_progress_lambdas.get(key)) |code_offset| {
+                return code_offset;
+            }
+
             // Check if already compiled
             if (use_cache) {
                 if (self.compiled_lambdas.get(key)) |code_offset| {
@@ -14684,6 +14771,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Register before generating (for potential recursive calls)
             // Use body_start as temporary; will be updated after prologue prepend
+            try self.in_progress_lambdas.put(key, body_start);
             if (use_cache) {
                 try self.compiled_lambdas.put(key, body_start);
             }
@@ -14722,6 +14810,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (use_cache) {
                     _ = self.compiled_lambdas.remove(key);
                 }
+                _ = self.in_progress_lambdas.remove(key);
                 self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
                 self.early_return_ret_layout = saved_early_return_ret_layout;
                 self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
@@ -14812,6 +14901,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (use_cache) {
                     try self.compiled_lambdas.put(key, prologue_start);
                 }
+                _ = self.in_progress_lambdas.remove(key);
 
                 // Patch early return jumps to point to the epilogue (now at adjusted offset)
                 const final_epilogue_offset = body_epilogue_offset - body_start + prologue_size + prologue_start;
@@ -14886,6 +14976,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (use_cache) {
                     try self.compiled_lambdas.put(key, prologue_start);
                 }
+                _ = self.in_progress_lambdas.remove(key);
 
                 // Patch early return jumps
                 const final_epilogue_offset = body_epilogue_offset - body_start + prologue_size + prologue_start;
