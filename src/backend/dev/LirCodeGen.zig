@@ -1090,6 +1090,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return true;
         }
 
+        fn adaptLocationForLayout(_: *Self, loc: ValueLocation, layout_idx: layout.Idx) ValueLocation {
+            if (layout_idx == .i128 or layout_idx == .u128 or layout_idx == .dec) {
+                if (loc == .stack) {
+                    return .{ .stack_i128 = loc.stack.offset };
+                }
+            }
+            return loc;
+        }
+
         fn putSymbolLocation(self: *Self, symbol: Symbol, layout_idx: ?layout.Idx, loc: ValueLocation) Allocator.Error!void {
             try self.symbol_locations.put(symbolKey(symbol), loc);
             if (layout_idx) |li| {
@@ -1106,7 +1115,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn getSymbolLocation(self: *Self, symbol: Symbol, layout_idx: ?layout.Idx) ?ValueLocation {
             if (layout_idx) |li| {
                 if (self.symbol_locations_by_layout.get(self.symbolLayoutKey(symbol, li))) |loc| return loc;
-                if (self.symbol_locations.contains(symbolKey(symbol))) {
+                if (self.symbol_locations.get(symbolKey(symbol))) |fallback_loc_raw| {
+                    const fallback_loc = self.adaptLocationForLayout(fallback_loc_raw, li);
+                    if (self.locationMatchesLayout(fallback_loc, li)) {
+                        return fallback_loc;
+                    }
                     var debug_name: []const u8 = "<unknown>";
                     if (self.layout_store) |ls| {
                         if (symbol.module_idx < ls.all_module_envs.len) {
@@ -7577,15 +7590,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         switch (value_loc) {
                             .stack => |s| {
                                 const base_offset = s.offset;
+                                var bind_layout_idx = arg_bind.layout_idx;
                                 const arg_loc: ValueLocation = if (payload_is_tuple and variant_payload_layout != null) plblk: {
                                     // Multi-arg tag: payload is a tuple, use tuple element offsets/layouts
                                     const pl_val = ls.getLayout(variant_payload_layout.?);
                                     const elem_offset = ls.getStructFieldOffsetByOriginalIndex(pl_val.data.struct_.idx, @intCast(arg_idx));
                                     const elem_layout = ls.getStructFieldLayoutByOriginalIndex(pl_val.data.struct_.idx, @intCast(arg_idx));
+                                    bind_layout_idx = elem_layout;
                                     const arg_offset = base_offset + @as(i32, @intCast(elem_offset));
                                     break :plblk self.stackLocationForLayout(elem_layout, arg_offset);
                                 } else if (variant_payload_layout) |pl| plblk: {
                                     // Single-arg tag: use variant payload layout directly
+                                    bind_layout_idx = pl;
                                     const payload_offset = base_offset;
                                     if (pl == .i128 or pl == .u128 or pl == .dec) {
                                         break :plblk .{ .stack_i128 = payload_offset };
@@ -7631,10 +7647,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                         break :plblk .{ .stack = .{ .offset = payload_offset } };
                                     }
                                 } else .{ .stack = .{ .offset = base_offset + @as(i32, @intCast(arg_idx)) * 8 } };
-                                try self.putSymbolLocation(arg_bind.symbol, arg_bind.layout_idx, arg_loc);
+                                try self.putSymbolLocation(arg_bind.symbol, bind_layout_idx, arg_loc);
                             },
                             else => {
-                                try self.putSymbolLocation(arg_bind.symbol, arg_bind.layout_idx, value_loc);
+                                const bind_layout_idx = variant_payload_layout orelse arg_bind.layout_idx;
+                                try self.putSymbolLocation(arg_bind.symbol, bind_layout_idx, value_loc);
                             },
                         }
                     },

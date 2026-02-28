@@ -1874,6 +1874,23 @@ fn lowerRecord(self: *Self, module_env: *const ModuleEnv, record: anytype, monot
 
 /// Lower `e_type_var_dispatch` by resolving the type alias and dispatching to the method.
 fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.Idx, tvd: anytype, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
+    if (std.mem.eql(u8, module_env.getIdent(tvd.method_name), "decode_i32")) {
+        const constraints = module_env.types.sliceAllStaticDispatchConstraints();
+        for (constraints) |constraint| {
+            if (constraint.source_expr_idx == @intFromEnum(expr_idx)) {
+                std.debug.print(
+                    "DBG tvd expr={} constraint fn={s} fn_var={} resolved_none={} origin={s}\n",
+                    .{
+                        @intFromEnum(expr_idx),
+                        module_env.getIdent(constraint.fn_name),
+                        @intFromEnum(constraint.fn_var),
+                        constraint.resolved_target.isNone(),
+                        @tagName(constraint.origin),
+                    },
+                );
+            }
+        }
+    }
     // Get the type variable from the alias statement
     const stmt = module_env.store.getStatement(tvd.type_var_alias_stmt);
     const type_var_binding = stmt.s_type_var_alias;
@@ -1897,7 +1914,7 @@ fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR
     }
     const func_monotype = try self.buildFuncMonotype(self.mono_scratches.idxs.sliceFromStart(mono_top), monotype, false);
 
-    const resolved_symbol = method_symbol orelse std.debug.panic(
+    const resolved_symbol = method_symbol orelse self.resolveMethodByNameAcrossModules(module_env, tvd.method_name) orelse std.debug.panic(
         "MIR lower error: unresolved type-var dispatch method `{s}` for expr {}",
         .{ module_env.getIdent(tvd.method_name), @intFromEnum(expr_idx) },
     );
@@ -2010,6 +2027,33 @@ fn resolveMethodForTypeVar(
         .module_idx = @intCast(origin_module_idx),
         .ident_idx = qualified_method,
     };
+}
+
+/// Fallback path for unresolved type-var dispatch:
+/// find a unique method definition by method-name text across loaded modules.
+fn resolveMethodByNameAcrossModules(self: *Self, source_env: *const ModuleEnv, method_name: Ident.Idx) ?MIR.Symbol {
+    const method_text = source_env.getIdent(method_name);
+
+    var match: ?MIR.Symbol = null;
+
+    for (self.all_module_envs, 0..) |env, mod_idx| {
+        const local_ident = env.common.findIdent(method_text) orelse continue;
+        if (self.findDefExprBySymbol(@intCast(mod_idx), local_ident) != null) {
+            const candidate = MIR.Symbol{
+                .module_idx = @intCast(mod_idx),
+                .ident_idx = local_ident,
+            };
+            if (match) |existing| {
+                if (existing.module_idx != candidate.module_idx or existing.ident_idx.idx != candidate.ident_idx.idx) {
+                    return null;
+                }
+            } else {
+                match = candidate;
+            }
+        }
+    }
+
+    return match;
 }
 
 /// Resolve a flex/rigid type variable to nominal info via `type_var_seen`.
