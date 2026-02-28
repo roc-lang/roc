@@ -360,28 +360,6 @@ const DevRocEnv = struct {
             const self: *DevRocEnv = @ptrCast(@alignCast(env));
             self.crashed = true;
             if (self.crash_message) |old| self.allocator.free(old);
-            std.debug.print("rocAlloc overflow site histogram ({} unique):\n", .{StaticAlloc.alloc_site_count});
-            var i: usize = 0;
-            while (i < StaticAlloc.alloc_site_count) : (i += 1) {
-                const site = StaticAlloc.alloc_sites[i];
-                const in_code = self.current_code_base != 0 and
-                    site >= self.current_code_base and
-                    site < (self.current_code_base + self.current_code_size);
-                if (in_code) {
-                    std.debug.print(
-                        "  site=0x{x} (code+0x{x}) count={d}\n",
-                        .{
-                            site,
-                            site - self.current_code_base,
-                            StaticAlloc.alloc_site_counts[i],
-                        },
-                    );
-                } else {
-                    std.debug.print("  site=0x{x} count={d}\n", .{ site, StaticAlloc.alloc_site_counts[i] });
-                }
-            }
-            std.debug.print("rocAlloc overflow stack trace:\n", .{});
-            std.debug.dumpCurrentStackTrace(@returnAddress());
             self.crash_message = std.fmt.allocPrint(
                 self.allocator,
                 "static buffer overflow in alloc (len={d}, align={d}, offset={d}, aligned_offset={d}, buffer_len={d}, alloc_count={d})",
@@ -665,8 +643,6 @@ pub const DevEvaluator = struct {
         if (jmp_result != 0) {
             if (jmp_result == 2) {
                 // Returned via longjmp from VEH handler (segfault)
-                const code = WindowsSEH.getExceptionCode();
-                std.debug.print("\nSegfault caught: {s} (code 0x{X:0>8})\n", .{ WindowsSEH.formatException(code), code });
                 return error.Segfault;
             } else {
                 // Returned via longjmp from rocCrashedFn (value 1)
@@ -768,17 +744,6 @@ pub const DevEvaluator = struct {
 
                 const validation_result = transformer.validateAllResolved();
                 if (!validation_result.is_valid) {
-                    if (validation_result.first_error) |err| {
-                        std.log.err(
-                            "Lambda-set validation failed for module '{s}': unresolved={d}, first={s}",
-                            .{ module.module_name, validation_result.unresolved_count, @tagName(err.kind) },
-                        );
-                    } else {
-                        std.log.err(
-                            "Lambda-set validation failed for module '{s}': unresolved={d}",
-                            .{ module.module_name, validation_result.unresolved_count },
-                        );
-                    }
                     return error.RuntimeError;
                 }
 

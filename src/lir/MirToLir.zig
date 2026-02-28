@@ -304,6 +304,16 @@ fn getIdentText(self: *const Self, ident_idx: Ident.Idx) ?[]const u8 {
     return null;
 }
 
+fn isTrueTagName(self: *const Self, ident_idx: Ident.Idx) bool {
+    if (@as(u32, @bitCast(ident_idx)) == @as(u32, @bitCast(self.true_tag))) {
+        return true;
+    }
+    if (self.getIdentText(ident_idx)) |name_text| {
+        return std.mem.eql(u8, name_text, "True");
+    }
+    return false;
+}
+
 /// Given a tag name and the monotype of the containing tag union,
 /// return the discriminant (sorted index of the tag name).
 fn tagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monotype.Idx) u16 {
@@ -313,7 +323,7 @@ fn tagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monot
             // Bool is a primitive, not a tag_union. Its discriminants are:
             // False = 0, True = 1 (sorted alphabetically).
             std.debug.assert(p == .bool);
-            return if (@as(u32, @bitCast(tag_name)) == @as(u32, @bitCast(self.true_tag))) 1 else 0;
+            return if (self.isTrueTagName(tag_name)) 1 else 0;
         },
         .tag_union => |tu| {
             const tags = self.mir_store.monotype_store.getTags(tu.tags);
@@ -325,11 +335,8 @@ fn tagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monot
                 const p0 = self.mir_store.monotype_store.getIdxSpan(tags[0].payloads);
                 const p1 = self.mir_store.monotype_store.getIdxSpan(tags[1].payloads);
                 if (p0.len == 0 and p1.len == 0) {
-                    const true_u32: u32 = @bitCast(self.true_tag);
-                    if (@as(u32, @bitCast(tags[0].name)) == true_u32 or
-                        @as(u32, @bitCast(tags[1].name)) == true_u32)
-                    {
-                        return if (@as(u32, @bitCast(tag_name)) == true_u32) 1 else 0;
+                    if (self.isTrueTagName(tags[0].name) or self.isTrueTagName(tags[1].name)) {
+                        return if (self.isTrueTagName(tag_name)) 1 else 0;
                     }
                 }
             }
@@ -4096,6 +4103,33 @@ test "MIR small i128 value emits i128_literal not i64_literal" {
 // --- Bool.not LIR structural tests ---
 // Verify that a prim.bool match (like negBool produces) gets correct discriminants:
 // True pattern → discriminant 1, False body → discriminant 0.
+
+test "Bool discriminant: prim.bool resolves cross-module True by text" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    var foreign_env = try ModuleEnv.init(allocator, "");
+    defer foreign_env.deinit();
+
+    const foreign_true = try foreign_env.insertIdent(Ident.for_text("True"));
+    const bool_mono = env.mir_store.monotype_store.primIdx(.bool);
+
+    const all_envs: []const *const ModuleEnv = &.{ &env.module_env, &foreign_env };
+    var translator = Self.init(
+        allocator,
+        &env.mir_store,
+        &env.lir_store,
+        &env.layout_store,
+        all_envs,
+        env.module_env.idents.true_tag,
+    );
+    defer translator.deinit();
+
+    try testing.expectEqual(@as(u16, 1), translator.tagDiscriminant(foreign_true, bool_mono));
+}
 
 test "LIR Bool match: True pattern gets discriminant 1, False body gets discriminant 0" {
     const allocator = testing.allocator;

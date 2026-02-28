@@ -1677,6 +1677,36 @@ test "Bool.not MIR: Bool.not(False) is a call with prim.bool return type" {
     try testing.expectEqual(Monotype.Prim.bool, arg_mono.prim);
 }
 
+test "Bool.not MIR: callee symbol lowers to lambda with match body" {
+    var env = try MirTestEnv.initExpr("Bool.not(True)");
+    defer env.deinit();
+
+    const expr = try env.lowerFirstDef();
+    const call_expr = env.mir_store.getExpr(expr);
+    try testing.expect(call_expr == .call);
+
+    const func_expr = env.mir_store.getExpr(call_expr.call.func);
+    try testing.expect(func_expr == .lookup);
+
+    const callee_def_id = env.mir_store.getSymbolDef(func_expr.lookup) orelse return error.TestUnexpectedResult;
+    const callee_def = env.mir_store.getExpr(callee_def_id);
+    try testing.expect(callee_def == .lambda);
+
+    const body = env.mir_store.getExpr(callee_def.lambda.body);
+    try testing.expect(body == .match_expr);
+    const branches = env.mir_store.getBranches(body.match_expr.branches);
+    try testing.expectEqual(@as(usize, 2), branches.len);
+
+    const bp0 = env.mir_store.getBranchPatterns(branches[0].patterns);
+    const pat0 = env.mir_store.getPattern(bp0[0].pattern);
+    try testing.expect(pat0 == .tag);
+    try testing.expectEqualStrings("True", env.module_env.getIdent(pat0.tag.name));
+
+    const body0 = env.mir_store.getExpr(branches[0].body);
+    try testing.expect(body0 == .tag);
+    try testing.expectEqualStrings("False", env.module_env.getIdent(body0.tag.name));
+}
+
 // --- Nominal Bool vs structural tag union MIR tests ---
 // CRITICAL DISTINCTION: Bare tags like `True` and `False` without a Bool annotation
 // must lower to `.tag_union` monotype, NOT `prim.bool`. Only nominal `Bool` (via
@@ -1775,6 +1805,175 @@ test "cross-module type resolution: U32.to dispatches with concrete U32 function
     try testing.expect(def_ret_mono == .list);
     const def_elem = env.mir_store.monotype_store.getMonotype(def_ret_mono.list.elem);
     try testing.expectEqual(Monotype.Monotype{ .prim = .u32 }, def_elem);
+}
+
+test "cross-module type resolution: U32.to body calls concrete U32 range_to" {
+    var env = try MirTestEnv.initExpr("1.U32.to(5.U32)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+
+    const top = env.mir_store.getExpr(expr);
+    try testing.expect(top == .call);
+
+    const to_lookup_expr = env.mir_store.getExpr(top.call.func);
+    try testing.expect(to_lookup_expr == .lookup);
+    const to_symbol = to_lookup_expr.lookup;
+    const to_sym_key: u64 = @bitCast(to_symbol);
+    const to_def_expr_id = env.mir_store.symbol_defs.get(to_sym_key) orelse
+        return error.TestUnexpectedResult;
+
+    const to_def_expr = env.mir_store.getExpr(to_def_expr_id);
+    try testing.expect(to_def_expr == .lambda);
+
+    const to_body_expr = env.mir_store.getExpr(to_def_expr.lambda.body);
+    try testing.expect(to_body_expr == .call);
+
+    const range_lookup_expr = env.mir_store.getExpr(to_body_expr.call.func);
+    try testing.expect(range_lookup_expr == .lookup);
+    const range_symbol = range_lookup_expr.lookup;
+
+    const range_func_mono_idx = env.mir_store.typeOf(to_body_expr.call.func);
+    const range_func_mono = env.mir_store.monotype_store.getMonotype(range_func_mono_idx);
+    try testing.expect(range_func_mono == .func);
+
+    const range_arg_monos = env.mir_store.monotype_store.getIdxSpan(range_func_mono.func.args);
+    try testing.expectEqual(@as(usize, 2), range_arg_monos.len);
+    try testing.expectEqual(Monotype.Monotype{ .prim = .u32 }, env.mir_store.monotype_store.getMonotype(range_arg_monos[0]));
+    try testing.expectEqual(Monotype.Monotype{ .prim = .u32 }, env.mir_store.monotype_store.getMonotype(range_arg_monos[1]));
+
+    const range_ret_mono = env.mir_store.monotype_store.getMonotype(range_func_mono.func.ret);
+    try testing.expect(range_ret_mono == .list);
+    try testing.expectEqual(Monotype.Monotype{ .prim = .u32 }, env.mir_store.monotype_store.getMonotype(range_ret_mono.list.elem));
+
+    // The lowered definition behind range_to must also be concretely specialized.
+    const range_sym_key: u64 = @bitCast(range_symbol);
+    const range_def_expr_id = env.mir_store.symbol_defs.get(range_sym_key) orelse
+        return error.TestUnexpectedResult;
+    const range_def_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(range_def_expr_id));
+    try testing.expect(range_def_mono == .func);
+    const range_def_args = env.mir_store.monotype_store.getIdxSpan(range_def_mono.func.args);
+    try testing.expectEqual(@as(usize, 2), range_def_args.len);
+    try testing.expectEqual(Monotype.Monotype{ .prim = .u32 }, env.mir_store.monotype_store.getMonotype(range_def_args[0]));
+    try testing.expectEqual(Monotype.Monotype{ .prim = .u32 }, env.mir_store.monotype_store.getMonotype(range_def_args[1]));
+    const range_def_ret = env.mir_store.monotype_store.getMonotype(range_def_mono.func.ret);
+    try testing.expect(range_def_ret == .list);
+    try testing.expectEqual(Monotype.Monotype{ .prim = .u32 }, env.mir_store.monotype_store.getMonotype(range_def_ret.list.elem));
+
+    var found_u32_list_append = false;
+    const Walker = struct {
+        fn visit(envp: *MirTestEnv, expr_id: MIR.ExprId, found: *bool) !void {
+            const node = envp.mir_store.getExpr(expr_id);
+            switch (node) {
+                .run_low_level => |ll| {
+                    if (ll.op == .list_append or ll.op == .list_append_unsafe) {
+                        const ll_args = envp.mir_store.getExprSpan(ll.args);
+                        if (ll_args.len == 2) {
+                            const ret_mono = envp.mir_store.monotype_store.getMonotype(envp.mir_store.typeOf(expr_id));
+                            const arg0_mono = envp.mir_store.monotype_store.getMonotype(envp.mir_store.typeOf(ll_args[0]));
+                            const arg1_mono = envp.mir_store.monotype_store.getMonotype(envp.mir_store.typeOf(ll_args[1]));
+                            if (ret_mono == .list and arg0_mono == .list and arg1_mono == .prim and arg1_mono.prim == .u32) {
+                                const ret_elem = envp.mir_store.monotype_store.getMonotype(ret_mono.list.elem);
+                                const arg0_elem = envp.mir_store.monotype_store.getMonotype(arg0_mono.list.elem);
+                                if (ret_elem == .prim and arg0_elem == .prim and ret_elem.prim == .u32 and arg0_elem.prim == .u32) {
+                                    found.* = true;
+                                }
+                            }
+                        }
+                    }
+                    const ll_args = envp.mir_store.getExprSpan(ll.args);
+                    for (ll_args) |arg| {
+                        try visit(envp, arg, found);
+                    }
+                },
+                .block => |b| {
+                    const stmts = envp.mir_store.getStmts(b.stmts);
+                    for (stmts) |stmt| {
+                        switch (stmt) {
+                            .decl_const => |binding| try visit(envp, binding.expr, found),
+                            .decl_var => |binding| try visit(envp, binding.expr, found),
+                            .mutate_var => |binding| try visit(envp, binding.expr, found),
+                        }
+                    }
+                    try visit(envp, b.final_expr, found);
+                },
+                .call => |c| {
+                    const fn_expr = envp.mir_store.getExpr(c.func);
+                    if (fn_expr == .lookup) {
+                        const fn_symbol = fn_expr.lookup;
+                        const fn_env = envp.lower.all_module_envs[fn_symbol.module_idx];
+                        const fn_name = fn_env.getIdent(fn_symbol.ident_idx);
+                        if (std.mem.endsWith(u8, fn_name, "append")) {
+                            const fn_mono = envp.mir_store.monotype_store.getMonotype(envp.mir_store.typeOf(c.func));
+                            const call_args = envp.mir_store.getExprSpan(c.args);
+                            if (fn_mono == .func and call_args.len == 2) {
+                                const ret_mono = envp.mir_store.monotype_store.getMonotype(envp.mir_store.typeOf(expr_id));
+                                const arg0_mono = envp.mir_store.monotype_store.getMonotype(envp.mir_store.typeOf(call_args[0]));
+                                const arg1_mono = envp.mir_store.monotype_store.getMonotype(envp.mir_store.typeOf(call_args[1]));
+                                if (ret_mono == .list and arg0_mono == .list and arg1_mono == .prim and arg1_mono.prim == .u32) {
+                                    const ret_elem = envp.mir_store.monotype_store.getMonotype(ret_mono.list.elem);
+                                    const arg0_elem = envp.mir_store.monotype_store.getMonotype(arg0_mono.list.elem);
+                                    if (ret_elem == .prim and arg0_elem == .prim and ret_elem.prim == .u32 and arg0_elem.prim == .u32) {
+                                        found.* = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    try visit(envp, c.func, found);
+                    const args = envp.mir_store.getExprSpan(c.args);
+                    for (args) |arg| {
+                        try visit(envp, arg, found);
+                    }
+                },
+                .lambda => |lam| try visit(envp, lam.body, found),
+                .match_expr => |m| {
+                    try visit(envp, m.cond, found);
+                    const branches = envp.mir_store.getBranches(m.branches);
+                    for (branches) |br| {
+                        if (!br.guard.isNone()) {
+                            try visit(envp, br.guard, found);
+                        }
+                        try visit(envp, br.body, found);
+                    }
+                },
+                .while_loop => |w| {
+                    try visit(envp, w.cond, found);
+                    try visit(envp, w.body, found);
+                },
+                .for_loop => |f| {
+                    try visit(envp, f.list, found);
+                    try visit(envp, f.body, found);
+                },
+                .record => |r| {
+                    const fields = envp.mir_store.getExprSpan(r.fields);
+                    for (fields) |field| {
+                        try visit(envp, field, found);
+                    }
+                },
+                .tuple => |t| {
+                    const elems = envp.mir_store.getExprSpan(t.elems);
+                    for (elems) |elem| {
+                        try visit(envp, elem, found);
+                    }
+                },
+                .tag => |t| {
+                    const args = envp.mir_store.getExprSpan(t.args);
+                    for (args) |arg| {
+                        try visit(envp, arg, found);
+                    }
+                },
+                .record_access => |ra| try visit(envp, ra.record, found),
+                .tuple_access => |ta| try visit(envp, ta.tuple, found),
+                .hosted => |h| try visit(envp, h.body, found),
+                .dbg_expr => |d| try visit(envp, d.expr, found),
+                .expect => |e| try visit(envp, e.body, found),
+                .return_expr => |r| try visit(envp, r.expr, found),
+                else => {},
+            }
+        }
+    };
+    try Walker.visit(&env, range_def_expr_id, &found_u32_list_append);
+    try testing.expect(found_u32_list_append);
 }
 
 // --- Polymorphic numeric specialization tests ---

@@ -645,18 +645,6 @@ pub fn listAppendSafeC(
     copy: CopyFallbackFn,
     roc_ops: *RocOps,
 ) callconv(.c) void {
-    if (builtin.mode == .Debug and element_width == 4) {
-        if (list_length < 8 or (list_length % 500 == 0)) {
-            if (element) |elem_ptr| {
-                const val: u32 = @as(*const u32, @ptrCast(@alignCast(elem_ptr))).*;
-                std.debug.print(
-                    "listAppendSafeC: len={d} cap_or_ptr=0x{x} elem_u32={d}\n",
-                    .{ list_length, list_capacity_or_alloc_ptr, val },
-                );
-            }
-        }
-    }
-
     const list = RocList{
         .bytes = list_bytes,
         .length = list_length,
