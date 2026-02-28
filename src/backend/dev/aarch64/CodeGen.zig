@@ -613,36 +613,14 @@ pub fn CodeGen(comptime target: RocTarget) type {
 
         /// Load from stack slot into register
         pub fn emitLoadStack(self: *Self, width: RegisterWidth, dst: GeneralReg, offset: i32) !void {
-            if (offset >= -256 and offset <= 255) {
-                try self.emit.ldurRegMem(width, dst, .FP, @intCast(offset));
-            } else if (offset > 0) {
-                // Positive offset - use scaled unsigned form
-                const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> (if (width == .w64) 3 else 2));
-                try self.emit.ldrRegMemUoff(width, dst, .FP, uoffset);
-            } else {
-                // Large negative offset - add offset to FP, then load
-                // Use IP0 as scratch register
-                try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
-                try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
-                try self.emit.ldrRegMemUoff(width, dst, .IP0, 0);
-            }
+            // Delegate to signed-offset helper to avoid truncating large positive offsets.
+            try self.emit.ldrRegMemSoff(width, dst, .FP, offset);
         }
 
         /// Store register to stack slot
         pub fn emitStoreStack(self: *Self, width: RegisterWidth, offset: i32, src: GeneralReg) !void {
-            if (offset >= -256 and offset <= 255) {
-                try self.emit.sturRegMem(width, src, .FP, @intCast(offset));
-            } else if (offset > 0) {
-                // Positive offset - use scaled unsigned form
-                const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> (if (width == .w64) 3 else 2));
-                try self.emit.strRegMemUoff(width, src, .FP, uoffset);
-            } else {
-                // Large negative offset - add offset to FP, then store
-                // Use IP0 as scratch register
-                try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
-                try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
-                try self.emit.strRegMemUoff(width, src, .IP0, 0);
-            }
+            // Delegate to signed-offset helper to avoid truncating large positive offsets.
+            try self.emit.strRegMemSoff(width, src, .FP, offset);
         }
 
         /// Store byte to stack slot
@@ -673,12 +651,12 @@ pub fn CodeGen(comptime target: RocTarget) type {
         pub fn emitLoadStackByte(self: *Self, dst: GeneralReg, offset: i32) !void {
             if (offset >= -256 and offset <= 255) {
                 try self.emit.ldurbRegMem(dst, .FP, @intCast(offset));
-            } else if (offset > 0) {
+            } else if (offset >= 0 and offset <= 4095) {
                 // Positive offset - use scaled unsigned form (byte: no shift needed)
                 const uoffset: u12 = @intCast(@as(u32, @intCast(offset)));
                 try self.emit.ldrbRegMem(dst, .FP, uoffset);
             } else {
-                // Large negative offset - add offset to FP, then load
+                // Offset outside direct encodings - materialize address, then load.
                 try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
                 try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
                 try self.emit.ldrbRegMem(dst, .IP0, 0);
@@ -689,12 +667,12 @@ pub fn CodeGen(comptime target: RocTarget) type {
         pub fn emitLoadStackHalfword(self: *Self, dst: GeneralReg, offset: i32) !void {
             if (offset >= -256 and offset <= 255) {
                 try self.emit.ldurhRegMem(dst, .FP, @intCast(offset));
-            } else if (offset > 0) {
+            } else if (offset >= 0 and (offset & 1) == 0 and (@as(u32, @intCast(offset)) >> 1) <= 4095) {
                 // Positive offset - use scaled unsigned form (halfword: shift by 1)
                 const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> 1);
                 try self.emit.ldrhRegMem(dst, .FP, uoffset);
             } else {
-                // Large negative offset - add offset to FP, then load
+                // Offset outside direct encodings - materialize address, then load.
                 try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
                 try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
                 try self.emit.ldrhRegMem(dst, .IP0, 0);
@@ -703,12 +681,12 @@ pub fn CodeGen(comptime target: RocTarget) type {
 
         /// Load float64 from stack slot
         pub fn emitLoadStackF64(self: *Self, dst: FloatReg, offset: i32) !void {
-            if (offset >= 0) {
+            if (offset >= 0 and (offset & 7) == 0 and (@as(u32, @intCast(offset)) >> 3) <= 4095) {
                 // Positive offset - use scaled unsigned form
                 const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> 3);
                 try self.emit.fldrRegMemUoff(.double, dst, .FP, uoffset);
             } else {
-                // Negative offset - add offset to FP, then load
+                // Offset outside direct encodings - materialize address, then load.
                 try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
                 try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
                 try self.emit.fldrRegMemUoff(.double, dst, .IP0, 0);
@@ -717,12 +695,12 @@ pub fn CodeGen(comptime target: RocTarget) type {
 
         /// Store float64 to stack slot
         pub fn emitStoreStackF64(self: *Self, offset: i32, src: FloatReg) !void {
-            if (offset >= 0) {
+            if (offset >= 0 and (offset & 7) == 0 and (@as(u32, @intCast(offset)) >> 3) <= 4095) {
                 // Positive offset - use scaled unsigned form
                 const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> 3);
                 try self.emit.fstrRegMemUoff(.double, src, .FP, uoffset);
             } else {
-                // Negative offset - add offset to FP, then store
+                // Offset outside direct encodings - materialize address, then store.
                 try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
                 try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
                 try self.emit.fstrRegMemUoff(.double, src, .IP0, 0);

@@ -918,27 +918,29 @@ pub fn roc_builtins_float_to_str(out: *RocStr, val_bits: u64, is_f32: bool, roc_
 
 // ── Numeric-from-string wrappers ──
 
-fn writeIntParseResult(comptime T: type, out: [*]u8, disc_offset: u32, roc_str: RocStr) void {
+fn discForParseResult(errorcode: u8, ok_discriminant: u8) u8 {
+    // Parse helpers use errorcode 0 for success, non-zero for failure.
+    return if (errorcode == 0) ok_discriminant else ok_discriminant ^ 1;
+}
+
+fn writeIntParseResult(comptime T: type, out: [*]u8, disc_offset: u32, ok_discriminant: u8, roc_str: RocStr) void {
     const r = num.parseIntFromStr(T, roc_str);
     const value_bytes = std.mem.asBytes(&r.value);
     @memcpy(out[0..value_bytes.len], value_bytes);
-    // Roc discriminants: Err=0, Ok=1 (alphabetically sorted)
-    // parseIntFromStr errorcode: 0=success, 1=failure
-    // So: Ok discriminant = 1 - errorcode
-    out[disc_offset] = 1 - r.errorcode;
+    out[disc_offset] = discForParseResult(r.errorcode, ok_discriminant);
 }
 
-fn writeFloatParseResult(comptime T: type, out: [*]u8, disc_offset: u32, roc_str: RocStr) void {
+fn writeFloatParseResult(comptime T: type, out: [*]u8, disc_offset: u32, ok_discriminant: u8, roc_str: RocStr) void {
     const r = num.parseFloatFromStr(T, roc_str);
     const value_bytes = std.mem.asBytes(&r.value);
     @memcpy(out[0..value_bytes.len], value_bytes);
-    out[disc_offset] = 1 - r.errorcode;
+    out[disc_offset] = discForParseResult(r.errorcode, ok_discriminant);
 }
 
 /// Unified integer-from-string wrapper: parses a string into an integer of the given width.
 /// Writes the result directly into the tag union memory at `out`:
 ///   - Payload (parsed value) at offset 0
-///   - Discriminant (Ok=1, Err=0) at disc_offset
+///   - Discriminant at disc_offset (caller-provided Ok index for this concrete layout)
 pub fn roc_builtins_int_from_str(
     out: [*]u8,
     str_bytes: ?[*]u8,
@@ -947,24 +949,25 @@ pub fn roc_builtins_int_from_str(
     int_width: u8,
     is_signed: bool,
     disc_offset: u32,
+    ok_discriminant: u8,
 ) callconv(.c) void {
     const roc_str = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
     if (is_signed) {
         switch (int_width) {
-            1 => writeIntParseResult(i8, out, disc_offset, roc_str),
-            2 => writeIntParseResult(i16, out, disc_offset, roc_str),
-            4 => writeIntParseResult(i32, out, disc_offset, roc_str),
-            8 => writeIntParseResult(i64, out, disc_offset, roc_str),
-            16 => writeIntParseResult(i128, out, disc_offset, roc_str),
+            1 => writeIntParseResult(i8, out, disc_offset, ok_discriminant, roc_str),
+            2 => writeIntParseResult(i16, out, disc_offset, ok_discriminant, roc_str),
+            4 => writeIntParseResult(i32, out, disc_offset, ok_discriminant, roc_str),
+            8 => writeIntParseResult(i64, out, disc_offset, ok_discriminant, roc_str),
+            16 => writeIntParseResult(i128, out, disc_offset, ok_discriminant, roc_str),
             else => unreachable,
         }
     } else {
         switch (int_width) {
-            1 => writeIntParseResult(u8, out, disc_offset, roc_str),
-            2 => writeIntParseResult(u16, out, disc_offset, roc_str),
-            4 => writeIntParseResult(u32, out, disc_offset, roc_str),
-            8 => writeIntParseResult(u64, out, disc_offset, roc_str),
-            16 => writeIntParseResult(u128, out, disc_offset, roc_str),
+            1 => writeIntParseResult(u8, out, disc_offset, ok_discriminant, roc_str),
+            2 => writeIntParseResult(u16, out, disc_offset, ok_discriminant, roc_str),
+            4 => writeIntParseResult(u32, out, disc_offset, ok_discriminant, roc_str),
+            8 => writeIntParseResult(u64, out, disc_offset, ok_discriminant, roc_str),
+            16 => writeIntParseResult(u128, out, disc_offset, ok_discriminant, roc_str),
             else => unreachable,
         }
     }
@@ -978,12 +981,13 @@ pub fn roc_builtins_dec_from_str(
     str_len: usize,
     str_cap: usize,
     disc_offset: u32,
+    ok_discriminant: u8,
 ) callconv(.c) void {
     const roc_str = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
     const r = dec.fromStr(roc_str);
     const value_bytes = std.mem.asBytes(&r.value);
     @memcpy(out[0..value_bytes.len], value_bytes);
-    out[disc_offset] = 1 - r.errorcode;
+    out[disc_offset] = discForParseResult(r.errorcode, ok_discriminant);
 }
 
 /// Float-from-string wrapper: parses a string into f32 or f64.
@@ -995,11 +999,12 @@ pub fn roc_builtins_float_from_str(
     str_cap: usize,
     float_width: u8,
     disc_offset: u32,
+    ok_discriminant: u8,
 ) callconv(.c) void {
     const roc_str = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
     switch (float_width) {
-        4 => writeFloatParseResult(f32, out, disc_offset, roc_str),
-        8 => writeFloatParseResult(f64, out, disc_offset, roc_str),
+        4 => writeFloatParseResult(f32, out, disc_offset, ok_discriminant, roc_str),
+        8 => writeFloatParseResult(f64, out, disc_offset, ok_discriminant, roc_str),
         else => unreachable,
     }
 }

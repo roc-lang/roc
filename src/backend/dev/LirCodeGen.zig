@@ -3371,6 +3371,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const ret_layout_val = ls.getLayout(ll.ret_layout);
                     if (ret_layout_val.tag == .tag_union) {
                         const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
+                        const variants = ls.getTagUnionVariants(tu_data);
+                        std.debug.assert(variants.len == 2);
+                        var ok_disc: u32 = 0;
+                        var err_disc: u32 = 1;
+                        var found_ok = false;
+                        for (0..variants.len) |i| {
+                            if (variants.get(@intCast(i)).payload_layout == .str) {
+                                ok_disc = @intCast(i);
+                                err_disc = if (i == 0) 1 else 0;
+                                found_ok = true;
+                                break;
+                            }
+                        }
+                        std.debug.assert(found_ok);
                         const tag_size = tu_data.size;
                         const disc_offset = tu_data.discriminant_offset;
                         const disc_size = tu_data.discriminant_size;
@@ -3393,7 +3407,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try self.copyChunked(temp_reg, frame_ptr, raw_offset + 8, frame_ptr, result_slot, 24);
                             self.codegen.freeGeneral(temp_reg);
                         }
-                        try self.storeDiscriminant(result_slot + @as(i32, @intCast(disc_offset)), 1, disc_size);
+                        try self.storeDiscriminant(result_slot + @as(i32, @intCast(disc_offset)), @intCast(ok_disc), disc_size);
                         const end_patch = try self.codegen.emitJump();
 
                         // === ERR branch ===
@@ -3411,7 +3425,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try self.emitStoreStackW8(result_slot + 8, prob_reg);
                             self.codegen.freeGeneral(prob_reg);
                         }
-                        try self.storeDiscriminant(result_slot + @as(i32, @intCast(disc_offset)), 0, disc_size);
+                        try self.storeDiscriminant(result_slot + @as(i32, @intCast(disc_offset)), @intCast(err_disc), disc_size);
 
                         // === END ===
                         self.codegen.patchJump(end_patch, self.codegen.currentOffset());
@@ -5849,10 +5863,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // The Ok variant has the numeric payload; the Err variant has ZST.
             const variants = ls.getTagUnionVariants(tu_data);
             var payload_idx: layout.Idx = .zst;
+            var ok_disc_idx: u32 = 0;
             for (0..variants.len) |i| {
                 const v_payload = variants.get(@intCast(i)).payload_layout;
                 if (v_payload != .zst) {
                     payload_idx = v_payload;
+                    ok_disc_idx = @intCast(i);
                     break;
                 }
             }
@@ -5867,6 +5883,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addMemArg(base_reg, str_off + 8);
                 try builder.addMemArg(base_reg, str_off + 16);
                 try builder.addImmArg(@intCast(disc_offset));
+                try builder.addImmArg(@intCast(ok_disc_idx));
                 try self.callBuiltin(&builder, fn_addr, .dec_from_str);
             } else if (payload_idx == .f32 or payload_idx == .f64) {
                 const float_width: u8 = if (payload_idx == .f32) 4 else 8;
@@ -5878,6 +5895,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addMemArg(base_reg, str_off + 16);
                 try builder.addImmArg(@intCast(float_width));
                 try builder.addImmArg(@intCast(disc_offset));
+                try builder.addImmArg(@intCast(ok_disc_idx));
                 try self.callBuiltin(&builder, fn_addr, .float_from_str);
             } else {
                 const int_width: u8 = switch (payload_idx) {
@@ -5902,6 +5920,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addImmArg(@intCast(int_width));
                 try builder.addImmArg(if (is_signed) @as(i64, 1) else @as(i64, 0));
                 try builder.addImmArg(@intCast(disc_offset));
+                try builder.addImmArg(@intCast(ok_disc_idx));
                 try self.callBuiltin(&builder, fn_addr, .int_from_str);
             }
 
