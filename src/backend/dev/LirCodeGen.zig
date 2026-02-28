@@ -1601,11 +1601,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// (stack, immediate, lambda_code, closure_value) — never a bare register.
         fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!ValueLocation {
             const raw_loc = try self.generateExprRaw(expr_id);
-            const stable_loc = try self.stabilize(raw_loc);
             if (self.getExprLayout(expr_id)) |expr_layout| {
-                return try self.stabilizeBindingLocation(expr_layout, stable_loc);
+                // Use layout-aware stabilization directly so width-sensitive values
+                // (for example f32) are materialized with the correct byte width.
+                return try self.stabilizeBindingLocation(expr_layout, raw_loc);
             }
-            return stable_loc;
+            return try self.stabilize(raw_loc);
         }
 
         /// Spill bare register values to the stack. All other locations pass through.
@@ -9599,6 +9600,43 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     return;
                 },
+                .float_reg => |reg| {
+                    switch (size) {
+                        4 => {
+                            const tmp = self.codegen.allocFloat() orelse unreachable;
+                            defer self.codegen.freeFloat(tmp);
+                            if (comptime target.toCpuArch() == .aarch64) {
+                                try self.codegen.emit.fmovRegReg(.double, tmp, reg);
+                                try self.codegen.emit.fcvtFloatFloat(.single, tmp, .double, tmp);
+                            } else {
+                                try self.codegen.emit.movsdRegReg(tmp, reg);
+                                try self.codegen.emit.cvtsd2ssRegReg(tmp, tmp);
+                            }
+                            try self.emitStoreStackF32(dest_offset, tmp);
+                        },
+                        8 => try self.codegen.emitStoreStackF64(dest_offset, reg),
+                        else => unreachable,
+                    }
+                    return;
+                },
+                .immediate_f64 => |val| {
+                    const reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(reg);
+                    switch (size) {
+                        4 => {
+                            const bits32: u32 = @bitCast(@as(f32, @floatCast(val)));
+                            try self.codegen.emitLoadImm(reg, @as(i64, @intCast(bits32)));
+                            try self.codegen.emitStoreStack(.w32, dest_offset, reg);
+                        },
+                        8 => {
+                            const bits64: u64 = @bitCast(val);
+                            try self.codegen.emitLoadImm(reg, @bitCast(bits64));
+                            try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                        },
+                        else => unreachable,
+                    }
+                    return;
+                },
                 .stack, .stack_str, .stack_i128, .list_stack, .closure_value => {
                     // Handle stack locations below
                 },
@@ -11959,6 +11997,36 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        fn emitLoadStackF32(self: *Self, dst: FloatReg, offset: i32) Allocator.Error!void {
+            if (comptime target.toCpuArch() == .aarch64) {
+                if (offset >= 0) {
+                    const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> 2);
+                    try self.codegen.emit.fldrRegMemUoff(.single, dst, .FP, uoffset);
+                } else {
+                    try self.codegen.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
+                    try self.codegen.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
+                    try self.codegen.emit.fldrRegMemUoff(.single, dst, .IP0, 0);
+                }
+            } else {
+                try self.codegen.emit.movssRegMem(dst, .RBP, offset);
+            }
+        }
+
+        fn emitStoreStackF32(self: *Self, offset: i32, src: FloatReg) Allocator.Error!void {
+            if (comptime target.toCpuArch() == .aarch64) {
+                if (offset >= 0) {
+                    const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> 2);
+                    try self.codegen.emit.fstrRegMemUoff(.single, src, .FP, uoffset);
+                } else {
+                    try self.codegen.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
+                    try self.codegen.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
+                    try self.codegen.emit.fstrRegMemUoff(.single, src, .IP0, 0);
+                }
+            } else {
+                try self.codegen.emit.movssMemReg(.RBP, offset, src);
+            }
+        }
+
         /// Emit a correctly-sized load from memory (arbitrary base register + offset),
         /// zero-extending sub-word values to 64 bits.
         fn emitSizedLoadMem(self: *Self, dst: GeneralReg, base_reg: GeneralReg, offset: i32, size: ValueSize) Allocator.Error!void {
@@ -13970,7 +14038,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .stack => |s| {
                     const offset = s.offset;
                     const reg = self.codegen.allocFloat() orelse unreachable;
-                    try self.codegen.emitLoadStackF64(reg, offset);
+                    if (s.size == .dword) {
+                        try self.emitLoadStackF32(reg, offset);
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            try self.codegen.emit.fcvtFloatFloat(.double, reg, .single, reg);
+                        } else {
+                            try self.codegen.emit.cvtss2sdRegReg(reg, reg);
+                        }
+                    } else {
+                        try self.codegen.emitLoadStackF64(reg, offset);
+                    }
                     return reg;
                 },
                 .immediate_i64 => |val| {
@@ -14082,9 +14159,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                 },
                 .f32 => {
-                    // F32: Convert from F64 and store 4 bytes.
-                    // Note: `stabilize` spills float regs to the stack as 8-byte F64,
-                    // so .stack locations hold F64-encoded values that need conversion.
+                    // F32: .stack may hold either raw f32 (size=dword) or f64 (size=qword).
                     switch (loc) {
                         .float_reg => |reg| {
                             // Convert F64 to F32, then store 4 bytes
@@ -14106,19 +14181,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             self.codegen.freeGeneral(reg);
                         },
                         .stack => |s| {
-                            const offset = s.offset;
-                            // Value was spilled to stack as F64 by stabilize.
-                            // Load as F64, convert to F32, then store 4 bytes.
-                            const freg = self.codegen.allocFloat() orelse unreachable;
-                            try self.codegen.emitLoadStackF64(freg, offset);
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.fcvtFloatFloat(.single, freg, .double, freg);
-                                try self.codegen.emit.fstrRegMemUoff(.single, freg, saved_ptr_reg, 0);
+                            if (s.size == .dword) {
+                                const reg = try self.allocTempGeneral();
+                                try self.codegen.emitLoadStack(.w32, reg, s.offset);
+                                try self.emitStoreToPtr(.w32, reg, saved_ptr_reg, 0);
+                                self.codegen.freeGeneral(reg);
                             } else {
-                                try self.codegen.emit.cvtsd2ssRegReg(freg, freg);
-                                try self.codegen.emit.movssMemReg(saved_ptr_reg, 0, freg);
+                                const offset = s.offset;
+                                const freg = self.codegen.allocFloat() orelse unreachable;
+                                try self.codegen.emitLoadStackF64(freg, offset);
+                                if (comptime target.toCpuArch() == .aarch64) {
+                                    try self.codegen.emit.fcvtFloatFloat(.single, freg, .double, freg);
+                                    try self.codegen.emit.fstrRegMemUoff(.single, freg, saved_ptr_reg, 0);
+                                } else {
+                                    try self.codegen.emit.cvtsd2ssRegReg(freg, freg);
+                                    try self.codegen.emit.movssMemReg(saved_ptr_reg, 0, freg);
+                                }
+                                self.codegen.freeFloat(freg);
                             }
-                            self.codegen.freeFloat(freg);
                         },
                         else => {
                             // Store 4 bytes from general register
@@ -15446,6 +15526,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             .immediate_i64 => |val| {
                                 try self.codegen.emitLoadImm(arg_reg, @bitCast(val));
                             },
+                            .immediate_f64 => |val| {
+                                if (arg_layout != null and arg_layout.? == .f32) {
+                                    const bits32: u32 = @bitCast(@as(f32, @floatCast(val)));
+                                    try self.codegen.emitLoadImm(arg_reg, @as(i64, @intCast(bits32)));
+                                } else {
+                                    const bits64: u64 = @bitCast(val);
+                                    try self.codegen.emitLoadImm(arg_reg, @bitCast(bits64));
+                                }
+                            },
                             .lambda_code => |lc| {
                                 const current = self.codegen.currentOffset();
                                 const rel: i64 = @as(i64, @intCast(lc.code_offset)) - @as(i64, @intCast(current));
@@ -16046,6 +16135,77 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                     }
                     return;
+                }
+            }
+
+            if (ret_layout == .f32 or ret_layout == .f64) {
+                switch (loc) {
+                    .float_reg => |freg| {
+                        const slot = self.codegen.allocStackSlot(8);
+                        if (ret_layout == .f32) {
+                            if (comptime target.toCpuArch() == .aarch64) {
+                                try self.codegen.emit.fcvtFloatFloat(.single, freg, .double, freg);
+                                const uoffset: u12 = @intCast(@as(u32, @intCast(slot)) >> 2);
+                                try self.codegen.emit.fstrRegMemUoff(.single, freg, .FP, uoffset);
+                                try self.codegen.emitLoadStack(.w32, ret_reg_0, slot);
+                            } else {
+                                try self.codegen.emit.cvtsd2ssRegReg(freg, freg);
+                                try self.codegen.emit.movssMemReg(.RBP, slot, freg);
+                                try self.codegen.emitLoadStack(.w32, ret_reg_0, slot);
+                            }
+                        } else {
+                            try self.codegen.emitStoreStackF64(slot, freg);
+                            try self.codegen.emitLoadStack(.w64, ret_reg_0, slot);
+                        }
+                        return;
+                    },
+                    .immediate_f64 => |val| {
+                        if (ret_layout == .f32) {
+                            const bits32: u32 = @bitCast(@as(f32, @floatCast(val)));
+                            try self.codegen.emitLoadImm(ret_reg_0, @as(i64, @intCast(bits32)));
+                        } else {
+                            const bits64: u64 = @bitCast(val);
+                            try self.codegen.emitLoadImm(ret_reg_0, @bitCast(bits64));
+                        }
+                        return;
+                    },
+                    .stack => |s| {
+                        if (ret_layout == .f32) {
+                            if (s.size == .dword) {
+                                try self.codegen.emitLoadStack(.w32, ret_reg_0, s.offset);
+                            } else {
+                                const slot = self.codegen.allocStackSlot(8);
+                                const freg = self.codegen.allocFloat() orelse unreachable;
+                                try self.codegen.emitLoadStackF64(freg, s.offset);
+                                if (comptime target.toCpuArch() == .aarch64) {
+                                    try self.codegen.emit.fcvtFloatFloat(.single, freg, .double, freg);
+                                } else {
+                                    try self.codegen.emit.cvtsd2ssRegReg(freg, freg);
+                                }
+                                try self.emitStoreStackF32(slot, freg);
+                                self.codegen.freeFloat(freg);
+                                try self.codegen.emitLoadStack(.w32, ret_reg_0, slot);
+                            }
+                        } else {
+                            if (s.size == .dword) {
+                                const slot = self.codegen.allocStackSlot(8);
+                                const freg = self.codegen.allocFloat() orelse unreachable;
+                                try self.emitLoadStackF32(freg, s.offset);
+                                if (comptime target.toCpuArch() == .aarch64) {
+                                    try self.codegen.emit.fcvtFloatFloat(.double, freg, .single, freg);
+                                } else {
+                                    try self.codegen.emit.cvtss2sdRegReg(freg, freg);
+                                }
+                                try self.codegen.emitStoreStackF64(slot, freg);
+                                self.codegen.freeFloat(freg);
+                                try self.codegen.emitLoadStack(.w64, ret_reg_0, slot);
+                            } else {
+                                try self.codegen.emitLoadStack(.w64, ret_reg_0, s.offset);
+                            }
+                        }
+                        return;
+                    },
+                    else => {},
                 }
             }
 
