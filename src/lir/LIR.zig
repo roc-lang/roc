@@ -1046,6 +1046,8 @@ pub const LirPattern = union(enum) {
         elem_layout: layout.Idx,
         /// Patterns for known prefix elements (before ..)
         prefix: LirPatternSpan,
+        /// Whether this pattern includes `..` (with or without a named rest binding).
+        has_rest: bool,
         /// Pattern for remaining elements (as a list), or none
         rest: LirPatternId,
         /// Patterns for known suffix elements (after ..)

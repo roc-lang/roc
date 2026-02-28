@@ -1590,6 +1590,7 @@ fn lowerPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Error!LirPatte
                 break :blk self.lir_store.addPattern(.{ .list = .{
                     .elem_layout = elem_layout,
                     .prefix = lir_prefix,
+                    .has_rest = false,
                     .rest = rest_pat,
                     .suffix = LirPatternSpan.empty(),
                 } }, region);
@@ -1600,6 +1601,7 @@ fn lowerPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Error!LirPatte
                 break :blk self.lir_store.addPattern(.{ .list = .{
                     .elem_layout = elem_layout,
                     .prefix = lir_prefix,
+                    .has_rest = true,
                     .rest = rest_pat,
                     .suffix = lir_suffix,
                 } }, region);

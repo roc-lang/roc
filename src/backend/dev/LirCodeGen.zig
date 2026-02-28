@@ -8068,7 +8068,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     },
                     .list => |list_pattern| {
                         const suffix_patterns = self.store.getPatternSpan(list_pattern.suffix);
-                        const is_exact_match = list_pattern.rest.isNone() and suffix_patterns.len == 0;
+                        const is_exact_match = !list_pattern.has_rest and suffix_patterns.len == 0;
 
                         // Check list length
                         try self.emitListLengthCheck(list_pattern, value_loc);
@@ -8551,29 +8551,33 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Given a field's stack base offset, size, and layout index, return the appropriate ValueLocation.
         fn fieldLocationFromLayout(self: *Self, field_base: i32, field_size: u32, field_layout_idx: layout.Idx) ValueLocation {
-            // Check well-known layout indices first
-            if (field_layout_idx == .str) {
-                return .{ .stack_str = field_base };
-            }
-            if (field_layout_idx == .i128 or field_layout_idx == .u128 or field_layout_idx == .dec) {
-                return .{ .stack_i128 = field_base };
-            }
-            // Check layout tag for lists
             if (self.layout_store) |ls| {
                 if (@intFromEnum(field_layout_idx) < ls.layouts.len()) {
                     const field_layout = ls.getLayout(field_layout_idx);
-                    if (field_layout.tag == .list or field_layout.tag == .list_of_zst) {
-                        return .{ .list_stack = .{
-                            .struct_offset = field_base,
-                            .data_offset = 0,
-                            .num_elements = 0,
-                        } };
+                    switch (field_layout.tag) {
+                        .list, .list_of_zst => {
+                            return .{ .list_stack = .{
+                                .struct_offset = field_base,
+                                .data_offset = 0,
+                                .num_elements = 0,
+                            } };
+                        },
+                        .scalar => {
+                            if (field_layout.data.scalar.tag == .str) {
+                                return .{ .stack_str = field_base };
+                            }
+                            if (ls.layoutSizeAlign(field_layout).size == 16) {
+                                return .{ .stack_i128 = field_base };
+                            }
+                        },
+                        else => {},
                     }
                 }
             }
-            if (field_size == 16) {
-                return .{ .stack_i128 = field_base };
-            }
+            // Check well-known layout indices as fallback when we can't resolve in-store layout.
+            if (field_layout_idx == .str) return .{ .stack_str = field_base };
+            if (field_layout_idx == .i128 or field_layout_idx == .u128 or field_layout_idx == .dec) return .{ .stack_i128 = field_base };
+            if (field_size == 16) return .{ .stack_i128 = field_base };
             return .{ .stack = .{ .offset = field_base, .size = ValueSize.fromByteCount(field_size) } };
         }
 
@@ -8916,6 +8920,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .stack_i128 => |sv| {
                     // Struct itself is i128-sized, field access within it
                     const field_base = sv + @as(i32, @intCast(field_offset));
+                    return self.fieldLocationFromLayout(field_base, field_size, field_layout_idx);
+                },
+                .list_stack => |list_info| {
+                    const field_base = list_info.struct_offset + @as(i32, @intCast(field_offset));
                     return self.fieldLocationFromLayout(field_base, field_size, field_layout_idx);
                 },
                 .general_reg => |reg| {
@@ -9657,9 +9665,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// overlapping offset to avoid over-reading the source.
         fn copyChunked(self: *Self, temp_reg: GeneralReg, src_base: GeneralReg, src_offset: i32, dst_base: GeneralReg, dst_offset: i32, size: u32) Allocator.Error!void {
             std.debug.assert(size > 0);
+            var scratch = temp_reg;
+            var owns_scratch = false;
+            if (scratch == src_base or scratch == dst_base) {
+                scratch = try self.allocTempGeneral();
+                owns_scratch = true;
+                if (scratch == src_base or scratch == dst_base) unreachable;
+            }
+            defer if (owns_scratch) self.codegen.freeGeneral(scratch);
+
             if (size == 8) {
-                try self.emitLoad(.w64, temp_reg, src_base, src_offset);
-                try self.emitStore(.w64, dst_base, dst_offset, temp_reg);
+                try self.emitLoad(.w64, scratch, src_base, src_offset);
+                try self.emitStore(.w64, dst_base, dst_offset, scratch);
                 return;
             }
             if (size < 8) {
@@ -9668,20 +9685,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 var remaining = size;
                 var off: i32 = 0;
                 if (remaining >= 4) {
-                    try self.emitLoad(.w32, temp_reg, src_base, src_offset + off);
-                    try self.emitStore(.w32, dst_base, dst_offset + off, temp_reg);
+                    try self.emitLoad(.w32, scratch, src_base, src_offset + off);
+                    try self.emitStore(.w32, dst_base, dst_offset + off, scratch);
                     remaining -= 4;
                     off += 4;
                 }
                 if (remaining >= 2) {
-                    try self.emitLoadW16(temp_reg, src_base, src_offset + off);
-                    try self.emitStoreW16(dst_base, dst_offset + off, temp_reg);
+                    try self.emitLoadW16(scratch, src_base, src_offset + off);
+                    try self.emitStoreW16(dst_base, dst_offset + off, scratch);
                     remaining -= 2;
                     off += 2;
                 }
                 if (remaining >= 1) {
-                    try self.emitLoadW8(temp_reg, src_base, src_offset + off);
-                    try self.emitStoreW8(dst_base, dst_offset + off, temp_reg);
+                    try self.emitLoadW8(scratch, src_base, src_offset + off);
+                    try self.emitStoreW8(dst_base, dst_offset + off, scratch);
                 }
                 return;
             }
@@ -9689,8 +9706,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             while (copied + 8 <= size) : (copied += 8) {
                 const s = src_offset + @as(i32, @intCast(copied));
                 const d = dst_offset + @as(i32, @intCast(copied));
-                try self.emitLoad(.w64, temp_reg, src_base, s);
-                try self.emitStore(.w64, dst_base, d, temp_reg);
+                try self.emitLoad(.w64, scratch, src_base, s);
+                try self.emitStore(.w64, dst_base, d, scratch);
             }
             // Handle tail: if size is not a multiple of 8, re-copy the last 8 bytes
             // at an overlapping offset. This is safe because size > 8.
@@ -9698,8 +9715,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const tail = @as(i32, @intCast(size - 8));
                 const s = src_offset + tail;
                 const d = dst_offset + tail;
-                try self.emitLoad(.w64, temp_reg, src_base, s);
-                try self.emitStore(.w64, dst_base, d, temp_reg);
+                try self.emitLoad(.w64, scratch, src_base, s);
+                try self.emitStore(.w64, dst_base, d, scratch);
             }
         }
 
@@ -11516,16 +11533,44 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Multi-word types (strings, i128/Dec, lists) need specific location variants
         /// so downstream code loads the correct number of bytes.
         fn stackLocationForLayout(self: *Self, layout_idx: layout.Idx, stack_offset: i32) ValueLocation {
-            if (layout_idx == .i128 or layout_idx == .u128 or layout_idx == .dec)
+            if (self.layout_store) |ls| {
+                if (@intFromEnum(layout_idx) < ls.layouts.len()) {
+                    const resolved = ls.getLayout(layout_idx);
+                    switch (resolved.tag) {
+                        .list, .list_of_zst => {
+                            return .{ .list_stack = .{
+                                .struct_offset = stack_offset,
+                                .data_offset = 0,
+                                .num_elements = 0,
+                            } };
+                        },
+                        .scalar => {
+                            if (resolved.data.scalar.tag == .str) {
+                                return .{ .stack_str = stack_offset };
+                            }
+                            if (ls.layoutSizeAlign(resolved).size == 16) {
+                                return .{ .stack_i128 = stack_offset };
+                            }
+                        },
+                        else => {},
+                    }
+                    const size = ls.layoutSizeAlign(resolved).size;
+                    return .{ .stack = .{
+                        .offset = stack_offset,
+                        .size = ValueSize.fromByteCount(size),
+                    } };
+                }
+            }
+            if (layout_idx == .i128 or layout_idx == .u128 or layout_idx == .dec) {
                 return .{ .stack_i128 = stack_offset };
-            if (layout_idx == .str)
+            }
+            if (layout_idx == .str) {
                 return .{ .stack_str = stack_offset };
-            const ls = self.layout_store orelse return .{ .stack = .{ .offset = stack_offset, .size = ValueSize.fromByteCount(self.getLayoutSize(layout_idx)) } };
-            const resolved = ls.getLayout(layout_idx);
-            if (resolved.tag == .list or resolved.tag == .list_of_zst)
-                return .{ .list_stack = .{ .struct_offset = stack_offset, .data_offset = 0, .num_elements = 0 } };
-            const size = ls.layoutSizeAlign(resolved).size;
-            return .{ .stack = .{ .offset = stack_offset, .size = ValueSize.fromByteCount(size) } };
+            }
+            return .{ .stack = .{
+                .offset = stack_offset,
+                .size = ValueSize.fromByteCount(self.getLayoutSize(layout_idx)),
+            } };
         }
 
         /// Emit a correctly-sized load from the stack, zero-extending sub-word
@@ -13750,6 +13795,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
 
                     self.codegen.freeGeneral(temp_reg);
+                },
+                .stack_str => |stack_offset| {
+                    try self.copyStackToPtr(.{ .stack = .{ .offset = stack_offset } }, ptr_reg, size);
+                },
+                .stack_i128 => |stack_offset| {
+                    try self.copyStackToPtr(.{ .stack = .{ .offset = stack_offset } }, ptr_reg, size);
                 },
                 .list_stack => |list_info| {
                     // Copy 24 bytes from list struct on stack to destination
@@ -16412,7 +16463,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     },
                     .list => |list_pattern| {
                         const suffix_patterns = self.store.getPatternSpan(list_pattern.suffix);
-                        const is_exact_match = list_pattern.rest.isNone() and suffix_patterns.len == 0;
+                        const is_exact_match = !list_pattern.has_rest and suffix_patterns.len == 0;
 
                         // Check list length
                         try self.emitListLengthCheck(list_pattern, value_loc);
