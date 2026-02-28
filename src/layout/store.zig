@@ -646,7 +646,6 @@ pub const Store = struct {
     pub fn internRecord(self: *Self, field_layout_idxs: []const Idx, field_names: []const Ident.Idx) std.mem.Allocator.Error!Idx {
         std.debug.assert(field_layout_idxs.len == field_names.len);
         if (field_layout_idxs.len == 0) return self.getEmptyStructLayout();
-        if (field_layout_idxs.len == 1) return field_layout_idxs[0];
 
         const hash = hashRecordKey(field_layout_idxs, field_names);
         if (self.interned_records_by_hash.getPtr(hash)) |bucket| {

@@ -187,7 +187,6 @@ fn layoutFromMonotypeInner(self: *Self, monotype: Monotype.Monotype) Allocator.E
 fn layoutFromRecord(self: *Self, record: anytype) Allocator.Error!layout.Idx {
     const fields = self.mir_store.monotype_store.getFields(record.fields);
     if (fields.len == 0) return .zst;
-    if (fields.len == 1) return self.layoutFromMonotype(fields[0].type_idx);
 
     const save_layout_idxs = self.scratch_layout_idxs.items.len;
     defer self.scratch_layout_idxs.shrinkRetainingCapacity(save_layout_idxs);
@@ -604,11 +603,6 @@ fn lowerRecord(self: *Self, rec: anytype, mono_idx: Monotype.Idx, region: Region
             .struct_layout = record_layout,
             .fields = LirExprSpan.empty(),
         } }, region);
-    }
-
-    // 1-field records are layout-unwrapped, so construction is just the field value.
-    if (mir_fields.len == 1) {
-        return self.lowerExpr(mir_fields[0]);
     }
 
     const record_layout = try self.layoutFromMonotype(mono_idx);
@@ -1105,15 +1099,6 @@ fn lowerBlock(self: *Self, block_data: anytype, mono_idx: Monotype.Idx, region: 
 
 fn lowerRecordAccess(self: *Self, ra: anytype, mir_expr_id: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
     const struct_mono = self.mir_store.typeOf(ra.record);
-    const struct_monotype = self.mir_store.monotype_store.getMonotype(struct_mono);
-    if (struct_monotype == .record) {
-        const fields = self.mir_store.monotype_store.getFields(struct_monotype.record.fields);
-        if (fields.len == 1) {
-            // 1-field records are layout-unwrapped: `record.field` is just `record`.
-            return self.lowerExpr(ra.record);
-        }
-    }
-
     var acc = self.startLetAccumulator();
     const lir_struct_raw = try self.lowerExpr(ra.record);
     const struct_layout = try self.layoutFromMonotype(struct_mono);
@@ -1506,20 +1491,6 @@ fn lowerPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Error!LirPatte
             // so codegen can use positional field indices.
             const mir_patterns = self.mir_store.getPatternSpan(rd.destructs);
             const mir_field_names = self.mir_store.getFieldNameSpan(rd.field_names);
-            const mono = self.mir_store.monotype_store.getMonotype(mono_idx);
-            const record = switch (mono) {
-                .record => |r| r,
-                else => unreachable,
-            };
-            const all_fields = self.mir_store.monotype_store.getFields(record.fields);
-
-            if (all_fields.len == 1) {
-                if (mir_patterns.len == 0) {
-                    const field_layout = try self.layoutFromMonotype(all_fields[0].type_idx);
-                    break :blk self.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = field_layout } }, region);
-                }
-                break :blk try self.lowerPattern(mir_patterns[0]);
-            }
 
             const record_layout_val = self.layout_store.getLayout(record_layout);
 
@@ -2066,24 +2037,6 @@ fn inspektPrim(self: *Self, value_expr: LirExprId, prim: Monotype.Prim, region: 
 fn inspektRecord(self: *Self, value_expr: LirExprId, record: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
     const fields = self.mir_store.monotype_store.getFields(record.fields);
     if (fields.len == 0) return self.emitStrLiteral("{}", region);
-
-    if (fields.len == 1) {
-        // 1-field record layout is unwrapped, so value_expr is already the field value.
-        const save_exprs = self.scratch_lir_expr_ids.items.len;
-        defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
-
-        const field_name = self.getIdentText(fields[0].name) orelse "?";
-        const field_label = try std.fmt.allocPrint(self.allocator, "{{ {s}: ", .{field_name});
-        defer self.allocator.free(field_label);
-
-        try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(field_label, region));
-        const field_inspected = try self.expandStrInspekt(value_expr, fields[0].type_idx, region);
-        try self.scratch_lir_expr_ids.append(self.allocator, field_inspected);
-        try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(" }", region));
-
-        const parts = self.scratch_lir_expr_ids.items[save_exprs..];
-        return self.foldStrConcat(parts, region);
-    }
 
     const struct_layout = try self.layoutFromMonotype(mono_idx);
     const struct_layout_val = self.layout_store.getLayout(struct_layout);

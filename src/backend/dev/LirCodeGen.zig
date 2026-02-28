@@ -14739,6 +14739,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             .stack => |s| s.offset,
                             .list_stack => |li| li.struct_offset,
                             .stack_str => |off| off,
+                            .closure_value => |cv| cv.stack_offset,
                             else => unreachable,
                         };
                         const reg0 = self.getArgumentRegister(reg_idx);

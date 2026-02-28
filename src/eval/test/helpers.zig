@@ -875,6 +875,24 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
             const mem_slice = module_instance.memoryAll();
 
             switch (l.tag) {
+                .struct_ => {
+                    const ptr: u32 = @bitCast(returns[0].I32);
+                    const struct_size = ls.layoutSize(l);
+                    if (ptr > mem_slice.len or mem_slice.len - ptr < struct_size) {
+                        break :blk error.WasmExecFailed;
+                    }
+
+                    const roc_val = values.RocValue{
+                        .ptr = @ptrCast(mem_slice[ptr..].ptr),
+                        .lay = l,
+                        .layout_idx = wasm_result.result_layout,
+                    };
+                    const fmt_ctx = values.RocValue.FormatContext{
+                        .layout_store = ls,
+                        .ident_store = null,
+                    };
+                    break :blk roc_val.format(allocator, fmt_ctx) catch error.UnsupportedLayout;
+                },
                 .tag_union => {
                     // Small tag union that fits in i32 — return discriminant as integer
                     const tu_size = ls.layoutSize(l);
