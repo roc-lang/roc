@@ -892,13 +892,13 @@ fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, region: Region
         // Compute closure layout and representation based on capture count
         const capture_items = self.scratch_lir_captures.items[save_captures_len..];
         if (capture_items.len == 1) {
-            // Single capture: unwrapped_capture (zero overhead)
+            // Single capture: one_capture (zero overhead)
             const cap_layout = capture_items[0].layout_idx;
             const closure_data_id = try self.lir_store.addClosureData(.{
                 .closure_layout = cap_layout,
                 .lambda = lambda_expr,
                 .captures = lir_captures,
-                .representation = .{ .unwrapped_capture = .{
+                .representation = .{ .one_capture = .{
                     .capture_layout = cap_layout,
                 } },
                 // Recursion flags default to not_recursive here. The TailRecursion pass
@@ -910,7 +910,7 @@ fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, region: Region
             });
             return self.lir_store.addExpr(.{ .closure = closure_data_id }, region);
         } else {
-            // Multiple captures: struct_captures with a tuple layout (positional, no names needed)
+            // Multiple captures: multiple_captures with a tuple layout (positional, no names needed)
             var cap_layout_idxs = std.ArrayList(layout.Idx).empty;
             defer cap_layout_idxs.deinit(self.allocator);
             for (capture_items) |cap| {
@@ -921,7 +921,7 @@ fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, region: Region
                 .closure_layout = closure_layout,
                 .lambda = lambda_expr,
                 .captures = lir_captures,
-                .representation = .{ .struct_captures = .{
+                .representation = .{ .multiple_captures = .{
                     .captures = lir_captures,
                     .struct_layout = closure_layout,
                 } },
@@ -2991,7 +2991,7 @@ test "MIR multi-tag union tags get correct discriminants" {
     try testing.expectEqual(@as(u16, 1), foo_lir_expr.tag.discriminant);
 }
 
-test "MIR lambda with single capture lowers to closure with unwrapped_capture" {
+test "MIR lambda with single capture lowers to closure with one_capture" {
     const allocator = testing.allocator;
 
     var env = try testInit();
@@ -3036,12 +3036,12 @@ test "MIR lambda with single capture lowers to closure with unwrapped_capture" {
 
     // Should produce a closure, not a plain lambda
     try testing.expect(lir_expr == .closure);
-    // Single capture → unwrapped_capture representation
+    // Single capture → one_capture representation
     const clo = env.lir_store.getClosureData(lir_expr.closure);
-    try testing.expect(clo.representation == .unwrapped_capture);
+    try testing.expect(clo.representation == .one_capture);
 }
 
-test "MIR lambda with multiple captures lowers to closure with struct_captures" {
+test "MIR lambda with multiple captures lowers to closure with multiple_captures" {
     const allocator = testing.allocator;
 
     var env = try testInit();
@@ -3096,9 +3096,9 @@ test "MIR lambda with multiple captures lowers to closure with struct_captures" 
 
     // Should produce a closure, not a plain lambda
     try testing.expect(lir_expr == .closure);
-    // Multiple captures → struct_captures representation
+    // Multiple captures → multiple_captures representation
     const clo = env.lir_store.getClosureData(lir_expr.closure);
-    try testing.expect(clo.representation == .struct_captures);
+    try testing.expect(clo.representation == .multiple_captures);
 }
 
 test "MIR record access finds correct field index for non-first field" {
@@ -3539,7 +3539,7 @@ test "MIR block with decl_var and mutate_var lowers to LIR decl and mutate" {
     try testing.expect(final == .lookup);
 }
 
-test "MIR lambda with heterogeneous captures (I64 + Str) lowers to closure with struct_captures" {
+test "MIR lambda with heterogeneous captures (I64 + Str) lowers to closure with multiple_captures" {
     const allocator = testing.allocator;
 
     var env = try testInit();
@@ -3593,9 +3593,9 @@ test "MIR lambda with heterogeneous captures (I64 + Str) lowers to closure with 
 
     // Should produce a closure
     try testing.expect(lir_expr == .closure);
-    // Multiple captures → struct_captures representation
+    // Multiple captures → multiple_captures representation
     const clo = env.lir_store.getClosureData(lir_expr.closure);
-    try testing.expect(clo.representation == .struct_captures);
+    try testing.expect(clo.representation == .multiple_captures);
 }
 
 test "MIR for_loop lowers to LIR for_loop" {

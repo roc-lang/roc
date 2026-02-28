@@ -62,7 +62,7 @@ pub fn wasmReprWithStore(layout_idx: layout.Idx, ls: *const layout.Store) WasmRe
                 .box, .box_of_zst => .{ .primitive = .i32 }, // pointer
                 .list, .list_of_zst => .{ .stack_memory = 12 }, // RocList
                 .closure => blk: {
-                    // For unwrapped_capture closures, the runtime value IS the capture
+                    // For one_capture closures, the runtime value IS the capture
                     // value itself (not a pointer). Resolve the captures layout to check.
                     const captures_repr = wasmReprWithStore(l.data.closure.captures_layout_idx, ls);
                     break :blk switch (captures_repr) {

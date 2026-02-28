@@ -86,11 +86,11 @@ pub const ClosureRepresentation = union(enum) {
 
     /// Single closure with exactly one capture - stored directly (unwrapped).
     /// Avoids the overhead of a single-field struct.
-    unwrapped_capture: UnwrappedCaptureInfo,
+    one_capture: UnwrappedCaptureInfo,
 
     /// Multiple closures with NO captures - stored as enum tag only.
     /// Very efficient: just a tag value, no capture data needed.
-    enum_dispatch: EnumDispatchInfo,
+    enum_no_captures: EnumDispatchInfo,
 
     /// No closures in the lambda set (empty or pure functions only)
     empty,
@@ -398,7 +398,7 @@ pub const LambdaSet = struct {
             } else if (capture_count == 1) {
                 // Single closure with single capture - can unwrap
                 return .{
-                    .unwrapped_capture = .{
+                    .one_capture = .{
                         .closure = closure,
                         .capture_type = null, // Type info filled in later if needed
                     },
@@ -425,7 +425,7 @@ pub const LambdaSet = struct {
 
         if (!any_has_captures) {
             // Multiple closures, none have captures - use enum dispatch
-            return .{ .enum_dispatch = .{
+            return .{ .enum_no_captures = .{
                 .closures = closures,
                 .variant_count = closures.len,
             } };

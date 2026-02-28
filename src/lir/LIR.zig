@@ -145,13 +145,13 @@ pub const LirCapture = struct {
 pub const ClosureRepresentation = union(enum) {
     /// 1 function, 1 capture → no wrapper, capture passed directly.
     /// Zero overhead - the closure IS the captured value.
-    unwrapped_capture: struct {
+    one_capture: struct {
         capture_layout: layout.Idx,
     },
 
     /// 1 function, N captures → struct with captures sorted by alignment.
     /// Captures stored largest-alignment-first for memory efficiency.
-    struct_captures: struct {
+    multiple_captures: struct {
         /// Captures in alignment order (largest first)
         captures: LirCaptureSpan,
         /// Total layout of the capture struct
@@ -160,7 +160,7 @@ pub const ClosureRepresentation = union(enum) {
 
     /// N functions, 0 captures → small tag (Bool for 2 fns, U8 for 3+).
     /// No payload needed, just Bool (2 fns) or U8 (3+ fns).
-    enum_dispatch: struct {
+    enum_no_captures: struct {
         /// Number of functions in the set
         num_functions: u16,
         /// This function's tag value (position in lambda set)
@@ -171,7 +171,7 @@ pub const ClosureRepresentation = union(enum) {
 
     /// N functions, some with captures → tagged union.
     /// Tag identifies which function, payload contains captures.
-    union_repr: struct {
+    tagged_union_captures: struct {
         /// This function's tag value
         tag: u16,
         /// Captures for this variant (may be empty)
@@ -184,7 +184,7 @@ pub const ClosureRepresentation = union(enum) {
 
     /// No representation needed - function is called directly.
     /// Used when a lambda is immediately called and never stored.
-    direct_call: void,
+    no_captures: void,
 };
 
 /// Closure data stored in a side table (LirExprStore.closure_data) to reduce

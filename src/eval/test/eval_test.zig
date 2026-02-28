@@ -415,8 +415,8 @@ test "lambdas with capture" {
     , 60, .no_trace);
 }
 
-test "closure with many captures (struct_captures)" {
-    // 4 captures -> struct_captures representation
+test "closure with many captures (multiple_captures)" {
+    // 4 captures -> multiple_captures representation
     try runExpectI64(
         \\{
         \\    a = 100.I64

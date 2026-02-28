@@ -8605,7 +8605,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             .captures = closure.captures,
                         },
                     };
-                    if (closure.representation == .unwrapped_capture) {
+                    if (closure.representation == .one_capture) {
                         const captures = self.store.getCaptures(closure.captures);
                         if (captures.len == 1) {
                             pb.capture_alias_symbol = captures[0].symbol;
@@ -8621,7 +8621,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .lambda => .{
                     .info = .{
-                        .representation = .{ .direct_call = {} },
+                        .representation = .{ .no_captures = {} },
                         .lambda = expr_id,
                         .captures = lir.LIR.LirCaptureSpan.empty(),
                     },
@@ -8723,7 +8723,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn preboundCallableIsI128Like(self: *Self, symbol: Symbol, layout_idx: layout.Idx) bool {
             const info = self.preboundCallableInfo(symbol, layout_idx) orelse return false;
             return switch (info.representation) {
-                .unwrapped_capture => |u| u.capture_layout == .dec or u.capture_layout == .i128 or u.capture_layout == .u128,
+                .one_capture => |u| u.capture_layout == .dec or u.capture_layout == .i128 or u.capture_layout == .u128,
                 else => false,
             };
         }
@@ -8746,33 +8746,33 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn closureResultLayoutFromInfo(info: ClosureStackInfo) layout.Idx {
             return switch (info.representation) {
-                .enum_dispatch => .u64,
-                .union_repr => |repr| repr.union_layout,
-                .unwrapped_capture => |repr| repr.capture_layout,
-                .struct_captures => |repr| repr.struct_layout,
-                .direct_call => .named_fn,
+                .enum_no_captures => .u64,
+                .tagged_union_captures => |repr| repr.union_layout,
+                .one_capture => |repr| repr.capture_layout,
+                .multiple_captures => |repr| repr.struct_layout,
+                .no_captures => .named_fn,
             };
         }
 
         fn closureStorageSize(self: *Self, repr: lir.ClosureRepresentation) u32 {
             const ls = self.layout_store orelse return 8;
             return switch (repr) {
-                .enum_dispatch => 8,
-                .union_repr => |u| ls.layoutSizeAlign(ls.getLayout(u.union_layout)).size,
-                .unwrapped_capture => |u| ls.layoutSizeAlign(ls.getLayout(u.capture_layout)).size,
-                .struct_captures => |s| ls.layoutSizeAlign(ls.getLayout(s.struct_layout)).size,
-                .direct_call => 0,
+                .enum_no_captures => 8,
+                .tagged_union_captures => |u| ls.layoutSizeAlign(ls.getLayout(u.union_layout)).size,
+                .one_capture => |u| ls.layoutSizeAlign(ls.getLayout(u.capture_layout)).size,
+                .multiple_captures => |s| ls.layoutSizeAlign(ls.getLayout(s.struct_layout)).size,
+                .no_captures => 0,
             };
         }
 
         fn closureStorageAlignBytes(self: *Self, repr: lir.ClosureRepresentation) u32 {
             const ls = self.layout_store orelse return 8;
             return switch (repr) {
-                .enum_dispatch => 8,
-                .union_repr => |u| @as(u32, @intCast(ls.layoutSizeAlign(ls.getLayout(u.union_layout)).alignment.toByteUnits())),
-                .unwrapped_capture => |u| @as(u32, @intCast(ls.layoutSizeAlign(ls.getLayout(u.capture_layout)).alignment.toByteUnits())),
-                .struct_captures => |s| @as(u32, @intCast(ls.layoutSizeAlign(ls.getLayout(s.struct_layout)).alignment.toByteUnits())),
-                .direct_call => 1,
+                .enum_no_captures => 8,
+                .tagged_union_captures => |u| @as(u32, @intCast(ls.layoutSizeAlign(ls.getLayout(u.union_layout)).alignment.toByteUnits())),
+                .one_capture => |u| @as(u32, @intCast(ls.layoutSizeAlign(ls.getLayout(u.capture_layout)).alignment.toByteUnits())),
+                .multiple_captures => |s| @as(u32, @intCast(ls.layoutSizeAlign(ls.getLayout(s.struct_layout)).alignment.toByteUnits())),
+                .no_captures => 1,
             };
         }
 
@@ -11915,7 +11915,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Handles different closure representations based on the lambda set.
         fn generateClosure(self: *Self, closure: anytype) Allocator.Error!ValueLocation {
             switch (closure.representation) {
-                .enum_dispatch => |repr| {
+                .enum_no_captures => |repr| {
                     // Multiple functions, no captures - just store the tag byte
                     // Use 8-byte slot for simplicity (tag is only 1 byte but stack alignment matters)
                     const slot = self.codegen.allocStackSlot(8);
@@ -11933,7 +11933,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.updateClosureStackInfoForCopy(slot, cv);
                     return cv;
                 },
-                .union_repr => |repr| {
+                .tagged_union_captures => |repr| {
                     // Multiple functions with captures - store tag + captures as tagged union
                     const ls = self.layout_store orelse unreachable;
                     const union_layout = ls.getLayout(repr.union_layout);
@@ -11955,11 +11955,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.updateClosureStackInfoForCopy(slot, cv);
                     return cv;
                 },
-                .unwrapped_capture => {
+                .one_capture => {
                     // Single function with one capture - materialize capture to stack
                     // and store as closure_value for dispatch at call sites.
                     const ls = self.layout_store orelse unreachable;
-                    const capture_layout = ls.getLayout(closure.representation.unwrapped_capture.capture_layout);
+                    const capture_layout = ls.getLayout(closure.representation.one_capture.capture_layout);
                     const declared_capture_size = ls.layoutSizeAlign(capture_layout).size;
                     const dynamic_capture_size = self.captureStorageSizeInScope(closure.captures);
                     const capture_size = @max(declared_capture_size, dynamic_capture_size);
@@ -11990,7 +11990,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     return cv;
                 },
-                .struct_captures => |sc| {
+                .multiple_captures => |sc| {
                     // Single function with multiple captures - materialize to struct on stack.
                     const ls = self.layout_store orelse unreachable;
                     const struct_layout = ls.getLayout(sc.struct_layout);
@@ -12012,7 +12012,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     return cv;
                 },
-                .direct_call => {
+                .no_captures => {
                     // Direct call - compile as procedure for direct calling
                     const inner = self.store.getExpr(closure.lambda);
                     if (inner != .lambda) unreachable;
@@ -12237,21 +12237,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             ret_layout: layout.Idx,
         ) Allocator.Error!ValueLocation {
             switch (cv.representation) {
-                .enum_dispatch => |repr| {
+                .enum_no_captures => |repr| {
                     return try self.dispatchEnumClosure(cv.stack_offset, repr.lambda_set, args_span, ret_layout);
                 },
-                .union_repr => |repr| {
+                .tagged_union_captures => |repr| {
                     return try self.dispatchUnionClosure(cv.stack_offset, repr, args_span, ret_layout);
                 },
-                .unwrapped_capture => {
+                .one_capture => {
                     // Single function - call with the captured value
                     return try self.callSingleClosureWithCaptures(cv, args_span, ret_layout);
                 },
-                .struct_captures => {
+                .multiple_captures => {
                     // Single function - call with captures struct
                     return try self.callSingleClosureWithCaptures(cv, args_span, ret_layout);
                 },
-                .direct_call => {
+                .no_captures => {
                     return try self.compileLambdaAndCall(cv.lambda, args_span, ret_layout);
                 },
             }
@@ -12396,7 +12396,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .stack = .{ .offset = result_slot } };
         }
 
-        /// Call a single closure (unwrapped_capture or struct_captures) by binding
+        /// Call a single closure (one_capture or multiple_captures) by binding
         /// its captures to symbol_locations and then calling its compiled procedure.
         fn callSingleClosureWithCaptures(
             self: *Self,
@@ -12871,7 +12871,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         if (self.closureValueFromStackOffset(s.offset)) |closure_loc| {
                             return try self.generateClosureDispatch(closure_loc.closure_value, args_span, ret_layout);
                         }
-                        return try self.generateIndirectCall(loc, args_span, ret_layout);
+                        std.debug.panic("generateLookupCall: missing closure info for stack callable symbol={} layout={}", .{
+                            @as(u64, @bitCast(lookup.symbol)),
+                            @intFromEnum(lookup.layout_idx),
+                        });
                     },
                     .stack_i128 => |off| {
                         if (self.getSymbolClosureInfo(lookup.symbol, lookup.layout_idx)) |info| {
@@ -12885,6 +12888,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         if (self.closureValueFromStackOffset(off)) |closure_loc| {
                             return try self.generateClosureDispatch(closure_loc.closure_value, args_span, ret_layout);
                         }
+                        std.debug.panic("generateLookupCall: missing closure info for i128-like callable symbol={} layout={}", .{
+                            @as(u64, @bitCast(lookup.symbol)),
+                            @intFromEnum(lookup.layout_idx),
+                        });
                     },
                     .stack_str => |off| {
                         if (self.getSymbolClosureInfo(lookup.symbol, lookup.layout_idx)) |info| {
@@ -12898,13 +12905,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         if (self.closureValueFromStackOffset(off)) |closure_loc| {
                             return try self.generateClosureDispatch(closure_loc.closure_value, args_span, ret_layout);
                         }
+                        std.debug.panic("generateLookupCall: missing closure info for str-like callable symbol={} layout={}", .{
+                            @as(u64, @bitCast(lookup.symbol)),
+                            @intFromEnum(lookup.layout_idx),
+                        });
                     },
                     // Function pointer: the value is an absolute address that we can call
                     // indirectly via BLR (aarch64) or CALL reg (x86_64).
                     // This happens when a lambda is passed as an argument to a higher-order
                     // function — the caller computes the address via ADR/LEA and passes it.
                     .general_reg, .immediate_i64 => {
-                        return try self.generateIndirectCall(loc, args_span, ret_layout);
+                        std.debug.panic("generateLookupCall: register/immediate callable requires defunctionalization symbol={} layout={}", .{
+                            @as(u64, @bitCast(lookup.symbol)),
+                            @intFromEnum(lookup.layout_idx),
+                        });
                     },
                     else => {},
                 }
@@ -13099,8 +13113,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn calcArgRegCount(self: *Self, arg_loc: ValueLocation, arg_layout: ?layout.Idx) u8 {
             if (arg_loc == .closure_value) {
                 const repr = arg_loc.closure_value.representation;
-                if (repr == .unwrapped_capture) {
-                    const cap_layout = repr.unwrapped_capture.capture_layout;
+                if (repr == .one_capture) {
+                    const cap_layout = repr.one_capture.capture_layout;
                     if (cap_layout == .dec or cap_layout == .i128 or cap_layout == .u128) {
                         return 2;
                     }
@@ -14656,7 +14670,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128);
                     const is_i128_closure = switch (arg_loc) {
                         .closure_value => |cv| switch (cv.representation) {
-                            .unwrapped_capture => |u| u.capture_layout == .dec or u.capture_layout == .i128 or u.capture_layout == .u128,
+                            .one_capture => |u| u.capture_layout == .dec or u.capture_layout == .i128 or u.capture_layout == .u128,
                             else => false,
                         },
                         else => false,
