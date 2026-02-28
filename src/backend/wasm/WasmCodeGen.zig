@@ -6601,6 +6601,59 @@ fn getClosureInfoFromExprWithExpectation(
             }
             return null;
         },
+        .struct_access => |sa| {
+            const field_expr_id = self.resolveStructFieldExpr(sa.struct_expr, sa.field_idx, 0) orelse return null;
+            return self.getClosureInfoFromExprWithExpectation(field_expr_id, expect_callable);
+        },
+        .if_then_else => |ite| {
+            const branches = self.store.getIfBranches(ite.branches);
+
+            // If all branch conditions are compile-time booleans, select the
+            // exact taken branch and preserve its callable metadata.
+            var all_literal = true;
+            for (branches) |branch| {
+                const cond_val = self.boolLiteralValue(branch.cond) orelse {
+                    all_literal = false;
+                    break;
+                };
+                if (cond_val) {
+                    return self.getClosureInfoFromExprWithExpectation(branch.body, expect_callable);
+                }
+            }
+            if (all_literal) {
+                return self.getClosureInfoFromExprWithExpectation(ite.final_else, expect_callable);
+            }
+
+            const merged = self.getClosureInfoFromExprWithExpectation(ite.final_else, expect_callable) orelse return null;
+            for (branches) |branch| {
+                const branch_info = self.getClosureInfoFromExprWithExpectation(branch.body, expect_callable) orelse return null;
+                if (!std.meta.eql(branch_info, merged)) return null;
+            }
+            return merged;
+        },
+        .match_expr => |m| {
+            if (self.resolveConstMatchBranchBody(m)) |selected_body| {
+                return self.getClosureInfoFromExprWithExpectation(selected_body, expect_callable);
+            }
+            const branches = self.store.getMatchBranches(m.branches);
+            if (branches.len == 0) return null;
+            const merged = self.getClosureInfoFromExprWithExpectation(branches[0].body, expect_callable) orelse return null;
+            for (branches[1..]) |branch| {
+                const branch_info = self.getClosureInfoFromExprWithExpectation(branch.body, expect_callable) orelse return null;
+                if (!std.meta.eql(branch_info, merged)) return null;
+            }
+            return merged;
+        },
+        .discriminant_switch => |sw| {
+            const branches = self.store.getExprSpan(sw.branches);
+            if (branches.len == 0) return null;
+            const merged = self.getClosureInfoFromExprWithExpectation(branches[0], expect_callable) orelse return null;
+            for (branches[1..]) |branch_expr_id| {
+                const branch_info = self.getClosureInfoFromExprWithExpectation(branch_expr_id, expect_callable) orelse return null;
+                if (!std.meta.eql(branch_info, merged)) return null;
+            }
+            return merged;
+        },
         .nominal => |nom| {
             return self.getClosureInfoFromExprWithExpectation(nom.backing_expr, expect_callable);
         },
@@ -6651,11 +6704,177 @@ fn getClosureInfoFromExpectedCallableExpr(self: *const Self, expr_id: LirExprId,
             }
             return null;
         },
+        .struct_access => |sa| {
+            const field_expr_id = self.resolveStructFieldExpr(sa.struct_expr, sa.field_idx, depth + 1) orelse return null;
+            return self.getClosureInfoFromExpectedCallableExpr(field_expr_id, depth + 1);
+        },
+        .if_then_else => |ite| {
+            const branches = self.store.getIfBranches(ite.branches);
+
+            var all_literal = true;
+            for (branches) |branch| {
+                const cond_val = self.boolLiteralValue(branch.cond) orelse {
+                    all_literal = false;
+                    break;
+                };
+                if (cond_val) {
+                    return self.getClosureInfoFromExpectedCallableExpr(branch.body, depth + 1);
+                }
+            }
+            if (all_literal) {
+                return self.getClosureInfoFromExpectedCallableExpr(ite.final_else, depth + 1);
+            }
+
+            const merged = self.getClosureInfoFromExpectedCallableExpr(ite.final_else, depth + 1) orelse return null;
+            for (branches) |branch| {
+                const branch_info = self.getClosureInfoFromExpectedCallableExpr(branch.body, depth + 1) orelse return null;
+                if (!std.meta.eql(branch_info, merged)) return null;
+            }
+            return merged;
+        },
+        .match_expr => |m| {
+            if (self.resolveConstMatchBranchBody(m)) |selected_body| {
+                return self.getClosureInfoFromExpectedCallableExpr(selected_body, depth + 1);
+            }
+            const branches = self.store.getMatchBranches(m.branches);
+            if (branches.len == 0) return null;
+            const merged = self.getClosureInfoFromExpectedCallableExpr(branches[0].body, depth + 1) orelse return null;
+            for (branches[1..]) |branch| {
+                const branch_info = self.getClosureInfoFromExpectedCallableExpr(branch.body, depth + 1) orelse return null;
+                if (!std.meta.eql(branch_info, merged)) return null;
+            }
+            return merged;
+        },
+        .discriminant_switch => |sw| {
+            const branches = self.store.getExprSpan(sw.branches);
+            if (branches.len == 0) return null;
+            const merged = self.getClosureInfoFromExpectedCallableExpr(branches[0], depth + 1) orelse return null;
+            for (branches[1..]) |branch_expr_id| {
+                const branch_info = self.getClosureInfoFromExpectedCallableExpr(branch_expr_id, depth + 1) orelse return null;
+                if (!std.meta.eql(branch_info, merged)) return null;
+            }
+            return merged;
+        },
         .nominal => |nom| {
             return self.getClosureInfoFromExpectedCallableExpr(nom.backing_expr, depth + 1);
         },
         else => return null,
     }
+}
+
+fn boolLiteralValue(self: *const Self, expr_id: LirExprId) ?bool {
+    const expr = self.store.getExpr(expr_id);
+    return switch (expr) {
+        .bool_literal => |b| b,
+        .lookup => |lk| blk: {
+            const key: u64 = @bitCast(lk.symbol);
+            if (self.local_binding_exprs.get(key)) |bound_expr_id| {
+                break :blk self.boolLiteralValue(bound_expr_id);
+            }
+            if (self.store.getSymbolDef(lk.symbol)) |def_id| {
+                break :blk self.boolLiteralValue(def_id);
+            }
+            break :blk null;
+        },
+        .nominal => |nom| self.boolLiteralValue(nom.backing_expr),
+        .block => |b| self.boolLiteralValue(b.final_expr),
+        else => null,
+    };
+}
+
+fn intLiteralValue(self: *const Self, expr_id: LirExprId) ?i128 {
+    const expr = self.store.getExpr(expr_id);
+    return switch (expr) {
+        .i64_literal => |v| @as(i128, v),
+        .i128_literal => |v| v,
+        .lookup => |lk| blk: {
+            const key: u64 = @bitCast(lk.symbol);
+            if (self.local_binding_exprs.get(key)) |bound_expr_id| {
+                break :blk self.intLiteralValue(bound_expr_id);
+            }
+            if (self.store.getSymbolDef(lk.symbol)) |def_id| {
+                break :blk self.intLiteralValue(def_id);
+            }
+            break :blk null;
+        },
+        .nominal => |nom| self.intLiteralValue(nom.backing_expr),
+        .block => |b| self.intLiteralValue(b.final_expr),
+        else => null,
+    };
+}
+
+fn tagLiteralDiscriminant(self: *const Self, expr_id: LirExprId) ?u16 {
+    const expr = self.store.getExpr(expr_id);
+    return switch (expr) {
+        .bool_literal => |b| if (b) 1 else 0,
+        .zero_arg_tag => |t| t.discriminant,
+        .lookup => |lk| blk: {
+            const key: u64 = @bitCast(lk.symbol);
+            if (self.local_binding_exprs.get(key)) |bound_expr_id| {
+                break :blk self.tagLiteralDiscriminant(bound_expr_id);
+            }
+            if (self.store.getSymbolDef(lk.symbol)) |def_id| {
+                break :blk self.tagLiteralDiscriminant(def_id);
+            }
+            break :blk null;
+        },
+        .nominal => |nom| self.tagLiteralDiscriminant(nom.backing_expr),
+        .block => |b| self.tagLiteralDiscriminant(b.final_expr),
+        else => null,
+    };
+}
+
+fn resolveConstMatchBranchBody(self: *const Self, m: anytype) ?LirExprId {
+    const tag_disc = self.tagLiteralDiscriminant(m.value);
+    const int_val = self.intLiteralValue(m.value);
+    if (tag_disc == null and int_val == null) return null;
+
+    const branches = self.store.getMatchBranches(m.branches);
+    for (branches) |branch| {
+        const pattern = self.store.getPattern(branch.pattern);
+        const matches = switch (pattern) {
+            .wildcard, .bind, .as_pattern => true,
+            .tag => |tag_pat| if (tag_disc) |disc| disc == tag_pat.discriminant else false,
+            .int_literal => |lit| if (int_val) |v| v == lit.value else false,
+            else => false,
+        };
+        if (!matches) continue;
+
+        if (!branch.guard.isNone()) {
+            const guard_val = self.boolLiteralValue(branch.guard) orelse return null;
+            if (!guard_val) continue;
+        }
+
+        return branch.body;
+    }
+
+    return null;
+}
+
+fn resolveStructFieldExpr(self: *const Self, expr_id: LirExprId, field_idx: u16, depth: u16) ?LirExprId {
+    if (depth > 64) return null;
+
+    const expr = self.store.getExpr(expr_id);
+    return switch (expr) {
+        .struct_ => |s| blk: {
+            const fields = self.store.getExprSpan(s.fields);
+            if (field_idx >= fields.len) break :blk null;
+            break :blk fields[field_idx];
+        },
+        .nominal => |nom| self.resolveStructFieldExpr(nom.backing_expr, field_idx, depth + 1),
+        .block => |b| self.resolveStructFieldExpr(b.final_expr, field_idx, depth + 1),
+        .lookup => |lk| blk: {
+            const key: u64 = @bitCast(lk.symbol);
+            if (self.local_binding_exprs.get(key)) |bound_expr_id| {
+                break :blk self.resolveStructFieldExpr(bound_expr_id, field_idx, depth + 1);
+            }
+            if (self.store.getSymbolDef(lk.symbol)) |def_id| {
+                break :blk self.resolveStructFieldExpr(def_id, field_idx, depth + 1);
+            }
+            break :blk null;
+        },
+        else => null,
+    };
 }
 
 /// After binding a value to `symbol`, register callable metadata (if any) so

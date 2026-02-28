@@ -7337,6 +7337,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Generate code for if-then-else
         fn generateIfThenElse(self: *Self, ite: anytype) Allocator.Error!ValueLocation {
+            if (self.resolveConstMatchLikeIfBranchExpr(ite.branches, ite.final_else)) |selected_body| {
+                return self.generateExpr(selected_body);
+            }
             const branches = self.store.getIfBranches(ite.branches);
 
             // Collect jump targets for patching
@@ -7920,6 +7923,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Generate code for match expression
         fn generateMatch(self: *Self, when_expr: anytype) Allocator.Error!ValueLocation {
+            if (self.resolveConstMatchBranchForCodegen(when_expr.branches, when_expr.value)) |selected_body| {
+                return self.generateExpr(selected_body);
+            }
+
             // Evaluate the scrutinee (the value being matched)
             const value_loc = try self.generateExpr(when_expr.value);
 
@@ -8685,6 +8692,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     break :blk self.returnedClosureInfoFromCallableExpr(call.fn_expr);
                 },
                 .if_then_else => |ite| blk: {
+                    if (self.resolveConstMatchLikeIfBranchExpr(ite.branches, ite.final_else)) |selected_body| {
+                        break :blk self.closureInfoFromExprIdWithExpectation(selected_body, expect_callable);
+                    }
                     const merged = self.closureInfoFromExprIdWithExpectation(ite.final_else, expect_callable) orelse break :blk null;
                     const branches = self.store.getIfBranches(ite.branches);
                     for (branches) |branch| {
@@ -8694,6 +8704,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     break :blk merged;
                 },
                 .match_expr => |m| blk: {
+                    if (self.resolveConstMatchBranchExpr(m.branches, m.value)) |selected_body| {
+                        break :blk self.closureInfoFromExprIdWithExpectation(selected_body, expect_callable);
+                    }
                     const branches = self.store.getMatchBranches(m.branches);
                     if (branches.len == 0) break :blk null;
                     const merged = self.closureInfoFromExprIdWithExpectation(branches[0].body, expect_callable) orelse break :blk null;
@@ -8720,6 +8733,148 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 ),
                 else => null,
             };
+        }
+
+        fn boolLiteralExprValue(self: *Self, expr_id: LirExprId) ?bool {
+            const expr = self.store.getExpr(expr_id);
+            return switch (expr) {
+                .bool_literal => |b| b,
+                .lookup => |lk| blk: {
+                    if (self.getSymbolDefExact(lk.symbol)) |def_expr_id| {
+                        break :blk self.boolLiteralExprValue(def_expr_id);
+                    }
+                    if (self.symbol_source_exprs.get(symbolKey(lk.symbol))) |src_expr_id| {
+                        break :blk self.boolLiteralExprValue(src_expr_id);
+                    }
+                    break :blk null;
+                },
+                .nominal => |nom| self.boolLiteralExprValue(nom.backing_expr),
+                .block => |b| self.boolLiteralExprValue(b.final_expr),
+                else => null,
+            };
+        }
+
+        fn intLiteralExprValue(self: *Self, expr_id: LirExprId) ?i128 {
+            const expr = self.store.getExpr(expr_id);
+            return switch (expr) {
+                .i64_literal => |v| @as(i128, v),
+                .i128_literal => |v| v,
+                .lookup => |lk| blk: {
+                    if (self.getSymbolDefExact(lk.symbol)) |def_expr_id| {
+                        break :blk self.intLiteralExprValue(def_expr_id);
+                    }
+                    if (self.symbol_source_exprs.get(symbolKey(lk.symbol))) |src_expr_id| {
+                        break :blk self.intLiteralExprValue(src_expr_id);
+                    }
+                    break :blk null;
+                },
+                .nominal => |nom| self.intLiteralExprValue(nom.backing_expr),
+                .block => |b| self.intLiteralExprValue(b.final_expr),
+                else => null,
+            };
+        }
+
+        fn tagLiteralExprDiscriminant(self: *Self, expr_id: LirExprId) ?u16 {
+            const expr = self.store.getExpr(expr_id);
+            return switch (expr) {
+                .bool_literal => |b| if (b) 1 else 0,
+                .zero_arg_tag => |t| t.discriminant,
+                .lookup => |lk| blk: {
+                    if (self.getSymbolDefExact(lk.symbol)) |def_expr_id| {
+                        break :blk self.tagLiteralExprDiscriminant(def_expr_id);
+                    }
+                    if (self.symbol_source_exprs.get(symbolKey(lk.symbol))) |src_expr_id| {
+                        break :blk self.tagLiteralExprDiscriminant(src_expr_id);
+                    }
+                    break :blk null;
+                },
+                .nominal => |nom| self.tagLiteralExprDiscriminant(nom.backing_expr),
+                .block => |b| self.tagLiteralExprDiscriminant(b.final_expr),
+                else => null,
+            };
+        }
+
+        fn resolveConstMatchLikeIfBranchExpr(
+            self: *Self,
+            branches_span: lir.LIR.LirIfBranchSpan,
+            final_else: LirExprId,
+        ) ?LirExprId {
+            const branches = self.store.getIfBranches(branches_span);
+            var all_literal = true;
+            for (branches) |branch| {
+                const cond_val = self.boolLiteralExprValue(branch.cond) orelse {
+                    all_literal = false;
+                    break;
+                };
+                if (cond_val) return branch.body;
+            }
+            if (all_literal) return final_else;
+            return null;
+        }
+
+        fn resolveConstMatchBranchExpr(
+            self: *Self,
+            branches_span: lir.LIR.LirMatchBranchSpan,
+            value_expr_id: LirExprId,
+        ) ?LirExprId {
+            const tag_disc = self.tagLiteralExprDiscriminant(value_expr_id);
+            const int_val = self.intLiteralExprValue(value_expr_id);
+            if (tag_disc == null and int_val == null) return null;
+
+            const branches = self.store.getMatchBranches(branches_span);
+            for (branches) |branch| {
+                const pattern = self.store.getPattern(branch.pattern);
+                const matches = switch (pattern) {
+                    .wildcard, .bind, .as_pattern => true,
+                    .tag => |tag_pat| if (tag_disc) |disc| disc == tag_pat.discriminant else false,
+                    .int_literal => |lit| if (int_val) |v| v == lit.value else false,
+                    else => false,
+                };
+                if (!matches) continue;
+
+                if (!branch.guard.isNone()) {
+                    const guard_val = self.boolLiteralExprValue(branch.guard) orelse return null;
+                    if (!guard_val) continue;
+                }
+
+                return branch.body;
+            }
+
+            return null;
+        }
+
+        fn resolveConstMatchBranchForCodegen(
+            self: *Self,
+            branches_span: lir.LIR.LirMatchBranchSpan,
+            value_expr_id: LirExprId,
+        ) ?LirExprId {
+            const tag_disc = self.tagLiteralExprDiscriminant(value_expr_id);
+            const int_val = self.intLiteralExprValue(value_expr_id);
+            if (tag_disc == null and int_val == null) return null;
+
+            const branches = self.store.getMatchBranches(branches_span);
+            for (branches) |branch| {
+                const pattern = self.store.getPattern(branch.pattern);
+                const matches = switch (pattern) {
+                    .wildcard => true,
+                    .tag => |tag_pat| blk: {
+                        if (tag_pat.args.len != 0) break :blk false;
+                        break :blk if (tag_disc) |disc| disc == tag_pat.discriminant else false;
+                    },
+                    .int_literal => |lit| if (int_val) |v| v == lit.value else false,
+                    else => return null,
+                };
+                if (!matches) continue;
+
+                if (!branch.guard.isNone()) {
+                    const guard_val = self.boolLiteralExprValue(branch.guard) orelse return null;
+                    if (!guard_val) continue;
+                }
+
+                return branch.body;
+            }
+
+            return null;
         }
 
         fn preboundCallableFromExprId(self: *Self, expr_id: LirExprId) ?PreboundCallable {
