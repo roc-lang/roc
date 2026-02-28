@@ -803,12 +803,26 @@ fn lowerMatch(self: *Self, match_data: anytype, mono_idx: Monotype.Idx, region: 
     return acc.finish(match_expr, result_layout, region);
 }
 
-fn closureLayoutFromLirExpr(self: *Self, expr_id: LirExprId) ?layout.Idx {
+fn callableFnLayoutFromLirExpr(self: *Self, expr_id: LirExprId) ?layout.Idx {
+    return self.callableFnLayoutFromLirExprWithDepth(expr_id, 0);
+}
+
+fn callableFnLayoutFromLirExprWithDepth(self: *Self, expr_id: LirExprId, depth: u16) ?layout.Idx {
+    if (depth > 64) return null;
+
     const expr = self.lir_store.getExpr(expr_id);
     return switch (expr) {
-        .closure => |closure_id| self.lir_store.getClosureData(closure_id).closure_layout,
-        .nominal => |nom| self.closureLayoutFromLirExpr(nom.backing_expr),
-        .block => |b| self.closureLayoutFromLirExpr(b.final_expr),
+        .lambda => |lam| lam.fn_layout,
+        .closure => |closure_id| blk: {
+            const closure = self.lir_store.getClosureData(closure_id);
+            break :blk self.callableFnLayoutFromLirExprWithDepth(closure.lambda, depth + 1);
+        },
+        .nominal => |nom| self.callableFnLayoutFromLirExprWithDepth(nom.backing_expr, depth + 1),
+        .block => |b| self.callableFnLayoutFromLirExprWithDepth(b.final_expr, depth + 1),
+        .lookup => |lookup| blk: {
+            const def_expr_id = self.lir_store.getSymbolDef(lookup.symbol) orelse break :blk null;
+            break :blk self.callableFnLayoutFromLirExprWithDepth(def_expr_id, depth + 1);
+        },
         else => null,
     };
 }
@@ -947,9 +961,15 @@ fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, region: Region
                     break :blk try self.layoutFromMonotype(def_mono_idx);
                 }
 
+                if (self.symbol_layouts.get(cap_key)) |cached_layout| {
+                    if (self.layoutIsFunctionLike(cached_layout)) {
+                        break :blk cached_layout;
+                    }
+                }
+
                 if (self.lir_store.getSymbolDef(cap.symbol)) |lir_def_id| {
-                    if (self.closureLayoutFromLirExpr(lir_def_id)) |closure_layout| {
-                        break :blk closure_layout;
+                    if (self.callableFnLayoutFromLirExpr(lir_def_id)) |callable_layout| {
+                        break :blk callable_layout;
                     }
                 }
 
@@ -961,9 +981,17 @@ fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, region: Region
                         break :blk try self.layoutFromMonotype(def_mono_idx);
                     }
                 }
-                if (self.closureLayoutFromLirExpr(lir_def_id)) |closure_layout| {
-                    break :blk closure_layout;
+
+                if (self.symbol_layouts.get(cap_key)) |cached_layout| {
+                    if (self.layoutIsFunctionLike(cached_layout)) {
+                        break :blk cached_layout;
+                    }
                 }
+
+                if (self.callableFnLayoutFromLirExpr(lir_def_id)) |callable_layout| {
+                    break :blk callable_layout;
+                }
+
                 if (self.symbol_layouts.get(cap_key)) |cached_layout| {
                     break :blk cached_layout;
                 }
