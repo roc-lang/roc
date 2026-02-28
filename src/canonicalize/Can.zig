@@ -2010,7 +2010,23 @@ pub fn canonicalizeFile(
         }
     }
 
-    // Phase 1.5.5: Process anno-only top-level type annotations EARLY
+    // Phase 1.5.5: Introduce type names for types WITHOUT associated blocks
+    // This allows associated blocks (processed in Phase 1.6) to reference sibling types
+    // that are declared without associated blocks (e.g., Positive's negate -> Negative,
+    // or a type alias like NodeKind used in an associated item's type annotation).
+    // Also needed before Phase 1.5.6 so anno-only annotations can resolve type aliases.
+    // We only introduce the name here; full processing happens in Phase 1.7.
+    for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
+        const stmt = self.parse_ir.store.getStatement(stmt_id);
+        if (stmt == .type_decl) {
+            const type_decl = stmt.type_decl;
+            if (type_decl.associated == null) {
+                try self.introduceTypeNameOnly(type_decl);
+            }
+        }
+    }
+
+    // Phase 1.5.6: Process anno-only top-level type annotations EARLY
     // For type-modules, anno-only top-level type annotations (like list_get_unsafe) need to be
     // processed before associated blocks so they can be referenced inside those blocks
     // IMPORTANT: Only process anno-only (no matching decl), and only for type-modules
@@ -2085,21 +2101,6 @@ pub fn canonicalizeFile(
             }
         },
         else => {},
-    }
-
-    // Phase 1.5.8: Introduce type names for types WITHOUT associated blocks
-    // This allows associated blocks (processed in Phase 1.6) to reference sibling types
-    // that are declared without associated blocks (e.g., Positive's negate -> Negative,
-    // or a type alias like NodeKind used in an associated item's type annotation).
-    // We only introduce the name here; full processing happens in Phase 1.7.
-    for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
-        const stmt = self.parse_ir.store.getStatement(stmt_id);
-        if (stmt == .type_decl) {
-            const type_decl = stmt.type_decl;
-            if (type_decl.associated == null) {
-                try self.introduceTypeNameOnly(type_decl);
-            }
-        }
     }
 
     // Phase 1.6: Now process all deferred type declaration associated blocks
