@@ -9174,12 +9174,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 var capture_size = cap_sa.size;
                 var capture_align = cap_sa.alignment.toByteUnits();
                 if (self.isFunctionLayout(capture.layout_idx)) {
-                    if (self.getSymbolLocation(capture.symbol, capture.layout_idx)) |cap_loc| {
-                        if (self.closureInfoFromValueLocation(cap_loc)) |info| {
-                            capture_size = @max(capture_size, @as(@TypeOf(capture_size), @intCast(self.closureStorageSize(info.representation))));
-                            capture_align = @max(capture_align, self.closureStorageAlignBytes(info.representation));
+                    const callable_info = self.callableInfoForSymbol(capture.symbol, capture.layout_idx) orelse blk: {
+                        if (self.getSymbolLocation(capture.symbol, capture.layout_idx)) |cap_loc| {
+                            if (self.closureInfoFromValueLocation(cap_loc)) |info| break :blk info;
                         }
-                    }
+                        std.debug.panic("captureStorageSizeInScope: missing callable info for symbol={} layout={}", .{
+                            @as(u64, @bitCast(capture.symbol)),
+                            @intFromEnum(capture.layout_idx),
+                        });
+                    };
+                    capture_size = @as(@TypeOf(capture_size), @intCast(self.closureStorageSize(callable_info.representation)));
+                    capture_align = @as(@TypeOf(capture_align), @intCast(self.closureStorageAlignBytes(callable_info.representation)));
                 }
                 total_size = @intCast(std.mem.alignForward(usize, total_size, capture_align));
                 total_size += capture_size;
@@ -12522,15 +12527,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         if (callable_info_opt == null) {
                             callable_info_opt = self.closureInfoFromValueLocation(capture_loc);
                         }
-                        if (callable_info_opt) |info| {
-                            capture_size = @max(capture_size, @as(@TypeOf(capture_size), @intCast(self.closureStorageSize(info.representation))));
-                            cap_align = @max(cap_align, self.closureStorageAlignBytes(info.representation));
-                        }
+                        const info = callable_info_opt orelse std.debug.panic(
+                            "materializeCaptures: missing callable info for symbol={} layout={}",
+                            .{
+                                @as(u64, @bitCast(capture.symbol)),
+                                @intFromEnum(capture.layout_idx),
+                            },
+                        );
+                        capture_size = @as(@TypeOf(capture_size), @intCast(self.closureStorageSize(info.representation)));
+                        cap_align = @as(@TypeOf(cap_align), @intCast(self.closureStorageAlignBytes(info.representation)));
                     }
                     offset = @intCast(std.mem.alignForward(usize, @intCast(offset), cap_align));
                     // Number of 8-byte words to copy (rounded up)
                     const num_words: u32 = (capture_size + 7) / 8;
-
                     // Copy value to the struct offset
                     switch (capture_loc) {
                         .immediate_i128 => |val| {
@@ -12670,10 +12679,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             if (callable_info_opt == null) {
                                 callable_info_opt = self.closureInfoFromValueLocation(resolved_loc);
                             }
-                            if (callable_info_opt) |info| {
-                                capture_size = @max(capture_size, @as(@TypeOf(capture_size), @intCast(self.closureStorageSize(info.representation))));
-                                cap_align_r = @max(cap_align_r, self.closureStorageAlignBytes(info.representation));
-                            }
+                            const info = callable_info_opt orelse std.debug.panic(
+                                "materializeCaptures(resolve): missing callable info for symbol={} layout={}",
+                                .{
+                                    @as(u64, @bitCast(capture.symbol)),
+                                    @intFromEnum(capture.layout_idx),
+                                },
+                            );
+                            capture_size = @as(@TypeOf(capture_size), @intCast(self.closureStorageSize(info.representation)));
+                            cap_align_r = @as(@TypeOf(cap_align_r), @intCast(self.closureStorageAlignBytes(info.representation)));
                         }
                         offset = @intCast(std.mem.alignForward(usize, @intCast(offset), cap_align_r));
                         const num_words_r: u32 = (capture_size + 7) / 8;
@@ -12972,10 +12986,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 if (self.isFunctionLayout(capture.layout_idx)) {
                     callable_info_opt = self.callableInfoForSymbol(capture.symbol, capture.layout_idx);
-                    if (callable_info_opt) |callable_info| {
-                        capture_size = @max(capture_size, @as(@TypeOf(capture_size), @intCast(self.closureStorageSize(callable_info.representation))));
-                        capture_align = @max(capture_align, self.closureStorageAlignBytes(callable_info.representation));
-                    }
+                    const callable_info = callable_info_opt orelse std.debug.panic(
+                        "appendCaptureArgInfos: missing callable info for symbol={} layout={}",
+                        .{
+                            @as(u64, @bitCast(capture.symbol)),
+                            @intFromEnum(capture.layout_idx),
+                        },
+                    );
+                    capture_size = @as(@TypeOf(capture_size), @intCast(self.closureStorageSize(callable_info.representation)));
+                    capture_align = @as(@TypeOf(capture_align), @intCast(self.closureStorageAlignBytes(callable_info.representation)));
                 }
 
                 offset = @intCast(std.mem.alignForward(usize, @intCast(offset), capture_align));
@@ -12996,7 +13015,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 if (self.isFunctionLayout(capture.layout_idx)) {
                     if (callable_info_opt) |info| {
-                        capture_size = @max(capture_size, @as(@TypeOf(capture_size), @intCast(self.closureStorageSize(info.representation))));
+                        capture_size = @as(@TypeOf(capture_size), @intCast(self.closureStorageSize(info.representation)));
                         loc = .{ .closure_value = .{
                             .stack_offset = capture_offset,
                             .representation = info.representation,
@@ -13004,7 +13023,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             .captures = info.captures,
                         } };
                     } else if (self.closure_stack_info.get(capture_offset)) |info| {
-                        capture_size = @max(capture_size, @as(@TypeOf(capture_size), @intCast(self.closureStorageSize(info.representation))));
+                        capture_size = @as(@TypeOf(capture_size), @intCast(self.closureStorageSize(info.representation)));
                         loc = .{ .closure_value = .{
                             .stack_offset = capture_offset,
                             .representation = info.representation,
@@ -15089,10 +15108,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 var callable_info_opt: ?ClosureStackInfo = null;
                 if (self.isFunctionLayout(capture.layout_idx)) {
                     callable_info_opt = self.callableInfoForSymbol(capture.symbol, capture.layout_idx);
-                    if (callable_info_opt) |callable_info| {
-                        capture_size = @max(capture_size, @as(@TypeOf(capture_size), @intCast(self.closureStorageSize(callable_info.representation))));
-                        capture_align = @max(capture_align, self.closureStorageAlignBytes(callable_info.representation));
-                    }
+                    const callable_info = callable_info_opt orelse std.debug.panic(
+                        "registerReturnedCallableCaptureInfos: missing callable info for symbol={} layout={}",
+                        .{
+                            @as(u64, @bitCast(capture.symbol)),
+                            @intFromEnum(capture.layout_idx),
+                        },
+                    );
+                    capture_size = @as(@TypeOf(capture_size), @intCast(self.closureStorageSize(callable_info.representation)));
+                    capture_align = @as(@TypeOf(capture_align), @intCast(self.closureStorageAlignBytes(callable_info.representation)));
                 }
 
                 offset = @intCast(std.mem.alignForward(usize, @intCast(offset), capture_align));
