@@ -1086,9 +1086,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn getSymbolLocation(self: *Self, symbol: Symbol, layout_idx: ?layout.Idx) ?ValueLocation {
             if (layout_idx) |li| {
                 if (self.symbol_locations_by_layout.get(symbolLayoutKey(symbol, li))) |loc| return loc;
-                if (self.symbol_locations.get(symbolKey(symbol))) |loc| {
-                    if (self.locationMatchesLayout(loc, li)) return loc;
-                    return null;
+                if (self.symbol_locations.contains(symbolKey(symbol))) {
+                    std.debug.panic(
+                        "getSymbolLocation: missing layout-specialized location for symbol={} layout={}",
+                        .{
+                            @as(u64, @bitCast(symbol)),
+                            @intFromEnum(li),
+                        },
+                    );
                 }
                 return null;
             }
