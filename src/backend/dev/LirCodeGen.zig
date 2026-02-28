@@ -10146,7 +10146,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.collectMutatedSymbolsFromExpr(m.value, out);
                     const branches = self.store.getMatchBranches(m.branches);
                     for (branches) |br| {
-                        try self.collectMutatedSymbolsFromExpr(br.guard, out);
+                        if (!br.guard.isNone()) {
+                            try self.collectMutatedSymbolsFromExpr(br.guard, out);
+                        }
                         try self.collectMutatedSymbolsFromExpr(br.body, out);
                     }
                 },

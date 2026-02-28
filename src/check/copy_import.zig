@@ -52,6 +52,7 @@ pub fn copyVar(
 
     // Record the mapping immediately to handle recursive types
     try var_mapping.put(resolved.var_, placeholder_var);
+    try copyNominalRecMeta(source_store, dest_store, resolved.var_, placeholder_var, var_mapping);
 
     // Now copy the content (which may recursively reference this variable)
     const dest_content = try copyContent(source_store, dest_store, resolved.desc.content, var_mapping, source_idents, dest_idents, allocator);
@@ -63,6 +64,22 @@ pub fn copyVar(
     });
 
     return placeholder_var;
+}
+
+fn copyNominalRecMeta(
+    source_store: *const TypesStore,
+    dest_store: *TypesStore,
+    source_var: Var,
+    dest_var: Var,
+    var_mapping: *VarMapping,
+) std.mem.Allocator.Error!void {
+    const source_meta = source_store.getNominalRecMeta(source_var) orelse return;
+    const mapped_anchor = var_mapping.get(source_meta.anchor_var) orelse dest_var;
+    const mapped_group = var_mapping.get(source_meta.group_anchor_var) orelse mapped_anchor;
+    try dest_store.setNominalRecMeta(dest_var, .{
+        .anchor_var = mapped_anchor,
+        .group_anchor_var = mapped_group,
+    });
 }
 
 fn copyContent(

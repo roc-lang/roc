@@ -27,6 +27,7 @@ const TypeIdent = types.TypeIdent;
 const Alias = types.Alias;
 const FlatType = types.FlatType;
 const NominalType = types.NominalType;
+const NominalRecMeta = types.NominalRecMeta;
 const Record = types.Record;
 const StaticDispatchConstraint = types.StaticDispatchConstraint;
 
@@ -92,6 +93,8 @@ pub const Store = struct {
     /// Count of flex vars that currently have a from_numeral constraint.
     /// Used to skip the finalization walk when no numeric defaults need resolving.
     from_numeral_flex_count: u32,
+    /// Optional recursion metadata for nominal vars, indexed by Var.
+    nominal_rec_meta_by_var: std.ArrayListUnmanaged(?NominalRecMeta),
 
     /// Init the unification table with default capacity.
     /// For production use with source files, prefer initFromSourceLen() which
@@ -127,6 +130,7 @@ pub const Store = struct {
             .tags = try TagSafeMultiList.initCapacity(gpa, child_capacity),
             .static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, child_capacity),
             .from_numeral_flex_count = 0,
+            .nominal_rec_meta_by_var = .empty,
         };
     }
 
@@ -134,6 +138,7 @@ pub const Store = struct {
     pub fn ensureTotalCapacity(self: *Self, capacity: usize) Allocator.Error!void {
         try self.descs.backing.ensureTotalCapacity(self.gpa, capacity);
         try self.slots.backing.items.ensureTotalCapacity(self.gpa, capacity);
+        try self.nominal_rec_meta_by_var.ensureTotalCapacity(self.gpa, capacity);
     }
 
     pub fn extendToVar(self: *Self, var_: Var) Allocator.Error!void {
@@ -155,6 +160,7 @@ pub const Store = struct {
         self.record_fields.deinit(self.gpa);
         self.tags.deinit(self.gpa);
         self.static_dispatch_constraints.deinit(self.gpa);
+        self.nominal_rec_meta_by_var.deinit(self.gpa);
     }
 
     /// Return the number of type variables in the store.
@@ -180,11 +186,14 @@ pub const Store = struct {
         tags_len: usize,
         /// Length of static_dispatch_constraints list at snapshot time
         static_dispatch_constraints_len: usize,
+        /// Cloned nominal recursion metadata side-table
+        nominal_rec_meta_clone: []?NominalRecMeta,
 
         /// Free the memory held by this snapshot
         pub fn deinit(self: *Snapshot, gpa: Allocator) void {
             gpa.free(self.slots_clone);
             self.descs_clone.deinit(gpa);
+            gpa.free(self.nominal_rec_meta_clone);
         }
     };
 
@@ -198,6 +207,7 @@ pub const Store = struct {
             .record_fields_len = self.record_fields.items.len,
             .tags_len = self.tags.items.len,
             .static_dispatch_constraints_len = self.static_dispatch_constraints.items.items.len,
+            .nominal_rec_meta_clone = try self.gpa.dupe(?NominalRecMeta, self.nominal_rec_meta_by_var.items),
         };
     }
 
@@ -220,6 +230,8 @@ pub const Store = struct {
         self.record_fields.items.shrinkRetainingCapacity(snap.record_fields_len);
         self.tags.items.shrinkRetainingCapacity(snap.tags_len);
         self.static_dispatch_constraints.items.shrinkRetainingCapacity(snap.static_dispatch_constraints_len);
+        @memcpy(self.nominal_rec_meta_by_var.items[0..snap.nominal_rec_meta_clone.len], snap.nominal_rec_meta_clone);
+        self.nominal_rec_meta_by_var.shrinkRetainingCapacity(snap.nominal_rec_meta_clone.len);
     }
 
     // fresh variables //
@@ -247,35 +259,112 @@ pub const Store = struct {
         defer trace.end();
         const desc_idx = try self.descs.insert(self.gpa, .{ .content = content, .rank = Rank.outermost });
         const slot_idx = try self.slots.insert(self.gpa, .{ .root = desc_idx });
-        return Self.slotIdxToVar(slot_idx);
+        const var_ = Self.slotIdxToVar(slot_idx);
+        try self.nominal_rec_meta_by_var.append(self.gpa, null);
+        try self.maybeSeedNominalRecMeta(var_, content);
+        return var_;
     }
 
     /// Create a new variable with the given content and rank
     pub fn freshFromContentWithRank(self: *Self, content: Content, rank: Rank) std.mem.Allocator.Error!Var {
         const desc_idx = try self.descs.insert(self.gpa, .{ .content = content, .rank = rank });
         const slot_idx = try self.slots.insert(self.gpa, .{ .root = desc_idx });
-        return Self.slotIdxToVar(slot_idx);
+        const var_ = Self.slotIdxToVar(slot_idx);
+        try self.nominal_rec_meta_by_var.append(self.gpa, null);
+        try self.maybeSeedNominalRecMeta(var_, content);
+        return var_;
     }
 
     /// Create a variable redirecting to the provided var
     /// Used in tests
     pub fn freshRedirect(self: *Self, var_: Var) std.mem.Allocator.Error!Var {
         const slot_idx = try self.slots.insert(self.gpa, .{ .redirect = var_ });
-        return Self.slotIdxToVar(slot_idx);
+        const fresh_var = Self.slotIdxToVar(slot_idx);
+        try self.nominal_rec_meta_by_var.append(self.gpa, null);
+        try self.propagateNominalRecMeta(var_, fresh_var);
+        return fresh_var;
     }
 
     /// Create a new variable with the given descriptor
     pub fn register(self: *Self, desc: Desc) std.mem.Allocator.Error!Var {
         const desc_idx = try self.descs.insert(self.gpa, desc);
         const slot_idx = try self.slots.insert(self.gpa, .{ .root = desc_idx });
-        return Self.slotIdxToVar(slot_idx);
+        const var_ = Self.slotIdxToVar(slot_idx);
+        try self.nominal_rec_meta_by_var.append(self.gpa, null);
+        try self.maybeSeedNominalRecMeta(var_, desc.content);
+        return var_;
     }
 
     /// Create a new variable with the provided content assuming there is capacity
     pub fn appendFromContentAssumeCapacity(self: *Self, content: Content, rank: Rank) Var {
         const desc_idx = self.descs.appendAssumeCapacity(.{ .content = content, .rank = rank });
         const slot_idx = self.slots.appendAssumeCapacity(.{ .root = desc_idx });
-        return Self.slotIdxToVar(slot_idx);
+        const var_ = Self.slotIdxToVar(slot_idx);
+        self.nominal_rec_meta_by_var.appendAssumeCapacity(null);
+        self.maybeSeedNominalRecMetaAssumeCapacity(var_, content);
+        return var_;
+    }
+
+    fn maybeSeedNominalRecMeta(self: *Self, var_: Var, content: Content) Allocator.Error!void {
+        const nominal = content.unwrapNominalType() orelse return;
+        _ = nominal;
+        const idx = @intFromEnum(var_);
+        if (idx >= self.nominal_rec_meta_by_var.items.len) {
+            return;
+        }
+        if (self.nominal_rec_meta_by_var.items[idx] == null) {
+            self.nominal_rec_meta_by_var.items[idx] = NominalRecMeta{
+                .anchor_var = var_,
+                .group_anchor_var = var_,
+            };
+        }
+    }
+
+    fn maybeSeedNominalRecMetaAssumeCapacity(self: *Self, var_: Var, content: Content) void {
+        const nominal = content.unwrapNominalType() orelse return;
+        _ = nominal;
+        const idx = @intFromEnum(var_);
+        if (idx < self.nominal_rec_meta_by_var.items.len and self.nominal_rec_meta_by_var.items[idx] == null) {
+            self.nominal_rec_meta_by_var.items[idx] = NominalRecMeta{
+                .anchor_var = var_,
+                .group_anchor_var = var_,
+            };
+        }
+    }
+
+    fn getNominalRecMetaDirect(self: *const Self, var_: Var) ?NominalRecMeta {
+        const idx = @intFromEnum(var_);
+        if (idx >= self.nominal_rec_meta_by_var.items.len) return null;
+        return self.nominal_rec_meta_by_var.items[idx];
+    }
+
+    fn setNominalRecMetaDirect(self: *Self, var_: Var, meta: NominalRecMeta) void {
+        const idx = @intFromEnum(var_);
+        if (idx >= self.nominal_rec_meta_by_var.items.len) return;
+        self.nominal_rec_meta_by_var.items[idx] = meta;
+    }
+
+    pub fn getNominalRecMeta(self: *const Self, var_: Var) ?NominalRecMeta {
+        const resolved = self.resolveVar(var_);
+        return self.getNominalRecMetaDirect(resolved.var_);
+    }
+
+    pub fn setNominalRecMeta(self: *Self, var_: Var, meta: NominalRecMeta) Allocator.Error!void {
+        const resolved = self.resolveVar(var_);
+        const idx = @intFromEnum(resolved.var_);
+        if (idx >= self.nominal_rec_meta_by_var.items.len) {
+            return;
+        }
+        self.nominal_rec_meta_by_var.items[idx] = meta;
+    }
+
+    pub fn propagateNominalRecMeta(self: *Self, from_var: Var, to_var: Var) Allocator.Error!void {
+        const from_resolved = self.resolveVar(from_var);
+        const to_resolved = self.resolveVar(to_var);
+        const from_meta = self.getNominalRecMetaDirect(from_resolved.var_) orelse return;
+        if (self.getNominalRecMetaDirect(to_resolved.var_) == null) {
+            self.setNominalRecMetaDirect(to_resolved.var_, from_meta);
+        }
     }
 
     // setting variables //
@@ -290,6 +379,7 @@ pub const Store = struct {
         std.debug.assert(@intFromEnum(target_var) < self.len());
         const resolved = self.resolveVar(target_var);
         self.descs.set(resolved.desc_idx, desc);
+        try self.maybeSeedNominalRecMeta(resolved.var_, desc.content);
     }
 
     /// Set a type variable to the provided content
@@ -299,6 +389,7 @@ pub const Store = struct {
         var desc = resolved.desc;
         desc.content = content;
         self.descs.set(resolved.desc_idx, desc);
+        try self.maybeSeedNominalRecMeta(resolved.var_, content);
     }
 
     /// Set a type variable to redirect to the provided variables.
@@ -315,6 +406,7 @@ pub const Store = struct {
         std.debug.assert(target_var != redirect_to);
         const slot_idx = Self.varToSlotIdx(target_var);
         self.slots.set(slot_idx, .{ .redirect = redirect_to });
+        try self.propagateNominalRecMeta(target_var, redirect_to);
     }
 
     // make builtin types //
@@ -818,6 +910,15 @@ pub const Store = struct {
 
         // Update a to point to b
         self.slots.set(Self.varToSlotIdx(a_var), .{ .redirect = b_var });
+
+        // Preserve nominal recursion metadata on the surviving root var.
+        const a_meta = self.getNominalRecMetaDirect(a_var);
+        const b_meta = self.getNominalRecMetaDirect(b_var);
+        if (b_meta == null and a_meta != null) {
+            self.setNominalRecMetaDirect(b_data.var_, a_meta.?);
+        } else if (a_meta == null and b_meta != null) {
+            self.setNominalRecMetaDirect(a_var, b_meta.?);
+        }
     }
 
     // test helpers //
@@ -911,21 +1012,28 @@ pub const Store = struct {
                 .tags = self.tags.deserializeInto(base_addr),
                 .static_dispatch_constraints = self.static_dispatch_constraints.deserializeInto(base_addr),
                 .from_numeral_flex_count = 0,
+                .nominal_rec_meta_by_var = .empty,
             };
         }
 
         /// Deserialize into a Store value with fresh memory allocation.
         /// The returned Store owns its memory and can be safely grown/mutated.
         pub fn deserializeWithCopy(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!Store {
+            const slots = try self.slots.deserializeWithCopy(base_addr, gpa);
+            var nominal_rec_meta_by_var: std.ArrayListUnmanaged(?NominalRecMeta) = .empty;
+            try nominal_rec_meta_by_var.resize(gpa, slots.backing.len());
+            @memset(nominal_rec_meta_by_var.items, null);
+
             return Store{
                 .gpa = gpa,
-                .slots = try self.slots.deserializeWithCopy(base_addr, gpa),
+                .slots = slots,
                 .descs = try self.descs.deserializeWithCopy(base_addr, gpa),
                 .vars = try self.vars.deserializeWithCopy(base_addr, gpa),
                 .record_fields = try self.record_fields.deserializeWithCopy(base_addr, gpa),
                 .tags = try self.tags.deserializeWithCopy(base_addr, gpa),
                 .static_dispatch_constraints = try self.static_dispatch_constraints.deserializeWithCopy(base_addr, gpa),
                 .from_numeral_flex_count = 0,
+                .nominal_rec_meta_by_var = nominal_rec_meta_by_var,
             };
         }
     };
@@ -949,6 +1057,7 @@ pub const Store = struct {
             .tags = (try self.tags.serialize(allocator, writer)).*,
             .static_dispatch_constraints = (try self.static_dispatch_constraints.serialize(allocator, writer)).*,
             .from_numeral_flex_count = 0,
+            .nominal_rec_meta_by_var = .empty,
         };
 
         return @constCast(offset_self);
@@ -1055,6 +1164,10 @@ pub const Store = struct {
         const static_dispatch_constraints = try StaticDispatchConstraint.SafeList.deserializeFrom(static_dispatch_constraints_buffer, allocator);
         offset += static_dispatch_constraints_size;
 
+        var nominal_rec_meta_by_var: std.ArrayListUnmanaged(?NominalRecMeta) = .empty;
+        try nominal_rec_meta_by_var.resize(allocator, slots.backing.len());
+        @memset(nominal_rec_meta_by_var.items, null);
+
         return Self{
             .gpa = allocator,
             .slots = slots,
@@ -1063,6 +1176,8 @@ pub const Store = struct {
             .tags = tags,
             .vars = vars,
             .static_dispatch_constraints = static_dispatch_constraints,
+            .from_numeral_flex_count = 0,
+            .nominal_rec_meta_by_var = nominal_rec_meta_by_var,
         };
     }
 };

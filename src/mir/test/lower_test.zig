@@ -2198,6 +2198,136 @@ test "polymorphic lambda with literal in body: a + b + 0 called with U64" {
     }
 }
 
+test "polymorphic block call specialization: clone_via_fold gets distinct call monotypes" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    append_one = |acc, x| List.append(acc, x)
+        \\    clone_via_fold = |xs| xs.fold(List.with_capacity(1), append_one)
+        \\    first_len = clone_via_fold([1i64, 2i64]).len()
+        \\    clone_via_fold([[1i64, 2i64], [3i64, 4i64]]).len()
+        \\}
+    );
+    defer env.deinit();
+
+    const expr = try env.lowerFirstDef();
+    const top = env.mir_store.getExpr(expr);
+    try testing.expect(top == .block);
+
+    const stmts = env.mir_store.getStmts(top.block.stmts);
+    try testing.expect(stmts.len >= 3);
+    const first_len_expr = stmts[2].decl_const.expr;
+    const final_expr = top.block.final_expr;
+
+    const CallInfo = struct {
+        symbol: MIR.Symbol,
+        func_mono: Monotype.Idx,
+    };
+
+    const Finder = struct {
+        fn find(envp: *MirTestEnv, expr_id: MIR.ExprId) ?CallInfo {
+            const expr_node = envp.mir_store.getExpr(expr_id);
+            switch (expr_node) {
+                .call => |call_node| {
+                    const func_mono_idx = envp.mir_store.typeOf(call_node.func);
+                    const func_mono = envp.mir_store.monotype_store.getMonotype(func_mono_idx);
+                    if (func_mono == .func) {
+                        const args_mono = envp.mir_store.monotype_store.getIdxSpan(func_mono.func.args);
+                        const ret_mono = envp.mir_store.monotype_store.getMonotype(func_mono.func.ret);
+                        if (args_mono.len == 1 and ret_mono == .list) {
+                            const fn_expr = envp.mir_store.getExpr(call_node.func);
+                            if (fn_expr == .lookup) {
+                                return .{
+                                    .symbol = fn_expr.lookup,
+                                    .func_mono = func_mono_idx,
+                                };
+                            }
+                        }
+                    }
+
+                    if (find(envp, call_node.func)) |found| return found;
+                    const args = envp.mir_store.getExprSpan(call_node.args);
+                    for (args) |arg| {
+                        if (find(envp, arg)) |found| return found;
+                    }
+                },
+                .block => |block_node| {
+                    const block_stmts = envp.mir_store.getStmts(block_node.stmts);
+                    for (block_stmts) |stmt| {
+                        switch (stmt) {
+                            .decl_const => |dc| {
+                                if (find(envp, dc.expr)) |found| return found;
+                            },
+                            .decl_var => |dv| {
+                                if (find(envp, dv.expr)) |found| return found;
+                            },
+                            .mutate_var => |mv| {
+                                if (find(envp, mv.expr)) |found| return found;
+                            },
+                        }
+                    }
+                    if (find(envp, block_node.final_expr)) |found| return found;
+                },
+                .match_expr => |match_node| {
+                    if (find(envp, match_node.cond)) |found| return found;
+                    const branches = envp.mir_store.getBranches(match_node.branches);
+                    for (branches) |branch| {
+                        if (!branch.guard.isNone()) {
+                            if (find(envp, branch.guard)) |found| return found;
+                        }
+                        if (find(envp, branch.body)) |found| return found;
+                    }
+                },
+                .tuple => |tuple_node| {
+                    const elems = envp.mir_store.getExprSpan(tuple_node.elems);
+                    for (elems) |elem| {
+                        if (find(envp, elem)) |found| return found;
+                    }
+                },
+                .record => |record_node| {
+                    const fields = envp.mir_store.getExprSpan(record_node.fields);
+                    for (fields) |field_expr| {
+                        if (find(envp, field_expr)) |found| return found;
+                    }
+                },
+                .tag => |tag_node| {
+                    const args = envp.mir_store.getExprSpan(tag_node.args);
+                    for (args) |arg| {
+                        if (find(envp, arg)) |found| return found;
+                    }
+                },
+                .record_access => |ra| return find(envp, ra.record),
+                .tuple_access => |ta| return find(envp, ta.tuple),
+                .lambda => |lam| return find(envp, lam.body),
+                .for_loop => |fl| {
+                    if (find(envp, fl.list)) |found| return found;
+                    if (find(envp, fl.body)) |found| return found;
+                },
+                .while_loop => |wl| {
+                    if (find(envp, wl.cond)) |found| return found;
+                    if (find(envp, wl.body)) |found| return found;
+                },
+                .dbg_expr => |dbg_node| return find(envp, dbg_node.expr),
+                .expect => |expect_node| return find(envp, expect_node.body),
+                .return_expr => |ret_node| return find(envp, ret_node.expr),
+                .run_low_level => |ll| {
+                    const args = envp.mir_store.getExprSpan(ll.args);
+                    for (args) |arg| {
+                        if (find(envp, arg)) |found| return found;
+                    }
+                },
+                else => {},
+            }
+            return null;
+        }
+    };
+
+    const call_a = Finder.find(&env, first_len_expr) orelse return error.TestUnexpectedResult;
+    const call_b = Finder.find(&env, final_expr) orelse return error.TestUnexpectedResult;
+
+    try testing.expect(call_a.func_mono != call_b.func_mono);
+    try testing.expect(call_a.symbol != call_b.symbol);
+}
+
 test "Dec.abs lowers to num_abs with Dec monotype, not unit" {
     var env = try MirTestEnv.initExpr("(-3.14).abs()");
     defer env.deinit();

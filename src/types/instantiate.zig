@@ -131,6 +131,7 @@ pub const Instantiator = struct {
                 // IMPORTANT: This has to be inserted _before_ we recurse into `instantiateContent`
                 const fresh_var = try self.store.freshFromContentWithRank(.{ .flex = Flex.init() }, self.current_rank);
                 try self.var_map.put(resolved_var, fresh_var);
+                try self.propagateNominalRecMeta(resolved_var, fresh_var);
 
                 // Copy the rigid var's constraints
                 const fresh_constraints = try self.instantiateStaticDispatchConstraints(rigid.constraints);
@@ -159,6 +160,7 @@ pub const Instantiator = struct {
                 // IMPORTANT: This has to be inserted _before_ we recurse into `instantiateContent`
                 const fresh_var = try self.store.fresh();
                 try self.var_map.put(resolved_var, fresh_var);
+                try self.propagateNominalRecMeta(resolved_var, fresh_var);
 
                 const fresh_content = try self.instantiateContent(resolved.desc.content);
 
@@ -174,6 +176,16 @@ pub const Instantiator = struct {
                 return fresh_var;
             },
         }
+    }
+
+    fn propagateNominalRecMeta(self: *Self, source_var: Var, fresh_var: Var) std.mem.Allocator.Error!void {
+        const source_meta = self.store.getNominalRecMeta(source_var) orelse return;
+        const mapped_anchor = self.var_map.get(source_meta.anchor_var) orelse source_meta.anchor_var;
+        const mapped_group = self.var_map.get(source_meta.group_anchor_var) orelse source_meta.group_anchor_var;
+        try self.store.setNominalRecMeta(fresh_var, .{
+            .anchor_var = mapped_anchor,
+            .group_anchor_var = mapped_group,
+        });
     }
 
     fn instantiateContent(self: *Self, content: Content) std.mem.Allocator.Error!Content {

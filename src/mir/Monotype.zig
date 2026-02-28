@@ -124,14 +124,8 @@ pub const Tag = struct {
     /// Span of Monotype.Idx for payload types
     payloads: Span,
 
-    pub fn sortByNameAsc(ident_store: *const Ident.Store, a: Tag, b: Tag) bool {
-        return orderByName(ident_store, a, b) == .lt;
-    }
-
-    fn orderByName(ident_store: *const Ident.Store, a: Tag, b: Tag) std.math.Order {
-        const a_text = ident_store.getText(a.name);
-        const b_text = ident_store.getText(b.name);
-        return std.mem.order(u8, a_text, b_text);
+    pub fn sortByNameAsc(_: void, a: Tag, b: Tag) bool {
+        return @as(u32, @bitCast(a.name)) < @as(u32, @bitCast(b.name));
     }
 };
 
@@ -154,14 +148,8 @@ pub const Field = struct {
     name: Ident.Idx,
     type_idx: Idx,
 
-    pub fn sortByNameAsc(ident_store: *const Ident.Store, a: Field, b: Field) bool {
-        return orderByName(ident_store, a, b) == .lt;
-    }
-
-    fn orderByName(ident_store: *const Ident.Store, a: Field, b: Field) std.math.Order {
-        const a_text = ident_store.getText(a.name);
-        const b_text = ident_store.getText(b.name);
-        return std.mem.order(u8, a_text, b_text);
+    pub fn sortByNameAsc(_: void, a: Field, b: Field) bool {
+        return @as(u32, @bitCast(a.name)) < @as(u32, @bitCast(b.name));
     }
 };
 
@@ -192,6 +180,12 @@ pub const Store = struct {
     tags: std.ArrayListUnmanaged(Tag),
     fields: std.ArrayListUnmanaged(Field),
     nominal_hints: std.AutoHashMapUnmanaged(u32, NominalHint),
+    /// Hash bucket -> canonical monotype roots in that bucket.
+    canonical_by_hash: std.AutoHashMapUnmanaged(u64, std.ArrayListUnmanaged(Idx)),
+    /// Memoized mapping from an existing monotype index to its canonical index.
+    canonical_cache: std.AutoHashMapUnmanaged(u32, Idx),
+    /// Placeholder indices that are still in progress and must not be interned yet.
+    in_progress_placeholders: std.AutoHashMapUnmanaged(u32, void),
 
     /// Pre-interned index for the unit monotype.
     unit_idx: Idx,
@@ -252,6 +246,9 @@ pub const Store = struct {
             .tags = .empty,
             .fields = .empty,
             .nominal_hints = .{},
+            .canonical_by_hash = .{},
+            .canonical_cache = .{},
+            .in_progress_placeholders = .{},
             .unit_idx = unit_idx,
             .prim_idxs = prim_idxs,
         };
@@ -263,12 +260,38 @@ pub const Store = struct {
         self.tags.deinit(allocator);
         self.fields.deinit(allocator);
         self.nominal_hints.deinit(allocator);
+        var bucket_it = self.canonical_by_hash.iterator();
+        while (bucket_it.next()) |entry| {
+            entry.value_ptr.deinit(allocator);
+        }
+        self.canonical_by_hash.deinit(allocator);
+        self.canonical_cache.deinit(allocator);
+        self.in_progress_placeholders.deinit(allocator);
     }
 
     pub fn addMonotype(self: *Store, allocator: Allocator, mono: Monotype) !Idx {
+        if (mono == .unit) return self.unit_idx;
+        if (mono == .prim) return self.primIdx(mono.prim);
+        const raw_idx = try self.appendRawMonotype(allocator, mono);
+        return try self.internExistingMonotype(allocator, raw_idx);
+    }
+
+    fn appendRawMonotype(self: *Store, allocator: Allocator, mono: Monotype) !Idx {
         const idx: u32 = @intCast(self.monotypes.items.len);
         try self.monotypes.append(allocator, mono);
         return @enumFromInt(idx);
+    }
+
+    fn addPlaceholder(self: *Store, allocator: Allocator) !Idx {
+        const idx = try self.appendRawMonotype(allocator, .unit);
+        try self.in_progress_placeholders.put(allocator, @intFromEnum(idx), {});
+        return idx;
+    }
+
+    fn resolvePlaceholder(self: *Store, idx: Idx, mono: Monotype) void {
+        self.monotypes.items[@intFromEnum(idx)] = mono;
+        _ = self.in_progress_placeholders.remove(@intFromEnum(idx));
+        _ = self.canonical_cache.remove(@intFromEnum(idx));
     }
 
     pub fn getMonotype(self: *const Store, idx: Idx) Monotype {
@@ -328,6 +351,235 @@ pub const Store = struct {
         return self.fields.items[span.start..][0..span.len];
     }
 
+    const CanonicalToken = enum(u64) {
+        rec_start = 1,
+        rec_end = 2,
+        rec_ref = 3,
+        unit = 4,
+        prim = 5,
+        list = 6,
+        box = 7,
+        tuple = 8,
+        func = 9,
+        record = 10,
+        tag_union = 11,
+    };
+
+    fn appendCanonicalTokensRec(
+        self: *const Store,
+        allocator: Allocator,
+        idx: Idx,
+        tokens: *std.ArrayList(u64),
+        in_progress: *std.AutoHashMap(u32, u32),
+        next_binder: *u32,
+        has_unresolved_placeholder: *bool,
+    ) Allocator.Error!void {
+        const idx_u32 = @intFromEnum(idx);
+        if (self.in_progress_placeholders.contains(idx_u32)) {
+            has_unresolved_placeholder.* = true;
+            return;
+        }
+
+        if (in_progress.get(idx_u32)) |binder| {
+            try tokens.append(allocator, @intFromEnum(CanonicalToken.rec_ref));
+            try tokens.append(allocator, binder);
+            return;
+        }
+
+        const binder = next_binder.*;
+        next_binder.* = binder + 1;
+        try in_progress.put(idx_u32, binder);
+        defer _ = in_progress.remove(idx_u32);
+
+        try tokens.append(allocator, @intFromEnum(CanonicalToken.rec_start));
+        try tokens.append(allocator, binder);
+
+        switch (self.getMonotype(idx)) {
+            .unit => try tokens.append(allocator, @intFromEnum(CanonicalToken.unit)),
+            .prim => |prim| {
+                try tokens.append(allocator, @intFromEnum(CanonicalToken.prim));
+                try tokens.append(allocator, @intFromEnum(prim));
+            },
+            .list => |list| {
+                try tokens.append(allocator, @intFromEnum(CanonicalToken.list));
+                try self.appendCanonicalTokensRec(
+                    allocator,
+                    list.elem,
+                    tokens,
+                    in_progress,
+                    next_binder,
+                    has_unresolved_placeholder,
+                );
+            },
+            .box => |boxed| {
+                try tokens.append(allocator, @intFromEnum(CanonicalToken.box));
+                try self.appendCanonicalTokensRec(
+                    allocator,
+                    boxed.inner,
+                    tokens,
+                    in_progress,
+                    next_binder,
+                    has_unresolved_placeholder,
+                );
+            },
+            .tuple => |tuple| {
+                try tokens.append(allocator, @intFromEnum(CanonicalToken.tuple));
+                const elems = self.getIdxSpan(tuple.elems);
+                try tokens.append(allocator, elems.len);
+                for (elems) |elem| {
+                    try self.appendCanonicalTokensRec(
+                        allocator,
+                        elem,
+                        tokens,
+                        in_progress,
+                        next_binder,
+                        has_unresolved_placeholder,
+                    );
+                }
+            },
+            .func => |func| {
+                try tokens.append(allocator, @intFromEnum(CanonicalToken.func));
+                try tokens.append(allocator, @intFromBool(func.effectful));
+                const args = self.getIdxSpan(func.args);
+                try tokens.append(allocator, args.len);
+                for (args) |arg| {
+                    try self.appendCanonicalTokensRec(
+                        allocator,
+                        arg,
+                        tokens,
+                        in_progress,
+                        next_binder,
+                        has_unresolved_placeholder,
+                    );
+                }
+                try self.appendCanonicalTokensRec(
+                    allocator,
+                    func.ret,
+                    tokens,
+                    in_progress,
+                    next_binder,
+                    has_unresolved_placeholder,
+                );
+            },
+            .record => |record| {
+                try tokens.append(allocator, @intFromEnum(CanonicalToken.record));
+                const fields = self.getFields(record.fields);
+                try tokens.append(allocator, fields.len);
+                for (fields) |field| {
+                    try tokens.append(allocator, @as(u32, @bitCast(field.name)));
+                    try self.appendCanonicalTokensRec(
+                        allocator,
+                        field.type_idx,
+                        tokens,
+                        in_progress,
+                        next_binder,
+                        has_unresolved_placeholder,
+                    );
+                }
+            },
+            .tag_union => |tu| {
+                try tokens.append(allocator, @intFromEnum(CanonicalToken.tag_union));
+                const tags = self.getTags(tu.tags);
+                try tokens.append(allocator, tags.len);
+                for (tags) |tag| {
+                    try tokens.append(allocator, @as(u32, @bitCast(tag.name)));
+                    const payloads = self.getIdxSpan(tag.payloads);
+                    try tokens.append(allocator, payloads.len);
+                    for (payloads) |payload| {
+                        try self.appendCanonicalTokensRec(
+                            allocator,
+                            payload,
+                            tokens,
+                            in_progress,
+                            next_binder,
+                            has_unresolved_placeholder,
+                        );
+                    }
+                }
+            },
+        }
+
+        try tokens.append(allocator, @intFromEnum(CanonicalToken.rec_end));
+    }
+
+    fn buildCanonicalTokens(
+        self: *const Store,
+        allocator: Allocator,
+        root: Idx,
+        tokens: *std.ArrayList(u64),
+    ) Allocator.Error!bool {
+        var in_progress = std.AutoHashMap(u32, u32).init(allocator);
+        defer in_progress.deinit();
+        var next_binder: u32 = 0;
+        var has_unresolved_placeholder = false;
+        try self.appendCanonicalTokensRec(
+            allocator,
+            root,
+            tokens,
+            &in_progress,
+            &next_binder,
+            &has_unresolved_placeholder,
+        );
+        return has_unresolved_placeholder;
+    }
+
+    fn canonicalTokensEqual(
+        self: *const Store,
+        allocator: Allocator,
+        lhs: Idx,
+        rhs: Idx,
+    ) Allocator.Error!bool {
+        var lhs_tokens = std.ArrayList(u64).empty;
+        defer lhs_tokens.deinit(allocator);
+        if (try self.buildCanonicalTokens(allocator, lhs, &lhs_tokens)) return false;
+
+        var rhs_tokens = std.ArrayList(u64).empty;
+        defer rhs_tokens.deinit(allocator);
+        if (try self.buildCanonicalTokens(allocator, rhs, &rhs_tokens)) return false;
+
+        return std.mem.eql(u64, lhs_tokens.items, rhs_tokens.items);
+    }
+
+    fn internExistingMonotype(
+        self: *Store,
+        allocator: Allocator,
+        idx: Idx,
+    ) Allocator.Error!Idx {
+        if (idx == self.unit_idx) return idx;
+
+        if (self.getMonotype(idx) == .prim) {
+            return self.primIdx(self.getMonotype(idx).prim);
+        }
+
+        const idx_u32 = @intFromEnum(idx);
+        if (self.canonical_cache.get(idx_u32)) |cached| return cached;
+
+        var tokens = std.ArrayList(u64).empty;
+        defer tokens.deinit(allocator);
+        const has_unresolved_placeholder = try self.buildCanonicalTokens(allocator, idx, &tokens);
+        if (has_unresolved_placeholder) return idx;
+
+        var hasher = std.hash.Wyhash.init(0);
+        hasher.update(std.mem.sliceAsBytes(tokens.items));
+        const hash = hasher.final();
+
+        var bucket = try self.canonical_by_hash.getOrPut(allocator, hash);
+        if (!bucket.found_existing) {
+            bucket.value_ptr.* = .{};
+        } else {
+            for (bucket.value_ptr.items) |candidate| {
+                if (try self.canonicalTokensEqual(allocator, idx, candidate)) {
+                    try self.canonical_cache.put(allocator, idx_u32, candidate);
+                    return candidate;
+                }
+            }
+        }
+
+        try bucket.value_ptr.append(allocator, idx);
+        try self.canonical_cache.put(allocator, idx_u32, idx);
+        return idx;
+    }
+
     /// Convert a CIR type variable to a Monotype, recursively resolving all
     /// type structure. Uses `seen` for cycle detection on recursive types.
     pub fn fromTypeVar(
@@ -341,33 +593,42 @@ pub const Store = struct {
     ) Allocator.Error!Idx {
         const resolved = types_store.resolveVar(type_var);
 
-        // Cycle detection: if we've already seen this var, return the cached idx
-        if (seen.get(resolved.var_)) |cached| return cached;
+        // Cycle detection: if we've already seen this var, return the cached idx.
+        // If the cached graph has finished resolving, canonicalize before returning.
+        if (seen.get(resolved.var_)) |cached| {
+            const interned_cached = try self.internExistingMonotype(allocator, cached);
+            if (interned_cached != cached) {
+                try seen.put(resolved.var_, interned_cached);
+            }
+            return interned_cached;
+        }
 
-        return switch (resolved.desc.content) {
-            .flex => |flex| {
-                if (hasNumeralConstraint(types_store, flex.constraints))
-                    return self.primIdx(.dec);
-                return self.unit_idx;
-            },
-            .rigid => |rigid| {
-                if (hasNumeralConstraint(types_store, rigid.constraints))
-                    return self.primIdx(.dec);
-                return self.unit_idx;
-            },
-            .alias => |alias| {
+        const raw_idx = switch (resolved.desc.content) {
+            .flex => |flex| if (hasNumeralConstraint(types_store, flex.constraints))
+                self.primIdx(.dec)
+            else
+                self.unit_idx,
+            .rigid => |rigid| if (hasNumeralConstraint(types_store, rigid.constraints))
+                self.primIdx(.dec)
+            else
+                self.unit_idx,
+            .alias => |alias| blk: {
                 // Aliases are transparent — follow the backing var
                 const backing_var = types_store.getAliasBackingVar(alias);
-                return try self.fromTypeVar(allocator, types_store, backing_var, common_idents, seen, scratches);
+                break :blk try self.fromTypeVar(allocator, types_store, backing_var, common_idents, seen, scratches);
             },
-            .structure => |flat_type| {
-                return try self.fromFlatType(allocator, types_store, resolved.var_, flat_type, common_idents, seen, scratches);
+            .structure => |flat_type| blk: {
+                break :blk try self.fromFlatType(allocator, types_store, resolved.var_, flat_type, common_idents, seen, scratches);
             },
             // `.err` is a poison type from type-checking failures.
             // Lower it to unit so MIR lowering can continue and preserve
             // diagnostics/runtime error behavior instead of crashing.
             .err => self.unit_idx,
         };
+
+        const interned = try self.internExistingMonotype(allocator, raw_idx);
+        try seen.put(resolved.var_, interned);
+        return interned;
     }
 
     fn fromFlatType(
@@ -388,7 +649,7 @@ pub const Store = struct {
             .empty_tag_union => try self.addMonotype(allocator, .{ .tag_union = .{ .tags = TagSpan.empty() } }),
             .record => |record| {
                 // Reserve a slot for cycle detection before recursing into fields
-                const placeholder_idx = try self.addMonotype(allocator, .unit);
+                const placeholder_idx = try self.addPlaceholder(allocator);
                 try seen.put(var_, placeholder_idx);
 
                 const scratch_top = scratches.fields.top();
@@ -460,11 +721,9 @@ pub const Store = struct {
 
                 const collected_fields = scratches.fields.sliceFromStart(scratch_top);
                 // Each row segment is sorted, but concatenation may not be.
-                if (scratches.ident_store) |ident_store| {
-                    std.mem.sort(Field, collected_fields, ident_store, Field.sortByNameAsc);
-                }
+                std.mem.sort(Field, collected_fields, {}, Field.sortByNameAsc);
                 const field_span = try self.addFields(allocator, collected_fields);
-                self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .record = .{ .fields = field_span } };
+                self.resolvePlaceholder(placeholder_idx, .{ .record = .{ .fields = field_span } });
                 return placeholder_idx;
             },
             .record_unbound => |fields_range| {
@@ -473,7 +732,7 @@ pub const Store = struct {
                 const names = fields_slice.items(.name);
                 const vars = fields_slice.items(.var_);
 
-                const placeholder_idx = try self.addMonotype(allocator, .unit);
+                const placeholder_idx = try self.addPlaceholder(allocator);
                 try seen.put(var_, placeholder_idx);
 
                 const scratch_top = scratches.fields.top();
@@ -485,11 +744,11 @@ pub const Store = struct {
                 }
 
                 const field_span = try self.addFields(allocator, scratches.fields.sliceFromStart(scratch_top));
-                self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .record = .{ .fields = field_span } };
+                self.resolvePlaceholder(placeholder_idx, .{ .record = .{ .fields = field_span } });
                 return placeholder_idx;
             },
             .tuple => |tuple| {
-                const placeholder_idx = try self.addMonotype(allocator, .unit);
+                const placeholder_idx = try self.addPlaceholder(allocator);
                 try seen.put(var_, placeholder_idx);
 
                 const elem_vars = types_store.sliceVars(tuple.elems);
@@ -502,11 +761,11 @@ pub const Store = struct {
                 }
 
                 const elem_span = try self.addIdxSpan(allocator, scratches.idxs.sliceFromStart(scratch_top));
-                self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .tuple = .{ .elems = elem_span } };
+                self.resolvePlaceholder(placeholder_idx, .{ .tuple = .{ .elems = elem_span } });
                 return placeholder_idx;
             },
             .tag_union => |tag_union_row| {
-                const placeholder_idx = try self.addMonotype(allocator, .unit);
+                const placeholder_idx = try self.addPlaceholder(allocator);
                 try seen.put(var_, placeholder_idx);
 
                 const tags_top = scratches.tags.top();
@@ -561,11 +820,9 @@ pub const Store = struct {
                 const collected_tags = scratches.tags.sliceFromStart(tags_top);
                 // Sort tags alphabetically to match discriminant assignment order.
                 // Each ext-chain row is pre-sorted, but the concatenation may not be.
-                if (scratches.ident_store) |ident_store| {
-                    std.mem.sort(Tag, collected_tags, ident_store, Tag.sortByNameAsc);
-                }
+                std.mem.sort(Tag, collected_tags, {}, Tag.sortByNameAsc);
                 const tag_span = try self.addTags(allocator, collected_tags);
-                self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .tag_union = .{ .tags = tag_span } };
+                self.resolvePlaceholder(placeholder_idx, .{ .tag_union = .{ .tags = tag_span } });
                 return placeholder_idx;
             },
             .fn_pure => |func| try self.fromFuncType(allocator, types_store, var_, func, false, common_idents, seen, scratches),
@@ -585,7 +842,7 @@ pub const Store = struct {
         seen: *std.AutoHashMap(types.Var, Idx),
         scratches: *Scratches,
     ) Allocator.Error!Idx {
-        const placeholder_idx = try self.addMonotype(allocator, .unit);
+        const placeholder_idx = try self.addPlaceholder(allocator);
         try seen.put(var_, placeholder_idx);
 
         const arg_vars = types_store.sliceVars(func.args);
@@ -600,11 +857,11 @@ pub const Store = struct {
         const args_span = try self.addIdxSpan(allocator, scratches.idxs.sliceFromStart(scratch_top));
         const ret = try self.fromTypeVar(allocator, types_store, func.ret, common_idents, seen, scratches);
 
-        self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .func = .{
+        self.resolvePlaceholder(placeholder_idx, .{ .func = .{
             .args = args_span,
             .ret = ret,
             .effectful = effectful,
-        } };
+        } });
         return placeholder_idx;
     }
 
@@ -674,7 +931,7 @@ pub const Store = struct {
         // so we must overwrite it in-place with the real value — we can't just
         // return `backing_idx` because earlier callers already captured
         // `placeholder_idx`.
-        const placeholder_idx = try self.addMonotype(allocator, .unit);
+        const placeholder_idx = try self.addPlaceholder(allocator);
         try seen.put(nominal_var, placeholder_idx);
 
         const backing_var = types_store.getNominalBackingVar(nominal);
@@ -685,7 +942,7 @@ pub const Store = struct {
         // values from indices) because every field inside a Monotype is an index
         // (Idx, Span, Ident.Idx) — never a pointer. The monotype store is
         // append-only, so all indices remain valid after the copy.
-        self.monotypes.items[@intFromEnum(placeholder_idx)] = self.monotypes.items[@intFromEnum(backing_idx)];
+        self.resolvePlaceholder(placeholder_idx, self.monotypes.items[@intFromEnum(backing_idx)]);
         try self.setNominalHint(allocator, placeholder_idx, .{
             .module_idx = scratches.current_module_idx,
             .ident = nominal.ident.ident_idx,

@@ -53,6 +53,15 @@ pub const Var = enum(u32) {
     }
 };
 
+/// Recursion metadata for nominal types, keyed by type variable.
+/// All identity is integer-based (Var indices).
+pub const NominalRecMeta = struct {
+    /// Anchor var for this nominal recursion identity.
+    anchor_var: Var,
+    /// Shared group anchor for mutually recursive nominals.
+    group_anchor_var: Var,
+};
+
 /// A mapping from polymorphic type variables to concrete type variables
 pub const VarMap = std.hash_map.HashMap(Var, Var, std.hash_map.AutoContext(Var), 80);
 
