@@ -74,18 +74,21 @@ pattern_symbols: std.AutoHashMap(u64, MIR.Symbol),
 
 /// Cache for type var → monotype conversion (shared across all fromTypeVar calls)
 type_var_seen: std.AutoHashMap(types.Var, Monotype.Idx),
+/// Concrete nominal identity for resolved type vars in the active lowering scope.
+/// Needed when monotype canonicalization strips nominal wrappers.
+type_var_nominal_info: std.AutoHashMap(types.Var, NominalInfo),
 
 /// Cache for already-lowered symbol definitions (avoids re-lowering).
 /// Key is @bitCast(MIR.Symbol) → u64.
 lowered_symbols: std.AutoHashMap(u64, MIR.ExprId),
 
-/// Polymorphic specialization cache: maps (symbol_key, monotype) → specialized MIR.Symbol.
+/// Call-site specialization cache: maps (symbol_key, monotype) → specialized MIR.Symbol.
 /// When a polymorphic function is called with a different type than what was first lowered,
 /// a new synthetic symbol is created, lowered with the new type, and cached here.
 /// Key is (symbol_key << 32 | @intFromEnum(monotype)) as u128.
-poly_specializations: std.AutoHashMap(u128, MIR.Symbol),
+call_site_specializations: std.AutoHashMap(u128, MIR.Symbol),
 
-/// Counter for generating synthetic ident indices for polymorphic specializations.
+/// Counter for generating synthetic ident indices for call-site specializations.
 /// Counts down from NONE - 1 to avoid collision with real idents.
 next_synthetic_ident: u29,
 
@@ -93,7 +96,7 @@ next_synthetic_ident: u29,
 in_progress_defs: std.AutoHashMap(u64, void),
 
 /// Monotype currently being lowered for each in-progress symbol.
-/// Used to detect in-progress calls that need a distinct specialization symbol.
+/// Used to detect in-progress calls that need a distinct call-site specialization symbol.
 in_progress_symbol_monotypes: std.AutoHashMap(u64, Monotype.Idx),
 
 /// Block-local polymorphic lambda defs waiting for call-site type information.
@@ -172,8 +175,9 @@ pub fn init(
         .app_module_idx = app_module_idx,
         .pattern_symbols = std.AutoHashMap(u64, MIR.Symbol).init(allocator),
         .type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
+        .type_var_nominal_info = std.AutoHashMap(types.Var, NominalInfo).init(allocator),
         .lowered_symbols = std.AutoHashMap(u64, MIR.ExprId).init(allocator),
-        .poly_specializations = std.AutoHashMap(u128, MIR.Symbol).init(allocator),
+        .call_site_specializations = std.AutoHashMap(u128, MIR.Symbol).init(allocator),
         .next_synthetic_ident = Ident.Idx.NONE.idx - 1,
         .in_progress_defs = std.AutoHashMap(u64, void).init(allocator),
         .in_progress_symbol_monotypes = std.AutoHashMap(u64, Monotype.Idx).init(allocator),
@@ -225,8 +229,9 @@ pub fn deinit(self: *Self) void {
     }
     self.pattern_symbols.deinit();
     self.type_var_seen.deinit();
+    self.type_var_nominal_info.deinit();
     self.lowered_symbols.deinit();
-    self.poly_specializations.deinit();
+    self.call_site_specializations.deinit();
     self.in_progress_defs.deinit();
     self.in_progress_symbol_monotypes.deinit();
     self.deferred_block_lambdas.deinit();
@@ -367,10 +372,14 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                     // Use a fresh type_var_seen scope so call-site concrete
                     // types aren't shadowed by stale defaults from pattern lowering.
                     const saved_type_var_seen = self.type_var_seen;
+                    const saved_type_var_nominal_info = self.type_var_nominal_info;
                     self.type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+                    self.type_var_nominal_info = std.AutoHashMap(types.Var, NominalInfo).init(self.allocator);
                     defer {
                         self.type_var_seen.deinit();
+                        self.type_var_nominal_info.deinit();
                         self.type_var_seen = saved_type_var_seen;
+                        self.type_var_nominal_info = saved_type_var_nominal_info;
                     }
                     self.seedTypeVarSeen(ModuleEnv.varFrom(saved_deferred.cir_expr), monotype);
                     const lowered = try self.lowerExpr(saved_deferred.cir_expr);
@@ -412,17 +421,17 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                         // instantiated copy (e.g. `a` in `to`), so we seed
                         // before lowering to connect them.
                         self.seedTypeVarSeen(ModuleEnv.varFrom(def.expr), monotype);
-                        _ = try self.lowerExternalDefWithType(symbol, def.expr, monotype);
+                        _ = try self.lowerExternalDefWithType(symbol, def.expr, monotype, null);
                         break;
                     }
                 }
             } else if (self.lowered_symbols.get(symbol_key)) |cached_expr| {
                 // Symbol is already lowered. Check if this is a polymorphic
-                // re-specialization: the same function called with a different type.
+                // call-site specialization: the same function called with a different type.
                 const cached_monotype = self.store.typeOf(cached_expr);
                 if (!monotype.isNone() and cached_monotype != monotype) {
                     // Check for an existing specialization with this monotype.
-                    if (self.lookupPolySpecialization(symbol_key, monotype)) |spec_symbol| {
+                    if (self.lookupCallSiteSpecialization(symbol_key, monotype)) |spec_symbol| {
                         return try self.store.addExpr(self.allocator, .{ .lookup = spec_symbol }, monotype, region);
                     }
 
@@ -445,7 +454,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                     };
 
                     if (cir_expr) |cir_def_expr| {
-                        const spec_key = polySpecKey(symbol_key, monotype);
+                        const spec_key = callSiteSpecKey(symbol_key, monotype);
                         const spec_symbol = self.makeSyntheticSymbol(symbol);
                         const spec_symbol_key: u64 = @bitCast(spec_symbol);
 
@@ -467,7 +476,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                         const spec_monotype = self.store.typeOf(spec_lowered);
                         try self.lowered_symbols.put(spec_symbol_key, spec_lowered);
                         try self.store.registerSymbolDef(self.allocator, spec_symbol, spec_lowered);
-                        try self.poly_specializations.put(spec_key, spec_symbol);
+                        try self.call_site_specializations.put(spec_key, spec_symbol);
 
                         const needs_local_binding = switch (self.store.getExpr(spec_lowered)) {
                             .lambda => |lam| self.store.getCaptures(lam.captures).len > 0,
@@ -524,31 +533,31 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                 if (target_env.store.isDefNode(ext.target_node_idx)) {
                     const def_idx: CIR.Def.Idx = @enumFromInt(ext.target_node_idx);
                     const def = target_env.store.getDef(def_idx);
-                    _ = try self.lowerExternalDefWithType(symbol, def.expr, monotype);
+                    _ = try self.lowerExternalDefWithType(symbol, def.expr, monotype, null);
                 }
                 return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, monotype, region);
             }
 
-            // Symbol already lowered. Check for polymorphic re-specialization.
+            // Symbol already lowered. Check for polymorphic call-site specialization.
             if (self.lowered_symbols.get(symbol_key)) |cached_expr| {
                 const cached_monotype = self.store.typeOf(cached_expr);
                 if (!monotype.isNone() and cached_monotype != monotype) {
-                    if (self.lookupPolySpecialization(symbol_key, monotype)) |spec_symbol| {
+                    if (self.lookupCallSiteSpecialization(symbol_key, monotype)) |spec_symbol| {
                         return try self.store.addExpr(self.allocator, .{ .lookup = spec_symbol }, monotype, region);
                     }
 
                     // Create a new specialization.
                     const target_env = self.all_module_envs[target_module_idx];
                     if (target_env.store.isDefNode(ext.target_node_idx)) {
-                        const spec_key = polySpecKey(symbol_key, monotype);
+                        const spec_key = callSiteSpecKey(symbol_key, monotype);
                         const def_idx: CIR.Def.Idx = @enumFromInt(ext.target_node_idx);
                         const def = target_env.store.getDef(def_idx);
                         const spec_symbol = self.makeSyntheticSymbol(symbol);
 
                         // Lower with lowerExternalDefWithType using the spec_symbol
                         // so it gets its own cache entry and symbol_def registration.
-                        _ = try self.lowerExternalDefWithType(spec_symbol, def.expr, monotype);
-                        try self.poly_specializations.put(spec_key, spec_symbol);
+                        _ = try self.lowerExternalDefWithType(spec_symbol, def.expr, monotype, null);
+                        try self.call_site_specializations.put(spec_key, spec_symbol);
 
                         return try self.store.addExpr(self.allocator, .{ .lookup = spec_symbol }, monotype, region);
                     }
@@ -586,7 +595,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                     .assign => |assign| {
                         if (std.mem.eql(u8, app_env.getIdent(assign.ident), required_name)) {
                             const symbol = MIR.Symbol{ .module_idx = app_idx, .ident_idx = assign.ident };
-                            _ = try self.lowerExternalDefWithType(symbol, def.expr, monotype);
+                            _ = try self.lowerExternalDefWithType(symbol, def.expr, monotype, null);
                             return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, monotype, region);
                         }
                     },
@@ -752,7 +761,7 @@ fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!MI
     return symbol;
 }
 
-/// Create a synthetic symbol for a polymorphic specialization.
+/// Create a synthetic symbol for a call-site specialization.
 /// Uses a counter that decrements from NONE-1 to generate unique ident indices.
 fn makeSyntheticSymbol(self: *Self, original: MIR.Symbol) MIR.Symbol {
     const idx = self.next_synthetic_ident;
@@ -763,14 +772,14 @@ fn makeSyntheticSymbol(self: *Self, original: MIR.Symbol) MIR.Symbol {
     };
 }
 
-/// Compute the composite cache key for polymorphic specializations.
-fn polySpecKey(symbol_key: u64, monotype: Monotype.Idx) u128 {
+/// Compute the composite cache key for call-site specializations.
+fn callSiteSpecKey(symbol_key: u64, monotype: Monotype.Idx) u128 {
     return (@as(u128, symbol_key) << 32) | @as(u128, @intFromEnum(monotype));
 }
 
-fn lookupPolySpecialization(self: *Self, symbol_key: u64, caller_monotype: Monotype.Idx) ?MIR.Symbol {
-    const exact_key = polySpecKey(symbol_key, caller_monotype);
-    return self.poly_specializations.get(exact_key);
+fn lookupCallSiteSpecialization(self: *Self, symbol_key: u64, caller_monotype: Monotype.Idx) ?MIR.Symbol {
+    const exact_key = callSiteSpecKey(symbol_key, caller_monotype);
+    return self.call_site_specializations.get(exact_key);
 }
 
 /// Get the monotype for a CIR expression (via its type var).
@@ -788,6 +797,49 @@ fn resolveMonotype(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!Monotype
 
 fn currentCommonIdents(self: *const Self) ModuleEnv.CommonIdents {
     return self.all_module_envs[self.current_module_idx].idents;
+}
+
+fn resolveNominalInfoFromVar(self: *Self, module_env: *const ModuleEnv, var_: types.Var) ?NominalInfo {
+    var resolved = self.types_store.resolveVar(var_);
+    while (resolved.desc.content == .alias) {
+        const alias = resolved.desc.content.alias;
+        resolved = self.types_store.resolveVar(self.types_store.getAliasBackingVar(alias));
+    }
+
+    switch (resolved.desc.content) {
+        .structure => |flat_type| switch (flat_type) {
+            .nominal_type => |nom| {
+                const module_idx: u32 = if (nom.origin_module == module_env.qualified_module_ident)
+                    self.current_module_idx
+                else
+                    self.findModuleForOrigin(module_env, nom.origin_module);
+
+                return .{
+                    .origin = nom.origin_module,
+                    .ident = nom.ident.ident_idx,
+                    .module_idx = module_idx,
+                };
+            },
+            else => return null,
+        },
+        .flex, .rigid => {
+            if (self.type_var_nominal_info.get(resolved.var_)) |info| {
+                return info;
+            }
+            if (self.type_var_seen.get(resolved.var_)) |mono| {
+                if (self.store.monotype_store.getNominalHint(mono)) |hint| {
+                    return .{
+                        .origin = Ident.Idx.NONE,
+                        .ident = hint.ident,
+                        .module_idx = hint.module_idx,
+                    };
+                }
+            }
+            return null;
+        },
+        .err => return null,
+        .alias => unreachable,
+    }
 }
 
 /// Build a function monotype from argument types, return type, and effectfulness.
@@ -1084,7 +1136,7 @@ fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Clo
         const cap = module_env.store.getCapture(cap_idx);
         // Top-level defs do not need to be captured in closures: they can be
         // looked up globally at call sites, which allows polymorphic
-        // re-specialization to pick the correct symbol per instantiation.
+        // call-site specialization to pick the correct symbol per instantiation.
         //
         // Use exact pattern identity (not ident text) to avoid shadowing bugs.
         var is_top_level_def = false;
@@ -1127,10 +1179,18 @@ fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype:
     }
 
     const args = try self.lowerExprSpan(module_env, call.args);
+    const cir_args = module_env.store.sliceExpr(call.args);
+
+    var call_arg_nominal_infos = std.ArrayList(?NominalInfo).empty;
+    defer call_arg_nominal_infos.deinit(self.allocator);
+    try call_arg_nominal_infos.ensureTotalCapacity(self.allocator, cir_args.len);
+    for (cir_args) |arg_idx| {
+        const nominal_info = self.resolveNominalInfoFromVar(module_env, ModuleEnv.varFrom(arg_idx));
+        try call_arg_nominal_infos.append(self.allocator, nominal_info);
+    }
 
     const mono_top = self.mono_scratches.idxs.top();
     defer self.mono_scratches.idxs.clearFrom(mono_top);
-    const cir_args = module_env.store.sliceExpr(call.args);
     for (cir_args) |arg_idx| {
         try self.mono_scratches.idxs.append(try self.resolveMonotype(arg_idx));
     }
@@ -1180,15 +1240,69 @@ fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype:
         self.seedTypeVarSeen(ModuleEnv.varFrom(call.func), desired_func_monotype);
     }
 
-    var func = try self.lowerExpr(call.func);
+    var func: MIR.ExprId = undefined;
+    var handled_external_lookup = false;
+
+    if (func_cir == .e_lookup_external and !desired_func_monotype.isNone()) {
+        const ext = func_cir.e_lookup_external;
+        const target_module_idx: u32 = @intCast(module_env.imports.getResolvedModule(ext.module_idx) orelse unreachable);
+        const callee_symbol = MIR.Symbol{
+            .module_idx = target_module_idx,
+            .ident_idx = ext.ident_idx,
+        };
+        var call_symbol = callee_symbol;
+
+        const target_env = self.all_module_envs[target_module_idx];
+        if (target_env.store.isDefNode(ext.target_node_idx)) {
+            const symbol_key: u64 = @bitCast(callee_symbol);
+            const spec_key = callSiteSpecKey(symbol_key, desired_func_monotype);
+            if (self.lookupCallSiteSpecialization(symbol_key, desired_func_monotype)) |spec_symbol| {
+                call_symbol = spec_symbol;
+            } else {
+                const def_idx: CIR.Def.Idx = @enumFromInt(ext.target_node_idx);
+                const def = target_env.store.getDef(def_idx);
+
+                if (self.lowered_symbols.get(symbol_key)) |cached_expr| {
+                    const cached_monotype = self.store.typeOf(cached_expr);
+                    if (cached_monotype != desired_func_monotype) {
+                        const spec_symbol = self.makeSyntheticSymbol(callee_symbol);
+                        _ = try self.lowerExternalDefWithType(
+                            spec_symbol,
+                            def.expr,
+                            desired_func_monotype,
+                            call_arg_nominal_infos.items,
+                        );
+                        try self.call_site_specializations.put(spec_key, spec_symbol);
+                        call_symbol = spec_symbol;
+                    }
+                } else {
+                    _ = try self.lowerExternalDefWithType(
+                        callee_symbol,
+                        def.expr,
+                        desired_func_monotype,
+                        call_arg_nominal_infos.items,
+                    );
+                }
+            }
+        }
+
+        func = try self.store.addExpr(self.allocator, .{ .lookup = call_symbol }, desired_func_monotype, region);
+        handled_external_lookup = true;
+    } else {
+        func = try self.lowerExpr(call.func);
+    }
 
     // If call target lowered to a symbol lookup, route through method lowering
-    // so polymorphic recursive calls can get a distinct specialization symbol.
-    if (self.store.getExpr(func) == .lookup) {
+    // so polymorphic recursive calls can get a distinct call-site specialization symbol.
+    if (self.store.getExpr(func) == .lookup and !handled_external_lookup) {
         const callee_symbol = self.store.getExpr(func).lookup;
 
         if (!desired_func_monotype.isNone()) {
-            const lowered_symbol = try self.ensureMethodLowered(callee_symbol, desired_func_monotype);
+            const lowered_symbol = try self.ensureMethodLowered(
+                callee_symbol,
+                desired_func_monotype,
+                call_arg_nominal_infos.items,
+            );
             if (@as(u64, @bitCast(lowered_symbol)) != @as(u64, @bitCast(callee_symbol))) {
                 func = try self.store.addExpr(
                     self.allocator,
@@ -1367,7 +1481,7 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
             if (self.scratch_stmts.items.items[deferred.scratch_stmt_idx].decl_const.expr == MIR.ExprId.none) {
                 // This deferred lambda was never referenced in this block.
                 // Drop the placeholder decl instead of forcing a default-typed
-                // lower pass, which can pollute polymorphic specialization
+                // lower pass, which can pollute call-site specialization
                 // caches with unit/default monotypes.
                 try remove_stmt_idxs.append(deferred.scratch_stmt_idx);
             }
@@ -1500,7 +1614,7 @@ fn lowerBinop(self: *Self, binop: CIR.Expr.Binop, monotype: Monotype.Idx, region
             const func_monotype = try self.buildFuncMonotype(&.{ lhs_monotype, rhs_monotype }, monotype, false);
 
             // Ensure the method body is lowered so codegen can find it.
-            const lowered_method_symbol = try self.ensureMethodLowered(method_symbol, func_monotype);
+            const lowered_method_symbol = try self.ensureMethodLowered(method_symbol, func_monotype, null);
 
             const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = lowered_method_symbol }, func_monotype, region);
 
@@ -1572,7 +1686,7 @@ fn lowerUnaryMinus(self: *Self, um: CIR.Expr.UnaryMinus, monotype: Monotype.Idx,
     const func_monotype = try self.buildFuncMonotype(&.{inner_monotype}, monotype, false);
 
     // Ensure the method body is lowered so codegen can find it.
-    const lowered_method_symbol = try self.ensureMethodLowered(method_symbol, func_monotype);
+    const lowered_method_symbol = try self.ensureMethodLowered(method_symbol, func_monotype, null);
 
     const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = lowered_method_symbol }, func_monotype, region);
     const args = try self.store.addExprSpan(self.allocator, &.{inner});
@@ -1698,7 +1812,7 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
         const func_monotype = try self.buildFuncMonotype(self.mono_scratches.idxs.sliceFromStart(mono_top), monotype, false);
 
         // Ensure the method body is lowered so codegen can find it.
-        const lowered_method_symbol = try self.ensureMethodLowered(method_symbol, func_monotype);
+        const lowered_method_symbol = try self.ensureMethodLowered(method_symbol, func_monotype, null);
 
         const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = lowered_method_symbol }, func_monotype, region);
 
@@ -1874,23 +1988,6 @@ fn lowerRecord(self: *Self, module_env: *const ModuleEnv, record: anytype, monot
 
 /// Lower `e_type_var_dispatch` by resolving the type alias and dispatching to the method.
 fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.Idx, tvd: anytype, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
-    if (std.mem.eql(u8, module_env.getIdent(tvd.method_name), "decode_i32")) {
-        const constraints = module_env.types.sliceAllStaticDispatchConstraints();
-        for (constraints) |constraint| {
-            if (constraint.source_expr_idx == @intFromEnum(expr_idx)) {
-                std.debug.print(
-                    "DBG tvd expr={} constraint fn={s} fn_var={} resolved_none={} origin={s}\n",
-                    .{
-                        @intFromEnum(expr_idx),
-                        module_env.getIdent(constraint.fn_name),
-                        @intFromEnum(constraint.fn_var),
-                        constraint.resolved_target.isNone(),
-                        @tagName(constraint.origin),
-                    },
-                );
-            }
-        }
-    }
     // Get the type variable from the alias statement
     const stmt = module_env.store.getStatement(tvd.type_var_alias_stmt);
     const type_var_binding = stmt.s_type_var_alias;
@@ -1914,12 +2011,12 @@ fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR
     }
     const func_monotype = try self.buildFuncMonotype(self.mono_scratches.idxs.sliceFromStart(mono_top), monotype, false);
 
-    const resolved_symbol = method_symbol orelse self.resolveMethodByNameAcrossModules(module_env, tvd.method_name) orelse std.debug.panic(
+    const resolved_symbol = method_symbol orelse std.debug.panic(
         "MIR lower error: unresolved type-var dispatch method `{s}` for expr {}",
         .{ module_env.getIdent(tvd.method_name), @intFromEnum(expr_idx) },
     );
     const args = try self.lowerExprSpan(module_env, tvd.args);
-    const lowered_method_symbol = try self.ensureMethodLowered(resolved_symbol, func_monotype);
+    const lowered_method_symbol = try self.ensureMethodLowered(resolved_symbol, func_monotype, null);
     const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = lowered_method_symbol }, func_monotype, region);
 
     return try self.store.addExpr(self.allocator, .{ .call = .{
@@ -2012,12 +2109,12 @@ fn resolveMethodForTypeVar(
     // primitives mapped via common idents) or the origin env (e.g. nominals
     // inferred from another module). Try both provenances before giving up.
     const qualified_method = origin_env.lookupMethodIdentFromTwoEnvsConst(
-        source_env,
+        origin_env,
         info.ident,
         source_env,
         method_name,
     ) orelse origin_env.lookupMethodIdentFromTwoEnvsConst(
-        origin_env,
+        source_env,
         info.ident,
         source_env,
         method_name,
@@ -2029,38 +2126,15 @@ fn resolveMethodForTypeVar(
     };
 }
 
-/// Fallback path for unresolved type-var dispatch:
-/// find a unique method definition by method-name text across loaded modules.
-fn resolveMethodByNameAcrossModules(self: *Self, source_env: *const ModuleEnv, method_name: Ident.Idx) ?MIR.Symbol {
-    const method_text = source_env.getIdent(method_name);
-
-    var match: ?MIR.Symbol = null;
-
-    for (self.all_module_envs, 0..) |env, mod_idx| {
-        const local_ident = env.common.findIdent(method_text) orelse continue;
-        if (self.findDefExprBySymbol(@intCast(mod_idx), local_ident) != null) {
-            const candidate = MIR.Symbol{
-                .module_idx = @intCast(mod_idx),
-                .ident_idx = local_ident,
-            };
-            if (match) |existing| {
-                if (existing.module_idx != candidate.module_idx or existing.ident_idx.idx != candidate.ident_idx.idx) {
-                    return null;
-                }
-            } else {
-                match = candidate;
-            }
-        }
-    }
-
-    return match;
-}
-
 /// Resolve a flex/rigid type variable to nominal info via `type_var_seen`.
 /// When a where-clause constrained type var (e.g. `ok` in `Try.is_eq`) has been
 /// seeded with a concrete monotype (e.g. Dec), this maps that monotype back to
 /// the corresponding nominal type's origin module and ident for method dispatch.
 fn resolveFlexRigidToNominal(self: *Self, var_: types.Var) ?NominalInfo {
+    if (self.type_var_nominal_info.get(var_)) |info| {
+        return info;
+    }
+
     const monotype = self.type_var_seen.get(var_) orelse return null;
     if (monotype.isNone()) return null;
 
@@ -2124,38 +2198,42 @@ fn findDefExprBySymbol(self: *Self, module_idx: u32, ident_idx: Ident.Idx) ?CIR.
 }
 
 /// Ensure a method definition is lowered (for cross-module dispatch),
-/// returning the symbol to call. For polymorphic re-specialization this may
+/// returning the symbol to call. For call-site specialization this may
 /// be a synthetic symbol unique to (method symbol, caller monotype).
-fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?Monotype.Idx) Allocator.Error!MIR.Symbol {
+fn ensureMethodLowered(
+    self: *Self,
+    symbol: MIR.Symbol,
+    caller_func_monotype: ?Monotype.Idx,
+    caller_arg_nominals: ?[]const ?NominalInfo,
+) Allocator.Error!MIR.Symbol {
     const symbol_key: u64 = @bitCast(symbol);
 
     if (caller_func_monotype) |caller_monotype| {
         if (!caller_monotype.isNone()) {
-            const spec_key = polySpecKey(symbol_key, caller_monotype);
+            const spec_key = callSiteSpecKey(symbol_key, caller_monotype);
 
-            if (self.lookupPolySpecialization(symbol_key, caller_monotype)) |spec_symbol| {
+            if (self.lookupCallSiteSpecialization(symbol_key, caller_monotype)) |spec_symbol| {
                 return spec_symbol;
             }
 
             // Recursive lowering for a different caller monotype needs a new
-            // specialization symbol; placeholders are only valid for the same
-            // active specialization.
+            // call-site specialization symbol; placeholders are only valid for the same
+            // active call-site specialization.
             if (self.in_progress_defs.contains(symbol_key)) {
                 const active_monotype = self.in_progress_symbol_monotypes.get(symbol_key) orelse Monotype.Idx.none;
-                const same_specialization = if (active_monotype.isNone())
+                const same_call_site_specialization = if (active_monotype.isNone())
                     false
                 else
                     active_monotype == caller_monotype;
 
-                if (!same_specialization) {
+                if (!same_call_site_specialization) {
                     if (self.findDefExprBySymbol(symbol.module_idx, symbol.ident_idx)) |def_expr| {
                         const spec_symbol = self.makeSyntheticSymbol(symbol);
-                        try self.poly_specializations.put(spec_key, spec_symbol);
-                        errdefer _ = self.poly_specializations.remove(spec_key);
-                        _ = try self.lowerExternalDefWithType(spec_symbol, def_expr, caller_monotype);
+                        try self.call_site_specializations.put(spec_key, spec_symbol);
+                        errdefer _ = self.call_site_specializations.remove(spec_key);
+                        _ = try self.lowerExternalDefWithType(spec_symbol, def_expr, caller_monotype, caller_arg_nominals);
                         return spec_symbol;
                     }
-
                     return symbol;
                 }
             }
@@ -2165,12 +2243,11 @@ fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?M
                 if (cached_monotype != caller_monotype) {
                     if (self.findDefExprBySymbol(symbol.module_idx, symbol.ident_idx)) |def_expr| {
                         const spec_symbol = self.makeSyntheticSymbol(symbol);
-                        try self.poly_specializations.put(spec_key, spec_symbol);
-                        errdefer _ = self.poly_specializations.remove(spec_key);
-                        _ = try self.lowerExternalDefWithType(spec_symbol, def_expr, caller_monotype);
+                        try self.call_site_specializations.put(spec_key, spec_symbol);
+                        errdefer _ = self.call_site_specializations.remove(spec_key);
+                        _ = try self.lowerExternalDefWithType(spec_symbol, def_expr, caller_monotype, caller_arg_nominals);
                         return spec_symbol;
                     }
-
                     return symbol;
                 }
             }
@@ -2180,7 +2257,7 @@ fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?M
     if (self.lowered_symbols.contains(symbol_key)) return symbol;
 
     if (self.findDefExprBySymbol(symbol.module_idx, symbol.ident_idx)) |def_expr| {
-        _ = try self.lowerExternalDefWithType(symbol, def_expr, caller_func_monotype);
+        _ = try self.lowerExternalDefWithType(symbol, def_expr, caller_func_monotype, caller_arg_nominals);
     }
 
     // Method not found in target module's defs. This can happen for same-module
@@ -2191,14 +2268,20 @@ fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?M
 
 /// Lower an external definition by symbol, caching the result.
 pub fn lowerExternalDef(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId {
-    return self.lowerExternalDefWithType(symbol, cir_expr_idx, null);
+    return self.lowerExternalDefWithType(symbol, cir_expr_idx, null, null);
 }
 
 /// Lower an external definition, with an optional caller monotype for
 /// cross-module polymorphism resolution. When the caller provides a concrete
 /// monotype, flex type variables in the target module are pre-seeded so they
 /// resolve to the caller's concrete types instead of unit/ZST.
-fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.Expr.Idx, caller_monotype: ?Monotype.Idx) Allocator.Error!MIR.ExprId {
+fn lowerExternalDefWithType(
+    self: *Self,
+    symbol: MIR.Symbol,
+    cir_expr_idx: CIR.Expr.Idx,
+    caller_monotype: ?Monotype.Idx,
+    caller_arg_nominals: ?[]const ?NominalInfo,
+) Allocator.Error!MIR.ExprId {
     const symbol_key: u64 = @bitCast(symbol);
 
     // Check cache
@@ -2229,6 +2312,7 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
     const saved_module_idx = self.current_module_idx;
     const saved_types_store = self.types_store;
     const saved_type_var_seen = self.type_var_seen;
+    const saved_type_var_nominal_info = self.type_var_nominal_info;
     const saved_ident_store = self.mono_scratches.ident_store;
     const saved_mono_module_idx = self.mono_scratches.current_module_idx;
     if (switching_module) {
@@ -2239,9 +2323,10 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
     }
 
     // Always isolate type_var_seen per external definition lowering.
-    // Reusing a shared cache across polymorphic specializations can pin flex
+    // Reusing a shared cache across call-site specializations can pin flex
     // and rigid vars to an earlier specialization.
     self.type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+    self.type_var_nominal_info = std.AutoHashMap(types.Var, NominalInfo).init(self.allocator);
 
     // Pre-seed type_var_seen with the caller's concrete types so that
     // flex/rigid vars in the definition resolve to concrete monotypes instead
@@ -2255,11 +2340,14 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
         if (!cmt.isNone()) {
             const target_type_var = ModuleEnv.varFrom(cir_expr_idx);
             self.seedTypeVarSeen(target_type_var, cmt);
+            self.seedFunctionArgNominalInfo(target_type_var, caller_arg_nominals);
         }
     }
     defer {
         self.type_var_seen.deinit();
+        self.type_var_nominal_info.deinit();
         self.type_var_seen = saved_type_var_seen;
+        self.type_var_nominal_info = saved_type_var_nominal_info;
         if (switching_module) {
             self.types_store = saved_types_store;
             self.current_module_idx = saved_module_idx;
@@ -2290,6 +2378,36 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
     _ = self.in_progress_symbol_monotypes.remove(symbol_key);
 
     return result;
+}
+
+fn seedNominalInfoForVar(self: *Self, type_var: types.Var, info: NominalInfo) void {
+    var resolved = self.types_store.resolveVar(type_var);
+    while (resolved.desc.content == .alias) {
+        const alias = resolved.desc.content.alias;
+        resolved = self.types_store.resolveVar(self.types_store.getAliasBackingVar(alias));
+    }
+
+    self.type_var_nominal_info.put(resolved.var_, info) catch return;
+}
+
+fn seedFunctionArgNominalInfo(self: *Self, func_var: types.Var, caller_arg_nominals: ?[]const ?NominalInfo) void {
+    const arg_infos = caller_arg_nominals orelse return;
+    if (arg_infos.len == 0) return;
+
+    var resolved = self.types_store.resolveVar(func_var);
+    while (resolved.desc.content == .alias) {
+        const alias = resolved.desc.content.alias;
+        resolved = self.types_store.resolveVar(self.types_store.getAliasBackingVar(alias));
+    }
+
+    const func = resolved.desc.content.unwrapFunc() orelse return;
+    const arg_vars = self.types_store.sliceVars(func.args);
+    const n = @min(arg_vars.len, arg_infos.len);
+    for (0..n) |i| {
+        if (arg_infos[i]) |info| {
+            self.seedNominalInfoForVar(arg_vars[i], info);
+        }
+    }
 }
 
 /// Walk a polymorphic type variable from the target module's type store in
