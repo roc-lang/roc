@@ -1591,6 +1591,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
         }
 
+        fn generateNoCapturesClosureValue(self: *Self, lambda_expr_id: LirExprId) Allocator.Error!ValueLocation {
+            const slot = self.codegen.allocStackSlot(8);
+            const temp = try self.allocTempGeneral();
+            try self.codegen.emitLoadImm(temp, 0);
+            try self.codegen.emitStoreStack(.w64, slot, temp);
+            self.codegen.freeGeneral(temp);
+            return .{ .closure_value = .{
+                .stack_offset = slot,
+                .representation = .{ .no_captures = {} },
+                .lambda = lambda_expr_id,
+                .captures = lir.LIR.LirCaptureSpan.empty(),
+            } };
+        }
+
         /// Generate code for an expression (raw — may return bare register locations).
         fn generateExprRaw(self: *Self, expr_id: LirExprId) Allocator.Error!ValueLocation {
             const expr = self.store.getExpr(expr_id);
@@ -1617,14 +1631,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Function calls and lambdas
                 .call => |call| try self.generateCall(call),
                 // Lambdas and closures as first-class values (stored to variables)
-                .lambda => |lambda| {
-                    const code_offset = try self.compileLambdaAsProc(expr_id, lambda);
-                    return .{ .lambda_code = .{
-                        .code_offset = code_offset,
-                        .ret_layout = lambda.ret_layout,
-                        .source_expr = expr_id,
-                    } };
-                },
+                .lambda => |_| try self.generateNoCapturesClosureValue(expr_id),
                 .closure => |closure_id| {
                     return try self.generateClosure(self.store.getClosureData(closure_id));
                 },
@@ -11789,10 +11796,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             return switch (fn_expr) {
                 // Direct lambda call.
-                .lambda => |lambda| {
-                    const code_offset = try self.compileLambdaAsProc(call.fn_expr, lambda);
-                    return try self.generateCallToLambdaWithSource(code_offset, call.args, call.ret_layout, call.fn_expr);
-                },
+                .lambda => |_| try self.compileLambdaAndCall(call.fn_expr, call.args, call.ret_layout),
 
                 // Direct closure call.
                 .closure => |closure_id| {
@@ -12430,6 +12434,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const lambda_expr = self.store.getExpr(lambda_body);
             switch (lambda_expr) {
                 .lambda => |lambda| {
+                    var saved_prebound = self.prebound_callables_by_layout.clone() catch return error.OutOfMemory;
+                    defer saved_prebound.deinit();
+                    defer {
+                        self.prebound_callables_by_layout.deinit();
+                        self.prebound_callables_by_layout = saved_prebound.clone() catch unreachable;
+                    }
+                    try self.prebindCallableArgsForLambdaCall(lambda.params, args_span);
                     const code_offset = try self.compileLambdaAsProc(lambda_body, lambda);
                     return try self.generateCallToLambdaWithSource(code_offset, args_span, ret_layout, lambda_body);
                 },
@@ -12437,6 +12448,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const closure = self.store.getClosureData(closure_id);
                     const inner = self.store.getExpr(closure.lambda);
                     if (inner == .lambda) {
+                        var saved_prebound = self.prebound_callables_by_layout.clone() catch return error.OutOfMemory;
+                        defer saved_prebound.deinit();
+                        defer {
+                            self.prebound_callables_by_layout.deinit();
+                            self.prebound_callables_by_layout = saved_prebound.clone() catch unreachable;
+                        }
+                        try self.prebindCallableArgsForLambdaCall(inner.lambda.params, args_span);
                         const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
                         return try self.generateCallToLambdaWithSource(code_offset, args_span, ret_layout, closure.lambda);
                     }
@@ -12771,17 +12789,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const def_expr = self.store.getExpr(def_expr_id);
 
                 return switch (def_expr) {
-                    .lambda => |lambda| {
-                        var saved_prebound = self.prebound_callables_by_layout.clone() catch return error.OutOfMemory;
-                        defer saved_prebound.deinit();
-                        defer {
-                            self.prebound_callables_by_layout.deinit();
-                            self.prebound_callables_by_layout = saved_prebound.clone() catch unreachable;
-                        }
-                        try self.prebindCallableArgsForLambdaCall(lambda.params, args_span);
-                        const offset = try self.compileLambdaAsProc(def_expr_id, lambda);
-                        return try self.generateCallToLambdaWithSource(offset, args_span, ret_layout, def_expr_id);
-                    },
+                    .lambda => |_| try self.compileLambdaAndCall(def_expr_id, args_span, ret_layout),
                     .closure => |_| {
                         const closure_loc = try self.generateExpr(def_expr_id);
                         if (closure_loc == .closure_value) {
@@ -12809,8 +12817,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // Unwrap nominal and retry with the inner expression
                         const inner = self.store.getExpr(nom.backing_expr);
                         if (inner == .lambda) {
-                            const offset = try self.compileLambdaAsProc(nom.backing_expr, inner.lambda);
-                            return try self.generateCallToLambdaWithSource(offset, args_span, ret_layout, nom.backing_expr);
+                            return try self.compileLambdaAndCall(nom.backing_expr, args_span, ret_layout);
                         }
                         if (inner == .closure) {
                             const inner_loc = try self.generateExpr(nom.backing_expr);
