@@ -1210,6 +1210,7 @@ pub const RcInsertPass = struct {
                     region,
                     &stmt_buf,
                     stmt_index,
+                    stmts,
                     final_expr,
                     &last_binding_stmt_index,
                     &outer_live_symbol_ids,
@@ -2394,6 +2395,7 @@ pub const RcInsertPass = struct {
         region: Region,
         rc_stmts: *std.ArrayList(LirStmt),
         stmt_index: usize,
+        block_stmts: []const LirStmt,
         final_expr: LirExprId,
         last_binding_index: *const std.AutoHashMap(u64, usize),
         outer_live_symbol_ids: *const std.AutoHashMap(u64, void),
@@ -2404,6 +2406,7 @@ pub const RcInsertPass = struct {
             region: Region,
             rc_stmts: *std.ArrayList(LirStmt),
             stmt_index: usize,
+            block_stmts: []const LirStmt,
             final_expr: LirExprId,
             last_binding_index: *const std.AutoHashMap(u64, usize),
             outer_live_symbol_ids: *const std.AutoHashMap(u64, void),
@@ -2425,7 +2428,21 @@ pub const RcInsertPass = struct {
                 const remaining_uses = if (consumed_so_far >= total_uses) 0 else total_uses - consumed_so_far;
                 if (remaining_uses != 0) return;
 
-                if (ctx.pass.exprHasBorrowedLookupUseOfSymbol(ctx.final_expr, symbol)) {
+                var should_defer_cleanup = ctx.pass.exprHasBorrowedLookupUseOfSymbol(ctx.final_expr, symbol);
+
+                // Mutable tail cleanup runs while we are iterating statements.
+                // A symbol can still be used later via borrowed low-level args,
+                // which are intentionally excluded from consume counts.
+                if (!should_defer_cleanup and (ctx.stmt_index + 1) < ctx.block_stmts.len) {
+                    for (ctx.block_stmts[ctx.stmt_index + 1 ..]) |later_stmt| {
+                        if (ctx.pass.exprHasBorrowedLookupUseOfSymbol(later_stmt.binding().expr, symbol)) {
+                            should_defer_cleanup = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (should_defer_cleanup) {
                     try ctx.post_final_cleanup.put(makeKey(symbol, resolved_layout), {});
                 } else {
                     try ctx.pass.emitDecrefInto(symbol, resolved_layout, ctx.region, ctx.rc_stmts);
@@ -2438,6 +2455,7 @@ pub const RcInsertPass = struct {
             .region = region,
             .rc_stmts = rc_stmts,
             .stmt_index = stmt_index,
+            .block_stmts = block_stmts,
             .final_expr = final_expr,
             .last_binding_index = last_binding_index,
             .outer_live_symbol_ids = outer_live_symbol_ids,
