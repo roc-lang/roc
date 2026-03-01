@@ -581,6 +581,7 @@ pub const RcInsertPass = struct {
                 if (new_fn_expr == call.fn_expr and !args_res.changed) return expr_id;
                 return self.store.addExpr(.{ .call = .{
                     .fn_expr = new_fn_expr,
+                    .callable_instance = call.callable_instance,
                     .fn_layout = call.fn_layout,
                     .args = args_res.span,
                     .ret_layout = call.ret_layout,

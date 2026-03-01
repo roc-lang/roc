@@ -500,15 +500,21 @@ pub const RocStr = extern struct {
     }
 
     pub fn asSlice(self: *const RocStr) []const u8 {
-        return self.asU8ptr()[0..self.len()];
+        const length = self.len();
+        if (length == 0) return &.{};
+        return self.asU8ptr()[0..length];
     }
 
     pub fn asSliceWithCapacity(self: *const RocStr) []const u8 {
-        return self.asU8ptr()[0..self.getCapacity()];
+        const cap = self.getCapacity();
+        if (cap == 0) return &.{};
+        return self.asU8ptr()[0..cap];
     }
 
     pub fn asSliceWithCapacityMut(self: *RocStr) []u8 {
-        return self.asU8ptrMut()[0..self.getCapacity()];
+        const cap = self.getCapacity();
+        if (cap == 0) return @constCast((&[_]u8{})[0..]);
+        return self.asU8ptrMut()[0..cap];
     }
 
     pub fn asU8ptr(self: *const RocStr) [*]const u8 {

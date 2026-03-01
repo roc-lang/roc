@@ -2103,6 +2103,286 @@ test "cross-module type resolution: U32.to body calls concrete U32 range_to" {
     try testing.expect(found_u32_list_append);
 }
 
+test "cross-module: U8.range_to uses same current symbol for append and mutation" {
+    var env = try MirTestEnv.initExpr("1.U8.to(5.U8)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+
+    const top = env.mir_store.getExpr(expr);
+    try testing.expect(top == .call);
+
+    const to_lookup_expr = env.mir_store.getExpr(top.call.func);
+    try testing.expect(to_lookup_expr == .lookup);
+    const to_symbol = to_lookup_expr.lookup;
+    const to_def_expr_id = env.mir_store.symbol_defs.get(@bitCast(to_symbol)) orelse
+        return error.TestUnexpectedResult;
+
+    const to_def_expr = env.mir_store.getExpr(to_def_expr_id);
+    try testing.expect(to_def_expr == .lambda);
+    const to_body_expr = env.mir_store.getExpr(to_def_expr.lambda.body);
+    try testing.expect(to_body_expr == .call);
+
+    const range_lookup_expr = env.mir_store.getExpr(to_body_expr.call.func);
+    try testing.expect(range_lookup_expr == .lookup);
+    const range_symbol = range_lookup_expr.lookup;
+    const range_def_expr_id = env.mir_store.symbol_defs.get(@bitCast(range_symbol)) orelse
+        return error.TestUnexpectedResult;
+
+    var append_elem_symbol: ?MIR.Symbol = null;
+    var current_mut_symbol: ?MIR.Symbol = null;
+
+    const Walker = struct {
+        fn visit(envp: *MirTestEnv, expr_id: MIR.ExprId, append_sym: *?MIR.Symbol, mutate_sym: *?MIR.Symbol) !void {
+            const node = envp.mir_store.getExpr(expr_id);
+            switch (node) {
+                .run_low_level => |ll| {
+                    if ((ll.op == .list_append or ll.op == .list_append_unsafe) and append_sym.* == null) {
+                        const args = envp.mir_store.getExprSpan(ll.args);
+                        if (args.len == 2) {
+                            const elem = envp.mir_store.getExpr(args[1]);
+                            if (elem == .lookup) {
+                                append_sym.* = elem.lookup;
+                            }
+                        }
+                    }
+                    const args = envp.mir_store.getExprSpan(ll.args);
+                    for (args) |arg| {
+                        try visit(envp, arg, append_sym, mutate_sym);
+                    }
+                },
+                .block => |b| {
+                    const stmts = envp.mir_store.getStmts(b.stmts);
+                    for (stmts) |stmt| {
+                        switch (stmt) {
+                            .decl_const, .decl_var => |binding| {
+                                try visit(envp, binding.expr, append_sym, mutate_sym);
+                            },
+                            .mutate_var => |binding| {
+                                const pat = envp.mir_store.getPattern(binding.pattern);
+                                if (pat == .bind and mutate_sym.* == null) {
+                                    const pat_mono = envp.mir_store.monotype_store.getMonotype(envp.mir_store.patternTypeOf(binding.pattern));
+                                    if (pat_mono == .prim and pat_mono.prim == .u8) {
+                                        mutate_sym.* = pat.bind;
+                                    }
+                                }
+                                try visit(envp, binding.expr, append_sym, mutate_sym);
+                            },
+                        }
+                    }
+                    try visit(envp, b.final_expr, append_sym, mutate_sym);
+                },
+                .call => |c| {
+                    const fn_expr = envp.mir_store.getExpr(c.func);
+                    if (fn_expr == .lookup and append_sym.* == null) {
+                        const fn_symbol = fn_expr.lookup;
+                        const fn_env = envp.lower.all_module_envs[fn_symbol.module_idx];
+                        const fn_name = fn_env.getIdent(fn_symbol.ident_idx);
+                        if (std.mem.endsWith(u8, fn_name, "append")) {
+                            const call_args = envp.mir_store.getExprSpan(c.args);
+                            if (call_args.len == 2) {
+                                const elem_expr = envp.mir_store.getExpr(call_args[1]);
+                                if (elem_expr == .lookup) {
+                                    append_sym.* = elem_expr.lookup;
+                                }
+                            }
+                        }
+                    }
+                    try visit(envp, c.func, append_sym, mutate_sym);
+                    const args = envp.mir_store.getExprSpan(c.args);
+                    for (args) |arg| {
+                        try visit(envp, arg, append_sym, mutate_sym);
+                    }
+                },
+                .lambda => |lam| try visit(envp, lam.body, append_sym, mutate_sym),
+                .match_expr => |m| {
+                    try visit(envp, m.cond, append_sym, mutate_sym);
+                    const branches = envp.mir_store.getBranches(m.branches);
+                    for (branches) |br| {
+                        if (!br.guard.isNone()) {
+                            try visit(envp, br.guard, append_sym, mutate_sym);
+                        }
+                        try visit(envp, br.body, append_sym, mutate_sym);
+                    }
+                },
+                .while_loop => |w| {
+                    try visit(envp, w.cond, append_sym, mutate_sym);
+                    try visit(envp, w.body, append_sym, mutate_sym);
+                },
+                .for_loop => |f| {
+                    try visit(envp, f.list, append_sym, mutate_sym);
+                    try visit(envp, f.body, append_sym, mutate_sym);
+                },
+                .record => |r| {
+                    const fields = envp.mir_store.getExprSpan(r.fields);
+                    for (fields) |field| {
+                        try visit(envp, field, append_sym, mutate_sym);
+                    }
+                },
+                .tuple => |t| {
+                    const elems = envp.mir_store.getExprSpan(t.elems);
+                    for (elems) |elem| {
+                        try visit(envp, elem, append_sym, mutate_sym);
+                    }
+                },
+                .tag => |t| {
+                    const args = envp.mir_store.getExprSpan(t.args);
+                    for (args) |arg| {
+                        try visit(envp, arg, append_sym, mutate_sym);
+                    }
+                },
+                .record_access => |ra| try visit(envp, ra.record, append_sym, mutate_sym),
+                .tuple_access => |ta| try visit(envp, ta.tuple, append_sym, mutate_sym),
+                .hosted => |h| try visit(envp, h.body, append_sym, mutate_sym),
+                .dbg_expr => |d| try visit(envp, d.expr, append_sym, mutate_sym),
+                .expect => |e| try visit(envp, e.body, append_sym, mutate_sym),
+                .return_expr => |r| try visit(envp, r.expr, append_sym, mutate_sym),
+                else => {},
+            }
+        }
+    };
+
+    try Walker.visit(&env, range_def_expr_id, &append_elem_symbol, &current_mut_symbol);
+
+    const append_symbol = append_elem_symbol orelse return error.TestUnexpectedResult;
+    const mutate_symbol = current_mut_symbol orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(u64, @bitCast(mutate_symbol)), @as(u64, @bitCast(append_symbol)));
+}
+
+test "cross-module: U32.range_to increment argument is concretely U32 (not Dec)" {
+    var env = try MirTestEnv.initExpr("1.U32.to(5.U32)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+
+    const top = env.mir_store.getExpr(expr);
+    try testing.expect(top == .call);
+
+    const to_lookup_expr = env.mir_store.getExpr(top.call.func);
+    try testing.expect(to_lookup_expr == .lookup);
+    const to_symbol = to_lookup_expr.lookup;
+    const to_def_expr_id = env.mir_store.symbol_defs.get(@bitCast(to_symbol)) orelse
+        return error.TestUnexpectedResult;
+
+    const to_def_expr = env.mir_store.getExpr(to_def_expr_id);
+    try testing.expect(to_def_expr == .lambda);
+    const to_body_expr = env.mir_store.getExpr(to_def_expr.lambda.body);
+    try testing.expect(to_body_expr == .call);
+
+    const range_lookup_expr = env.mir_store.getExpr(to_body_expr.call.func);
+    try testing.expect(range_lookup_expr == .lookup);
+    const range_symbol = range_lookup_expr.lookup;
+    const range_def_expr_id = env.mir_store.symbol_defs.get(@bitCast(range_symbol)) orelse
+        return error.TestUnexpectedResult;
+
+    var found_plus = false;
+    var saw_dec_rhs = false;
+
+    const Walker = struct {
+        fn visit(envp: *MirTestEnv, expr_id: MIR.ExprId, found: *bool, saw_dec: *bool) !void {
+            const node = envp.mir_store.getExpr(expr_id);
+            switch (node) {
+                .call => |c| {
+                    const fn_expr = envp.mir_store.getExpr(c.func);
+                    if (fn_expr == .lookup) {
+                        const fn_symbol = fn_expr.lookup;
+                        const fn_env = envp.lower.all_module_envs[fn_symbol.module_idx];
+                        const fn_name = fn_env.getIdent(fn_symbol.ident_idx);
+                        if (std.mem.eql(u8, fn_name, "Builtin.Num.U32.plus")) {
+                            const call_args = envp.mir_store.getExprSpan(c.args);
+                            try testing.expectEqual(@as(usize, 2), call_args.len);
+
+                            const rhs_mono = envp.mir_store.monotype_store.getMonotype(envp.mir_store.typeOf(call_args[1]));
+                            try testing.expect(rhs_mono == .prim and rhs_mono.prim == .u32);
+
+                            const rhs_expr = envp.mir_store.getExpr(call_args[1]);
+                            if (rhs_expr == .dec) {
+                                saw_dec.* = true;
+                            } else if (rhs_expr == .lookup) {
+                                if (envp.mir_store.getSymbolDef(rhs_expr.lookup)) |rhs_def_id| {
+                                    if (envp.mir_store.getExpr(rhs_def_id) == .dec) {
+                                        saw_dec.* = true;
+                                    }
+                                }
+                            }
+
+                            found.* = true;
+                        }
+                    }
+                    try visit(envp, c.func, found, saw_dec);
+                    const args = envp.mir_store.getExprSpan(c.args);
+                    for (args) |arg| {
+                        try visit(envp, arg, found, saw_dec);
+                    }
+                },
+                .block => |b| {
+                    const stmts = envp.mir_store.getStmts(b.stmts);
+                    for (stmts) |stmt| {
+                        switch (stmt) {
+                            .decl_const, .decl_var, .mutate_var => |binding| {
+                                try visit(envp, binding.expr, found, saw_dec);
+                            },
+                        }
+                    }
+                    try visit(envp, b.final_expr, found, saw_dec);
+                },
+                .run_low_level => |ll| {
+                    const args = envp.mir_store.getExprSpan(ll.args);
+                    for (args) |arg| {
+                        try visit(envp, arg, found, saw_dec);
+                    }
+                },
+                .lambda => |lam| try visit(envp, lam.body, found, saw_dec),
+                .match_expr => |m| {
+                    try visit(envp, m.cond, found, saw_dec);
+                    const branches = envp.mir_store.getBranches(m.branches);
+                    for (branches) |br| {
+                        if (!br.guard.isNone()) {
+                            try visit(envp, br.guard, found, saw_dec);
+                        }
+                        try visit(envp, br.body, found, saw_dec);
+                    }
+                },
+                .while_loop => |w| {
+                    try visit(envp, w.cond, found, saw_dec);
+                    try visit(envp, w.body, found, saw_dec);
+                },
+                .for_loop => |f| {
+                    try visit(envp, f.list, found, saw_dec);
+                    try visit(envp, f.body, found, saw_dec);
+                },
+                .record => |r| {
+                    const fields = envp.mir_store.getExprSpan(r.fields);
+                    for (fields) |field| {
+                        try visit(envp, field, found, saw_dec);
+                    }
+                },
+                .tuple => |t| {
+                    const elems = envp.mir_store.getExprSpan(t.elems);
+                    for (elems) |elem| {
+                        try visit(envp, elem, found, saw_dec);
+                    }
+                },
+                .tag => |t| {
+                    const args = envp.mir_store.getExprSpan(t.args);
+                    for (args) |arg| {
+                        try visit(envp, arg, found, saw_dec);
+                    }
+                },
+                .record_access => |ra| try visit(envp, ra.record, found, saw_dec),
+                .tuple_access => |ta| try visit(envp, ta.tuple, found, saw_dec),
+                .hosted => |h| try visit(envp, h.body, found, saw_dec),
+                .dbg_expr => |d| try visit(envp, d.expr, found, saw_dec),
+                .expect => |e| try visit(envp, e.body, found, saw_dec),
+                .return_expr => |r| try visit(envp, r.expr, found, saw_dec),
+                else => {},
+            }
+        }
+    };
+
+    try Walker.visit(&env, range_def_expr_id, &found_plus, &saw_dec_rhs);
+    try testing.expect(found_plus);
+    try testing.expect(!saw_dec_rhs);
+}
+
 // --- Polymorphic numeric specialization tests ---
 // These tests verify that polymorphic lambdas in blocks get the correct
 // monotype when called with concrete numeric types (not defaulting to Dec).

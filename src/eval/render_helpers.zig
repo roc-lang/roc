@@ -8,12 +8,95 @@ const builtins = @import("builtins");
 const StackValue = @import("StackValue.zig");
 const TypeScope = types.TypeScope;
 
-/// Copy tags and sort them alphabetically, returning the tag at the given index.
-/// This is necessary because tags stored in the runtime type store may not be
-/// sorted consistently when the same source type is translated multiple times
-/// with different cache generations. By sorting at render time, we ensure the
-/// discriminant index maps to the correct tag name.
-fn getSortedTag(
+fn identText(ctx: *RenderCtx, ident_idx: anytype) []const u8 {
+    const byte_offset: usize = ident_idx.idx;
+    for (ctx.layout_store.all_module_envs) |env| {
+        const bytes = env.getIdentStoreConst().interner.bytes.items.items;
+        if (byte_offset >= bytes.len) continue;
+        if (byte_offset != 0 and bytes[byte_offset - 1] != 0) continue;
+
+        var end = byte_offset;
+        while (end < bytes.len and bytes[end] != 0) : (end += 1) {}
+        return bytes[byte_offset..end];
+    }
+    return "<unknown_ident>";
+}
+
+fn layoutPairKey(a: layout.Idx, b: layout.Idx) u64 {
+    const a_bits: u64 = @intCast(@intFromEnum(a));
+    const b_bits: u64 = @intCast(@intFromEnum(b));
+    return (a_bits << 32) | b_bits;
+}
+
+fn layoutsEquivalentRec(
+    ctx: *RenderCtx,
+    a_idx: layout.Idx,
+    b_idx: layout.Idx,
+    visited: *std.AutoHashMap(u64, void),
+) !bool {
+    if (a_idx == b_idx) return true;
+
+    const key = layoutPairKey(a_idx, b_idx);
+    if (visited.contains(key)) return true;
+    try visited.put(key, {});
+
+    const ls = ctx.layout_store;
+    const a = ls.getLayout(a_idx);
+    const b = ls.getLayout(b_idx);
+    if (a.tag != b.tag) return false;
+
+    return switch (a.tag) {
+        .zst, .box_of_zst, .list_of_zst => true,
+        .scalar => a.data.scalar.tag == b.data.scalar.tag and switch (a.data.scalar.tag) {
+            .str => true,
+            .int => a.data.scalar.data.int == b.data.scalar.data.int,
+            .frac => a.data.scalar.data.frac == b.data.scalar.data.frac,
+        },
+        .list => try layoutsEquivalentRec(ctx, a.data.list, b.data.list, visited),
+        .box => try layoutsEquivalentRec(ctx, a.data.box, b.data.box, visited),
+        .closure => try layoutsEquivalentRec(ctx, a.data.closure.captures_layout_idx, b.data.closure.captures_layout_idx, visited),
+        .struct_ => blk: {
+            const a_info = ls.getStructInfo(a);
+            const b_info = ls.getStructInfo(b);
+            if (a_info.data.size != b_info.data.size) break :blk false;
+            if (a_info.alignment != b_info.alignment) break :blk false;
+            if (a_info.fields.len != b_info.fields.len) break :blk false;
+            for (0..a_info.fields.len) |i| {
+                const fa = a_info.fields.get(@intCast(i));
+                const fb = b_info.fields.get(@intCast(i));
+                if (fa.index != fb.index or fa.name != fb.name) break :blk false;
+                if (!try layoutsEquivalentRec(ctx, fa.layout, fb.layout, visited)) break :blk false;
+            }
+            break :blk true;
+        },
+        .tag_union => blk: {
+            const a_info = ls.getTagUnionInfo(a);
+            const b_info = ls.getTagUnionInfo(b);
+            if (a_info.data.discriminant_size != b_info.data.discriminant_size) break :blk false;
+            if (a_info.data.discriminant_offset != b_info.data.discriminant_offset) break :blk false;
+            if (a_info.alignment != b_info.alignment) break :blk false;
+            if (a_info.variants.len != b_info.variants.len) break :blk false;
+            for (0..a_info.variants.len) |i| {
+                const va = a_info.variants.get(@intCast(i));
+                const vb = b_info.variants.get(@intCast(i));
+                if (!try layoutsEquivalentRec(ctx, va.payload_layout, vb.payload_layout, visited)) break :blk false;
+            }
+            break :blk true;
+        },
+    };
+}
+
+fn layoutsEquivalent(ctx: *RenderCtx, a_idx: layout.Idx, b_idx: layout.Idx) bool {
+    if (a_idx == b_idx) return true;
+    var visited = std.AutoHashMap(u64, void).init(ctx.allocator);
+    defer visited.deinit();
+    return layoutsEquivalentRec(ctx, a_idx, b_idx, &visited) catch false;
+}
+
+/// Return the tag at the given discriminant index in runtime declaration order.
+/// This must match lowering, which also uses declaration/monotype order rather
+/// than lexical sorting for discriminants.
+fn getTagAtDiscriminant(
     ctx: *RenderCtx,
     tag_union: types.TagUnion,
     tag_index: usize,
@@ -49,10 +132,105 @@ fn getSortedTag(
         }
     }
 
-    if (all_tags.items.len == 0) return null;
+    return if (tag_index < all_tags.items.len) all_tags.items[tag_index] else null;
+}
 
-    const ident_store = ctx.env.common.getIdentStore();
-    std.mem.sort(types.Tag, all_tags.items, ident_store, types.Tag.sortByNameAsc);
+fn tagPayloadLayout(ctx: *RenderCtx, tag: types.Tag) ?layout.Idx {
+    const arg_vars = ctx.runtime_types.sliceVars(toVarRange(tag.args));
+    return switch (arg_vars.len) {
+        0 => .zst,
+        1 => ctx.layout_store.fromTypeVar(0, arg_vars[0], ctx.type_scope, null) catch null,
+        else => blk: {
+            var elem_layouts = std.array_list.AlignedManaged(layout.Idx, null).init(ctx.allocator);
+            defer elem_layouts.deinit();
+            for (arg_vars) |arg_var| {
+                const arg_layout = ctx.layout_store.fromTypeVar(0, arg_var, ctx.type_scope, null) catch return null;
+                elem_layouts.append(arg_layout) catch return null;
+            }
+            break :blk ctx.layout_store.internTuple(elem_layouts.items) catch null;
+        },
+    };
+}
+
+fn getTagAtDiscriminantByVariantLayout(
+    ctx: *RenderCtx,
+    tag_union: types.TagUnion,
+    tag_index: usize,
+    variants: anytype,
+) ?types.Tag {
+    var all_tags = std.array_list.AlignedManaged(types.Tag, null).init(ctx.allocator);
+    defer all_tags.deinit();
+
+    const initial_tags = ctx.runtime_types.getTagsSlice(tag_union.tags);
+    for (initial_tags.items(.name), initial_tags.items(.args)) |name, args| {
+        all_tags.append(.{ .name = name, .args = args }) catch return null;
+    }
+
+    var ext = tag_union.ext;
+    while (true) {
+        const ext_resolved = ctx.runtime_types.resolveVar(ext);
+        switch (ext_resolved.desc.content) {
+            .structure => |st| switch (st) {
+                .tag_union => |ext_tag_union| {
+                    const ext_tags = ctx.runtime_types.getTagsSlice(ext_tag_union.tags);
+                    for (ext_tags.items(.name), ext_tags.items(.args)) |name, args| {
+                        all_tags.append(.{ .name = name, .args = args }) catch return null;
+                    }
+                    ext = ext_tag_union.ext;
+                },
+                .empty_tag_union => break,
+                else => break,
+            },
+            .alias => |alias| {
+                ext = ctx.runtime_types.getAliasBackingVar(alias);
+            },
+            else => break,
+        }
+    }
+
+    if (all_tags.items.len == variants.len and variants.len > 0) {
+        const used_tags = ctx.allocator.alloc(bool, all_tags.items.len) catch return null;
+        defer ctx.allocator.free(used_tags);
+        @memset(used_tags, false);
+
+        const variant_to_tag = ctx.allocator.alloc(?usize, variants.len) catch return null;
+        defer ctx.allocator.free(variant_to_tag);
+        @memset(variant_to_tag, null);
+
+        var vi: usize = 0;
+        while (vi < variants.len) : (vi += 1) {
+            const want_payload = variants.get(@intCast(vi)).payload_layout;
+            var matched: ?usize = null;
+            var ambiguous = false;
+
+            var ti: usize = 0;
+            while (ti < all_tags.items.len) : (ti += 1) {
+                if (used_tags[ti]) continue;
+                const payload_layout = tagPayloadLayout(ctx, all_tags.items[ti]) orelse continue;
+                if (layoutsEquivalent(ctx, payload_layout, want_payload)) {
+                    if (matched != null) {
+                        ambiguous = true;
+                        break;
+                    }
+                    matched = ti;
+                }
+            }
+
+            if (ambiguous or matched == null) {
+                break;
+            }
+
+            const matched_idx = matched.?;
+            used_tags[matched_idx] = true;
+            variant_to_tag[vi] = matched_idx;
+        }
+
+        if (tag_index < variant_to_tag.len) {
+            if (variant_to_tag[tag_index]) |ti| {
+                return all_tags.items[ti];
+            }
+        }
+    }
 
     return if (tag_index < all_tags.items.len) all_tags.items[tag_index] else null;
 }
@@ -230,44 +408,34 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                                 const elem_layout_idx = value.layout.data.list;
                                 const elem_layout = ctx.layout_store.getLayout(elem_layout_idx);
                                 const elem_size = ctx.layout_store.layoutSize(elem_layout);
-                                var i: usize = 0;
-                                while (i < len) : (i += 1) {
-                                    if (roc_list.bytes) |bytes| {
-                                        const elem_ptr: *anyopaque = @ptrCast(bytes + i * elem_size);
-                                        const elem_val = StackValue{
-                                            .layout = elem_layout,
-                                            .ptr = elem_ptr,
-                                            .is_initialized = true,
-                                            .rt_var = elem_type_var,
-                                        };
-                                        // Use type-aware rendering to enable unbound numeral stripping
-                                        const rendered = try renderValueRocWithType(ctx, elem_val, elem_type_var);
-                                        defer gpa.free(rendered);
-                                        try out.appendSlice(rendered);
-                                        if (i + 1 < len) try out.appendSlice(", ");
+                                if (elem_size == 0) {
+                                    try std.fmt.format(out.writer(), "<{d} zero-sized elements>", .{len});
+                                } else {
+                                    var i: usize = 0;
+                                    while (i < len) : (i += 1) {
+                                        if (roc_list.bytes) |bytes| {
+                                            const elem_ptr: *anyopaque = @ptrCast(bytes + i * elem_size);
+                                            const elem_val = StackValue{
+                                                .layout = elem_layout,
+                                                .ptr = elem_ptr,
+                                                .is_initialized = true,
+                                                .rt_var = elem_type_var,
+                                            };
+                                            // Use type-aware rendering to enable unbound numeral stripping
+                                            const rendered = try renderValueRocWithType(ctx, elem_val, elem_type_var);
+                                            defer gpa.free(rendered);
+                                            try out.appendSlice(rendered);
+                                            if (i + 1 < len) try out.appendSlice(", ");
+                                        }
                                     }
                                 }
                             }
                         } else if (value.layout.tag == .list_of_zst) {
-                            // list_of_zst - elements have no data, just render count if non-empty
+                            // list_of_zst - elements have no data
                             const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(value.ptr.?));
                             const len = roc_list.len();
                             if (len > 0) {
-                                // For ZST lists, render each element using type info
-                                const elem_layout = layout.Layout.zst();
-                                var i: usize = 0;
-                                while (i < len) : (i += 1) {
-                                    const elem_val = StackValue{
-                                        .layout = elem_layout,
-                                        .ptr = null,
-                                        .is_initialized = true,
-                                        .rt_var = elem_type_var,
-                                    };
-                                    const rendered = try renderValueRocWithType(ctx, elem_val, elem_type_var);
-                                    defer gpa.free(rendered);
-                                    try out.appendSlice(rendered);
-                                    if (i + 1 < len) try out.appendSlice(", ");
-                                }
+                                try std.fmt.format(out.writer(), "<{d} zero-sized elements>", .{len});
                             }
                         }
 
@@ -290,9 +458,8 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
             var have_tag = false;
             if (value.layout.tag == .zst) {
                 // Zero-sized tag union - must be the first (and only) tag with no payload
-                // Use getSortedTag to ensure consistent tag ordering
-                if (getSortedTag(ctx, tu, 0)) |sorted_tag| {
-                    const tag_name = ctx.env.getIdent(sorted_tag.name);
+                if (getTagAtDiscriminant(ctx, tu, 0)) |sorted_tag| {
+                    const tag_name = identText(ctx, sorted_tag.name);
                     var out = std.array_list.AlignedManaged(u8, null).init(gpa);
                     errdefer out.deinit();
                     try out.appendSlice(tag_name);
@@ -306,10 +473,9 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                         have_tag = true;
                     }
                 }
-                // Use getSortedTag to ensure consistent tag ordering
                 if (have_tag) {
-                    if (getSortedTag(ctx, tu, tag_index)) |sorted_tag| {
-                        const tag_name = ctx.env.getIdent(sorted_tag.name);
+                    if (getTagAtDiscriminant(ctx, tu, tag_index)) |sorted_tag| {
+                        const tag_name = identText(ctx, sorted_tag.name);
                         var out = std.array_list.AlignedManaged(u8, null).init(gpa);
                         errdefer out.deinit();
                         try out.appendSlice(tag_name);
@@ -331,8 +497,8 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                         }
                     }
                     if (have_tag) {
-                        if (getSortedTag(ctx, tu, tag_index)) |sorted_tag| {
-                            const tag_name = ctx.env.getIdent(sorted_tag.name);
+                        if (getTagAtDiscriminant(ctx, tu, tag_index)) |sorted_tag| {
+                            const tag_name = identText(ctx, sorted_tag.name);
                             var out = std.array_list.AlignedManaged(u8, null).init(gpa);
                             errdefer out.deinit();
                             try out.appendSlice(tag_name);
@@ -410,8 +576,8 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                         }
                     }
                     if (have_tag) {
-                        if (getSortedTag(ctx, tu, tag_index)) |sorted_tag| {
-                            const tag_name = ctx.env.getIdent(sorted_tag.name);
+                        if (getTagAtDiscriminant(ctx, tu, tag_index)) |sorted_tag| {
+                            const tag_name = identText(ctx, sorted_tag.name);
                             var out = std.array_list.AlignedManaged(u8, null).init(gpa);
                             errdefer out.deinit();
                             try out.appendSlice(tag_name);
@@ -458,16 +624,16 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                 // Tag union with new proper layout: payload at offset 0, discriminant at discriminant_offset
                 const tu_idx = value.layout.data.tag_union.idx;
                 const tu_data = ctx.layout_store.getTagUnionData(tu_idx);
+                const variants = ctx.layout_store.getTagUnionVariants(tu_data);
                 const disc_offset = ctx.layout_store.getTagUnionDiscriminantOffset(tu_idx);
                 if (value.ptr) |ptr| {
                     const base_ptr: [*]u8 = @ptrCast(ptr);
                     tag_index = tu_data.readDiscriminantFromPtr(base_ptr + disc_offset);
                     have_tag = true;
                 }
-                // Use getSortedTag to ensure consistent tag ordering
                 if (have_tag) {
-                    if (getSortedTag(ctx, tu, tag_index)) |sorted_tag| {
-                        const tag_name = ctx.env.getIdent(sorted_tag.name);
+                    if (getTagAtDiscriminantByVariantLayout(ctx, tu, tag_index, variants)) |sorted_tag| {
+                        const tag_name = identText(ctx, sorted_tag.name);
                         var out = std.array_list.AlignedManaged(u8, null).init(gpa);
                         errdefer out.deinit();
                         try out.appendSlice(tag_name);
@@ -479,7 +645,6 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                             // Get the stored variant layout from the tag union data
                             // This ensures we use the layout that was actually used when creating the value,
                             // not a potentially different layout computed from type variables.
-                            const variants = ctx.layout_store.getTagUnionVariants(tu_data);
                             const stored_payload_layout = ctx.layout_store.getLayout(variants.get(tag_index).payload_layout);
                             if (arg_vars.len == 1) {
                                 const arg_var = arg_vars[0];
@@ -626,13 +791,19 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                 }
             }
 
+            // Keep record rendering deterministic and consistent with REPL display:
+            // order fields lexically by field name.
+            if (all_fields.items.len > 1) {
+                std.mem.sort(types.RecordField, all_fields.items, ctx.env.common.getIdentStore(), types.RecordField.sortByNameAsc);
+            }
+
             if (is_valid and all_fields.items.len > 0) {
                 var out = std.array_list.AlignedManaged(u8, null).init(gpa);
                 errdefer out.deinit();
                 try out.appendSlice("{ ");
                 var acc = try value.asRecord(ctx.layout_store);
                 for (all_fields.items, 0..) |f, i| {
-                    const name_text = ctx.env.getIdent(f.name);
+                    const name_text = identText(ctx, f.name);
                     try out.appendSlice(name_text);
                     try out.appendSlice(": ");
                     const idx = acc.findFieldIndex(name_text) orelse {

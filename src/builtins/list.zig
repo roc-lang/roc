@@ -392,20 +392,29 @@ pub const RocList = extern struct {
         roc_ops: *RocOps,
     ) RocList {
         const old_length = self.length;
+        const was_unique = self.isUnique(roc_ops);
+        const copied_len = @min(old_length, new_length);
 
         const result = RocList.list_allocate(alignment, new_length, element_width, elements_refcounted, roc_ops);
 
         if (self.bytes) |source_ptr| {
             // transfer the memory
             const dest_ptr = result.bytes orelse unreachable;
+            const copy_bytes = copied_len * element_width;
+            if (copy_bytes > 0) {
+                @memmove(dest_ptr[0..copy_bytes], source_ptr[0..copy_bytes]);
+            }
+            const init_start = copied_len * element_width;
+            const init_end = new_length * element_width;
+            if (init_end > init_start) {
+                @memset(dest_ptr[init_start..init_end], 0);
+            }
 
-            @memcpy(dest_ptr[0..(old_length * element_width)], source_ptr[0..(old_length * element_width)]);
-            @memset(dest_ptr[(old_length * element_width)..(new_length * element_width)], 0);
-
-            // Increment refcount of all elements now in a new list.
-            if (elements_refcounted) {
+            // Increment element refcounts only when cloning from a shared source list.
+            // Unique seamless slices transfer ownership, so extra increfs would leak.
+            if (elements_refcounted and !was_unique) {
                 var i: usize = 0;
-                while (i < old_length) : (i += 1) {
+                while (i < copied_len) : (i += 1) {
                     inc(inc_context, dest_ptr + i * element_width);
                 }
             }

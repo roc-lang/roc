@@ -25,6 +25,7 @@ const loadCompiledModule = builtin_loading_mod.loadCompiledModule;
 const backend = @import("backend");
 const bytebox = @import("bytebox");
 const WasmEvaluator = eval_mod.WasmEvaluator;
+const WasmLayout = backend.wasm.WasmLayout;
 const values = @import("values");
 const i128h = builtins.compiler_rt_128;
 
@@ -453,6 +454,156 @@ const WasmEvalError = error{
     UnsupportedLayout,
     OutOfMemory,
 };
+
+fn readWasmU32(mem: []const u8, ptr: usize) WasmEvalError!u32 {
+    if (ptr > mem.len or mem.len - ptr < 4) return error.WasmExecFailed;
+    return std.mem.readInt(u32, mem[ptr..][0..4], .little);
+}
+
+fn readWasmU64(mem: []const u8, ptr: usize) WasmEvalError!u64 {
+    if (ptr > mem.len or mem.len - ptr < 8) return error.WasmExecFailed;
+    return std.mem.readInt(u64, mem[ptr..][0..8], .little);
+}
+
+fn formatWasmStrAt(allocator: std.mem.Allocator, mem: []const u8, str_ptr: usize) WasmEvalError![]u8 {
+    if (str_ptr > mem.len or mem.len - str_ptr < 12) return error.WasmExecFailed;
+
+    const byte11 = mem[str_ptr + 11];
+    const str_data: []const u8 = if (byte11 & 0x80 != 0) sd: {
+        const sso_len: u32 = byte11 & 0x7F;
+        if (sso_len > 11) return error.WasmExecFailed;
+        break :sd mem[str_ptr..][0..sso_len];
+    } else sd: {
+        const data_ptr: usize = @intCast(try readWasmU32(mem, str_ptr));
+        const data_len: usize = @intCast(try readWasmU32(mem, str_ptr + 4));
+        if (data_ptr > mem.len or mem.len - data_ptr < data_len) return error.WasmExecFailed;
+        break :sd mem[data_ptr..][0..data_len];
+    };
+
+    var buf = std.array_list.AlignedManaged(u8, null).init(allocator);
+    errdefer buf.deinit();
+    try buf.append('"');
+    for (str_data) |ch| {
+        switch (ch) {
+            '\\' => try buf.appendSlice("\\\\"),
+            '"' => try buf.appendSlice("\\\""),
+            else => try buf.append(ch),
+        }
+    }
+    try buf.append('"');
+    return buf.toOwnedSlice();
+}
+
+fn wasmValueByteSize(ls: *const layout.Store, layout_idx: layout.Idx) u32 {
+    return switch (WasmLayout.wasmReprWithStore(layout_idx, ls)) {
+        .primitive => |vt| switch (vt) {
+            .i32, .f32 => 4,
+            .i64, .f64 => 8,
+        },
+        .stack_memory => |size| size,
+    };
+}
+
+fn formatWasmValueAt(
+    allocator: std.mem.Allocator,
+    ls: *const layout.Store,
+    mem: []const u8,
+    layout_idx: layout.Idx,
+    ptr: usize,
+) WasmEvalError![]u8 {
+    switch (layout_idx) {
+        .bool => {
+            const raw = try readWasmU32(mem, ptr);
+            return allocator.dupe(u8, if (raw != 0) "True" else "False");
+        },
+        .i8 => {
+            const raw: u8 = @truncate(try readWasmU32(mem, ptr));
+            return std.fmt.allocPrint(allocator, "{}", .{@as(i8, @bitCast(raw))});
+        },
+        .u8 => return std.fmt.allocPrint(allocator, "{}", .{@as(u8, @truncate(try readWasmU32(mem, ptr)))}),
+        .i16 => {
+            const raw: u16 = @truncate(try readWasmU32(mem, ptr));
+            return std.fmt.allocPrint(allocator, "{}", .{@as(i16, @bitCast(raw))});
+        },
+        .u16 => return std.fmt.allocPrint(allocator, "{}", .{@as(u16, @truncate(try readWasmU32(mem, ptr)))}),
+        .i32 => {
+            const raw = try readWasmU32(mem, ptr);
+            return std.fmt.allocPrint(allocator, "{}", .{@as(i32, @bitCast(raw))});
+        },
+        .u32 => return std.fmt.allocPrint(allocator, "{}", .{try readWasmU32(mem, ptr)}),
+        .i64 => return std.fmt.allocPrint(allocator, "{}", .{@as(i64, @bitCast(try readWasmU64(mem, ptr)))}),
+        .u64 => return std.fmt.allocPrint(allocator, "{}", .{try readWasmU64(mem, ptr)}),
+        .f32 => {
+            const raw: u32 = try readWasmU32(mem, ptr);
+            var buf: [400]u8 = undefined;
+            const val: f32 = @bitCast(raw);
+            return allocator.dupe(u8, i128h.f64_to_str(&buf, @as(f64, val)));
+        },
+        .f64 => {
+            const raw: u64 = try readWasmU64(mem, ptr);
+            var buf: [400]u8 = undefined;
+            return allocator.dupe(u8, i128h.f64_to_str(&buf, @as(f64, @bitCast(raw))));
+        },
+        .str => return formatWasmStrAt(allocator, mem, ptr),
+        else => {},
+    }
+
+    const l = ls.getLayout(layout_idx);
+    return switch (l.tag) {
+        .zst => allocator.dupe(u8, "{}"),
+        .list => formatWasmListAt(allocator, ls, mem, ptr, l.data.list),
+        .list_of_zst => formatWasmListOfZstAt(allocator, mem, ptr),
+        else => error.UnsupportedLayout,
+    };
+}
+
+fn formatWasmListAt(
+    allocator: std.mem.Allocator,
+    ls: *const layout.Store,
+    mem: []const u8,
+    list_ptr: usize,
+    elem_layout_idx: layout.Idx,
+) WasmEvalError![]u8 {
+    if (list_ptr > mem.len or mem.len - list_ptr < 12) return error.WasmExecFailed;
+
+    const data_ptr: usize = @intCast(try readWasmU32(mem, list_ptr));
+    const len: usize = @intCast(try readWasmU32(mem, list_ptr + 4));
+    const elem_layout = ls.getLayout(elem_layout_idx);
+    const elem_size: usize = @intCast(ls.layoutSize(elem_layout));
+    if (elem_size == 0) {
+        if (len == 0) return allocator.dupe(u8, "[]");
+        return std.fmt.allocPrint(allocator, "[<{d} zero-sized elements>]", .{len});
+    }
+
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(allocator);
+    try out.append(allocator, '[');
+
+    var i: usize = 0;
+    while (i < len) : (i += 1) {
+        const elem_ptr = if (elem_size == 0)
+            data_ptr
+        else blk: {
+            const offset = i * elem_size;
+            if (data_ptr > mem.len or mem.len - data_ptr < offset + elem_size) return error.WasmExecFailed;
+            break :blk data_ptr + offset;
+        };
+        const rendered = try formatWasmValueAt(allocator, ls, mem, elem_layout_idx, elem_ptr);
+        defer allocator.free(rendered);
+        try out.appendSlice(allocator, rendered);
+        if (i + 1 < len) try out.appendSlice(allocator, ", ");
+    }
+
+    try out.append(allocator, ']');
+    return out.toOwnedSlice(allocator);
+}
+
+fn formatWasmListOfZstAt(allocator: std.mem.Allocator, mem: []const u8, list_ptr: usize) WasmEvalError![]u8 {
+    if (list_ptr > mem.len or mem.len - list_ptr < 12) return error.WasmExecFailed;
+    const len: usize = @intCast(try readWasmU32(mem, list_ptr + 4));
+    if (len == 0) return allocator.dupe(u8, "[]");
+    return std.fmt.allocPrint(allocator, "[<{d} zero-sized elements>]", .{len});
+}
 
 /// Evaluate an expression using the WasmEvaluator + bytebox and return the result as a string.
 fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) WasmEvalError![]const u8 {
@@ -884,41 +1035,9 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
             break :blk std.fmt.allocPrint(allocator, "{}", .{val});
         },
         layout_mod.Idx.str => blk: {
-            // RocStr is 12 bytes on wasm32: { ptr/bytes[0..3], len/bytes[4..7], cap/bytes[8..11] }
-            const str_ptr: u32 = @bitCast(returns[0].I32);
+            const str_ptr: usize = @intCast(@as(u32, @bitCast(returns[0].I32)));
             const mem_slice = module_instance.memoryAll();
-            if (str_ptr + 12 > mem_slice.len) {
-                return error.WasmExecFailed;
-            }
-
-            // Check SSO: high bit of byte 11
-            const byte11 = mem_slice[str_ptr + 11];
-            const str_data: []const u8 = if (byte11 & 0x80 != 0) sd: {
-                // Small string: bytes stored inline, length in byte 11 (masked)
-                const sso_len: u32 = byte11 & 0x7F;
-                if (sso_len > 11) return error.WasmExecFailed;
-                break :sd mem_slice[str_ptr..][0..sso_len];
-            } else sd: {
-                // Large string: ptr at offset 0, len at offset 4
-                const data_ptr: u32 = @bitCast(mem_slice[str_ptr..][0..4].*);
-                const data_len: u32 = @bitCast(mem_slice[str_ptr + 4 ..][0..4].*);
-                if (data_ptr + data_len > mem_slice.len) return error.WasmExecFailed;
-                break :sd mem_slice[data_ptr..][0..data_len];
-            };
-
-            // Wrap in quotes with escape handling, matching interpreter (RocValue.zig)
-            var buf = std.array_list.AlignedManaged(u8, null).init(allocator);
-            errdefer buf.deinit();
-            try buf.append('"');
-            for (str_data) |ch| {
-                switch (ch) {
-                    '\\' => try buf.appendSlice("\\\\"),
-                    '"' => try buf.appendSlice("\\\""),
-                    else => try buf.append(ch),
-                }
-            }
-            try buf.append('"');
-            break :blk buf.toOwnedSlice();
+            break :blk try formatWasmStrAt(allocator, mem_slice, str_ptr);
         },
         else => blk: {
             // Non-sentinel layout — use layout store to determine type
@@ -980,6 +1099,14 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
                 .zst => {
                     // Zero-sized type — return 0
                     break :blk std.fmt.allocPrint(allocator, "0", .{});
+                },
+                .list => {
+                    const list_ptr: usize = @intCast(@as(u32, @bitCast(returns[0].I32)));
+                    break :blk try formatWasmListAt(allocator, ls, mem_slice, list_ptr, l.data.list);
+                },
+                .list_of_zst => {
+                    const list_ptr: usize = @intCast(@as(u32, @bitCast(returns[0].I32)));
+                    break :blk try formatWasmListOfZstAt(allocator, mem_slice, list_ptr);
                 },
                 else => break :blk error.UnsupportedLayout,
             }
@@ -1127,6 +1254,7 @@ fn hostListEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const 
 
     const b_data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[b_list_ptr..][0..4], .little));
     const b_len: usize = @intCast(std.mem.readInt(u32, buffer[b_list_ptr + 4 ..][0..4], .little));
+
 
     // Compare lengths first
     if (a_len != b_len) {
@@ -1587,6 +1715,7 @@ fn hostListListEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
     const a_len: usize = @intCast(std.mem.readInt(u32, buffer[a_ptr + 4 ..][0..4], .little));
     const b_data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[b_ptr..][0..4], .little));
     const b_len: usize = @intCast(std.mem.readInt(u32, buffer[b_ptr + 4 ..][0..4], .little));
+
 
     // Different lengths -> not equal
     if (a_len != b_len) {
@@ -2815,9 +2944,19 @@ pub fn runExpectUnit(src: []const u8, should_trace: enum { trace, no_trace }) !v
 }
 
 /// Legacy helper name kept for existing tests.
-/// Now delegates to strict three-backend parity checks.
 pub fn runDevOnlyExpectStr(src: []const u8, expected_str: []const u8) !void {
-    return runExpectStr(src, expected_str, .no_trace);
+    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    const dev_str = try devEvaluatorStr(
+        test_allocator,
+        resources.module_env,
+        resources.expr_idx,
+        resources.builtin_module.env,
+    );
+    defer test_allocator.free(dev_str);
+
+    try std.testing.expectEqualStrings(expected_str, dev_str);
 }
 
 /// Parse and canonicalize an expression.

@@ -264,15 +264,19 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
             const elem_layout_idx = self.lay.data.list;
             const elem_layout = ctx.layout_store.getLayout(elem_layout_idx);
             const elem_size = ctx.layout_store.layoutSize(elem_layout);
-            var i: usize = 0;
-            while (i < len) : (i += 1) {
-                if (roc_list.bytes) |bytes| {
-                    const elem_ptr: [*]const u8 = bytes + i * elem_size;
-                    const elem_val = RocValue{ .ptr = elem_ptr, .lay = elem_layout };
-                    const rendered = try elem_val.format(allocator, ctx);
-                    defer allocator.free(rendered);
-                    try out.appendSlice(rendered);
-                    if (i + 1 < len) try out.appendSlice(", ");
+            if (elem_size == 0) {
+                try std.fmt.format(out.writer(), "<{d} zero-sized elements>", .{len});
+            } else {
+                var i: usize = 0;
+                while (i < len) : (i += 1) {
+                    if (roc_list.bytes) |bytes| {
+                        const elem_ptr: [*]const u8 = bytes + i * elem_size;
+                        const elem_val = RocValue{ .ptr = elem_ptr, .lay = elem_layout };
+                        const rendered = try elem_val.format(allocator, ctx);
+                        defer allocator.free(rendered);
+                        try out.appendSlice(rendered);
+                        if (i + 1 < len) try out.appendSlice(", ");
+                    }
                 }
             }
         }

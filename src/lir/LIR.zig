@@ -77,6 +77,17 @@ pub const ClosureDataId = enum(u32) {
     }
 };
 
+/// Index into LirExprStore.callable_instances.
+pub const CallableInstanceId = enum(u32) {
+    _,
+
+    pub const none: CallableInstanceId = @enumFromInt(std.math.maxInt(u32));
+
+    pub fn isNone(self: CallableInstanceId) bool {
+        return self == none;
+    }
+};
+
 /// Index into LirExprStore.patterns
 pub const LirPatternId = enum(u32) {
     _,
@@ -185,6 +196,32 @@ pub const ClosureRepresentation = union(enum) {
     /// No representation needed - function is called directly.
     /// Used when a lambda is immediately called and never stored.
     no_captures: void,
+};
+
+/// Compact runtime classification of callable representation for call-instance keys.
+pub const ClosureRepKind = enum(u8) {
+    unknown,
+    no_captures,
+    one_capture,
+    multiple_captures,
+    enum_no_captures,
+    tagged_union_captures,
+};
+
+/// Canonical callable instance metadata used by backends.
+/// This captures call-site-specialized callable ABI once in LIR.
+pub const CallableInstance = struct {
+    /// Callee function monotype identity from MIR (semantic type identity).
+    callee_fn_monotype: mir.Monotype.Idx,
+    /// Callable runtime representation class (if known).
+    closure_rep: ClosureRepKind,
+    /// Captures layout sequence (empty when not applicable). This is part of
+    /// callable identity because capture ABI shape affects callable storage/dispatch.
+    capture_layouts: LayoutIdxSpan,
+    /// Concrete call-argument layouts for this callable instance.
+    /// Not part of interning identity: the callee monotype is the semantic
+    /// function signature identity and must determine this sequence.
+    arg_layouts: LayoutIdxSpan,
 };
 
 /// Closure data stored in a side table (LirExprStore.closure_data) to reduce
@@ -371,6 +408,8 @@ pub const LirExpr = union(enum) {
     call: struct {
         /// The function expression (could be a lookup, lambda, closure, etc.)
         fn_expr: LirExprId,
+        /// Canonical callable instance for this call site (when known).
+        callable_instance: CallableInstanceId = .none,
         /// Layout of the function/closure type
         fn_layout: layout.Idx,
         /// Arguments to the function

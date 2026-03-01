@@ -36,6 +36,11 @@ const LirStmt = LIR.LirStmt;
 const LirMatchBranch = LIR.LirMatchBranch;
 const LirCapture = LIR.LirCapture;
 const Symbol = LIR.Symbol;
+const ClosureRepKind = LIR.ClosureRepKind;
+const CallableRepData = struct {
+    rep: ClosureRepKind,
+    capture_layouts: LIR.LayoutIdxSpan,
+};
 
 const Self = @This();
 
@@ -335,24 +340,23 @@ fn tagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monot
                 }
             }
 
-            // Fast path: direct bitcast comparison (same module)
-            for (tags, 0..) |tag, i| {
+            // Monotype tag order defines discriminant order. Find the exact tag
+            // index in that order so payload layouts and discriminants stay aligned.
+            const target_text = self.getIdentText(tag_name);
+            var idx: u16 = 0;
+            for (tags) |tag| {
                 if (@as(u32, @bitCast(tag.name)) == @as(u32, @bitCast(tag_name))) {
-                    return @intCast(i);
+                    return idx;
                 }
-            }
-
-            // Slow path: cross-module comparison by text.
-            // Tag names may have different Ident.Idx values when they come from
-            // different modules' ident stores.
-            if (self.getIdentText(tag_name)) |name_text| {
-                for (tags, 0..) |tag, i| {
-                    if (self.getIdentText(tag.name)) |tag_text| {
-                        if (std.mem.eql(u8, name_text, tag_text)) {
-                            return @intCast(i);
-                        }
+                // Cross-module monotype interning can preserve a tag ident from a
+                // different module. When ident indices differ but text matches, this
+                // is still the same logical tag and must map to the same index.
+                if (target_text) |target| {
+                    if (self.getIdentText(tag.name)) |candidate| {
+                        if (std.mem.eql(u8, target, candidate)) return idx;
                     }
                 }
+                idx += 1;
             }
 
             unreachable; // compiler bug: tag name not in tag union
@@ -373,12 +377,14 @@ const LetAccumulator = struct {
     parent: *Self,
     save_len: usize,
 
-    /// If `expr_id` is atomic (lookup or literal), return it as-is.
-    /// Otherwise, Let-bind it to a fresh symbol and return a lookup to that symbol.
-    fn ensureSymbol(acc: *LetAccumulator, expr_id: LirExprId, expr_layout: layout.Idx, region: Region) Allocator.Error!LirExprId {
-        const expr = acc.parent.lir_store.getExpr(expr_id);
-        if (isAtomicExpr(expr)) return expr_id;
-
+    fn bindSymbol(acc: *LetAccumulator, expr_id: LirExprId, expr_layout: layout.Idx, region: Region) Allocator.Error!LirExprId {
+        const expr_layout_int = @intFromEnum(expr_layout);
+        if (expr_layout != layout.Idx.none and expr_layout != layout.Idx.named_fn and expr_layout_int >= acc.parent.layout_store.layouts.len()) {
+            std.debug.panic("LetAccumulator.bindSymbol invalid layout expr={} layout={}", .{
+                @intFromEnum(expr_id),
+                expr_layout_int,
+            });
+        }
         const bp = try acc.parent.freshBindPattern(expr_layout, false, region);
         try acc.parent.scratch_anf_stmts.append(acc.parent.allocator, .{ .decl = .{
             .pattern = bp.pattern,
@@ -389,6 +395,20 @@ const LetAccumulator = struct {
             .symbol = bp.symbol,
             .layout_idx = expr_layout,
         } }, region);
+    }
+
+    /// If `expr_id` is atomic (lookup or literal), return it as-is.
+    /// Otherwise, Let-bind it to a fresh symbol and return a lookup to that symbol.
+    fn ensureSymbol(acc: *LetAccumulator, expr_id: LirExprId, expr_layout: layout.Idx, region: Region) Allocator.Error!LirExprId {
+        const expr = acc.parent.lir_store.getExpr(expr_id);
+        if (isAtomicExpr(expr)) return expr_id;
+        return acc.bindSymbol(expr_id, expr_layout, region);
+    }
+
+    /// Always Let-bind, even when the expression is atomic.
+    /// Used when we need downstream binding-time conversion to the target layout.
+    fn forceSymbol(acc: *LetAccumulator, expr_id: LirExprId, expr_layout: layout.Idx, region: Region) Allocator.Error!LirExprId {
+        return acc.bindSymbol(expr_id, expr_layout, region);
     }
 
     /// Wrap `result_expr` in a block with accumulated Let-bindings, or return it directly
@@ -479,6 +499,80 @@ fn lowerAnfSpan(self: *Self, acc: *LetAccumulator, mir_expr_ids: []const MIR.Exp
     return self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_len..]);
 }
 
+/// Lower call arguments with caller-provided expected layouts.
+/// This keeps argument representation aligned with the callee ABI and forces
+/// literal coercion-by-construction where the literal runtime layout differs.
+fn lowerCallArgSpan(
+    self: *Self,
+    acc: *LetAccumulator,
+    mir_expr_ids: []const MIR.ExprId,
+    expected_arg_layouts: []const layout.Idx,
+    region: Region,
+) Allocator.Error!LirExprSpan {
+    const save_len = self.scratch_lir_expr_ids.items.len;
+    defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_len);
+    for (mir_expr_ids, 0..) |mir_id, i| {
+        const lir_id = try self.lowerExpr(mir_id);
+        const mono = self.mir_store.typeOf(mir_id);
+        const fallback_layout = try self.layoutFromMonotype(mono);
+        const expected_layout = if (i < expected_arg_layouts.len and expected_arg_layouts[i] != layout.Idx.none)
+            expected_arg_layouts[i]
+        else
+            fallback_layout;
+
+        var coerced_expr_id = lir_id;
+        var coerced_expr = self.lir_store.getExpr(coerced_expr_id);
+
+        if (fallback_layout == .dec and expected_layout != .dec) {
+            if (coerced_expr == .dec_literal) {
+                coerced_expr_id = try self.lowerScaledDecLiteral(coerced_expr.dec_literal, expected_layout, region);
+                coerced_expr = self.lir_store.getExpr(coerced_expr_id);
+            } else {
+                const op = decToLayoutTruncOp(expected_layout) orelse {
+                    std.debug.panic(
+                        "lowerCallArgSpan: missing Dec->layout conversion op for layout {}",
+                        .{@intFromEnum(expected_layout)},
+                    );
+                };
+                const dec_arg = try acc.ensureSymbol(coerced_expr_id, .dec, region);
+                const conv_args = try self.lir_store.addExprSpan(&.{dec_arg});
+                coerced_expr_id = try self.lir_store.addExpr(.{ .low_level = .{
+                    .op = op,
+                    .args = conv_args,
+                    .ret_layout = expected_layout,
+                } }, region);
+                coerced_expr = self.lir_store.getExpr(coerced_expr_id);
+            }
+        }
+
+        const literal_runtime_layout: ?layout.Idx = switch (coerced_expr) {
+            .i64_literal => .i64,
+            .i128_literal => .i128,
+            .f64_literal => .f64,
+            .f32_literal => .f32,
+            .dec_literal => .dec,
+            .str_literal => .str,
+            .bool_literal => .bool,
+            else => null,
+        };
+        const literal_layout_mismatch = literal_runtime_layout != null and literal_runtime_layout.? != expected_layout;
+        const ensured = blk: {
+            if (literal_layout_mismatch) {
+                if (coerced_expr == .dec_literal) {
+                    // Dec literals are i128-scaled at runtime; convert at lowering-time
+                    // so call args match the callee ABI by construction.
+                    const coerced = try self.lowerScaledDecLiteral(coerced_expr.dec_literal, expected_layout, region);
+                    break :blk try acc.ensureSymbol(coerced, expected_layout, region);
+                }
+                break :blk try acc.forceSymbol(coerced_expr_id, expected_layout, region);
+            }
+            break :blk try acc.ensureSymbol(coerced_expr_id, expected_layout, region);
+        };
+        try self.scratch_lir_expr_ids.append(self.allocator, ensured);
+    }
+    return self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_len..]);
+}
+
 fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
     const expr = self.mir_store.getExpr(mir_expr_id);
     const region = self.mir_store.getRegion(mir_expr_id);
@@ -488,7 +582,7 @@ fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
         .int => |i| self.lowerInt(i, mono_idx, region),
         .frac_f32 => |v| self.lir_store.addExpr(.{ .f32_literal = v }, region),
         .frac_f64 => |v| self.lir_store.addExpr(.{ .f64_literal = v }, region),
-        .dec => |v| self.lir_store.addExpr(.{ .dec_literal = v.num }, region),
+        .dec => |v| self.lowerDec(v, mono_idx, region),
         .str => |s| blk: {
             const lir_str_idx = try self.copyStringToLir(s);
             break :blk self.lir_store.addExpr(.{ .str_literal = lir_str_idx }, region);
@@ -574,6 +668,84 @@ fn lowerInt(self: *Self, int_data: anytype, mono_idx: Monotype.Idx, region: Regi
             return self.lir_store.addExpr(.{ .i128_literal = val }, region);
         },
     }
+}
+
+fn lowerDec(self: *Self, dec_data: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
+    const target_layout = try self.layoutFromMonotype(mono_idx);
+    return self.lowerScaledDecLiteral(dec_data.num, target_layout, region);
+}
+
+fn lowerScaledDecLiteral(
+    self: *Self,
+    scaled_val: i128,
+    target_layout: layout.Idx,
+    region: Region,
+) Allocator.Error!LirExprId {
+    const one_point_zero: i128 = 1_000_000_000_000_000_000;
+
+    if (target_layout == .dec) {
+        return self.lir_store.addExpr(.{ .dec_literal = scaled_val }, region);
+    }
+
+    if (target_layout == .f64) {
+        const num_f64: f64 = @floatFromInt(scaled_val);
+        const den_f64: f64 = @floatFromInt(one_point_zero);
+        return self.lir_store.addExpr(.{ .f64_literal = num_f64 / den_f64 }, region);
+    }
+
+    if (target_layout == .f32) {
+        const num_f64: f64 = @floatFromInt(scaled_val);
+        const den_f64: f64 = @floatFromInt(one_point_zero);
+        return self.lir_store.addExpr(.{ .f32_literal = @floatCast(num_f64 / den_f64) }, region);
+    }
+
+    if (@rem(scaled_val, one_point_zero) != 0) {
+        std.debug.panic(
+            "lowerDec: non-whole Dec literal cannot lower to non-Dec layout {}",
+            .{@intFromEnum(target_layout)},
+        );
+    }
+
+    const whole: i128 = @divTrunc(scaled_val, one_point_zero);
+    switch (target_layout) {
+        .u8, .u16, .u32, .u64, .u128 => {
+            if (whole < 0) {
+                std.debug.panic(
+                    "lowerDec: negative Dec literal cannot lower to unsigned layout {}",
+                    .{@intFromEnum(target_layout)},
+                );
+            }
+        },
+        else => {},
+    }
+
+    if (target_layout == .i128 or target_layout == .u128) {
+        return self.lir_store.addExpr(.{ .i128_literal = whole }, region);
+    }
+
+    if (whole >= std.math.minInt(i64) and whole <= std.math.maxInt(i64)) {
+        return self.lir_store.addExpr(.{ .i64_literal = @intCast(whole) }, region);
+    }
+
+    return self.lir_store.addExpr(.{ .i128_literal = whole }, region);
+}
+
+fn decToLayoutTruncOp(target_layout: layout.Idx) ?LirExpr.LowLevel {
+    return switch (target_layout) {
+        .i8 => .dec_to_i8_trunc,
+        .i16 => .dec_to_i16_trunc,
+        .i32 => .dec_to_i32_trunc,
+        .i64 => .dec_to_i64_trunc,
+        .i128 => .dec_to_i128_trunc,
+        .u8 => .dec_to_u8_trunc,
+        .u16 => .dec_to_u16_trunc,
+        .u32 => .dec_to_u32_trunc,
+        .u64 => .dec_to_u64_trunc,
+        .u128 => .dec_to_u128_trunc,
+        .f32 => .dec_to_f32_wrap,
+        .f64 => .dec_to_f64,
+        else => null,
+    };
 }
 
 fn lowerList(self: *Self, list_data: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
@@ -738,6 +910,7 @@ fn lowerTag(self: *Self, tag_data: anytype, mono_idx: Monotype.Idx, region: Regi
 
 fn lowerLookup(self: *Self, sym: Symbol, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
     const sym_key: u64 = @bitCast(sym);
+    const requested_layout = try self.layoutFromMonotype(mono_idx);
     var preferred_layout: ?layout.Idx = null;
     if (self.mir_store.getSymbolDef(sym)) |mir_def_id| {
         preferred_layout = try self.layoutFromMonotype(self.mir_store.typeOf(mir_def_id));
@@ -747,7 +920,16 @@ fn lowerLookup(self: *Self, sym: Symbol, mono_idx: Monotype.Idx, region: Region)
             preferred_layout = cached;
         }
     }
-    const layout_idx = preferred_layout orelse try self.layoutFromMonotype(mono_idx);
+    const layout_idx = if (preferred_layout) |preferred|
+        // Non-callable lookups must honor the lookup expression's monotype-derived
+        // layout (e.g. numeric re-seeding from Dec -> U64). Callable lookups keep
+        // preferred callable layouts to preserve closure/function representation.
+        if (self.layoutIsFunctionLike(requested_layout) or requested_layout == .zst)
+            preferred
+        else
+            requested_layout
+    else
+        requested_layout;
 
     // Propagate MIR symbol definition to LIR store (if exists and not already done)
     if (self.lir_store.getSymbolDef(sym) == null) {
@@ -919,6 +1101,129 @@ fn applyCallableExprOnceWithDepth(self: *Self, expr_id: LirExprId, depth: u16) ?
         },
         else => null,
     };
+}
+
+fn closureRepKindFromRepresentation(rep: LIR.ClosureRepresentation) ClosureRepKind {
+    return switch (rep) {
+        .no_captures => .no_captures,
+        .one_capture => .one_capture,
+        .multiple_captures => .multiple_captures,
+        .enum_no_captures => .enum_no_captures,
+        .tagged_union_captures => .tagged_union_captures,
+    };
+}
+
+fn callableRepDataFromExpr(self: *Self, expr_id: LirExprId) Allocator.Error!CallableRepData {
+    return self.callableRepDataFromExprWithDepth(expr_id, 0);
+}
+
+fn callableRepDataFromExprWithDepth(self: *Self, expr_id: LirExprId, depth: u16) Allocator.Error!CallableRepData {
+    if (depth > 64) return .{ .rep = .unknown, .capture_layouts = .empty() };
+
+    const expr = self.lir_store.getExpr(expr_id);
+    return switch (expr) {
+        .lambda => .{ .rep = .no_captures, .capture_layouts = .empty() },
+        .closure => |closure_id| blk: {
+            const closure = self.lir_store.getClosureData(closure_id);
+            const rep = closureRepKindFromRepresentation(closure.representation);
+            const captures = self.lir_store.getCaptures(closure.captures);
+            if (captures.len == 0) break :blk .{ .rep = rep, .capture_layouts = .empty() };
+
+            const save_layout_len = self.scratch_layout_idxs.items.len;
+            defer self.scratch_layout_idxs.shrinkRetainingCapacity(save_layout_len);
+            for (captures) |cap| {
+                try self.scratch_layout_idxs.append(self.allocator, cap.layout_idx);
+            }
+            const capture_span = try self.lir_store.addLayoutIdxSpan(self.scratch_layout_idxs.items[save_layout_len..]);
+            break :blk .{ .rep = rep, .capture_layouts = capture_span };
+        },
+        .nominal => |nom| self.callableRepDataFromExprWithDepth(nom.backing_expr, depth + 1),
+        .block => |b| self.callableRepDataFromExprWithDepth(b.final_expr, depth + 1),
+        .lookup => |lookup| blk: {
+            const def_expr_id = self.lir_store.getSymbolDef(lookup.symbol) orelse break :blk .{ .rep = .unknown, .capture_layouts = .empty() };
+            break :blk try self.callableRepDataFromExprWithDepth(def_expr_id, depth + 1);
+        },
+        else => .{ .rep = .unknown, .capture_layouts = .empty() },
+    };
+}
+
+fn callArgLayoutsFromFnMonotype(
+    self: *Self,
+    fn_mono: Monotype.Idx,
+    call_args: MIR.ExprSpan,
+) Allocator.Error!LIR.LayoutIdxSpan {
+    const save_layout_len = self.scratch_layout_idxs.items.len;
+    defer self.scratch_layout_idxs.shrinkRetainingCapacity(save_layout_len);
+    const args = self.mir_store.getExprSpan(call_args);
+
+    const fn_monotype = self.mir_store.monotype_store.getMonotype(fn_mono);
+    switch (fn_monotype) {
+        .func => |func_mono| {
+            const arg_monos = self.mir_store.monotype_store.getIdxSpan(func_mono.args);
+            for (arg_monos, 0..) |arg_mono, i| {
+                var arg_layout = try self.layoutFromMonotype(arg_mono);
+                const concrete_arg_layout = if (i < args.len)
+                    try self.layoutFromMonotype(self.mir_store.typeOf(args[i]))
+                else
+                    layout.Idx.none;
+
+                // Use the concrete call-site layout when the callee arg layout is still
+                // unresolved, invalid, or a generic zst placeholder.
+                if (arg_layout == layout.Idx.none and concrete_arg_layout != layout.Idx.none) {
+                    arg_layout = concrete_arg_layout;
+                }
+                if (!self.isValidLayoutIdx(arg_layout) and concrete_arg_layout != layout.Idx.none) {
+                    arg_layout = concrete_arg_layout;
+                }
+                if (arg_layout == .zst and concrete_arg_layout != layout.Idx.none and concrete_arg_layout != .zst) {
+                    arg_layout = concrete_arg_layout;
+                }
+                if (!self.isValidLayoutIdx(arg_layout)) {
+                    std.debug.panic("callArgLayoutsFromFnMonotype: invalid arg layout fn_mono={} arg_index={} layout={}", .{
+                        @intFromEnum(fn_mono),
+                        i,
+                        @intFromEnum(arg_layout),
+                    });
+                }
+
+                try self.scratch_layout_idxs.append(self.allocator, arg_layout);
+            }
+
+            // If call has extra args, keep metadata complete by appending concrete layouts.
+            if (arg_monos.len < args.len) {
+                for (args[arg_monos.len..]) |arg_expr| {
+                    const arg_mono = self.mir_store.typeOf(arg_expr);
+                    const arg_layout = try self.layoutFromMonotype(arg_mono);
+                    if (!self.isValidLayoutIdx(arg_layout)) {
+                        std.debug.panic("callArgLayoutsFromFnMonotype: invalid extra-arg layout fn_mono={} layout={}", .{
+                            @intFromEnum(fn_mono),
+                            @intFromEnum(arg_layout),
+                        });
+                    }
+                    try self.scratch_layout_idxs.append(self.allocator, arg_layout);
+                }
+            }
+        },
+        else => {
+            for (args) |arg_expr| {
+                const arg_mono = self.mir_store.typeOf(arg_expr);
+                const arg_layout = try self.layoutFromMonotype(arg_mono);
+                if (!self.isValidLayoutIdx(arg_layout)) {
+                    std.debug.panic("callArgLayoutsFromFnMonotype: invalid fallback arg layout fn_mono={} layout={}", .{
+                        @intFromEnum(fn_mono),
+                        @intFromEnum(arg_layout),
+                    });
+                }
+                try self.scratch_layout_idxs.append(self.allocator, arg_layout);
+            }
+        },
+    }
+    return self.lir_store.addLayoutIdxSpan(self.scratch_layout_idxs.items[save_layout_len..]);
+}
+
+fn isValidLayoutIdx(self: *Self, layout_idx: layout.Idx) bool {
+    if (layout_idx == layout.Idx.none or layout_idx == layout.Idx.named_fn) return true;
+    return @intFromEnum(layout_idx) < self.layout_store.layouts.len();
 }
 
 fn layoutIsFunctionLike(self: *Self, layout_idx: layout.Idx) bool {
@@ -1109,10 +1414,25 @@ fn lowerCall(self: *Self, call_data: anytype, mono_idx: Monotype.Idx, region: Re
     const ret_layout = default_ret_layout;
 
     const mir_args = self.mir_store.getExprSpan(call_data.args);
-    const lir_args = try self.lowerAnfSpan(&acc, mir_args, region);
+    const arg_layouts = try self.callArgLayoutsFromFnMonotype(fn_mono, call_data.args);
+    const expected_arg_layouts_raw = self.lir_store.getLayoutIdxSpan(arg_layouts);
+    const save_expected_layouts = self.scratch_layout_idxs.items.len;
+    defer self.scratch_layout_idxs.shrinkRetainingCapacity(save_expected_layouts);
+    try self.scratch_layout_idxs.appendSlice(self.allocator, expected_arg_layouts_raw);
+    const expected_arg_layouts = self.scratch_layout_idxs.items[save_expected_layouts..];
+    const lir_args = try self.lowerCallArgSpan(&acc, mir_args, expected_arg_layouts, region);
+
+    const rep_data = try self.callableRepDataFromExpr(fn_expr);
+    const callable_instance = try self.lir_store.internCallableInstance(.{
+        .callee_fn_monotype = fn_mono,
+        .closure_rep = rep_data.rep,
+        .capture_layouts = rep_data.capture_layouts,
+        .arg_layouts = arg_layouts,
+    });
 
     const call_expr = try self.lir_store.addExpr(.{ .call = .{
         .fn_expr = fn_expr,
+        .callable_instance = callable_instance,
         .fn_layout = fn_layout,
         .args = lir_args,
         .ret_layout = ret_layout,
@@ -2192,15 +2512,37 @@ fn inspektRecord(self: *Self, value_expr: LirExprId, record: anytype, mono_idx: 
     const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
 
     // Build parts: "{ " field1_name ": " inspect(field1_value) ", " ... " }"
-    // Monotype fields are alphabetically sorted, which matches how we want to display them.
-    // Layout fields may be reordered by alignment. We use the layout's StructField.index
-    // to map from layout position back to the original (alphabetical) field order.
+    // Do not rely on monotype field insertion order; explicitly pick a deterministic
+    // display order by identifier index, while keeping original field indices for
+    // layout-position lookup.
+    const OrderedField = struct {
+        original_index: usize,
+        field: @TypeOf(fields[0]),
+    };
+    var ordered_fields = std.ArrayList(OrderedField).empty;
+    defer ordered_fields.deinit(self.allocator);
+    try ordered_fields.ensureTotalCapacity(self.allocator, fields.len);
+    for (fields, 0..) |field, i| {
+        ordered_fields.appendAssumeCapacity(.{
+            .original_index = i,
+            .field = field,
+        });
+    }
+    std.mem.sort(OrderedField, ordered_fields.items, self, struct {
+        fn lessThan(ctx: *Self, lhs: OrderedField, rhs: OrderedField) bool {
+            const lhs_name = ctx.getIdentText(lhs.field.name) orelse "";
+            const rhs_name = ctx.getIdentText(rhs.field.name) orelse "";
+            return std.mem.order(u8, lhs_name, rhs_name) == .lt;
+        }
+    }.lessThan);
+
     const save_exprs = self.scratch_lir_expr_ids.items.len;
     defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
 
     try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral("{ ", region));
 
-    for (fields, 0..) |field, i| {
+    for (ordered_fields.items, 0..) |entry, i| {
+        const field = entry.field;
         if (i > 0) {
             try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(", ", region));
         }
@@ -2214,7 +2556,7 @@ fn inspektRecord(self: *Self, value_expr: LirExprId, record: anytype, mono_idx: 
         // Access the field value
         var layout_field_idx: ?u16 = null;
         for (0..layout_fields.len) |li| {
-            if (layout_fields.get(li).index == i) {
+            if (layout_fields.get(li).index == entry.original_index) {
                 layout_field_idx = @intCast(li);
                 break;
             }
@@ -2676,10 +3018,20 @@ fn inspektList(self: *Self, list_expr: LirExprId, list_data: anytype, mono_idx: 
 }
 
 /// Inspect a box: the inner value is behind a pointer.
-fn inspektBox(self: *Self, _: LirExprId, _: anytype, region: Region) Allocator.Error!LirExprId {
-    // Box inspection requires dereferencing, which needs pointer support.
-    // TODO: implement proper box inspection.
-    return self.emitStrLiteral("<box>", region);
+fn inspektBox(self: *Self, value_expr: LirExprId, box_mono: anytype, region: Region) Allocator.Error!LirExprId {
+    const inner_mono: Monotype.Idx = box_mono.inner;
+    const inner_layout = try self.layoutFromMonotype(inner_mono);
+
+    const unboxed = try self.emitLowLevel(
+        .box_unbox,
+        &.{value_expr},
+        inner_layout,
+        region,
+    );
+    const inspected_inner = try self.expandStrInspekt(unboxed, inner_mono, region);
+    const open = try self.emitStrLiteral("Box(", region);
+    const close = try self.emitStrLiteral(")", region);
+    return self.foldStrConcat(&.{ open, inspected_inner, close }, region);
 }
 
 // --- Tests ---

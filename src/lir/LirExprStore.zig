@@ -28,6 +28,8 @@ const LirCaptureSpan = ir.LirCaptureSpan;
 const LirCapture = ir.LirCapture;
 const ClosureData = ir.ClosureData;
 const ClosureDataId = ir.ClosureDataId;
+const CallableInstance = ir.CallableInstance;
+const CallableInstanceId = ir.CallableInstanceId;
 const LirMatchBranch = ir.LirMatchBranch;
 const LirMatchBranchSpan = ir.LirMatchBranchSpan;
 const LambdaSetMember = ir.LambdaSetMember;
@@ -81,6 +83,9 @@ captures: std.ArrayList(LirCapture),
 /// Closure data (side table to reduce LirExpr union size)
 closure_data: std.ArrayList(ClosureData),
 
+/// Canonical callable instances used by call expressions.
+callable_instances: std.ArrayList(CallableInstance),
+
 /// Lambda set members (for closure dispatch)
 lambda_set_members: std.ArrayList(LambdaSetMember),
 
@@ -120,6 +125,7 @@ pub fn init(allocator: Allocator) Self {
         .stmts = std.ArrayList(LirStmt).empty,
         .captures = std.ArrayList(LirCapture).empty,
         .closure_data = std.ArrayList(ClosureData).empty,
+        .callable_instances = std.ArrayList(CallableInstance).empty,
         .lambda_set_members = std.ArrayList(LambdaSetMember).empty,
         .cf_stmts = std.ArrayList(CFStmt).empty,
         .cf_switch_branches = std.ArrayList(CFSwitchBranch).empty,
@@ -155,6 +161,7 @@ pub fn deinit(self: *Self) void {
     self.stmts.deinit(self.allocator);
     self.captures.deinit(self.allocator);
     self.closure_data.deinit(self.allocator);
+    self.callable_instances.deinit(self.allocator);
     self.lambda_set_members.deinit(self.allocator);
     self.cf_stmts.deinit(self.allocator);
     self.cf_switch_branches.deinit(self.allocator);
@@ -361,6 +368,47 @@ pub fn addClosureData(self: *Self, data: ClosureData) Allocator.Error!ClosureDat
 pub fn getClosureData(self: *const Self, id: ClosureDataId) ClosureData {
     std.debug.assert(!id.isNone());
     return self.closure_data.items[@intFromEnum(id)];
+}
+
+/// Add callable instance metadata and return its ID.
+pub fn addCallableInstance(self: *Self, data: CallableInstance) Allocator.Error!CallableInstanceId {
+    const idx = self.callable_instances.items.len;
+    try self.callable_instances.append(self.allocator, data);
+    return @enumFromInt(@as(u32, @intCast(idx)));
+}
+
+/// Get callable instance metadata by ID.
+pub fn getCallableInstance(self: *const Self, id: CallableInstanceId) CallableInstance {
+    std.debug.assert(!id.isNone());
+    return self.callable_instances.items[@intFromEnum(id)];
+}
+
+/// Intern callable instance metadata and return canonical ID.
+pub fn internCallableInstance(self: *Self, data: CallableInstance) Allocator.Error!CallableInstanceId {
+    const data_capture_layouts = self.getLayoutIdxSpan(data.capture_layouts);
+    const data_arg_layouts = self.getLayoutIdxSpan(data.arg_layouts);
+
+    for (self.callable_instances.items, 0..) |existing, idx| {
+        if (existing.callee_fn_monotype != data.callee_fn_monotype) continue;
+        if (existing.closure_rep != data.closure_rep) continue;
+        const existing_capture_layouts = self.getLayoutIdxSpan(existing.capture_layouts);
+        if (!std.mem.eql(layout.Idx, existing_capture_layouts, data_capture_layouts)) continue;
+
+        const existing_arg_layouts = self.getLayoutIdxSpan(existing.arg_layouts);
+        if (!std.mem.eql(layout.Idx, existing_arg_layouts, data_arg_layouts)) {
+            std.debug.panic(
+                "internCallableInstance: inconsistent arg layouts for identical callable identity mono={} rep={} existing_args={} new_args={}",
+                .{
+                    @intFromEnum(data.callee_fn_monotype),
+                    @intFromEnum(data.closure_rep),
+                    existing_arg_layouts.len,
+                    data_arg_layouts.len,
+                },
+            );
+        }
+        return @enumFromInt(@as(u32, @intCast(idx)));
+    }
+    return self.addCallableInstance(data);
 }
 
 /// Add lambda set members and return a span

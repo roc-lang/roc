@@ -41,13 +41,16 @@ stack_frame_size: u32 = 0,
 uses_stack_memory: bool = false,
 /// Local index of the frame pointer ($fp) - only valid when uses_stack_memory is true.
 fp_local: u32 = 0,
-/// Map from lambda expression ID → compiled wasm function index.
-compiled_lambdas: std.AutoHashMap(u32, u32),
+/// Cache of compiled lambda/closure variants keyed by expression + concrete wasm signature.
+compiled_lambdas: std.ArrayListUnmanaged(CompiledLambdaVariant) = .empty,
 /// Map from Symbol → ClosureValue (for all callable bindings).
 closure_values: std.AutoHashMap(u64, ClosureValue),
 /// Map from Symbol → bound expression id for local let/mutate bindings.
 /// Used to recover callable metadata for synthetic ANF symbols.
 local_binding_exprs: std.AutoHashMap(u64, LirExprId),
+/// Per-function symbol layout overrides used when compiling specialized callable variants.
+/// This lets expression layout queries observe call-site-specialized param layouts.
+symbol_layout_overrides: std.AutoHashMap(u64, layout.Idx),
 /// Type index for the RocOps function signature: (i32, i32) -> void.
 roc_ops_type_idx: u32 = 0,
 /// Table indices for RocOps functions (used with call_indirect).
@@ -133,6 +136,14 @@ wasm_memory_pages: u32 = 0,
 /// Used to determine if a lambda expression should be lifted to a procedure.
 // Lambda lifting is integrated into the MIR→LIR pipeline (no separate pass).
 
+const CompiledLambdaVariant = struct {
+    expr_key: u32,
+    ret_vt: ValType,
+    param_types: []ValType,
+    func_idx: u32,
+    finished: bool,
+};
+
 /// Closure value storage for runtime dispatch.
 /// Tracks how a closure is stored so call sites can dispatch correctly.
 const ClosureValue = struct {
@@ -167,6 +178,11 @@ const ForwardedCapture = struct {
     layout_idx: layout.Idx,
 };
 
+const CompileCallableOptions = struct {
+    arg_layout_overrides: ?[]const layout.Idx = null,
+    ret_layout_override: ?layout.Idx = null,
+};
+
 pub fn init(allocator: Allocator, store: *const LirExprStore, layout_store: ?*const LayoutStore) Self {
     return .{
         .allocator = allocator,
@@ -178,9 +194,10 @@ pub fn init(allocator: Allocator, store: *const LirExprStore, layout_store: ?*co
         .stack_frame_size = 0,
         .uses_stack_memory = false,
         .fp_local = 0,
-        .compiled_lambdas = std.AutoHashMap(u32, u32).init(allocator),
+        .compiled_lambdas = .empty,
         .closure_values = std.AutoHashMap(u64, ClosureValue).init(allocator),
         .local_binding_exprs = std.AutoHashMap(u64, LirExprId).init(allocator),
+        .symbol_layout_overrides = std.AutoHashMap(u64, layout.Idx).init(allocator),
         .join_point_depths = std.AutoHashMap(u32, u32).init(allocator),
         .join_point_param_locals = std.AutoHashMap(u32, []u32).init(allocator),
         .forwarded_func_captures = std.AutoHashMap(u32, []ForwardedCapture).init(allocator),
@@ -191,7 +208,10 @@ pub fn deinit(self: *Self) void {
     self.module.deinit();
     self.body.deinit(self.allocator);
     self.storage.deinit();
-    self.compiled_lambdas.deinit();
+    for (self.compiled_lambdas.items) |entry| {
+        self.allocator.free(entry.param_types);
+    }
+    self.compiled_lambdas.deinit(self.allocator);
     self.join_point_depths.deinit();
     // Free allocated param local arrays
     var jp_it = self.join_point_param_locals.iterator();
@@ -207,6 +227,7 @@ pub fn deinit(self: *Self) void {
     self.forwarded_func_captures.deinit();
     self.closure_values.deinit();
     self.local_binding_exprs.deinit();
+    self.symbol_layout_overrides.deinit();
 }
 
 /// Register host function imports. Must be called before any addFunction calls
@@ -605,6 +626,19 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
                 const pattern = self.store.getPattern(stmt.pattern);
                 switch (pattern) {
                     .bind => |bind| {
+                        const ls = self.layout_store orelse unreachable;
+                        const bind_layout_int = @intFromEnum(bind.layout_idx);
+                        if (bind.layout_idx != layout.Idx.none and bind.layout_idx != layout.Idx.named_fn and bind_layout_int >= ls.layouts.len()) {
+                            std.debug.panic(
+                                "WasmCodeGen invalid bind layout symbol={} layout={} pattern={} expr={}",
+                                .{
+                                    @as(u64, @bitCast(bind.symbol)),
+                                    bind_layout_int,
+                                    @intFromEnum(stmt.pattern),
+                                    @intFromEnum(stmt.expr),
+                                },
+                            );
+                        }
                         // Check if the bound expression is a lambda — if so, compile
                         // as a wasm function and record symbol→func_idx mapping.
                         const stmt_expr = self.store.getExpr(stmt.expr);
@@ -837,13 +871,6 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
             if (self.storage.locals.get(key)) |local_info| {
                 self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                 WasmModule.leb128WriteU32(self.allocator, &self.body, local_info.idx) catch return error.OutOfMemory;
-                // Convert if the local's actual type differs from the expression's layout type.
-                // This can happen when a function parameter is i64 (Roc I64) but the body
-                // expression's layout resolves to i32 (e.g., used as a list count).
-                const expected_vt = self.resolveValType(l.layout_idx);
-                if (local_info.val_type != expected_vt) {
-                    try self.emitConversion(local_info.val_type, expected_vt);
-                }
             } else if (self.closure_values.get(key)) |cv| {
                 // Symbol is a closure bound via tryBindFunction — generate its
                 // runtime closure value (used when passing closures as arguments
@@ -1670,11 +1697,29 @@ fn valTypeToBlockType(vt: ValType) BlockType {
 }
 
 /// Try to infer the layout.Idx of an expression (for signedness checks).
-fn exprLayoutIdx(self: *Self, expr_id: LirExprId) ?layout.Idx {
+fn exprLayoutIdx(self: *const Self, expr_id: LirExprId) ?layout.Idx {
     const expr = self.store.getExpr(expr_id);
     return switch (expr) {
         .block => |b| b.result_layout,
-        .lookup => |l| l.layout_idx,
+        .lookup => |l| blk: {
+            const key: u64 = @bitCast(l.symbol);
+            if (self.symbol_layout_overrides.get(key)) |override_layout| break :blk override_layout;
+            if (l.layout_idx != layout.Idx.none) break :blk l.layout_idx;
+
+            if (self.local_binding_exprs.get(key)) |bound_expr_id| {
+                if (bound_expr_id != expr_id) {
+                    if (self.exprLayoutIdx(bound_expr_id)) |bound_layout| break :blk bound_layout;
+                }
+            }
+
+            if (self.store.getSymbolDef(l.symbol)) |def_expr_id| {
+                if (def_expr_id != expr_id) {
+                    if (self.exprLayoutIdx(def_expr_id)) |def_layout| break :blk def_layout;
+                }
+            }
+
+            break :blk null;
+        },
         .if_then_else => |ite| ite.result_layout,
         .match_expr => |w| w.result_layout,
         .nominal => |nom| self.exprLayoutIdx(nom.backing_expr),
@@ -1717,14 +1762,36 @@ fn exprValType(self: *Self, expr_id: LirExprId) ValType {
         .bool_literal => .i32,
         .i128_literal, .dec_literal => .i32, // pointer to stack memory
         .block => |b| self.exprValType(b.final_expr),
-        .lookup => |l| self.resolveValType(l.layout_idx),
+        .lookup => |l| blk: {
+            const key: u64 = @bitCast(l.symbol);
+            if (self.storage.locals.get(key)) |local_info| break :blk local_info.val_type;
+            if (self.closure_values.get(key)) |cv| {
+                break :blk switch (cv.representation) {
+                    .one_capture => |repr| self.resolveValType(repr.capture_layout),
+                    else => .i32,
+                };
+            }
+            if (self.symbol_layout_overrides.get(key)) |override_layout| {
+                break :blk self.resolveValType(override_layout);
+            }
+            if (self.exprLayoutIdx(expr_id)) |resolved_layout| {
+                break :blk self.resolveValType(resolved_layout);
+            }
+            break :blk self.resolveValType(l.layout_idx);
+        },
         .if_then_else => |ite| self.resolveValType(ite.result_layout),
         .match_expr => |w| self.resolveValType(w.result_layout),
         .nominal => |nom| self.exprValType(nom.backing_expr),
         .empty_list => .i32, // pointer to 12-byte RocList
         .call => |c| self.resolveValType(c.ret_layout),
         .lambda => .i32, // function reference (index)
-        .closure => .i32, // closure value (function reference)
+        .closure => |closure_id| blk: {
+            const closure = self.store.getClosureData(closure_id);
+            break :blk switch (closure.representation) {
+                .one_capture => |repr| self.resolveValType(repr.capture_layout),
+                else => .i32,
+            };
+        },
         .struct_ => .i32, // pointer to stack memory
         .struct_access => |sa| self.resolveValType(sa.field_layout),
         .zero_arg_tag => .i32, // discriminant or pointer
@@ -1792,7 +1859,12 @@ fn isCompositeExpr(self: *const Self, expr_id: LirExprId) bool {
         .block => |b| self.isCompositeExpr(b.final_expr),
         .if_then_else => |ite| self.isCompositeLayout(ite.result_layout),
         .match_expr => |w| self.isCompositeLayout(w.result_layout),
-        .lookup => |l| self.isCompositeLayout(l.layout_idx),
+        .lookup => blk: {
+            if (self.exprLayoutIdx(expr_id)) |resolved_layout| {
+                break :blk self.isCompositeLayout(resolved_layout);
+            }
+            break :blk false;
+        },
         .call => |c| self.isCompositeLayout(c.ret_layout),
         .struct_access => |sa| self.isCompositeLayout(sa.field_layout),
         .low_level => |ll| self.isCompositeLayout(ll.ret_layout),
@@ -2171,28 +2243,7 @@ fn compareFieldByLayout(
                 }
                 self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
                 WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
-            } else if (ls.getLayout(elem_layout).tag == .list) {
-                // List of lists - use specialized host function with inner element size
-                const inner_elem_layout = ls.getLayout(elem_layout).data.list;
-                const inner_elem_size = self.layoutByteSize(inner_elem_layout);
-                const import_idx = self.list_list_eq_import orelse unreachable;
-                try self.emitLocalGet(lhs_local);
-                if (field_offset > 0) {
-                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(field_offset)) catch return error.OutOfMemory;
-                    self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-                }
-                try self.emitLocalGet(rhs_local);
-                if (field_offset > 0) {
-                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(field_offset)) catch return error.OutOfMemory;
-                    self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-                }
-                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(inner_elem_size)) catch return error.OutOfMemory;
-                self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
-                WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
-            } else if (ls.layoutContainsRefcounted(ls.getLayout(elem_layout))) {
+            } else if (ls.getLayout(elem_layout).tag == .list or ls.layoutContainsRefcounted(ls.getLayout(elem_layout))) {
                 // Composite elements (records/tuples/tag-unions with refcounted fields):
                 // inline element-by-element structural comparison loop.
                 const elem_size = self.layoutByteSize(elem_layout);
@@ -2581,23 +2632,14 @@ fn stabilizeCompositeResult(self: *Self, size: u32) Allocator.Error!u32 {
     try self.emitLocalSet(src_local);
 
     // Allocate a stable buffer in the caller's stack frame
-    const buf_offset = try self.allocStackMemory(size, 8);
+    const copy_align: u32 = if (size >= 8) 8 else if (size >= 4) 4 else if (size >= 2) 2 else 1;
+    const buf_offset = try self.allocStackMemory(size, copy_align);
     const buf_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitFpOffset(buf_offset);
     try self.emitLocalSet(buf_local);
 
-    // Copy using i64 load/store pairs (16 bytes = 2 × i64)
-    var offset: u32 = 0;
-    while (offset < size) : (offset += 8) {
-        try self.emitLocalGet(buf_local);
-        try self.emitLocalGet(src_local);
-        self.body.append(self.allocator, Op.i64_load) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &self.body, 3) catch return error.OutOfMemory; // align=8
-        WasmModule.leb128WriteU32(self.allocator, &self.body, offset) catch return error.OutOfMemory;
-        self.body.append(self.allocator, Op.i64_store) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &self.body, 3) catch return error.OutOfMemory; // align=8
-        WasmModule.leb128WriteU32(self.allocator, &self.body, offset) catch return error.OutOfMemory;
-    }
+    // Copy exact byte count; this handles non-8-byte-sized composites (e.g. RocList=12 bytes).
+    try self.emitCopyToStack(src_local, buf_offset, size);
 
     return buf_local;
 }
@@ -4419,46 +4461,115 @@ fn emitConversion(self: *Self, source: ValType, target: ValType) Allocator.Error
     }
 }
 
+fn lambdaVariantMatches(
+    entry: *const CompiledLambdaVariant,
+    expr_key: u32,
+    ret_vt: ValType,
+    param_types: []const ValType,
+) bool {
+    return entry.expr_key == expr_key and
+        entry.ret_vt == ret_vt and
+        std.mem.eql(ValType, entry.param_types, param_types);
+}
+
+fn findCompiledLambdaVariant(
+    self: *Self,
+    expr_key: u32,
+    ret_vt: ValType,
+    param_types: []const ValType,
+    allow_in_progress: bool,
+) ?u32 {
+    for (self.compiled_lambdas.items) |entry| {
+        if (lambdaVariantMatches(&entry, expr_key, ret_vt, param_types) and
+            (allow_in_progress or entry.finished))
+        {
+            return entry.func_idx;
+        }
+    }
+    return null;
+}
+
+fn addCompiledLambdaVariant(
+    self: *Self,
+    expr_key: u32,
+    ret_vt: ValType,
+    param_types: []const ValType,
+    func_idx: u32,
+) Allocator.Error!usize {
+    const params_copy = try self.allocator.dupe(ValType, param_types);
+    errdefer self.allocator.free(params_copy);
+
+    try self.compiled_lambdas.append(self.allocator, .{
+        .expr_key = expr_key,
+        .ret_vt = ret_vt,
+        .param_types = params_copy,
+        .func_idx = func_idx,
+        .finished = false,
+    });
+    return self.compiled_lambdas.items.len - 1;
+}
+
+fn removeCompiledLambdaVariant(self: *Self, idx: usize) void {
+    const removed = self.compiled_lambdas.orderedRemove(idx);
+    self.allocator.free(removed.param_types);
+}
+
 /// Compile a lambda expression as a separate wasm function.
 /// Returns the wasm function index.
 fn compileLambda(self: *Self, expr_id: LirExprId, lambda: anytype) Allocator.Error!u32 {
-    // Check if already compiled
-    const expr_key: u32 = @intFromEnum(expr_id);
-    if (self.compiled_lambdas.get(expr_key)) |existing| {
-        return existing;
-    }
+    return self.compileLambdaWithOptions(expr_id, lambda, .{});
+}
 
-    // Build parameter types: roc_ops_ptr first, then regular params
+/// Compile a lambda expression as a separate wasm function with optional call-site ABI overrides.
+fn compileLambdaWithOptions(self: *Self, expr_id: LirExprId, lambda: anytype, options: CompileCallableOptions) Allocator.Error!u32 {
+    const expr_key: u32 = @intFromEnum(expr_id);
+
+    // Build parameter types in ABI order:
+    // roc_ops_ptr, then forwarded captures, then regular params.
     const params = self.store.getPatternSpan(lambda.params);
     var param_types: std.ArrayList(ValType) = .empty;
     defer param_types.deinit(self.allocator);
+    var regular_param_types: std.ArrayList(ValType) = .empty;
+    defer regular_param_types.deinit(self.allocator);
 
     // First parameter: roc_ops_ptr (i32)
     param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
 
-    for (params) |param_id| {
+    for (params, 0..) |param_id, param_i| {
         const pat = self.store.getPattern(param_id);
         switch (pat) {
             .bind => |bind| {
-                // For pre-bound callable params with one_capture, use the
-                // capture's type instead of the closure layout type, since the
-                // actual runtime value passed is the capture itself (not a pointer).
                 const param_key: u64 = @bitCast(bind.symbol);
-                const vt = if (self.closure_values.get(param_key)) |cv| blk: {
-                    break :blk switch (cv.representation) {
-                        .one_capture => |repr| self.resolveValType(repr.capture_layout),
-                        else => self.resolveValType(bind.layout_idx),
+                // If a callable param is represented as one_capture, its runtime value
+                // is that capture payload, not a closure pointer.
+                const one_capture_layout: ?layout.Idx = blk: {
+                    if (self.closure_values.get(param_key)) |cv| switch (cv.representation) {
+                        .one_capture => |repr| break :blk repr.capture_layout,
+                        else => {},
                     };
-                } else self.resolveValType(bind.layout_idx);
-                param_types.append(self.allocator, vt) catch return error.OutOfMemory;
+                    break :blk null;
+                };
+                const vt = if (one_capture_layout) |cap_layout|
+                    self.resolveValType(cap_layout)
+                else
+                    self.resolveValType(bind.layout_idx);
+                const final_vt = if (options.arg_layout_overrides) |overrides| blk: {
+                    // One-capture callable params must use capture ABI regardless of
+                    // the nominal function layout override.
+                    if (one_capture_layout == null and param_i < overrides.len and overrides[param_i] != layout.Idx.none) {
+                        break :blk self.resolveValType(overrides[param_i]);
+                    }
+                    break :blk vt;
+                } else vt;
+                regular_param_types.append(self.allocator, final_vt) catch return error.OutOfMemory;
             },
             .wildcard => {
                 // Wildcard param — still needs a slot. Use i32 as default.
-                param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
+                regular_param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
             },
             .struct_, .list => {
                 // Struct/list destructuring param — passed as i32 pointer
-                param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
+                regular_param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
             },
             else => unreachable,
         }
@@ -4476,42 +4587,50 @@ fn compileLambda(self: *Self, expr_id: LirExprId, lambda: anytype) Allocator.Err
         switch (pat) {
             .bind => |bind| {
                 const param_key: u64 = @bitCast(bind.symbol);
-                if (self.closure_values.get(param_key)) |cv| {
-                    switch (cv.representation) {
-                        .multiple_captures => {
-                            const caps = self.store.getCaptures(cv.captures);
-                            for (caps) |cap| {
-                                const vt = self.resolveValType(cap.layout_idx);
-                                param_types.append(self.allocator, vt) catch return error.OutOfMemory;
-                                forwarded_captures.append(self.allocator, .{
-                                    .symbol = cap.symbol,
-                                    .layout_idx = cap.layout_idx,
-                                }) catch return error.OutOfMemory;
-                            }
-                        },
-                        else => {}, // one_capture handled by alias, no_captures has no captures
-                    }
-                }
+                if (self.closure_values.get(param_key)) |cv| switch (cv.representation) {
+                    .multiple_captures => {
+                        const caps = self.store.getCaptures(cv.captures);
+                        for (caps) |cap| {
+                            const vt = self.resolveValType(cap.layout_idx);
+                            // Forwarded captures are ABI-leading parameters.
+                            param_types.append(self.allocator, vt) catch return error.OutOfMemory;
+                            forwarded_captures.append(self.allocator, .{
+                                .symbol = cap.symbol,
+                                .layout_idx = cap.layout_idx,
+                            }) catch return error.OutOfMemory;
+                        }
+                    },
+                    else => {}, // one_capture handled by alias, no_captures has no captures
+                };
             },
             else => {},
         }
     }
 
+    // Regular user params come after forwarded captures.
+    param_types.appendSlice(self.allocator, regular_param_types.items) catch return error.OutOfMemory;
+
     // Determine return type. For one_capture closures, the runtime return
     // value is the capture itself, not a closure pointer.
     const ret_vt = if (self.getUnwrappedCaptureLayout(lambda.body)) |cap_layout|
         self.resolveValType(cap_layout)
+    else if (options.ret_layout_override) |ret_layout_override|
+        self.resolveValType(ret_layout_override)
     else
         self.resolveValType(lambda.ret_layout);
+
+    // Check if this exact lambda/signature variant is already compiled (or in progress).
+    if (self.findCompiledLambdaVariant(expr_key, ret_vt, param_types.items, true)) |existing| {
+        return existing;
+    }
 
     // Add function type and function to the module
     const type_idx = self.module.addFuncType(param_types.items, &.{ret_vt}) catch return error.OutOfMemory;
     const func_idx = self.module.addFunction(type_idx) catch return error.OutOfMemory;
 
-    // Cache the compiled function EARLY (before body compilation) to support
-    // mutual recursion: if this lambda's body calls another lambda that calls
-    // back to this one, the recursive lookup will find this func_idx.
-    self.compiled_lambdas.put(expr_key, func_idx) catch return error.OutOfMemory;
+    // Cache this variant EARLY (before body compilation) to support mutual recursion.
+    const cache_idx = try self.addCompiledLambdaVariant(expr_key, ret_vt, param_types.items, func_idx);
+    errdefer self.removeCompiledLambdaVariant(cache_idx);
 
     // Store forwarded captures in map for call sites to use
     if (forwarded_captures.items.len > 0) {
@@ -4526,6 +4645,7 @@ fn compileLambda(self: *Self, expr_id: LirExprId, lambda: anytype) Allocator.Err
     // Initialize fresh state for the lambda body
     self.body = .empty;
     self.storage.locals = std.AutoHashMap(u64, Storage.LocalInfo).init(self.allocator);
+    self.symbol_layout_overrides = std.AutoHashMap(u64, layout.Idx).init(self.allocator);
     self.storage.next_local_idx = 0;
     self.storage.local_types = .empty;
     // Note: closure_values is NOT reset for compileLambda — the lambda body
@@ -4545,19 +4665,31 @@ fn compileLambda(self: *Self, expr_id: LirExprId, lambda: anytype) Allocator.Err
     }
 
     // Bind parameters — they occupy locals F+1..F+N
-    for (params) |param_id| {
+    for (params, 0..) |param_id, param_i| {
         const pat = self.store.getPattern(param_id);
         switch (pat) {
             .bind => |bind| {
-                // Match the param type override for one_capture callables
                 const param_key: u64 = @bitCast(bind.symbol);
-                const vt = if (self.closure_values.get(param_key)) |cv| blk: {
-                    break :blk switch (cv.representation) {
-                        .one_capture => |repr| self.resolveValType(repr.capture_layout),
-                        else => self.resolveValType(bind.layout_idx),
+                const one_capture_layout: ?layout.Idx = blk: {
+                    if (self.closure_values.get(param_key)) |cv| switch (cv.representation) {
+                        .one_capture => |repr| break :blk repr.capture_layout,
+                        else => {},
                     };
-                } else self.resolveValType(bind.layout_idx);
-                _ = self.storage.allocLocal(bind.symbol, vt) catch return error.OutOfMemory;
+                    break :blk null;
+                };
+                const vt = if (one_capture_layout) |cap_layout|
+                    self.resolveValType(cap_layout)
+                else
+                    self.resolveValType(bind.layout_idx);
+                const override_layout = if (options.arg_layout_overrides) |overrides|
+                    if (one_capture_layout == null and param_i < overrides.len and overrides[param_i] != layout.Idx.none) overrides[param_i] else null
+                else
+                    null;
+                const final_vt = if (override_layout) |lay| self.resolveValType(lay) else vt;
+                _ = self.storage.allocLocal(bind.symbol, final_vt) catch return error.OutOfMemory;
+                if (override_layout) |lay| {
+                    try self.symbol_layout_overrides.put(param_key, lay);
+                }
             },
             .wildcard => {
                 _ = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -4681,6 +4813,7 @@ fn compileLambda(self: *Self, expr_id: LirExprId, lambda: anytype) Allocator.Err
     // If the lambda used stack memory, the outer scope needs to know
     if (lambda_used_stack_memory) self.uses_stack_memory = true;
 
+    self.compiled_lambdas.items[cache_idx].finished = true;
     return func_idx;
 }
 
@@ -4688,11 +4821,12 @@ fn compileLambda(self: *Self, expr_id: LirExprId, lambda: anytype) Allocator.Err
 /// Captures become extra leading parameters in the compiled function.
 /// Returns the wasm function index.
 fn compileClosure(self: *Self, expr_id: LirExprId, closure: anytype) Allocator.Error!u32 {
-    // Check if already compiled
+    return self.compileClosureWithOptions(expr_id, closure, .{});
+}
+
+/// Compile a closure (lambda with captures) as a separate wasm function with optional call-site ABI overrides.
+fn compileClosureWithOptions(self: *Self, expr_id: LirExprId, closure: anytype, options: CompileCallableOptions) Allocator.Error!u32 {
     const expr_key: u32 = @intFromEnum(expr_id);
-    if (self.compiled_lambdas.get(expr_key)) |existing| {
-        return existing;
-    }
 
     // Get the inner lambda
     const inner = self.store.getExpr(closure.lambda);
@@ -4724,11 +4858,28 @@ fn compileClosure(self: *Self, expr_id: LirExprId, closure: anytype) Allocator.E
 
     // Regular parameter types
     const params = self.store.getPatternSpan(lambda.params);
-    for (params) |param_id| {
+    for (params, 0..) |param_id, param_i| {
         const pat = self.store.getPattern(param_id);
         switch (pat) {
             .bind => |bind| {
-                const vt = self.resolveValType(bind.layout_idx);
+                const param_key: u64 = @bitCast(bind.symbol);
+                const one_capture_layout: ?layout.Idx = blk: {
+                    if (self.closure_values.get(param_key)) |cv| switch (cv.representation) {
+                        .one_capture => |repr| break :blk repr.capture_layout,
+                        else => {},
+                    };
+                    break :blk null;
+                };
+                const base_vt = if (one_capture_layout) |cap_layout|
+                    self.resolveValType(cap_layout)
+                else
+                    self.resolveValType(bind.layout_idx);
+                const vt = if (options.arg_layout_overrides) |overrides| blk: {
+                    if (one_capture_layout == null and param_i < overrides.len and overrides[param_i] != layout.Idx.none) {
+                        break :blk self.resolveValType(overrides[param_i]);
+                    }
+                    break :blk base_vt;
+                } else base_vt;
                 param_types.append(self.allocator, vt) catch return error.OutOfMemory;
             },
             .wildcard => {
@@ -4745,15 +4896,22 @@ fn compileClosure(self: *Self, expr_id: LirExprId, closure: anytype) Allocator.E
     // value is the capture itself, not a closure pointer.
     const ret_vt = if (self.getUnwrappedCaptureLayout(lambda.body)) |cap_layout|
         self.resolveValType(cap_layout)
+    else if (options.ret_layout_override) |ret_layout_override|
+        self.resolveValType(ret_layout_override)
     else
         self.resolveValType(lambda.ret_layout);
+
+    // Check if this exact closure/signature variant is already compiled (or in progress).
+    if (self.findCompiledLambdaVariant(expr_key, ret_vt, param_types.items, true)) |existing| {
+        return existing;
+    }
+
     const type_idx = self.module.addFuncType(param_types.items, &.{ret_vt}) catch return error.OutOfMemory;
     const func_idx = self.module.addFunction(type_idx) catch return error.OutOfMemory;
 
-    // Cache the compiled closure EARLY (before body compilation) to support
-    // mutual recursion: if this closure's body calls another closure that calls
-    // back to this one, the recursive lookup will find this func_idx.
-    self.compiled_lambdas.put(expr_key, func_idx) catch return error.OutOfMemory;
+    // Cache this variant EARLY (before body compilation) to support mutual recursion.
+    const cache_idx = try self.addCompiledLambdaVariant(expr_key, ret_vt, param_types.items, func_idx);
+    errdefer self.removeCompiledLambdaVariant(cache_idx);
 
     // Save current codegen state
     const saved = self.saveState() catch return error.OutOfMemory;
@@ -4761,6 +4919,7 @@ fn compileClosure(self: *Self, expr_id: LirExprId, closure: anytype) Allocator.E
     // Initialize fresh state
     self.body = .empty;
     self.storage.locals = std.AutoHashMap(u64, Storage.LocalInfo).init(self.allocator);
+    self.symbol_layout_overrides = std.AutoHashMap(u64, layout.Idx).init(self.allocator);
     self.storage.next_local_idx = 0;
     self.storage.local_types = .empty;
     // Note: closure_values is NOT reset — the closure body may reference
@@ -4840,12 +4999,32 @@ fn compileClosure(self: *Self, expr_id: LirExprId, closure: anytype) Allocator.E
     }
 
     // Bind regular parameters
-    for (params) |param_id| {
+    for (params, 0..) |param_id, param_i| {
         const pat = self.store.getPattern(param_id);
         switch (pat) {
             .bind => |bind| {
-                const vt = self.resolveValType(bind.layout_idx);
+                const param_key: u64 = @bitCast(bind.symbol);
+                const one_capture_layout: ?layout.Idx = blk: {
+                    if (self.closure_values.get(param_key)) |cv| switch (cv.representation) {
+                        .one_capture => |repr| break :blk repr.capture_layout,
+                        else => {},
+                    };
+                    break :blk null;
+                };
+                const base_vt = if (one_capture_layout) |cap_layout|
+                    self.resolveValType(cap_layout)
+                else
+                    self.resolveValType(bind.layout_idx);
+                const override_layout = if (options.arg_layout_overrides) |overrides|
+                    if (one_capture_layout == null and param_i < overrides.len and overrides[param_i] != layout.Idx.none) overrides[param_i] else null
+                else
+                    null;
+                const vt = if (override_layout) |lay| self.resolveValType(lay) else base_vt;
                 _ = self.storage.allocLocal(bind.symbol, vt) catch return error.OutOfMemory;
+                if (override_layout) |lay| {
+                    const key: u64 = @bitCast(bind.symbol);
+                    try self.symbol_layout_overrides.put(key, lay);
+                }
             },
             .wildcard => {
                 _ = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -4982,6 +5161,7 @@ fn compileClosure(self: *Self, expr_id: LirExprId, closure: anytype) Allocator.E
     // If the closure used stack memory, the outer scope needs to know
     if (closure_used_stack_memory) self.uses_stack_memory = true;
 
+    self.compiled_lambdas.items[cache_idx].finished = true;
     return func_idx;
 }
 
@@ -5231,7 +5411,7 @@ fn tryBindFunction(self: *Self, expr_id: LirExprId, expr: LirExpr, symbol: Symbo
                 fn_result_info;
 
             // Compile the returned closure's function (may already be compiled)
-            const func_idx = self.compileCallableWithCaptures(closure_info.lambda_expr, closure_info.captures) catch return false;
+            const func_idx = self.compileCallableWithCaptures(closure_info.lambda_expr, closure_info.captures, .{}) catch return false;
 
             // Generate the call — leaves closure value on the wasm stack
             try self.generateCall(call_expr);
@@ -5455,6 +5635,7 @@ fn compileProcBody(self: *Self, proc: LirProc) Allocator.Error!void {
     // Initialize fresh state with ALL registered procs (for mutual recursion)
     self.body = .empty;
     self.storage.locals = std.AutoHashMap(u64, Storage.LocalInfo).init(self.allocator);
+    self.symbol_layout_overrides = std.AutoHashMap(u64, layout.Idx).init(self.allocator);
     self.storage.next_local_idx = 0;
     self.storage.local_types = .empty;
     // Note: closure_values is NOT cleared — all pre-registered procs remain
@@ -5477,6 +5658,10 @@ fn compileProcBody(self: *Self, proc: LirProc) Allocator.Error!void {
             .bind => |bind| {
                 const vt = if (i < arg_layouts.len) self.resolveValType(arg_layouts[i]) else .i32;
                 _ = self.storage.allocLocal(bind.symbol, vt) catch return error.OutOfMemory;
+                if (i < arg_layouts.len) {
+                    const symbol_key: u64 = @bitCast(bind.symbol);
+                    try self.symbol_layout_overrides.put(symbol_key, arg_layouts[i]);
+                }
             },
             .wildcard => {
                 const vt = if (i < arg_layouts.len) self.resolveValType(arg_layouts[i]) else .i32;
@@ -5578,6 +5763,7 @@ const SavedState = struct {
     body_items: []u8,
     body_capacity: usize,
     locals: std.AutoHashMap(u64, Storage.LocalInfo),
+    symbol_layout_overrides: std.AutoHashMap(u64, layout.Idx),
     next_local_idx: u32,
     local_types_items: []ValType,
     local_types_capacity: usize,
@@ -5597,6 +5783,7 @@ fn saveState(self: *Self) Allocator.Error!SavedState {
         .body_items = self.body.items,
         .body_capacity = self.body.capacity,
         .locals = self.storage.locals,
+        .symbol_layout_overrides = self.symbol_layout_overrides,
         .next_local_idx = self.storage.next_local_idx,
         .local_types_items = self.storage.local_types.items,
         .local_types_capacity = self.storage.local_types.capacity,
@@ -5616,6 +5803,8 @@ fn restoreState(self: *Self, saved: SavedState) void {
     self.body.capacity = saved.body_capacity;
     self.storage.locals.deinit();
     self.storage.locals = saved.locals;
+    self.symbol_layout_overrides.deinit();
+    self.symbol_layout_overrides = saved.symbol_layout_overrides;
     self.storage.next_local_idx = saved.next_local_idx;
     self.storage.local_types.deinit(self.allocator);
     self.storage.local_types.items = saved.local_types_items;
@@ -6037,10 +6226,12 @@ fn bindCFLetPattern(self: *Self, pat: LirPattern, value_expr: LirExprId) Allocat
 fn generateCallFromFnExpr(self: *Self, fn_expr_id: LirExprId, args: LIR.LirExprSpan, ret_layout: layout.Idx) Allocator.Error!void {
     const synthetic_call = struct {
         fn_expr: LirExprId,
+        callable_instance: LIR.CallableInstanceId,
         args: LIR.LirExprSpan,
         ret_layout: layout.Idx,
     }{
         .fn_expr = fn_expr_id,
+        .callable_instance = .none,
         .args = args,
         .ret_layout = ret_layout,
     };
@@ -6112,18 +6303,55 @@ fn tryGenerateDirectCallFromSimpleTagElseMatch(
 
 fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
     const fn_expr = self.store.getExpr(c.fn_expr);
+    var resolved_arg_overrides_buf = std.ArrayList(layout.Idx).empty;
+    defer resolved_arg_overrides_buf.deinit(self.allocator);
+
+    const instance_arg_overrides: []const layout.Idx = if (c.callable_instance.isNone()) &.{} else blk: {
+        const instance = self.store.getCallableInstance(c.callable_instance);
+        break :blk self.store.getLayoutIdxSpan(instance.arg_layouts);
+    };
+    const call_arg_exprs = self.store.getExprSpan(c.args);
+    if (call_arg_exprs.len > 0) {
+        try resolved_arg_overrides_buf.ensureTotalCapacity(self.allocator, call_arg_exprs.len);
+        for (call_arg_exprs, 0..) |arg_expr, i| {
+            var arg_layout: layout.Idx = if (i < instance_arg_overrides.len)
+                instance_arg_overrides[i]
+            else
+                (self.exprLayoutIdx(arg_expr) orelse layout.Idx.none);
+            if (arg_layout == layout.Idx.none or arg_layout == .zst) {
+                if (self.exprLayoutIdx(arg_expr)) |expr_layout| {
+                    if (expr_layout != layout.Idx.none) {
+                        arg_layout = expr_layout;
+                    }
+                }
+            }
+            try resolved_arg_overrides_buf.append(self.allocator, arg_layout);
+        }
+    }
+
+    const call_compile_options: CompileCallableOptions = .{
+        .arg_layout_overrides = if (resolved_arg_overrides_buf.items.len > 0)
+            resolved_arg_overrides_buf.items
+        else if (instance_arg_overrides.len > 0)
+            instance_arg_overrides
+        else
+            null,
+        .ret_layout_override = c.ret_layout,
+    };
 
     switch (fn_expr) {
         .lambda => |lambda| {
-            const func_idx = try self.compileLambda(c.fn_expr, lambda);
+            const func_idx = try self.compileLambdaWithOptions(c.fn_expr, lambda, call_compile_options);
             try self.emitLocalGet(self.roc_ops_local);
             try self.emitForwardedCaptures(func_idx);
+            const forwarded_count: usize = if (self.forwarded_func_captures.get(func_idx)) |caps| caps.len else 0;
+            self.debugAssertCallArgTypesMatch(func_idx, c.args, 1 + forwarded_count, "call.lambda");
             try self.generateCallArgs(c.args);
             try self.emitCall(func_idx);
         },
         .closure => |closure_id| {
             const closure = self.store.getClosureData(closure_id);
-            const func_idx = try self.compileClosure(c.fn_expr, closure);
+            const func_idx = try self.compileClosureWithOptions(c.fn_expr, closure, call_compile_options);
             // Push roc_ops_ptr first, then captures, then forwarded captures, then args
             try self.emitLocalGet(self.roc_ops_local);
             const captures = self.store.getCaptures(closure.captures);
@@ -6132,6 +6360,8 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
                 try self.emitLocalGet(local_idx);
             }
             try self.emitForwardedCaptures(func_idx);
+            const forwarded_count: usize = if (self.forwarded_func_captures.get(func_idx)) |caps| caps.len else 0;
+            self.debugAssertCallArgTypesMatch(func_idx, c.args, 1 + captures.len + forwarded_count, "call.closure");
             try self.generateCallArgs(c.args);
             try self.emitCall(func_idx);
         },
@@ -6146,7 +6376,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
                     const fn_def = self.store.getExpr(cv.lambda_expr);
                     try self.preBindCallableArgs(fn_def, c.args);
                 }
-                try self.dispatchClosureCall(cv, c.args, c.ret_layout);
+                try self.dispatchClosureCall(cv, c.args, c.ret_layout, call_compile_options);
             } else if (self.store.getSymbolDef(lookup.symbol)) |def_expr_id| {
                 const def_expr = self.store.getExpr(def_expr_id);
 
@@ -6158,7 +6388,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
                 if (self.tryBindFunction(def_expr_id, def_expr, lookup.symbol)) |bound| {
                     if (bound) {
                         const cv = self.closure_values.get(key) orelse unreachable;
-                        try self.dispatchClosureCall(cv, c.args, c.ret_layout);
+                        try self.dispatchClosureCall(cv, c.args, c.ret_layout, call_compile_options);
                     } else {
                         if (def_expr == .match_expr) {
                             if (try self.tryGenerateDirectCallFromSimpleTagElseMatch(def_expr.match_expr, c.args, c.ret_layout)) {
@@ -6191,7 +6421,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
                         const fn_def = self.store.getExpr(cv.lambda_expr);
                         try self.preBindCallableArgs(fn_def, c.args);
                     }
-                    try self.dispatchClosureCall(cv, c.args, c.ret_layout);
+                    try self.dispatchClosureCall(cv, c.args, c.ret_layout, call_compile_options);
                     return;
                 }
                 std.debug.panic(
@@ -6230,15 +6460,17 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
             const inner = self.store.getExpr(nom.backing_expr);
             switch (inner) {
                 .lambda => |lambda| {
-                    const func_idx = try self.compileLambda(nom.backing_expr, lambda);
+                    const func_idx = try self.compileLambdaWithOptions(nom.backing_expr, lambda, call_compile_options);
                     try self.emitLocalGet(self.roc_ops_local);
                     try self.emitForwardedCaptures(func_idx);
+                    const forwarded_count: usize = if (self.forwarded_func_captures.get(func_idx)) |caps| caps.len else 0;
+                    self.debugAssertCallArgTypesMatch(func_idx, c.args, 1 + forwarded_count, "call.nominal.lambda");
                     try self.generateCallArgs(c.args);
                     try self.emitCall(func_idx);
                 },
                 .closure => |closure_id| {
                     const closure = self.store.getClosureData(closure_id);
-                    const func_idx = try self.compileClosure(nom.backing_expr, closure);
+                    const func_idx = try self.compileClosureWithOptions(nom.backing_expr, closure, call_compile_options);
                     try self.emitLocalGet(self.roc_ops_local);
                     const captures = self.store.getCaptures(closure.captures);
                     for (captures) |cap| {
@@ -6246,6 +6478,8 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
                         try self.emitLocalGet(local_idx);
                     }
                     try self.emitForwardedCaptures(func_idx);
+                    const forwarded_count: usize = if (self.forwarded_func_captures.get(func_idx)) |caps| caps.len else 0;
+                    self.debugAssertCallArgTypesMatch(func_idx, c.args, 1 + captures.len + forwarded_count, "call.nominal.closure");
                     try self.generateCallArgs(c.args);
                     try self.emitCall(func_idx);
                 },
@@ -6290,7 +6524,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
             try self.generateCall(inner_call);
 
             // Compile the inner closure function
-            const func_idx = try self.compileCallableWithCaptures(inner_closure_info.lambda_expr, inner_closure_info.captures);
+            const func_idx = try self.compileCallableWithCaptures(inner_closure_info.lambda_expr, inner_closure_info.captures, call_compile_options);
 
             switch (inner_closure_info.representation) {
                 .no_captures => {
@@ -6298,6 +6532,8 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
                     try self.body.append(self.allocator, Op.drop);
                     try self.emitLocalGet(self.roc_ops_local);
                     try self.emitForwardedCaptures(func_idx);
+                    const forwarded_count: usize = if (self.forwarded_func_captures.get(func_idx)) |caps| caps.len else 0;
+                    self.debugAssertCallArgTypesMatch(func_idx, c.args, 1 + forwarded_count, "call.chained.no_captures");
                     try self.generateCallArgs(c.args);
                     try self.emitCall(func_idx);
                 },
@@ -6310,6 +6546,8 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
                     try self.emitLocalGet(self.roc_ops_local);
                     try self.emitLocalGet(cap_tmp);
                     try self.emitForwardedCaptures(func_idx);
+                    const forwarded_count: usize = if (self.forwarded_func_captures.get(func_idx)) |caps| caps.len else 0;
+                    self.debugAssertCallArgTypesMatch(func_idx, c.args, 2 + forwarded_count, "call.chained.one_capture");
                     try self.generateCallArgs(c.args);
                     try self.emitCall(func_idx);
                 },
@@ -6329,6 +6567,8 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
                         field_offset += if (vs < 8) 8 else vs;
                     }
                     try self.emitForwardedCaptures(func_idx);
+                    const forwarded_count: usize = if (self.forwarded_func_captures.get(func_idx)) |caps| caps.len else 0;
+                    self.debugAssertCallArgTypesMatch(func_idx, c.args, 1 + captures.len + forwarded_count, "call.chained.multiple_captures");
                     try self.generateCallArgs(c.args);
                     try self.emitCall(func_idx);
                 },
@@ -6369,7 +6609,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
                             .lambda_expr = closure_info.lambda_expr,
                             .captures = closure_info.captures,
                         };
-                        try self.dispatchClosureCall(cv, c.args, c.ret_layout);
+                        try self.dispatchClosureCall(cv, c.args, c.ret_layout, call_compile_options);
                     },
                     .enum_no_captures => |repr| {
                         // Tag-based dispatch — store tag to memory
@@ -6454,6 +6694,65 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
 fn emitCall(self: *Self, func_idx: u32) Allocator.Error!void {
     try self.body.append(self.allocator, Op.call);
     try WasmModule.leb128WriteU32(self.allocator, &self.body, func_idx);
+}
+
+fn functionParamTypes(self: *const Self, func_idx: u32) ?[]const ValType {
+    const import_count = self.module.importCount();
+    const type_idx: u32 = if (func_idx < import_count) blk: {
+        break :blk self.module.imports.items[func_idx].type_idx;
+    } else blk: {
+        const local_idx = func_idx - import_count;
+        if (local_idx >= self.module.func_type_indices.items.len) return null;
+        break :blk self.module.func_type_indices.items[local_idx];
+    };
+    if (type_idx >= self.module.func_types.items.len) return null;
+    return self.module.func_types.items[type_idx].params;
+}
+
+fn debugAssertCallArgTypesMatch(
+    self: *Self,
+    func_idx: u32,
+    args_span: LIR.LirExprSpan,
+    param_start: usize,
+    context: []const u8,
+) void {
+    if (!std.debug.runtime_safety) return;
+
+    const params = self.functionParamTypes(func_idx) orelse return;
+    const arg_exprs = self.store.getExprSpan(args_span);
+    if (param_start + arg_exprs.len > params.len) {
+        std.debug.panic(
+            "wasm call signature overflow ctx={s} func={} param_start={} args={} params={}",
+            .{ context, func_idx, param_start, arg_exprs.len, params.len },
+        );
+    }
+
+    for (arg_exprs, 0..) |arg_id, i| {
+        const expected = params[param_start + i];
+        const actual = self.exprValType(arg_id);
+        if (expected != actual) {
+            const layout_id: u32 = if (self.exprLayoutIdx(arg_id)) |layout_idx|
+                @intFromEnum(layout_idx)
+            else
+                @intFromEnum(layout.Idx.none);
+            std.debug.panic(
+                "wasm call arg type mismatch ctx={s} func={} arg={} expected={} actual={} layout={} expr={}",
+                .{ context, func_idx, i, expected, actual, layout_id, @intFromEnum(arg_id) },
+            );
+        }
+    }
+}
+
+fn compileOptionsForCall(self: *Self, callable_instance: LIR.CallableInstanceId, fallback_ret_layout: layout.Idx) CompileCallableOptions {
+    if (callable_instance.isNone()) {
+        return .{ .ret_layout_override = fallback_ret_layout };
+    }
+    const instance = self.store.getCallableInstance(callable_instance);
+    const arg_overrides = self.store.getLayoutIdxSpan(instance.arg_layouts);
+    return .{
+        .arg_layout_overrides = if (arg_overrides.len > 0) arg_overrides else null,
+        .ret_layout_override = fallback_ret_layout,
+    };
 }
 
 /// Generate call arguments (helper to avoid duplication).
@@ -6965,9 +7264,11 @@ fn generateClosureValue(self: *Self, closure: anytype) Allocator.Error!void {
                 if (self.storage.getLocal(cap.symbol)) |local_idx| {
                     self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
+                } else if (self.resolveCaptureThroughClosure(cap.symbol)) |local_idx| {
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
                 } else {
-                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                    try self.emitDummyValue(self.resolveValType(cap.layout_idx));
                 }
             } else {
                 const cap_size = self.layoutByteSize(repr.capture_layout);
@@ -7170,20 +7471,21 @@ fn compileCallableWithCaptures(
     self: *Self,
     lambda_expr_id: LirExprId,
     captures: LIR.LirCaptureSpan,
+    options: CompileCallableOptions,
 ) Allocator.Error!u32 {
     const expr = self.store.getExpr(lambda_expr_id);
     return switch (expr) {
-        .closure => |closure_id| try self.compileClosure(lambda_expr_id, self.store.getClosureData(closure_id)),
+        .closure => |closure_id| try self.compileClosureWithOptions(lambda_expr_id, self.store.getClosureData(closure_id), options),
         .lambda => |lambda| blk: {
             if (self.store.getCaptures(captures).len > 0) {
-                break :blk try self.compileClosure(lambda_expr_id, .{
+                break :blk try self.compileClosureWithOptions(lambda_expr_id, .{
                     .lambda = lambda_expr_id,
                     .captures = captures,
-                });
+                }, options);
             }
-            break :blk try self.compileLambda(lambda_expr_id, lambda);
+            break :blk try self.compileLambdaWithOptions(lambda_expr_id, lambda, options);
         },
-        .nominal => |nom| try self.compileCallableWithCaptures(nom.backing_expr, captures),
+        .nominal => |nom| try self.compileCallableWithCaptures(nom.backing_expr, captures, options),
         else => unreachable,
     };
 }
@@ -7195,6 +7497,7 @@ fn dispatchClosureCall(
     cv: ClosureValue,
     args: LIR.LirExprSpan,
     ret_layout: layout.Idx,
+    call_compile_options: CompileCallableOptions,
 ) Allocator.Error!void {
     switch (cv.representation) {
         .enum_no_captures => |repr| {
@@ -7217,9 +7520,7 @@ fn dispatchClosureCall(
         },
         .one_capture, .multiple_captures, .no_captures => {
             // Single function - compile and call directly
-            const func_idx = if (cv.func_idx) |fid| fid else blk: {
-                break :blk try self.compileCallableWithCaptures(cv.lambda_expr, cv.captures);
-            };
+            const func_idx = try self.compileCallableWithCaptures(cv.lambda_expr, cv.captures, call_compile_options);
 
             // Push roc_ops_ptr first
             try self.emitLocalGet(self.roc_ops_local);
@@ -7269,6 +7570,8 @@ fn dispatchClosureCall(
             try self.emitForwardedCaptures(func_idx);
 
             // Generate arguments and call
+            const forwarded_count: usize = if (self.forwarded_func_captures.get(func_idx)) |caps| caps.len else 0;
+            self.debugAssertCallArgTypesMatch(func_idx, args, 1 + captures.len + forwarded_count, "dispatchClosureCall.single");
             try self.generateCallArgs(args);
             try self.emitCall(func_idx);
         },
@@ -7565,11 +7868,13 @@ fn compileLambdaSetMemberAndCall(
     try self.emitLocalGet(self.roc_ops_local);
 
     // Push captures from the member
+    var pushed_capture_count: usize = 0;
     if (lambda_expr == .closure) {
         const captures = self.store.getCaptures(self.store.getClosureData(lambda_expr.closure).captures);
         for (captures) |cap| {
             if (self.storage.getLocal(cap.symbol)) |local_idx| {
                 try self.emitLocalGet(local_idx);
+                pushed_capture_count += 1;
             }
         }
     } else if (member_captures.len > 0) {
@@ -7578,6 +7883,7 @@ fn compileLambdaSetMemberAndCall(
         for (member_captures) |cap| {
             if (self.storage.getLocal(cap.symbol)) |local_idx| {
                 try self.emitLocalGet(local_idx);
+                pushed_capture_count += 1;
             }
         }
     }
@@ -7586,6 +7892,8 @@ fn compileLambdaSetMemberAndCall(
     try self.emitForwardedCaptures(func_idx);
 
     // Push arguments
+    const forwarded_count: usize = if (self.forwarded_func_captures.get(func_idx)) |caps| caps.len else 0;
+    self.debugAssertCallArgTypesMatch(func_idx, args, 1 + pushed_capture_count + forwarded_count, "compileLambdaSetMemberAndCall");
     try self.generateCallArgs(args);
 
     // Call
@@ -7604,6 +7912,12 @@ fn layoutByteSize(self: *const Self, layout_idx: layout.Idx) u32 {
     const ls = self.layout_store orelse return 4; // default to 4 bytes
     const l = ls.getLayout(layout_idx);
     return ls.layoutSize(l);
+}
+
+fn layoutByteAlign(self: *const Self, layout_idx: layout.Idx) u32 {
+    const ls = self.layout_store orelse return 4;
+    const l = ls.getLayout(layout_idx);
+    return @intCast(ls.layoutSizeAlign(l).alignment.toByteUnits());
 }
 
 /// Emit a store instruction for the given value type at an address already on the stack.
@@ -9039,13 +9353,12 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // Returns Result(elem, [OutOfBounds]) — a tag union with bounds checking.
             const ls = self.getLayoutStore();
 
-            // Get element layout from the list type
+            // Get element layout from the list type first.
             const list_layout_idx = self.exprLayoutIdx(args[0]) orelse unreachable;
             const list_layout = ls.getLayout(list_layout_idx);
             const list_info = ls.getListInfo(list_layout);
-            const elem_size: u32 = list_info.elem_size;
-            const elem_layout_idx = list_info.elem_layout_idx;
-            const elem_is_composite = self.isCompositeLayout(elem_layout_idx);
+            var elem_layout_idx = list_info.elem_layout_idx;
+            var elem_size: u32 = list_info.elem_size;
 
             // Generate list expression and save pointer
             try self.generateExpr(args[0]);
@@ -9067,6 +9380,31 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                     WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(v)) catch return error.OutOfMemory;
                 },
+                .lookup => |lookup| blk: {
+                    const key: u64 = @bitCast(lookup.symbol);
+                    if (self.local_binding_exprs.get(key)) |bound_expr_id| {
+                        const bound_expr = self.store.getExpr(bound_expr_id);
+                        switch (bound_expr) {
+                            .dec_literal => |v| {
+                                const one_point_zero: i128 = 1_000_000_000_000_000_000;
+                                const actual: i32 = if (v == 0) 0 else @intCast(@divExact(v, one_point_zero));
+                                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                                WasmModule.leb128WriteI32(self.allocator, &self.body, actual) catch return error.OutOfMemory;
+                                break :blk;
+                            },
+                            .i64_literal => |v| {
+                                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                                WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(v)) catch return error.OutOfMemory;
+                                break :blk;
+                            },
+                            else => {},
+                        }
+                    }
+                    try self.generateExpr(args[1]);
+                    if (self.exprValType(args[1]) == .i64) {
+                        self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+                    }
+                },
                 else => {
                     try self.generateExpr(args[1]);
                     if (self.exprValType(args[1]) == .i64) {
@@ -9080,6 +9418,28 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const ret_layout_obj = ls.getLayout(ll.ret_layout);
             if (ret_layout_obj.tag == .tag_union) {
                 const tu_data = ls.getTagUnionData(ret_layout_obj.data.tag_union.idx);
+                const variants = ls.getTagUnionVariants(tu_data);
+                std.debug.assert(variants.len == 2);
+                var ok_disc: u32 = 0;
+                var err_disc: u32 = 1;
+                if (variants.get(0).payload_layout == list_info.elem_layout_idx) {
+                    ok_disc = 0;
+                    err_disc = 1;
+                } else if (variants.get(1).payload_layout == list_info.elem_layout_idx) {
+                    ok_disc = 1;
+                    err_disc = 0;
+                } else {
+                    // Generic/mismatched list parameter layout: pick larger payload as Ok.
+                    const s0 = ls.layoutSize(ls.getLayout(variants.get(0).payload_layout));
+                    const s1 = ls.layoutSize(ls.getLayout(variants.get(1).payload_layout));
+                    if (s1 > s0) {
+                        ok_disc = 1;
+                        err_disc = 0;
+                    }
+                }
+                elem_layout_idx = variants.get(ok_disc).payload_layout;
+                elem_size = ls.layoutSize(ls.getLayout(elem_layout_idx));
+                const elem_is_composite = self.isCompositeLayout(elem_layout_idx);
                 const tu_size = ls.layoutSize(ret_layout_obj);
                 const disc_offset: u32 = tu_data.discriminant_offset;
                 const disc_size: u32 = tu_data.discriminant_size;
@@ -9122,17 +9482,17 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     try self.emitStoreToMemSized(result_local, 0, elem_vt, elem_size);
                 }
 
-                // Set discriminant to 1 (Ok — alphabetically after Err)
+                // Set Ok discriminant
                 self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                WasmModule.leb128WriteI32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(ok_disc)) catch return error.OutOfMemory;
                 try self.emitStoreToMemSized(result_local, disc_offset, .i32, disc_size);
 
                 // else — Err path (out of bounds)
                 self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
 
-                // Set discriminant to 0 (Err — alphabetically before Ok)
+                // Set Err discriminant
                 self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(err_disc)) catch return error.OutOfMemory;
                 try self.emitStoreToMemSized(result_local, disc_offset, .i32, disc_size);
 
                 self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
@@ -9141,6 +9501,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 try self.emitLocalGet(result_local);
             } else {
                 // Non-tag-union return — direct element access (no bounds checking)
+                const elem_is_composite = self.isCompositeLayout(elem_layout_idx);
                 try self.emitLocalGet(list_local);
                 try self.emitLoadOp(.i32, 0);
                 try self.emitLocalGet(index_local);
@@ -9325,8 +9686,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
 
-            // Get element size from ret_layout (which is the list layout, not elem)
-            const elem_size = self.getListElemSize(ll.ret_layout);
+            const elem_info = self.inferListElemInfo(ll.ret_layout, args[0], null);
+            const elem_size = elem_info.size;
 
             // new_ptr = old_ptr + count * elem_size
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
@@ -9527,7 +9888,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
 
-            const elem_size = self.getListElemSize(ll.ret_layout);
+            const elem_info = self.inferListElemInfo(ll.ret_layout, args[0], null);
+            const elem_size = elem_info.size;
 
             // new_ptr = old_ptr + (len - actual_count) * elem_size
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
@@ -9830,7 +10192,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
 
-            const elem_size = self.getListElemSize(ll.ret_layout);
+            const elem_info = self.inferListElemInfo(ll.ret_layout, args[0], null);
+            const elem_size = elem_info.size;
 
             // new_ptr = old_ptr + actual_start * elem_size
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
@@ -12059,18 +12422,7 @@ fn generateListEqWithElemLayout(self: *Self, lhs: LirExprId, rhs: LirExprId, ele
         WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
     } else if (self.layout_store) |ls| {
         const elem_l = ls.getLayout(elem_layout);
-        if (elem_l.tag == .list) {
-            // List of lists - use specialized host function with inner element size
-            const inner_elem_layout = elem_l.data.list;
-            const inner_elem_size = self.layoutByteSize(inner_elem_layout);
-            const import_idx = self.list_list_eq_import orelse unreachable;
-            try self.emitLocalGet(lhs_local);
-            try self.emitLocalGet(rhs_local);
-            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(inner_elem_size)) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
-        } else if (ls.layoutContainsRefcounted(elem_l)) {
+        if (elem_l.tag == .list or ls.layoutContainsRefcounted(elem_l)) {
             // Composite elements with refcounted fields: inline structural loop
             const elem_size = self.layoutByteSize(elem_layout);
             try self.emitListEqLoop(lhs_local, rhs_local, elem_layout, elem_size);
@@ -13606,6 +13958,69 @@ fn getListElemAlign(self: *const Self, list_layout: layout.Idx) u32 {
     return @intCast(ls.getLayout(l.data.list).alignment(ls.targetUsize()).toByteUnits());
 }
 
+const ListElemInfo = struct {
+    size: u32,
+    align_bytes: u32,
+};
+
+fn listElemInfoFromListLayout(self: *const Self, list_layout: layout.Idx) ?ListElemInfo {
+    const ls = self.layout_store orelse return null;
+    const l = ls.getLayout(list_layout);
+    if (l.tag != .list) return null;
+
+    const elem = ls.getLayout(l.data.list);
+    const size_align = ls.layoutSizeAlign(elem);
+    const align_bytes: u32 = @max(1, @as(u32, @intCast(size_align.alignment.toByteUnits())));
+    return .{
+        .size = size_align.size,
+        .align_bytes = align_bytes,
+    };
+}
+
+fn inferListElemInfo(
+    self: *Self,
+    ret_layout: layout.Idx,
+    list_expr: ?LirExprId,
+    elem_expr: ?LirExprId,
+) ListElemInfo {
+    if (self.listElemInfoFromListLayout(ret_layout)) |info| {
+        if (info.size > 0) return info;
+    }
+
+    if (list_expr) |list_e| {
+        if (self.exprLayoutIdx(list_e)) |list_layout| {
+            if (self.listElemInfoFromListLayout(list_layout)) |info| {
+                if (info.size > 0) return info;
+            }
+        }
+    }
+
+    if (elem_expr) |elem_e| {
+        if (self.exprLayoutIdx(elem_e)) |elem_layout| {
+            const size = self.layoutByteSize(elem_layout);
+            if (size > 0) {
+                return .{
+                    .size = size,
+                    .align_bytes = self.layoutByteAlign(elem_layout),
+                };
+            }
+        }
+
+        const vt = self.exprValType(elem_e);
+        const size = valTypeSize(vt);
+        const align_bytes: u32 = if (size >= 8) 8 else if (size >= 4) 4 else if (size >= 2) 2 else 1;
+        return .{
+            .size = size,
+            .align_bytes = align_bytes,
+        };
+    }
+
+    return .{
+        .size = 0,
+        .align_bytes = 1,
+    };
+}
+
 const StrSearchMode = enum { contains, starts_with, ends_with };
 
 /// Generate LowLevel str_contains / str_starts_with / str_ends_with.
@@ -13853,8 +14268,9 @@ fn emitBytewiseCompare(self: *Self, ptr_a: u32, ptr_b: u32, len: u32, result_loc
 
 /// Generate LowLevel list_append: create new list with one element appended.
 fn generateLLListAppend(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
-    const elem_size = self.getListElemSize(ret_layout);
-    const elem_align = self.getListElemAlign(ret_layout);
+    const elem_info = self.inferListElemInfo(ret_layout, args[0], args[1]);
+    const elem_size = elem_info.size;
+    const elem_align = elem_info.align_bytes;
 
     // Generate list arg
     try self.generateExpr(args[0]);
@@ -13947,8 +14363,9 @@ fn generateLLListAppend(self: *Self, args: anytype, ret_layout: layout.Idx) Allo
 
 /// Generate LowLevel list_prepend: create new list with one element prepended.
 fn generateLLListPrepend(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
-    const elem_size = self.getListElemSize(ret_layout);
-    const elem_align = self.getListElemAlign(ret_layout);
+    const elem_info = self.inferListElemInfo(ret_layout, args[0], args[1]);
+    const elem_size = elem_info.size;
+    const elem_align = elem_info.align_bytes;
 
     // Generate list and element
     try self.generateExpr(args[0]);
@@ -14037,8 +14454,9 @@ fn generateLLListPrepend(self: *Self, args: anytype, ret_layout: layout.Idx) All
 
 /// Generate LowLevel list_concat: concatenate two lists.
 fn generateLLListConcat(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
-    const elem_size = self.getListElemSize(ret_layout);
-    const elem_align = self.getListElemAlign(ret_layout);
+    const elem_info = self.inferListElemInfo(ret_layout, args[0], null);
+    const elem_size = elem_info.size;
+    const elem_align = elem_info.align_bytes;
 
     // Generate both lists
     try self.generateExpr(args[0]);
@@ -14124,8 +14542,9 @@ fn generateLLListConcat(self: *Self, args: anytype, ret_layout: layout.Idx) Allo
 
 /// Generate LowLevel list_reverse: create new list with elements in reverse order.
 fn generateLLListReverse(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
-    const elem_size = self.getListElemSize(ret_layout);
-    const elem_align = self.getListElemAlign(ret_layout);
+    const elem_info = self.inferListElemInfo(ret_layout, args[0], null);
+    const elem_size = elem_info.size;
+    const elem_align = elem_info.align_bytes;
 
     try self.generateExpr(args[0]);
     const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -14275,8 +14694,9 @@ fn buildRocListWithCap(self: *Self, data_local: u32, len_local: u32, cap_local: 
 
 /// Generate list_with_capacity: create empty list with given capacity
 fn generateLLListWithCapacity(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
-    const elem_size = self.getListElemSize(ret_layout);
-    const elem_align = self.getListElemAlign(ret_layout);
+    const elem_info = self.inferListElemInfo(ret_layout, null, null);
+    const elem_size = elem_info.size;
+    const elem_align = elem_info.align_bytes;
 
     // Generate capacity arg (may be i64 from MonoIR layout; convert to i32 for wasm32)
     try self.generateExpr(args[0]);
@@ -14307,8 +14727,9 @@ fn generateLLListWithCapacity(self: *Self, args: anytype, ret_layout: layout.Idx
 
 /// Generate list_repeat: create list with count copies of value
 fn generateLLListRepeat(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
-    const elem_size = self.getListElemSize(ret_layout);
-    const elem_align = self.getListElemAlign(ret_layout);
+    const elem_info = self.inferListElemInfo(ret_layout, null, args[0]);
+    const elem_size = elem_info.size;
+    const elem_align = elem_info.align_bytes;
 
     // Generate value arg
     try self.generateExpr(args[0]);
@@ -14392,8 +14813,9 @@ fn generateLLListRepeat(self: *Self, args: anytype, ret_layout: layout.Idx) Allo
 
 /// Generate list_set: set element at index, creating a new list
 fn generateLLListSet(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
-    const elem_size = self.getListElemSize(ret_layout);
-    const elem_align = self.getListElemAlign(ret_layout);
+    const elem_info = self.inferListElemInfo(ret_layout, args[0], args[2]);
+    const elem_size = elem_info.size;
+    const elem_align = elem_info.align_bytes;
 
     // Generate list arg
     try self.generateExpr(args[0]);
@@ -14471,8 +14893,9 @@ fn generateLLListSet(self: *Self, args: anytype, ret_layout: layout.Idx) Allocat
 
 /// Generate list_reserve: ensure list has at least given capacity
 fn generateLLListReserve(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
-    const elem_size = self.getListElemSize(ret_layout);
-    const elem_align = self.getListElemAlign(ret_layout);
+    const elem_info = self.inferListElemInfo(ret_layout, args[0], null);
+    const elem_size = elem_info.size;
+    const elem_align = elem_info.align_bytes;
 
     // Generate list arg
     try self.generateExpr(args[0]);
@@ -14538,8 +14961,9 @@ fn generateLLListReserve(self: *Self, args: anytype, ret_layout: layout.Idx) All
 
 /// Generate list_release_excess_capacity: shrink list to exact length
 fn generateLLListReleaseExcessCapacity(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
-    const elem_size = self.getListElemSize(ret_layout);
-    const elem_align = self.getListElemAlign(ret_layout);
+    const elem_info = self.inferListElemInfo(ret_layout, args[0], null);
+    const elem_size = elem_info.size;
+    const elem_align = elem_info.align_bytes;
 
     // Generate list arg
     try self.generateExpr(args[0]);
@@ -14587,8 +15011,9 @@ fn generateLLListReleaseExcessCapacity(self: *Self, args: anytype, ret_layout: l
 fn generateLLListSplitFirst(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
     // ret_layout is a record { first: elem, rest: list }
     // We need to extract the element type and size
-    const elem_size = self.getListElemSize(ret_layout);
-    const elem_align = self.getListElemAlign(ret_layout);
+    const elem_info = self.inferListElemInfo(ret_layout, args[0], null);
+    const elem_size = elem_info.size;
+    const elem_align = elem_info.align_bytes;
 
     // Generate list arg
     try self.generateExpr(args[0]);
@@ -14680,8 +15105,9 @@ fn generateLLListSplitFirst(self: *Self, args: anytype, ret_layout: layout.Idx) 
 
 /// Generate list_split_last: split list into rest and last element
 fn generateLLListSplitLast(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
-    const elem_size = self.getListElemSize(ret_layout);
-    const elem_align = self.getListElemAlign(ret_layout);
+    const elem_info = self.inferListElemInfo(ret_layout, args[0], null);
+    const elem_size = elem_info.size;
+    const elem_align = elem_info.align_bytes;
 
     // Generate list arg
     try self.generateExpr(args[0]);
