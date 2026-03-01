@@ -807,10 +807,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Registry of compiled lambdas by cache key.
         /// Used when a lambda is called - we compile it once and reuse.
-        compiled_lambdas: std.AutoHashMap(u32, usize),
+        compiled_lambdas: std.AutoHashMap(LambdaCompileKey, usize),
         /// Lambdas currently being compiled (temporary body-start offsets).
         /// This breaks recursive compilation cycles when lambda caching is disabled.
-        in_progress_lambdas: std.AutoHashMap(u32, usize),
+        in_progress_lambdas: std.AutoHashMap(LambdaCompileKey, usize),
         /// Closures currently being materialized (layout-disambiguated symbol key -> location).
         /// Used to resolve mutually-recursive closure captures without re-entering
         /// closure materialization recursively.
@@ -895,6 +895,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             loc: ValueLocation,
             layout_idx: ?layout.Idx,
             num_regs: u8,
+        };
+
+        const LambdaCompileKey = struct {
+            expr_id: LirExprId,
+            fn_layout: layout.Idx,
+            ret_layout: layout.Idx,
+            capture_start: u32,
+            capture_len: u16,
         };
 
         /// Info about a mutable variable's fixed stack slot
@@ -1235,8 +1243,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .current_recursive_join_point = null,
                 .current_binding_symbol = null,
                 .proc_registry = std.AutoHashMap(u64, CompiledProc).init(allocator),
-                .compiled_lambdas = std.AutoHashMap(u32, usize).init(allocator),
-                .in_progress_lambdas = std.AutoHashMap(u32, usize).init(allocator),
+                .compiled_lambdas = std.AutoHashMap(LambdaCompileKey, usize).init(allocator),
+                .in_progress_lambdas = std.AutoHashMap(LambdaCompileKey, usize).init(allocator),
                 .in_progress_closures_by_layout = std.AutoHashMap(u128, ValueLocation).init(allocator),
                 .pending_calls = std.ArrayList(PendingCall).empty,
                 .join_point_jumps = std.AutoHashMap(u32, std.ArrayList(JumpRecord)).init(allocator),
@@ -14803,7 +14811,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn compileLambdaAsProc(self: *Self, lambda_expr_id: LirExprId, lambda: anytype, options: LambdaCompileOptions) Allocator.Error!usize {
             const proc_ret_layout = lambda.ret_layout;
             const use_cache = self.store.getCaptures(options.capture_params).len == 0 and !self.hasPreboundCallableForParams(lambda.params);
-            const key = @intFromEnum(lambda_expr_id);
+            const key: LambdaCompileKey = .{
+                .expr_id = lambda_expr_id,
+                .fn_layout = lambda.fn_layout,
+                .ret_layout = proc_ret_layout,
+                .capture_start = options.capture_params.start,
+                .capture_len = options.capture_params.len,
+            };
 
             // Recursive lambda compilation must resolve to the in-flight body start
             // to avoid unbounded re-entry (e.g. mutually-recursive closures).
