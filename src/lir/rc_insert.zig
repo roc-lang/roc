@@ -414,15 +414,6 @@ pub const RcInsertPass = struct {
                 // Pre-register all pattern symbols so lambdas in early
                 // statements can detect captures from later siblings.
                 for (stmts) |stmt| {
-                    if (std.debug.runtime_safety) {
-                        const pat = self.store.getPattern(stmt.binding().pattern);
-                        if (pat == .bind and @as(u64, @bitCast(pat.bind.symbol)) == 18446743833191383041) {
-                            std.debug.print(
-                                "[DBG rc_insert.countUsesInto.block] bind symbol_key={} expr_tag={s}\n",
-                                .{ @as(u64, @bitCast(pat.bind.symbol)), @tagName(self.store.getExpr(stmt.binding().expr)) },
-                            );
-                        }
-                    }
                     try self.registerPatternSymbolInto(stmt.binding().pattern, target);
                 }
                 for (stmts) |stmt| {
@@ -500,50 +491,6 @@ pub const RcInsertPass = struct {
 
                 const params = self.store.getPatternSpan(lam.params);
                 for (params) |pat_id| {
-                    if (std.debug.runtime_safety) {
-                        const pat = self.store.getPattern(pat_id);
-                        if (pat == .bind and @as(u64, @bitCast(pat.bind.symbol)) == 18446743833191383041) {
-                            std.debug.print(
-                                "[DBG rc_insert.countUsesInto.lambda] param symbol_key={} body_tag={s}\n",
-                                .{ @as(u64, @bitCast(pat.bind.symbol)), @tagName(self.store.getExpr(lam.body)) },
-                            );
-                            const body_expr = self.store.getExpr(lam.body);
-                            if (body_expr == .block) {
-                                const dbg_stmts = self.store.getStmts(body_expr.block.stmts);
-                                for (dbg_stmts, 0..) |dbg_stmt, dbg_i| {
-                                    const dbg_expr_id = dbg_stmt.binding().expr;
-                                    const dbg_expr = self.store.getExpr(dbg_expr_id);
-                                    std.debug.print(
-                                        "  [DBG lambda body stmt {}] expr={} tag={s}\n",
-                                        .{ dbg_i, @intFromEnum(dbg_expr_id), @tagName(dbg_expr) },
-                                    );
-                                    if (dbg_expr == .for_loop) {
-                                        const list_expr = self.store.getExpr(dbg_expr.for_loop.list_expr);
-                                        if (list_expr == .lookup) {
-                                            std.debug.print(
-                                                "    [DBG lambda for_loop list] expr={} symbol_key={} layout={}\n",
-                                                .{
-                                                    @intFromEnum(dbg_expr.for_loop.list_expr),
-                                                    @as(u64, @bitCast(list_expr.lookup.symbol)),
-                                                    @intFromEnum(list_expr.lookup.layout_idx),
-                                                },
-                                            );
-                                        } else {
-                                            std.debug.print(
-                                                "    [DBG lambda for_loop list] expr={} tag={s}\n",
-                                                .{ @intFromEnum(dbg_expr.for_loop.list_expr), @tagName(list_expr) },
-                                            );
-                                        }
-                                    }
-                                }
-                                const dbg_final = self.store.getExpr(body_expr.block.final_expr);
-                                std.debug.print(
-                                    "  [DBG lambda body final] expr={} tag={s}\n",
-                                    .{ @intFromEnum(body_expr.block.final_expr), @tagName(dbg_final) },
-                                );
-                            }
-                        }
-                    }
                     try self.registerPatternSymbolInto(pat_id, &local);
                 }
                 try self.countUsesInto(lam.body, &local);
@@ -2351,16 +2298,6 @@ pub const RcInsertPass = struct {
             fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
                 if (ctx.pass.layoutNeedsRc(layout_idx)) {
                     const use_count = ctx.pass.sumSymbolUses(ctx.local_uses, symbol);
-                    if (std.debug.runtime_safety and @as(u64, @bitCast(symbol)) == 18446743833191383041) {
-                        std.debug.print(
-                            "[DBG rc_insert.emitRcOpsForPatternInto] symbol_key={} layout={} use_count={}\n",
-                            .{
-                                @as(u64, @bitCast(symbol)),
-                                @intFromEnum(layout_idx),
-                                use_count,
-                            },
-                        );
-                    }
                     if (use_count == 0) {
                         try ctx.pass.emitDecrefInto(symbol, layout_idx, ctx.region, ctx.rc_stmts);
                     } else if (use_count > 1) {

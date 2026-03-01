@@ -1148,60 +1148,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn putSymbolLocation(self: *Self, symbol: Symbol, layout_idx: ?layout.Idx, loc: ValueLocation) Allocator.Error!void {
-            const dbg_symbol_key: u64 = 18446743833191383041;
-            const dbg_symbol_key_2: u64 = 18446743953450467328;
-            if (std.debug.runtime_safety and layout_idx != null and @intFromEnum(layout_idx.?) == 18) {
-                const any_off: i32 = switch (loc) {
-                    .stack => |s| s.offset,
-                    .list_stack => |ls_info| ls_info.struct_offset,
-                    .stack_i128 => |off| off,
-                    .stack_str => |off| off,
-                    .closure_value => |cv| cv.stack_offset,
-                    else => -999999,
-                };
-                std.debug.print(
-                    "[DBG putSymbolLocation.anyList] sym={} layout={} loc={s} off={}\n",
-                    .{ symbolKey(symbol), @intFromEnum(layout_idx.?), @tagName(loc), any_off },
-                );
-            }
-            if (std.debug.runtime_safety and symbolKey(symbol) == dbg_symbol_key) {
-                const dbg_off: i32 = switch (loc) {
-                    .stack => |s| s.offset,
-                    .list_stack => |ls_info| ls_info.struct_offset,
-                    .stack_i128 => |off| off,
-                    .stack_str => |off| off,
-                    .closure_value => |cv| cv.stack_offset,
-                    else => -999999,
-                };
-                std.debug.print(
-                    "[DBG putSymbolLocation] sym={} layout={} loc={s} off={}\n",
-                    .{
-                        symbolKey(symbol),
-                        if (layout_idx) |li| @intFromEnum(li) else @as(u32, std.math.maxInt(u32)),
-                        @tagName(loc),
-                        dbg_off,
-                    },
-                );
-            }
-            if (std.debug.runtime_safety and symbolKey(symbol) == dbg_symbol_key_2) {
-                const dbg_off_2: i32 = switch (loc) {
-                    .stack => |s| s.offset,
-                    .list_stack => |ls_info| ls_info.struct_offset,
-                    .stack_i128 => |off| off,
-                    .stack_str => |off| off,
-                    .closure_value => |cv| cv.stack_offset,
-                    else => -999999,
-                };
-                std.debug.print(
-                    "[DBG putSymbolLocation.acc] sym={} layout={} loc={s} off={}\n",
-                    .{
-                        symbolKey(symbol),
-                        if (layout_idx) |li| @intFromEnum(li) else @as(u32, std.math.maxInt(u32)),
-                        @tagName(loc),
-                        dbg_off_2,
-                    },
-                );
-            }
             try self.symbol_locations.put(symbolKey(symbol), loc);
             if (layout_idx) |li| {
                 if (li == layout.Idx.none) {
@@ -1256,53 +1202,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn getSymbolLocation(self: *Self, symbol: Symbol, layout_idx: ?layout.Idx) ?ValueLocation {
-            const dbg_symbol_key: u64 = 18446743833191383041;
-            const dbg_symbol_key_2: u64 = 18446743953450467328;
-            if (std.debug.runtime_safety and symbolKey(symbol) == dbg_symbol_key) {
-                std.debug.print(
-                    "[DBG getSymbolLocation] sym={} layout={}\n",
-                    .{
-                        symbolKey(symbol),
-                        if (layout_idx) |li| @intFromEnum(li) else @as(u32, std.math.maxInt(u32)),
-                    },
-                );
-            }
-            if (std.debug.runtime_safety and symbolKey(symbol) == dbg_symbol_key_2) {
-                std.debug.print(
-                    "[DBG getSymbolLocation.acc] sym={} layout={}\n",
-                    .{
-                        symbolKey(symbol),
-                        if (layout_idx) |li| @intFromEnum(li) else @as(u32, std.math.maxInt(u32)),
-                    },
-                );
-            }
             if (layout_idx) |li| {
                 if (li == layout.Idx.none) {
                     return self.symbol_locations.get(symbolKey(symbol));
                 }
                 if (self.symbol_locations_by_layout.get(self.symbolLayoutKey(symbol, li))) |loc| {
-                    if (std.debug.runtime_safety and symbolKey(symbol) == dbg_symbol_key) {
-                        const dbg_off: i32 = switch (loc) {
-                            .stack => |s| s.offset,
-                            .list_stack => |ls_info| ls_info.struct_offset,
-                            .stack_i128 => |off| off,
-                            .stack_str => |off| off,
-                            .closure_value => |cv| cv.stack_offset,
-                            else => -999999,
-                        };
-                        std.debug.print("[DBG getSymbolLocation.hit] loc={s} off={}\n", .{ @tagName(loc), dbg_off });
-                    }
-                    if (std.debug.runtime_safety and symbolKey(symbol) == dbg_symbol_key_2) {
-                        const dbg_off_2: i32 = switch (loc) {
-                            .stack => |s| s.offset,
-                            .list_stack => |ls_info| ls_info.struct_offset,
-                            .stack_i128 => |off| off,
-                            .stack_str => |off| off,
-                            .closure_value => |cv| cv.stack_offset,
-                            else => -999999,
-                        };
-                        std.debug.print("[DBG getSymbolLocation.acc.hit] loc={s} off={}\n", .{ @tagName(loc), dbg_off_2 });
-                    }
                     return loc;
                 }
                 if (self.isFunctionLayout(li)) {
@@ -3795,20 +3699,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // list_last(list) -> element  (same as list_get at index len-1)
                     if (args.len != 1) unreachable;
                     const list_loc = try self.generateExpr(args[0]);
-                    if (std.debug.runtime_safety) {
-                        const arg_expr = self.store.getExpr(args[0]);
-                        std.debug.print("[DBG list_last] arg_expr={} lookup={} layout={}\n", .{
-                            @intFromEnum(args[0]),
-                            arg_expr == .lookup,
-                            if (self.getExprLayout(args[0])) |li| @intFromEnum(li) else @as(u32, std.math.maxInt(u32)),
-                        });
-                        if (arg_expr == .lookup) {
-                            std.debug.print("[DBG list_last] lookup symbol_key={} layout={}\n", .{
-                                @as(u64, @bitCast(arg_expr.lookup.symbol)),
-                                @intFromEnum(arg_expr.lookup.layout_idx),
-                            });
-                        }
-                    }
                     const list_elem_layout: ?layout.Idx = blk: {
                         const ls = self.layout_store orelse break :blk null;
                         if (self.getExprLayout(args[0])) |list_layout_idx| {
@@ -12584,51 +12474,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Process each statement
             for (stmts) |stmt| {
                 const b = stmt.binding();
-                if (std.debug.runtime_safety) {
-                    const dbg_symbol_key: u64 = 18446743833191383041;
-                    const stmt_expr_dbg = self.store.getExpr(b.expr);
-                    if (stmt_expr_dbg == .decref) {
-                        const value_expr_dbg = self.store.getExpr(stmt_expr_dbg.decref.value);
-                        if (value_expr_dbg == .lookup and @as(u64, @bitCast(value_expr_dbg.lookup.symbol)) == dbg_symbol_key) {
-                            std.debug.print(
-                                "[DBG generateBlock.stmt.decref] stmt_expr={} value_expr={} layout={}\n",
-                                .{
-                                    @intFromEnum(b.expr),
-                                    @intFromEnum(stmt_expr_dbg.decref.value),
-                                    @intFromEnum(stmt_expr_dbg.decref.layout_idx),
-                                },
-                            );
-                            for (stmts, 0..) |dbg_stmt, dbg_i| {
-                                const dbg_b = dbg_stmt.binding();
-                                const dbg_expr_id = dbg_b.expr;
-                                const dbg_expr = self.store.getExpr(dbg_expr_id);
-                                std.debug.print(
-                                    "  [DBG block stmt {}] expr={} tag={s} pat={s}\n",
-                                    .{
-                                        dbg_i,
-                                        @intFromEnum(dbg_expr_id),
-                                        @tagName(dbg_expr),
-                                        @tagName(self.store.getPattern(dbg_b.pattern)),
-                                    },
-                                );
-                                if (dbg_expr == .decref) {
-                                    const dv = self.store.getExpr(dbg_expr.decref.value);
-                                    if (dv == .lookup) {
-                                        std.debug.print(
-                                            "    [DBG block decref] value_expr={} symbol_key={} layout={}\n",
-                                            .{
-                                                @intFromEnum(dbg_expr.decref.value),
-                                                @as(u64, @bitCast(dv.lookup.symbol)),
-                                                @intFromEnum(dbg_expr.decref.layout_idx),
-                                            },
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
                 // For self-recursive closures (e.g., `factorial = |n| ... factorial(n-1) ...`):
                 // The closure captures itself, but the self-capture is only used for recursive
                 // calls. We compile the lambda as a standalone procedure and bind the symbol
@@ -14416,28 +14261,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     var param_layout_overrides = std.ArrayList(layout.Idx).empty;
                     defer param_layout_overrides.deinit(self.allocator);
                     const args = self.store.getExprSpan(args_span);
-                    if (std.debug.runtime_safety) {
-                        const params_dbg = self.store.getPatternSpan(lambda.params);
-                        if (params_dbg.len > 0) {
-                            const p0 = self.store.getPattern(params_dbg[0]);
-                            if (p0 == .bind and @as(u64, @bitCast(p0.bind.symbol)) == 18446743833191383041 and args.len > 0) {
-                                const arg0_expr = self.store.getExpr(args[0]);
-                                std.debug.print(
-                                    "[DBG compileLambdaAndCall.arg0] lambda={} arg0_expr={} tag={s}\n",
-                                    .{ @intFromEnum(lambda_body), @intFromEnum(args[0]), @tagName(arg0_expr) },
-                                );
-                                if (arg0_expr == .lookup) {
-                                    std.debug.print(
-                                        "[DBG compileLambdaAndCall.arg0.lookup] symbol_key={} layout={}\n",
-                                        .{
-                                            @as(u64, @bitCast(arg0_expr.lookup.symbol)),
-                                            @intFromEnum(arg0_expr.lookup.layout_idx),
-                                        },
-                                    );
-                                }
-                            }
-                        }
-                    }
                     if (arg_layout_overrides.len > 0 and arg_layout_overrides.len != args.len) {
                         std.debug.panic("compileLambdaAndCall: arg layout override length mismatch expected={} actual={}", .{
                             args.len,
@@ -19584,9 +19407,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 if (list_info.contains_refcounted and list_info.elem_size > 0) {
                                     try self.emitListElementDecrefsIfUnique(value_loc, list_info.elem_layout_idx, list_info.elem_size);
                                 }
-                                if (std.debug.runtime_safety) {
-                                    std.debug.print("[DBG generateDecref.list] value_loc={s}\n", .{@tagName(value_loc)});
-                                }
                                 try self.emitListDecref(value_loc, list_info.elem_alignment, list_info.contains_refcounted);
                             }
                         },
@@ -19737,33 +19557,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // First generate the value expression
             const value_expr = self.store.getExpr(rc_op.value);
             const value_loc = try self.generateExpr(rc_op.value);
-            if (std.debug.runtime_safety) {
-                if (self.layout_store) |ls| {
-                    if (@intFromEnum(rc_op.layout_idx) < ls.layouts.len()) {
-                        const layout_val = ls.getLayout(rc_op.layout_idx);
-                        if (layout_val.tag == .list or layout_val.tag == .list_of_zst) {
-                            std.debug.print(
-                                "[DBG generateDecref] rc_value={} value_tag={s} layout={} value_loc={s}\n",
-                                .{
-                                    @intFromEnum(rc_op.value),
-                                    @tagName(value_expr),
-                                    @intFromEnum(rc_op.layout_idx),
-                                    @tagName(value_loc),
-                                },
-                            );
-                            if (value_expr == .lookup) {
-                                std.debug.print(
-                                    "[DBG generateDecref.lookup] symbol_key={} lookup_layout={}\n",
-                                    .{
-                                        @as(u64, @bitCast(value_expr.lookup.symbol)),
-                                        @intFromEnum(value_expr.lookup.layout_idx),
-                                    },
-                                );
-                            }
-                        }
-                    }
-                }
-            }
             trace(
                 "[generateDecref] value_expr={} layout={} loc={s}\n",
                 .{
@@ -19817,19 +19610,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Emit decref for a list value
         fn emitListDecref(self: *Self, value_loc: ValueLocation, elem_alignment: u32, elements_refcounted: bool) Allocator.Error!void {
-            if (std.debug.runtime_safety) {
-                const off: i32 = switch (value_loc) {
-                    .stack => |s| s.offset,
-                    .list_stack => |info| info.struct_offset,
-                    else => -999999,
-                };
-                std.debug.print("[DBG emitListDecref] loc={s} off={} align={} elems_rc={}\n", .{
-                    @tagName(value_loc),
-                    off,
-                    elem_alignment,
-                    elements_refcounted,
-                });
-            }
             const roc_ops_reg = self.roc_ops_reg orelse return;
             const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_decref_data_ptr_packed);
 
