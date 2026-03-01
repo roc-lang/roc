@@ -737,7 +737,17 @@ fn lowerTag(self: *Self, tag_data: anytype, mono_idx: Monotype.Idx, region: Regi
 }
 
 fn lowerLookup(self: *Self, sym: Symbol, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
-    const layout_idx = try self.layoutFromMonotype(mono_idx);
+    const sym_key: u64 = @bitCast(sym);
+    var preferred_layout: ?layout.Idx = null;
+    if (self.mir_store.getSymbolDef(sym)) |mir_def_id| {
+        preferred_layout = try self.layoutFromMonotype(self.mir_store.typeOf(mir_def_id));
+    }
+    if (preferred_layout == null) {
+        if (self.symbol_layouts.get(sym_key)) |cached| {
+            preferred_layout = cached;
+        }
+    }
+    const layout_idx = preferred_layout orelse try self.layoutFromMonotype(mono_idx);
 
     // Propagate MIR symbol definition to LIR store (if exists and not already done)
     if (self.lir_store.getSymbolDef(sym) == null) {

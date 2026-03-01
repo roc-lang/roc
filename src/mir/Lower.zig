@@ -1330,22 +1330,30 @@ fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Clo
 /// If the call target is an external lookup to a low-level builtin
 /// (e.g., List.concat, Str.concat), emit `run_low_level` instead of `call`.
 fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
-    // Check if the call target is an external low-level builtin.
     const func_cir = module_env.store.getExpr(call.func);
-    if (func_cir == .e_lookup_external) {
-        if (self.getExternalLowLevelOp(module_env, func_cir.e_lookup_external)) |ll_op| {
-            const args = try self.lowerExprSpan(module_env, call.args);
-            return try self.store.addExpr(self.allocator, .{ .run_low_level = .{
-                .op = ll_op,
-                .args = args,
-            } }, monotype, region);
-        }
-    }
+    const low_level_op: ?CIR.Expr.LowLevel = if (func_cir == .e_lookup_external)
+        self.getExternalLowLevelOp(module_env, func_cir.e_lookup_external)
+    else
+        null;
 
     const cir_args = module_env.store.sliceExpr(call.args);
 
+    var resolved_call_func_var = self.types_store.resolveVar(ModuleEnv.varFrom(call.func));
+    while (resolved_call_func_var.desc.content == .alias) {
+        const alias = resolved_call_func_var.desc.content.alias;
+        resolved_call_func_var = self.types_store.resolveVar(self.types_store.getAliasBackingVar(alias));
+    }
+    const func_target_is_poly_var = switch (resolved_call_func_var.desc.content) {
+        .flex, .rigid => true,
+        else => false,
+    };
+    if (func_target_is_poly_var) {
+        _ = self.type_var_seen.remove(resolved_call_func_var.var_);
+        _ = self.type_var_nominal_info.remove(resolved_call_func_var.var_);
+    }
+
     var desired_func_monotype = try self.resolveMonotype(call.func);
-    if (!desired_func_monotype.isNone()) {
+    if (!func_target_is_poly_var and !desired_func_monotype.isNone()) {
         switch (self.store.monotype_store.getMonotype(desired_func_monotype)) {
             .func => |func_mono| {
                 const expected_args = self.store.monotype_store.getIdxSpan(func_mono.args);
@@ -1353,16 +1361,7 @@ fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype:
                 for (0..n) |i| {
                     const expected_arg = expected_args[i];
                     if (expected_arg.isNone()) continue;
-                    const should_seed = switch (self.store.monotype_store.getMonotype(expected_arg)) {
-                        .prim => |p| switch (p) {
-                            .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => false,
-                            .bool, .str => true,
-                        },
-                        .unit, .list, .box, .record, .tuple, .tag_union, .func => true,
-                    };
-                    if (should_seed) {
-                        self.seedTypeVarSeen(ModuleEnv.varFrom(cir_args[i]), expected_arg);
-                    }
+                    self.seedTypeVarSeen(ModuleEnv.varFrom(cir_args[i]), expected_arg);
                 }
             },
             else => {},
@@ -1396,6 +1395,13 @@ fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype:
     }
 
     const args = try self.store.addExprSpan(self.allocator, lowered_args.items);
+
+    if (low_level_op) |ll_op| {
+        return try self.store.addExpr(self.allocator, .{ .run_low_level = .{
+            .op = ll_op,
+            .args = args,
+        } }, monotype, region);
+    }
 
     var call_arg_nominal_infos = std.ArrayList(?NominalInfo).empty;
     defer call_arg_nominal_infos.deinit(self.allocator);
@@ -2633,8 +2639,10 @@ fn seedTypeVarSeen(self: *Self, type_var: types.Var, monotype: Monotype.Idx) voi
     if (monotype.isNone()) return;
 
     const resolved = self.types_store.resolveVar(type_var);
-
-    if (self.type_var_seen.contains(resolved.var_)) return;
+    const existing = self.type_var_seen.get(resolved.var_);
+    if (existing) |current| {
+        if (current == monotype) return;
+    }
 
     switch (resolved.desc.content) {
         .flex, .rigid => {
@@ -2645,7 +2653,17 @@ fn seedTypeVarSeen(self: *Self, type_var: types.Var, monotype: Monotype.Idx) voi
             self.seedTypeVarSeen(backing_var, monotype);
         },
         .structure => |flat_type| {
-            if (!self.monotypeCompatibleWithFlatType(flat_type, monotype)) return;
+            if (!self.monotypeCompatibleWithFlatType(flat_type, monotype)) {
+                if (existing) |current| {
+                    if (std.debug.runtime_safety and current != monotype) {
+                        std.debug.panic(
+                            "seedTypeVarSeen: incompatible reseed var={} current={} new={}",
+                            .{ @intFromEnum(resolved.var_), @intFromEnum(current), @intFromEnum(monotype) },
+                        );
+                    }
+                }
+                return;
+            }
             // Seed this structure var so that any expression whose type var
             // resolves to this same root (e.g. a numeric literal inside a
             // polymorphic lambda body) will find the concrete monotype

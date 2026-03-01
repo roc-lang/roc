@@ -1695,7 +1695,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .dec_literal => |val| try self.generateI128Literal(val),
 
                 // Lookups
-                .lookup => |lookup| try self.generateLookup(lookup.symbol, lookup.layout_idx),
+                .lookup => |lookup| blk: {
+                    const effective_layout = self.getExprLayout(expr_id) orelse lookup.layout_idx;
+                    break :blk try self.generateLookup(lookup.symbol, effective_layout);
+                },
 
                 // Control flow
                 .if_then_else => |ite| try self.generateIfThenElse(ite),
@@ -3761,6 +3764,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     };
 
                     const is_float = operand_layout == .f32 or operand_layout == .f64;
+                    if ((ll.ret_layout == .f32 or ll.ret_layout == .f64) and !is_float and
+                        (ll.op == .num_add or ll.op == .num_sub or ll.op == .num_mul or ll.op == .num_div or ll.op == .num_div_trunc))
+                    {
+                        std.debug.panic(
+                            "float binop layout mismatch: op={s} ret_layout={} operand_layout={}",
+                            .{
+                                @tagName(ll.op),
+                                @intFromEnum(ll.ret_layout),
+                                @intFromEnum(operand_layout),
+                            },
+                        );
+                    }
 
                     if (is_float) {
                         return self.generateFloatBinop(ll.op, lhs_loc, rhs_loc);
@@ -5177,16 +5192,95 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                 }
             }
+            var first_known_layout: i32 = -1;
+            var known_layout_count: u32 = 0;
+            var by_layout_it = self.symbol_locations_by_layout.iterator();
+            while (by_layout_it.next()) |entry| {
+                const key_symbol_bits: u64 = @truncate(entry.key_ptr.* >> 64);
+                if (key_symbol_bits == symbolKey(symbol)) {
+                    known_layout_count += 1;
+                    if (first_known_layout < 0) {
+                        const layout_bits: u64 = @truncate(entry.key_ptr.*);
+                        first_known_layout = @intCast(layout_bits);
+                    }
+                }
+            }
+            var req_tag: []const u8 = "<none>";
+            var known_tag: []const u8 = "<none>";
+            var req_list_elem: i32 = -1;
+            var known_list_elem: i32 = -1;
+            var req_elem_tag: []const u8 = "<none>";
+            var known_elem_tag: []const u8 = "<none>";
+            const override_layout_opt = self.symbol_layout_overrides.get(symbolKey(symbol));
+            const override_layout_i32: i32 = if (override_layout_opt) |ol|
+                @intCast(@intFromEnum(ol))
+            else
+                -1;
+            if (self.layout_store) |ls| {
+                const req_idx: u32 = @intFromEnum(layout_idx);
+                if (req_idx < ls.layouts.len()) {
+                    const req_layout = ls.getLayout(layout_idx);
+                    req_tag = @tagName(req_layout.tag);
+                    if (req_layout.tag == .list) {
+                        req_list_elem = @intCast(@intFromEnum(req_layout.data.list));
+                        const req_elem_layout = ls.getLayout(req_layout.data.list);
+                        req_elem_tag = @tagName(req_elem_layout.tag);
+                    } else if (req_layout.tag == .list_of_zst) {
+                        req_list_elem = -2;
+                    }
+                }
+                if (first_known_layout >= 0) {
+                    const known_u32: u32 = @intCast(first_known_layout);
+                    if (known_u32 < ls.layouts.len()) {
+                        const known_layout = ls.getLayout(@enumFromInt(known_u32));
+                        known_tag = @tagName(known_layout.tag);
+                        if (known_layout.tag == .list) {
+                            known_list_elem = @intCast(@intFromEnum(known_layout.data.list));
+                            const known_elem_layout = ls.getLayout(known_layout.data.list);
+                            known_elem_tag = @tagName(known_elem_layout.tag);
+                        } else if (known_layout.tag == .list_of_zst) {
+                            known_list_elem = -2;
+                        }
+                    }
+                }
+            }
+            if (first_known_layout >= 0 and self.getSymbolDefExact(symbol) == null) {
+                if (self.layout_store) |ls| {
+                    const known_u32: u32 = @intCast(first_known_layout);
+                    if (known_u32 < ls.layouts.len()) {
+                        const known_layout_idx: layout.Idx = @enumFromInt(known_u32);
+                        const req_layout = ls.getLayout(layout_idx);
+                        const known_layout = ls.getLayout(known_layout_idx);
+                        const req_is_list = req_layout.tag == .list or req_layout.tag == .list_of_zst;
+                        const known_is_list = known_layout.tag == .list or known_layout.tag == .list_of_zst;
+                        if (req_is_list and known_is_list) {
+                            if (self.getSymbolLocation(symbol, known_layout_idx)) |known_loc| {
+                                try self.symbol_layout_overrides.put(symbolKey(symbol), known_layout_idx);
+                                return known_loc;
+                            }
+                        }
+                    }
+                }
+            }
             std.debug.panic(
-                "generateLookup: unresolved symbol={} module={} ident={} name={s} layout={} has_untyped={} has_def={}",
+                "generateLookup: unresolved symbol={} module={} ident={} name={s} layout={}({s}) elem={}({s}) override_layout={} has_untyped={} has_def={} known_layout_count={} first_layout={}({s}) elem={}({s})",
                 .{
                     @as(u64, @bitCast(symbol)),
                     symbol.module_idx,
                     symbol.ident_idx.idx,
                     sym_name,
                     @intFromEnum(layout_idx),
+                    req_tag,
+                    req_list_elem,
+                    req_elem_tag,
+                    override_layout_i32,
                     self.getSymbolLocation(symbol, null) != null,
                     self.getSymbolDefExact(symbol) != null,
+                    known_layout_count,
+                    first_known_layout,
+                    known_tag,
+                    known_list_elem,
+                    known_elem_tag,
                 },
             );
         }

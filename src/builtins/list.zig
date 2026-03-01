@@ -686,23 +686,8 @@ pub fn listAppend(
     copy_fn: CopyFallbackFn,
     roc_ops: *RocOps,
 ) callconv(.c) RocList {
-    var list_for_append = list;
-
-    // If an empty list already has preallocated storage from a previous
-    // specialization, drop it and re-reserve using the current element width.
-    if (list_for_append.len() == 0 and list_for_append.getCapacity() > 0 and list_for_append.bytes != null) {
-        utils.decref(
-            list_for_append.getAllocationDataPtr(roc_ops),
-            list_for_append.capacity_or_alloc_ptr,
-            alignment,
-            false,
-            roc_ops,
-        );
-        list_for_append = RocList.empty();
-    }
-
     const with_capacity = listReserve(
-        list_for_append,
+        list,
         alignment,
         1,
         element_width,
