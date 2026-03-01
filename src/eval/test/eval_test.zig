@@ -3953,6 +3953,151 @@ test "direct List.contains I64" {
     try runExpectI64(code, 1, .no_trace);
 }
 
+test "tmp direct List.any I64 no capture" {
+    const code =
+        \\{
+        \\    a : List(I64)
+        \\    a = [1, 2, 3]
+        \\    if List.any(a, |x| x == 2) { 1 } else { 0 }
+        \\}
+    ;
+    try runExpectI64(code, 1, .no_trace);
+}
+
+test "tmp direct List.any I64 no capture first elem" {
+    const code =
+        \\{
+        \\    a : List(I64)
+        \\    a = [1, 2, 3]
+        \\    if List.any(a, |x| x == 1) { 1 } else { 0 }
+        \\}
+    ;
+    try runExpectI64(code, 1, .no_trace);
+}
+
+test "tmp direct List.any I64 self equality" {
+    const code =
+        \\{
+        \\    a : List(I64)
+        \\    a = [1, 2, 3]
+        \\    if List.any(a, |x| x == x) { 1 } else { 0 }
+        \\}
+    ;
+    try runExpectI64(code, 1, .no_trace);
+}
+
+test "tmp direct List.any I64 always true" {
+    const code =
+        \\{
+        \\    a : List(I64)
+        \\    a = [1, 2, 3]
+        \\    if List.any(a, |_x| True) { 1 } else { 0 }
+        \\}
+    ;
+    try runExpectI64(code, 1, .no_trace);
+}
+
+test "tmp direct List.any I64 always true via eq" {
+    const code =
+        \\{
+        \\    a : List(I64)
+        \\    a = [1, 2, 3]
+        \\    if List.any(a, |_x| 1i64 == 1i64) { 1 } else { 0 }
+        \\}
+    ;
+    try runExpectI64(code, 1, .no_trace);
+}
+
+test "tmp direct List.any Dec always true" {
+    const code =
+        \\{
+        \\    a = [1, 2, 3]
+        \\    if List.any(a, |_x| True) { 1 } else { 0 }
+        \\}
+    ;
+    try runExpectI64(code, 1, .no_trace);
+}
+
+test "tmp direct List.any I64 gt zero" {
+    const code =
+        \\{
+        \\    a : List(I64)
+        \\    a = [1, 2, 3]
+        \\    if List.any(a, |x| x > 0i64) { 1 } else { 0 }
+        \\}
+    ;
+    try runExpectI64(code, 1, .no_trace);
+}
+
+test "tmp direct List.any I64 div-by-zero predicate" {
+    const code =
+        \\{
+        \\    a : List(I64)
+        \\    a = [1, 2, 3]
+        \\    List.any(a, |_x| (1 // 0) == 0)
+        \\}
+    ;
+    try runExpectError(code, error.DivisionByZero, .no_trace);
+}
+
+test "tmp direct I64 equality" {
+    try runExpectI64("if 1i64 == 1i64 { 1 } else { 0 }", 1, .no_trace);
+}
+
+test "tmp direct lambda call always true" {
+    const code =
+        \\{
+        \\    f : I64 -> Bool
+        \\    f = |_x| True
+        \\    if f(1) { 1 } else { 0 }
+        \\}
+    ;
+    try runExpectI64(code, 1, .no_trace);
+}
+
+test "tmp direct lambda call always true via eq" {
+    const code =
+        \\{
+        \\    f : I64 -> Bool
+        \\    f = |_x| 1i64 == 1i64
+        \\    if f(1) { 1 } else { 0 }
+        \\}
+    ;
+    try runExpectI64(code, 1, .no_trace);
+}
+
+test "tmp direct lambda call Dec always true" {
+    const code =
+        \\{
+        \\    f = |_x| True
+        \\    if f(1) { 1 } else { 0 }
+        \\}
+    ;
+    try runExpectI64(code, 1, .no_trace);
+}
+
+test "tmp direct lambda call I64 gt zero" {
+    const code =
+        \\{
+        \\    f : I64 -> Bool
+        \\    f = |x| x > 0i64
+        \\    if f(1) { 1 } else { 0 }
+        \\}
+    ;
+    try runExpectI64(code, 1, .no_trace);
+}
+
+test "tmp list len i64" {
+    const code =
+        \\{
+        \\    a : List(I64)
+        \\    a = [1, 2, 3]
+        \\    a.len()
+        \\}
+    ;
+    try runExpectI64(code, 3, .no_trace);
+}
+
 test "polymorphic function single call I64" {
     const code =
         \\{

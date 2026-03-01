@@ -170,6 +170,9 @@ pub const ModuleState = struct {
     /// True if this module was loaded from cache in this build.
     /// Used by parent modules to determine if fast path is valid.
     was_cache_hit: bool,
+    /// Diagnostic counts loaded from cache metadata for cache-hit modules.
+    cached_error_count: u32,
+    cached_warning_count: u32,
     /// Accumulated compile time for this module (parse + canonicalize + type-check)
     compile_time_ns: u64,
 
@@ -197,6 +200,8 @@ pub const ModuleState = struct {
             .depth = std.math.maxInt(u32),
             .visit_color = .white,
             .was_cache_hit = false,
+            .cached_error_count = 0,
+            .cached_warning_count = 0,
             .compile_time_ns = 0,
         };
     }
@@ -1382,6 +1387,8 @@ pub const Coordinator = struct {
         // Set module from cache - mark as Done immediately since env is complete
         mod.env = result.module_env;
         mod.was_cache_hit = true;
+        mod.cached_error_count = result.error_count;
+        mod.cached_warning_count = result.warning_count;
         mod.phase = .Done;
         mod.visit_color = .black;
 
@@ -1625,6 +1632,8 @@ pub const Coordinator = struct {
         }
 
         mod.was_cache_hit = true;
+        mod.cached_error_count = meta.error_count;
+        mod.cached_warning_count = meta.warning_count;
         mod.phase = .Done;
         mod.visit_color = .black;
 

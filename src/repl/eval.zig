@@ -731,10 +731,7 @@ pub const Repl = struct {
                         else => return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Dev backend execution error: {s}", .{@errorName(err)}) },
                     };
 
-                    const roc_str_ptr: *const RocStr = @ptrCast(@alignCast(&result_buf));
-                    const roc_str = roc_str_ptr.*;
-                    defer roc_str.decref(self.roc_ops);
-
+                    const roc_str: *const RocStr = @ptrCast(@alignCast(&result_buf));
                     const slice = if (roc_str.isSmallStr())
                         roc_str.asSlice()
                     else if (roc_str.len() > 0 and roc_str.len() < 1024 * 1024)

@@ -617,6 +617,8 @@ pub const BuildEnv = struct {
                         sched_mod.env = env.*;
                         // Transfer the cache flag so scheduler knows not to deinit cached envs
                         sched_mod.was_from_cache = coord_mod.was_cache_hit;
+                        sched_mod.cached_error_count = coord_mod.cached_error_count;
+                        sched_mod.cached_warning_count = coord_mod.cached_warning_count;
 
                         // Free the heap-allocated struct wrapper.
                         // IMPORTANT: Use env.gpa, not self.gpa, because the env was
@@ -2181,6 +2183,29 @@ pub const BuildEnv = struct {
     pub const BuildCacheStats = BuildStats;
     pub fn getCacheStats(self: *BuildEnv) BuildStats {
         return self.getBuildStats();
+    }
+
+    pub const DiagnosticCounts = struct {
+        error_count: u32 = 0,
+        warning_count: u32 = 0,
+    };
+
+    /// Get diagnostic counts contributed by cache-hit modules.
+    /// These reports are not emitted through OrderedSink, so callers that only
+    /// inspect drained reports will otherwise undercount diagnostics.
+    pub fn getCachedDiagnosticCounts(self: *BuildEnv) DiagnosticCounts {
+        var counts = DiagnosticCounts{};
+        var sched_it = self.schedulers.iterator();
+        while (sched_it.next()) |sched_entry| {
+            const sched = sched_entry.value_ptr.*;
+            for (sched.modules.items) |m| {
+                if (m.was_from_cache) {
+                    counts.error_count += m.cached_error_count;
+                    counts.warning_count += m.cached_warning_count;
+                }
+            }
+        }
+        return counts;
     }
 
     /// Information about a compiled module, ready for serialization.

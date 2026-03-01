@@ -942,6 +942,24 @@ test "roc check returns exit code 2 for warnings" {
     try testing.expect(has_zero_errors);
 }
 
+test "roc check cached run preserves warning exit code 2" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Populate cache
+    const result1 = try util.runRoc(gpa, &.{"check"}, "test/fx/run_warning_only.roc");
+    defer gpa.free(result1.stdout);
+    defer gpa.free(result1.stderr);
+    try testing.expect(result1.term == .Exited and result1.term.Exited == 2);
+
+    // Cached replay must keep warning semantics (exit code 2)
+    const result2 = try util.runRoc(gpa, &.{"check"}, "test/fx/run_warning_only.roc");
+    defer gpa.free(result2.stdout);
+    defer gpa.free(result2.stderr);
+    try testing.expect(result2.term == .Exited and result2.term.Exited == 2);
+    try testing.expect(std.mem.indexOf(u8, result2.stderr, "warning(s)") != null);
+}
+
 test "roc check returns exit code 0 for no warnings or errors" {
     const testing = std.testing;
     const gpa = testing.allocator;

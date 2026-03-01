@@ -142,6 +142,9 @@ const ModuleState = struct {
     /// True if this module was loaded from cache. Cached modules have their env memory
     /// owned by the cache buffer, so we must NOT call env.deinit() for them.
     was_from_cache: bool = false,
+    /// Diagnostic counts loaded from cache metadata for cache-hit modules.
+    cached_error_count: u32 = 0,
+    cached_warning_count: u32 = 0,
 
     fn deinit(self: *ModuleState, gpa: Allocator) void {
         if (comptime trace_build) {

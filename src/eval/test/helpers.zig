@@ -304,7 +304,13 @@ fn forkAndExecute(
         // meaningless since we exit via _exit and no defers run.
         const child_alloc = std.heap.page_allocator;
 
-        const result_str = executeAndFormat(child_alloc, dev_eval, executable, code_result, module_env, expr_idx) catch {
+        const result_str = executeAndFormat(child_alloc, dev_eval, executable, code_result, module_env, expr_idx) catch |err| {
+            std.debug.print("child executeAndFormat error: {s}\n", .{@errorName(err)});
+            if (err == error.RocCrashed) {
+                if (dev_eval.getCrashMessage()) |msg| {
+                    std.debug.print("child roc crash message: {s}\n", .{msg});
+                }
+            }
             posix.close(pipe_write);
             posix.exit(1);
         };

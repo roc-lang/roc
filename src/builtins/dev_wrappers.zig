@@ -452,6 +452,10 @@ pub fn roc_builtins_allocate_with_refcount(data_bytes: usize, element_alignment:
 /// Re-export increfDataPtrC
 pub fn roc_builtins_incref_data_ptr(ptr: ?[*]u8, amount: isize, roc_ops: *RocOps) callconv(.c) void {
     if (ptr) |p| {
+        std.debug.print(
+            "[roc_builtins_incref_data_ptr] ptr=0x{x} amount={}\n",
+            .{ @intFromPtr(p), amount },
+        );
         increfDataPtrC(p, amount, roc_ops);
     }
 }
@@ -459,6 +463,10 @@ pub fn roc_builtins_incref_data_ptr(ptr: ?[*]u8, amount: isize, roc_ops: *RocOps
 /// Re-export decrefDataPtrC
 pub fn roc_builtins_decref_data_ptr(ptr: ?[*]u8, alignment: u32, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
     if (ptr) |p| {
+        std.debug.print(
+            "[roc_builtins_decref_data_ptr] ptr=0x{x} alignment={} elements_refcounted={}\n",
+            .{ @intFromPtr(p), alignment, elements_refcounted },
+        );
         decrefDataPtrC(p, alignment, elements_refcounted, roc_ops);
     }
 }

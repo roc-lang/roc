@@ -606,6 +606,21 @@ inline fn decref_ptr_to_refcount(
     // Use roc_ops.crash() instead of @panic for WASM compatibility.
     if (builtin.mode == .Debug) {
         if (refcount == POISON_VALUE) {
+            if (builtin.os.tag != .freestanding) {
+                const site_name = switch (site) {
+                    .allocate_with_refcount => "allocate_with_refcount",
+                    .incref_rc_ptr => "incref_rc_ptr",
+                    .decref_rc_ptr => "decref_rc_ptr",
+                    .decref_data_ptr => "decref_data_ptr",
+                    .decref_check_null => "decref_check_null",
+                    .free_from_decref => "free_from_decref",
+                };
+                std.debug.print(
+                    "Use-after-free decref site={s} rc_addr=0x{x}\n",
+                    .{ site_name, @intFromPtr(refcount_ptr) },
+                );
+                DebugRefcountTracker.dumpHistoryFor(@intFromPtr(refcount_ptr));
+            }
             roc_ops.crash("Use-after-free: decref on already-freed memory");
             return;
         }
@@ -967,6 +982,32 @@ pub const DebugRefcountTracker = struct {
                 .site = site,
             };
             op_count += 1;
+        }
+    }
+
+    pub fn dumpHistoryFor(rc_addr: usize) void {
+        if (!active) return;
+        std.debug.print("DebugRefcountTracker history for rc_addr=0x{x}\n", .{rc_addr});
+        for (op_log[0..op_count], 0..) |op, i| {
+            if (op.rc_addr != rc_addr) continue;
+            const kind = switch (op.kind) {
+                .alloc => "alloc",
+                .incref => "incref",
+                .decref => "decref",
+                .free => "free",
+            };
+            const site_name = switch (op.site) {
+                .allocate_with_refcount => "allocate_with_refcount",
+                .incref_rc_ptr => "incref_rc_ptr",
+                .decref_rc_ptr => "decref_rc_ptr",
+                .decref_data_ptr => "decref_data_ptr",
+                .decref_check_null => "decref_check_null",
+                .free_from_decref => "free_from_decref",
+            };
+            std.debug.print(
+                "  [{d}] {s} amount={d} shadow_after={d} site={s}\n",
+                .{ i, kind, op.amount, op.shadow_after, site_name },
+            );
         }
     }
 

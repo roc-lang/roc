@@ -3519,6 +3519,9 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             reporting.renderReportToTerminal(report, ctx.io.stderr(), palette, config) catch {};
         }
     }
+    const native_cached_diag_counts = build_env.getCachedDiagnosticCounts();
+    total_error_count += native_cached_diag_counts.error_count;
+    total_warning_count += native_cached_diag_counts.warning_count;
 
     if (total_error_count > 0 and !args.allow_errors) {
         return error.CompilationFailed;
@@ -4146,7 +4149,10 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     }
 
     if (total_warning_count > 0) {
-        try stdout.print("  {} warning(s)\n", .{total_warning_count});
+        const stderr = ctx.io.stderr();
+        try stderr.print("Found 0 error(s) and {} warning(s) while building {s}.\n", .{ total_warning_count, args.path });
+        ctx.io.flush();
+        std.process.exit(2);
     }
 }
 
@@ -4340,6 +4346,9 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             reporting.renderReportToTerminal(report, ctx.io.stderr(), palette, config) catch {};
         }
     }
+    const embedded_cached_diag_counts = build_env.getCachedDiagnosticCounts();
+    total_error_count += embedded_cached_diag_counts.error_count;
+    total_warning_count += embedded_cached_diag_counts.warning_count;
 
     // Check if we should stop due to errors
     if (total_error_count > 0 and !args.allow_errors) {
@@ -4561,6 +4570,8 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     // Exit with code 2 if there were warnings (but no errors)
     if (total_warning_count > 0) {
+        const stderr = ctx.io.stderr();
+        try stderr.print("Found 0 error(s) and {} warning(s) while building {s}.\n", .{ total_warning_count, args.path });
         ctx.io.flush();
         std.process.exit(2);
     }
@@ -5362,10 +5373,34 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                 // Copy test results for reporting
                 var results = try ctx.gpa.alloc(TestResultItem, test_runner.test_results.items.len);
                 for (test_runner.test_results.items, 0..) |tr, i| {
+                    var error_msg: ?[]const u8 = null;
+                    if (tr.error_msg) |msg| {
+                        error_msg = try ctx.gpa.dupe(u8, msg);
+                    } else if (!tr.passed) {
+                        // Preserve rich failure text for cached verbose replay.
+                        var report = test_runner.createReport(tr, args.path) catch {
+                            error_msg = null;
+                            results[i] = .{
+                                .result = if (tr.passed) .passed else .failed,
+                                .region = tr.region,
+                                .error_msg = error_msg,
+                            };
+                            continue;
+                        };
+                        defer report.deinit();
+
+                        var report_writer = std.Io.Writer.Allocating.init(ctx.gpa);
+                        defer report_writer.deinit();
+                        const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+                        const config = reporting.ReportingConfig.initColorTerminal();
+                        reporting.renderReportToTerminal(&report, &report_writer.writer, palette, config) catch {};
+                        error_msg = ctx.gpa.dupe(u8, report_writer.written()) catch null;
+                    }
+
                     results[i] = .{
                         .result = if (tr.passed) .passed else .failed,
                         .region = tr.region,
-                        .error_msg = if (tr.error_msg) |msg| try ctx.gpa.dupe(u8, msg) else null,
+                        .error_msg = error_msg,
                     };
                 }
 
@@ -5447,6 +5482,34 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
 
     // Clean up comptime evaluator
     comptime_evaluator.deinit();
+
+    // Build cache payload entries for replay (including verbose failure details).
+    for (module_results.items) |mr| {
+        for (mr.results) |result| {
+            var report_len: u32 = 0;
+            if (result.result == .failed) {
+                if (result.error_msg) |msg| {
+                    const report_copy = ctx.gpa.dupe(u8, msg) catch null;
+                    if (report_copy) |copied| {
+                        cache_failure_reports.append(ctx.gpa, copied) catch {
+                            ctx.gpa.free(copied);
+                        };
+                        report_len = @intCast(copied.len);
+                    }
+                }
+            }
+
+            cache_entries.append(ctx.gpa, .{
+                .passed = switch (result.result) {
+                    .failed => 0,
+                    .passed, .skipped => 1,
+                },
+                .region_start = result.region.start.offset,
+                .region_end = result.region.end.offset,
+                .report_len = report_len,
+            }) catch {};
+        }
+    }
 
     // Calculate elapsed time
     const end_time = std.time.nanoTimestamp();
@@ -6700,6 +6763,9 @@ fn checkFileWithBuildEnvPreserved(
             }
         }
     }
+    const cached_diag_counts = build_env.getCachedDiagnosticCounts();
+    error_count += cached_diag_counts.error_count;
+    warning_count += cached_diag_counts.warning_count;
 
     // Convert BuildEnv drained reports to our format
     var reports = try ctx.gpa.alloc(DrainedReport, drained.len);
@@ -6719,11 +6785,12 @@ fn checkFileWithBuildEnvPreserved(
         CheckTimingInfo{}
     else
         build_env.getTimingInfo();
+    const cache_stats = build_env.getCacheStats();
 
     const check_result = CheckResult{
         .reports = reports,
         .timing = timing,
-        .was_cached = false, // BuildEnv doesn't currently expose cache info
+        .was_cached = cache_stats.cache_hits > 0 and cache_stats.cache_misses == 0,
         .error_count = error_count,
         .warning_count = warning_count,
     };
@@ -6838,6 +6905,9 @@ fn checkFileWithBuildEnv(
             }
         }
     }
+    const cached_diag_counts = build_env.getCachedDiagnosticCounts();
+    error_count += cached_diag_counts.error_count;
+    warning_count += cached_diag_counts.warning_count;
 
     // Convert BuildEnv drained reports to our format
     var reports = try ctx.gpa.alloc(DrainedReport, drained.len);
@@ -6868,7 +6938,7 @@ fn checkFileWithBuildEnv(
     return CheckResult{
         .reports = reports,
         .timing = timing,
-        .was_cached = false, // TODO: Set based on cache stats
+        .was_cached = cache_stats.cache_hits > 0 and cache_stats.cache_misses == 0,
         .error_count = error_count,
         .warning_count = warning_count,
         .modules_total = cache_stats.modules_total,
@@ -6925,7 +6995,12 @@ fn rocCheck(ctx: *CliContext, args: cli_args.CheckArgs) !void {
             formatElapsedTimeMs(stderr, elapsed) catch {};
             stderr.print(" with 100% cache hit for {s}\n", .{args.path}) catch {};
             stderr.print("(note: module loaded from cache, use --no-cache to display errors and warnings)\n", .{}) catch {};
-            return error.CheckFailed;
+            if (total_errors > 0) {
+                return error.CheckFailed;
+            } else {
+                ctx.io.flush();
+                std.process.exit(2);
+            }
         } else {
             stdout.print("No errors found in ", .{}) catch {};
             formatElapsedTimeMs(stdout, elapsed) catch {};
@@ -7246,7 +7321,9 @@ fn rocDocs(ctx: *CliContext, args: cli_args.DocsArgs) !void {
             }) catch {};
             formatElapsedTime(stderr, elapsed) catch {};
             stderr.print(" for {s} (note module loaded from cache, use --no-cache to display Errors and Warnings.).", .{args.path}) catch {};
-            return error.DocsFailed;
+            if (total_errors > 0) {
+                return error.DocsFailed;
+            }
         }
     } else {
         // For fresh compilation, process and display reports normally

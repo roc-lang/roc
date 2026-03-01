@@ -347,6 +347,7 @@ test "fx platform check unused state var reports correct errors" {
         .argv = &[_][]const u8{
             roc_binary_path,
             "check",
+            "--no-cache",
             "test/fx/unused_state_var.roc",
         },
     });
@@ -1256,7 +1257,7 @@ test "fx platform issue8943 error message memory corruption" {
     const allocator = testing.allocator;
 
     const run_result = try runRoc(allocator, "test/fx/issue8943.roc", .{
-        .extra_args = &[_][]const u8{"check"},
+        .extra_args = &[_][]const u8{ "check", "--no-cache" },
     });
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
@@ -1332,7 +1333,7 @@ test "fx platform issue9118 try operator on tuple in type method" {
     const allocator = testing.allocator;
 
     const run_result = try runRoc(allocator, "test/fx/for_var_in_type_method.roc", .{
-        .extra_args = &[_][]const u8{"test"},
+        .extra_args = &[_][]const u8{ "test", "--no-cache" },
     });
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);

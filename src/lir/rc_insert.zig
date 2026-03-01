@@ -129,6 +129,52 @@ pub const RcInsertPass = struct {
         return @enumFromInt(raw);
     }
 
+    /// Returns true when a low-level op argument is currently implemented as
+    /// borrow-only in backend codegen and therefore must not consume a symbol use.
+    fn lowLevelArgIsBorrowed(op: LIR.LirExpr.LowLevel, arg_index: usize) bool {
+        return switch (op) {
+            .list_len,
+            .list_is_empty,
+            .list_first,
+            .list_last,
+            => arg_index == 0,
+            .list_get => arg_index == 0,
+            .list_contains => arg_index < 2,
+            else => false,
+        };
+    }
+
+    /// Undo one direct lookup-use that was counted for a borrowed low-level arg.
+    /// This preserves counting of sub-expression uses while making the top-level
+    /// borrowed symbol non-consuming for RC accounting.
+    fn unconsumeBorrowedArgUse(self: *RcInsertPass, arg_id: LirExprId, target: *std.AutoHashMap(SymbolUseKey, u32)) void {
+        if (arg_id.isNone()) return;
+
+        var cur = arg_id;
+        while (true) {
+            const expr = self.store.getExpr(cur);
+            switch (expr) {
+                .lookup => |lookup| {
+                    if (lookup.symbol.isNone()) return;
+                    const key = makeKey(lookup.symbol, lookup.layout_idx);
+                    if (target.getPtr(key)) |count_ptr| {
+                        if (count_ptr.* > 1) {
+                            count_ptr.* -= 1;
+                        } else {
+                            _ = target.remove(key);
+                        }
+                    }
+                    return;
+                },
+                .nominal => |n| {
+                    cur = n.backing_expr;
+                    continue;
+                },
+                else => return,
+            }
+        }
+    }
+
     /// Sum all use counts for a symbol across every layout key.
     fn sumSymbolUses(_: *RcInsertPass, uses: *const std.AutoHashMap(SymbolUseKey, u32), symbol: Symbol) u32 {
         var total: u32 = 0;
@@ -316,7 +362,14 @@ pub const RcInsertPass = struct {
             },
             .closure => |clo_id| {
                 const clo = self.store.getClosureData(clo_id);
-                try self.countUsesInto(clo.lambda, target);
+                // Closure lambda bodies are a separate scope. Count them against an
+                // isolated target so body-local symbols still get registered in
+                // self.symbol_use_counts, but captured symbols are not attributed to
+                // the enclosing scope twice (once via lambda free vars and again via
+                // explicit closure captures below).
+                var lambda_scope = std.AutoHashMap(SymbolUseKey, u32).init(self.allocator);
+                defer lambda_scope.deinit();
+                try self.countUsesInto(clo.lambda, &lambda_scope);
                 // Each capture consumes a reference to the captured symbol.
                 const captures = self.store.getCaptures(clo.captures);
                 for (captures) |cap| {
@@ -370,8 +423,11 @@ pub const RcInsertPass = struct {
             },
             .low_level => |ll| {
                 const args = self.store.getExprSpan(ll.args);
-                for (args) |arg_id| {
+                for (args, 0..) |arg_id, arg_i| {
                     try self.countUsesInto(arg_id, target);
+                    if (lowLevelArgIsBorrowed(ll.op, arg_i)) {
+                        self.unconsumeBorrowedArgUse(arg_id, target);
+                    }
                 }
             },
             .hosted_call => |hc| {
@@ -1148,14 +1204,45 @@ pub const RcInsertPass = struct {
             guard_added.deinit();
 
             const processed_guard = try self.processExpr(branch.guard);
-            // Re-count body uses for wrapBranchWithRcOps
+
+            // Re-count body uses for wrapBranchWithRcOps and pattern pre-increfs.
             self.scratch_uses.clearRetainingCapacity();
             try self.countUsesInto(branch.body, &self.scratch_uses);
-            const new_body = try self.wrapBranchWithRcOps(processed_body, &self.scratch_uses, &symbols_in_any_branch, result_layout, region);
-            // Count guard uses for wrapGuardWithIncref
+            const body_with_outer_rc = try self.wrapBranchWithRcOps(processed_body, &self.scratch_uses, &symbols_in_any_branch, result_layout, region);
+
+            var new_body = body_with_outer_rc;
+            var pattern_body_rc = std.ArrayList(LirStmt).empty;
+            defer pattern_body_rc.deinit(self.allocator);
+            try self.emitPatternUseIncrefsInto(branch.pattern, &self.scratch_uses, region, &pattern_body_rc);
+            if (pattern_body_rc.items.len > 0) {
+                const pat_body_span = try self.store.addStmts(pattern_body_rc.items);
+                new_body = try self.store.addExpr(.{ .block = .{
+                    .stmts = pat_body_span,
+                    .final_expr = body_with_outer_rc,
+                    .result_layout = result_layout,
+                } }, region);
+            }
+
+            // Count guard uses for wrapGuardWithIncref and pattern pre-increfs.
             self.scratch_uses.clearRetainingCapacity();
             try self.countUsesInto(branch.guard, &self.scratch_uses);
-            const new_guard = try self.wrapGuardWithIncref(processed_guard, &self.scratch_uses, &pattern_bound, region);
+            const guard_with_outer_rc = try self.wrapGuardWithIncref(processed_guard, &self.scratch_uses, &pattern_bound, region);
+
+            var new_guard = guard_with_outer_rc;
+            if (!guard_with_outer_rc.isNone()) {
+                var pattern_guard_rc = std.ArrayList(LirStmt).empty;
+                defer pattern_guard_rc.deinit(self.allocator);
+                try self.emitPatternUseIncrefsInto(branch.pattern, &self.scratch_uses, region, &pattern_guard_rc);
+                if (pattern_guard_rc.items.len > 0) {
+                    const pat_guard_span = try self.store.addStmts(pattern_guard_rc.items);
+                    new_guard = try self.store.addExpr(.{ .block = .{
+                        .stmts = pat_guard_span,
+                        .final_expr = guard_with_outer_rc,
+                        .result_layout = .bool,
+                    } }, region);
+                }
+            }
+
             try new_branches.append(self.allocator, .{
                 .pattern = branch.pattern,
                 .guard = new_guard,
@@ -1928,6 +2015,39 @@ pub const RcInsertPass = struct {
         };
         ensurePatternIdValid(self.store, pat_id, "emitRcOpsForPatternInto");
         try walkPatternBinds(self.store, pat_id, Ctx{ .pass = self, .local_uses = local_uses, .region = region, .rc_stmts = rc_stmts });
+    }
+
+    /// Emit pre-increfs for symbols bound by a pattern, based on direct use counts.
+    /// Unlike emitRcOpsForPatternInto, this does not assume an inherited reference.
+    /// For each refcounted bound symbol with use_count > 0, emit incref(use_count).
+    fn emitPatternUseIncrefsInto(
+        self: *RcInsertPass,
+        pat_id: LirPatternId,
+        local_uses: *const std.AutoHashMap(SymbolUseKey, u32),
+        region: Region,
+        rc_stmts: *std.ArrayList(LirStmt),
+    ) Allocator.Error!void {
+        const Ctx = struct {
+            pass: *RcInsertPass,
+            local_uses: *const std.AutoHashMap(SymbolUseKey, u32),
+            region: Region,
+            rc_stmts: *std.ArrayList(LirStmt),
+            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
+                if (ctx.pass.layoutNeedsRc(layout_idx)) {
+                    const use_count = ctx.pass.sumSymbolUses(ctx.local_uses, symbol);
+                    if (use_count > 0) {
+                        try ctx.pass.emitIncrefInto(symbol, layout_idx, @intCast(use_count), ctx.region, ctx.rc_stmts);
+                    }
+                }
+            }
+        };
+        ensurePatternIdValid(self.store, pat_id, "emitPatternUseIncrefsInto");
+        try walkPatternBinds(self.store, pat_id, Ctx{
+            .pass = self,
+            .local_uses = local_uses,
+            .region = region,
+            .rc_stmts = rc_stmts,
+        });
     }
 
     /// Emit an incref statement into a given statement list.
