@@ -138,6 +138,7 @@ wasm_memory_pages: u32 = 0,
 
 const CompiledLambdaVariant = struct {
     expr_key: u32,
+    callable_instance: LIR.CallableInstanceId,
     ret_vt: ValType,
     param_types: []ValType,
     func_idx: u32,
@@ -181,6 +182,7 @@ const ForwardedCapture = struct {
 const CompileCallableOptions = struct {
     arg_layout_overrides: ?[]const layout.Idx = null,
     ret_layout_override: ?layout.Idx = null,
+    callable_instance: LIR.CallableInstanceId = .none,
 };
 
 pub fn init(allocator: Allocator, store: *const LirExprStore, layout_store: ?*const LayoutStore) Self {
@@ -4464,10 +4466,12 @@ fn emitConversion(self: *Self, source: ValType, target: ValType) Allocator.Error
 fn lambdaVariantMatches(
     entry: *const CompiledLambdaVariant,
     expr_key: u32,
+    callable_instance: LIR.CallableInstanceId,
     ret_vt: ValType,
     param_types: []const ValType,
 ) bool {
     return entry.expr_key == expr_key and
+        entry.callable_instance == callable_instance and
         entry.ret_vt == ret_vt and
         std.mem.eql(ValType, entry.param_types, param_types);
 }
@@ -4475,12 +4479,13 @@ fn lambdaVariantMatches(
 fn findCompiledLambdaVariant(
     self: *Self,
     expr_key: u32,
+    callable_instance: LIR.CallableInstanceId,
     ret_vt: ValType,
     param_types: []const ValType,
     allow_in_progress: bool,
 ) ?u32 {
     for (self.compiled_lambdas.items) |entry| {
-        if (lambdaVariantMatches(&entry, expr_key, ret_vt, param_types) and
+        if (lambdaVariantMatches(&entry, expr_key, callable_instance, ret_vt, param_types) and
             (allow_in_progress or entry.finished))
         {
             return entry.func_idx;
@@ -4492,6 +4497,7 @@ fn findCompiledLambdaVariant(
 fn addCompiledLambdaVariant(
     self: *Self,
     expr_key: u32,
+    callable_instance: LIR.CallableInstanceId,
     ret_vt: ValType,
     param_types: []const ValType,
     func_idx: u32,
@@ -4501,6 +4507,7 @@ fn addCompiledLambdaVariant(
 
     try self.compiled_lambdas.append(self.allocator, .{
         .expr_key = expr_key,
+        .callable_instance = callable_instance,
         .ret_vt = ret_vt,
         .param_types = params_copy,
         .func_idx = func_idx,
@@ -4620,7 +4627,7 @@ fn compileLambdaWithOptions(self: *Self, expr_id: LirExprId, lambda: anytype, op
         self.resolveValType(lambda.ret_layout);
 
     // Check if this exact lambda/signature variant is already compiled (or in progress).
-    if (self.findCompiledLambdaVariant(expr_key, ret_vt, param_types.items, true)) |existing| {
+    if (self.findCompiledLambdaVariant(expr_key, options.callable_instance, ret_vt, param_types.items, true)) |existing| {
         return existing;
     }
 
@@ -4629,7 +4636,7 @@ fn compileLambdaWithOptions(self: *Self, expr_id: LirExprId, lambda: anytype, op
     const func_idx = self.module.addFunction(type_idx) catch return error.OutOfMemory;
 
     // Cache this variant EARLY (before body compilation) to support mutual recursion.
-    const cache_idx = try self.addCompiledLambdaVariant(expr_key, ret_vt, param_types.items, func_idx);
+    const cache_idx = try self.addCompiledLambdaVariant(expr_key, options.callable_instance, ret_vt, param_types.items, func_idx);
     errdefer self.removeCompiledLambdaVariant(cache_idx);
 
     // Store forwarded captures in map for call sites to use
@@ -4902,7 +4909,7 @@ fn compileClosureWithOptions(self: *Self, expr_id: LirExprId, closure: anytype, 
         self.resolveValType(lambda.ret_layout);
 
     // Check if this exact closure/signature variant is already compiled (or in progress).
-    if (self.findCompiledLambdaVariant(expr_key, ret_vt, param_types.items, true)) |existing| {
+    if (self.findCompiledLambdaVariant(expr_key, options.callable_instance, ret_vt, param_types.items, true)) |existing| {
         return existing;
     }
 
@@ -4910,7 +4917,7 @@ fn compileClosureWithOptions(self: *Self, expr_id: LirExprId, closure: anytype, 
     const func_idx = self.module.addFunction(type_idx) catch return error.OutOfMemory;
 
     // Cache this variant EARLY (before body compilation) to support mutual recursion.
-    const cache_idx = try self.addCompiledLambdaVariant(expr_key, ret_vt, param_types.items, func_idx);
+    const cache_idx = try self.addCompiledLambdaVariant(expr_key, options.callable_instance, ret_vt, param_types.items, func_idx);
     errdefer self.removeCompiledLambdaVariant(cache_idx);
 
     // Save current codegen state
@@ -6337,6 +6344,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
         else
             null,
         .ret_layout_override = c.ret_layout,
+        .callable_instance = c.callable_instance,
     };
 
     switch (fn_expr) {
@@ -6745,13 +6753,17 @@ fn debugAssertCallArgTypesMatch(
 
 fn compileOptionsForCall(self: *Self, callable_instance: LIR.CallableInstanceId, fallback_ret_layout: layout.Idx) CompileCallableOptions {
     if (callable_instance.isNone()) {
-        return .{ .ret_layout_override = fallback_ret_layout };
+        return .{
+            .ret_layout_override = fallback_ret_layout,
+            .callable_instance = callable_instance,
+        };
     }
     const instance = self.store.getCallableInstance(callable_instance);
     const arg_overrides = self.store.getLayoutIdxSpan(instance.arg_layouts);
     return .{
         .arg_layout_overrides = if (arg_overrides.len > 0) arg_overrides else null,
         .ret_layout_override = fallback_ret_layout,
+        .callable_instance = callable_instance,
     };
 }
 
