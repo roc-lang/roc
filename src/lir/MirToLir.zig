@@ -1240,9 +1240,12 @@ fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, region: Region
         .prim, .unit, .record, .tuple, .tag_union, .list, .box => unreachable, // Lambda expressions always have .func monotype
     };
 
-    const lir_params = try self.lowerPatternSpan(self.mir_store.getPatternSpan(lam.params));
-    const lir_body = try self.lowerExpr(lam.body);
+    const lir_params_raw = try self.lowerPatternSpan(self.mir_store.getPatternSpan(lam.params));
+    const lir_body_raw = try self.lowerExpr(lam.body);
     const ret_layout = default_ret_layout;
+    const normalized = try self.normalizeLambdaParamPatterns(lir_params_raw, lir_body_raw, ret_layout, region);
+    const lir_params = normalized.params;
+    const lir_body = normalized.body;
 
     // Check if this lambda has captures → closure
     const mir_captures = self.mir_store.getCaptures(lam.captures);
@@ -1385,6 +1388,95 @@ fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, region: Region
         .body = lir_body,
         .ret_layout = ret_layout,
     } }, region);
+}
+
+fn patternRootLayout(self: *Self, pat_id: LirPatternId) Allocator.Error!layout.Idx {
+    const pat = self.lir_store.getPattern(pat_id);
+    return switch (pat) {
+        .bind => |b| b.layout_idx,
+        .wildcard => |w| w.layout_idx,
+        .int_literal => |i| i.layout_idx,
+        .float_literal => |f| f.layout_idx,
+        .str_literal => .str,
+        .tag => |t| t.union_layout,
+        .struct_ => |s| s.struct_layout,
+        .list => |l| try self.layout_store.internList(l.elem_layout),
+        .as_pattern => |a| a.layout_idx,
+    };
+}
+
+fn normalizeLambdaParamPatterns(
+    self: *Self,
+    params_span: LirPatternSpan,
+    body_expr: LirExprId,
+    ret_layout: layout.Idx,
+    region: Region,
+) Allocator.Error!struct { params: LirPatternSpan, body: LirExprId } {
+    const original_params = self.lir_store.getPatternSpan(params_span);
+    if (original_params.len == 0) return .{ .params = params_span, .body = body_expr };
+
+    var normalized_params = std.ArrayList(LirPatternId).empty;
+    defer normalized_params.deinit(self.allocator);
+    try normalized_params.appendSlice(self.allocator, original_params);
+
+    var changed = false;
+    var normalized_body = body_expr;
+
+    // Normalize from right-to-left so wrapper evaluation order matches parameter order.
+    var idx = original_params.len;
+    while (idx > 0) {
+        idx -= 1;
+        const original_pat_id = original_params[idx];
+        const original_pat = self.lir_store.getPattern(original_pat_id);
+
+        switch (original_pat) {
+            .bind => {},
+            .wildcard => |w| {
+                changed = true;
+                const fresh = try self.freshBindPattern(w.layout_idx, false, region);
+                normalized_params.items[idx] = fresh.pattern;
+            },
+            else => {
+                changed = true;
+                const root_layout = try self.patternRootLayout(original_pat_id);
+                const fresh = try self.freshBindPattern(root_layout, false, region);
+                normalized_params.items[idx] = fresh.pattern;
+
+                const value_lookup = try self.emitLookup(fresh.symbol, root_layout, region);
+                const mismatch_expr = try self.lir_store.addExpr(.{ .runtime_error = .{
+                    .kind = .type_error,
+                } }, region);
+                const fallback_wildcard = try self.lir_store.addPattern(.{ .wildcard = .{
+                    .layout_idx = root_layout,
+                } }, region);
+                const branches = try self.lir_store.addMatchBranches(&.{
+                    .{
+                        .pattern = original_pat_id,
+                        .guard = LirExprId.none,
+                        .body = normalized_body,
+                    },
+                    .{
+                        .pattern = fallback_wildcard,
+                        .guard = LirExprId.none,
+                        .body = mismatch_expr,
+                    },
+                });
+
+                normalized_body = try self.lir_store.addExpr(.{ .match_expr = .{
+                    .value = value_lookup,
+                    .value_layout = root_layout,
+                    .branches = branches,
+                    .result_layout = ret_layout,
+                } }, region);
+            },
+        }
+    }
+
+    if (!changed) return .{ .params = params_span, .body = body_expr };
+    return .{
+        .params = try self.lir_store.addPatternSpan(normalized_params.items),
+        .body = normalized_body,
+    };
 }
 
 fn lowerCall(self: *Self, call_data: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
@@ -4108,6 +4200,113 @@ test "MIR lambda with heterogeneous captures (I64 + Str) lowers to closure with 
     // Multiple captures → multiple_captures representation
     const clo = env.lir_store.getClosureData(lir_expr.closure);
     try testing.expect(clo.representation == .multiple_captures);
+}
+
+test "MIR lambda list-destructure param normalizes to bind param plus match wrapper" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const list_i64_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .list = .{ .elem = i64_mono } });
+    const func_arg_span = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{list_i64_mono});
+    const func_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .func = .{
+        .args = func_arg_span,
+        .ret = i64_mono,
+        .effectful = false,
+    } });
+
+    const ident_head = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 11 };
+    const sym_head = Symbol{ .module_idx = 0, .ident_idx = ident_head };
+    const pat_head = try env.mir_store.addPattern(allocator, .{ .bind = sym_head }, i64_mono);
+    const list_patterns = try env.mir_store.addPatternSpan(allocator, &.{pat_head});
+    const list_param = try env.mir_store.addPattern(allocator, .{ .list_destructure = .{
+        .patterns = list_patterns,
+        .rest_index = .none,
+        .rest_pattern = MIR.PatternId.none,
+    } }, list_i64_mono);
+    const params = try env.mir_store.addPatternSpan(allocator, &.{list_param});
+
+    const body_lookup = try env.mir_store.addExpr(allocator, .{ .lookup = sym_head }, i64_mono, Region.zero());
+    const lambda_expr = try env.mir_store.addExpr(allocator, .{ .lambda = .{
+        .params = params,
+        .body = body_lookup,
+        .captures = MIR.CaptureSpan.empty(),
+    } }, func_mono, Region.zero());
+
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, all_envs, env.module_env.idents.true_tag);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(lambda_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+    try testing.expect(lir_expr == .lambda);
+
+    const lir_params = env.lir_store.getPatternSpan(lir_expr.lambda.params);
+    try testing.expectEqual(@as(usize, 1), lir_params.len);
+    const param_pat = env.lir_store.getPattern(lir_params[0]);
+    try testing.expect(param_pat == .bind);
+
+    const body = env.lir_store.getExpr(lir_expr.lambda.body);
+    try testing.expect(body == .match_expr);
+    const match_expr = body.match_expr;
+    try testing.expectEqual(param_pat.bind.layout_idx, match_expr.value_layout);
+
+    const match_value = env.lir_store.getExpr(match_expr.value);
+    try testing.expect(match_value == .lookup);
+    try testing.expectEqual(param_pat.bind.layout_idx, match_value.lookup.layout_idx);
+    try testing.expectEqual(param_pat.bind.symbol, match_value.lookup.symbol);
+
+    const branches = env.lir_store.getMatchBranches(match_expr.branches);
+    try testing.expectEqual(@as(usize, 2), branches.len);
+    try testing.expect(env.lir_store.getPattern(branches[0].pattern) == .list);
+    try testing.expect(env.lir_store.getPattern(branches[1].pattern) == .wildcard);
+}
+
+test "MIR lambda wildcard param normalizes to bind param" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const list_i64_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .list = .{ .elem = i64_mono } });
+    const func_arg_span = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{list_i64_mono});
+    const func_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .func = .{
+        .args = func_arg_span,
+        .ret = i64_mono,
+        .effectful = false,
+    } });
+
+    const wildcard_param = try env.mir_store.addPattern(allocator, .{ .wildcard = {} }, list_i64_mono);
+    const params = try env.mir_store.addPatternSpan(allocator, &.{wildcard_param});
+
+    const zero = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 0)), .kind = .i128 },
+    } }, i64_mono, Region.zero());
+    const lambda_expr = try env.mir_store.addExpr(allocator, .{ .lambda = .{
+        .params = params,
+        .body = zero,
+        .captures = MIR.CaptureSpan.empty(),
+    } }, func_mono, Region.zero());
+
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, all_envs, env.module_env.idents.true_tag);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(lambda_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+    try testing.expect(lir_expr == .lambda);
+
+    const lir_params = env.lir_store.getPatternSpan(lir_expr.lambda.params);
+    try testing.expectEqual(@as(usize, 1), lir_params.len);
+    try testing.expect(env.lir_store.getPattern(lir_params[0]) == .bind);
+
+    const body = env.lir_store.getExpr(lir_expr.lambda.body);
+    try testing.expect(body == .i64_literal);
 }
 
 test "MIR for_loop lowers to LIR for_loop" {

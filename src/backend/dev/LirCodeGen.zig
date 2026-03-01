@@ -724,6 +724,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
     return struct {
         const Self = @This();
+        const trace_enabled = false;
+
+        inline fn trace(comptime fmt: []const u8, args: anytype) void {
+            if (comptime trace_enabled) std.debug.print(fmt, args);
+        }
 
         /// The target this LirCodeGen was instantiated for
         pub const roc_target = target;
@@ -1143,6 +1148,60 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn putSymbolLocation(self: *Self, symbol: Symbol, layout_idx: ?layout.Idx, loc: ValueLocation) Allocator.Error!void {
+            const dbg_symbol_key: u64 = 18446743833191383041;
+            const dbg_symbol_key_2: u64 = 18446743953450467328;
+            if (std.debug.runtime_safety and layout_idx != null and @intFromEnum(layout_idx.?) == 18) {
+                const any_off: i32 = switch (loc) {
+                    .stack => |s| s.offset,
+                    .list_stack => |ls_info| ls_info.struct_offset,
+                    .stack_i128 => |off| off,
+                    .stack_str => |off| off,
+                    .closure_value => |cv| cv.stack_offset,
+                    else => -999999,
+                };
+                std.debug.print(
+                    "[DBG putSymbolLocation.anyList] sym={} layout={} loc={s} off={}\n",
+                    .{ symbolKey(symbol), @intFromEnum(layout_idx.?), @tagName(loc), any_off },
+                );
+            }
+            if (std.debug.runtime_safety and symbolKey(symbol) == dbg_symbol_key) {
+                const dbg_off: i32 = switch (loc) {
+                    .stack => |s| s.offset,
+                    .list_stack => |ls_info| ls_info.struct_offset,
+                    .stack_i128 => |off| off,
+                    .stack_str => |off| off,
+                    .closure_value => |cv| cv.stack_offset,
+                    else => -999999,
+                };
+                std.debug.print(
+                    "[DBG putSymbolLocation] sym={} layout={} loc={s} off={}\n",
+                    .{
+                        symbolKey(symbol),
+                        if (layout_idx) |li| @intFromEnum(li) else @as(u32, std.math.maxInt(u32)),
+                        @tagName(loc),
+                        dbg_off,
+                    },
+                );
+            }
+            if (std.debug.runtime_safety and symbolKey(symbol) == dbg_symbol_key_2) {
+                const dbg_off_2: i32 = switch (loc) {
+                    .stack => |s| s.offset,
+                    .list_stack => |ls_info| ls_info.struct_offset,
+                    .stack_i128 => |off| off,
+                    .stack_str => |off| off,
+                    .closure_value => |cv| cv.stack_offset,
+                    else => -999999,
+                };
+                std.debug.print(
+                    "[DBG putSymbolLocation.acc] sym={} layout={} loc={s} off={}\n",
+                    .{
+                        symbolKey(symbol),
+                        if (layout_idx) |li| @intFromEnum(li) else @as(u32, std.math.maxInt(u32)),
+                        @tagName(loc),
+                        dbg_off_2,
+                    },
+                );
+            }
             try self.symbol_locations.put(symbolKey(symbol), loc);
             if (layout_idx) |li| {
                 if (li == layout.Idx.none) {
@@ -1197,11 +1256,53 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn getSymbolLocation(self: *Self, symbol: Symbol, layout_idx: ?layout.Idx) ?ValueLocation {
+            const dbg_symbol_key: u64 = 18446743833191383041;
+            const dbg_symbol_key_2: u64 = 18446743953450467328;
+            if (std.debug.runtime_safety and symbolKey(symbol) == dbg_symbol_key) {
+                std.debug.print(
+                    "[DBG getSymbolLocation] sym={} layout={}\n",
+                    .{
+                        symbolKey(symbol),
+                        if (layout_idx) |li| @intFromEnum(li) else @as(u32, std.math.maxInt(u32)),
+                    },
+                );
+            }
+            if (std.debug.runtime_safety and symbolKey(symbol) == dbg_symbol_key_2) {
+                std.debug.print(
+                    "[DBG getSymbolLocation.acc] sym={} layout={}\n",
+                    .{
+                        symbolKey(symbol),
+                        if (layout_idx) |li| @intFromEnum(li) else @as(u32, std.math.maxInt(u32)),
+                    },
+                );
+            }
             if (layout_idx) |li| {
                 if (li == layout.Idx.none) {
                     return self.symbol_locations.get(symbolKey(symbol));
                 }
                 if (self.symbol_locations_by_layout.get(self.symbolLayoutKey(symbol, li))) |loc| {
+                    if (std.debug.runtime_safety and symbolKey(symbol) == dbg_symbol_key) {
+                        const dbg_off: i32 = switch (loc) {
+                            .stack => |s| s.offset,
+                            .list_stack => |ls_info| ls_info.struct_offset,
+                            .stack_i128 => |off| off,
+                            .stack_str => |off| off,
+                            .closure_value => |cv| cv.stack_offset,
+                            else => -999999,
+                        };
+                        std.debug.print("[DBG getSymbolLocation.hit] loc={s} off={}\n", .{ @tagName(loc), dbg_off });
+                    }
+                    if (std.debug.runtime_safety and symbolKey(symbol) == dbg_symbol_key_2) {
+                        const dbg_off_2: i32 = switch (loc) {
+                            .stack => |s| s.offset,
+                            .list_stack => |ls_info| ls_info.struct_offset,
+                            .stack_i128 => |off| off,
+                            .stack_str => |off| off,
+                            .closure_value => |cv| cv.stack_offset,
+                            else => -999999,
+                        };
+                        std.debug.print("[DBG getSymbolLocation.acc.hit] loc={s} off={}\n", .{ @tagName(loc), dbg_off_2 });
+                    }
                     return loc;
                 }
                 if (self.isFunctionLayout(li)) {
@@ -1702,6 +1803,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        fn borrowedArgNeedsLocalRelease(self: *Self, expr_id: LirExprId) bool {
+            if (!self.exprResolvesToLookup(expr_id)) return true;
+
+            const expr = self.store.getExpr(expr_id);
+            return expr == .lookup and expr.lookup.symbol.isNone();
+        }
+
         /// Generate code for an expression. The result is ALWAYS in a stable location
         /// (stack, immediate, lambda_code, closure_value) — never a bare register.
         fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!ValueLocation {
@@ -1863,8 +1971,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // List is a (ptr, len, capacity) triple - length is at offset 8
                     std.debug.assert(args.len >= 1);
                     const list_loc = try self.generateExpr(args[0]);
-                    const release_borrowed_temp = !self.exprResolvesToLookup(args[0]);
-                    std.debug.print(
+                    const release_borrowed_temp = self.borrowedArgNeedsLocalRelease(args[0]);
+                    trace(
                         "[list_len.codegen] arg_expr={} release_temp={} layout={}\n",
                         .{
                             @intFromEnum(args[0]),
@@ -1874,7 +1982,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     );
                     const list_len_arg_expr = self.store.getExpr(args[0]);
                     if (list_len_arg_expr == .lookup) {
-                        std.debug.print(
+                        trace(
                             "[list_len.codegen] arg_lookup symbol_key={} layout={}\n",
                             .{
                                 @as(u64, @bitCast(list_len_arg_expr.lookup.symbol)),
@@ -1901,9 +2009,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const result_reg = try self.allocTempGeneral();
                     try self.emitLoad(.w64, result_reg, frame_ptr, base_offset + 8);
                     if (release_borrowed_temp) {
+                        const spill_slot = self.codegen.allocStackSlot(8);
+                        try self.emitStore(.w64, frame_ptr, spill_slot, result_reg);
                         if (self.getExprLayout(args[0])) |list_layout_idx| {
                             try self.emitRcForLayout(list_loc, list_layout_idx, .decref, 1);
                         }
+                        try self.emitLoad(.w64, result_reg, frame_ptr, spill_slot);
                     }
                     return .{ .general_reg = result_reg };
                 },
@@ -1911,7 +2022,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // List is empty if length is 0
                     std.debug.assert(args.len >= 1);
                     const list_loc = try self.generateExpr(args[0]);
-                    const release_borrowed_temp = !self.exprResolvesToLookup(args[0]);
+                    const release_borrowed_temp = self.borrowedArgNeedsLocalRelease(args[0]);
 
                     const base_offset: i32 = switch (list_loc) {
                         .stack => |s| s.offset,
@@ -1945,9 +2056,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         self.codegen.freeGeneral(one_reg);
                         self.codegen.freeGeneral(len_reg);
                         if (release_borrowed_temp) {
+                            const spill_slot = self.codegen.allocStackSlot(8);
+                            try self.emitStore(.w64, frame_ptr, spill_slot, result_reg);
                             if (self.getExprLayout(args[0])) |list_layout_idx| {
                                 try self.emitRcForLayout(list_loc, list_layout_idx, .decref, 1);
                             }
+                            try self.emitLoad(.w64, result_reg, frame_ptr, spill_slot);
                         }
                         return .{ .general_reg = result_reg };
                     }
@@ -2036,7 +2150,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     // Generate element value
                     const elem_loc = try self.generateExpr(args[1]);
-                    std.debug.print(
+                    trace(
                         "[list_append.codegen] arg0_layout={} arg1_layout={} ll_ret_layout={}\n",
                         .{
                             if (self.getExprLayout(args[0])) |l0| @intFromEnum(l0) else @as(u32, std.math.maxInt(u32)),
@@ -2078,18 +2192,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                         break :blk false;
                     };
-                    if (elements_refcounted and elem_size_align.size > 0) {
-                        const elem_layout_idx = if (self.getExprLayout(args[1])) |arg_layout_idx|
-                            arg_layout_idx
-                        else blk: {
-                            const ret_layout_val = ls.getLayout(ll.ret_layout);
-                            break :blk switch (ret_layout_val.tag) {
-                                .list => ret_layout_val.data.list,
-                                else => unreachable,
-                            };
-                        };
-                        try self.emitRcForLayout(elem_loc, elem_layout_idx, .incref, 1);
-                    }
                     const list_offset: i32 = switch (list_loc) {
                         .stack => |s| s.offset,
                         .list_stack => |ls_info| ls_info.struct_offset,
@@ -3693,6 +3795,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // list_last(list) -> element  (same as list_get at index len-1)
                     if (args.len != 1) unreachable;
                     const list_loc = try self.generateExpr(args[0]);
+                    if (std.debug.runtime_safety) {
+                        const arg_expr = self.store.getExpr(args[0]);
+                        std.debug.print("[DBG list_last] arg_expr={} lookup={} layout={}\n", .{
+                            @intFromEnum(args[0]),
+                            arg_expr == .lookup,
+                            if (self.getExprLayout(args[0])) |li| @intFromEnum(li) else @as(u32, std.math.maxInt(u32)),
+                        });
+                        if (arg_expr == .lookup) {
+                            std.debug.print("[DBG list_last] lookup symbol_key={} layout={}\n", .{
+                                @as(u64, @bitCast(arg_expr.lookup.symbol)),
+                                @intFromEnum(arg_expr.lookup.layout_idx),
+                            });
+                        }
+                    }
                     const list_elem_layout: ?layout.Idx = blk: {
                         const ls = self.layout_store orelse break :blk null;
                         if (self.getExprLayout(args[0])) |list_layout_idx| {
@@ -3710,7 +3826,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const ls = self.layout_store orelse unreachable;
                     const list_layout_idx = self.getExprLayout(args[0]) orelse unreachable;
                     const list_layout = ls.getLayout(list_layout_idx);
-                    std.debug.print(
+                    trace(
                         "[list_contains.codegen] list_expr={} needle_expr={} list_layout_idx={} tag={s}\n",
                         .{
                             @intFromEnum(args[0]),
@@ -3721,7 +3837,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     );
                     switch (list_layout.tag) {
                         .list => {
-                            std.debug.print(
+                            trace(
                                 "[list_contains.codegen] elem_layout_idx={}\n",
                                 .{@intFromEnum(list_layout.data.list)},
                             );
@@ -3987,7 +4103,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (ll.op == .num_is_eq) {
                         const arg0_expr_data = self.store.getExpr(args[0]);
                         const arg1_expr_data = self.store.getExpr(args[1]);
-                        std.debug.print(
+                        trace(
                             "[low_level.num_is_eq] arg0_expr={} arg1_expr={} arg0_layout={} arg1_layout={} operand_layout={} ret_layout={}\n",
                             .{
                                 @intFromEnum(args[0]),
@@ -3999,62 +4115,62 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             },
                         );
                         switch (lhs_loc) {
-                            .stack => |s| std.debug.print("[low_level.num_is_eq] lhs_loc=stack off={} size={s}\n", .{ s.offset, @tagName(s.size) }),
-                            .immediate_i64 => |v| std.debug.print("[low_level.num_is_eq] lhs_loc=imm {}\n", .{v}),
-                            .immediate_f64 => |v| std.debug.print("[low_level.num_is_eq] lhs_loc=imm_f64 {d}\n", .{v}),
-                            .stack_i128 => |off| std.debug.print("[low_level.num_is_eq] lhs_loc=i128 off={}\n", .{off}),
-                            .general_reg => |r| std.debug.print("[low_level.num_is_eq] lhs_loc=reg {}\n", .{@intFromEnum(r)}),
-                            else => std.debug.print("[low_level.num_is_eq] lhs_loc={s}\n", .{@tagName(lhs_loc)}),
+                            .stack => |s| trace("[low_level.num_is_eq] lhs_loc=stack off={} size={s}\n", .{ s.offset, @tagName(s.size) }),
+                            .immediate_i64 => |v| trace("[low_level.num_is_eq] lhs_loc=imm {}\n", .{v}),
+                            .immediate_f64 => |v| trace("[low_level.num_is_eq] lhs_loc=imm_f64 {d}\n", .{v}),
+                            .stack_i128 => |off| trace("[low_level.num_is_eq] lhs_loc=i128 off={}\n", .{off}),
+                            .general_reg => |r| trace("[low_level.num_is_eq] lhs_loc=reg {}\n", .{@intFromEnum(r)}),
+                            else => trace("[low_level.num_is_eq] lhs_loc={s}\n", .{@tagName(lhs_loc)}),
                         }
                         switch (rhs_loc) {
-                            .stack => |s| std.debug.print("[low_level.num_is_eq] rhs_loc=stack off={} size={s}\n", .{ s.offset, @tagName(s.size) }),
-                            .immediate_i64 => |v| std.debug.print("[low_level.num_is_eq] rhs_loc=imm {}\n", .{v}),
-                            .immediate_f64 => |v| std.debug.print("[low_level.num_is_eq] rhs_loc=imm_f64 {d}\n", .{v}),
-                            .stack_i128 => |off| std.debug.print("[low_level.num_is_eq] rhs_loc=i128 off={}\n", .{off}),
-                            .general_reg => |r| std.debug.print("[low_level.num_is_eq] rhs_loc=reg {}\n", .{@intFromEnum(r)}),
-                            else => std.debug.print("[low_level.num_is_eq] rhs_loc={s}\n", .{@tagName(rhs_loc)}),
+                            .stack => |s| trace("[low_level.num_is_eq] rhs_loc=stack off={} size={s}\n", .{ s.offset, @tagName(s.size) }),
+                            .immediate_i64 => |v| trace("[low_level.num_is_eq] rhs_loc=imm {}\n", .{v}),
+                            .immediate_f64 => |v| trace("[low_level.num_is_eq] rhs_loc=imm_f64 {d}\n", .{v}),
+                            .stack_i128 => |off| trace("[low_level.num_is_eq] rhs_loc=i128 off={}\n", .{off}),
+                            .general_reg => |r| trace("[low_level.num_is_eq] rhs_loc=reg {}\n", .{@intFromEnum(r)}),
+                            else => trace("[low_level.num_is_eq] rhs_loc={s}\n", .{@tagName(rhs_loc)}),
                         }
                         if (arg0_expr_data == .lookup) {
                             const lk = arg0_expr_data.lookup;
-                            std.debug.print(
+                            trace(
                                 "[low_level.num_is_eq] arg0 lookup symbol_key={} layout={}\n",
                                 .{ @as(u64, @bitCast(lk.symbol)), @intFromEnum(lk.layout_idx) },
                             );
                             if (self.getSymbolLocation(lk.symbol, lk.layout_idx)) |loc| {
                                 switch (loc) {
-                                    .stack => |s| std.debug.print("[low_level.num_is_eq] arg0 loc=stack off={} size={s}\n", .{ s.offset, @tagName(s.size) }),
-                                    .immediate_i64 => |v| std.debug.print("[low_level.num_is_eq] arg0 loc=imm {}\n", .{v}),
-                                    .general_reg => |r| std.debug.print("[low_level.num_is_eq] arg0 loc=reg {}\n", .{@intFromEnum(r)}),
-                                    .closure_value => |cv| std.debug.print("[low_level.num_is_eq] arg0 loc=closure off={}\n", .{cv.stack_offset}),
-                                    .list_stack => |li| std.debug.print("[low_level.num_is_eq] arg0 loc=list off={}\n", .{li.struct_offset}),
-                                    .stack_i128 => |off| std.debug.print("[low_level.num_is_eq] arg0 loc=i128 off={}\n", .{off}),
-                                    .stack_str => |off| std.debug.print("[low_level.num_is_eq] arg0 loc=str off={}\n", .{off}),
-                                    .float_reg => |f| std.debug.print("[low_level.num_is_eq] arg0 loc=float reg={}\n", .{@intFromEnum(f)}),
-                                    .immediate_f64 => |v| std.debug.print("[low_level.num_is_eq] arg0 loc=immediate_f64 {d}\n", .{v}),
-                                    .lambda_code => |lc| std.debug.print("[low_level.num_is_eq] arg0 loc=lambda code={}\n", .{lc.code_offset}),
-                                    else => std.debug.print("[low_level.num_is_eq] arg0 loc=other {s}\n", .{@tagName(loc)}),
+                                    .stack => |s| trace("[low_level.num_is_eq] arg0 loc=stack off={} size={s}\n", .{ s.offset, @tagName(s.size) }),
+                                    .immediate_i64 => |v| trace("[low_level.num_is_eq] arg0 loc=imm {}\n", .{v}),
+                                    .general_reg => |r| trace("[low_level.num_is_eq] arg0 loc=reg {}\n", .{@intFromEnum(r)}),
+                                    .closure_value => |cv| trace("[low_level.num_is_eq] arg0 loc=closure off={}\n", .{cv.stack_offset}),
+                                    .list_stack => |li| trace("[low_level.num_is_eq] arg0 loc=list off={}\n", .{li.struct_offset}),
+                                    .stack_i128 => |off| trace("[low_level.num_is_eq] arg0 loc=i128 off={}\n", .{off}),
+                                    .stack_str => |off| trace("[low_level.num_is_eq] arg0 loc=str off={}\n", .{off}),
+                                    .float_reg => |f| trace("[low_level.num_is_eq] arg0 loc=float reg={}\n", .{@intFromEnum(f)}),
+                                    .immediate_f64 => |v| trace("[low_level.num_is_eq] arg0 loc=immediate_f64 {d}\n", .{v}),
+                                    .lambda_code => |lc| trace("[low_level.num_is_eq] arg0 loc=lambda code={}\n", .{lc.code_offset}),
+                                    else => trace("[low_level.num_is_eq] arg0 loc=other {s}\n", .{@tagName(loc)}),
                                 }
                             }
                         }
                         if (arg1_expr_data == .lookup) {
                             const lk = arg1_expr_data.lookup;
-                            std.debug.print(
+                            trace(
                                 "[low_level.num_is_eq] arg1 lookup symbol_key={} layout={}\n",
                                 .{ @as(u64, @bitCast(lk.symbol)), @intFromEnum(lk.layout_idx) },
                             );
                             if (self.getSymbolLocation(lk.symbol, lk.layout_idx)) |loc| {
                                 switch (loc) {
-                                    .stack => |s| std.debug.print("[low_level.num_is_eq] arg1 loc=stack off={} size={s}\n", .{ s.offset, @tagName(s.size) }),
-                                    .immediate_i64 => |v| std.debug.print("[low_level.num_is_eq] arg1 loc=imm {}\n", .{v}),
-                                    .general_reg => |r| std.debug.print("[low_level.num_is_eq] arg1 loc=reg {}\n", .{@intFromEnum(r)}),
-                                    .closure_value => |cv| std.debug.print("[low_level.num_is_eq] arg1 loc=closure off={}\n", .{cv.stack_offset}),
-                                    .list_stack => |li| std.debug.print("[low_level.num_is_eq] arg1 loc=list off={}\n", .{li.struct_offset}),
-                                    .stack_i128 => |off| std.debug.print("[low_level.num_is_eq] arg1 loc=i128 off={}\n", .{off}),
-                                    .stack_str => |off| std.debug.print("[low_level.num_is_eq] arg1 loc=str off={}\n", .{off}),
-                                    .float_reg => |f| std.debug.print("[low_level.num_is_eq] arg1 loc=float reg={}\n", .{@intFromEnum(f)}),
-                                    .immediate_f64 => |v| std.debug.print("[low_level.num_is_eq] arg1 loc=immediate_f64 {d}\n", .{v}),
-                                    .lambda_code => |lc| std.debug.print("[low_level.num_is_eq] arg1 loc=lambda code={}\n", .{lc.code_offset}),
-                                    else => std.debug.print("[low_level.num_is_eq] arg1 loc=other {s}\n", .{@tagName(loc)}),
+                                    .stack => |s| trace("[low_level.num_is_eq] arg1 loc=stack off={} size={s}\n", .{ s.offset, @tagName(s.size) }),
+                                    .immediate_i64 => |v| trace("[low_level.num_is_eq] arg1 loc=imm {}\n", .{v}),
+                                    .general_reg => |r| trace("[low_level.num_is_eq] arg1 loc=reg {}\n", .{@intFromEnum(r)}),
+                                    .closure_value => |cv| trace("[low_level.num_is_eq] arg1 loc=closure off={}\n", .{cv.stack_offset}),
+                                    .list_stack => |li| trace("[low_level.num_is_eq] arg1 loc=list off={}\n", .{li.struct_offset}),
+                                    .stack_i128 => |off| trace("[low_level.num_is_eq] arg1 loc=i128 off={}\n", .{off}),
+                                    .stack_str => |off| trace("[low_level.num_is_eq] arg1 loc=str off={}\n", .{off}),
+                                    .float_reg => |f| trace("[low_level.num_is_eq] arg1 loc=float reg={}\n", .{@intFromEnum(f)}),
+                                    .immediate_f64 => |v| trace("[low_level.num_is_eq] arg1 loc=immediate_f64 {d}\n", .{v}),
+                                    .lambda_code => |lc| trace("[low_level.num_is_eq] arg1 loc=lambda code={}\n", .{lc.code_offset}),
+                                    else => trace("[low_level.num_is_eq] arg1 loc=other {s}\n", .{@tagName(loc)}),
                                 }
                             }
                         }
@@ -5834,7 +5950,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Allocate result register
             const result_reg = try self.allocTempGeneral();
             if (op == .num_is_eq) {
-                std.debug.print(
+                trace(
                     "[generateIntBinop.num_is_eq] lhs_reg={} rhs_reg={} result_reg={} operand_layout={}\n",
                     .{
                         @intFromEnum(lhs_reg),
@@ -7329,7 +7445,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             result_reg: GeneralReg,
         ) Allocator.Error!void {
             const ls = self.layout_store orelse unreachable;
-            std.debug.print(
+            trace(
                 "[compareFieldByLayout] lhs_off={} rhs_off={} layout_idx={} size={}\n",
                 .{ lhs_off, rhs_off, @intFromEnum(field_layout_idx), field_size },
             );
@@ -8715,12 +8831,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Evaluate the scrutinee (the value being matched)
             const value_loc = try self.generateExpr(when_expr.value);
             switch (value_loc) {
-                .stack => |s| std.debug.print("[generateMatch] value_loc=stack off={} size={s}\n", .{ s.offset, @tagName(s.size) }),
-                .immediate_i64 => |v| std.debug.print("[generateMatch] value_loc=imm {}\n", .{v}),
-                .general_reg => |r| std.debug.print("[generateMatch] value_loc=reg {}\n", .{@intFromEnum(r)}),
-                .stack_i128 => |off| std.debug.print("[generateMatch] value_loc=i128 off={}\n", .{off}),
-                .closure_value => |cv| std.debug.print("[generateMatch] value_loc=closure off={} repr={s}\n", .{ cv.stack_offset, @tagName(cv.representation) }),
-                else => std.debug.print("[generateMatch] value_loc={s}\n", .{@tagName(value_loc)}),
+                .stack => |s| trace("[generateMatch] value_loc=stack off={} size={s}\n", .{ s.offset, @tagName(s.size) }),
+                .immediate_i64 => |v| trace("[generateMatch] value_loc=imm {}\n", .{v}),
+                .general_reg => |r| trace("[generateMatch] value_loc=reg {}\n", .{@intFromEnum(r)}),
+                .stack_i128 => |off| trace("[generateMatch] value_loc=i128 off={}\n", .{off}),
+                .closure_value => |cv| trace("[generateMatch] value_loc=closure off={} repr={s}\n", .{ cv.stack_offset, @tagName(cv.representation) }),
+                else => trace("[generateMatch] value_loc={s}\n", .{@tagName(value_loc)}),
             }
 
             // Get the branches
@@ -8735,7 +8851,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             var result_size: u32 = ls.layoutSizeAlign(result_layout_val).size;
             var use_stack_result = result_size > 8;
             const value_layout_val = ls.getLayout(when_expr.value_layout);
-            std.debug.print(
+            trace(
                 "[generateMatch] value_expr={} value_layout={} value_layout_tag={s} result_layout={} branches={}\n",
                 .{
                     @intFromEnum(when_expr.value),
@@ -8753,33 +8869,33 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const body_stmts = self.store.getStmts(body_expr.block.stmts);
                     const body_final_id = body_expr.block.final_expr;
                     const body_final = self.store.getExpr(body_final_id);
-                    std.debug.print(
+                    trace(
                         "[generateMatch] branch[{}] body_block stmts_len={} final_expr={} final_tag={s}\n",
                         .{ bi, body_stmts.len, @intFromEnum(body_final_id), @tagName(body_final) },
                     );
                     for (body_stmts, 0..) |stmt, si| {
                         const stmt_expr_id = stmt.binding().expr;
                         const stmt_expr = self.store.getExpr(stmt_expr_id);
-                        std.debug.print(
+                        trace(
                             "[generateMatch] branch[{}] body_stmt[{}] tag={s} expr={} expr_tag={s}\n",
                             .{ bi, si, @tagName(stmt), @intFromEnum(stmt_expr_id), @tagName(stmt_expr) },
                         );
                     }
                 }
                 switch (pat) {
-                    .tag => |tp| std.debug.print(
+                    .tag => |tp| trace(
                         "[generateMatch] branch[{}] pat=tag disc={} body_expr={} body_tag={s}\n",
                         .{ bi, tp.discriminant, @intFromEnum(branch.body), @tagName(self.store.getExpr(branch.body)) },
                     ),
-                    .wildcard => std.debug.print(
+                    .wildcard => trace(
                         "[generateMatch] branch[{}] pat=wildcard body_expr={} body_tag={s}\n",
                         .{ bi, @intFromEnum(branch.body), @tagName(self.store.getExpr(branch.body)) },
                     ),
-                    .bind => |b| std.debug.print(
+                    .bind => |b| trace(
                         "[generateMatch] branch[{}] pat=bind symbol_key={} body_expr={} body_tag={s}\n",
                         .{ bi, @as(u64, @bitCast(b.symbol)), @intFromEnum(branch.body), @tagName(self.store.getExpr(branch.body)) },
                     ),
-                    else => std.debug.print(
+                    else => trace(
                         "[generateMatch] branch[{}] pat={s} body_expr={} body_tag={s}\n",
                         .{ bi, @tagName(pat), @intFromEnum(branch.body), @tagName(self.store.getExpr(branch.body)) },
                     ),
@@ -8805,7 +8921,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Use .w32 for <=4-byte discriminants, and also whenever a 64-bit load
             // would read past the tag union allocation.
             const disc_use_w32 = tu_disc_size <= 4 or (tu_disc_offset + 8 > @as(i32, @intCast(tu_total_size)));
-            std.debug.print(
+            trace(
                 "[generateMatch] disc_offset={} disc_size={} total_size={} use_w32={}\n",
                 .{ tu_disc_offset, tu_disc_size, tu_total_size, disc_use_w32 },
             );
@@ -9224,7 +9340,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Get element layout from the layout store - required, no fallbacks
             const ls = self.layout_store orelse unreachable;
-            std.debug.print(
+            trace(
                 "[generateList] elem_layout={} elems_len={}\n",
                 .{ @intFromEnum(list.elem_layout), elems.len },
             );
@@ -9853,7 +9969,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!void {
             const key = self.symbolLayoutKey(symbol, layout_idx);
             const pb = self.prebound_callables_by_layout.get(key) orelse return;
-            std.debug.print(
+            trace(
                 "[applyPreboundCallableForBinding] symbol_key={} layout={} stack_offset={} repr={s} lambda={} captures_len={}\n",
                 .{
                     @as(u64, @bitCast(symbol)),
@@ -11125,14 +11241,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Iterates over each element, binding it to the pattern and executing the body
         fn consumeForLoopListValue(
             self: *Self,
-            list_expr: LirExprId,
             list_loc: ValueLocation,
             elem_layout_idx: layout.Idx,
-            elem_size: u32,
         ) Allocator.Error!void {
             const ls = self.layout_store orelse return;
-            _ = list_expr;
-            _ = elem_size;
 
             // for_loop body receives ownership of each element; RC insertion on the
             // element binding is responsible for consuming/moving those refs.
@@ -11143,10 +11255,33 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitListDecref(list_loc, elem_alignment, false);
         }
 
+        fn internalReturnRegisters() []const GeneralReg {
+            if (comptime target.toCpuArch() == .aarch64) {
+                return &[_]GeneralReg{ .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7, .XR, .X9, .X10, .X11, .X12, .X13, .X14, .X15 };
+            }
+            return &[_]GeneralReg{ .RAX, .RDX, .RCX, .R8, .R9, .R10, .R11, .RDI, .RSI };
+        }
+
+        fn spillInternalReturnRegisters(self: *Self) Allocator.Error!i32 {
+            const regs = internalReturnRegisters();
+            const spill_slot = self.codegen.allocStackSlot(@intCast(regs.len * @sizeOf(u64)));
+            for (regs, 0..) |reg, i| {
+                try self.emitStore(.w64, frame_ptr, spill_slot + @as(i32, @intCast(i * 8)), reg);
+            }
+            return spill_slot;
+        }
+
+        fn restoreInternalReturnRegisters(self: *Self, spill_slot: i32) Allocator.Error!void {
+            const regs = internalReturnRegisters();
+            for (regs, 0..) |reg, i| {
+                try self.emitLoad(.w64, reg, frame_ptr, spill_slot + @as(i32, @intCast(i * 8)));
+            }
+        }
+
         fn generateForLoop(self: *Self, for_loop: anytype) Allocator.Error!ValueLocation {
             // Get the list location
             const list_loc = try self.generateExpr(for_loop.list_expr);
-            std.debug.print(
+            trace(
                 "[generateForLoop] body_expr={} body_tag={s}\n",
                 .{ @intFromEnum(for_loop.body), @tagName(self.store.getExpr(for_loop.body)) },
             );
@@ -11154,7 +11289,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (for_body_expr == .block) {
                 const body_stmts = self.store.getStmts(for_body_expr.block.stmts);
                 const body_final = self.store.getExpr(for_body_expr.block.final_expr);
-                std.debug.print(
+                trace(
                     "[generateForLoop] body_block stmts_len={} final_expr={} final_tag={s}\n",
                     .{ body_stmts.len, @intFromEnum(for_body_expr.block.final_expr), @tagName(body_final) },
                 );
@@ -11162,7 +11297,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 var depth: u8 = 0;
                 while (depth < 4) : (depth += 1) {
                     const cur_expr = self.store.getExpr(cur_expr_id);
-                    std.debug.print(
+                    trace(
                         "[generateForLoop] body_chain depth={} expr={} tag={s}\n",
                         .{ depth, @intFromEnum(cur_expr_id), @tagName(cur_expr) },
                     );
@@ -11230,7 +11365,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const elem_size: u32 = ls.layoutSizeAlign(elem_layout).size;
             // ZST elements (size 0) are valid - they have no data but we still iterate
             std.debug.assert(elem_size <= 1024 * 1024); // Sanity check: < 1MB
-            std.debug.print(
+            trace(
                 "[generateForLoop] list_expr_layout={} stored_elem_layout={} effective_elem_layout={} elem_size={}\n",
                 .{
                     if (self.getExprLayout(for_loop.list_expr)) |li| @intFromEnum(li) else @as(u32, 0),
@@ -11378,7 +11513,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // for_loop consumes its list expression. Release the loop input once
             // iteration is finished (including all break paths patched above).
-            try self.consumeForLoopListValue(for_loop.list_expr, list_loc, effective_elem_layout, elem_size);
+            try self.consumeForLoopListValue(list_loc, effective_elem_layout);
 
             // Early returns from inside the loop body bypass normal loop cleanup.
             // Retarget those jumps through a loop-local cleanup trampoline that
@@ -11392,7 +11527,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
                 self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
 
-                try self.consumeForLoopListValue(for_loop.list_expr, list_loc, effective_elem_layout, elem_size);
+                const saved_return_regs_slot: ?i32 = if (self.ret_ptr_slot == null and self.early_return_ret_layout != null)
+                    try self.spillInternalReturnRegisters()
+                else
+                    null;
+                try self.consumeForLoopListValue(list_loc, effective_elem_layout);
+                if (saved_return_regs_slot) |spill_slot| {
+                    try self.restoreInternalReturnRegisters(spill_slot);
+                }
 
                 const epilogue_patch = try self.codegen.emitJump();
                 try self.early_return_patches.append(self.allocator, epilogue_patch);
@@ -12442,6 +12584,50 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Process each statement
             for (stmts) |stmt| {
                 const b = stmt.binding();
+                if (std.debug.runtime_safety) {
+                    const dbg_symbol_key: u64 = 18446743833191383041;
+                    const stmt_expr_dbg = self.store.getExpr(b.expr);
+                    if (stmt_expr_dbg == .decref) {
+                        const value_expr_dbg = self.store.getExpr(stmt_expr_dbg.decref.value);
+                        if (value_expr_dbg == .lookup and @as(u64, @bitCast(value_expr_dbg.lookup.symbol)) == dbg_symbol_key) {
+                            std.debug.print(
+                                "[DBG generateBlock.stmt.decref] stmt_expr={} value_expr={} layout={}\n",
+                                .{
+                                    @intFromEnum(b.expr),
+                                    @intFromEnum(stmt_expr_dbg.decref.value),
+                                    @intFromEnum(stmt_expr_dbg.decref.layout_idx),
+                                },
+                            );
+                            for (stmts, 0..) |dbg_stmt, dbg_i| {
+                                const dbg_b = dbg_stmt.binding();
+                                const dbg_expr_id = dbg_b.expr;
+                                const dbg_expr = self.store.getExpr(dbg_expr_id);
+                                std.debug.print(
+                                    "  [DBG block stmt {}] expr={} tag={s} pat={s}\n",
+                                    .{
+                                        dbg_i,
+                                        @intFromEnum(dbg_expr_id),
+                                        @tagName(dbg_expr),
+                                        @tagName(self.store.getPattern(dbg_b.pattern)),
+                                    },
+                                );
+                                if (dbg_expr == .decref) {
+                                    const dv = self.store.getExpr(dbg_expr.decref.value);
+                                    if (dv == .lookup) {
+                                        std.debug.print(
+                                            "    [DBG block decref] value_expr={} symbol_key={} layout={}\n",
+                                            .{
+                                                @intFromEnum(dbg_expr.decref.value),
+                                                @as(u64, @bitCast(dv.lookup.symbol)),
+                                                @intFromEnum(dbg_expr.decref.layout_idx),
+                                            },
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // For self-recursive closures (e.g., `factorial = |n| ... factorial(n-1) ...`):
                 // The closure captures itself, but the self-capture is only used for recursive
@@ -12465,7 +12651,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             }
                         }
                         if (is_self_recursive) {
-                            std.debug.print(
+                            trace(
                                 "[self-rec-bind] symbol_key={} closure_lambda={} pattern_layout={}\n",
                                 .{
                                     bind_key,
@@ -13439,7 +13625,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
             if (debug_is_list_any) {
-                std.debug.print(
+                trace(
                     "[generateCall] fn={s} callable_instance={} args_len={} resolved_layouts_len={}\n",
                     .{
                         debug_call_name,
@@ -13450,7 +13636,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 );
                 for (call_args_exprs, 0..) |arg_expr, i| {
                     const expr_data = self.store.getExpr(arg_expr);
-                    std.debug.print(
+                    trace(
                         "[generateCall] arg[{}] expr={} tag={s} override_layout={}\n",
                         .{
                             i,
@@ -13753,7 +13939,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             var offset: i32 = 0;
             for (captures) |capture| {
                 if (self.getSymbolLocation(capture.symbol, capture.layout_idx)) |capture_loc| {
-                    std.debug.print(
+                    trace(
                         "[materializeCaptures] symbol_key={} layout={} base_offset={} cur_offset={}\n",
                         .{
                             @as(u64, @bitCast(capture.symbol)),
@@ -13763,14 +13949,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         },
                     );
                     switch (capture_loc) {
-                        .stack => |s| std.debug.print("[materializeCaptures] src=stack off={} size={s}\n", .{ s.offset, @tagName(s.size) }),
-                        .immediate_i64 => |v| std.debug.print("[materializeCaptures] src=imm {}\n", .{v}),
-                        .general_reg => |r| std.debug.print("[materializeCaptures] src=reg {}\n", .{@intFromEnum(r)}),
-                        .closure_value => |cv| std.debug.print("[materializeCaptures] src=closure off={} repr={s}\n", .{ cv.stack_offset, @tagName(cv.representation) }),
-                        .list_stack => |li| std.debug.print("[materializeCaptures] src=list off={}\n", .{li.struct_offset}),
-                        .stack_i128 => |off| std.debug.print("[materializeCaptures] src=i128 off={}\n", .{off}),
-                        .stack_str => |off| std.debug.print("[materializeCaptures] src=str off={}\n", .{off}),
-                        else => std.debug.print("[materializeCaptures] src={s}\n", .{@tagName(capture_loc)}),
+                        .stack => |s| trace("[materializeCaptures] src=stack off={} size={s}\n", .{ s.offset, @tagName(s.size) }),
+                        .immediate_i64 => |v| trace("[materializeCaptures] src=imm {}\n", .{v}),
+                        .general_reg => |r| trace("[materializeCaptures] src=reg {}\n", .{@intFromEnum(r)}),
+                        .closure_value => |cv| trace("[materializeCaptures] src=closure off={} repr={s}\n", .{ cv.stack_offset, @tagName(cv.representation) }),
+                        .list_stack => |li| trace("[materializeCaptures] src=list off={}\n", .{li.struct_offset}),
+                        .stack_i128 => |off| trace("[materializeCaptures] src=i128 off={}\n", .{off}),
+                        .stack_str => |off| trace("[materializeCaptures] src=str off={}\n", .{off}),
+                        else => trace("[materializeCaptures] src={s}\n", .{@tagName(capture_loc)}),
                     }
                     // Get size and alignment of this capture
                     const ls = self.layout_store orelse unreachable;
@@ -14176,7 +14362,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             ret_layout: layout.Idx,
             arg_layout_overrides: []const layout.Idx,
         ) Allocator.Error!ValueLocation {
-            std.debug.print(
+            trace(
                 "[callSingleClosureWithCaptures] lambda={} captures_len={} stack_offset={} repr={s} args_len={} overrides_len={}\n",
                 .{
                     @intFromEnum(cv.lambda),
@@ -14210,7 +14396,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const lambda_expr = self.store.getExpr(lambda_body);
             switch (lambda_expr) {
                 .lambda => |lambda| {
-                    std.debug.print(
+                    trace(
                         "[compileLambdaAndCall] lambda_body={} callable_instance={} args_len={} overrides_len={}\n",
                         .{
                             @intFromEnum(lambda_body),
@@ -14230,6 +14416,28 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     var param_layout_overrides = std.ArrayList(layout.Idx).empty;
                     defer param_layout_overrides.deinit(self.allocator);
                     const args = self.store.getExprSpan(args_span);
+                    if (std.debug.runtime_safety) {
+                        const params_dbg = self.store.getPatternSpan(lambda.params);
+                        if (params_dbg.len > 0) {
+                            const p0 = self.store.getPattern(params_dbg[0]);
+                            if (p0 == .bind and @as(u64, @bitCast(p0.bind.symbol)) == 18446743833191383041 and args.len > 0) {
+                                const arg0_expr = self.store.getExpr(args[0]);
+                                std.debug.print(
+                                    "[DBG compileLambdaAndCall.arg0] lambda={} arg0_expr={} tag={s}\n",
+                                    .{ @intFromEnum(lambda_body), @intFromEnum(args[0]), @tagName(arg0_expr) },
+                                );
+                                if (arg0_expr == .lookup) {
+                                    std.debug.print(
+                                        "[DBG compileLambdaAndCall.arg0.lookup] symbol_key={} layout={}\n",
+                                        .{
+                                            @as(u64, @bitCast(arg0_expr.lookup.symbol)),
+                                            @intFromEnum(arg0_expr.lookup.layout_idx),
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                    }
                     if (arg_layout_overrides.len > 0 and arg_layout_overrides.len != args.len) {
                         std.debug.panic("compileLambdaAndCall: arg layout override length mismatch expected={} actual={}", .{
                             args.len,
@@ -14250,7 +14458,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             arg_layout,
                         );
                     }
-                    std.debug.print(
+                    trace(
                         "[compileLambdaAndCall] param_overrides first={} second={} ret_layout={}\n",
                         .{
                             if (param_layout_overrides.items.len > 0) @intFromEnum(param_layout_overrides.items[0]) else @as(u32, 0),
@@ -14267,7 +14475,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             @tagName(ls.getLayout(param_layout_overrides.items[1]).tag)
                         else
                             "out_of_range";
-                        std.debug.print(
+                        trace(
                             "[compileLambdaAndCall] layout_store_len={} first_tag={s} second_tag={s}\n",
                             .{ ls.layouts.len(), first_tag, second_tag },
                         );
@@ -14280,7 +14488,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return try self.generateCallToLambdaWithSource(code_offset, args_span, ret_layout, lambda_body, arg_layout_overrides);
                 },
                 .closure => |closure_id| {
-                    std.debug.print(
+                    trace(
                         "[compileLambdaAndCall] closure_expr={} callable_instance={} args_len={} overrides_len={}\n",
                         .{
                             @intFromEnum(lambda_body),
@@ -14323,7 +14531,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 arg_layout,
                             );
                         }
-                        std.debug.print(
+                        trace(
                             "[compileLambdaAndCall] closure param_overrides first={} second={} ret_layout={} closure_lambda={}\n",
                             .{
                                 if (param_layout_overrides.items.len > 0) @intFromEnum(param_layout_overrides.items[0]) else @as(u32, 0),
@@ -14459,7 +14667,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!ValueLocation {
             switch (self.store.getExpr(lambda_expr_id)) {
                 .lambda => |lambda| {
-                    std.debug.print(
+                    trace(
                         "[compileLambdaAndCallWithCaptureArgs] lambda_expr={} params_len={} body={} callable_instance={} captures_len={} args_len={} overrides_len={}\n",
                         .{
                             @intFromEnum(lambda_expr_id),
@@ -14473,7 +14681,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     );
                     const capture_defs = self.store.getCaptures(captures_span);
                     if (capture_defs.len > 0) {
-                        std.debug.print(
+                        trace(
                             "[compileLambdaAndCallWithCaptureArgs] capture0 symbol_key={} layout={}\n",
                             .{
                                 @as(u64, @bitCast(capture_defs[0].symbol)),
@@ -14485,7 +14693,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (lambda_param_patterns.len > 0) {
                         const p0 = self.store.getPattern(lambda_param_patterns[0]);
                         if (p0 == .bind) {
-                            std.debug.print(
+                            trace(
                                 "[compileLambdaAndCallWithCaptureArgs] param0 symbol_key={} layout={}\n",
                                 .{
                                     @as(u64, @bitCast(p0.bind.symbol)),
@@ -14561,7 +14769,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             arg_layout,
                         );
                     }
-                    std.debug.print(
+                    trace(
                         "[compileLambdaAndCallWithCaptureArgs] param_overrides first={} second={} total={} ret_layout={}\n",
                         .{
                             if (param_layout_overrides.items.len > 0) @intFromEnum(param_layout_overrides.items[0]) else @as(u32, 0),
@@ -14579,7 +14787,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             @tagName(ls.getLayout(param_layout_overrides.items[1]).tag)
                         else
                             "out_of_range";
-                        std.debug.print(
+                        trace(
                             "[compileLambdaAndCallWithCaptureArgs] layout_store_len={} first_tag={s} second_tag={s}\n",
                             .{ ls.layouts.len(), first_tag, second_tag },
                         );
@@ -14788,7 +14996,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
             if (std.mem.indexOf(u8, debug_name, "contains") != null) {
-                std.debug.print(
+                trace(
                     "[lookup_call] symbol={s} symbol_key={} lookup_layout={} ret_layout={} args_len={} callable_instance={}\n",
                     .{
                         debug_name,
@@ -14803,13 +15011,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const debug_is_contains = std.mem.indexOf(u8, debug_name, "contains") != null;
             if (try self.tryGenerateBuiltinNumMethodCall(debug_name, args_span, ret_layout)) |direct| {
                 if (debug_is_contains) {
-                    std.debug.print("[lookup_call] resolved via Builtin.Num direct path\n", .{});
+                    trace("[lookup_call] resolved via Builtin.Num direct path\n", .{});
                 }
                 return direct;
             }
             if (try self.tryGenerateBuiltinListMethodCall(debug_name, args_span, ret_layout)) |direct| {
                 if (debug_is_contains) {
-                    std.debug.print("[lookup_call] resolved via Builtin.List direct path\n", .{});
+                    trace("[lookup_call] resolved via Builtin.List direct path\n", .{});
                 }
                 return direct;
             }
@@ -14818,7 +15026,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // over top-level symbol defs.
             if (self.getSymbolLocation(lookup.symbol, lookup.layout_idx)) |loc| {
                 if (debug_is_contains) {
-                    std.debug.print("[lookup_call] using local symbol location variant={s}\n", .{@tagName(loc)});
+                    trace("[lookup_call] using local symbol location variant={s}\n", .{@tagName(loc)});
                 }
                 switch (loc) {
                     .lambda_code => |lc| {
@@ -14899,7 +15107,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (def_expr_id_opt == null) {
                 if (self.proc_registry.get(symbol_key)) |proc| {
                     if (debug_is_contains) {
-                        std.debug.print("[lookup_call] using proc_registry direct call\n", .{});
+                        trace("[lookup_call] using proc_registry direct call\n", .{});
                     }
                     return try self.generateCallToCompiledProc(proc, args_span, ret_layout);
                 }
@@ -14909,13 +15117,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (def_expr_id_opt) |def_expr_id| {
                 const def_expr = self.store.getExpr(def_expr_id);
                 if (debug_is_contains) {
-                    std.debug.print("[lookup_call] using symbol def expr tag={s} id={}\n", .{ @tagName(def_expr), @intFromEnum(def_expr_id) });
+                    trace("[lookup_call] using symbol def expr tag={s} id={}\n", .{ @tagName(def_expr), @intFromEnum(def_expr_id) });
                 }
 
                 return switch (def_expr) {
                     .lambda => |lam| blk: {
                         if (debug_is_contains) {
-                            std.debug.print(
+                            trace(
                                 "[lookup_call] lambda params={} call_arg_overrides_len={} first_override={} second_override={} lambda_ret={}\n",
                                 .{
                                     self.store.getPatternSpan(lam.params).len,
@@ -15018,12 +15226,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const proc_key: u64 = @bitCast(proc.name);
                 if (proc_key != symbol_key) continue;
                 if (debug_is_contains) {
-                    std.debug.print("[lookup_call] lazy-compiling proc list entry\n", .{});
+                    trace("[lookup_call] lazy-compiling proc list entry\n", .{});
                 }
                 try self.compileProc(proc);
                 if (self.proc_registry.get(symbol_key)) |compiled_proc| {
                     if (debug_is_contains) {
-                        std.debug.print("[lookup_call] calling freshly compiled proc\n", .{});
+                        trace("[lookup_call] calling freshly compiled proc\n", .{});
                     }
                     return try self.generateCallToCompiledProc(compiled_proc, args_span, ret_layout);
                 }
@@ -15119,13 +15327,46 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             args_span: anytype,
             ret_layout: layout.Idx,
         ) Allocator.Error!?ValueLocation {
-            _ = ret_layout;
             if (!std.mem.startsWith(u8, symbol_name, "Builtin.List.")) return null;
 
             const method_name = symbol_name["Builtin.List.".len..];
+            const args = self.store.getExprSpan(args_span);
+            if (std.mem.eql(u8, method_name, "last")) {
+                if (args.len != 1) return null;
+                const ls = self.layout_store orelse return null;
+                const list_layout_idx = self.getExprLayout(args[0]) orelse return null;
+                if (@intFromEnum(list_layout_idx) >= ls.layouts.len()) return null;
+                const list_layout = ls.getLayout(list_layout_idx);
+                if (list_layout.tag != .list and list_layout.tag != .list_of_zst) return null;
+
+                const list_loc = try self.generateExpr(args[0]);
+                const list_elem_layout: ?layout.Idx = if (list_layout.tag == .list) list_layout.data.list else null;
+                const result_loc = try self.listGetAtLastIndex(list_loc, ret_layout, list_elem_layout);
+                if (self.borrowedArgNeedsLocalRelease(args[0])) {
+                    try self.emitRcForLayout(list_loc, list_layout_idx, .decref, 1);
+                }
+                return result_loc;
+            }
+
+            if (std.mem.eql(u8, method_name, "first")) {
+                if (args.len != 1) return null;
+                const ls = self.layout_store orelse return null;
+                const list_layout_idx = self.getExprLayout(args[0]) orelse return null;
+                if (@intFromEnum(list_layout_idx) >= ls.layouts.len()) return null;
+                const list_layout = ls.getLayout(list_layout_idx);
+                if (list_layout.tag != .list and list_layout.tag != .list_of_zst) return null;
+
+                const list_loc = try self.generateExpr(args[0]);
+                const list_elem_layout: ?layout.Idx = if (list_layout.tag == .list) list_layout.data.list else null;
+                const result_loc = try self.listGetAtConstIndex(list_loc, 0, ret_layout, list_elem_layout);
+                if (self.borrowedArgNeedsLocalRelease(args[0])) {
+                    try self.emitRcForLayout(list_loc, list_layout_idx, .decref, 1);
+                }
+                return result_loc;
+            }
+
             if (!std.mem.eql(u8, method_name, "contains")) return null;
 
-            const args = self.store.getExprSpan(args_span);
             if (args.len != 2) return null;
 
             const ls = self.layout_store orelse return null;
@@ -15137,12 +15378,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list => blk: {
                     const list_loc = try self.generateExpr(args[0]);
                     const needle_loc = try self.generateExpr(args[1]);
-                    break :blk try self.generateListContains(list_loc, needle_loc, list_layout.data.list);
+                    const result_loc = try self.generateListContains(list_loc, needle_loc, list_layout.data.list);
+                    const stable_result_slot = try self.ensureOnStack(result_loc, 8);
+                    try self.emitRcForLayout(list_loc, list_layout_idx, .decref, 1);
+                    if (self.getExprLayout(args[1])) |needle_layout_idx| {
+                        try self.emitRcForLayout(needle_loc, needle_layout_idx, .decref, 1);
+                    }
+                    break :blk self.stackLocationForLayout(.bool, stable_result_slot);
                 },
                 .list_of_zst => blk: {
                     const list_loc = try self.generateExpr(args[0]);
-                    _ = try self.generateExpr(args[1]); // evaluate needle for side effects
-                    break :blk try self.generateZstListContains(list_loc);
+                    const needle_loc = try self.generateExpr(args[1]);
+                    const result_loc = try self.generateZstListContains(list_loc);
+                    const stable_result_slot = try self.ensureOnStack(result_loc, 8);
+                    try self.emitRcForLayout(list_loc, list_layout_idx, .decref, 1);
+                    if (self.getExprLayout(args[1])) |needle_layout_idx| {
+                        try self.emitRcForLayout(needle_loc, needle_layout_idx, .decref, 1);
+                    }
+                    break :blk self.stackLocationForLayout(.bool, stable_result_slot);
                 },
                 else => null,
             };
@@ -16016,6 +16269,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Save current state - procedure has its own scope that shouldn't pollute caller
             const saved_stack_offset = self.codegen.stack_offset;
             const saved_callee_saved_used = self.codegen.callee_saved_used;
+            const saved_callee_saved_available = self.codegen.callee_saved_available;
+            const saved_roc_ops_reg = self.roc_ops_reg;
             var saved_symbol_locations = self.symbol_locations.clone() catch return error.OutOfMemory;
             defer saved_symbol_locations.deinit();
             var saved_symbol_locations_by_layout = self.symbol_locations_by_layout.clone() catch return error.OutOfMemory;
@@ -16030,6 +16285,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer saved_mutable_var_slots.deinit();
             var saved_closure_stack_info = self.closure_stack_info.clone() catch return error.OutOfMemory;
             defer saved_closure_stack_info.deinit();
+            defer self.codegen.callee_saved_available = saved_callee_saved_available;
+            defer self.roc_ops_reg = saved_roc_ops_reg;
+
+            // Procedure bodies can emit RC/builtin calls during compilation. Those
+            // call builders require a non-null roc_ops register, and that register
+            // must never be allocated as a temporary.
+            const roc_ops_save_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64)
+                .X20
+            else
+                .R12;
+            if (self.roc_ops_reg == null) {
+                self.roc_ops_reg = roc_ops_save_reg;
+            }
+            self.codegen.callee_saved_available &= ~(@as(u32, 1) << @intFromEnum(roc_ops_save_reg));
 
             // Clear state for procedure's scope
             self.symbol_locations.clearRetainingCapacity();
@@ -16079,6 +16348,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Save early return state (return_stmt uses jump-to-epilogue mechanism)
             const saved_early_return_patches_len = self.early_return_patches.items.len;
+            const saved_early_return_ret_layout = self.early_return_ret_layout;
+            defer self.early_return_ret_layout = saved_early_return_ret_layout;
+            self.early_return_ret_layout = proc.ret_layout;
 
             // Bind parameters to argument registers
             try self.bindProcParams(proc.args, proc.arg_layouts);
@@ -16322,7 +16594,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Check if already compiled
             if (use_cache) {
                 if (self.compiled_lambdas.get(key)) |code_offset| {
-                    std.debug.print(
+                    trace(
                         "[compileLambdaAsProc] cache hit expr={} callable_instance={} override_len={} override_hash={} code_offset={}\n",
                         .{
                             @intFromEnum(lambda_expr_id),
@@ -16336,7 +16608,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
             const body_expr = self.store.getExpr(lambda.body);
-            std.debug.print(
+            trace(
                 "[compileLambdaAsProc] compile expr={} body_expr={} body_tag={s} callable_instance={} override_len={} override_hash={} ret_layout={}\n",
                 .{
                     @intFromEnum(lambda_expr_id),
@@ -16349,7 +16621,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
             );
             if (body_expr == .zero_arg_tag) {
-                std.debug.print(
+                trace(
                     "[compileLambdaAsProc] body zero_arg_tag disc={} union_layout={}\n",
                     .{
                         body_expr.zero_arg_tag.discriminant,
@@ -16359,7 +16631,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             if (body_expr == .low_level) {
                 const ll = body_expr.low_level;
-                std.debug.print(
+                trace(
                     "[compileLambdaAsProc] body low_level op={s} ret_layout={} args_len={}\n",
                     .{
                         @tagName(ll.op),
@@ -16372,14 +16644,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const stmts = self.store.getStmts(body_expr.block.stmts);
                 const final_expr_id = body_expr.block.final_expr;
                 const final_expr = self.store.getExpr(final_expr_id);
-                std.debug.print(
+                trace(
                     "[compileLambdaAsProc] body block stmts_len={} final_expr={} final_tag={s}\n",
                     .{ stmts.len, @intFromEnum(final_expr_id), @tagName(final_expr) },
                 );
                 for (stmts, 0..) |stmt, si| {
                     const stmt_expr_id = stmt.binding().expr;
                     const stmt_expr = self.store.getExpr(stmt_expr_id);
-                    std.debug.print(
+                    trace(
                         "[compileLambdaAsProc] body stmt[{}] tag={s} expr={} expr_tag={s}\n",
                         .{ si, @tagName(stmt), @intFromEnum(stmt_expr_id), @tagName(stmt_expr) },
                     );
@@ -16568,7 +16840,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (pat != .bind) continue;
                     if (self.getSymbolLocation(pat.bind.symbol, pat.bind.layout_idx)) |loc| {
                         switch (loc) {
-                            .stack => |s| std.debug.print(
+                            .stack => |s| trace(
                                 "[compileLambdaAsProc] bound expr={} param[{}] symbol_key={} layout={} loc=stack off={} size={s}\n",
                                 .{
                                     @intFromEnum(lambda_expr_id),
@@ -16579,7 +16851,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                     @tagName(s.size),
                                 },
                             ),
-                            .stack_i128 => |off| std.debug.print(
+                            .stack_i128 => |off| trace(
                                 "[compileLambdaAsProc] bound expr={} param[{}] symbol_key={} layout={} loc=i128 off={}\n",
                                 .{
                                     @intFromEnum(lambda_expr_id),
@@ -16589,7 +16861,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                     off,
                                 },
                             ),
-                            .closure_value => |cv| std.debug.print(
+                            .closure_value => |cv| trace(
                                 "[compileLambdaAsProc] bound expr={} param[{}] symbol_key={} layout={} loc=closure off={} repr={s}\n",
                                 .{
                                     @intFromEnum(lambda_expr_id),
@@ -16600,7 +16872,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                     @tagName(cv.representation),
                                 },
                             ),
-                            else => std.debug.print(
+                            else => trace(
                                 "[compileLambdaAsProc] bound expr={} param[{}] symbol_key={} layout={} loc={s}\n",
                                 .{
                                     @intFromEnum(lambda_expr_id),
@@ -16726,7 +16998,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Patch the skip jump to point here (after the lambda code)
                 const after_lambda = self.codegen.currentOffset();
                 self.codegen.patchJump(skip_jump, after_lambda);
-                std.debug.print(
+                trace(
                     "[compileLambdaAsProc] finished expr={} prologue_start={} after_lambda={} skip_jump={}\n",
                     .{ @intFromEnum(lambda_expr_id), prologue_start, after_lambda, skip_jump },
                 );
@@ -16813,7 +17085,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Patch the skip jump to point here (after the lambda code)
                 const after_lambda = self.codegen.currentOffset();
                 self.codegen.patchJump(skip_jump, after_lambda);
-                std.debug.print(
+                trace(
                     "[compileLambdaAsProc] finished expr={} prologue_start={} after_lambda={} skip_jump={}\n",
                     .{ @intFromEnum(lambda_expr_id), prologue_start, after_lambda, skip_jump },
                 );
@@ -17541,7 +17813,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 try self.putSymbolLocationWithOverride(bind.symbol, bind.layout_idx, bind_layout, .{ .stack_str = local_stack_offset });
                             } else if (self.layout_store) |ls| {
                                 if (@intFromEnum(bind_layout) >= ls.layouts.len()) {
-                                    std.debug.print(
+                                    trace(
                                         "[bindLambdaParams] out-of-range bind_layout={} layouts_len={} symbol_key={}\n",
                                         .{
                                             @intFromEnum(bind_layout),
@@ -18209,7 +18481,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             const debug_list_closure_call = true;
             if (debug_list_closure_call) {
-                std.debug.print(
+                trace(
                     "[generateLambdaCall] code_offset={} ret_layout={} args_len={} prefix_args={} overrides_len={} ov0={} ov1={}\n",
                     .{
                         code_offset,
@@ -18231,14 +18503,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (debug_list_closure_call) {
                     for (prefix, 0..) |arg_info, pi| {
                         switch (arg_info.loc) {
-                            .stack => |s| std.debug.print("[generateLambdaCall] prefix[{}] loc=stack off={} size={s} regs={}\n", .{ pi, s.offset, @tagName(s.size), arg_info.num_regs }),
-                            .list_stack => |li| std.debug.print("[generateLambdaCall] prefix[{}] loc=list off={} regs={}\n", .{ pi, li.struct_offset, arg_info.num_regs }),
-                            .closure_value => |cv| std.debug.print("[generateLambdaCall] prefix[{}] loc=closure off={} repr={s} regs={}\n", .{ pi, cv.stack_offset, @tagName(cv.representation), arg_info.num_regs }),
-                            .immediate_i64 => |v| std.debug.print("[generateLambdaCall] prefix[{}] loc=imm {} regs={}\n", .{ pi, v, arg_info.num_regs }),
-                            .general_reg => |r| std.debug.print("[generateLambdaCall] prefix[{}] loc=reg {} regs={}\n", .{ pi, @intFromEnum(r), arg_info.num_regs }),
-                            .stack_i128 => |off| std.debug.print("[generateLambdaCall] prefix[{}] loc=i128 off={} regs={}\n", .{ pi, off, arg_info.num_regs }),
-                            .stack_str => |off| std.debug.print("[generateLambdaCall] prefix[{}] loc=str off={} regs={}\n", .{ pi, off, arg_info.num_regs }),
-                            else => std.debug.print("[generateLambdaCall] prefix[{}] loc={s} regs={}\n", .{ pi, @tagName(arg_info.loc), arg_info.num_regs }),
+                            .stack => |s| trace("[generateLambdaCall] prefix[{}] loc=stack off={} size={s} regs={}\n", .{ pi, s.offset, @tagName(s.size), arg_info.num_regs }),
+                            .list_stack => |li| trace("[generateLambdaCall] prefix[{}] loc=list off={} regs={}\n", .{ pi, li.struct_offset, arg_info.num_regs }),
+                            .closure_value => |cv| trace("[generateLambdaCall] prefix[{}] loc=closure off={} repr={s} regs={}\n", .{ pi, cv.stack_offset, @tagName(cv.representation), arg_info.num_regs }),
+                            .immediate_i64 => |v| trace("[generateLambdaCall] prefix[{}] loc=imm {} regs={}\n", .{ pi, v, arg_info.num_regs }),
+                            .general_reg => |r| trace("[generateLambdaCall] prefix[{}] loc=reg {} regs={}\n", .{ pi, @intFromEnum(r), arg_info.num_regs }),
+                            .stack_i128 => |off| trace("[generateLambdaCall] prefix[{}] loc=i128 off={} regs={}\n", .{ pi, off, arg_info.num_regs }),
+                            .stack_str => |off| trace("[generateLambdaCall] prefix[{}] loc=str off={} regs={}\n", .{ pi, off, arg_info.num_regs }),
+                            else => trace("[generateLambdaCall] prefix[{}] loc={s} regs={}\n", .{ pi, @tagName(arg_info.loc), arg_info.num_regs }),
                         }
                     }
                 }
@@ -18268,14 +18540,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const arg_loc = try self.stabilizeCallArgLocation(arg_loc_raw, num_regs);
                 if (debug_list_closure_call) {
                     switch (arg_loc) {
-                        .stack => |s| std.debug.print("[generateLambdaCall] arg[{}] loc=stack off={} size={s} regs={}\n", .{ i, s.offset, @tagName(s.size), num_regs }),
-                        .list_stack => |li| std.debug.print("[generateLambdaCall] arg[{}] loc=list off={} regs={}\n", .{ i, li.struct_offset, num_regs }),
-                        .closure_value => |cv| std.debug.print("[generateLambdaCall] arg[{}] loc=closure off={} repr={s} regs={}\n", .{ i, cv.stack_offset, @tagName(cv.representation), num_regs }),
-                        .immediate_i64 => |v| std.debug.print("[generateLambdaCall] arg[{}] loc=imm {} regs={}\n", .{ i, v, num_regs }),
-                        .general_reg => |r| std.debug.print("[generateLambdaCall] arg[{}] loc=reg {} regs={}\n", .{ i, @intFromEnum(r), num_regs }),
-                        .stack_i128 => |off| std.debug.print("[generateLambdaCall] arg[{}] loc=i128 off={} regs={}\n", .{ i, off, num_regs }),
-                        .stack_str => |off| std.debug.print("[generateLambdaCall] arg[{}] loc=str off={} regs={}\n", .{ i, off, num_regs }),
-                        else => std.debug.print("[generateLambdaCall] arg[{}] loc={s} regs={}\n", .{ i, @tagName(arg_loc), num_regs }),
+                        .stack => |s| trace("[generateLambdaCall] arg[{}] loc=stack off={} size={s} regs={}\n", .{ i, s.offset, @tagName(s.size), num_regs }),
+                        .list_stack => |li| trace("[generateLambdaCall] arg[{}] loc=list off={} regs={}\n", .{ i, li.struct_offset, num_regs }),
+                        .closure_value => |cv| trace("[generateLambdaCall] arg[{}] loc=closure off={} repr={s} regs={}\n", .{ i, cv.stack_offset, @tagName(cv.representation), num_regs }),
+                        .immediate_i64 => |v| trace("[generateLambdaCall] arg[{}] loc=imm {} regs={}\n", .{ i, v, num_regs }),
+                        .general_reg => |r| trace("[generateLambdaCall] arg[{}] loc=reg {} regs={}\n", .{ i, @intFromEnum(r), num_regs }),
+                        .stack_i128 => |off| trace("[generateLambdaCall] arg[{}] loc=i128 off={} regs={}\n", .{ i, off, num_regs }),
+                        .stack_str => |off| trace("[generateLambdaCall] arg[{}] loc=str off={} regs={}\n", .{ i, off, num_regs }),
+                        else => trace("[generateLambdaCall] arg[{}] loc={s} regs={}\n", .{ i, @tagName(arg_loc), num_regs }),
                     }
                 }
                 try self.scratch_arg_infos.append(.{ .loc = arg_loc, .layout_idx = arg_layout, .num_regs = num_regs });
@@ -19312,6 +19584,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 if (list_info.contains_refcounted and list_info.elem_size > 0) {
                                     try self.emitListElementDecrefsIfUnique(value_loc, list_info.elem_layout_idx, list_info.elem_size);
                                 }
+                                if (std.debug.runtime_safety) {
+                                    std.debug.print("[DBG generateDecref.list] value_loc={s}\n", .{@tagName(value_loc)});
+                                }
                                 try self.emitListDecref(value_loc, list_info.elem_alignment, list_info.contains_refcounted);
                             }
                         },
@@ -19433,7 +19708,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // First generate the value expression
             const value_expr = self.store.getExpr(rc_op.value);
             const value_loc = try self.generateExpr(rc_op.value);
-            std.debug.print(
+            trace(
                 "[generateIncref] value_expr={} layout={} loc={s}\n",
                 .{
                     @intFromEnum(rc_op.value),
@@ -19442,7 +19717,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
             );
             if (value_expr == .lookup) {
-                std.debug.print(
+                trace(
                     "[generateIncref] lookup symbol_key={} lookup_layout={}\n",
                     .{
                         @as(u64, @bitCast(value_expr.lookup.symbol)),
@@ -19462,7 +19737,34 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // First generate the value expression
             const value_expr = self.store.getExpr(rc_op.value);
             const value_loc = try self.generateExpr(rc_op.value);
-            std.debug.print(
+            if (std.debug.runtime_safety) {
+                if (self.layout_store) |ls| {
+                    if (@intFromEnum(rc_op.layout_idx) < ls.layouts.len()) {
+                        const layout_val = ls.getLayout(rc_op.layout_idx);
+                        if (layout_val.tag == .list or layout_val.tag == .list_of_zst) {
+                            std.debug.print(
+                                "[DBG generateDecref] rc_value={} value_tag={s} layout={} value_loc={s}\n",
+                                .{
+                                    @intFromEnum(rc_op.value),
+                                    @tagName(value_expr),
+                                    @intFromEnum(rc_op.layout_idx),
+                                    @tagName(value_loc),
+                                },
+                            );
+                            if (value_expr == .lookup) {
+                                std.debug.print(
+                                    "[DBG generateDecref.lookup] symbol_key={} lookup_layout={}\n",
+                                    .{
+                                        @as(u64, @bitCast(value_expr.lookup.symbol)),
+                                        @intFromEnum(value_expr.lookup.layout_idx),
+                                    },
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            trace(
                 "[generateDecref] value_expr={} layout={} loc={s}\n",
                 .{
                     @intFromEnum(rc_op.value),
@@ -19471,7 +19773,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
             );
             if (value_expr == .lookup) {
-                std.debug.print(
+                trace(
                     "[generateDecref] lookup symbol_key={} lookup_layout={}\n",
                     .{
                         @as(u64, @bitCast(value_expr.lookup.symbol)),
@@ -19515,6 +19817,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Emit decref for a list value
         fn emitListDecref(self: *Self, value_loc: ValueLocation, elem_alignment: u32, elements_refcounted: bool) Allocator.Error!void {
+            if (std.debug.runtime_safety) {
+                const off: i32 = switch (value_loc) {
+                    .stack => |s| s.offset,
+                    .list_stack => |info| info.struct_offset,
+                    else => -999999,
+                };
+                std.debug.print("[DBG emitListDecref] loc={s} off={} align={} elems_rc={}\n", .{
+                    @tagName(value_loc),
+                    off,
+                    elem_alignment,
+                    elements_refcounted,
+                });
+            }
             const roc_ops_reg = self.roc_ops_reg orelse return;
             const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_decref_data_ptr_packed);
 

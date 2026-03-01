@@ -175,6 +175,158 @@ pub const RcInsertPass = struct {
         }
     }
 
+    fn lookupSymbolFromExpr(self: *RcInsertPass, expr_id: LirExprId) ?Symbol {
+        if (expr_id.isNone()) return null;
+
+        var cur = expr_id;
+        while (true) {
+            const expr = self.store.getExpr(cur);
+            switch (expr) {
+                .lookup => |lookup| {
+                    if (lookup.symbol.isNone()) return null;
+                    return lookup.symbol;
+                },
+                .nominal => |n| {
+                    cur = n.backing_expr;
+                    continue;
+                },
+                else => return null,
+            }
+        }
+    }
+
+    fn exprHasBorrowedLookupUseOfSymbol(self: *RcInsertPass, expr_id: LirExprId, symbol: Symbol) bool {
+        if (expr_id.isNone()) return false;
+
+        const expr = self.store.getExpr(expr_id);
+        switch (expr) {
+            .block => |block| {
+                const stmts = self.store.getStmts(block.stmts);
+                for (stmts) |stmt| {
+                    if (self.exprHasBorrowedLookupUseOfSymbol(stmt.binding().expr, symbol)) return true;
+                }
+                return self.exprHasBorrowedLookupUseOfSymbol(block.final_expr, symbol);
+            },
+            .call => |call| {
+                if (self.exprHasBorrowedLookupUseOfSymbol(call.fn_expr, symbol)) return true;
+                const args = self.store.getExprSpan(call.args);
+                for (args) |arg_id| {
+                    if (self.exprHasBorrowedLookupUseOfSymbol(arg_id, symbol)) return true;
+                }
+                return false;
+            },
+            .if_then_else => |ite| {
+                const branches = self.store.getIfBranches(ite.branches);
+                for (branches) |branch| {
+                    if (self.exprHasBorrowedLookupUseOfSymbol(branch.cond, symbol)) return true;
+                    if (self.exprHasBorrowedLookupUseOfSymbol(branch.body, symbol)) return true;
+                }
+                return self.exprHasBorrowedLookupUseOfSymbol(ite.final_else, symbol);
+            },
+            .match_expr => |w| {
+                if (self.exprHasBorrowedLookupUseOfSymbol(w.value, symbol)) return true;
+                const branches = self.store.getMatchBranches(w.branches);
+                for (branches) |branch| {
+                    if (self.exprHasBorrowedLookupUseOfSymbol(branch.guard, symbol)) return true;
+                    if (self.exprHasBorrowedLookupUseOfSymbol(branch.body, symbol)) return true;
+                }
+                return false;
+            },
+            .low_level => |ll| {
+                const args = self.store.getExprSpan(ll.args);
+                for (args, 0..) |arg_id, arg_i| {
+                    if (lowLevelArgIsBorrowed(ll.op, arg_i)) {
+                        if (self.lookupSymbolFromExpr(arg_id)) |borrowed_symbol| {
+                            if (std.meta.eql(borrowed_symbol, symbol)) return true;
+                        }
+                    }
+                    if (self.exprHasBorrowedLookupUseOfSymbol(arg_id, symbol)) return true;
+                }
+                return false;
+            },
+            .hosted_call => |hc| {
+                const args = self.store.getExprSpan(hc.args);
+                for (args) |arg_id| {
+                    if (self.exprHasBorrowedLookupUseOfSymbol(arg_id, symbol)) return true;
+                }
+                return false;
+            },
+            .list => |list| {
+                const elems = self.store.getExprSpan(list.elems);
+                for (elems) |elem_id| {
+                    if (self.exprHasBorrowedLookupUseOfSymbol(elem_id, symbol)) return true;
+                }
+                return false;
+            },
+            .struct_ => |s| {
+                const fields = self.store.getExprSpan(s.fields);
+                for (fields) |field_id| {
+                    if (self.exprHasBorrowedLookupUseOfSymbol(field_id, symbol)) return true;
+                }
+                return false;
+            },
+            .tag => |t| {
+                const args = self.store.getExprSpan(t.args);
+                for (args) |arg_id| {
+                    if (self.exprHasBorrowedLookupUseOfSymbol(arg_id, symbol)) return true;
+                }
+                return false;
+            },
+            .struct_access => |sa| return self.exprHasBorrowedLookupUseOfSymbol(sa.struct_expr, symbol),
+            .nominal => |n| return self.exprHasBorrowedLookupUseOfSymbol(n.backing_expr, symbol),
+            .early_return => |ret| return self.exprHasBorrowedLookupUseOfSymbol(ret.expr, symbol),
+            .dbg => |d| return self.exprHasBorrowedLookupUseOfSymbol(d.expr, symbol),
+            .expect => |e| return self.exprHasBorrowedLookupUseOfSymbol(e.cond, symbol) or self.exprHasBorrowedLookupUseOfSymbol(e.body, symbol),
+            .str_concat => |span| {
+                const parts = self.store.getExprSpan(span);
+                for (parts) |part_id| {
+                    if (self.exprHasBorrowedLookupUseOfSymbol(part_id, symbol)) return true;
+                }
+                return false;
+            },
+            .int_to_str => |its| return self.exprHasBorrowedLookupUseOfSymbol(its.value, symbol),
+            .float_to_str => |fts| return self.exprHasBorrowedLookupUseOfSymbol(fts.value, symbol),
+            .dec_to_str => |d| return self.exprHasBorrowedLookupUseOfSymbol(d, symbol),
+            .str_escape_and_quote => |s| return self.exprHasBorrowedLookupUseOfSymbol(s, symbol),
+            .discriminant_switch => |ds| {
+                if (self.exprHasBorrowedLookupUseOfSymbol(ds.value, symbol)) return true;
+                const branches = self.store.getExprSpan(ds.branches);
+                for (branches) |br_id| {
+                    if (self.exprHasBorrowedLookupUseOfSymbol(br_id, symbol)) return true;
+                }
+                return false;
+            },
+            .tag_payload_access => |tpa| return self.exprHasBorrowedLookupUseOfSymbol(tpa.value, symbol),
+            .crash => |crash| return self.exprHasBorrowedLookupUseOfSymbol(crash.msg_expr, symbol),
+            .for_loop => |fl| {
+                if (self.exprHasBorrowedLookupUseOfSymbol(fl.list_expr, symbol)) return true;
+                return self.exprHasBorrowedLookupUseOfSymbol(fl.body, symbol);
+            },
+            .while_loop => |wl| {
+                if (self.exprHasBorrowedLookupUseOfSymbol(wl.cond, symbol)) return true;
+                return self.exprHasBorrowedLookupUseOfSymbol(wl.body, symbol);
+            },
+            .lookup,
+            .lambda,
+            .closure,
+            .incref,
+            .decref,
+            .free,
+            .i64_literal,
+            .i128_literal,
+            .f64_literal,
+            .f32_literal,
+            .dec_literal,
+            .str_literal,
+            .bool_literal,
+            .empty_list,
+            .zero_arg_tag,
+            .runtime_error,
+            .break_expr,
+            => return false,
+        }
+    }
+
     /// Sum all use counts for a symbol across every layout key.
     fn sumSymbolUses(_: *RcInsertPass, uses: *const std.AutoHashMap(SymbolUseKey, u32), symbol: Symbol) u32 {
         var total: u32 = 0;
@@ -262,6 +414,15 @@ pub const RcInsertPass = struct {
                 // Pre-register all pattern symbols so lambdas in early
                 // statements can detect captures from later siblings.
                 for (stmts) |stmt| {
+                    if (std.debug.runtime_safety) {
+                        const pat = self.store.getPattern(stmt.binding().pattern);
+                        if (pat == .bind and @as(u64, @bitCast(pat.bind.symbol)) == 18446743833191383041) {
+                            std.debug.print(
+                                "[DBG rc_insert.countUsesInto.block] bind symbol_key={} expr_tag={s}\n",
+                                .{ @as(u64, @bitCast(pat.bind.symbol)), @tagName(self.store.getExpr(stmt.binding().expr)) },
+                            );
+                        }
+                    }
                     try self.registerPatternSymbolInto(stmt.binding().pattern, target);
                 }
                 for (stmts) |stmt| {
@@ -339,6 +500,50 @@ pub const RcInsertPass = struct {
 
                 const params = self.store.getPatternSpan(lam.params);
                 for (params) |pat_id| {
+                    if (std.debug.runtime_safety) {
+                        const pat = self.store.getPattern(pat_id);
+                        if (pat == .bind and @as(u64, @bitCast(pat.bind.symbol)) == 18446743833191383041) {
+                            std.debug.print(
+                                "[DBG rc_insert.countUsesInto.lambda] param symbol_key={} body_tag={s}\n",
+                                .{ @as(u64, @bitCast(pat.bind.symbol)), @tagName(self.store.getExpr(lam.body)) },
+                            );
+                            const body_expr = self.store.getExpr(lam.body);
+                            if (body_expr == .block) {
+                                const dbg_stmts = self.store.getStmts(body_expr.block.stmts);
+                                for (dbg_stmts, 0..) |dbg_stmt, dbg_i| {
+                                    const dbg_expr_id = dbg_stmt.binding().expr;
+                                    const dbg_expr = self.store.getExpr(dbg_expr_id);
+                                    std.debug.print(
+                                        "  [DBG lambda body stmt {}] expr={} tag={s}\n",
+                                        .{ dbg_i, @intFromEnum(dbg_expr_id), @tagName(dbg_expr) },
+                                    );
+                                    if (dbg_expr == .for_loop) {
+                                        const list_expr = self.store.getExpr(dbg_expr.for_loop.list_expr);
+                                        if (list_expr == .lookup) {
+                                            std.debug.print(
+                                                "    [DBG lambda for_loop list] expr={} symbol_key={} layout={}\n",
+                                                .{
+                                                    @intFromEnum(dbg_expr.for_loop.list_expr),
+                                                    @as(u64, @bitCast(list_expr.lookup.symbol)),
+                                                    @intFromEnum(list_expr.lookup.layout_idx),
+                                                },
+                                            );
+                                        } else {
+                                            std.debug.print(
+                                                "    [DBG lambda for_loop list] expr={} tag={s}\n",
+                                                .{ @intFromEnum(dbg_expr.for_loop.list_expr), @tagName(list_expr) },
+                                            );
+                                        }
+                                    }
+                                }
+                                const dbg_final = self.store.getExpr(body_expr.block.final_expr);
+                                std.debug.print(
+                                    "  [DBG lambda body final] expr={} tag={s}\n",
+                                    .{ @intFromEnum(body_expr.block.final_expr), @tagName(dbg_final) },
+                                );
+                            }
+                        }
+                    }
                     try self.registerPatternSymbolInto(pat_id, &local);
                 }
                 try self.countUsesInto(lam.body, &local);
@@ -993,6 +1198,8 @@ pub const RcInsertPass = struct {
             const before_len = stmt_buf.items.len;
             for (stmts, 0..) |stmt, stmt_index| {
                 const b = stmt.binding();
+                const is_mutated_binding = try self.patternBindsAnySymbolId(b.pattern, &mutated_symbol_ids);
+                if (is_mutated_binding) continue;
                 try self.emitBlockDecrefsForPattern(
                     b.pattern,
                     region,
@@ -1002,6 +1209,58 @@ pub const RcInsertPass = struct {
                     final_expr,
                 );
             }
+            if (stmt_buf.items.len > before_len) changed = true;
+        }
+
+        // Mutated bindings produce a sequence of runtime values over the block.
+        // The per-binding use-count heuristic above is based on declaration-time
+        // symbol counts and can miss the final live value. Insert one final
+        // decref for each mutated RC symbol that is not consumed by the final expr.
+        {
+            self.scratch_uses.clearRetainingCapacity();
+            try self.countUsesInto(final_expr, &self.scratch_uses);
+
+            var handled_mutated = std.AutoHashMap(u64, void).init(self.allocator);
+            defer handled_mutated.deinit();
+
+            const before_len = stmt_buf.items.len;
+            for (stmts) |stmt| {
+                if (stmt != .decl) continue;
+                const b = stmt.binding();
+                if (!try self.patternBindsAnySymbolId(b.pattern, &mutated_symbol_ids)) continue;
+
+                const Ctx = struct {
+                    pass: *RcInsertPass,
+                    handled: *std.AutoHashMap(u64, void),
+                    final_uses: *const std.AutoHashMap(SymbolUseKey, u32),
+                    region: Region,
+                    stmts: *std.ArrayList(LirStmt),
+                    fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
+                        const symbol_id: u64 = @bitCast(symbol);
+                        if (ctx.handled.contains(symbol_id)) return;
+                        try ctx.handled.put(symbol_id, {});
+
+                        const key = makeKey(symbol, layout_idx);
+                        const resolved_layout = ctx.pass.symbol_layouts.get(key) orelse layout_idx;
+                        if (!ctx.pass.layoutNeedsRc(resolved_layout)) return;
+
+                        const final_consumed = ctx.pass.sumSymbolUses(ctx.final_uses, symbol);
+                        if (final_consumed == 0) {
+                            try ctx.pass.emitDecrefInto(symbol, resolved_layout, ctx.region, ctx.stmts);
+                        }
+                    }
+                };
+
+                ensurePatternIdValid(self.store, b.pattern, "processBlock.mutated-final-decref");
+                try walkPatternBinds(self.store, b.pattern, Ctx{
+                    .pass = self,
+                    .handled = &handled_mutated,
+                    .final_uses = &self.scratch_uses,
+                    .region = region,
+                    .stmts = &stmt_buf,
+                });
+            }
+
             if (stmt_buf.items.len > before_len) changed = true;
         }
 
@@ -1368,9 +1627,9 @@ pub const RcInsertPass = struct {
 
         const new_body = try self.processExpr(lam.body);
 
-        // Count uses locally within the lambda body (using scratch_uses)
+        // Count uses locally within the transformed lambda body (using scratch_uses)
         self.scratch_uses.clearRetainingCapacity();
-        try self.countUsesInto(lam.body, &self.scratch_uses);
+        try self.countUsesInto(new_body, &self.scratch_uses);
 
         // Emit RC ops for lambda parameters
         var rc_stmts = std.ArrayList(LirStmt).empty;
@@ -1378,7 +1637,34 @@ pub const RcInsertPass = struct {
 
         const params_after = self.store.getPatternSpan(lam.params);
         for (params_after) |pat_id| {
-            try self.emitRcOpsForPatternInto(pat_id, &self.scratch_uses, region, &rc_stmts);
+            const Ctx = struct {
+                pass: *RcInsertPass,
+                local_uses: *const std.AutoHashMap(SymbolUseKey, u32),
+                body_expr: LirExprId,
+                region: Region,
+                rc_stmts: *std.ArrayList(LirStmt),
+                fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
+                    if (!ctx.pass.layoutNeedsRc(layout_idx)) return;
+
+                    const use_count = ctx.pass.sumSymbolUses(ctx.local_uses, symbol);
+                    if (use_count == 0) {
+                        // Borrow-only low-level parameter uses are intentionally
+                        // non-consuming; don't synthesize a decref for them.
+                        if (ctx.pass.exprHasBorrowedLookupUseOfSymbol(ctx.body_expr, symbol)) return;
+                        try ctx.pass.emitDecrefInto(symbol, layout_idx, ctx.region, ctx.rc_stmts);
+                    } else if (use_count > 1) {
+                        try ctx.pass.emitIncrefInto(symbol, layout_idx, @intCast(use_count - 1), ctx.region, ctx.rc_stmts);
+                    }
+                }
+            };
+            ensurePatternIdValid(self.store, pat_id, "processLambda.param");
+            try walkPatternBinds(self.store, pat_id, Ctx{
+                .pass = self,
+                .local_uses = &self.scratch_uses,
+                .body_expr = new_body,
+                .region = region,
+                .rc_stmts = &rc_stmts,
+            });
         }
 
         // If RC ops needed, wrap body in a block with RC stmts prepended
@@ -1445,9 +1731,9 @@ pub const RcInsertPass = struct {
 
         const new_body = try self.processExpr(fl.body);
 
-        // Count uses locally within the loop body (using scratch_uses)
+        // Count uses locally within the transformed loop body (using scratch_uses)
         self.scratch_uses.clearRetainingCapacity();
-        try self.countUsesInto(fl.body, &self.scratch_uses);
+        try self.countUsesInto(new_body, &self.scratch_uses);
 
         // Emit RC ops for the elem_pattern
         var rc_stmts = std.ArrayList(LirStmt).empty;
@@ -2119,6 +2405,16 @@ pub const RcInsertPass = struct {
             fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
                 if (ctx.pass.layoutNeedsRc(layout_idx)) {
                     const use_count = ctx.pass.sumSymbolUses(ctx.local_uses, symbol);
+                    if (std.debug.runtime_safety and @as(u64, @bitCast(symbol)) == 18446743833191383041) {
+                        std.debug.print(
+                            "[DBG rc_insert.emitRcOpsForPatternInto] symbol_key={} layout={} use_count={}\n",
+                            .{
+                                @as(u64, @bitCast(symbol)),
+                                @intFromEnum(layout_idx),
+                                use_count,
+                            },
+                        );
+                    }
                     if (use_count == 0) {
                         try ctx.pass.emitDecrefInto(symbol, layout_idx, ctx.region, ctx.rc_stmts);
                     } else if (use_count > 1) {
@@ -3465,6 +3761,216 @@ test "RC match guard+body: symbol used in both guard and body gets proper RC ops
     const rc = countRcOps(&env.lir_store, result);
     try std.testing.expectEqual(@as(u32, 1), rc.increfs);
     try std.testing.expectEqual(@as(u32, 1), rc.decrefs);
+}
+
+test "RC low_level list_len borrow does not consume binding" {
+    // { xs = [1, 2, 3]; _ = list_len(xs); 0 }
+    // list_len is borrow-only for arg0, so xs must still be decref'd by block RC.
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_layout: LayoutIdx = .i64;
+    const list_layout = try env.layout_store.internList(i64_layout);
+
+    const one = try env.lir_store.addExpr(.{ .i64_literal = 1 }, Region.zero());
+    const two = try env.lir_store.addExpr(.{ .i64_literal = 2 }, Region.zero());
+    const three = try env.lir_store.addExpr(.{ .i64_literal = 3 }, Region.zero());
+    const elems = try env.lir_store.addExprSpan(&.{ one, two, three });
+    const list_expr = try env.lir_store.addExpr(.{ .list = .{
+        .elem_layout = i64_layout,
+        .elems = elems,
+    } }, Region.zero());
+
+    const sym_xs = makeSymbol(1);
+    const pat_xs = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_xs,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+
+    const xs_lookup = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_xs,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const len_args = try env.lir_store.addExprSpan(&.{xs_lookup});
+    const len_expr = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .list_len,
+        .args = len_args,
+        .ret_layout = .u64,
+    } }, Region.zero());
+
+    const pat_wild_u64 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = .u64 } }, Region.zero());
+    const zero = try env.lir_store.addExpr(.{ .i64_literal = 0 }, Region.zero());
+    const stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = pat_xs, .expr = list_expr } },
+        .{ .decl = .{ .pattern = pat_wild_u64, .expr = len_expr } },
+    });
+
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = zero,
+        .result_layout = .i64,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+    const rc = countRcOps(&env.lir_store, result);
+    try std.testing.expect(rc.decrefs >= 1);
+}
+
+test "RC list_append result consumed after list_len borrow chain" {
+    // { l = [1,2,3]; tmp = list_append(l, 99); _ = list_len(tmp); 0 }
+    // list_append consumes l, list_len borrows tmp, so tmp must still be decref'd.
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_layout: LayoutIdx = .i64;
+    const list_layout = try env.layout_store.internList(i64_layout);
+
+    const one = try env.lir_store.addExpr(.{ .i64_literal = 1 }, Region.zero());
+    const two = try env.lir_store.addExpr(.{ .i64_literal = 2 }, Region.zero());
+    const three = try env.lir_store.addExpr(.{ .i64_literal = 3 }, Region.zero());
+    const list_elems = try env.lir_store.addExprSpan(&.{ one, two, three });
+    const list_expr = try env.lir_store.addExpr(.{ .list = .{
+        .elem_layout = i64_layout,
+        .elems = list_elems,
+    } }, Region.zero());
+
+    const sym_l = makeSymbol(11);
+    const pat_l = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_l,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const l_lookup = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_l,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+
+    const ninety_nine = try env.lir_store.addExpr(.{ .i64_literal = 99 }, Region.zero());
+    const append_args = try env.lir_store.addExprSpan(&.{ l_lookup, ninety_nine });
+    const append_expr = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .list_append,
+        .args = append_args,
+        .ret_layout = list_layout,
+    } }, Region.zero());
+
+    const sym_tmp = makeSymbol(12);
+    const pat_tmp = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_tmp,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const tmp_lookup = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_tmp,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const len_args = try env.lir_store.addExprSpan(&.{tmp_lookup});
+    const len_expr = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .list_len,
+        .args = len_args,
+        .ret_layout = .u64,
+    } }, Region.zero());
+
+    const pat_wild_u64 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = .u64 } }, Region.zero());
+    const zero = try env.lir_store.addExpr(.{ .i64_literal = 0 }, Region.zero());
+    const stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = pat_l, .expr = list_expr } },
+        .{ .decl = .{ .pattern = pat_tmp, .expr = append_expr } },
+        .{ .decl = .{ .pattern = pat_wild_u64, .expr = len_expr } },
+    });
+
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = zero,
+        .result_layout = .i64,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+    const rc = countRcOps(&env.lir_store, result);
+    try std.testing.expect(rc.decrefs >= 1);
+}
+
+test "RC final borrowed list_len still cleans up prior list_append result" {
+    // { l = [1,2,3]; tmp = list_append(l, 99); list_len(tmp) }
+    // The final expression borrows tmp; RC insertion must still decref tmp before return.
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_layout: LayoutIdx = .i64;
+    const list_layout = try env.layout_store.internList(i64_layout);
+
+    const one = try env.lir_store.addExpr(.{ .i64_literal = 1 }, Region.zero());
+    const two = try env.lir_store.addExpr(.{ .i64_literal = 2 }, Region.zero());
+    const three = try env.lir_store.addExpr(.{ .i64_literal = 3 }, Region.zero());
+    const list_elems = try env.lir_store.addExprSpan(&.{ one, two, three });
+    const list_expr = try env.lir_store.addExpr(.{ .list = .{
+        .elem_layout = i64_layout,
+        .elems = list_elems,
+    } }, Region.zero());
+
+    const sym_l = makeSymbol(21);
+    const pat_l = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_l,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const l_lookup = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_l,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+
+    const ninety_nine = try env.lir_store.addExpr(.{ .i64_literal = 99 }, Region.zero());
+    const append_args = try env.lir_store.addExprSpan(&.{ l_lookup, ninety_nine });
+    const append_expr = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .list_append,
+        .args = append_args,
+        .ret_layout = list_layout,
+    } }, Region.zero());
+
+    const sym_tmp = makeSymbol(22);
+    const pat_tmp = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_tmp,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const tmp_lookup = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_tmp,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const len_args = try env.lir_store.addExprSpan(&.{tmp_lookup});
+    const len_expr = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .list_len,
+        .args = len_args,
+        .ret_layout = .u64,
+    } }, Region.zero());
+
+    const stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = pat_l, .expr = list_expr } },
+        .{ .decl = .{ .pattern = pat_tmp, .expr = append_expr } },
+    });
+
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = len_expr,
+        .result_layout = .u64,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+    const rc = countRcOps(&env.lir_store, result);
+    try std.testing.expect(rc.decrefs >= 1);
 }
 
 test "RC for_loop: wrapper block has unit result layout, not elem layout" {
