@@ -875,6 +875,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Used by allocTempGeneral() for temporaries that don't correspond to real locals.
         next_temp_local: u32 = 0x8000_0000,
 
+        /// Callable-instance identity for the call currently being generated.
+        /// This threads canonical call-site specialization identity down into
+        /// lambda-proc compilation without widening many helper signatures.
+        active_callable_instance: lir.LIR.CallableInstanceId = .none,
+
         /// Generation mode determines whether to use direct function pointers or symbol references.
         /// - native_execution: Code runs in-process (dev evaluator), direct function pointers work
         /// - object_file: Generating relocatable object files, use symbol references for builtins
@@ -903,6 +908,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             expr_id: LirExprId,
             fn_layout: layout.Idx,
             ret_layout: layout.Idx,
+            callable_instance: lir.LIR.CallableInstanceId,
             capture_start: u32,
             capture_len: u16,
             layout_override_hash: u64,
@@ -1384,6 +1390,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.join_point_param_patterns.clearRetainingCapacity();
             self.internal_call_patches.clearRetainingCapacity();
             self.internal_addr_patches.clearRetainingCapacity();
+            self.active_callable_instance = .none;
         }
 
         /// Generate code for a LIR expression
@@ -1412,6 +1419,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.active_closure_base = null;
             self.in_progress_lambdas.clearRetainingCapacity();
             self.in_progress_closures_by_layout.clearRetainingCapacity();
+            self.active_callable_instance = .none;
             self.codegen.callee_saved_used = 0;
 
             // Initialize stack_offset to reserve space for callee-saved area
@@ -12851,6 +12859,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Generate code for a function call
         fn generateCall(self: *Self, call: anytype) Allocator.Error!ValueLocation {
+            const saved_active_callable_instance = self.active_callable_instance;
+            self.active_callable_instance = call.callable_instance;
+            defer self.active_callable_instance = saved_active_callable_instance;
+
             // Get the function expression
             const fn_expr = self.store.getExpr(call.fn_expr);
             const instance_call_arg_layouts = self.callArgLayoutsFromInstance(call.callable_instance);
@@ -13000,7 +13012,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             else => {},
                         }
                     }
-                    return try self.generateLookupCall(lookup, call.args, call.ret_layout, call_arg_layouts);
+                    return try self.generateLookupCall(lookup, call.args, call.ret_layout, call_arg_layouts, call.callable_instance);
                 },
 
                 else => unreachable,
@@ -13627,6 +13639,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const code_offset = try self.compileLambdaAsProc(lambda_body, lambda, .{
                         .param_layout_overrides = param_layout_overrides.items,
                         .ret_layout_override = ret_layout,
+                        .callable_instance = self.active_callable_instance,
                     });
                     return try self.generateCallToLambdaWithSource(code_offset, args_span, ret_layout, lambda_body, arg_layout_overrides);
                 },
@@ -13668,6 +13681,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda, .{
                             .param_layout_overrides = param_layout_overrides.items,
                             .ret_layout_override = ret_layout,
+                            .callable_instance = self.active_callable_instance,
                         });
                         return try self.generateCallToLambdaWithSource(code_offset, args_span, ret_layout, closure.lambda, arg_layout_overrides);
                     }
@@ -13862,6 +13876,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .capture_params = captures_span,
                         .param_layout_overrides = param_layout_overrides.items,
                         .ret_layout_override = call_ret_layout,
+                        .callable_instance = self.active_callable_instance,
                     });
 
                     return self.generateLambdaCall(
@@ -14044,7 +14059,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             args_span: anytype,
             ret_layout: layout.Idx,
             arg_layout_overrides: []const layout.Idx,
+            callable_instance: lir.LIR.CallableInstanceId,
         ) Allocator.Error!ValueLocation {
+            const saved_active_callable_instance = self.active_callable_instance;
+            self.active_callable_instance = callable_instance;
+            defer self.active_callable_instance = saved_active_callable_instance;
+
             const symbol_key: u64 = @bitCast(lookup.symbol);
             var debug_name: []const u8 = "<unknown>";
             if (self.layout_store) |ls| {
@@ -15460,6 +15480,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             capture_params: lir.LIR.LirCaptureSpan = lir.LIR.LirCaptureSpan.empty(),
             param_layout_overrides: ?[]const layout.Idx = null,
             ret_layout_override: ?layout.Idx = null,
+            callable_instance: lir.LIR.CallableInstanceId = .none,
         };
 
         /// Compile a lambda expression as a standalone procedure.
@@ -15470,7 +15491,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const proc_ret_layout = options.ret_layout_override orelse lambda.ret_layout;
             var override_hash: u64 = 0;
             var override_len: u16 = 0;
-            if (options.param_layout_overrides) |overrides| {
+            if (options.callable_instance.isNone()) if (options.param_layout_overrides) |overrides| {
                 override_len = @intCast(@min(overrides.len, std.math.maxInt(u16)));
                 var hasher = std.hash.Wyhash.init(0);
                 for (overrides) |li| {
@@ -15478,16 +15499,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     hasher.update(std.mem.asBytes(&li_int));
                 }
                 override_hash = hasher.final();
-            }
+            };
 
             const has_layout_overrides = options.param_layout_overrides != null and options.param_layout_overrides.?.len > 0;
-            const use_cache = !has_layout_overrides and
+            const use_cache = (!has_layout_overrides or !options.callable_instance.isNone()) and
                 self.store.getCaptures(options.capture_params).len == 0 and
                 !self.hasPreboundCallableForParams(lambda.params);
             const key: LambdaCompileKey = .{
                 .expr_id = lambda_expr_id,
                 .fn_layout = lambda.fn_layout,
                 .ret_layout = proc_ret_layout,
+                .callable_instance = options.callable_instance,
                 .capture_start = options.capture_params.start,
                 .capture_len = options.capture_params.len,
                 .layout_override_hash = override_hash,
