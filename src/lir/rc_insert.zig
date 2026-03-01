@@ -3702,7 +3702,8 @@ test "RC low_level list_len borrow does not consume binding" {
 
     const result = try pass.insertRcOps(block_expr);
     const rc = countRcOps(&env.lir_store, result);
-    try std.testing.expect(rc.decrefs >= 1);
+    try std.testing.expectEqual(@as(u32, 0), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 1), rc.decrefs);
 }
 
 test "RC list_append result consumed after list_len borrow chain" {
@@ -3779,7 +3780,8 @@ test "RC list_append result consumed after list_len borrow chain" {
 
     const result = try pass.insertRcOps(block_expr);
     const rc = countRcOps(&env.lir_store, result);
-    try std.testing.expect(rc.decrefs >= 1);
+    try std.testing.expectEqual(@as(u32, 0), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 1), rc.decrefs);
 }
 
 test "RC final borrowed list_len still cleans up prior list_append result" {
@@ -3853,7 +3855,124 @@ test "RC final borrowed list_len still cleans up prior list_append result" {
 
     const result = try pass.insertRcOps(block_expr);
     const rc = countRcOps(&env.lir_store, result);
-    try std.testing.expect(rc.decrefs >= 1);
+    try std.testing.expectEqual(@as(u32, 0), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 1), rc.decrefs);
+}
+
+test "RC if-branch borrowed list_get plus consuming call does not add branch incref" {
+    // {
+    //   list = [1,2,3]
+    //   cond = True
+    //   if cond then { _ = list_get(list, 0); consume(list) } else { 0 }
+    // }
+    // list_get(list, 0) is borrowed, so the then-branch has exactly one consuming
+    // use of list (the call argument). Branch RC wrapping must not insert incref.
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const list_elem_layout: LayoutIdx = .i64;
+    const list_layout = try env.layout_store.internList(list_elem_layout);
+
+    const sym_list = makeSymbol(31);
+    const sym_cond = makeSymbol(32);
+    const sym_consume_fn = makeSymbol(33);
+
+    const one = try env.lir_store.addExpr(.{ .i64_literal = 1 }, Region.zero());
+    const two = try env.lir_store.addExpr(.{ .i64_literal = 2 }, Region.zero());
+    const three = try env.lir_store.addExpr(.{ .i64_literal = 3 }, Region.zero());
+    const elems = try env.lir_store.addExprSpan(&.{ one, two, three });
+    const list_expr = try env.lir_store.addExpr(.{ .list = .{
+        .elem_layout = list_elem_layout,
+        .elems = elems,
+    } }, Region.zero());
+
+    const cond_true = try env.lir_store.addExpr(.{ .bool_literal = true }, Region.zero());
+
+    const list_lookup_for_get = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_list,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const zero_idx = try env.lir_store.addExpr(.{ .i64_literal = 0 }, Region.zero());
+    const get_args = try env.lir_store.addExprSpan(&.{ list_lookup_for_get, zero_idx });
+    const get_expr = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .list_get,
+        .args = get_args,
+        .ret_layout = list_elem_layout,
+    } }, Region.zero());
+    const wild_i64 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = list_elem_layout } }, Region.zero());
+
+    const consume_fn_lookup = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_consume_fn,
+        .layout_idx = .none,
+    } }, Region.zero());
+    const list_lookup_for_call = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_list,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const call_args = try env.lir_store.addExprSpan(&.{list_lookup_for_call});
+    const consume_call = try env.lir_store.addExpr(.{ .call = .{
+        .fn_expr = consume_fn_lookup,
+        .args = call_args,
+        .fn_layout = .none,
+        .ret_layout = .i64,
+        .callable_instance = .none,
+        .called_via = .apply,
+    } }, Region.zero());
+
+    const then_stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = wild_i64, .expr = get_expr } },
+    });
+    const then_body = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = then_stmts,
+        .final_expr = consume_call,
+        .result_layout = .i64,
+    } }, Region.zero());
+
+    const else_zero = try env.lir_store.addExpr(.{ .i64_literal = 0 }, Region.zero());
+    const cond_lookup = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_cond,
+        .layout_idx = .bool,
+    } }, Region.zero());
+    const if_branches = try env.lir_store.addIfBranches(&.{
+        .{
+            .cond = cond_lookup,
+            .body = then_body,
+        },
+    });
+    const if_expr = try env.lir_store.addExpr(.{ .if_then_else = .{
+        .branches = if_branches,
+        .final_else = else_zero,
+        .result_layout = .i64,
+    } }, Region.zero());
+
+    const pat_list = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_list,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const pat_cond = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_cond,
+        .layout_idx = .bool,
+    } }, Region.zero());
+    const stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = pat_list, .expr = list_expr } },
+        .{ .decl = .{ .pattern = pat_cond, .expr = cond_true } },
+    });
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = if_expr,
+        .result_layout = .i64,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+    const rc = countRcOps(&env.lir_store, result);
+    try std.testing.expectEqual(@as(u32, 0), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 1), rc.decrefs);
 }
 
 test "RC for_loop: wrapper block has unit result layout, not elem layout" {
