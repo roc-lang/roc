@@ -627,14 +627,6 @@ pub const DevEvaluator = struct {
             self.roc_env.current_code_size = 0;
         }
 
-        if (comptime builtin.mode == .Debug) {
-            builtins.utils.DebugRefcountTracker.enable();
-        }
-        defer if (comptime builtin.mode == .Debug) {
-            _ = builtins.utils.DebugRefcountTracker.reportLeaks();
-            builtins.utils.DebugRefcountTracker.disable();
-        };
-
         // On Windows, install the VEH handler to catch segfaults
         const veh_handle = WindowsSEH.install(&self.roc_env.jmp_buf);
         defer WindowsSEH.remove(veh_handle);

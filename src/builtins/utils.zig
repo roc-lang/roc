@@ -937,13 +937,15 @@ pub const DebugRefcountTracker = struct {
         site: Site,
     };
 
-    var rc_addrs: [max_tracked]usize = [_]usize{0} ** max_tracked;
-    var shadow_rcs: [max_tracked]isize = [_]isize{0} ** max_tracked;
-    var count: usize = 0;
-    var active: bool = false;
+    // Snapshot/eval tests can execute on multiple threads; keep debug
+    // refcount state thread-local so one execution cannot corrupt another.
+    threadlocal var rc_addrs: [max_tracked]usize = [_]usize{0} ** max_tracked;
+    threadlocal var shadow_rcs: [max_tracked]isize = [_]isize{0} ** max_tracked;
+    threadlocal var count: usize = 0;
+    threadlocal var active: bool = false;
 
-    var op_log: [max_ops]OpEntry = undefined;
-    var op_count: usize = 0;
+    threadlocal var op_log: [max_ops]OpEntry = undefined;
+    threadlocal var op_count: usize = 0;
 
     pub fn enable() void {
         active = true;
