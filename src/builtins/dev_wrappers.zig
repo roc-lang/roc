@@ -407,7 +407,8 @@ pub fn roc_builtins_list_sort_with(
         while (j > 0) {
             const elem_j_minus_1 = sorted_bytes + (j - 1) * element_width;
             const cmp_result = sortCmpTrampoline(@ptrCast(@constCast(&cmp_ctx)), &temp_buf, elem_j_minus_1);
-            if (cmp_result != 2) break;
+            // Builtin Order is [LT, EQ, GT], so LT discriminant is 0.
+            if (cmp_result != 0) break;
 
             const elem_j = sorted_bytes + j * element_width;
             @memcpy(elem_j[0..element_width], elem_j_minus_1[0..element_width]);

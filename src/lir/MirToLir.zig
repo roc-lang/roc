@@ -2652,13 +2652,46 @@ fn inspektTagUnion(self: *Self, value_expr: LirExprId, tu: anytype, mono_idx: Mo
         }
     }
 
-    // Multi-tag union: emit a discriminant_switch with one branch per tag
+    // Multi-tag union: emit a discriminant_switch with one branch per
+    // discriminant value. `generateDiscriminantSwitch` matches branch index `i`
+    // against runtime discriminant `i`, so we must order branches by discriminant
+    // even if `tags` arrives in a different order.
     const save_exprs = self.scratch_lir_expr_ids.items.len;
     defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
 
+    const ordered_branches = try self.allocator.alloc(LirExprId, tags.len);
+    defer self.allocator.free(ordered_branches);
+    const seen_discriminants = try self.allocator.alloc(bool, tags.len);
+    defer self.allocator.free(seen_discriminants);
+    @memset(seen_discriminants, false);
+
     for (tags) |tag| {
+        const discriminant = self.tagDiscriminant(tag.name, mono_idx);
+        if (discriminant >= tags.len) {
+            std.debug.panic(
+                "inspektTagUnion: discriminant {} out of range for {} tags",
+                .{ discriminant, tags.len },
+            );
+        }
+        if (seen_discriminants[discriminant]) {
+            std.debug.panic(
+                "inspektTagUnion: duplicate discriminant {} for mono_idx={}",
+                .{ discriminant, @intFromEnum(mono_idx) },
+            );
+        }
         const branch_expr = try self.inspektTagBranch(value_expr, tag, union_layout, region);
-        try self.scratch_lir_expr_ids.append(self.allocator, branch_expr);
+        ordered_branches[discriminant] = branch_expr;
+        seen_discriminants[discriminant] = true;
+    }
+
+    for (seen_discriminants, 0..) |seen, disc| {
+        if (!seen) {
+            std.debug.panic(
+                "inspektTagUnion: missing branch for discriminant {} mono_idx={}",
+                .{ disc, @intFromEnum(mono_idx) },
+            );
+        }
+        try self.scratch_lir_expr_ids.append(self.allocator, ordered_branches[disc]);
     }
 
     const branches = self.scratch_lir_expr_ids.items[save_exprs..];

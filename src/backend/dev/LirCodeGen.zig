@@ -630,7 +630,8 @@ fn wrapListSortWith(
             const elem_j_minus_1 = sorted_bytes + (j - 1) * element_width;
             // Compare temp (element being inserted) with element[j-1]
             const cmp_result = sortCmpTrampoline(@ptrCast(@constCast(&cmp_ctx)), &temp_buf, elem_j_minus_1);
-            if (cmp_result != 2) break; // not LT, stop shifting (EQ=0, GT=1)
+            // Builtin Order is [LT, EQ, GT], so LT discriminant is 0.
+            if (cmp_result != 0) break;
             // Shift element[j-1] to element[j]
             const elem_j = sorted_bytes + j * element_width;
             @memcpy(elem_j[0..element_width], elem_j_minus_1[0..element_width]);
@@ -2103,8 +2104,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const ls = self.layout_store orelse unreachable;
                     const ret_layout_val = ls.getLayout(ll.ret_layout);
 
-                    // Determine element layout: extract from the list arg's layout
-                    // (not from ret_layout, which may be a Try tag union)
+                    // Determine element layout from the list argument first.
+                    // Only fall back to return-layout inspection for genuine
+                    // List.get-style Try results.
                     const elem_layout_idx: layout.Idx = blk: {
                         // Try to get the list layout from the first argument
                         if (self.getExprLayout(args[0])) |list_layout_idx| {
@@ -2113,14 +2115,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 break :blk list_layout_val.data.list;
                             }
                         }
-                        // Fallback: if ret_layout is a tag_union (Try), extract
-                        // the Ok variant's payload layout as element layout.
-                        // Tag unions are sorted by tag name, so Result/Try is [Err, Ok].
+                        // Fallback: if ret_layout looks like Try(elem, err), extract
+                        // the non-ZST payload as the element layout.
                         if (ret_layout_val.tag == .tag_union) {
                             const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
                             const variants = ls.getTagUnionVariants(tu_data);
-                            if (variants.len > 1) {
-                                break :blk variants.get(1).payload_layout;
+                            if (variants.len == 2) {
+                                const p0 = variants.get(0).payload_layout;
+                                const p1 = variants.get(1).payload_layout;
+                                const p0_size = ls.layoutSizeAlign(ls.getLayout(p0)).size;
+                                const p1_size = ls.layoutSizeAlign(ls.getLayout(p1)).size;
+                                if (p0_size == 0 and p1_size > 0) break :blk p1;
+                                if (p1_size == 0 and p0_size > 0) break :blk p0;
                             }
                         }
                         // Last resort: use ret_layout directly (for list_get_unsafe)
@@ -2129,8 +2135,28 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const elem_layout_val = ls.getLayout(elem_layout_idx);
                     const elem_size: u32 = ls.layoutSizeAlign(elem_layout_val).size;
 
-                    // Check if this is a safe List.get (ret_layout is a tag_union)
-                    const is_safe_get = ret_layout_val.tag == .tag_union;
+                    // Safe List.get returns Try(elem, err). Do not treat arbitrary
+                    // tag-union element types as safe-get results.
+                    const is_safe_get = blk: {
+                        if (ret_layout_val.tag != .tag_union) break :blk false;
+                        const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
+                        const variants = ls.getTagUnionVariants(tu_data);
+                        if (variants.len != 2) break :blk false;
+
+                        var has_elem_payload = false;
+                        var has_empty_payload = false;
+                        for (0..variants.len) |variant_i| {
+                            const variant = variants.get(variant_i);
+                            if (variant.payload_layout == elem_layout_idx) {
+                                has_elem_payload = true;
+                            }
+                            const payload_size = ls.layoutSizeAlign(ls.getLayout(variant.payload_layout)).size;
+                            if (payload_size == 0) {
+                                has_empty_payload = true;
+                            }
+                        }
+                        break :blk has_elem_payload and has_empty_payload;
+                    };
 
                     if (elem_size == 0 and !is_safe_get) {
                         // ZST element with unsafe get - no actual data to load
@@ -2237,7 +2263,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         self.codegen.patchJump(end_patch, self.codegen.currentOffset());
 
                         self.codegen.freeGeneral(index_reg);
-                        return .{ .stack = .{ .offset = result_slot } };
+                        return self.stackLocationForLayout(ll.ret_layout, result_slot);
                     }
 
                     // Unsafe list_get: no bounds checking, return bare element
@@ -2281,18 +2307,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // list_get_unsafe returns a copied element value; for refcounted
                     // element kinds we must incref here so ownership matches the
                     // interpreter's pushCopy semantics.
-                    const result_loc: ValueLocation = if (elem_layout_idx == .i128 or elem_layout_idx == .u128 or elem_layout_idx == .dec)
-                        .{ .stack_i128 = elem_slot }
-                    else if (elem_layout_idx == .str)
-                        .{ .stack_str = elem_slot }
-                    else if (elem_layout_val.tag == .list or elem_layout_val.tag == .list_of_zst)
-                        .{ .list_stack = .{
-                            .struct_offset = elem_slot,
-                            .data_offset = 0,
-                            .num_elements = 0,
-                        } }
-                    else
-                        .{ .stack = .{ .offset = elem_slot } };
+                    const result_loc: ValueLocation = self.stackLocationForLayout(elem_layout_idx, elem_slot);
 
                     switch (elem_layout_val.tag) {
                         .list, .list_of_zst => try self.emitListIncref(result_loc, 1),
@@ -5573,6 +5588,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 layout.Idx.u8, layout.Idx.u16, layout.Idx.u32, layout.Idx.u64, layout.Idx.u128 => true,
                 else => false,
             };
+            const int_info = self.getIntLayoutInfo(operand_layout);
+            if (int_info) |info| {
+                try self.normalizeIntRegForLayout(lhs_reg, info);
+                try self.normalizeIntRegForLayout(rhs_reg, info);
+            }
 
             switch (op) {
                 .num_add => try self.codegen.emitAdd(.w64, result_reg, lhs_reg, rhs_reg),
@@ -5649,11 +5669,41 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 else => unreachable,
             }
 
+            switch (op) {
+                .num_add,
+                .num_sub,
+                .num_mul,
+                .num_div,
+                .num_div_trunc,
+                .num_rem,
+                .num_mod,
+                .num_shift_left_by,
+                .num_shift_right_by,
+                .num_shift_right_zf_by,
+                => {
+                    if (int_info) |info| {
+                        try self.normalizeIntRegForLayout(result_reg, info);
+                    }
+                },
+                else => {},
+            }
+
             // Free operand registers if they were temporary
             self.codegen.freeGeneral(lhs_reg);
             self.codegen.freeGeneral(rhs_reg);
 
             return .{ .general_reg = result_reg };
+        }
+
+        fn normalizeIntRegForLayout(self: *Self, reg: GeneralReg, info: IntLayoutInfo) Allocator.Error!void {
+            if (info.bits >= 64) return;
+            const shift_amount: u8 = 64 - info.bits;
+            try self.emitShlImm(.w64, reg, reg, shift_amount);
+            if (info.signed) {
+                try self.emitAsrImm(.w64, reg, reg, shift_amount);
+            } else {
+                try self.emitLsrImm(.w64, reg, reg, shift_amount);
+            }
         }
 
         // Condition code helpers for cross-architecture support
@@ -8799,6 +8849,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const elem_size_align = ls.layoutSizeAlign(elem_layout_data);
             const elem_size: u32 = elem_size_align.size;
             const elem_alignment: u32 = @intCast(elem_size_align.alignment.toByteUnits());
+
+            if (elem_layout_data.tag == .tag_union) {
+                const tu_data = ls.getTagUnionData(elem_layout_data.data.tag_union.idx);
+                const min_tag_size: u32 = tu_data.discriminant_offset + tu_data.discriminant_size;
+                if (elem_size < min_tag_size) {
+                    std.debug.panic(
+                        "generateList: tag union element layout too small elem_layout={} size={} disc_off={} disc_size={}",
+                        .{
+                            @intFromEnum(list.elem_layout),
+                            elem_size,
+                            tu_data.discriminant_offset,
+                            tu_data.discriminant_size,
+                        },
+                    );
+                }
+            }
 
             const num_elems: u32 = @intCast(elems.len);
             const total_data_bytes: usize = @as(usize, elem_size) * @as(usize, num_elems);
