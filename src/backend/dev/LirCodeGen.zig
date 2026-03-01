@@ -16541,10 +16541,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Boxes are always heap-allocated
                     try self.emitBoxIncref(value_loc, rc_op.count);
                 },
-                else => {
-                    // Records, tuples, tag unions, closures, zst don't need RC at the top level
-                    // (their heap-allocated fields are handled separately)
+                .struct_, .tag_union => {
+                    // Records and tag unions: walk their fields and incref each
+                    // refcounted one. This is needed when a struct value is used
+                    // by multiple struct_access expressions (e.g. during inspect),
+                    // where each access decrefs the struct.
+                    if (ls.layoutContainsRefcounted(layout_val)) {
+                        const value_size = ls.layoutSizeAlign(layout_val).size;
+                        if (value_size > 0) {
+                            const base_offset = try self.ensureValueOnStackForRc(value_loc, value_size);
+                            for (0..rc_op.count) |_| {
+                                try self.emitIncrefAtStackOffset(base_offset, rc_op.layout_idx);
+                            }
+                        }
+                    }
                 },
+                else => {},
             }
 
             return value_loc;

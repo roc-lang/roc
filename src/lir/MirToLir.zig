@@ -2115,6 +2115,36 @@ fn inspektRecord(self: *Self, value_expr: LirExprId, record: anytype, mono_idx: 
     const struct_data = self.layout_store.getStructData(struct_layout_val.data.struct_.idx);
     const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
 
+    // Each struct_access in the codegen decrefs the parent struct (consuming one
+    // reference). When the struct contains refcounted fields and we access N fields,
+    // we need N references total. The struct construction provides 1 reference, so
+    // emit an incref with count=N-1 before the accesses to avoid use-after-free.
+    const needs_extra_refs = fields.len > 1 and self.layout_store.layoutContainsRefcounted(struct_layout_val);
+
+    // If we need extra refs, bind the value and emit the incref in a block.
+    const save_stmts = self.scratch_lir_stmts.items.len;
+    defer self.scratch_lir_stmts.shrinkRetainingCapacity(save_stmts);
+
+    var struct_val_expr = value_expr;
+    if (needs_extra_refs) {
+        // Bind value_expr to a variable so it's evaluated exactly once
+        const bp = try self.freshBindPattern(struct_layout, false, region);
+        try self.scratch_lir_stmts.append(self.allocator, .{ .decl = .{ .pattern = bp.pattern, .expr = value_expr } });
+
+        // Emit incref with count = N-1
+        const lookup_for_incref = try self.emitLookup(bp.symbol, struct_layout, region);
+        const incref_expr = try self.lir_store.addExpr(.{ .incref = .{
+            .value = lookup_for_incref,
+            .layout_idx = struct_layout,
+            .count = @intCast(fields.len - 1),
+        } }, region);
+        const incref_bp = try self.freshBindPattern(struct_layout, false, region);
+        try self.scratch_lir_stmts.append(self.allocator, .{ .decl = .{ .pattern = incref_bp.pattern, .expr = incref_expr } });
+
+        // Use a fresh lookup for each struct_access
+        struct_val_expr = try self.emitLookup(bp.symbol, struct_layout, region);
+    }
+
     // Build parts: "{ " field1_name ": " inspect(field1_value) ", " ... " }"
     // Monotype fields are alphabetically sorted, which matches how we want to display them.
     // Layout fields may be reordered by alignment. We use the layout's StructField.index
@@ -2145,7 +2175,7 @@ fn inspektRecord(self: *Self, value_expr: LirExprId, record: anytype, mono_idx: 
         }
         const field_layout = try self.layoutFromMonotype(field.type_idx);
         const field_access = try self.lir_store.addExpr(.{ .struct_access = .{
-            .struct_expr = value_expr,
+            .struct_expr = struct_val_expr,
             .struct_layout = struct_layout,
             .field_layout = field_layout,
             .field_idx = layout_field_idx orelse unreachable,
@@ -2159,7 +2189,19 @@ fn inspektRecord(self: *Self, value_expr: LirExprId, record: anytype, mono_idx: 
     try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(" }", region));
 
     const parts = self.scratch_lir_expr_ids.items[save_exprs..];
-    return self.foldStrConcat(parts, region);
+    const concat_result = try self.foldStrConcat(parts, region);
+
+    // If we emitted incref stmts, wrap in a block
+    if (needs_extra_refs) {
+        const stmts = try self.lir_store.addStmts(self.scratch_lir_stmts.items[save_stmts..]);
+        return self.lir_store.addExpr(.{ .block = .{
+            .stmts = stmts,
+            .final_expr = concat_result,
+            .result_layout = .str,
+        } }, region);
+    }
+
+    return concat_result;
 }
 
 /// Inspect a tuple: (inspect(v0), inspect(v1), ...)
@@ -2168,6 +2210,31 @@ fn inspektTuple(self: *Self, value_expr: LirExprId, tup: anytype, mono_idx: Mono
     if (elems.len == 0) return self.emitStrLiteral("()", region);
 
     const struct_layout = try self.layoutFromMonotype(mono_idx);
+    const struct_layout_val = self.layout_store.getLayout(struct_layout);
+
+    // Same as inspektRecord: each struct_access decrefs the struct, so we need
+    // extra increfs when there are multiple elements with refcounted fields.
+    const needs_extra_refs = elems.len > 1 and self.layout_store.layoutContainsRefcounted(struct_layout_val);
+
+    const save_stmts = self.scratch_lir_stmts.items.len;
+    defer self.scratch_lir_stmts.shrinkRetainingCapacity(save_stmts);
+
+    var tuple_val_expr = value_expr;
+    if (needs_extra_refs) {
+        const bp = try self.freshBindPattern(struct_layout, false, region);
+        try self.scratch_lir_stmts.append(self.allocator, .{ .decl = .{ .pattern = bp.pattern, .expr = value_expr } });
+
+        const lookup_for_incref = try self.emitLookup(bp.symbol, struct_layout, region);
+        const incref_expr = try self.lir_store.addExpr(.{ .incref = .{
+            .value = lookup_for_incref,
+            .layout_idx = struct_layout,
+            .count = @intCast(elems.len - 1),
+        } }, region);
+        const incref_bp = try self.freshBindPattern(struct_layout, false, region);
+        try self.scratch_lir_stmts.append(self.allocator, .{ .decl = .{ .pattern = incref_bp.pattern, .expr = incref_expr } });
+
+        tuple_val_expr = try self.emitLookup(bp.symbol, struct_layout, region);
+    }
 
     const save_exprs = self.scratch_lir_expr_ids.items.len;
     defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
@@ -2181,7 +2248,7 @@ fn inspektTuple(self: *Self, value_expr: LirExprId, tup: anytype, mono_idx: Mono
 
         const elem_layout = try self.layoutFromMonotype(elem_mono);
         const elem_access = try self.lir_store.addExpr(.{ .struct_access = .{
-            .struct_expr = value_expr,
+            .struct_expr = tuple_val_expr,
             .struct_layout = struct_layout,
             .field_layout = elem_layout,
             .field_idx = self.layoutFieldPositionForSemanticIndex(struct_layout, i),
@@ -2194,7 +2261,18 @@ fn inspektTuple(self: *Self, value_expr: LirExprId, tup: anytype, mono_idx: Mono
     try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(")", region));
 
     const parts = self.scratch_lir_expr_ids.items[save_exprs..];
-    return self.foldStrConcat(parts, region);
+    const concat_result = try self.foldStrConcat(parts, region);
+
+    if (needs_extra_refs) {
+        const stmts = try self.lir_store.addStmts(self.scratch_lir_stmts.items[save_stmts..]);
+        return self.lir_store.addExpr(.{ .block = .{
+            .stmts = stmts,
+            .final_expr = concat_result,
+            .result_layout = .str,
+        } }, region);
+    }
+
+    return concat_result;
 }
 
 /// Map a semantic field index (source order) to the actual layout field position.
