@@ -744,6 +744,11 @@ pub const LirExpr = union(enum) {
         num_is_lt,
         num_is_lte,
 
+        // Structural equality operations (layout-driven)
+        struct_is_eq,
+        list_is_eq,
+        tag_union_is_eq,
+
         // Boolean operations
         bool_is_eq,
         bool_not,

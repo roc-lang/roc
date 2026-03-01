@@ -2649,12 +2649,6 @@ fn stabilizeCompositeResult(self: *Self, size: u32) Allocator.Error!u32 {
 /// Generate composite (i128/Dec) numeric operations via LowLevel ops.
 /// Both operands are i32 pointers to 16-byte values in linear memory.
 fn generateCompositeNumericOp(self: *Self, op: anytype, args: []const LirExprId, ret_layout: layout.Idx, operand_layout: layout.Idx) Allocator.Error!void {
-    // For comparison ops like num_is_eq, check for structural equality first
-    if (op == .num_is_eq) {
-        try self.generateStructuralEq(args[0], args[1], false);
-        return;
-    }
-
     // Generate operand pointers and stabilize them
     try self.generateExpr(args[0]);
     const lhs_local = try self.stabilizeCompositeResult(16);
@@ -2718,6 +2712,7 @@ fn generateCompositeNumericOp(self: *Self, op: anytype, args: []const LirExprId,
                 const import_idx = if (is_signed) self.i128_mod_s_import else self.u128_mod_import;
                 try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx orelse unreachable);
             },
+            .num_is_eq => try self.emitI128Eq(lhs_local, rhs_local),
             .num_is_gt => try self.emitI128Compare(lhs_local, rhs_local, .gt),
             .num_is_gte => try self.emitI128Compare(lhs_local, rhs_local, .gte),
             .num_is_lt => try self.emitI128Compare(lhs_local, rhs_local, .lt),
@@ -3158,6 +3153,30 @@ fn emitI128Mul(self: *Self, lhs_local: u32, rhs_local: u32) Allocator.Error!void
 }
 
 const I128CmpOp = enum { lt, lte, gt, gte };
+
+/// Emit fixed-width i128 equality. Pushes i32 (0 or 1) result.
+fn emitI128Eq(self: *Self, lhs_local: u32, rhs_local: u32) Allocator.Error!void {
+    // Compare low 64 bits
+    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, lhs_local) catch return error.OutOfMemory;
+    try self.emitLoadOp(.i64, 0);
+    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, rhs_local) catch return error.OutOfMemory;
+    try self.emitLoadOp(.i64, 0);
+    self.body.append(self.allocator, Op.i64_eq) catch return error.OutOfMemory;
+
+    // Compare high 64 bits
+    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, lhs_local) catch return error.OutOfMemory;
+    try self.emitLoadOp(.i64, 8);
+    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, rhs_local) catch return error.OutOfMemory;
+    try self.emitLoadOp(.i64, 8);
+    self.body.append(self.allocator, Op.i64_eq) catch return error.OutOfMemory;
+
+    // both_equal = low_equal && high_equal
+    self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+}
 
 /// Emit signed i128 comparison. Pushes i32 (0 or 1) result.
 fn emitI128Compare(self: *Self, lhs_local: u32, rhs_local: u32, cmp_op: I128CmpOp) Allocator.Error!void {
@@ -8984,6 +9003,10 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             return self.generateNumericLowLevel(ll.op, args, ll.ret_layout);
         },
 
+        .struct_is_eq, .list_is_eq, .tag_union_is_eq => {
+            try self.generateStructuralEq(args[0], args[1], false);
+        },
+
         .bool_is_eq => {
             try self.generateExpr(args[0]);
             try self.generateExpr(args[1]);
@@ -12168,11 +12191,21 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LirExprId, re
             }
         },
         .num_is_eq => {
-            // Check for structural equality (strings, lists, records, etc.)
+            // num_is_eq is numeric-only in LIR.
             if (self.exprLayoutIdx(args[0])) |lay_idx| {
-                if (lay_idx == .str or self.isCompositeLayout(lay_idx)) {
-                    try self.generateStructuralEq(args[0], args[1], false);
-                    return;
+                if (lay_idx == .str) {
+                    std.debug.panic("num_is_eq on Str is invalid; lowering must emit str_is_eq", .{});
+                }
+                if (self.layout_store) |ls| {
+                    if (@intFromEnum(lay_idx) < ls.layouts.len()) {
+                        const l = ls.getLayout(lay_idx);
+                        if (l.tag == .struct_ or l.tag == .list or l.tag == .list_of_zst or l.tag == .tag_union) {
+                            std.debug.panic(
+                                "num_is_eq on structural layout {} is invalid; lowering must emit a structural eq op",
+                                .{@intFromEnum(lay_idx)},
+                            );
+                        }
+                    }
                 }
             }
             try self.generateExpr(args[0]);

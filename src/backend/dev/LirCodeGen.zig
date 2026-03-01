@@ -3787,6 +3787,46 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return try self.generateAbsDiff(a_loc, b_loc, ll.ret_layout, arg_layout);
                 },
 
+                .struct_is_eq => {
+                    const lhs_loc = try self.generateExpr(args[0]);
+                    const rhs_loc = try self.generateExpr(args[1]);
+                    const layout_idx = self.getExprLayout(args[0]) orelse self.getExprLayout(args[1]) orelse
+                        std.debug.panic("struct_is_eq missing operand layout", .{});
+                    if (self.layout_store) |ls| {
+                        const layout_val = ls.getLayout(layout_idx);
+                        if (layout_val.tag != .struct_ and layout_val.tag != .zst) {
+                            std.debug.panic("struct_is_eq received non-struct layout {}", .{@intFromEnum(layout_idx)});
+                        }
+                    }
+                    return self.generateStructComparisonByLayout(lhs_loc, rhs_loc, layout_idx, .num_is_eq);
+                },
+                .list_is_eq => {
+                    const lhs_loc = try self.generateExpr(args[0]);
+                    const rhs_loc = try self.generateExpr(args[1]);
+                    const layout_idx = self.getExprLayout(args[0]) orelse self.getExprLayout(args[1]) orelse
+                        std.debug.panic("list_is_eq missing operand layout", .{});
+                    if (self.layout_store) |ls| {
+                        const layout_val = ls.getLayout(layout_idx);
+                        if (layout_val.tag != .list and layout_val.tag != .list_of_zst) {
+                            std.debug.panic("list_is_eq received non-list layout {}", .{@intFromEnum(layout_idx)});
+                        }
+                    }
+                    return self.generateListComparisonByLayout(lhs_loc, rhs_loc, layout_idx, .num_is_eq);
+                },
+                .tag_union_is_eq => {
+                    const lhs_loc = try self.generateExpr(args[0]);
+                    const rhs_loc = try self.generateExpr(args[1]);
+                    const layout_idx = self.getExprLayout(args[0]) orelse self.getExprLayout(args[1]) orelse
+                        std.debug.panic("tag_union_is_eq missing operand layout", .{});
+                    if (self.layout_store) |ls| {
+                        const layout_val = ls.getLayout(layout_idx);
+                        if (layout_val.tag != .tag_union) {
+                            std.debug.panic("tag_union_is_eq received non-tag-union layout {}", .{@intFromEnum(layout_idx)});
+                        }
+                    }
+                    return self.generateTagUnionComparisonByLayout(lhs_loc, rhs_loc, layout_idx, .num_is_eq);
+                },
+
                 // Numeric arithmetic and comparison ops — route to existing binop helpers
                 .num_add,
                 .num_sub,
@@ -3810,30 +3850,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Determine operand layout from the first argument
                     const operand_layout = self.getExprLayout(args[0]) orelse ll.ret_layout;
 
-                    // With ANF, operands are always lookups or literals, so we
-                    // dispatch structural equality purely by layout.
-                    if (ll.op == .num_is_eq) {
-                        if (self.layout_store) |ls| {
-                            const ol = self.getExprLayout(args[0]) orelse self.getExprLayout(args[1]);
-                            if (ol) |layout_idx| {
-                                const stored_layout = ls.getLayout(layout_idx);
-                                if (stored_layout.tag == .struct_)
-                                    return self.generateStructComparisonByLayout(lhs_loc, rhs_loc, layout_idx, .num_is_eq);
-                                if (stored_layout.tag == .list)
-                                    return self.generateListComparisonByLayout(lhs_loc, rhs_loc, layout_idx, .num_is_eq);
-                                if (stored_layout.tag == .tag_union)
-                                    return self.generateTagUnionComparisonByLayout(lhs_loc, rhs_loc, layout_idx, .num_is_eq);
-                            }
-                        }
-                    }
-
-                    // Check for string operands that ended up in num_is_eq
-                    // (e.g., from structural equality on tag unions containing strings)
                     if (ll.op == .num_is_eq) {
                         if (operand_layout == .str) {
-                            const a_off = try self.ensureOnStack(lhs_loc, roc_str_size);
-                            const b_off = try self.ensureOnStack(rhs_loc, roc_str_size);
-                            return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&dev_wrappers.roc_builtins_str_equal_packed), .str_equal);
+                            std.debug.panic("num_is_eq on Str is invalid; lowering must emit str_is_eq", .{});
+                        }
+                        if (self.layout_store) |ls| {
+                            if (@intFromEnum(operand_layout) < ls.layouts.len()) {
+                                const ol = ls.getLayout(operand_layout);
+                                if (ol.tag == .struct_ or ol.tag == .list or ol.tag == .list_of_zst or ol.tag == .tag_union) {
+                                    std.debug.panic(
+                                        "num_is_eq on structural layout {} is invalid; lowering must emit a structural eq op",
+                                        .{@intFromEnum(operand_layout)},
+                                    );
+                                }
+                            }
                         }
                     }
 
@@ -7288,6 +7318,33 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const elem_sa = ls.layoutSizeAlign(elem_layout);
             const elem_size: u32 = elem_sa.size;
 
+            // For ZST elements, list equality is length equality.
+            if (elem_size == 0) {
+                const lhs_base: i32 = switch (lhs_loc) {
+                    .stack => |s| s.offset,
+                    .list_stack => |li| li.struct_offset,
+                    else => unreachable,
+                };
+                const rhs_base: i32 = switch (rhs_loc) {
+                    .stack => |s| s.offset,
+                    .list_stack => |li| li.struct_offset,
+                    else => unreachable,
+                };
+                const lhs_len = try self.allocTempGeneral();
+                const rhs_len = try self.allocTempGeneral();
+                const result_reg = try self.allocTempGeneral();
+                try self.emitLoad(.w64, lhs_len, frame_ptr, lhs_base + 8);
+                try self.emitLoad(.w64, rhs_len, frame_ptr, rhs_base + 8);
+                try self.emitCmpReg(lhs_len, rhs_len);
+                try self.emitSetCond(result_reg, condEqual());
+                self.codegen.freeGeneral(lhs_len);
+                self.codegen.freeGeneral(rhs_len);
+                if (op != .num_is_eq) {
+                    try self.emitXorImm(.w64, result_reg, result_reg, 1);
+                }
+                return .{ .general_reg = result_reg };
+            }
+
             // Get list struct offsets (ptr at +0, len at +8)
             const lhs_base: i32 = switch (lhs_loc) {
                 .stack => |s| s.offset,
@@ -9722,11 +9779,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const field_size = ls.getStructFieldSize(struct_layout.data.struct_.idx, access.field_idx);
             const field_layout_idx = ls.getStructFieldLayout(struct_layout.data.struct_.idx, access.field_idx);
 
-            // If this is access on a lookup-bound struct literal, recover the original
-            // field expression directly. This preserves callable values in fields
+            // If this is access on a lookup-bound struct literal, recover callable
+            // field expressions directly. This preserves callable values in fields
             // (closures/lambdas) that would otherwise degrade to plain stack bytes.
+            //
+            // Important: only do this for function-typed fields. Eagerly generating
+            // non-callable field expressions here can duplicate side effects and leak
+            // temporary allocations (for example large Str literals).
             const struct_expr = self.store.getExpr(access.struct_expr);
-            if (struct_expr == .lookup) {
+            if (struct_expr == .lookup and self.isFunctionLayout(access.field_layout)) {
                 const symbol_key: u64 = @bitCast(struct_expr.lookup.symbol);
                 if (self.symbol_source_exprs.get(symbol_key)) |source_expr_id| {
                     const source_expr = self.store.getExpr(source_expr_id);
@@ -19422,7 +19483,7 @@ test "record equality uses layout-aware comparison" {
     // LHS record == RHS record
     const eq_args = try store.addExprSpan(&.{ lhs_record, rhs_record });
     const eq_expr = try store.addExpr(.{ .low_level = .{
-        .op = .num_is_eq,
+        .op = .struct_is_eq,
         .args = eq_args,
         .ret_layout = .bool,
     } }, base.Region.zero());

@@ -1663,6 +1663,33 @@ fn lowerLowLevel(self: *Self, ll: anytype, mono_idx: Monotype.Idx, region: Regio
         return acc.finish(result, ret_layout, region);
     }
 
+    // CIR num_is_eq is polymorphic at the source level. Pick an explicit LIR
+    // equality op based on concrete operand layout so backends do not need
+    // layout-dispatch fallbacks on numeric equality.
+    if (ll.op == .num_is_eq) {
+        const lhs_layout = try self.layoutFromMonotype(self.mir_store.typeOf(mir_args[0]));
+        const eq_op: LirExpr.LowLevel = blk: {
+            if (lhs_layout == .str) break :blk .str_is_eq;
+            if (lhs_layout == .bool) break :blk .bool_is_eq;
+            if (@intFromEnum(lhs_layout) < self.layout_store.layouts.len()) {
+                const layout_val = self.layout_store.getLayout(lhs_layout);
+                break :blk switch (layout_val.tag) {
+                    .struct_ => .struct_is_eq,
+                    .list, .list_of_zst => .list_is_eq,
+                    .tag_union => .tag_union_is_eq,
+                    else => .num_is_eq,
+                };
+            }
+            break :blk .num_is_eq;
+        };
+        const result = try self.lir_store.addExpr(.{ .low_level = .{
+            .op = eq_op,
+            .args = lir_args,
+            .ret_layout = ret_layout,
+        } }, region);
+        return acc.finish(result, ret_layout, region);
+    }
+
     // str_inspekt → type-specific inspect expansion
     if (ll.op == .str_inspekt) {
         const args_slice = self.lir_store.getExprSpan(lir_args);
