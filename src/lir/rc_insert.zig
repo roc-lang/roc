@@ -926,7 +926,9 @@ pub const RcInsertPass = struct {
             if (stmt == .mutate) {
                 try self.collectPatternSymbolIds(stmt.binding().pattern, &mutated_symbol_ids);
             }
+            try self.collectMutatedSymbolIdsInExpr(stmt.binding().expr, &mutated_symbol_ids);
         }
+        try self.collectMutatedSymbolIdsInExpr(final_expr, &mutated_symbol_ids);
 
         var changed = false;
 
@@ -1605,6 +1607,118 @@ pub const RcInsertPass = struct {
         ensurePatternIdValid(self.store, pat_id, "patternBindsAnySymbolId");
         try walkPatternBinds(self.store, pat_id, Ctx{ .set = set, .found = &found });
         return found;
+    }
+
+    /// Collect symbol IDs mutated anywhere inside an expression tree.
+    /// Does not recurse into lambda/closure bodies because they are separate scopes.
+    fn collectMutatedSymbolIdsInExpr(self: *const RcInsertPass, expr_id: LirExprId, set: *std.AutoHashMap(u64, void)) Allocator.Error!void {
+        if (expr_id.isNone()) return;
+
+        const expr = self.store.getExpr(expr_id);
+        switch (expr) {
+            .block => |block| {
+                const stmts = self.store.getStmts(block.stmts);
+                for (stmts) |stmt| {
+                    const b = stmt.binding();
+                    if (stmt == .mutate) {
+                        try self.collectPatternSymbolIds(b.pattern, set);
+                    }
+                    try self.collectMutatedSymbolIdsInExpr(b.expr, set);
+                }
+                try self.collectMutatedSymbolIdsInExpr(block.final_expr, set);
+            },
+            .if_then_else => |ite| {
+                const ibs = self.store.getIfBranches(ite.branches);
+                for (ibs) |branch| {
+                    try self.collectMutatedSymbolIdsInExpr(branch.cond, set);
+                    try self.collectMutatedSymbolIdsInExpr(branch.body, set);
+                }
+                try self.collectMutatedSymbolIdsInExpr(ite.final_else, set);
+            },
+            .match_expr => |m| {
+                try self.collectMutatedSymbolIdsInExpr(m.value, set);
+                const branches = self.store.getMatchBranches(m.branches);
+                for (branches) |branch| {
+                    try self.collectMutatedSymbolIdsInExpr(branch.guard, set);
+                    try self.collectMutatedSymbolIdsInExpr(branch.body, set);
+                }
+            },
+            .for_loop => |fl| {
+                try self.collectMutatedSymbolIdsInExpr(fl.list_expr, set);
+                try self.collectMutatedSymbolIdsInExpr(fl.body, set);
+            },
+            .while_loop => |wl| {
+                try self.collectMutatedSymbolIdsInExpr(wl.cond, set);
+                try self.collectMutatedSymbolIdsInExpr(wl.body, set);
+            },
+            .discriminant_switch => |ds| {
+                try self.collectMutatedSymbolIdsInExpr(ds.value, set);
+                const branches = self.store.getExprSpan(ds.branches);
+                for (branches) |branch_expr_id| {
+                    try self.collectMutatedSymbolIdsInExpr(branch_expr_id, set);
+                }
+            },
+            .expect => |e| {
+                try self.collectMutatedSymbolIdsInExpr(e.cond, set);
+                try self.collectMutatedSymbolIdsInExpr(e.body, set);
+            },
+            .call => |call| {
+                try self.collectMutatedSymbolIdsInExpr(call.fn_expr, set);
+                const args = self.store.getExprSpan(call.args);
+                for (args) |arg_id| try self.collectMutatedSymbolIdsInExpr(arg_id, set);
+            },
+            .list => |l| {
+                const elems = self.store.getExprSpan(l.elems);
+                for (elems) |elem_id| try self.collectMutatedSymbolIdsInExpr(elem_id, set);
+            },
+            .struct_ => |s| {
+                const fields = self.store.getExprSpan(s.fields);
+                for (fields) |field_id| try self.collectMutatedSymbolIdsInExpr(field_id, set);
+            },
+            .tag => |t| {
+                const args = self.store.getExprSpan(t.args);
+                for (args) |arg_id| try self.collectMutatedSymbolIdsInExpr(arg_id, set);
+            },
+            .struct_access => |sa| try self.collectMutatedSymbolIdsInExpr(sa.struct_expr, set),
+            .nominal => |n| try self.collectMutatedSymbolIdsInExpr(n.backing_expr, set),
+            .early_return => |ret| try self.collectMutatedSymbolIdsInExpr(ret.expr, set),
+            .dbg => |d| try self.collectMutatedSymbolIdsInExpr(d.expr, set),
+            .low_level => |ll| {
+                const args = self.store.getExprSpan(ll.args);
+                for (args) |arg_id| try self.collectMutatedSymbolIdsInExpr(arg_id, set);
+            },
+            .hosted_call => |hc| {
+                const args = self.store.getExprSpan(hc.args);
+                for (args) |arg_id| try self.collectMutatedSymbolIdsInExpr(arg_id, set);
+            },
+            .str_concat => |span| {
+                const parts = self.store.getExprSpan(span);
+                for (parts) |part_id| try self.collectMutatedSymbolIdsInExpr(part_id, set);
+            },
+            .int_to_str => |its| try self.collectMutatedSymbolIdsInExpr(its.value, set),
+            .float_to_str => |fts| try self.collectMutatedSymbolIdsInExpr(fts.value, set),
+            .dec_to_str => |d| try self.collectMutatedSymbolIdsInExpr(d, set),
+            .str_escape_and_quote => |s| try self.collectMutatedSymbolIdsInExpr(s, set),
+            .tag_payload_access => |tpa| try self.collectMutatedSymbolIdsInExpr(tpa.value, set),
+            .crash => |crash| try self.collectMutatedSymbolIdsInExpr(crash.msg_expr, set),
+            .lambda, .closure => {},
+            .lookup,
+            .i64_literal,
+            .i128_literal,
+            .f64_literal,
+            .f32_literal,
+            .dec_literal,
+            .str_literal,
+            .bool_literal,
+            .empty_list,
+            .zero_arg_tag,
+            .break_expr,
+            .runtime_error,
+            .incref,
+            .decref,
+            .free,
+            => {},
+        }
     }
 
     fn exprUsesPatternSymbol(self: *RcInsertPass, expr_id: LirExprId, pat_id: LirPatternId) Allocator.Error!bool {
@@ -3137,6 +3251,68 @@ test "RC block: layout-mismatched symbol use is not treated as unused" {
     const result = try pass.insertRcOps(block_expr);
     const rc = countRcOps(&env.lir_store, result);
     try std.testing.expectEqual(@as(u32, 0), rc.decrefs);
+}
+
+test "RC block: nested mutation marks binding mutable and avoids top-level incref" {
+    // { var s = "hello"; _ = { s = s; True }; s }
+    // The nested mutate means s is mutable in this block, so global multi-use
+    // incref insertion at the original binding is unsound and must be skipped.
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const sym_s = makeSymbol(1);
+    const str_layout: LayoutIdx = .str;
+    const bool_layout: LayoutIdx = .bool;
+
+    const str_hello = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
+    const nested_rhs_lookup = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_s,
+        .layout_idx = str_layout,
+    } }, Region.zero());
+    const nested_true = try env.lir_store.addExpr(.{ .bool_literal = true }, Region.zero());
+    const final_lookup = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_s,
+        .layout_idx = str_layout,
+    } }, Region.zero());
+
+    const pat_s_decl = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_s,
+        .layout_idx = str_layout,
+    } }, Region.zero());
+    const pat_s_nested_mut = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_s,
+        .layout_idx = str_layout,
+    } }, Region.zero());
+    const pat_nested_wild = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = bool_layout } }, Region.zero());
+
+    const nested_stmts = try env.lir_store.addStmts(&.{
+        .{ .mutate = .{ .pattern = pat_s_nested_mut, .expr = nested_rhs_lookup } },
+    });
+    const nested_block = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = nested_stmts,
+        .final_expr = nested_true,
+        .result_layout = bool_layout,
+    } }, Region.zero());
+
+    const stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = pat_s_decl, .expr = str_hello } },
+        .{ .decl = .{ .pattern = pat_nested_wild, .expr = nested_block } },
+    });
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = final_lookup,
+        .result_layout = str_layout,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+    const rc = countRcOps(&env.lir_store, result);
+    try std.testing.expectEqual(@as(u32, 0), rc.increfs);
 }
 
 test "RC for_loop: unused refcounted elem gets decref" {

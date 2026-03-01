@@ -2078,9 +2078,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                         break :blk false;
                     };
-                    // List.append borrows its element argument; appending a refcounted
-                    // value creates an additional live reference in the destination list.
-                    // Increment here before append_unsafe copies the element bytes.
                     if (elements_refcounted and elem_size_align.size > 0) {
                         const elem_layout_idx = if (self.getExprLayout(args[1])) |arg_layout_idx|
                             arg_layout_idx
@@ -2093,7 +2090,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         };
                         try self.emitRcForLayout(elem_loc, elem_layout_idx, .incref, 1);
                     }
-
                     const list_offset: i32 = switch (list_loc) {
                         .stack => |s| s.offset,
                         .list_stack => |ls_info| ls_info.struct_offset,
@@ -11135,31 +11131,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             elem_size: u32,
         ) Allocator.Error!void {
             const ls = self.layout_store orelse return;
+            _ = list_expr;
+            _ = elem_size;
 
-            var consumed_loop_list = false;
-            if (self.getExprLayout(list_expr)) |list_layout_idx| {
-                if (@intFromEnum(list_layout_idx) < ls.layouts.len()) {
-                    const list_layout = ls.getLayout(list_layout_idx);
-                    if (list_layout.tag == .list or list_layout.tag == .list_of_zst) {
-                        try self.emitRcForLayout(list_loc, list_layout_idx, .decref, 1);
-                        consumed_loop_list = true;
-                    }
-                }
-            }
-
-            if (!consumed_loop_list) {
-                const elem_layout = ls.getLayout(elem_layout_idx);
-                const elem_alignment: u32 = @intCast(ls.layoutSizeAlign(elem_layout).alignment.toByteUnits());
-                const elements_refcounted = ls.layoutContainsRefcounted(elem_layout);
-                if (elem_layout_idx == .str) {
-                    try self.emitListDecrefStr(list_loc);
-                } else {
-                    if (elements_refcounted and elem_size > 0) {
-                        try self.emitListElementDecrefsIfUnique(list_loc, elem_layout_idx, elem_size);
-                    }
-                    try self.emitListDecref(list_loc, elem_alignment, elements_refcounted);
-                }
-            }
+            // for_loop body receives ownership of each element; RC insertion on the
+            // element binding is responsible for consuming/moving those refs.
+            // Here we only consume the list allocation itself (ptr/len/cap), without
+            // recursively decrefing element payloads.
+            const elem_layout = ls.getLayout(elem_layout_idx);
+            const elem_alignment: u32 = @intCast(ls.layoutSizeAlign(elem_layout).alignment.toByteUnits());
+            try self.emitListDecref(list_loc, elem_alignment, false);
         }
 
         fn generateForLoop(self: *Self, for_loop: anytype) Allocator.Error!ValueLocation {
@@ -14826,6 +14807,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
                 return direct;
             }
+            if (try self.tryGenerateBuiltinListMethodCall(debug_name, args_span, ret_layout)) |direct| {
+                if (debug_is_contains) {
+                    std.debug.print("[lookup_call] resolved via Builtin.List direct path\n", .{});
+                }
+                return direct;
+            }
 
             // Prefer a locally-bound callable value (lambda parameter / captured closure)
             // over top-level symbol defs.
@@ -15124,6 +15111,41 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             return try self.generateIntBinop(op, lhs_loc, rhs_loc, operand_layout);
+        }
+
+        fn tryGenerateBuiltinListMethodCall(
+            self: *Self,
+            symbol_name: []const u8,
+            args_span: anytype,
+            ret_layout: layout.Idx,
+        ) Allocator.Error!?ValueLocation {
+            _ = ret_layout;
+            if (!std.mem.startsWith(u8, symbol_name, "Builtin.List.")) return null;
+
+            const method_name = symbol_name["Builtin.List.".len..];
+            if (!std.mem.eql(u8, method_name, "contains")) return null;
+
+            const args = self.store.getExprSpan(args_span);
+            if (args.len != 2) return null;
+
+            const ls = self.layout_store orelse return null;
+            const list_layout_idx = self.getExprLayout(args[0]) orelse return null;
+            if (@intFromEnum(list_layout_idx) >= ls.layouts.len()) return null;
+
+            const list_layout = ls.getLayout(list_layout_idx);
+            return switch (list_layout.tag) {
+                .list => blk: {
+                    const list_loc = try self.generateExpr(args[0]);
+                    const needle_loc = try self.generateExpr(args[1]);
+                    break :blk try self.generateListContains(list_loc, needle_loc, list_layout.data.list);
+                },
+                .list_of_zst => blk: {
+                    const list_loc = try self.generateExpr(args[0]);
+                    _ = try self.generateExpr(args[1]); // evaluate needle for side effects
+                    break :blk try self.generateZstListContains(list_loc);
+                },
+                else => null,
+            };
         }
 
         /// Generate a call to an already-compiled procedure.
