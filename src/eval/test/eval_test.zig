@@ -3332,6 +3332,29 @@ test "str_inspekt - large integer" {
     try runExpectStr("Str.inspect(1234567890)", "1234567890.0", .no_trace);
 }
 
+test "str_inspekt - multi-field record with refcounted fields" {
+    try runExpectStr(
+        \\{
+        \\    first = "this is definitely a heap allocated string in roc"
+        \\    second = "this is another heap allocated string in roc"
+        \\    Str.inspect({ first, second })
+        \\}
+    , "{ first: \"this is definitely a heap allocated string in roc\", second: \"this is another heap allocated string in roc\" }", .no_trace);
+}
+
+test "str_inspekt - shared record value with refcounted fields" {
+    try runExpectStr(
+        \\{
+        \\    rec = {
+        \\        first: "this is definitely a heap allocated string in roc",
+        \\        second: "this is another heap allocated string in roc",
+        \\    }
+        \\    tup = (rec, rec)
+        \\    Str.inspect(tup)
+        \\}
+    , "({ first: \"this is definitely a heap allocated string in roc\", second: \"this is another heap allocated string in roc\" }, { first: \"this is definitely a heap allocated string in roc\", second: \"this is another heap allocated string in roc\" })", .no_trace);
+}
+
 // ============ Higher-Order Function Tests ============
 
 test "higher-order function - simple apply" {
