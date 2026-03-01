@@ -1198,8 +1198,6 @@ pub const RcInsertPass = struct {
             const before_len = stmt_buf.items.len;
             for (stmts, 0..) |stmt, stmt_index| {
                 const b = stmt.binding();
-                const is_mutated_binding = try self.patternBindsAnySymbolId(b.pattern, &mutated_symbol_ids);
-                if (is_mutated_binding) continue;
                 try self.emitBlockDecrefsForPattern(
                     b.pattern,
                     region,
@@ -1209,58 +1207,6 @@ pub const RcInsertPass = struct {
                     final_expr,
                 );
             }
-            if (stmt_buf.items.len > before_len) changed = true;
-        }
-
-        // Mutated bindings produce a sequence of runtime values over the block.
-        // The per-binding use-count heuristic above is based on declaration-time
-        // symbol counts and can miss the final live value. Insert one final
-        // decref for each mutated RC symbol that is not consumed by the final expr.
-        {
-            self.scratch_uses.clearRetainingCapacity();
-            try self.countUsesInto(final_expr, &self.scratch_uses);
-
-            var handled_mutated = std.AutoHashMap(u64, void).init(self.allocator);
-            defer handled_mutated.deinit();
-
-            const before_len = stmt_buf.items.len;
-            for (stmts) |stmt| {
-                if (stmt != .decl) continue;
-                const b = stmt.binding();
-                if (!try self.patternBindsAnySymbolId(b.pattern, &mutated_symbol_ids)) continue;
-
-                const Ctx = struct {
-                    pass: *RcInsertPass,
-                    handled: *std.AutoHashMap(u64, void),
-                    final_uses: *const std.AutoHashMap(SymbolUseKey, u32),
-                    region: Region,
-                    stmts: *std.ArrayList(LirStmt),
-                    fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
-                        const symbol_id: u64 = @bitCast(symbol);
-                        if (ctx.handled.contains(symbol_id)) return;
-                        try ctx.handled.put(symbol_id, {});
-
-                        const key = makeKey(symbol, layout_idx);
-                        const resolved_layout = ctx.pass.symbol_layouts.get(key) orelse layout_idx;
-                        if (!ctx.pass.layoutNeedsRc(resolved_layout)) return;
-
-                        const final_consumed = ctx.pass.sumSymbolUses(ctx.final_uses, symbol);
-                        if (final_consumed == 0) {
-                            try ctx.pass.emitDecrefInto(symbol, resolved_layout, ctx.region, ctx.stmts);
-                        }
-                    }
-                };
-
-                ensurePatternIdValid(self.store, b.pattern, "processBlock.mutated-final-decref");
-                try walkPatternBinds(self.store, b.pattern, Ctx{
-                    .pass = self,
-                    .handled = &handled_mutated,
-                    .final_uses = &self.scratch_uses,
-                    .region = region,
-                    .stmts = &stmt_buf,
-                });
-            }
-
             if (stmt_buf.items.len > before_len) changed = true;
         }
 
