@@ -1027,14 +1027,21 @@ fn slotToArg(comptime T: type, raw: usize) T {
     return switch (@typeInfo(T)) {
         .bool => raw != 0,
         .int => |info| blk: {
-            if (info.bits > @bitSizeOf(usize)) {
-                @compileError("packed builtin adapter does not support integer args wider than usize");
-            }
             if (info.signedness == .signed) {
+                if (info.bits > @bitSizeOf(usize)) {
+                    const RawBits = std.meta.Int(.unsigned, @bitSizeOf(usize));
+                    const RawSigned = std.meta.Int(.signed, @bitSizeOf(usize));
+                    const raw_bits: RawBits = @truncate(raw);
+                    const raw_signed: RawSigned = @bitCast(raw_bits);
+                    break :blk @as(T, @intCast(raw_signed));
+                }
                 const Unsigned = std.meta.Int(.unsigned, info.bits);
                 const bits: Unsigned = @truncate(raw);
                 break :blk @bitCast(bits);
             } else {
+                if (info.bits > @bitSizeOf(usize)) {
+                    break :blk @as(T, @intCast(raw));
+                }
                 break :blk @as(T, @truncate(raw));
             }
         },

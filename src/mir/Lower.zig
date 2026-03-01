@@ -1342,8 +1342,60 @@ fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype:
         }
     }
 
-    const args = try self.lowerExprSpan(module_env, call.args);
     const cir_args = module_env.store.sliceExpr(call.args);
+
+    var desired_func_monotype = try self.resolveMonotype(call.func);
+    if (!desired_func_monotype.isNone()) {
+        switch (self.store.monotype_store.getMonotype(desired_func_monotype)) {
+            .func => |func_mono| {
+                const expected_args = self.store.monotype_store.getIdxSpan(func_mono.args);
+                const n = @min(expected_args.len, cir_args.len);
+                for (0..n) |i| {
+                    const expected_arg = expected_args[i];
+                    if (expected_arg.isNone()) continue;
+                    const should_seed = switch (self.store.monotype_store.getMonotype(expected_arg)) {
+                        .prim => |p| switch (p) {
+                            .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => false,
+                            .bool, .str => true,
+                        },
+                        .unit, .list, .box, .record, .tuple, .tag_union, .func => true,
+                    };
+                    if (should_seed) {
+                        self.seedTypeVarSeen(ModuleEnv.varFrom(cir_args[i]), expected_arg);
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+
+    var lowered_args = std.ArrayList(MIR.ExprId).empty;
+    defer lowered_args.deinit(self.allocator);
+    try lowered_args.ensureTotalCapacity(self.allocator, cir_args.len);
+    for (cir_args) |arg_idx| {
+        lowered_args.appendAssumeCapacity(try self.lowerExpr(arg_idx));
+    }
+
+    if (!desired_func_monotype.isNone()) {
+        switch (self.store.monotype_store.getMonotype(desired_func_monotype)) {
+            .func => |func_mono| {
+                const expected_args = self.store.monotype_store.getIdxSpan(func_mono.args);
+                const n = @min(expected_args.len, lowered_args.items.len);
+                for (0..n) |i| {
+                    const expected_arg = expected_args[i];
+                    if (expected_arg.isNone()) continue;
+                    const actual_arg = self.store.typeOf(lowered_args.items[i]);
+                    if (actual_arg == expected_arg) continue;
+
+                    self.seedTypeVarSeen(ModuleEnv.varFrom(cir_args[i]), expected_arg);
+                    lowered_args.items[i] = try self.lowerExpr(cir_args[i]);
+                }
+            },
+            else => {},
+        }
+    }
+
+    const args = try self.store.addExprSpan(self.allocator, lowered_args.items);
 
     var call_arg_nominal_infos = std.ArrayList(?NominalInfo).empty;
     defer call_arg_nominal_infos.deinit(self.allocator);
@@ -1355,12 +1407,11 @@ fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype:
 
     const mono_top = self.mono_scratches.idxs.top();
     defer self.mono_scratches.idxs.clearFrom(mono_top);
-    for (cir_args) |arg_idx| {
-        try self.mono_scratches.idxs.append(try self.resolveMonotype(arg_idx));
+    for (lowered_args.items) |arg_expr_id| {
+        try self.mono_scratches.idxs.append(self.store.typeOf(arg_expr_id));
     }
     const arg_monotypes = self.mono_scratches.idxs.sliceFromStart(mono_top);
 
-    var desired_func_monotype = try self.resolveMonotype(call.func);
     var effectful = false;
     var needs_rebuild = true;
 

@@ -1939,48 +1939,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Generate element value
                     const elem_loc = try self.generateExpr(args[1]);
                     // Determine element size from layout.
-                    // Cross-module layout resolution can produce incorrect ret_layout
-                    // (e.g., list_of_zst instead of list(i64)) when the builtin function's
-                    // layout index refers to a layout in the wrong module context.
-                    // When this happens, derive the correct element size from the list
-                    // argument's layout.
                     const elem_size_align: layout.SizeAlign = blk: {
+                        if (self.getExprLayout(args[1])) |elem_layout_idx| {
+                            const elem_sa = ls.layoutSizeAlign(ls.getLayout(elem_layout_idx));
+                            if (elem_sa.size > 0) break :blk elem_sa;
+                        }
+
                         const ret_layout_val = ls.getLayout(ll.ret_layout);
                         if (ret_layout_val.tag == .list) {
-                            const sa = ls.layoutSizeAlign(ls.getLayout(ret_layout_val.data.list));
-                            if (sa.size > 0) break :blk sa;
+                            break :blk ls.layoutSizeAlign(ls.getLayout(ret_layout_val.data.list));
                         }
-                        // ret_layout is list_of_zst or has ZST element — try deriving
-                        // the correct element size from the list argument's layout
-                        if (self.getExprLayout(args[0])) |list_layout_idx| {
-                            const list_layout = ls.getLayout(list_layout_idx);
-                            if (list_layout.tag == .list) {
-                                const derived = ls.layoutSizeAlign(ls.getLayout(list_layout.data.list));
-                                if (derived.size > 0) break :blk derived;
-                            }
-                        }
-                        // Also check the element argument's layout
-                        if (self.getExprLayout(args[1])) |elem_layout_idx| {
-                            const sa = ls.layoutSizeAlign(ls.getLayout(elem_layout_idx));
-                            if (sa.size > 0) break :blk sa;
-                        }
-                        // Truly ZST
                         break :blk .{ .size = 0, .alignment = .@"1" };
                     };
-                    if (self.getExprLayout(args[1])) |elem_layout_idx| {
-                        const expected_sa = ls.layoutSizeAlign(ls.getLayout(elem_layout_idx));
-                        if (expected_sa.size > 0 and elem_size_align.size != expected_sa.size) {
-                            std.debug.panic(
-                                "list_append element size mismatch: expected={} computed={} arg_layout={} ret_layout={}",
-                                .{
-                                    expected_sa.size,
-                                    elem_size_align.size,
-                                    @intFromEnum(elem_layout_idx),
-                                    @intFromEnum(ll.ret_layout),
-                                },
-                            );
-                        }
-                    }
 
                     const list_offset: i32 = switch (list_loc) {
                         .stack => |s| s.offset,
@@ -12627,16 +12597,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return cv;
                 },
                 .no_captures => {
-                    // Direct call - compile as procedure for direct calling
-                    const inner = self.store.getExpr(closure.lambda);
-                    if (inner != .lambda) unreachable;
-                    const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda, .{});
-                    const lambda_loc: ValueLocation = .{ .lambda_code = .{
-                        .code_offset = code_offset,
-                        .ret_layout = inner.lambda.ret_layout,
-                        .source_expr = closure.lambda,
+                    // Keep no-capture closures in closure form so call-site specialization
+                    // can compile lambda bodies with concrete argument layouts.
+                    const slot = self.codegen.allocStackSlot(8);
+                    const temp = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(temp, 0);
+                    try self.codegen.emitStoreStack(.w64, slot, temp);
+                    self.codegen.freeGeneral(temp);
+                    const cv: ValueLocation = .{ .closure_value = .{
+                        .stack_offset = slot,
+                        .representation = closure.representation,
+                        .lambda = closure.lambda,
+                        .captures = closure.captures,
                     } };
-                    return lambda_loc;
+                    try self.updateClosureStackInfoForCopy(slot, cv);
+                    return cv;
                 },
             }
         }
@@ -13087,6 +13062,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     const code_offset = try self.compileLambdaAsProc(lambda_body, lambda, .{
                         .param_layout_overrides = param_layout_overrides.items,
+                        .ret_layout_override = ret_layout,
                     });
                     return try self.generateCallToLambdaWithSource(code_offset, args_span, ret_layout, lambda_body);
                 },
@@ -13112,6 +13088,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                         const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda, .{
                             .param_layout_overrides = param_layout_overrides.items,
+                            .ret_layout_override = ret_layout,
                         });
                         return try self.generateCallToLambdaWithSource(code_offset, args_span, ret_layout, closure.lambda);
                     }
@@ -13289,6 +13266,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const code_offset = try self.compileLambdaAsProc(lambda_expr_id, lambda, .{
                         .capture_params = captures_span,
                         .param_layout_overrides = param_layout_overrides.items,
+                        .ret_layout_override = call_ret_layout,
                     });
 
                     return self.generateLambdaCall(
@@ -13297,6 +13275,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         call_ret_layout,
                         returned_closure_info,
                         capture_infos.items,
+                        null,
                     );
                 },
                 .closure => |closure_id| {
@@ -14872,6 +14851,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         const LambdaCompileOptions = struct {
             capture_params: lir.LIR.LirCaptureSpan = lir.LIR.LirCaptureSpan.empty(),
             param_layout_overrides: ?[]const layout.Idx = null,
+            ret_layout_override: ?layout.Idx = null,
         };
 
         /// Compile a lambda expression as a standalone procedure.
@@ -14879,7 +14859,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// If the lambda was already compiled, returns the cached offset.
         /// Uses deferred prologue pattern for x86_64 to properly save callee-saved registers.
         fn compileLambdaAsProc(self: *Self, lambda_expr_id: LirExprId, lambda: anytype, options: LambdaCompileOptions) Allocator.Error!usize {
-            const proc_ret_layout = lambda.ret_layout;
+            const proc_ret_layout = options.ret_layout_override orelse lambda.ret_layout;
             var override_hash: u64 = 0;
             var override_len: u16 = 0;
             if (options.param_layout_overrides) |overrides| {
@@ -16555,6 +16535,30 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             else
                 null;
 
+            var expected_arg_layouts_buf = std.ArrayList(layout.Idx).empty;
+            defer expected_arg_layouts_buf.deinit(self.allocator);
+            var expected_arg_layouts: ?[]const layout.Idx = null;
+            if (source_expr) |expr_id| {
+                if (self.unwrapCallableLambdaExpr(expr_id)) |lambda_expr_id| {
+                    const lambda_expr = self.store.getExpr(lambda_expr_id);
+                    if (lambda_expr == .lambda) {
+                        const params = self.store.getPatternSpan(lambda_expr.lambda.params);
+                        try expected_arg_layouts_buf.ensureTotalCapacity(self.allocator, params.len);
+                        for (params) |pat_id| {
+                            const pat = self.store.getPattern(pat_id);
+                            const param_layout = switch (pat) {
+                                .bind => |b| b.layout_idx,
+                                .wildcard => |w| w.layout_idx,
+                                .struct_ => |s| s.struct_layout,
+                                else => layout.Idx.none,
+                            };
+                            expected_arg_layouts_buf.appendAssumeCapacity(param_layout);
+                        }
+                        expected_arg_layouts = expected_arg_layouts_buf.items;
+                    }
+                }
+            }
+
             const call_code_offset = code_offset;
             const call_ret_layout = ret_layout;
 
@@ -16582,6 +16586,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 call_ret_layout,
                 returned_closure_info,
                 null,
+                expected_arg_layouts,
             );
         }
 
@@ -16610,6 +16615,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             ret_layout: layout.Idx,
             returned_closure_info: ?ClosureStackInfo,
             prefix_arg_infos: ?[]const ArgInfo,
+            expected_arg_layouts: ?[]const layout.Idx,
         ) Allocator.Error!ValueLocation {
             const args = self.store.getExprSpan(args_span);
 
@@ -16623,9 +16629,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
 
-            for (args) |arg_id| {
-                const arg_loc_raw = try self.generateExpr(arg_id);
-                const arg_layout = self.getExprLayout(arg_id);
+            for (args, 0..) |arg_id, arg_i| {
+                const expected_layout_opt: ?layout.Idx = if (expected_arg_layouts) |expected|
+                    if (arg_i < expected.len and expected[arg_i] != layout.Idx.none) expected[arg_i] else null
+                else
+                    null;
+                const arg_expr = self.store.getExpr(arg_id);
+                const arg_loc_raw = if (expected_layout_opt) |expected_layout|
+                    blk: {
+                        if (arg_expr == .call) {
+                            var expected_call = arg_expr.call;
+                            expected_call.ret_layout = expected_layout;
+                            break :blk try self.generateCall(expected_call);
+                        }
+                        break :blk try self.generateExpr(arg_id);
+                    }
+                else
+                    try self.generateExpr(arg_id);
+                const arg_layout = expected_layout_opt orelse self.getExprLayout(arg_id);
                 const num_regs = self.calcArgRegCount(arg_loc_raw, arg_layout);
                 const arg_loc = try self.stabilizeCallArgLocation(arg_loc_raw, num_regs);
                 try self.scratch_arg_infos.append(.{ .loc = arg_loc, .layout_idx = arg_layout, .num_regs = num_regs });
