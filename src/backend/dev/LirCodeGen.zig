@@ -151,7 +151,6 @@ pub const BuiltinFn = enum {
     // List operations
     list_with_capacity,
     list_append_unsafe,
-    list_append_safe,
     list_concat,
     list_prepend,
     list_sublist,
@@ -233,7 +232,6 @@ pub const BuiltinFn = enum {
             // List operations
             .list_with_capacity => "roc_builtins_list_with_capacity",
             .list_append_unsafe => "roc_builtins_list_append_unsafe",
-            .list_append_safe => "roc_builtins_list_append_safe",
             .list_concat => "roc_builtins_list_concat",
             .list_prepend => "roc_builtins_list_prepend",
             .list_sublist => "roc_builtins_list_sublist",
@@ -1924,7 +1922,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .list_append => {
                     // list_append(list, element) -> List
-                    // Uses SAFE listAppendSafeC that reserves capacity if needed
                     if (args.len != 2) {
                         unreachable;
                     }
@@ -1983,35 +1980,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Allocate result slot (24 bytes for RocList)
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
 
-                    // Always use the safe append wrapper so capacity invariants hold.
-                    // The old ZST unsafe fast path could produce cap < len, which RC
-                    // logic interprets as a seamless slice and can synthesize invalid
-                    // data pointers (e.g. 0x2) during incref/decref.
                     const base_reg = frame_ptr;
-                    const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_append_safe_packed);
-                    const alignment_bytes = elem_size_align.alignment.toByteUnits();
+                    const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_append_unsafe_packed);
 
-                    // Determine if elements contain refcounted data
-                    const elements_refcounted: bool = blk: {
-                        const ret_layout_val = ls.getLayout(ll.ret_layout);
-                        if (ret_layout_val.tag == .list) {
-                            break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout_val.data.list));
-                        }
-                        break :blk false;
-                    };
-
-                    // roc_builtins_list_append_safe(out, list_bytes, list_len, list_cap, element, alignment, element_width, elements_refcounted, roc_ops)
+                    // roc_builtins_list_append_unsafe(out, list_bytes, list_len, list_cap, element, element_width, roc_ops)
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                     try builder.addLeaArg(base_reg, result_offset);
                     try builder.addMemArg(base_reg, list_offset);
                     try builder.addMemArg(base_reg, list_offset + 8);
                     try builder.addMemArg(base_reg, list_offset + 16);
                     try builder.addLeaArg(base_reg, elem_offset);
-                    try builder.addImmArg(@intCast(alignment_bytes));
                     try builder.addImmArg(@intCast(elem_size_align.size));
-                    try builder.addImmArg(if (elements_refcounted) 1 else 0);
                     try builder.addRegArg(roc_ops_reg);
-                    try self.callBuiltin(&builder, fn_addr, .list_append_safe);
+                    try self.callBuiltin(&builder, fn_addr, .list_append_unsafe);
 
                     // Return as .list_stack so recursive calls properly detect this as a list argument
                     return .{
