@@ -12802,9 +12802,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         unreachable;
                     },
                     .runtime_error => {
-                        // Dead code path in a call — emit roc_crashed and return dummy.
+                        // Dead code path in a call — emit roc_crashed and trap.
                         try self.emitRocCrash("hit a runtime error in call (dead code path)");
-                        return .{ .immediate_i64 = 0 };
+                        try self.emitTrap();
+                        return .noreturn;
                     },
                     else => @panic("generateLookupCall: unexpected def expr type in symbol_defs"),
                 };
