@@ -13007,18 +13007,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
 
-            // Fallback: lazy-compile a matching LirProc by symbol.
-            // Some lifted procedures are only available in the proc list and may not
-            // be pre-registered in proc_registry at this point.
-            for (self.store.getProcs()) |proc| {
-                const proc_key: u64 = @bitCast(proc.name);
-                if (proc_key != symbol_key) continue;
-                try self.compileProc(proc);
-                if (self.proc_registry.get(symbol_key)) |compiled_proc| {
-                    return try self.generateCallToCompiledProc(compiled_proc, args_span, ret_layout);
-                }
-            }
-
             const sym: Symbol = @bitCast(symbol_key);
             std.debug.panic(
                 "generateLookupCall: unresolved symbol={} layout={}",
