@@ -5352,7 +5352,7 @@ fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region,
 
     // Create the not static dispatch function on the not_arg + not_ret
     // This function attaches the dispatch fn to the not_arg
-    try self.mkUnaryOp(not_arg_var, not_ret_var, not_method_name, env, expr_region);
+    try self.mkUnaryOp(not_arg_var, not_ret_var, not_method_name, env, expr_region, expr_idx);
 
     // Redirect the result to the boolean type
     _ = try self.unify(expr_var, not_ret_var, env);
@@ -5381,7 +5381,7 @@ fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, e
 
     // Create the not static dispatch function on the not_arg + not_ret
     // This function attaches the dispatch fn to the not_arg
-    try self.mkUnaryOp(not_arg_var, not_ret_var, not_method_name, env, expr_region);
+    try self.mkUnaryOp(not_arg_var, not_ret_var, not_method_name, env, expr_region, expr_idx);
 
     // Redirect the result to the boolean type
     _ = try self.unify(expr_var, not_ret_var, env);
@@ -5514,7 +5514,7 @@ fn checkBinopExpr(
 
             // Create the not static dispatch function on the not_arg + not_ret
             // This function attaches the dispatch fn to the not_arg
-            try self.mkUnaryOp(not_arg_var, not_ret_var, not_method_name, env, expr_region);
+            try self.mkUnaryOp(not_arg_var, not_ret_var, not_method_name, env, expr_region, null);
 
             // IMPORTANT: We currently required the eq_ret_var to be  a bool.
             // This is more restrictive, but makes inferred types easier to
@@ -5590,6 +5590,7 @@ fn mkBinopConstraint(
         .fn_name = method_name,
         .fn_var = constraint_fn_var,
         .origin = .desugared_binop,
+        .source_expr_idx = if (binop_expr_idx) |idx| @intFromEnum(idx) else StaticDispatchConstraint.no_source_expr,
     };
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
@@ -5620,6 +5621,7 @@ fn mkUnaryOp(
     method_name: Ident.Idx,
     env: *Env,
     region: Region,
+    unary_expr_idx: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -5639,6 +5641,7 @@ fn mkUnaryOp(
         .fn_name = method_name,
         .fn_var = constraint_fn_var,
         .origin = .desugared_unaryop,
+        .source_expr_idx = if (unary_expr_idx) |idx| @intFromEnum(idx) else StaticDispatchConstraint.no_source_expr,
     };
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 

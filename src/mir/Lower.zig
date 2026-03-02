@@ -37,13 +37,6 @@ const DeferredBlockLambda = struct {
     module_idx: u32,
 };
 
-/// Nominal type origin info for method dispatch.
-const NominalInfo = struct {
-    origin: Ident.Idx,
-    ident: Ident.Idx,
-    module_idx: ?u32 = null,
-};
-
 const ResolvedDispatchTarget = struct {
     origin: Ident.Idx,
     method_ident: Ident.Idx,
@@ -120,8 +113,8 @@ deferred_block_lambdas: std.AutoHashMap(u32, DeferredBlockLambda),
 origin_lookup: std.AutoHashMap(u64, u32),
 
 /// Pre-resolved static dispatch targets keyed by (module_idx, expr_idx).
-/// Filled from type-checker constraints so MIR lowering does not need to
-/// rediscover nominal dispatch targets from monotype shape.
+/// Filled from type-checker constraints so MIR lowering uses authoritative
+/// dispatch resolution data directly.
 resolved_dispatch_targets: std.AutoHashMap(u64, ResolvedDispatchTarget),
 
 scratch_expr_ids: base.Scratch(MIR.ExprId),
@@ -206,7 +199,6 @@ pub fn init(
         .mono_scratches = blk: {
             var ms = try Monotype.Store.Scratches.init(allocator);
             ms.ident_store = all_module_envs[current_module_idx].getIdentStoreConst();
-            ms.current_module_idx = current_module_idx;
             break :blk ms;
         },
     };
@@ -1135,8 +1127,8 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
         .e_block => |block| try self.lowerBlock(module_env, block, monotype, region),
 
         // --- Operators (desugared to calls) ---
-        .e_binop => |binop| try self.lowerBinop(binop, monotype, region),
-        .e_unary_minus => |um| try self.lowerUnaryMinus(um, monotype, region),
+        .e_binop => |binop| try self.lowerBinop(expr_idx, binop, monotype, region),
+        .e_unary_minus => |um| try self.lowerUnaryMinus(expr_idx, um, monotype, region),
         .e_unary_not => |un| try self.lowerUnaryNot(un, monotype, region),
 
         // --- Access ---
@@ -1934,7 +1926,7 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
 }
 
 /// Lower `e_binop` to either a method call or a match (for short-circuit and/or).
-fn lowerBinop(self: *Self, binop: CIR.Expr.Binop, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
+fn lowerBinop(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
     const module_env = self.all_module_envs[self.current_module_idx];
 
     switch (binop.op) {
@@ -1964,21 +1956,6 @@ fn lowerBinop(self: *Self, binop: CIR.Expr.Binop, monotype: Monotype.Idx, region
         },
         // All other operators desugar to method calls
         .add, .sub, .mul, .div, .div_trunc, .rem, .lt, .le, .gt, .ge, .eq, .ne => {
-            const method_ident: Ident.Idx = switch (binop.op) {
-                .add => module_env.idents.plus,
-                .sub => module_env.idents.minus,
-                .mul => module_env.idents.times,
-                .div => module_env.idents.div_by,
-                .div_trunc => module_env.idents.div_trunc_by,
-                .rem => module_env.idents.rem_by,
-                .lt => module_env.idents.is_lt,
-                .le => module_env.idents.is_lte,
-                .gt => module_env.idents.is_gt,
-                .ge => module_env.idents.is_gte,
-                .eq, .ne => module_env.idents.is_eq,
-                .@"and", .@"or" => unreachable,
-            };
-
             const lhs = try self.lowerExpr(binop.lhs);
             const lhs_monotype = try self.resolveMonotype(binop.lhs);
             if (!lhs_monotype.isNone()) {
@@ -1988,22 +1965,32 @@ fn lowerBinop(self: *Self, binop: CIR.Expr.Binop, monotype: Monotype.Idx, region
             }
             const rhs = try self.lowerExpr(binop.rhs);
 
-            // Resolve the method via type-directed dispatch on the LHS operand
-            const lhs_type_var = ModuleEnv.varFrom(binop.lhs);
-            const method_symbol = try self.resolveMethodForTypeVar(
-                module_env,
-                lhs_type_var,
-                method_ident,
-            ) orelse {
+            // Use checker-resolved target for static dispatch.
+            const resolved_target = self.lookupResolvedDispatchTarget(expr_idx) orelse {
                 if (std.debug.runtime_safety) {
+                    const method_ident: Ident.Idx = switch (binop.op) {
+                        .add => module_env.idents.plus,
+                        .sub => module_env.idents.minus,
+                        .mul => module_env.idents.times,
+                        .div => module_env.idents.div_by,
+                        .div_trunc => module_env.idents.div_trunc_by,
+                        .rem => module_env.idents.rem_by,
+                        .lt => module_env.idents.is_lt,
+                        .le => module_env.idents.is_lte,
+                        .gt => module_env.idents.is_gt,
+                        .ge => module_env.idents.is_gte,
+                        .eq, .ne => module_env.idents.is_eq,
+                        .@"and", .@"or" => unreachable,
+                    };
                     const method_name = module_env.getIdent(method_ident);
                     std.debug.panic(
-                        "lowerBinop: unresolved method '{s}' for op {s} (checker/lowering invariant broken)",
+                        "lowerBinop: missing resolved dispatch target for method '{s}' op {s}",
                         .{ method_name, @tagName(binop.op) },
                     );
                 }
                 unreachable;
             };
+            const method_symbol = try self.resolvedDispatchTargetToSymbol(module_env, resolved_target);
 
             const func_monotype = try self.buildFuncMonotype(&.{ lhs_monotype, lhs_monotype }, monotype, false);
 
@@ -2029,52 +2016,17 @@ fn lowerBinop(self: *Self, binop: CIR.Expr.Binop, monotype: Monotype.Idx, region
 }
 
 /// Lower `e_unary_minus` to a call to `negate` (type-directed dispatch).
-fn lowerUnaryMinus(self: *Self, um: CIR.Expr.UnaryMinus, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
+fn lowerUnaryMinus(self: *Self, expr_idx: CIR.Expr.Idx, um: CIR.Expr.UnaryMinus, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
     const module_env = self.all_module_envs[self.current_module_idx];
     const inner = try self.lowerExpr(um.expr);
 
-    // Resolve the method via type-directed dispatch on the operand's type var
-    const type_var = ModuleEnv.varFrom(um.expr);
-    const method_symbol = try self.resolveMethodForTypeVar(
-        module_env,
-        type_var,
-        module_env.idents.negate,
-    ) orelse {
-        // No nominal method found — emit run_low_level directly.
-        // This happens for flex/rigid type vars (e.g. unresolved numerals like `-1`)
-        // and for .err types (where the type checker already reported the error).
-        //
-        // Nominal and structural types must not reach here: the type checker
-        // validates all dispatch constraints before lowering, replacing failures
-        // with .err.
+    const resolved_target = self.lookupResolvedDispatchTarget(expr_idx) orelse {
         if (std.debug.runtime_safety) {
-            var resolved = self.types_store.resolveVar(type_var);
-            while (resolved.desc.content == .alias) {
-                const alias = resolved.desc.content.alias;
-                const backing = self.types_store.getAliasBackingVar(alias);
-                resolved = self.types_store.resolveVar(backing);
-            }
-            switch (resolved.desc.content) {
-                .flex, .rigid, .err => {}, // expected fallback cases
-                .structure => |s| switch (s) {
-                    .nominal_type => std.debug.panic(
-                        "lowerUnaryMinus: nominal type reached fallback — type checker should have validated this",
-                        .{},
-                    ),
-                    else => std.debug.panic(
-                        "lowerUnaryMinus: structural type reached fallback — type checker should have rejected this",
-                        .{},
-                    ),
-                },
-                .alias => unreachable, // already followed aliases above
-            }
+            std.debug.panic("lowerUnaryMinus: missing resolved dispatch target for negate", .{});
         }
-        const ll_args = try self.store.addExprSpan(self.allocator, &.{inner});
-        return try self.store.addExpr(self.allocator, .{ .run_low_level = .{
-            .op = .num_negate,
-            .args = ll_args,
-        } }, monotype, region);
+        unreachable;
     };
+    const method_symbol = try self.resolvedDispatchTargetToSymbol(module_env, resolved_target);
 
     const inner_monotype = try self.resolveMonotype(um.expr);
     const func_monotype = try self.buildFuncMonotype(&.{inner_monotype}, monotype, false);
@@ -2149,73 +2101,52 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
     const receiver = try self.lowerExpr(da.receiver);
 
     if (da.args) |args_span| {
-        const resolved_target_opt = self.lookupResolvedDispatchTarget(expr_idx);
-
-        // Method call: use pre-resolved checker target when available,
-        // otherwise fall back to type-driven nominal lookup.
-        const method_symbol_opt: ?MIR.Symbol = if (resolved_target_opt) |resolved_target|
-            try self.resolvedDispatchTargetToSymbol(module_env, resolved_target)
-        else blk: {
-            const receiver_type_var = ModuleEnv.varFrom(da.receiver);
-            break :blk try self.resolveMethodForTypeVar(
-                module_env,
-                receiver_type_var,
-                da.field_name,
-            );
-        };
-
-        if (method_symbol_opt == null) {
+        const resolved_target = self.lookupResolvedDispatchTarget(expr_idx) orelse {
             if (std.debug.runtime_safety) {
                 const method_name = module_env.getIdent(da.field_name);
-                std.debug.panic(
-                    "lowerDotAccess: unresolved method '{s}' (checker/lowering invariant broken)",
-                    .{method_name},
-                );
+                std.debug.panic("lowerDotAccess: missing resolved dispatch target for method '{s}'", .{method_name});
             }
             unreachable;
-        }
-
-        const method_symbol = method_symbol_opt.?;
+        };
+        const method_symbol = try self.resolvedDispatchTargetToSymbol(module_env, resolved_target);
 
         // Build args as [receiver] ++ explicit_args
         // e.g. list.map(fn) → List.map(list, fn)
         const explicit_args = module_env.store.sliceExpr(args_span);
         const receiver_monotype = try self.resolveMonotype(da.receiver);
         var expected_param_monos: []const Monotype.Idx = &.{};
-        if (resolved_target_opt) |resolved_target| {
-            var resolved_fn = self.types_store.resolveVar(resolved_target.fn_var);
-            while (resolved_fn.desc.content == .alias) {
-                const alias = resolved_fn.desc.content.alias;
-                resolved_fn = self.types_store.resolveVar(self.types_store.getAliasBackingVar(alias));
+        var resolved_fn = self.types_store.resolveVar(resolved_target.fn_var);
+        while (resolved_fn.desc.content == .alias) {
+            const alias = resolved_fn.desc.content.alias;
+            resolved_fn = self.types_store.resolveVar(self.types_store.getAliasBackingVar(alias));
+        }
+        if (resolved_fn.desc.content == .structure) {
+            const fn_args = switch (resolved_fn.desc.content.structure) {
+                .fn_pure => |f| self.types_store.sliceVars(f.args),
+                .fn_effectful => |f| self.types_store.sliceVars(f.args),
+                .fn_unbound => |f| self.types_store.sliceVars(f.args),
+                else => &.{},
+            };
+            if (fn_args.len > 0 and !receiver_monotype.isNone()) {
+                const arg0_root = self.types_store.resolveVar(fn_args[0]).var_;
+                try self.type_var_seen.put(arg0_root, receiver_monotype);
             }
-            if (resolved_fn.desc.content == .structure) {
-                const fn_args = switch (resolved_fn.desc.content.structure) {
-                    .fn_pure => |f| self.types_store.sliceVars(f.args),
-                    .fn_effectful => |f| self.types_store.sliceVars(f.args),
-                    .fn_unbound => |f| self.types_store.sliceVars(f.args),
-                    else => &.{},
-                };
-                if (fn_args.len > 0 and !receiver_monotype.isNone()) {
-                    const arg0_root = self.types_store.resolveVar(fn_args[0]).var_;
-                    try self.type_var_seen.put(arg0_root, receiver_monotype);
-                }
-            }
+        }
 
-            const dispatch_func_monotype = try self.store.monotype_store.fromTypeVar(
-                self.allocator,
-                self.types_store,
-                resolved_target.fn_var,
-                self.currentCommonIdents(),
-                &self.type_var_seen,
-                &self.mono_scratches,
-            );
-            if (!dispatch_func_monotype.isNone()) {
-                const dispatch_mono = self.store.monotype_store.getMonotype(dispatch_func_monotype);
-                if (dispatch_mono == .func) {
-                    const dispatch_args = self.store.monotype_store.getIdxSpan(dispatch_mono.func.args);
-                    if (dispatch_args.len > 0 and try self.monotypesStructurallyEqual(dispatch_args[0], receiver_monotype)) {
-                        expected_param_monos = dispatch_args;
-                    }
+        const dispatch_func_monotype = try self.store.monotype_store.fromTypeVar(
+            self.allocator,
+            self.types_store,
+            resolved_target.fn_var,
+            self.currentCommonIdents(),
+            &self.type_var_seen,
+            &self.mono_scratches,
+        );
+        if (!dispatch_func_monotype.isNone()) {
+            const dispatch_mono = self.store.monotype_store.getMonotype(dispatch_func_monotype);
+            if (dispatch_mono == .func) {
+                const dispatch_args = self.store.monotype_store.getIdxSpan(dispatch_mono.func.args);
+                if (dispatch_args.len > 0 and try self.monotypesStructurallyEqual(dispatch_args[0], receiver_monotype)) {
+                    expected_param_monos = dispatch_args;
                 }
             }
         }
@@ -2368,22 +2299,16 @@ fn lowerRecord(self: *Self, module_env: *const ModuleEnv, record: anytype, monot
 
 // --- Type var dispatch & cross-module resolution ---
 
-/// Lower `e_type_var_dispatch` by resolving the type alias and dispatching to the method.
+/// Lower `e_type_var_dispatch` using checker-resolved dispatch target.
 fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.Idx, tvd: anytype, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
-    // Get the type variable from the alias statement
-    const stmt = module_env.store.getStatement(tvd.type_var_alias_stmt);
-    const type_var_binding = stmt.s_type_var_alias;
-    const type_var = ModuleEnv.varFrom(type_var_binding.type_var_anno);
-
-    // Resolve from checker-recorded target when present; fall back otherwise.
-    const method_symbol: ?MIR.Symbol = if (self.lookupResolvedDispatchTarget(expr_idx)) |resolved_target|
-        try self.resolvedDispatchTargetToSymbol(module_env, resolved_target)
-    else
-        try self.resolveMethodForTypeVar(
-            module_env,
-            type_var,
-            tvd.method_name,
-        );
+    const resolved_target = self.lookupResolvedDispatchTarget(expr_idx) orelse {
+        if (std.debug.runtime_safety) {
+            const method_name = module_env.getIdent(tvd.method_name);
+            std.debug.panic("lowerTypeVarDispatch: missing resolved dispatch target for method '{s}'", .{method_name});
+        }
+        unreachable;
+    };
+    const method_symbol = try self.resolvedDispatchTargetToSymbol(module_env, resolved_target);
 
     const cir_args = module_env.store.sliceExpr(tvd.args);
     const mono_top = self.mono_scratches.idxs.top();
@@ -2393,18 +2318,8 @@ fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR
     }
     const func_monotype = try self.buildFuncMonotype(self.mono_scratches.idxs.sliceFromStart(mono_top), monotype, false);
 
-    const resolved_symbol = method_symbol orelse {
-        if (std.debug.runtime_safety) {
-            const method_name = module_env.getIdent(tvd.method_name);
-            std.debug.panic(
-                "lowerTypeVarDispatch: unresolved method '{s}' (checker/lowering invariant broken)",
-                .{method_name},
-            );
-        }
-        unreachable;
-    };
     const args = try self.lowerExprSpan(module_env, tvd.args);
-    const lowered_method_symbol = try self.ensureMethodLowered(resolved_symbol, func_monotype);
+    const lowered_method_symbol = try self.ensureMethodLowered(method_symbol, func_monotype);
     const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = lowered_method_symbol }, func_monotype, region);
 
     return try self.store.addExpr(self.allocator, .{ .call = .{
@@ -2438,115 +2353,6 @@ fn lookupResolvedDispatchTarget(self: *const Self, expr_idx: CIR.Expr.Idx) ?Reso
 fn resolvedDispatchTargetToSymbol(self: *Self, source_env: *const ModuleEnv, target: ResolvedDispatchTarget) Allocator.Error!MIR.Symbol {
     const target_module_idx = self.findModuleForOrigin(source_env, target.origin);
     return self.internSymbol(@intCast(target_module_idx), target.method_ident);
-}
-
-/// Resolve a type variable to a method symbol via nominal type dispatch.
-/// Returns null if the type variable doesn't resolve to a nominal type or if the method can't be found.
-fn resolveMethodForTypeVar(
-    self: *Self,
-    source_env: *const ModuleEnv,
-    type_var: types.Var,
-    method_name: Ident.Idx,
-) Allocator.Error!?MIR.Symbol {
-    var resolved = self.types_store.resolveVar(type_var);
-
-    // Follow aliases to get to the underlying type
-    while (resolved.desc.content == .alias) {
-        const alias = resolved.desc.content.alias;
-        const backing = self.types_store.getAliasBackingVar(alias);
-        resolved = self.types_store.resolveVar(backing);
-    }
-
-    // Check if it's a nominal type
-    const nominal_info: ?NominalInfo = switch (resolved.desc.content) {
-        .structure => |s| switch (s) {
-            .nominal_type => |nom| .{
-                .origin = nom.origin_module,
-                .ident = nom.ident.ident_idx,
-            },
-            .record,
-            .record_unbound,
-            .tuple,
-            .fn_pure,
-            .fn_effectful,
-            .fn_unbound,
-            .empty_record,
-            .tag_union,
-            .empty_tag_union,
-            => null,
-        },
-        .flex, .rigid => self.resolveFlexRigidToNominal(resolved.var_),
-        .alias, .err => null,
-    };
-
-    const info = nominal_info orelse return null;
-
-    // Find the origin module
-    const origin_module_idx = if (info.module_idx) |module_idx|
-        module_idx
-    else
-        self.findModuleForOrigin(source_env, info.origin);
-
-    const origin_env = self.all_module_envs[origin_module_idx];
-
-    // Authoritative method resolution:
-    // 1. Translate the resolved nominal type ident and requested method ident
-    //    into the origin module's ident space.
-    // 2. Resolve the method in the origin module's method_idents table.
-    //
-    // No multi-provenance probing is allowed here; the lookup target must be
-    // the actual resolved nominal type in its defining module.
-    const type_name = source_env.getIdent(info.ident);
-    const method_name_text = source_env.getIdent(method_name);
-
-    const origin_type_ident = origin_env.common.findIdent(type_name) orelse return null;
-    const origin_method_ident = origin_env.common.findIdent(method_name_text) orelse return null;
-    const qualified_method = origin_env.lookupMethodIdentConst(origin_type_ident, origin_method_ident) orelse return null;
-
-    return self.internSymbol(@intCast(origin_module_idx), qualified_method);
-}
-
-/// Resolve a flex/rigid type variable to nominal info via `type_var_seen`.
-/// When a where-clause constrained type var (e.g. `ok` in `Try.is_eq`) has been
-/// seeded with a concrete monotype (e.g. Dec), this maps that monotype back to
-/// the corresponding nominal type's origin module and ident for method dispatch.
-fn resolveFlexRigidToNominal(self: *Self, var_: types.Var) ?NominalInfo {
-    const monotype = self.type_var_seen.get(var_) orelse return null;
-    if (monotype.isNone()) return null;
-
-    if (self.store.monotype_store.getNominalHint(monotype)) |hint| {
-        return .{
-            .origin = Ident.Idx.NONE,
-            .ident = hint.ident,
-            .module_idx = hint.module_idx,
-        };
-    }
-
-    const mono = self.store.monotype_store.getMonotype(monotype);
-    const common = self.currentCommonIdents();
-
-    return switch (mono) {
-        .prim => |p| switch (p) {
-            .dec => .{ .origin = common.builtin_module, .ident = common.dec },
-            .str => .{ .origin = common.builtin_module, .ident = common.str },
-            .bool => .{ .origin = common.builtin_module, .ident = common.bool },
-            .u8 => .{ .origin = common.builtin_module, .ident = common.u8 },
-            .u16 => .{ .origin = common.builtin_module, .ident = common.u16 },
-            .u32 => .{ .origin = common.builtin_module, .ident = common.u32 },
-            .u64 => .{ .origin = common.builtin_module, .ident = common.u64 },
-            .u128 => .{ .origin = common.builtin_module, .ident = common.u128 },
-            .i8 => .{ .origin = common.builtin_module, .ident = common.i8 },
-            .i16 => .{ .origin = common.builtin_module, .ident = common.i16 },
-            .i32 => .{ .origin = common.builtin_module, .ident = common.i32 },
-            .i64 => .{ .origin = common.builtin_module, .ident = common.i64 },
-            .i128 => .{ .origin = common.builtin_module, .ident = common.i128 },
-            .f32 => .{ .origin = common.builtin_module, .ident = common.f32 },
-            .f64 => .{ .origin = common.builtin_module, .ident = common.f64 },
-        },
-        .list => .{ .origin = common.builtin_module, .ident = common.list },
-        // Tag unions, records, tuples etc. don't have nominal dispatch
-        else => null,
-    };
 }
 
 fn findDefExprBySymbol(self: *Self, module_idx: u32, ident_idx: Ident.Idx) ?CIR.Expr.Idx {
@@ -2683,13 +2489,11 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
     const saved_types_store = self.types_store;
     const saved_type_var_seen = self.type_var_seen;
     const saved_ident_store = self.mono_scratches.ident_store;
-    const saved_mono_module_idx = self.mono_scratches.current_module_idx;
     self.current_pattern_scope = symbol_key;
     if (switching_module) {
         self.current_module_idx = symbol_meta.module_idx;
         self.types_store = &self.all_module_envs[symbol_meta.module_idx].types;
         self.mono_scratches.ident_store = self.all_module_envs[symbol_meta.module_idx].getIdentStoreConst();
-        self.mono_scratches.current_module_idx = symbol_meta.module_idx;
     }
 
     // Always isolate type_var_seen per external definition lowering.
@@ -2719,7 +2523,6 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
             self.types_store = saved_types_store;
             self.current_module_idx = saved_module_idx;
             self.mono_scratches.ident_store = saved_ident_store;
-            self.mono_scratches.current_module_idx = saved_mono_module_idx;
         }
     }
 

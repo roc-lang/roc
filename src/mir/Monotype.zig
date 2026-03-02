@@ -181,17 +181,11 @@ pub const FieldSpan = extern struct {
 
 /// Flat storage for monomorphic types.
 pub const Store = struct {
-    pub const NominalHint = struct {
-        module_idx: u32,
-        ident: Ident.Idx,
-    };
-
     monotypes: std.ArrayListUnmanaged(Monotype),
     /// Monotype.Idx values for spans (func args, tuple elems)
     extra_idx: std.ArrayListUnmanaged(u32),
     tags: std.ArrayListUnmanaged(Tag),
     fields: std.ArrayListUnmanaged(Field),
-    nominal_hints: std.AutoHashMapUnmanaged(u32, NominalHint),
 
     /// Pre-interned index for the unit monotype.
     unit_idx: Idx,
@@ -207,8 +201,6 @@ pub const Store = struct {
         /// Ident store for sorting tag names alphabetically.
         /// Updated when switching modules during cross-module lowering.
         ident_store: ?*const Ident.Store = null,
-        /// Current module index for nominal hint recording.
-        current_module_idx: u32 = 0,
 
         pub fn init(allocator: Allocator) Allocator.Error!Scratches {
             return .{
@@ -251,7 +243,6 @@ pub const Store = struct {
             .extra_idx = .empty,
             .tags = .empty,
             .fields = .empty,
-            .nominal_hints = .{},
             .unit_idx = unit_idx,
             .prim_idxs = prim_idxs,
         };
@@ -262,7 +253,6 @@ pub const Store = struct {
         self.extra_idx.deinit(allocator);
         self.tags.deinit(allocator);
         self.fields.deinit(allocator);
-        self.nominal_hints.deinit(allocator);
     }
 
     pub fn addMonotype(self: *Store, allocator: Allocator, mono: Monotype) !Idx {
@@ -273,14 +263,6 @@ pub const Store = struct {
 
     pub fn getMonotype(self: *const Store, idx: Idx) Monotype {
         return self.monotypes.items[@intFromEnum(idx)];
-    }
-
-    pub fn setNominalHint(self: *Store, allocator: Allocator, idx: Idx, hint: NominalHint) Allocator.Error!void {
-        try self.nominal_hints.put(allocator, @intFromEnum(idx), hint);
-    }
-
-    pub fn getNominalHint(self: *const Store, idx: Idx) ?NominalHint {
-        return self.nominal_hints.get(@intFromEnum(idx));
     }
 
     /// Add a span of Monotype.Idx values to extra_idx and return a Span.
@@ -752,10 +734,6 @@ pub const Store = struct {
         // (Idx, Span, Ident.Idx) — never a pointer. The monotype store is
         // append-only, so all indices remain valid after the copy.
         self.monotypes.items[@intFromEnum(placeholder_idx)] = self.monotypes.items[@intFromEnum(backing_idx)];
-        try self.setNominalHint(allocator, placeholder_idx, .{
-            .module_idx = scratches.current_module_idx,
-            .ident = nominal.ident.ident_idx,
-        });
         return placeholder_idx;
     }
 };
