@@ -157,6 +157,13 @@ const ReturnedClosureInfo = struct {
     captures: LIR.LirCaptureSpan,
 };
 
+const CaptureStructInfo = struct {
+    struct_idx: layout.StructIdx,
+    size: u32,
+    alignment: u32,
+    field_count: u32,
+};
+
 /// A capture that needs to be forwarded through a compiled function as an extra parameter.
 /// When a higher-order function has a pre-bound callback closure with captures,
 /// those captures become extra leading parameters so the function body can access them.
@@ -5386,25 +5393,32 @@ fn compileClosure(self: *Self, expr_id: LirExprId, closure: anytype) Allocator.E
     for (captures) |cap| {
         const cap_key: u64 = @bitCast(cap.symbol);
         if (self.closure_values.get(cap_key)) |cap_cv| {
-            if (cap_cv.representation == .struct_captures) {
-                const sub_captures = self.store.getCaptures(cap_cv.captures);
-                if (sub_captures.len > 0) {
-                    if (self.storage.getLocal(cap.symbol)) |struct_local| {
-                        var field_offset: u32 = 0;
-                        for (sub_captures) |sub_cap| {
-                            const sub_vt = self.resolveValType(sub_cap.layout_idx);
-                            const sub_cap_key: u64 = @bitCast(sub_cap.symbol);
-                            if (!self.storage.locals.contains(sub_cap_key)) {
-                                const sub_local = self.storage.allocLocal(sub_cap.symbol, sub_vt) catch return error.OutOfMemory;
-                                try self.emitLocalGet(struct_local);
-                                try self.emitLoadOp(sub_vt, field_offset);
-                                try self.emitLocalSet(sub_local);
+            switch (cap_cv.representation) {
+                .struct_captures => |repr| {
+                    const sub_captures = self.store.getCaptures(repr.captures);
+                    if (sub_captures.len > 0) {
+                        if (self.storage.getLocal(cap.symbol)) |struct_local| {
+                            const info = self.captureStructInfo(repr.struct_layout);
+                            const field_count: usize = @intCast(info.field_count);
+                            if (std.debug.runtime_safety and sub_captures.len != field_count) {
+                                std.debug.panic("WasmCodeGen invariant: nested struct_captures arity mismatch", .{});
                             }
-                            const vs: u32 = valTypeSize(sub_vt);
-                            field_offset += if (vs < 8) 8 else vs;
+
+                            for (sub_captures, 0..) |sub_cap, i| {
+                                const sub_vt = self.resolveValType(sub_cap.layout_idx);
+                                const sub_cap_key: u64 = @bitCast(sub_cap.symbol);
+                                if (!self.storage.locals.contains(sub_cap_key)) {
+                                    const sub_local = self.storage.allocLocal(sub_cap.symbol, sub_vt) catch return error.OutOfMemory;
+                                    const field_offset = self.captureStructFieldOffset(info, sub_cap.layout_idx, i);
+                                    try self.emitLocalGet(struct_local);
+                                    try self.emitLoadOp(sub_vt, field_offset);
+                                    try self.emitLocalSet(sub_local);
+                                }
+                            }
                         }
                     }
-                }
+                },
+                else => {},
             }
         }
     }
@@ -5607,27 +5621,26 @@ fn tryBindFunction(self: *Self, expr_id: LirExprId, expr: LirExpr, symbol: Symbo
                     WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
                     try self.materializeCapturesToStack(closure.captures, slot + 8);
                 },
-                .struct_captures => {
+                .struct_captures => |repr| {
                     // If the symbol already has a local (e.g., it's a capture parameter
                     // of the current compiled function), skip materialization — the
                     // captures struct is already available via the parameter.
                     if (self.storage.getLocal(symbol) == null) {
+                        const info = self.captureStructInfo(repr.struct_layout);
                         // Materialize captures to stack memory so the closure value
                         // (a pointer to the captures struct) is available as a local.
                         // This is needed when the closure is captured by another closure.
-                        const caps = self.store.getCaptures(closure.captures);
-                        var struct_size: u32 = 0;
-                        for (caps) |cap| {
-                            const vt = self.resolveValType(cap.layout_idx);
-                            const vs: u32 = valTypeSize(vt);
-                            struct_size += if (vs < 8) 8 else vs;
-                        }
-                        slot = try self.allocStackMemory(struct_size, 8);
-                        try self.materializeCapturesToStack(closure.captures, slot);
                         // Create a local holding the struct pointer so dispatchClosureCall
                         // can find this closure's value when it's captured by another closure.
                         const ptr_local = self.storage.allocLocal(symbol, .i32) catch return error.OutOfMemory;
-                        try self.emitFpOffset(slot);
+                        if (info.size == 0) {
+                            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                            WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                        } else {
+                            slot = try self.allocStackMemory(info.size, info.alignment);
+                            try self.materializeCaptureStructToStack(repr.captures, repr.struct_layout, slot);
+                            try self.emitFpOffset(slot);
+                        }
                         try self.emitLocalSet(ptr_local);
                     }
                 },
@@ -5757,17 +5770,23 @@ fn tryBindFunction(self: *Self, expr_id: LirExprId, expr: LirExpr, symbol: Symbo
                         try self.body.append(self.allocator, Op.drop);
                     }
                 },
-                .struct_captures => {
+                .struct_captures => |repr| {
                     // Pointer to captures struct — extract each capture into its own local.
                     // Use capture symbols here (struct_captures factories are rare).
-                    const captures = self.store.getCaptures(closure_info.captures);
+                    const captures = self.store.getCaptures(repr.captures);
                     const ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                     try self.emitLocalSet(ptr_local);
 
-                    var field_offset: u32 = 0;
-                    for (captures) |cap| {
+                    const info = self.captureStructInfo(repr.struct_layout);
+                    const field_count: usize = @intCast(info.field_count);
+                    if (std.debug.runtime_safety and captures.len != field_count) {
+                        std.debug.panic("WasmCodeGen invariant: returned struct_captures arity mismatch", .{});
+                    }
+
+                    for (captures, 0..) |cap, i| {
                         const cap_vt = self.resolveValType(cap.layout_idx);
                         const cap_local = self.storage.allocLocal(cap.symbol, cap_vt) catch return error.OutOfMemory;
+                        const field_offset = self.captureStructFieldOffset(info, cap.layout_idx, i);
                         try self.emitLocalGet(ptr_local);
                         try self.emitLoadOp(cap_vt, field_offset);
                         // If the capture is a pointer to stack_memory (Dec, i128, …),
@@ -5775,10 +5794,6 @@ fn tryBindFunction(self: *Self, expr_id: LirExprId, expr: LirExpr, symbol: Symbo
                         // Deep-copy the data to the caller's stack frame.
                         try self.emitDeepCopyIfStackMemory(cap.layout_idx, cap_vt);
                         try self.emitLocalSet(cap_local);
-                        // Match the layout used by materializeCapturesToStackWithBase:
-                        // offset by wasm value type size, padded to 8 bytes.
-                        const vs: u32 = valTypeSize(cap_vt);
-                        field_offset += if (vs < 8) 8 else vs;
                     }
                 },
                 .enum_dispatch, .union_repr => return false,
@@ -6766,20 +6781,23 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
                     try self.generateCallArgs(c.args);
                     try self.emitCall(func_idx);
                 },
-                .struct_captures => {
+                .struct_captures => |repr| {
                     // The return value is a pointer to the captures struct on the stack.
                     // Save the pointer, push roc_ops_ptr, load each capture field, push args, call.
                     const ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                     try self.emitLocalSet(ptr_local);
                     try self.emitLocalGet(self.roc_ops_local);
                     const captures = self.store.getCaptures(inner_closure_info.captures);
-                    var field_offset: u32 = 0;
-                    for (captures) |cap| {
+                    const info = self.captureStructInfo(repr.struct_layout);
+                    const field_count: usize = @intCast(info.field_count);
+                    if (std.debug.runtime_safety and captures.len != field_count) {
+                        std.debug.panic("WasmCodeGen invariant: chained-call struct_captures arity mismatch", .{});
+                    }
+                    for (captures, 0..) |cap, i| {
+                        const field_offset = self.captureStructFieldOffset(info, cap.layout_idx, i);
                         try self.emitLocalGet(ptr_local);
                         const vt = self.resolveValType(cap.layout_idx);
                         try self.emitLoadOp(vt, field_offset);
-                        const vs: u32 = valTypeSize(vt);
-                        field_offset += if (vs < 8) 8 else vs;
                     }
                     try self.emitForwardedCaptures(func_idx);
                     try self.generateCallArgs(c.args);
@@ -7193,6 +7211,46 @@ fn directCallableFuncIdx(self: *Self, closure: anytype) Allocator.Error!u32 {
     unreachable;
 }
 
+fn captureStructInfo(self: *const Self, struct_layout: layout.Idx) CaptureStructInfo {
+    const ls = self.getLayoutStore();
+    const l = ls.getLayout(struct_layout);
+    if (l.tag != .struct_) {
+        if (std.debug.runtime_safety) {
+            std.debug.panic("WasmCodeGen invariant: expected struct layout for struct_captures", .{});
+        }
+        unreachable;
+    }
+
+    const struct_idx = l.data.struct_.idx;
+    const fields = ls.getStructData(struct_idx).getFields();
+    return .{
+        .struct_idx = struct_idx,
+        .size = ls.layoutSize(l),
+        .alignment = @intCast(l.data.struct_.alignment.toByteUnits()),
+        .field_count = fields.count,
+    };
+}
+
+fn captureStructFieldOffset(
+    self: *const Self,
+    info: CaptureStructInfo,
+    capture_layout: layout.Idx,
+    capture_index: usize,
+) u32 {
+    const ls = self.getLayoutStore();
+    const field_idx: u32 = @intCast(capture_index);
+    if (std.debug.runtime_safety) {
+        if (field_idx >= info.field_count) {
+            std.debug.panic("WasmCodeGen invariant: capture index out of bounds for struct_captures layout", .{});
+        }
+        const field_layout = ls.getStructFieldLayout(info.struct_idx, field_idx);
+        if (field_layout != capture_layout) {
+            std.debug.panic("WasmCodeGen invariant: struct_captures field layout mismatch", .{});
+        }
+    }
+    return ls.getStructFieldOffset(info.struct_idx, field_idx);
+}
+
 /// Generate a closure value based on its representation.
 /// Handles all ClosureRepresentation variants and leaves the appropriate
 /// runtime value on the wasm stack.
@@ -7224,23 +7282,15 @@ fn generateClosureValue(self: *Self, closure: anytype) Allocator.Error!void {
                 unreachable;
             }
         },
-        .struct_captures => |_| {
-            // Multiple captures - allocate struct on stack, materialize captures.
-            // Compute actual struct size from captures' wasm representation sizes,
-            // since the struct_layout in MonoIR is a TODO placeholder.
-            const captures = self.store.getCaptures(closure.captures);
-            var struct_size: u32 = 0;
-            for (captures) |cap| {
-                const vs: u32 = valTypeSize(self.resolveValType(cap.layout_idx));
-                struct_size += if (vs < 8) 8 else vs;
-            }
-            if (struct_size == 0) {
+        .struct_captures => |repr| {
+            const info = self.captureStructInfo(repr.struct_layout);
+            if (info.size == 0) {
                 self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                 WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
                 return;
             }
-            const stack_offset = try self.allocStackMemory(struct_size, 8);
-            try self.materializeCapturesToStack(closure.captures, stack_offset);
+            const stack_offset = try self.allocStackMemory(info.size, info.alignment);
+            try self.materializeCaptureStructToStack(repr.captures, repr.struct_layout, stack_offset);
             try self.emitFpOffset(stack_offset);
         },
         .enum_dispatch => |repr| {
@@ -7278,6 +7328,61 @@ fn generateClosureValue(self: *Self, closure: anytype) Allocator.Error!void {
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
         },
+    }
+}
+
+/// Materialize struct_captures closure fields to a stack memory location at fp + stack_offset.
+fn materializeCaptureStructToStack(
+    self: *Self,
+    captures_span: LIR.LirCaptureSpan,
+    struct_layout: layout.Idx,
+    stack_offset: u32,
+) Allocator.Error!void {
+    const captures = self.store.getCaptures(captures_span);
+    if (captures.len == 0) return;
+
+    const base_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitFpOffset(stack_offset);
+    self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
+
+    const info = self.captureStructInfo(struct_layout);
+    const field_count: usize = @intCast(info.field_count);
+    if (std.debug.runtime_safety and captures.len != field_count) {
+        std.debug.panic("WasmCodeGen invariant: struct_captures capture arity does not match struct layout", .{});
+    }
+
+    for (captures, 0..) |cap, i| {
+        const cap_vt = self.resolveValType(cap.layout_idx);
+        const field_offset = self.captureStructFieldOffset(info, cap.layout_idx, i);
+        if (self.storage.getLocal(cap.symbol)) |local_idx| {
+            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
+            try self.emitStoreOp(cap_vt, field_offset);
+        } else if (self.resolveCaptureThroughClosure(cap.symbol)) |local_idx| {
+            // The capture is an unwrapped_capture closure — its value IS its
+            // inner capture. Use the resolved inner capture's local.
+            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
+            try self.emitStoreOp(cap_vt, field_offset);
+        } else if (self.materializeCapturedClosure(cap.symbol)) |ptr_local| {
+            // The capture is a struct_captures closure — materialize its inner
+            // captures recursively and store the resulting struct pointer.
+            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, ptr_local) catch return error.OutOfMemory;
+            try self.emitStoreOp(cap_vt, field_offset);
+        } else {
+            if (std.debug.runtime_safety) {
+                std.debug.panic("WasmCodeGen invariant: struct_captures capture local missing during materialization", .{});
+            }
+            unreachable;
+        }
     }
 }
 
@@ -7352,25 +7457,25 @@ fn materializeCapturesToStackWithBase(self: *Self, captures_span: LIR.LirCapture
 fn materializeCapturedClosure(self: *Self, symbol: Symbol) ?u32 {
     const key: u64 = @bitCast(symbol);
     const cv = self.closure_values.get(key) orelse return null;
-    if (cv.representation != .struct_captures) return null;
+    const repr = switch (cv.representation) {
+        .struct_captures => |r| r,
+        else => return null,
+    };
 
-    const inner_caps = self.store.getCaptures(cv.captures);
-    if (inner_caps.len == 0) return null;
-
-    // Calculate struct size
-    var struct_size: u32 = 0;
-    for (inner_caps) |cap| {
-        const vt = self.resolveValType(cap.layout_idx);
-        const vs: u32 = valTypeSize(vt);
-        struct_size += if (vs < 8) 8 else vs;
+    const info = self.captureStructInfo(repr.struct_layout);
+    const ptr_local = self.storage.allocLocal(symbol, .i32) catch return null;
+    if (info.size == 0) {
+        self.body.append(self.allocator, Op.i32_const) catch return null;
+        WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return null;
+        self.emitLocalSet(ptr_local) catch return null;
+        return ptr_local;
     }
 
     // Allocate stack memory for the inner captures struct
-    const slot = self.allocStackMemory(struct_size, 8) catch return null;
+    const slot = self.allocStackMemory(info.size, info.alignment) catch return null;
     // Recursively materialize inner captures
-    self.materializeCapturesToStack(cv.captures, slot) catch return null;
+    self.materializeCaptureStructToStack(repr.captures, repr.struct_layout, slot) catch return null;
     // Create a local for the struct pointer
-    const ptr_local = self.storage.allocLocal(symbol, .i32) catch return null;
     self.emitFpOffset(slot) catch return null;
     self.emitLocalSet(ptr_local) catch return null;
     return ptr_local;
