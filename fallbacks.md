@@ -144,11 +144,6 @@ No high-confidence release-path fallback/placeholder behavior found in this pass
 - Should look like: capture materialization is guaranteed; missing capture is invariant failure, not zero-fill fallback.
 - References: `src/backend/wasm/WasmCodeGen.zig:7451-7462`.
 
-11. Callable/closure dispatch recovery is still heuristic and expression-shape driven.
-- Problematic state: binding/dispatch relies on recursive shape inspection with many silent `return false/null` fallthroughs.
-- Should look like: explicit callable ABI/state model where dispatch data is canonical and not recovered heuristically from expression forms.
-- References: `src/backend/wasm/WasmCodeGen.zig:5511-5541`, `src/backend/wasm/WasmCodeGen.zig:5686-5743`, `src/backend/wasm/WasmCodeGen.zig:6996-7135`.
-
 ## LIR -> Codegen (LLVM backend)
 
 1. Pointer scalar bit-width queries still panic with TODO.

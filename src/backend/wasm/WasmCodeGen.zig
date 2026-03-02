@@ -150,6 +150,16 @@ const ClosureValue = struct {
     bound_symbol: ?Symbol = null,
 };
 
+/// A callable expression found after peeling through nominal/block wrappers.
+/// Invariant: for `.closure`, `closure_data.lambda` is always a `.lambda` expr (asserted).
+const CallableExpr = union(enum) {
+    lambda: LirExprId,
+    closure: struct {
+        expr_id: LirExprId,
+        closure_data: LIR.ClosureData,
+    },
+};
+
 /// Info about a closure returned by a call, for chained call dispatch.
 const ReturnedClosureInfo = struct {
     representation: LIR.ClosureRepresentation,
@@ -5508,38 +5518,53 @@ pub fn compileAllProcs(self: *Self, procs: []const LirProc) Allocator.Error!void
     }
 }
 
+/// Peel through nominal/block wrappers to find the underlying lambda or closure.
+/// For closures, asserts the invariant that `ClosureData.lambda` is a `.lambda` expr.
+/// Returns null for non-callable expressions.
+fn peelToCallable(self: *const Self, expr_id: LirExprId) ?CallableExpr {
+    const expr = self.store.getExpr(expr_id);
+    return switch (expr) {
+        .lambda => .{ .lambda = expr_id },
+        .closure => |c| {
+            const data = self.store.getClosureData(c);
+            if (std.debug.runtime_safety) {
+                const inner = self.store.getExpr(data.lambda);
+                if (inner != .lambda) {
+                    std.debug.panic("WasmCodeGen invariant: closure's inner expr must be .lambda, got {s}", .{@tagName(inner)});
+                }
+            }
+            return .{ .closure = .{ .expr_id = expr_id, .closure_data = data } };
+        },
+        .nominal => |n| self.peelToCallable(n.backing_expr),
+        .block => |b| self.peelToCallable(b.final_expr),
+        else => null,
+    };
+}
+
+/// Get the lambda params from a CallableExpr.
+fn callableParams(self: *const Self, callable: CallableExpr) LIR.LirPatternSpan {
+    return switch (callable) {
+        .lambda => |expr_id| self.store.getExpr(expr_id).lambda.params,
+        .closure => |c| self.store.getExpr(c.closure_data.lambda).lambda.params,
+    };
+}
+
+/// Get the lambda body from a CallableExpr.
+fn callableBody(self: *const Self, callable: CallableExpr) LirExprId {
+    return switch (callable) {
+        .lambda => |expr_id| self.store.getExpr(expr_id).lambda.body,
+        .closure => |c| self.store.getExpr(c.closure_data.lambda).lambda.body,
+    };
+}
+
 /// Pre-bind callable call arguments under the corresponding parameter symbols.
 /// This enables higher-order functions: when `apply = |f, x| f(x)` is called as
 /// `apply(|n| n + 1, 5)`, we compile `|n| n + 1` and register it in closure_values
 /// under `f`'s symbol BEFORE compiling `apply`'s body.
-fn preBindCallableArgs(self: *Self, def_expr: LirExpr, call_args: LIR.LirExprSpan) Allocator.Error!void {
-    // Extract parameter pattern span from the function definition
-    const param_span: LIR.LirPatternSpan = switch (def_expr) {
-        .lambda => |l| l.params,
-        .nominal => |n| blk: {
-            const inner = self.store.getExpr(n.backing_expr);
-            break :blk switch (inner) {
-                .lambda => |l| l.params,
-                .closure => |c| blk2: {
-                    const lam = self.store.getExpr(self.store.getClosureData(c).lambda);
-                    break :blk2 switch (lam) {
-                        .lambda => |l| l.params,
-                        else => return,
-                    };
-                },
-                else => return,
-            };
-        },
-        .closure => |c| blk: {
-            const lam = self.store.getExpr(self.store.getClosureData(c).lambda);
-            break :blk switch (lam) {
-                .lambda => |l| l.params,
-                else => return,
-            };
-        },
-        else => return,
-    };
-    const params = self.store.getPatternSpan(param_span);
+fn preBindCallableArgs(self: *Self, def_expr_id: LirExprId, call_args: LIR.LirExprSpan) Allocator.Error!void {
+    // Peel through wrappers to find the callable, then extract its params.
+    const callable = self.peelToCallable(def_expr_id) orelse return;
+    const params = self.store.getPatternSpan(self.callableParams(callable));
 
     const args = self.store.getExprSpan(call_args);
     const len = @min(params.len, args.len);
@@ -5713,11 +5738,9 @@ fn tryBindFunction(self: *Self, expr_id: LirExprId, expr: LirExpr, symbol: Symbo
             if (fn_expr_data == .lookup) {
                 const fn_sym_key: u64 = @bitCast(fn_expr_data.lookup.symbol);
                 if (self.closure_values.get(fn_sym_key)) |cv| {
-                    const fn_def = self.store.getExpr(cv.lambda_expr);
-                    try self.preBindCallableArgs(fn_def, call_expr.args);
+                    try self.preBindCallableArgs(cv.lambda_expr, call_expr.args);
                 } else if (self.store.getSymbolDef(fn_expr_data.lookup.symbol)) |def_id| {
-                    const def = self.store.getExpr(def_id);
-                    try self.preBindCallableArgs(def, call_expr.args);
+                    try self.preBindCallableArgs(def_id, call_expr.args);
                 }
             }
 
@@ -5734,12 +5757,18 @@ fn tryBindFunction(self: *Self, expr_id: LirExprId, expr: LirExpr, symbol: Symbo
             else
                 fn_result_info;
 
-            // Compile the returned closure's function (may already be compiled)
+            // Compile the returned closure's function (may already be compiled).
+            // Invariant: ReturnedClosureInfo.lambda_expr is always a lambda or closure.
             const inner_fn_expr = self.store.getExpr(closure_info.lambda_expr);
             const func_idx = switch (inner_fn_expr) {
                 .closure => |closure_id| try self.compileClosure(closure_info.lambda_expr, self.store.getClosureData(closure_id)),
                 .lambda => |lambda| try self.compileLambda(closure_info.lambda_expr, lambda),
-                else => return false,
+                else => {
+                    if (std.debug.runtime_safety) {
+                        std.debug.panic("WasmCodeGen invariant: ReturnedClosureInfo.lambda_expr must be .lambda or .closure, got {s}", .{@tagName(inner_fn_expr)});
+                    }
+                    unreachable;
+                },
             };
 
             // Generate the call — leaves closure value on the wasm stack
@@ -6659,8 +6688,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
                 // args must be bound to parameter symbols so the function body
                 // can resolve calls through those parameters.
                 if (cv.func_idx == null) {
-                    const fn_def = self.store.getExpr(cv.lambda_expr);
-                    try self.preBindCallableArgs(fn_def, c.args);
+                    try self.preBindCallableArgs(cv.lambda_expr, c.args);
                 }
                 try self.dispatchClosureCall(cv, c.args, c.ret_layout);
             } else if (self.store.getSymbolDef(lookup.symbol)) |def_expr_id| {
@@ -6668,7 +6696,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
 
                 // Pre-bind callable arguments under parameter symbols so the function
                 // body can resolve parameter calls (e.g., `f(x)` in `apply = |f, x| f(x)`).
-                try self.preBindCallableArgs(def_expr, c.args);
+                try self.preBindCallableArgs(def_expr_id, c.args);
 
                 // Compile the function as a separate wasm function.
                 const bound = try self.tryBindFunction(def_expr_id, def_expr, lookup.symbol);
@@ -6996,23 +7024,8 @@ fn emitForwardedCaptures(self: *Self, func_idx: u32) Allocator.Error!void {
 /// Examine a function expression to see if calling it returns a closure.
 /// For chained calls, we need to know statically what the inner call returns.
 fn returnedClosureOfCallableExpr(self: *const Self, callable_expr_id: LirExprId) ?ReturnedClosureInfo {
-    const callable_expr = self.store.getExpr(callable_expr_id);
-    switch (callable_expr) {
-        .closure => |c| {
-            const lam = self.store.getExpr(self.store.getClosureData(c).lambda);
-            return switch (lam) {
-                .lambda => |l| self.getClosureInfoFromExpr(l.body),
-                else => null,
-            };
-        },
-        .lambda => |l| {
-            return self.getClosureInfoFromExpr(l.body);
-        },
-        .nominal => |nom| {
-            return self.returnedClosureOfCallableExpr(nom.backing_expr);
-        },
-        else => return null,
-    }
+    const callable = self.peelToCallable(callable_expr_id) orelse return null;
+    return self.getClosureInfoFromExpr(self.callableBody(callable));
 }
 
 fn getReturnedClosureInfo(self: *const Self, fn_expr_id: LirExprId) ?ReturnedClosureInfo {
@@ -7024,10 +7037,13 @@ fn getReturnedClosureInfo(self: *const Self, fn_expr_id: LirExprId) ?ReturnedClo
         .closure => |closure_id| {
             const closure = self.store.getClosureData(closure_id);
             const inner = self.store.getExpr(closure.lambda);
-            if (inner == .lambda) {
-                return self.getClosureInfoFromExpr(inner.lambda.body);
+            if (inner != .lambda) {
+                if (std.debug.runtime_safety) {
+                    std.debug.panic("WasmCodeGen invariant: closure's inner expr must be .lambda, got {s}", .{@tagName(inner)});
+                }
+                unreachable;
             }
-            return null;
+            return self.getClosureInfoFromExpr(inner.lambda.body);
         },
         .nominal => |nom| {
             return self.getReturnedClosureInfo(nom.backing_expr);
@@ -7039,16 +7055,8 @@ fn getReturnedClosureInfo(self: *const Self, fn_expr_id: LirExprId) ?ReturnedClo
             const inner_fn_expr = self.store.getExpr(inner_call.fn_expr);
             if (inner_fn_expr == .call) {
                 const dispatched = self.getReturnedClosureInfo(inner_call.fn_expr) orelse return null;
-                // The dispatch calls `dispatched`, so the result is what `dispatched` returns
-                const dispatch_expr = self.store.getExpr(dispatched.lambda_expr);
-                return switch (dispatch_expr) {
-                    .closure => |c| blk: {
-                        const lam = self.store.getExpr(self.store.getClosureData(c).lambda);
-                        break :blk if (lam == .lambda) self.getClosureInfoFromExpr(lam.lambda.body) else null;
-                    },
-                    .lambda => |l| self.getClosureInfoFromExpr(l.body),
-                    else => null,
-                };
+                // The dispatch calls `dispatched`, so the result is what `dispatched` returns.
+                return self.returnedClosureOfCallableExpr(dispatched.lambda_expr);
             } else {
                 return self.getReturnedClosureInfo(inner_call.fn_expr);
             }
@@ -7063,16 +7071,7 @@ fn getReturnedClosureInfo(self: *const Self, fn_expr_id: LirExprId) ?ReturnedClo
                     const call_result_info = self.getReturnedClosureInfo(def_expr.call.fn_expr) orelse return null;
                     // call_result_info describes the closure this symbol evaluates to.
                     // Now find what CALLING that closure returns.
-                    const inner_expr = self.store.getExpr(call_result_info.lambda_expr);
-                    const result = switch (inner_expr) {
-                        .closure => |c| blk: {
-                            const lam = self.store.getExpr(self.store.getClosureData(c).lambda);
-                            break :blk if (lam == .lambda) self.getClosureInfoFromExpr(lam.lambda.body) else null;
-                        },
-                        .lambda => |l| self.getClosureInfoFromExpr(l.body),
-                        else => null,
-                    };
-                    return result;
+                    return self.returnedClosureOfCallableExpr(call_result_info.lambda_expr);
                 }
                 if (self.getClosureInfoFromExpr(def_id)) |callable_info| {
                     if (self.returnedClosureOfCallableExpr(callable_info.lambda_expr)) |returned| {
@@ -7092,29 +7091,25 @@ fn getReturnedClosureInfo(self: *const Self, fn_expr_id: LirExprId) ?ReturnedClo
 
 /// Extract closure info from an expression (the body/return value of a lambda).
 fn getClosureInfoFromExpr(self: *const Self, expr_id: LirExprId) ?ReturnedClosureInfo {
-    const expr = self.store.getExpr(expr_id);
-    switch (expr) {
-        .lambda => {
-            return .{
+    // First try peeling through wrappers to find a direct callable.
+    if (self.peelToCallable(expr_id)) |callable| {
+        return switch (callable) {
+            .lambda => |lambda_id| .{
                 .representation = .{ .direct_call = {} },
-                .lambda_expr = expr_id,
+                .lambda_expr = lambda_id,
                 .captures = LIR.LirCaptureSpan.empty(),
-            };
-        },
-        .closure => |closure_id| {
-            const closure = self.store.getClosureData(closure_id);
-            return .{
-                .representation = closure.representation,
-                .lambda_expr = expr_id,
-                .captures = closure.captures,
-            };
-        },
-        .block => |b| {
-            return self.getClosureInfoFromExpr(b.final_expr);
-        },
-        .call => {
-            return self.getReturnedClosureInfo(expr_id);
-        },
+            },
+            .closure => |c| .{
+                .representation = c.closure_data.representation,
+                .lambda_expr = c.expr_id,
+                .captures = c.closure_data.captures,
+            },
+        };
+    }
+    // Special cases that peelToCallable doesn't handle.
+    const expr = self.store.getExpr(expr_id);
+    return switch (expr) {
+        .call => self.getReturnedClosureInfo(expr_id),
         .lookup => |lk| {
             const key: u64 = @bitCast(lk.symbol);
             if (self.closure_values.get(key)) |cv| {
@@ -7129,11 +7124,8 @@ fn getClosureInfoFromExpr(self: *const Self, expr_id: LirExprId) ?ReturnedClosur
             }
             return null;
         },
-        .nominal => |nom| {
-            return self.getClosureInfoFromExpr(nom.backing_expr);
-        },
-        else => return null,
-    }
+        else => null,
+    };
 }
 
 /// Find the closure representation from an expression (recursing through blocks/nominals).

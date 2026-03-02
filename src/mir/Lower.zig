@@ -32,9 +32,10 @@ const ModuleEnv = can.ModuleEnv;
 const Self = @This();
 
 const DeferredBlockLambda = struct {
+    pattern_idx: CIR.Pattern.Idx,
     cir_expr: CIR.Expr.Idx,
-    scratch_stmt_idx: u32,
     module_idx: u32,
+    symbol: MIR.Symbol,
 };
 
 const ResolvedDispatchTarget = struct {
@@ -103,8 +104,7 @@ in_progress_defs: std.AutoHashMap(u64, void),
 in_progress_symbol_monotypes: std.AutoHashMap(u64, Monotype.Idx),
 
 /// Block-local polymorphic lambda defs waiting for call-site type information.
-/// Key is CIR Pattern.Idx (as u32). Value holds the CIR expression to lower and
-/// the index into `scratch_stmts` where the decl_const placeholder was emitted.
+/// Key is CIR Pattern.Idx (as u32). Value holds the CIR expression and symbol.
 /// Populated by `lowerBlock`, consumed by `e_lookup_local`.
 deferred_block_lambdas: std.AutoHashMap(u32, DeferredBlockLambda),
 
@@ -816,56 +816,8 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
         // --- Lookups ---
         .e_lookup_local => |lookup| {
             const symbol = try self.patternToSymbol(lookup.pattern_idx);
-
-            // Check for a deferred block-local polymorphic lambda. If found,
-            // bind the definition's type vars from the call-site monotype and
-            // lower with concrete types, patching the block's placeholder stmt.
             const symbol_key: u64 = @bitCast(symbol);
-            if (self.deferred_block_lambdas.get(@intFromEnum(lookup.pattern_idx))) |deferred| {
-                const deferred_is_unlowered =
-                    self.scratch_stmts.items.items[deferred.scratch_stmt_idx].decl_const.expr == MIR.ExprId.none;
-                if (deferred_is_unlowered) {
-                    // Remove from deferred BEFORE lowering to prevent infinite
-                    // recursion: if the lambda's body references itself (e.g.,
-                    // recursive fib), the nested lookup must not re-enter this
-                    // deferred path. Mark as in-progress so recursive references
-                    // get correctly typed lookups via recursion guards.
-                    const saved_deferred = deferred;
-                    _ = self.deferred_block_lambdas.remove(@intFromEnum(lookup.pattern_idx));
-
-                    try self.in_progress_defs.put(symbol_key, {});
-                    try self.in_progress_symbol_monotypes.put(symbol_key, monotype);
-                    errdefer _ = self.in_progress_symbol_monotypes.remove(symbol_key);
-
-                    // Use a fresh type_var_seen scope so the call-site's concrete
-                    // types aren't shadowed by stale Dec/unit entries from the
-                    // pattern lowering that happened when the block processed the
-                    // s_decl statement.
-                    const saved_type_var_seen = self.type_var_seen;
-                    self.type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
-                    defer {
-                        self.type_var_seen.deinit();
-                        self.type_var_seen = saved_type_var_seen;
-                    }
-                    try self.bindTypeVarMonotypes(ModuleEnv.varFrom(saved_deferred.cir_expr), monotype);
-                    const saved_pattern_scope = self.current_pattern_scope;
-                    self.current_pattern_scope = symbol_key;
-                    defer self.current_pattern_scope = saved_pattern_scope;
-                    const lowered = try self.lowerExpr(saved_deferred.cir_expr);
-                    self.scratch_stmts.items.items[saved_deferred.scratch_stmt_idx].decl_const.expr = lowered;
-
-                    // Track the base symbol so later call sites can trigger true
-                    // polymorphic specializations for this block-local lambda.
-                    try self.lowered_symbols.put(symbol_key, lowered);
-
-                    _ = self.in_progress_defs.remove(symbol_key);
-                    _ = self.in_progress_symbol_monotypes.remove(symbol_key);
-
-                    // Keep the CIR expression metadata for future
-                    // re-specializations from other call sites in this block.
-                    try self.deferred_block_lambdas.put(@intFromEnum(lookup.pattern_idx), saved_deferred);
-                }
-            }
+            try self.ensureDeferredBlockLambdaLowered(lookup.pattern_idx, symbol, monotype);
 
             // Ensure the local definition is lowered if it's a top-level def.
             // This is needed so that cross-module lowering (via lowerExternalDef)
@@ -908,7 +860,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                                 break :blk def.expr;
                             }
                         }
-                        // Check deferred block lambdas (restored after first specialization).
+                        // Check deferred block lambdas from the current block scope.
                         if (self.deferred_block_lambdas.get(@intFromEnum(lookup.pattern_idx))) |deferred_entry| {
                             break :blk deferred_entry.cir_expr;
                         }
@@ -1644,6 +1596,123 @@ fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Clo
     } }, monotype, region);
 }
 
+fn lowerDeferredBlockLambda(
+    self: *Self,
+    deferred: DeferredBlockLambda,
+    caller_monotype: Monotype.Idx,
+) Allocator.Error!MIR.ExprId {
+    const symbol = deferred.symbol;
+    const symbol_key: u64 = @bitCast(symbol);
+
+    if (self.lowered_symbols.get(symbol_key)) |cached| return cached;
+    if (self.in_progress_defs.contains(symbol_key)) {
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "MIR Lower invariant: deferred block lambda lowering re-entered while already in progress (symbol={d})",
+                .{symbol.raw()},
+            );
+        }
+        unreachable;
+    }
+
+    try self.in_progress_defs.put(symbol_key, {});
+    errdefer _ = self.in_progress_defs.remove(symbol_key);
+
+    const active_monotype: Monotype.Idx = if (!caller_monotype.isNone()) caller_monotype else Monotype.Idx.none;
+    try self.in_progress_symbol_monotypes.put(symbol_key, active_monotype);
+    errdefer _ = self.in_progress_symbol_monotypes.remove(symbol_key);
+
+    // Use an isolated type_var_seen scope so call-site bindings are not
+    // contaminated by earlier entries from this block/module.
+    const saved_type_var_seen = self.type_var_seen;
+    self.type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+    defer {
+        self.type_var_seen.deinit();
+        self.type_var_seen = saved_type_var_seen;
+    }
+
+    if (!caller_monotype.isNone()) {
+        if (std.debug.runtime_safety) {
+            var type_writer = try types.TypeWriter.initFromParts(
+                self.allocator,
+                self.types_store,
+                self.all_module_envs[self.current_module_idx].getIdentStoreConst(),
+                null,
+            );
+            defer type_writer.deinit();
+            const pattern_ty = try type_writer.writeGet(ModuleEnv.varFrom(deferred.pattern_idx), .one_line);
+            const expr_ty = try type_writer.writeGet(ModuleEnv.varFrom(deferred.cir_expr), .one_line);
+            const caller_mono = self.store.monotype_store.getMonotype(caller_monotype);
+            std.debug.print(
+                "deferred bind symbol={d} caller_mono={s} pattern_ty={s} expr_ty={s}\n",
+                .{ symbol.raw(), @tagName(caller_mono), pattern_ty, expr_ty },
+            );
+            if (caller_mono == .func) {
+                const args = self.store.monotype_store.getIdxSpan(caller_mono.func.args);
+                for (args, 0..) |arg_mono_idx, arg_i| {
+                    const arg_mono = self.store.monotype_store.getMonotype(arg_mono_idx);
+                    std.debug.print("  caller_arg[{d}]={s}\n", .{ arg_i, @tagName(arg_mono) });
+                    if (arg_mono == .prim) {
+                        std.debug.print("    prim={s}\n", .{@tagName(arg_mono.prim)});
+                    }
+                }
+                const ret_mono = self.store.monotype_store.getMonotype(caller_mono.func.ret);
+                std.debug.print("  caller_ret={s}\n", .{@tagName(ret_mono)});
+                if (ret_mono == .prim) {
+                    std.debug.print("    ret_prim={s}\n", .{@tagName(ret_mono.prim)});
+                }
+            }
+        }
+        // Bind via the declaration pattern's type root. This is the
+        // generalized let-binding type that call sites instantiate.
+        try self.bindTypeVarMonotypes(ModuleEnv.varFrom(deferred.pattern_idx), caller_monotype);
+    }
+
+    const saved_pattern_scope = self.current_pattern_scope;
+    self.current_pattern_scope = symbol_key;
+    defer self.current_pattern_scope = saved_pattern_scope;
+
+    const lowered = try self.lowerExpr(deferred.cir_expr);
+
+    try self.lowered_symbols.put(symbol_key, lowered);
+    if (self.store.getSymbolDef(symbol) == null) {
+        try self.store.registerSymbolDef(self.allocator, symbol, lowered);
+    }
+
+    _ = self.in_progress_defs.remove(symbol_key);
+    _ = self.in_progress_symbol_monotypes.remove(symbol_key);
+
+    return lowered;
+}
+
+fn ensureDeferredBlockLambdaLowered(
+    self: *Self,
+    pattern_idx: CIR.Pattern.Idx,
+    symbol: MIR.Symbol,
+    caller_monotype: Monotype.Idx,
+) Allocator.Error!void {
+    const deferred = self.deferred_block_lambdas.get(@intFromEnum(pattern_idx)) orelse return;
+    const symbol_key: u64 = @bitCast(symbol);
+    if (self.lowered_symbols.contains(symbol_key) or self.in_progress_defs.contains(symbol_key)) return;
+
+    if (std.debug.runtime_safety) {
+        if (deferred.module_idx != self.current_module_idx) {
+            std.debug.panic(
+                "MIR Lower invariant: deferred block lambda module mismatch (entry={d}, current={d})",
+                .{ deferred.module_idx, self.current_module_idx },
+            );
+        }
+        if (deferred.symbol.raw() != symbol.raw()) {
+            std.debug.panic(
+                "MIR Lower invariant: deferred block lambda symbol mismatch (entry={d}, lookup={d})",
+                .{ deferred.symbol.raw(), symbol.raw() },
+            );
+        }
+    }
+
+    _ = try self.lowerDeferredBlockLambda(deferred, caller_monotype);
+}
+
 /// Lower `e_call` to MIR call.
 /// If the call target is an external lookup to a low-level builtin
 /// (e.g., List.concat, Str.concat), emit `run_low_level` instead of `call`.
@@ -1744,6 +1813,25 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
     const stmts_top = self.scratch_stmts.top();
     defer self.scratch_stmts.clearFrom(stmts_top);
 
+    const DeferredDeclSlot = struct {
+        insert_idx: u32,
+        order: u32,
+        pattern: MIR.PatternId,
+        pattern_idx: CIR.Pattern.Idx,
+        symbol: MIR.Symbol,
+        cir_expr: CIR.Expr.Idx,
+    };
+
+    var deferred_decl_slots: std.ArrayList(DeferredDeclSlot) = .empty;
+    defer deferred_decl_slots.deinit(self.allocator);
+    defer {
+        for (deferred_decl_slots.items) |slot| {
+            _ = self.deferred_block_lambdas.remove(@intFromEnum(slot.pattern_idx));
+        }
+    }
+
+    var deferred_order: u32 = 0;
+
     for (cir_stmt_indices) |stmt_idx| {
         const cir_stmt = module_env.store.getStatement(stmt_idx);
         switch (cir_stmt) {
@@ -1757,14 +1845,22 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                 const is_lambda = cir_expr == .e_lambda or cir_expr == .e_closure;
                 const needs_inst = if (is_lambda) self.types_store.needsInstantiation(ModuleEnv.varFrom(decl.expr)) else false;
                 if (is_lambda and needs_inst) {
-                    const scratch_idx: u32 = @intCast(self.scratch_stmts.items.items.len);
-                    // Emit a placeholder decl_const — the expr will be filled in
-                    // when a call site triggers lowering via e_lookup_local.
-                    try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = pat, .expr = MIR.ExprId.none } });
-                    try self.deferred_block_lambdas.put(@intFromEnum(decl.pattern), .{
+                    const symbol = try self.patternToSymbol(decl.pattern);
+                    deferred_order += 1;
+                    // Track insertion order; materialize with concrete expression later.
+                    try deferred_decl_slots.append(self.allocator, .{
+                        .insert_idx = @intCast(self.scratch_stmts.items.items.len),
+                        .order = deferred_order,
+                        .pattern = pat,
+                        .pattern_idx = decl.pattern,
+                        .symbol = symbol,
                         .cir_expr = decl.expr,
-                        .scratch_stmt_idx = scratch_idx,
+                    });
+                    try self.deferred_block_lambdas.put(@intFromEnum(decl.pattern), .{
+                        .pattern_idx = decl.pattern,
+                        .cir_expr = decl.expr,
                         .module_idx = self.current_module_idx,
+                        .symbol = symbol,
                     });
                 } else {
                     const expr = try self.lowerExpr(decl.expr);
@@ -1860,28 +1956,48 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
     }
 
     // Lower the final expression BEFORE committing stmts. Call sites in the
-    // final expression (and in subsequent stmts) trigger deferred lambda
-    // lowering via e_lookup_local, which patches the placeholder stmts.
+    // final expression trigger deferred lambda lowering via e_lookup_local.
     const final_expr = try self.lowerExpr(block.final_expr);
 
-    // Lower any remaining deferred lambdas from THIS block that weren't
-    // referenced by a call site. Only process lambdas whose scratch_stmt_idx
-    // falls within this block's range (>= stmts_top) and whose module matches
-    // the current module. This prevents cross-module contamination when inner
-    // blocks from different modules are lowered during the final expression.
-    {
-        const stmts_top_idx: u32 = @intCast(stmts_top);
-        var deferred_iter = self.deferred_block_lambdas.iterator();
-        while (deferred_iter.next()) |entry| {
-            const deferred = entry.value_ptr.*;
-            if (deferred.module_idx != self.current_module_idx or deferred.scratch_stmt_idx < stmts_top_idx) continue;
-            if (self.scratch_stmts.items.items[deferred.scratch_stmt_idx].decl_const.expr == MIR.ExprId.none) {
-                const expr = try self.lowerExpr(deferred.cir_expr);
-                self.scratch_stmts.items.items[deferred.scratch_stmt_idx].decl_const.expr = expr;
-            }
-            // Remove this entry since the block is done
-            self.deferred_block_lambdas.removeByPtr(entry.key_ptr);
+    // Ensure every deferred declaration has a concrete lowered expression.
+    for (deferred_decl_slots.items) |slot| {
+        const symbol_key: u64 = @bitCast(slot.symbol);
+        if (!self.lowered_symbols.contains(symbol_key)) {
+            const decl_monotype = self.store.patternTypeOf(slot.pattern);
+            _ = try self.lowerDeferredBlockLambda(.{
+                .pattern_idx = slot.pattern_idx,
+                .cir_expr = slot.cir_expr,
+                .module_idx = self.current_module_idx,
+                .symbol = slot.symbol,
+            }, decl_monotype);
         }
+    }
+
+    // Insert deferred declarations in reverse insertion order so earlier
+    // insertions do not disturb later indices.
+    std.mem.sort(DeferredDeclSlot, deferred_decl_slots.items, {}, struct {
+        fn lessThan(_: void, a: DeferredDeclSlot, b: DeferredDeclSlot) bool {
+            if (a.insert_idx == b.insert_idx) return a.order > b.order;
+            return a.insert_idx > b.insert_idx;
+        }
+    }.lessThan);
+
+    for (deferred_decl_slots.items) |slot| {
+        const symbol_key: u64 = @bitCast(slot.symbol);
+        const lowered = self.lowered_symbols.get(symbol_key) orelse {
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "MIR Lower invariant: deferred block lambda has no lowered expression (symbol={d})",
+                    .{slot.symbol.raw()},
+                );
+            }
+            unreachable;
+        };
+
+        try self.scratch_stmts.items.insert(
+            @intCast(slot.insert_idx),
+            .{ .decl_const = .{ .pattern = slot.pattern, .expr = lowered } },
+        );
     }
 
     const stmt_span = try self.store.addStmts(self.allocator, self.scratch_stmts.sliceFromStart(stmts_top));
@@ -2362,8 +2478,8 @@ fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?M
             }
 
             // Recursive lowering for a different caller monotype needs a new
-            // specialization symbol; placeholders are only valid for the same
-            // active specialization.
+            // specialization symbol; a symbol that is currently in-progress is
+            // only valid for the same active specialization.
             if (self.in_progress_defs.contains(symbol_key)) {
                 const active_monotype = self.in_progress_symbol_monotypes.get(symbol_key) orelse Monotype.Idx.none;
                 const same_specialization = if (active_monotype.isNone())
@@ -2372,30 +2488,34 @@ fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?M
                     try self.monotypesStructurallyEqual(active_monotype, caller_monotype);
 
                 if (!same_specialization) {
-                    if (self.findDefExprBySymbol(symbol_meta.module_idx, symbol_meta.ident_idx)) |def_expr| {
-                        const spec_symbol = try self.makeSyntheticSymbol(symbol);
-                        try self.poly_specializations.put(spec_key, spec_symbol);
-                        errdefer _ = self.poly_specializations.remove(spec_key);
-                        _ = try self.lowerExternalDefWithType(spec_symbol, def_expr, caller_monotype);
-                        return spec_symbol;
-                    }
-
-                    return symbol;
+                    const def_expr = self.findDefExprBySymbol(symbol_meta.module_idx, symbol_meta.ident_idx) orelse {
+                        if (std.debug.runtime_safety) {
+                            std.debug.panic("ensureMethodLowered: need re-specialization for in-progress def but definition not found", .{});
+                        }
+                        unreachable;
+                    };
+                    const spec_symbol = try self.makeSyntheticSymbol(symbol);
+                    try self.poly_specializations.put(spec_key, spec_symbol);
+                    errdefer _ = self.poly_specializations.remove(spec_key);
+                    _ = try self.lowerExternalDefWithType(spec_symbol, def_expr, caller_monotype);
+                    return spec_symbol;
                 }
             }
 
             if (self.lowered_symbols.get(symbol_key)) |cached_expr| {
                 const cached_monotype = self.store.typeOf(cached_expr);
                 if (!try self.monotypesStructurallyEqual(cached_monotype, caller_monotype)) {
-                    if (self.findDefExprBySymbol(symbol_meta.module_idx, symbol_meta.ident_idx)) |def_expr| {
-                        const spec_symbol = try self.makeSyntheticSymbol(symbol);
-                        try self.poly_specializations.put(spec_key, spec_symbol);
-                        errdefer _ = self.poly_specializations.remove(spec_key);
-                        _ = try self.lowerExternalDefWithType(spec_symbol, def_expr, caller_monotype);
-                        return spec_symbol;
-                    }
-
-                    return symbol;
+                    const def_expr = self.findDefExprBySymbol(symbol_meta.module_idx, symbol_meta.ident_idx) orelse {
+                        if (std.debug.runtime_safety) {
+                            std.debug.panic("ensureMethodLowered: need re-specialization for cached symbol but definition not found", .{});
+                        }
+                        unreachable;
+                    };
+                    const spec_symbol = try self.makeSyntheticSymbol(symbol);
+                    try self.poly_specializations.put(spec_key, spec_symbol);
+                    errdefer _ = self.poly_specializations.remove(spec_key);
+                    _ = try self.lowerExternalDefWithType(spec_symbol, def_expr, caller_monotype);
+                    return spec_symbol;
                 }
             }
         }
@@ -2403,13 +2523,13 @@ fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?M
 
     if (self.lowered_symbols.contains(symbol_key)) return symbol;
 
-    if (self.findDefExprBySymbol(symbol_meta.module_idx, symbol_meta.ident_idx)) |def_expr| {
-        _ = try self.lowerExternalDefWithType(symbol, def_expr, caller_func_monotype);
-    }
-
-    // Method not found in target module's defs. This can happen for same-module
-    // methods where the definition is accessible through other means (e.g., via
-    // e_lookup_local processing when the call func expression is lowered).
+    const def_expr = self.findDefExprBySymbol(symbol_meta.module_idx, symbol_meta.ident_idx) orelse {
+        if (std.debug.runtime_safety) {
+            std.debug.panic("ensureMethodLowered: method definition not found for symbol", .{});
+        }
+        unreachable;
+    };
+    _ = try self.lowerExternalDefWithType(symbol, def_expr, caller_func_monotype);
     return symbol;
 }
 
