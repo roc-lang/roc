@@ -808,42 +808,10 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
                     try self.emitConversion(local_info.val_type, expected_vt);
                 }
             } else if (self.closure_values.get(key)) |cv| {
-                // Symbol is a closure bound via tryBindFunction — generate its
-                // runtime closure value (used when passing closures as arguments
-                // to higher-order functions like List.fold).
-                if (self.store.getSymbolDef(l.symbol)) |def_id| {
-                    const def_expr = self.store.getExpr(def_id);
-                    switch (def_expr) {
-                        .closure => |closure_id| try self.generateClosureValue(self.store.getClosureData(closure_id)),
-                        .lambda => {
-                            // Lambda with no captures: push dummy 0 (direct_call)
-                            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                            WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-                        },
-                        .nominal => |nom| {
-                            const inner = self.store.getExpr(nom.backing_expr);
-                            switch (inner) {
-                                .closure => |inner_closure_id| try self.generateClosureValue(self.store.getClosureData(inner_closure_id)),
-                                .lambda => {
-                                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                                    WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-                                },
-                                else => unreachable,
-                            }
-                        },
-                        .call => {
-                            // Symbol is bound to a call result (e.g., add5 = make_adder(5)).
-                            // The captures were extracted into locals by tryBindFunction(.call).
-                            // Generate the closure value from the stored closure_values entry.
-                            try self.generateClosureValue(cv);
-                        },
-                        else => unreachable,
-                    }
-                } else {
-                    // Some lowered closure symbols (e.g. synthetic specializations)
-                    // are tracked in closure_values without a symbol_def entry.
-                    try self.generateClosureValue(cv);
-                }
+                // Symbol is already bound as a callable in closure_values.
+                // Generate its runtime closure value (used when passing callables
+                // as arguments to higher-order functions).
+                try self.generateClosureValue(cv);
             } else if (self.store.getSymbolDef(l.symbol)) |def_id| {
                 // Symbol not in locals or closure_values — resolve via getSymbolDef.
                 // This handles callables whose block binding was dropped by RC insertion
@@ -852,27 +820,14 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
                 switch (def_expr) {
                     .lambda, .closure, .nominal => {
                         if (try self.tryBindFunction(def_id, def_expr, l.symbol)) {
-                            // Now bound — generate its closure value
-                            const cv_def_id = self.store.getSymbolDef(l.symbol) orelse unreachable;
-                            const cv_def_expr = self.store.getExpr(cv_def_id);
-                            switch (cv_def_expr) {
-                                .closure => |closure_id| try self.generateClosureValue(self.store.getClosureData(closure_id)),
-                                .lambda => {
-                                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                                    WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-                                },
-                                .nominal => |nom| {
-                                    const inner = self.store.getExpr(nom.backing_expr);
-                                    switch (inner) {
-                                        .closure => |inner_closure_id| try self.generateClosureValue(self.store.getClosureData(inner_closure_id)),
-                                        .lambda => {
-                                            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                                            WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-                                        },
-                                        else => unreachable,
-                                    }
-                                },
-                                else => unreachable,
+                            // Now bound — generate closure value through closure_values.
+                            if (self.closure_values.get(key)) |bound_cv| {
+                                try self.generateClosureValue(bound_cv);
+                            } else {
+                                if (std.debug.runtime_safety) {
+                                    std.debug.panic("WasmCodeGen invariant: callable lookup bound without closure_values entry", .{});
+                                }
+                                unreachable;
                             }
                         } else {
                             unreachable;
@@ -977,11 +932,9 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
         .lambda => |lambda| {
             // Compile lambda as a separate wasm function.
             // The result is a function index we can reference later.
-            _ = try self.compileLambda(expr_id, lambda);
-            // Lambda as a value — push a placeholder i32.
-            // For let-bound lambdas, closure_values is used at call site.
-            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+            const func_idx = try self.compileLambda(expr_id, lambda);
+            // Runtime value for direct-call closures is the compiled wasm function index.
+            try self.emitDirectCallableValue(func_idx);
         },
         .call => |c| {
             try self.generateCall(c);
@@ -1027,7 +980,7 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
                 },
                 .direct_call, .unwrapped_capture, .struct_captures => {
                     // Single function - compile and produce the closure value.
-                    // For direct_call: pushes dummy 0 (no captures).
+                    // For direct_call: pushes the compiled function index.
                     // For unwrapped_capture: pushes the single capture value.
                     // For struct_captures: materializes captures struct, pushes pointer.
                     _ = try self.compileClosure(expr_id, closure);
@@ -5783,7 +5736,8 @@ fn tryBindFunction(self: *Self, expr_id: LirExprId, expr: LirExpr, symbol: Symbo
             // factory produces multiple closures.
             switch (closure_info.representation) {
                 .direct_call => {
-                    // No captures — drop the dummy return value
+                    // No captures — drop the direct-call closure value.
+                    // The callable identity is tracked in closure_values.
                     try self.body.append(self.allocator, Op.drop);
                 },
                 .unwrapped_capture => {
@@ -6791,7 +6745,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
 
             switch (inner_closure_info.representation) {
                 .direct_call => {
-                    // No captures — drop the dummy return value, push roc_ops_ptr, args, call
+                    // No captures — drop the direct-call closure value, then call.
                     try self.body.append(self.allocator, Op.drop);
                     try self.emitLocalGet(self.roc_ops_local);
                     try self.emitForwardedCaptures(func_idx);
@@ -7168,16 +7122,75 @@ fn findClosureReprInExpr(self: *const Self, expr_id: LirExprId) ?LIR.ClosureRepr
     };
 }
 
+/// Emit the runtime value for a direct-call callable.
+/// We represent this as the compiled wasm function index.
+fn emitDirectCallableValue(self: *Self, func_idx: u32) Allocator.Error!void {
+    try self.body.append(self.allocator, Op.i32_const);
+    try WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(func_idx));
+}
+
+/// Resolve the compiled wasm function index for a direct-call callable.
+fn directCallableFuncIdx(self: *Self, closure: anytype) Allocator.Error!u32 {
+    if (@hasField(@TypeOf(closure), "func_idx")) {
+        if (closure.func_idx) |fid| return fid;
+    }
+
+    if (@hasField(@TypeOf(closure), "lambda")) {
+        const lambda_expr_id: LirExprId = closure.lambda;
+        const lambda_expr = self.store.getExpr(lambda_expr_id);
+        return switch (lambda_expr) {
+            .lambda => |lambda| try self.compileLambda(lambda_expr_id, lambda),
+            else => {
+                if (std.debug.runtime_safety) {
+                    std.debug.panic("WasmCodeGen invariant: direct-call closure.lambda must be a lambda expr", .{});
+                }
+                unreachable;
+            },
+        };
+    }
+
+    if (@hasField(@TypeOf(closure), "lambda_expr")) {
+        const expr_id: LirExprId = closure.lambda_expr;
+        const expr = self.store.getExpr(expr_id);
+        switch (expr) {
+            .lambda => |lambda| return try self.compileLambda(expr_id, lambda),
+            .closure => |closure_id| return try self.compileClosure(expr_id, self.store.getClosureData(closure_id)),
+            .nominal => |nom| {
+                const inner_expr = self.store.getExpr(nom.backing_expr);
+                return switch (inner_expr) {
+                    .lambda => |lambda| try self.compileLambda(nom.backing_expr, lambda),
+                    .closure => |closure_id| try self.compileClosure(nom.backing_expr, self.store.getClosureData(closure_id)),
+                    else => {
+                        if (std.debug.runtime_safety) {
+                            std.debug.panic("WasmCodeGen invariant: nominal direct-call callable must wrap lambda/closure", .{});
+                        }
+                        unreachable;
+                    },
+                };
+            },
+            else => {
+                if (std.debug.runtime_safety) {
+                    std.debug.panic("WasmCodeGen invariant: direct-call callable lambda_expr must resolve to callable expr", .{});
+                }
+                unreachable;
+            },
+        }
+    }
+
+    if (std.debug.runtime_safety) {
+        std.debug.panic("WasmCodeGen invariant: missing function index for direct-call callable value", .{});
+    }
+    unreachable;
+}
+
 /// Generate a closure value based on its representation.
 /// Handles all ClosureRepresentation variants and leaves the appropriate
 /// runtime value on the wasm stack.
 fn generateClosureValue(self: *Self, closure: anytype) Allocator.Error!void {
     switch (closure.representation) {
         .direct_call => {
-            // No runtime value needed - will be called directly.
-            // Push a dummy 0 as placeholder (caller won't use it).
-            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+            const func_idx = try self.directCallableFuncIdx(closure);
+            try self.emitDirectCallableValue(func_idx);
         },
         .unwrapped_capture => |repr| {
             // Single capture - push the capture value directly.
