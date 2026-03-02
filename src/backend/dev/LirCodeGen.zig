@@ -1714,6 +1714,28 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return expr == .lookup and expr.lookup.symbol.isNone();
         }
 
+        fn borrowedStrArgNeedsLocalRelease(self: *Self, expr_id: LirExprId) bool {
+            if (self.exprResolvesToLookup(expr_id)) {
+                const expr = self.store.getExpr(expr_id);
+                return expr == .lookup and expr.lookup.symbol.isNone();
+            }
+
+            return switch (self.store.getExpr(expr_id)) {
+                // These produce owned string values that must be released if borrowed.
+                .struct_access,
+                .tag_payload_access,
+                .str_concat,
+                .str_escape_and_quote,
+                .int_to_str,
+                .float_to_str,
+                .dec_to_str,
+                => true,
+                // Conservative default for strings: avoid local decref on values that
+                // may be seamless slices or otherwise non-owning.
+                else => false,
+            };
+        }
+
         /// Generate code for an expression. The result is ALWAYS in a stable location
         /// (stack, immediate, lambda_code, closure_value) — never a bare register.
         fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!ValueLocation {
@@ -11877,6 +11899,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const next_off = try self.ensureOnStack(next_loc, roc_str_size);
                 acc_loc = try self.callStr2RocOpsToStr(acc_off, next_off, @intFromPtr(&dev_wrappers.roc_builtins_str_concat_packed), .str_concat);
                 acc_off = try self.ensureOnStack(acc_loc, roc_str_size);
+
+                // str_concat borrows its RHS. If we materialized a temporary RHS
+                // expression (not a stable lookup), release that temporary here.
+                if (self.borrowedStrArgNeedsLocalRelease(next_expr)) {
+                    if (self.getExprLayout(next_expr)) |next_layout_idx| {
+                        try self.emitRcForLayout(next_loc, next_layout_idx, .decref, 1);
+                    }
+                }
             }
 
             return acc_loc;
@@ -12092,7 +12122,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn generateStrEscapeAndQuote(self: *Self, expr_id: anytype) Allocator.Error!ValueLocation {
             const str_loc = try self.generateExpr(expr_id);
             const str_off = try self.ensureOnStack(str_loc, roc_str_size);
-            return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&dev_wrappers.roc_builtins_str_escape_and_quote_packed), .str_escape_and_quote, .str);
+            const result = try self.callStr1RocOpsToResult(str_off, @intFromPtr(&dev_wrappers.roc_builtins_str_escape_and_quote_packed), .str_escape_and_quote, .str);
+
+            if (self.borrowedStrArgNeedsLocalRelease(expr_id)) {
+                if (self.getExprLayout(expr_id)) |arg_layout_idx| {
+                    try self.emitRcForLayout(str_loc, arg_layout_idx, .decref, 1);
+                }
+            }
+
+            return result;
         }
 
         /// Generate code for discriminant switch

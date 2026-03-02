@@ -2625,6 +2625,9 @@ fn inspektRecord(self: *Self, value_expr: LirExprId, record: anytype, mono_idx: 
     if (fields.len == 0) return self.emitStrLiteral("{}", region);
 
     const struct_layout = try self.layoutFromMonotype(mono_idx);
+    const value_bp = try self.freshBindPattern(struct_layout, false, region);
+    const value_lookup = try self.emitLookup(value_bp.symbol, struct_layout, region);
+
     const struct_layout_val = self.layout_store.getLayout(struct_layout);
     std.debug.assert(struct_layout_val.tag == .struct_);
     const struct_data = self.layout_store.getStructData(struct_layout_val.data.struct_.idx);
@@ -2682,7 +2685,7 @@ fn inspektRecord(self: *Self, value_expr: LirExprId, record: anytype, mono_idx: 
         }
         const field_layout = try self.layoutFromMonotype(field.type_idx);
         const field_access = try self.lir_store.addExpr(.{ .struct_access = .{
-            .struct_expr = value_expr,
+            .struct_expr = value_lookup,
             .struct_layout = struct_layout,
             .field_layout = field_layout,
             .field_idx = layout_field_idx orelse unreachable,
@@ -2696,7 +2699,16 @@ fn inspektRecord(self: *Self, value_expr: LirExprId, record: anytype, mono_idx: 
     try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(" }", region));
 
     const parts = self.scratch_lir_expr_ids.items[save_exprs..];
-    return self.foldStrConcat(parts, region);
+    const inspected = try self.foldStrConcat(parts, region);
+    const stmts = try self.lir_store.addStmts(&.{.{ .decl = .{
+        .pattern = value_bp.pattern,
+        .expr = value_expr,
+    } }});
+    return self.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = inspected,
+        .result_layout = .str,
+    } }, region);
 }
 
 /// Inspect a tuple: (inspect(v0), inspect(v1), ...)
@@ -2705,6 +2717,9 @@ fn inspektTuple(self: *Self, value_expr: LirExprId, tup: anytype, mono_idx: Mono
     if (elems.len == 0) return self.emitStrLiteral("()", region);
 
     const struct_layout = try self.layoutFromMonotype(mono_idx);
+    const value_bp = try self.freshBindPattern(struct_layout, false, region);
+    const value_lookup = try self.emitLookup(value_bp.symbol, struct_layout, region);
+
     const struct_layout_val = self.layout_store.getLayout(struct_layout);
     const struct_data = if (struct_layout_val.tag == .struct_)
         self.layout_store.getStructData(struct_layout_val.data.struct_.idx)
@@ -2734,7 +2749,7 @@ fn inspektTuple(self: *Self, value_expr: LirExprId, tup: anytype, mono_idx: Mono
         }
         const elem_layout = try self.layoutFromMonotype(elem_mono);
         const elem_access = try self.lir_store.addExpr(.{ .struct_access = .{
-            .struct_expr = value_expr,
+            .struct_expr = value_lookup,
             .struct_layout = struct_layout,
             .field_layout = elem_layout,
             .field_idx = layout_field_idx orelse unreachable,
@@ -2747,7 +2762,16 @@ fn inspektTuple(self: *Self, value_expr: LirExprId, tup: anytype, mono_idx: Mono
     try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(")", region));
 
     const parts = self.scratch_lir_expr_ids.items[save_exprs..];
-    return self.foldStrConcat(parts, region);
+    const inspected = try self.foldStrConcat(parts, region);
+    const stmts = try self.lir_store.addStmts(&.{.{ .decl = .{
+        .pattern = value_bp.pattern,
+        .expr = value_expr,
+    } }});
+    return self.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = inspected,
+        .result_layout = .str,
+    } }, region);
 }
 
 /// Inspect a tag union: discriminant_switch on the tag, producing "TagName" or "TagName(payload)"
@@ -2756,70 +2780,83 @@ fn inspektTagUnion(self: *Self, value_expr: LirExprId, tu: anytype, mono_idx: Mo
     if (tags.len == 0) return self.emitStrLiteral("<empty_tag_union>", region);
 
     const union_layout = try self.layoutFromMonotype(mono_idx);
+    const value_bp = try self.freshBindPattern(union_layout, false, region);
+    const value_lookup = try self.emitLookup(value_bp.symbol, union_layout, region);
 
-    // Single-tag union: no discriminant, directly inspect the payload
-    if (tags.len == 1) {
-        return self.inspektSingleTag(value_expr, tags[0], mono_idx, union_layout, region);
-    }
-
-    // Bool-like: exactly 2 zero-payload tags → emit if/else
-    if (tags.len == 2) {
-        const p0 = self.mir_store.monotype_store.getIdxSpan(tags[0].payloads);
-        const p1 = self.mir_store.monotype_store.getIdxSpan(tags[1].payloads);
-        if (p0.len == 0 and p1.len == 0) {
-            return self.inspektBoolLikeTagUnion(value_expr, tags, region);
+    const inspected = blk: {
+        // Single-tag union: no discriminant, directly inspect the payload
+        if (tags.len == 1) {
+            break :blk try self.inspektSingleTag(value_lookup, tags[0], mono_idx, union_layout, region);
         }
-    }
 
-    // Multi-tag union: emit a discriminant_switch with one branch per
-    // discriminant value. `generateDiscriminantSwitch` matches branch index `i`
-    // against runtime discriminant `i`, so we must order branches by discriminant
-    // even if `tags` arrives in a different order.
-    const save_exprs = self.scratch_lir_expr_ids.items.len;
-    defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
-
-    const ordered_branches = try self.allocator.alloc(LirExprId, tags.len);
-    defer self.allocator.free(ordered_branches);
-    const seen_discriminants = try self.allocator.alloc(bool, tags.len);
-    defer self.allocator.free(seen_discriminants);
-    @memset(seen_discriminants, false);
-
-    for (tags) |tag| {
-        const discriminant = self.tagDiscriminant(tag.name, mono_idx);
-        if (discriminant >= tags.len) {
-            std.debug.panic(
-                "inspektTagUnion: discriminant {} out of range for {} tags",
-                .{ discriminant, tags.len },
-            );
+        // Bool-like: exactly 2 zero-payload tags → emit if/else
+        if (tags.len == 2) {
+            const p0 = self.mir_store.monotype_store.getIdxSpan(tags[0].payloads);
+            const p1 = self.mir_store.monotype_store.getIdxSpan(tags[1].payloads);
+            if (p0.len == 0 and p1.len == 0) {
+                break :blk try self.inspektBoolLikeTagUnion(value_lookup, tags, region);
+            }
         }
-        if (seen_discriminants[discriminant]) {
-            std.debug.panic(
-                "inspektTagUnion: duplicate discriminant {} for mono_idx={}",
-                .{ discriminant, @intFromEnum(mono_idx) },
-            );
+
+        // Multi-tag union: emit a discriminant_switch with one branch per
+        // discriminant value. `generateDiscriminantSwitch` matches branch index `i`
+        // against runtime discriminant `i`, so we must order branches by discriminant
+        // even if `tags` arrives in a different order.
+        const save_exprs = self.scratch_lir_expr_ids.items.len;
+        defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
+
+        const ordered_branches = try self.allocator.alloc(LirExprId, tags.len);
+        defer self.allocator.free(ordered_branches);
+        const seen_discriminants = try self.allocator.alloc(bool, tags.len);
+        defer self.allocator.free(seen_discriminants);
+        @memset(seen_discriminants, false);
+
+        for (tags) |tag| {
+            const discriminant = self.tagDiscriminant(tag.name, mono_idx);
+            if (discriminant >= tags.len) {
+                std.debug.panic(
+                    "inspektTagUnion: discriminant {} out of range for {} tags",
+                    .{ discriminant, tags.len },
+                );
+            }
+            if (seen_discriminants[discriminant]) {
+                std.debug.panic(
+                    "inspektTagUnion: duplicate discriminant {} for mono_idx={}",
+                    .{ discriminant, @intFromEnum(mono_idx) },
+                );
+            }
+            const branch_expr = try self.inspektTagBranch(value_lookup, tag, union_layout, region);
+            ordered_branches[discriminant] = branch_expr;
+            seen_discriminants[discriminant] = true;
         }
-        const branch_expr = try self.inspektTagBranch(value_expr, tag, union_layout, region);
-        ordered_branches[discriminant] = branch_expr;
-        seen_discriminants[discriminant] = true;
-    }
 
-    for (seen_discriminants, 0..) |seen, disc| {
-        if (!seen) {
-            std.debug.panic(
-                "inspektTagUnion: missing branch for discriminant {} mono_idx={}",
-                .{ disc, @intFromEnum(mono_idx) },
-            );
+        for (seen_discriminants, 0..) |seen, disc| {
+            if (!seen) {
+                std.debug.panic(
+                    "inspektTagUnion: missing branch for discriminant {} mono_idx={}",
+                    .{ disc, @intFromEnum(mono_idx) },
+                );
+            }
+            try self.scratch_lir_expr_ids.append(self.allocator, ordered_branches[disc]);
         }
-        try self.scratch_lir_expr_ids.append(self.allocator, ordered_branches[disc]);
-    }
 
-    const branches = self.scratch_lir_expr_ids.items[save_exprs..];
-    const branches_span = try self.lir_store.addExprSpan(branches);
+        const branches = self.scratch_lir_expr_ids.items[save_exprs..];
+        const branches_span = try self.lir_store.addExprSpan(branches);
+        break :blk try self.lir_store.addExpr(.{ .discriminant_switch = .{
+            .value = value_lookup,
+            .union_layout = union_layout,
+            .branches = branches_span,
+            .result_layout = .str,
+        } }, region);
+    };
 
-    return self.lir_store.addExpr(.{ .discriminant_switch = .{
-        .value = value_expr,
-        .union_layout = union_layout,
-        .branches = branches_span,
+    const stmts = try self.lir_store.addStmts(&.{.{ .decl = .{
+        .pattern = value_bp.pattern,
+        .expr = value_expr,
+    } }});
+    return self.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = inspected,
         .result_layout = .str,
     } }, region);
 }
@@ -2987,23 +3024,24 @@ fn inspektTagBranch(self: *Self, union_value: LirExprId, tag: Monotype.Tag, unio
 fn foldStrConcat(self: *Self, parts: []const LirExprId, region: Region) Allocator.Error!LirExprId {
     if (parts.len == 0) return self.emitStrLiteral("", region);
     if (parts.len == 1) return parts[0];
-    if (parts.len == 2) {
-        return self.lir_store.addExpr(.{ .str_concat = try self.lir_store.addExprSpan(parts) }, region);
-    }
 
-    // For 3+ parts, fold left with let-bindings
+    // Fold left with explicit bindings so each concatenation operand is a
+    // symbol. This keeps concat RHS values materialized for RC insertion,
+    // since str_concat borrows its RHS.
     const save_stmts = self.scratch_lir_stmts.items.len;
     defer self.scratch_lir_stmts.shrinkRetainingCapacity(save_stmts);
 
-    // First concat: parts[0] ++ parts[1]
-    var acc_expr = try self.lir_store.addExpr(.{ .str_concat = try self.lir_store.addExprSpan(parts[0..2]) }, region);
+    var acc_expr = parts[0];
+    for (parts[1..]) |part| {
+        const acc_bp = try self.freshBindPattern(.str, false, region);
+        try self.scratch_lir_stmts.append(self.allocator, .{ .decl = .{ .pattern = acc_bp.pattern, .expr = acc_expr } });
+        const acc_lookup = try self.emitLookup(acc_bp.symbol, .str, region);
 
-    // For each remaining part, bind the accumulator and concat the next part
-    for (parts[2..]) |part| {
-        const bp = try self.freshBindPattern(.str, false, region);
-        try self.scratch_lir_stmts.append(self.allocator, .{ .decl = .{ .pattern = bp.pattern, .expr = acc_expr } });
-        const acc_lookup = try self.emitLookup(bp.symbol, .str, region);
-        acc_expr = try self.lir_store.addExpr(.{ .str_concat = try self.lir_store.addExprSpan(&.{ acc_lookup, part }) }, region);
+        const part_bp = try self.freshBindPattern(.str, false, region);
+        try self.scratch_lir_stmts.append(self.allocator, .{ .decl = .{ .pattern = part_bp.pattern, .expr = part } });
+        const part_lookup = try self.emitLookup(part_bp.symbol, .str, region);
+
+        acc_expr = try self.lir_store.addExpr(.{ .str_concat = try self.lir_store.addExprSpan(&.{ acc_lookup, part_lookup }) }, region);
     }
 
     const stmts = try self.lir_store.addStmts(self.scratch_lir_stmts.items[save_stmts..]);
@@ -3109,9 +3147,17 @@ fn inspektList(self: *Self, list_expr: LirExprId, list_data: anytype, mono_idx: 
     // inspect($elem)
     const elem_inspected = try self.expandStrInspekt(elem_expr, elem_mono, region);
 
+    // Bind inspect result so RHS borrow semantics are explicit for RC insertion.
+    const elem_inspected_bp = try self.freshBindPattern(.str, false, region);
+    try self.scratch_lir_stmts.append(self.allocator, .{ .decl = .{
+        .pattern = elem_inspected_bp.pattern,
+        .expr = elem_inspected,
+    } });
+
     // mutate $acc = str_concat($acc, inspect_result)
     const body_acc_lookup2 = try self.emitLookup(acc_bp.symbol, .str, region);
-    const concat_elem = try self.lir_store.addExpr(.{ .str_concat = try self.lir_store.addExprSpan(&.{ body_acc_lookup2, elem_inspected }) }, region);
+    const elem_inspected_lookup = try self.emitLookup(elem_inspected_bp.symbol, .str, region);
+    const concat_elem = try self.lir_store.addExpr(.{ .str_concat = try self.lir_store.addExprSpan(&.{ body_acc_lookup2, elem_inspected_lookup }) }, region);
     const acc_mut_pat2 = try self.lir_store.addPattern(.{ .bind = .{ .symbol = acc_bp.symbol, .layout_idx = .str } }, region);
     try self.scratch_lir_stmts.append(self.allocator, .{ .mutate = .{ .pattern = acc_mut_pat2, .expr = concat_elem } });
 

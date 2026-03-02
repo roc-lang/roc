@@ -944,8 +944,12 @@ pub const RcInsertPass = struct {
             },
             .str_concat => |span| {
                 const parts = self.store.getExprSpan(span);
-                for (parts) |part_id| {
+                for (parts, 0..) |part_id, i| {
                     try self.countUsesInto(part_id, target);
+                    // str_concat consumes its first argument and borrows the rest.
+                    if (i >= 1) {
+                        self.unconsumeBorrowedArgUse(part_id, target);
+                    }
                 }
             },
             .int_to_str => |its| {
@@ -959,6 +963,7 @@ pub const RcInsertPass = struct {
             },
             .str_escape_and_quote => |s| {
                 try self.countUsesInto(s, target);
+                self.unconsumeBorrowedArgUse(s, target);
             },
             .discriminant_switch => |ds| {
                 try self.countUsesInto(ds.value, target);
@@ -1147,7 +1152,13 @@ pub const RcInsertPass = struct {
         // Guard against sentinel/out-of-range layout indices (e.g., named_fn, none)
         // which can appear for function-typed symbols that don't need RC.
         const idx_int = @intFromEnum(layout_idx);
-        if (idx_int >= self.layout_store.layouts.len()) return false;
+        if (idx_int >= self.layout_store.layouts.len()) {
+            if (layout_idx == LayoutIdx.none or layout_idx == LayoutIdx.named_fn) return false;
+            std.debug.panic(
+                "layoutNeedsRc: out-of-range layout idx={} (store_len={})",
+                .{ idx_int, self.layout_store.layouts.len() },
+            );
+        }
         const l = self.layout_store.getLayout(layout_idx);
         return self.layout_store.layoutContainsRefcounted(l);
     }
@@ -5057,6 +5068,64 @@ test "RC lambda for_loop mutable acc with final list_len emits one cleanup decre
         .params = params,
         .body = lam_body,
         .ret_layout = .u64,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const lowered = try pass.insertRcOps(lambda_expr);
+    const rc = countRcOps(&env.lir_store, lowered);
+    try std.testing.expectEqual(@as(u32, 0), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 1), rc.decrefs);
+}
+
+test "RC lambda list_append with borrowed refcounted rhs decrefs rhs param" {
+    // |acc, x| list_append(acc, x)
+    // list_append consumes acc but borrows x. For refcounted x (List(I64)),
+    // RC insertion must emit one decref for x in lambda cleanup.
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_layout: LayoutIdx = .i64;
+    const inner_list_layout = try env.layout_store.internList(i64_layout);
+    const outer_list_layout = try env.layout_store.internList(inner_list_layout);
+
+    const sym_acc = makeSymbol(811);
+    const sym_x = makeSymbol(812);
+
+    const pat_acc = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_acc,
+        .layout_idx = outer_list_layout,
+    } }, Region.zero());
+    const pat_x = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_x,
+        .layout_idx = inner_list_layout,
+    } }, Region.zero());
+    const params = try env.lir_store.addPatternSpan(&.{ pat_acc, pat_x });
+
+    const acc_lookup = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_acc,
+        .layout_idx = outer_list_layout,
+    } }, Region.zero());
+    const x_lookup = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_x,
+        .layout_idx = inner_list_layout,
+    } }, Region.zero());
+    const append_args = try env.lir_store.addExprSpan(&.{ acc_lookup, x_lookup });
+    const body = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .list_append,
+        .args = append_args,
+        .ret_layout = outer_list_layout,
+    } }, Region.zero());
+
+    const lambda_expr = try env.lir_store.addExpr(.{ .lambda = .{
+        .fn_layout = .none,
+        .params = params,
+        .body = body,
+        .ret_layout = outer_list_layout,
     } }, Region.zero());
 
     var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
