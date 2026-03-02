@@ -14838,13 +14838,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
                 return direct;
             }
-            if (try self.tryGenerateBuiltinListMethodCall(debug_name, args_span, ret_layout)) |direct| {
-                if (debug_is_contains) {
-                    trace("[lookup_call] resolved via Builtin.List direct path\n", .{});
-                }
-                return direct;
-            }
-
             // Prefer a locally-bound callable value (lambda parameter / captured closure)
             // over top-level symbol defs.
             if (self.getSymbolLocation(lookup.symbol, lookup.layout_idx)) |loc| {

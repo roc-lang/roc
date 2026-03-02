@@ -1893,7 +1893,10 @@ test "List.single nested list after other specializations" {
         \\    _ = List.single("hello")
         \\    Str.inspect(List.single([1, 2, 3]))
         \\}
-    , "[[1.0, 2.0, 3.0]]", .no_trace);
+        ,
+        "[[1.0, 2.0, 3.0]]",
+        .no_trace,
+    );
 }
 
 // Test for List.repeat
