@@ -25,7 +25,7 @@ string_function = |x| x + 42
 ```
                       ^^^^^^
 
-The value's type, which does not have a method named**plus**, is:
+The value's type, which does not have a method named **plus**, is:
 
     Str
 
