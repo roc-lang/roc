@@ -2387,7 +2387,16 @@ fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR
     }
     const func_monotype = try self.buildFuncMonotype(self.mono_scratches.idxs.sliceFromStart(mono_top), monotype, false);
 
-    const resolved_symbol = method_symbol orelse return try self.store.addExpr(self.allocator, .runtime_err_type, monotype, region);
+    const resolved_symbol = method_symbol orelse {
+        if (std.debug.runtime_safety) {
+            const method_name = module_env.getIdent(tvd.method_name);
+            std.debug.panic(
+                "lowerTypeVarDispatch: unresolved method '{s}' (checker/lowering invariant broken)",
+                .{method_name},
+            );
+        }
+        unreachable;
+    };
     const args = try self.lowerExprSpan(module_env, tvd.args);
     const lowered_method_symbol = try self.ensureMethodLowered(resolved_symbol, func_monotype);
     const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = lowered_method_symbol }, func_monotype, region);
