@@ -459,13 +459,20 @@ hosted_fn_type = |func| {
 	parsed = parse_type_str(func.type_str)
 	struct_name = name_to_struct_name(func.name)
 
+	zig_ret = roc_type_to_zig(parsed.ret)
+	ret_param = if zig_ret == "void" {
+		"*anyopaque"
+	} else {
+		"*${zig_ret}"
+	}
+
 	args_param = if List.is_empty(parsed.args) {
 		"*anyopaque"
 	} else {
 		"*const ${struct_name}Args"
 	}
 
-	"*const fn (*RocOps, *anyopaque, ${args_param}) callconv(.c) void"
+	"*const fn (*RocOps, ${ret_param}, ${args_param}) callconv(.c) void"
 }
 
 ## Generate the hostedFunctions() helper that builds the dispatch table
