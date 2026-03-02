@@ -270,7 +270,9 @@ fn internSymbol(self: *Self, namespace_idx: u32, ident_idx: Ident.Idx) Allocator
             );
         }
     }
-    return MIR.Symbol.fromRaw(raw);
+    const symbol = MIR.Symbol.fromRaw(raw);
+    try self.store.registerSymbolReassignable(self.allocator, symbol, ident_idx.attributes.reassignable);
+    return symbol;
 }
 
 fn getSymbolMetadata(self: *const Self, symbol: MIR.Symbol) SymbolMetadata {

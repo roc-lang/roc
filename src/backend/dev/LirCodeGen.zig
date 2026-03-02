@@ -10675,7 +10675,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (normalized_value_loc == .list_stack) {} else if (normalized_value_loc == .stack) {}
 
                     // Check if this is a reassignable (mutable) variable
-                    if (bind.symbol.isReassignable()) {
+                    if (bind.reassignable) {
                         // Mutable variables need fixed stack slots for runtime updates
                         if (self.mutable_var_slots.get(symbol_key)) |var_info| {
                             // Re-binding: copy new value to the fixed slot at runtime
@@ -11023,7 +11023,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Ensure a reassignable symbol has a tracked mutable slot from its current location.
         fn trackMutableSlotFromSymbolLocation(self: *Self, bind: anytype, symbol_key: u64) Allocator.Error!void {
-            if (!bind.symbol.isReassignable()) return;
+            if (!bind.reassignable) return;
             const loc = self.symbol_locations.get(symbol_key) orelse return;
 
             const slot: i32 = switch (loc) {

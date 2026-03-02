@@ -1373,10 +1373,15 @@ fn lowerPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Error!LirPatte
     return switch (pat) {
         .bind => |sym| blk: {
             const layout_idx = try self.layoutFromMonotype(mono_idx);
+            const reassignable = self.mir_store.isSymbolReassignable(sym);
             // Register symbol → layout so captured variables can find their layout
             const sym_key: u64 = @bitCast(sym);
             try self.symbol_layouts.put(sym_key, layout_idx);
-            break :blk self.lir_store.addPattern(.{ .bind = .{ .symbol = sym, .layout_idx = layout_idx } }, region);
+            break :blk self.lir_store.addPattern(.{ .bind = .{
+                .symbol = sym,
+                .layout_idx = layout_idx,
+                .reassignable = reassignable,
+            } }, region);
         },
         .wildcard => blk: {
             const layout_idx = try self.layoutFromMonotype(mono_idx);
@@ -1593,9 +1598,11 @@ fn lowerPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Error!LirPatte
         .as_pattern => |ap| blk: {
             const layout_idx = try self.layoutFromMonotype(mono_idx);
             const inner = try self.lowerPattern(ap.pattern);
+            const reassignable = self.mir_store.isSymbolReassignable(ap.symbol);
             break :blk self.lir_store.addPattern(.{ .as_pattern = .{
                 .symbol = ap.symbol,
                 .layout_idx = layout_idx,
+                .reassignable = reassignable,
                 .inner = inner,
             } }, region);
         },
@@ -1960,17 +1967,21 @@ fn mapLowLevel(cir_op: CIR.Expr.LowLevel) ?LirExpr.LowLevel {
 /// Create a fresh synthetic symbol for generated code (ANF bindings).
 /// Uses a reserved high 32-bit namespace to avoid colliding with lowered symbols.
 fn freshSymbol(self: *Self, reassignable: bool) Symbol {
+    _ = reassignable;
     const id = self.next_synthetic_id;
     self.next_synthetic_id += 1;
-    const ident_idx = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = reassignable }, .idx = id };
-    const raw = (@as(u64, std.math.maxInt(u32)) << 32) | @as(u64, @as(u32, @bitCast(ident_idx)));
+    const raw = (@as(u64, std.math.maxInt(u32)) << 32) | @as(u64, id);
     return Symbol.fromRaw(raw);
 }
 
 /// Create a bind pattern for a fresh symbol.
 fn freshBindPattern(self: *Self, layout_idx: layout.Idx, reassignable: bool, region: Region) Allocator.Error!struct { symbol: Symbol, pattern: LirPatternId } {
     const sym = self.freshSymbol(reassignable);
-    const pat = try self.lir_store.addPattern(.{ .bind = .{ .symbol = sym, .layout_idx = layout_idx } }, region);
+    const pat = try self.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym,
+        .layout_idx = layout_idx,
+        .reassignable = reassignable,
+    } }, region);
     return .{ .symbol = sym, .pattern = pat };
 }
 
@@ -2004,6 +2015,12 @@ fn testSymbolFromIdent(ident: Ident.Idx) Symbol {
     return Symbol.fromRaw(@as(u64, @as(u32, @bitCast(ident))));
 }
 
+fn testMirSymbol(mir_store: *MIR.Store, allocator: Allocator, ident: Ident.Idx) !Symbol {
+    const sym = testSymbolFromIdent(ident);
+    try mir_store.registerSymbolReassignable(allocator, sym, ident.attributes.reassignable);
+    return sym;
+}
+
 test "ANF: list of calls Let-binds each call to a symbol" {
     const allocator = testing.allocator;
 
@@ -2027,7 +2044,7 @@ test "ANF: list of calls Let-binds each call to a symbol" {
     } });
 
     const ident_f = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const sym_f = testSymbolFromIdent(ident_f);
+    const sym_f = try testMirSymbol(&env.mir_store, allocator, ident_f);
 
     // func_lookup: lookup of `f`
     const func_lookup = try env.mir_store.addExpr(allocator, .{ .lookup = sym_f }, func_mono, Region.zero());
@@ -2152,7 +2169,7 @@ test "MIR lookup lowers to LIR lookup" {
     const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
 
     const ident_x = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const sym_x = testSymbolFromIdent(ident_x);
+    const sym_x = try testMirSymbol(&env.mir_store, allocator, ident_x);
 
     const lookup_expr = try env.mir_store.addExpr(allocator, .{ .lookup = sym_x }, i64_mono, Region.zero());
     var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, env.module_env.idents.true_tag);
@@ -2175,7 +2192,7 @@ test "MIR block lowers to LIR block" {
 
     // Create a simple block: { x = 42; x }
     const ident_x = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const sym_x = testSymbolFromIdent(ident_x);
+    const sym_x = try testMirSymbol(&env.mir_store, allocator, ident_x);
 
     const int_42 = try env.mir_store.addExpr(allocator, .{ .int = .{
         .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
@@ -2409,7 +2426,7 @@ test "MIR lambda with single capture lowers to closure with unwrapped_capture" {
 
     // Define captured symbol: x = 42
     const ident_x = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const sym_x = testSymbolFromIdent(ident_x);
+    const sym_x = try testMirSymbol(&env.mir_store, allocator, ident_x);
 
     const int_42 = try env.mir_store.addExpr(allocator, .{ .int = .{
         .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
@@ -2457,9 +2474,9 @@ test "MIR lambda with multiple captures lowers to closure with struct_captures" 
 
     // Define captured symbols: x = 42, y = 99
     const ident_x = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const sym_x = testSymbolFromIdent(ident_x);
+    const sym_x = try testMirSymbol(&env.mir_store, allocator, ident_x);
     const ident_y = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 2 };
-    const sym_y = testSymbolFromIdent(ident_y);
+    const sym_y = try testMirSymbol(&env.mir_store, allocator, ident_y);
 
     const int_42 = try env.mir_store.addExpr(allocator, .{ .int = .{
         .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
@@ -2614,7 +2631,7 @@ test "MIR lookup propagates symbol def to LIR store" {
 
     // Register a symbol def in MIR: x = 42
     const ident_x = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const sym_x = testSymbolFromIdent(ident_x);
+    const sym_x = try testMirSymbol(&env.mir_store, allocator, ident_x);
 
     const int_42 = try env.mir_store.addExpr(allocator, .{ .int = .{
         .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
@@ -2777,7 +2794,7 @@ test "MIR single-tag union pattern with one arg emits payload pattern directly" 
 
     // Create pattern: Ok x (bind the payload)
     const ident_x = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 2 };
-    const sym_x = testSymbolFromIdent(ident_x);
+    const sym_x = try testMirSymbol(&env.mir_store, allocator, ident_x);
     const bind_pat = try env.mir_store.addPattern(allocator, .{ .bind = sym_x }, i64_mono);
     const pat_args = try env.mir_store.addPatternSpan(allocator, &.{bind_pat});
     const tag_pat = try env.mir_store.addPattern(allocator, .{ .tag = .{
@@ -2815,9 +2832,9 @@ test "MIR hosted lambda lowers to LIR lambda wrapping hosted_call" {
 
     // Create parameter patterns (two binds)
     const ident_a = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const sym_a = testSymbolFromIdent(ident_a);
+    const sym_a = try testMirSymbol(&env.mir_store, allocator, ident_a);
     const ident_b = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 2 };
-    const sym_b = testSymbolFromIdent(ident_b);
+    const sym_b = try testMirSymbol(&env.mir_store, allocator, ident_b);
 
     const pat_a = try env.mir_store.addPattern(allocator, .{ .bind = sym_a }, i64_mono);
     const pat_b = try env.mir_store.addPattern(allocator, .{ .bind = sym_b }, i64_mono);
@@ -2872,7 +2889,7 @@ test "MIR block with decl_var and mutate_var lowers to LIR decl and mutate" {
 
     // Build MIR: { var s = 1; s = 2; s }
     const ident_s = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = true }, .idx = 1 };
-    const sym_s = testSymbolFromIdent(ident_s);
+    const sym_s = try testMirSymbol(&env.mir_store, allocator, ident_s);
 
     const int_1 = try env.mir_store.addExpr(allocator, .{ .int = .{
         .value = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 },
@@ -2936,9 +2953,9 @@ test "MIR lambda with heterogeneous captures (I64 + Str) lowers to closure with 
 
     // Define captured symbols: x = 42 (I64), s = "hello" (Str)
     const ident_x = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const sym_x = testSymbolFromIdent(ident_x);
+    const sym_x = try testMirSymbol(&env.mir_store, allocator, ident_x);
     const ident_s = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 2 };
-    const sym_s = testSymbolFromIdent(ident_s);
+    const sym_s = try testMirSymbol(&env.mir_store, allocator, ident_s);
 
     const int_42 = try env.mir_store.addExpr(allocator, .{ .int = .{
         .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
@@ -3384,7 +3401,7 @@ test "record destructure wildcard gets actual field layout not zst" {
     // In layout order: [b, c, a]. So b and c should get wildcard patterns
     // with I64 layout, NOT .zst.
     const ident_a = field_a;
-    const sym_a = testSymbolFromIdent(ident_a);
+    const sym_a = try testMirSymbol(&env.mir_store, allocator, ident_a);
     const bind_pat = try env.mir_store.addPattern(allocator, .{ .bind = sym_a }, u8_mono);
     const destructs = try env.mir_store.addPatternSpan(allocator, &.{bind_pat});
     const destruct_field_names = try env.mir_store.addFieldNameSpan(allocator, &.{field_a});

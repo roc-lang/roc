@@ -983,6 +983,7 @@ pub const LirPattern = union(enum) {
     bind: struct {
         symbol: Symbol,
         layout_idx: layout.Idx,
+        reassignable: bool = false,
     },
 
     /// Underscore/wildcard (always matches, doesn't bind).
@@ -1039,6 +1040,7 @@ pub const LirPattern = union(enum) {
     as_pattern: struct {
         symbol: Symbol,
         layout_idx: layout.Idx,
+        reassignable: bool = false,
         inner: LirPatternId,
     },
 };

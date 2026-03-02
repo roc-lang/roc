@@ -90,6 +90,7 @@ pub const RcInsertPass = struct {
     const LiveRcSymbol = struct {
         symbol: Symbol,
         layout_idx: LayoutIdx,
+        reassignable: bool,
     };
 
     comptime {
@@ -413,7 +414,7 @@ pub const RcInsertPass = struct {
         }
     }
 
-    /// Walk a pattern tree, calling ctx.onBind(symbol, layout_idx) at each
+    /// Walk a pattern tree, calling ctx.onBind(symbol, layout_idx, reassignable) at each
     /// .bind and .as_pattern leaf. Handles the full recursion over all pattern
     /// variants so callers only need to implement the leaf action.
     fn walkPatternBinds(store: *const LirExprStore, pat_id: LirPatternId, ctx: anytype) Allocator.Error!void {
@@ -421,10 +422,10 @@ pub const RcInsertPass = struct {
         const pat = store.getPattern(pat_id);
         switch (pat) {
             .bind => |bind| {
-                if (!bind.symbol.isNone()) try ctx.onBind(bind.symbol, bind.layout_idx);
+                if (!bind.symbol.isNone()) try ctx.onBind(bind.symbol, bind.layout_idx, bind.reassignable);
             },
             .as_pattern => |as_pat| {
-                if (!as_pat.symbol.isNone()) try ctx.onBind(as_pat.symbol, as_pat.layout_idx);
+                if (!as_pat.symbol.isNone()) try ctx.onBind(as_pat.symbol, as_pat.layout_idx, as_pat.reassignable);
                 try walkPatternBinds(store, as_pat.inner, ctx);
             },
             .tag => |t| for (store.getPatternSpan(t.args)) |a| {
@@ -447,7 +448,7 @@ pub const RcInsertPass = struct {
         const Ctx = struct {
             pass: *RcInsertPass,
             target: *std.AutoHashMap(u64, u32),
-            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
+            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx, _: bool) Allocator.Error!void {
                 const key = @as(u64, @bitCast(symbol));
                 try ctx.pass.symbol_layouts.put(key, layout_idx);
                 if (!ctx.target.contains(key)) {
@@ -1327,7 +1328,7 @@ pub const RcInsertPass = struct {
             // Mutable bindings are re-bound over time; global symbol use counts
             // over-approximate live refs for the current value at an early_return.
             // Treat the current mutable binding as owning exactly one live ref.
-            const base_count: u32 = if (live.symbol.isReassignable()) 1 else global_count;
+            const base_count: u32 = if (live.reassignable) 1 else global_count;
             const branch_adj: i32 = self.pending_branch_rc_adj.get(key) orelse 0;
             const effective_signed: i32 = @as(i32, @intCast(base_count)) + branch_adj;
             if (effective_signed <= 0) continue; // branch wrapper decrefs handle all refs
@@ -1377,7 +1378,7 @@ pub const RcInsertPass = struct {
     fn collectPatternSymbols(self: *const RcInsertPass, pat_id: LirPatternId, set: *std.AutoHashMap(u64, void)) Allocator.Error!void {
         const Ctx = struct {
             set: *std.AutoHashMap(u64, void),
-            fn onBind(ctx: @This(), symbol: Symbol, _: LayoutIdx) Allocator.Error!void {
+            fn onBind(ctx: @This(), symbol: Symbol, _: LayoutIdx, _: bool) Allocator.Error!void {
                 try ctx.set.put(@as(u64, @bitCast(symbol)), {});
             }
         };
@@ -1673,7 +1674,7 @@ pub const RcInsertPass = struct {
             pass: *RcInsertPass,
             region: Region,
             stmts: *std.ArrayList(LirStmt),
-            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
+            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx, _: bool) Allocator.Error!void {
                 const key = @as(u64, @bitCast(symbol));
                 const resolved_layout = ctx.pass.symbol_layouts.get(key) orelse layout_idx;
                 if (ctx.pass.layoutNeedsRc(resolved_layout)) {
@@ -1697,7 +1698,7 @@ pub const RcInsertPass = struct {
             prior_decl_layouts: *const std.AutoHashMap(u64, LayoutIdx),
             region: Region,
             stmts: *std.ArrayList(LirStmt),
-            fn onBind(ctx: @This(), symbol: Symbol, _: LayoutIdx) Allocator.Error!void {
+            fn onBind(ctx: @This(), symbol: Symbol, _: LayoutIdx, _: bool) Allocator.Error!void {
                 const key = @as(u64, @bitCast(symbol));
                 const previous_layout = ctx.prior_decl_layouts.get(key) orelse return;
                 // If prior statements already consumed this symbol, shadowing should not
@@ -1731,7 +1732,7 @@ pub const RcInsertPass = struct {
             prior_decl_layouts: *const std.AutoHashMap(u64, LayoutIdx),
             region: Region,
             stmts: *std.ArrayList(LirStmt),
-            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
+            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx, _: bool) Allocator.Error!void {
                 const key = @as(u64, @bitCast(symbol));
                 if (!ctx.prior_decl_layouts.contains(key)) return; // not a shadowing bind
 
@@ -1762,7 +1763,7 @@ pub const RcInsertPass = struct {
         const Ctx = struct {
             pass: *RcInsertPass,
             target: *std.AutoHashMap(u64, LayoutIdx),
-            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
+            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx, _: bool) Allocator.Error!void {
                 const key = @as(u64, @bitCast(symbol));
                 const resolved_layout = ctx.pass.symbol_layouts.get(key) orelse layout_idx;
                 try ctx.target.put(key, resolved_layout);
@@ -1775,19 +1776,21 @@ pub const RcInsertPass = struct {
     fn trackLiveRcSymbolsForPattern(self: *RcInsertPass, pat_id: LirPatternId) Allocator.Error!void {
         const Ctx = struct {
             pass: *RcInsertPass,
-            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
+            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx, reassignable: bool) Allocator.Error!void {
                 if (ctx.pass.layoutNeedsRc(layout_idx)) {
                     // Mutable reassignments re-bind the same symbol. Keep a single
                     // live entry per symbol so early_return cleanup does not double-decref.
                     for (ctx.pass.live_rc_symbols.items) |*live| {
                         if (std.meta.eql(live.symbol, symbol)) {
                             live.layout_idx = layout_idx;
+                            live.reassignable = reassignable;
                             return;
                         }
                     }
                     try ctx.pass.live_rc_symbols.append(ctx.pass.allocator, .{
                         .symbol = symbol,
                         .layout_idx = layout_idx,
+                        .reassignable = reassignable,
                     });
                 }
             }
@@ -1810,7 +1813,7 @@ pub const RcInsertPass = struct {
             pass: *RcInsertPass,
             region: Region,
             rc_stmts: *std.ArrayList(LirStmt),
-            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
+            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx, _: bool) Allocator.Error!void {
                 const key = @as(u64, @bitCast(symbol));
                 const resolved_layout = ctx.pass.symbol_layouts.get(key) orelse layout_idx;
                 if (ctx.pass.layoutNeedsRc(resolved_layout)) {
@@ -1843,7 +1846,7 @@ pub const RcInsertPass = struct {
             pass: *RcInsertPass,
             region: Region,
             stmts: *std.ArrayList(LirStmt),
-            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
+            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx, _: bool) Allocator.Error!void {
                 const key = @as(u64, @bitCast(symbol));
                 const resolved_layout = ctx.pass.symbol_layouts.get(key) orelse layout_idx;
                 if (ctx.pass.layoutNeedsRc(resolved_layout)) {
@@ -1878,7 +1881,7 @@ pub const RcInsertPass = struct {
             local_uses: *const std.AutoHashMap(u64, u32),
             region: Region,
             rc_stmts: *std.ArrayList(LirStmt),
-            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
+            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx, _: bool) Allocator.Error!void {
                 if (ctx.pass.layoutNeedsRc(layout_idx)) {
                     const key = @as(u64, @bitCast(symbol));
                     const use_count = ctx.local_uses.get(key) orelse 0;
@@ -1909,7 +1912,7 @@ pub const RcInsertPass = struct {
             local_uses: *const std.AutoHashMap(u64, u32),
             region: Region,
             rc_stmts: *std.ArrayList(LirStmt),
-            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
+            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx, _: bool) Allocator.Error!void {
                 if (ctx.pass.layoutNeedsRc(layout_idx)) {
                     const key = @as(u64, @bitCast(symbol));
                     const use_count = ctx.local_uses.get(key) orelse 0;
