@@ -9400,52 +9400,13 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const list_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(list_local);
 
-            // Generate index as i32
+            // Generate index as i32 from the current runtime value.
+            // Do not constant-fold lookup bindings here: mutable loop indices
+            // (e.g. in Str.inspect list traversal) must observe updates.
             const index_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            const index_expr = self.store.getExpr(args[1]);
-            switch (index_expr) {
-                .dec_literal => |v| {
-                    // Dec literals are scaled by 10^18. Convert back to integer.
-                    const one_point_zero: i128 = 1_000_000_000_000_000_000;
-                    const actual: i32 = if (v == 0) 0 else @intCast(@divExact(v, one_point_zero));
-                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteI32(self.allocator, &self.body, actual) catch return error.OutOfMemory;
-                },
-                .i64_literal => |v| {
-                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(v)) catch return error.OutOfMemory;
-                },
-                .lookup => |lookup| blk: {
-                    const key: u64 = @bitCast(lookup.symbol);
-                    if (self.local_binding_exprs.get(key)) |bound_expr_id| {
-                        const bound_expr = self.store.getExpr(bound_expr_id);
-                        switch (bound_expr) {
-                            .dec_literal => |v| {
-                                const one_point_zero: i128 = 1_000_000_000_000_000_000;
-                                const actual: i32 = if (v == 0) 0 else @intCast(@divExact(v, one_point_zero));
-                                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                                WasmModule.leb128WriteI32(self.allocator, &self.body, actual) catch return error.OutOfMemory;
-                                break :blk;
-                            },
-                            .i64_literal => |v| {
-                                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                                WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(v)) catch return error.OutOfMemory;
-                                break :blk;
-                            },
-                            else => {},
-                        }
-                    }
-                    try self.generateExpr(args[1]);
-                    if (self.exprValType(args[1]) == .i64) {
-                        self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-                    }
-                },
-                else => {
-                    try self.generateExpr(args[1]);
-                    if (self.exprValType(args[1]) == .i64) {
-                        self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-                    }
-                },
+            try self.generateExpr(args[1]);
+            if (self.exprValType(args[1]) == .i64) {
+                self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
             }
             try self.emitLocalSet(index_local);
 

@@ -3020,7 +3020,8 @@ fn freshSymbol(self: *Self, reassignable: bool) Symbol {
     const id = self.next_synthetic_id;
     self.next_synthetic_id += 1;
     return .{
-        .module_idx = std.math.maxInt(u32),
+        // Symbol.none uses module_idx = maxInt(u32), so stay below that sentinel.
+        .module_idx = std.math.maxInt(u32) - 1,
         .ident_idx = .{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = reassignable }, .idx = id },
     };
 }

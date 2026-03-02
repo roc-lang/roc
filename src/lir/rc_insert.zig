@@ -346,6 +346,133 @@ pub const RcInsertPass = struct {
         }
     }
 
+    fn exprHasAnyLookupUseOfSymbol(self: *RcInsertPass, expr_id: LirExprId, symbol: Symbol) bool {
+        if (expr_id.isNone()) return false;
+
+        const expr = self.store.getExpr(expr_id);
+        switch (expr) {
+            .lookup => |lookup| return std.meta.eql(lookup.symbol, symbol),
+            .nominal => |n| return self.exprHasAnyLookupUseOfSymbol(n.backing_expr, symbol),
+            .block => |block| {
+                const stmts = self.store.getStmts(block.stmts);
+                for (stmts) |stmt| {
+                    if (self.exprHasAnyLookupUseOfSymbol(stmt.binding().expr, symbol)) return true;
+                }
+                return self.exprHasAnyLookupUseOfSymbol(block.final_expr, symbol);
+            },
+            .call => |call| {
+                if (self.exprHasAnyLookupUseOfSymbol(call.fn_expr, symbol)) return true;
+                const args = self.store.getExprSpan(call.args);
+                for (args) |arg_id| {
+                    if (self.exprHasAnyLookupUseOfSymbol(arg_id, symbol)) return true;
+                }
+                return false;
+            },
+            .if_then_else => |ite| {
+                const branches = self.store.getIfBranches(ite.branches);
+                for (branches) |branch| {
+                    if (self.exprHasAnyLookupUseOfSymbol(branch.cond, symbol)) return true;
+                    if (self.exprHasAnyLookupUseOfSymbol(branch.body, symbol)) return true;
+                }
+                return self.exprHasAnyLookupUseOfSymbol(ite.final_else, symbol);
+            },
+            .match_expr => |w| {
+                if (self.exprHasAnyLookupUseOfSymbol(w.value, symbol)) return true;
+                const branches = self.store.getMatchBranches(w.branches);
+                for (branches) |branch| {
+                    if (self.exprHasAnyLookupUseOfSymbol(branch.guard, symbol)) return true;
+                    if (self.exprHasAnyLookupUseOfSymbol(branch.body, symbol)) return true;
+                }
+                return false;
+            },
+            .low_level => |ll| {
+                const args = self.store.getExprSpan(ll.args);
+                for (args) |arg_id| {
+                    if (self.exprHasAnyLookupUseOfSymbol(arg_id, symbol)) return true;
+                }
+                return false;
+            },
+            .hosted_call => |hc| {
+                const args = self.store.getExprSpan(hc.args);
+                for (args) |arg_id| {
+                    if (self.exprHasAnyLookupUseOfSymbol(arg_id, symbol)) return true;
+                }
+                return false;
+            },
+            .list => |l| {
+                const elems = self.store.getExprSpan(l.elems);
+                for (elems) |elem_id| {
+                    if (self.exprHasAnyLookupUseOfSymbol(elem_id, symbol)) return true;
+                }
+                return false;
+            },
+            .struct_ => |s| {
+                const fields = self.store.getExprSpan(s.fields);
+                for (fields) |field_id| {
+                    if (self.exprHasAnyLookupUseOfSymbol(field_id, symbol)) return true;
+                }
+                return false;
+            },
+            .tag => |t| {
+                const args = self.store.getExprSpan(t.args);
+                for (args) |arg_id| {
+                    if (self.exprHasAnyLookupUseOfSymbol(arg_id, symbol)) return true;
+                }
+                return false;
+            },
+            .struct_access => |sa| return self.exprHasAnyLookupUseOfSymbol(sa.struct_expr, symbol),
+            .early_return => |ret| return self.exprHasAnyLookupUseOfSymbol(ret.expr, symbol),
+            .dbg => |d| return self.exprHasAnyLookupUseOfSymbol(d.expr, symbol),
+            .expect => |e| return self.exprHasAnyLookupUseOfSymbol(e.cond, symbol) or self.exprHasAnyLookupUseOfSymbol(e.body, symbol),
+            .str_concat => |span| {
+                const parts = self.store.getExprSpan(span);
+                for (parts) |part_id| {
+                    if (self.exprHasAnyLookupUseOfSymbol(part_id, symbol)) return true;
+                }
+                return false;
+            },
+            .int_to_str => |its| return self.exprHasAnyLookupUseOfSymbol(its.value, symbol),
+            .float_to_str => |fts| return self.exprHasAnyLookupUseOfSymbol(fts.value, symbol),
+            .dec_to_str => |d| return self.exprHasAnyLookupUseOfSymbol(d, symbol),
+            .str_escape_and_quote => |s| return self.exprHasAnyLookupUseOfSymbol(s, symbol),
+            .discriminant_switch => |ds| {
+                if (self.exprHasAnyLookupUseOfSymbol(ds.value, symbol)) return true;
+                const branches = self.store.getExprSpan(ds.branches);
+                for (branches) |br_id| {
+                    if (self.exprHasAnyLookupUseOfSymbol(br_id, symbol)) return true;
+                }
+                return false;
+            },
+            .tag_payload_access => |tpa| return self.exprHasAnyLookupUseOfSymbol(tpa.value, symbol),
+            .crash => |crash| return self.exprHasAnyLookupUseOfSymbol(crash.msg_expr, symbol),
+            .for_loop => |fl| {
+                if (self.exprHasAnyLookupUseOfSymbol(fl.list_expr, symbol)) return true;
+                return self.exprHasAnyLookupUseOfSymbol(fl.body, symbol);
+            },
+            .while_loop => |wl| {
+                if (self.exprHasAnyLookupUseOfSymbol(wl.cond, symbol)) return true;
+                return self.exprHasAnyLookupUseOfSymbol(wl.body, symbol);
+            },
+            .lambda,
+            .closure,
+            .incref,
+            .decref,
+            .free,
+            .i64_literal,
+            .i128_literal,
+            .f64_literal,
+            .f32_literal,
+            .dec_literal,
+            .str_literal,
+            .bool_literal,
+            .empty_list,
+            .zero_arg_tag,
+            .runtime_error,
+            .break_expr,
+            => return false,
+        }
+    }
+
     /// Sum all use counts for a symbol across every layout key.
     fn sumSymbolUses(_: *RcInsertPass, uses: *const std.AutoHashMap(SymbolUseKey, u32), symbol: Symbol) u32 {
         var total: u32 = 0;
@@ -2467,14 +2594,15 @@ pub const RcInsertPass = struct {
                 const remaining_uses = if (consumed_so_far >= total_uses) 0 else total_uses - consumed_so_far;
                 if (remaining_uses != 0) return;
 
-                var should_defer_cleanup = ctx.pass.exprHasBorrowedLookupUseOfSymbol(ctx.final_expr, symbol);
+                var should_defer_cleanup = ctx.pass.exprHasAnyLookupUseOfSymbol(ctx.final_expr, symbol);
 
                 // Mutable tail cleanup runs while we are iterating statements.
-                // A symbol can still be used later via borrowed low-level args,
-                // which are intentionally excluded from consume counts.
+                // A symbol can still be used later in nested loop/branch bodies.
+                // Those uses can be excluded from consume counts (e.g. zero-iteration
+                // loops), so we must defer cleanup until after block execution.
                 if (!should_defer_cleanup and (ctx.stmt_index + 1) < ctx.block_stmts.len) {
                     for (ctx.block_stmts[ctx.stmt_index + 1 ..]) |later_stmt| {
-                        if (ctx.pass.exprHasBorrowedLookupUseOfSymbol(later_stmt.binding().expr, symbol)) {
+                        if (ctx.pass.exprHasAnyLookupUseOfSymbol(later_stmt.binding().expr, symbol)) {
                             should_defer_cleanup = true;
                             break;
                         }
