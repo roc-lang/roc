@@ -5001,8 +5001,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             unreachable;
         }
 
-        /// Look up a symbol definition, tolerating identifier attribute drift
-        /// by falling back to matching `(module_idx, ident_idx.idx)`.
+        /// Look up a symbol definition.
         fn getSymbolDefRelaxed(self: *Self, symbol: Symbol) ?LirExprId {
             return self.store.getSymbolDef(symbol);
         }
@@ -10850,7 +10849,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (normalized_value_loc == .list_stack) {} else if (normalized_value_loc == .stack) {}
 
                     // Check if this is a reassignable (mutable) variable
-                    if (bind.symbol.ident_idx.attributes.reassignable) {
+                    if (bind.symbol.isReassignable()) {
                         // Mutable variables need fixed stack slots for runtime updates
                         if (self.mutable_var_slots.get(symbol_key)) |var_info| {
                             // Re-binding: copy new value to the fixed slot at runtime
@@ -11198,7 +11197,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Ensure a reassignable symbol has a tracked mutable slot from its current location.
         fn trackMutableSlotFromSymbolLocation(self: *Self, bind: anytype, symbol_key: u64) Allocator.Error!void {
-            if (!bind.symbol.ident_idx.attributes.reassignable) return;
+            if (!bind.symbol.isReassignable()) return;
             const loc = self.symbol_locations.get(symbol_key) orelse return;
 
             const slot: i32 = switch (loc) {
@@ -13021,22 +13020,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             const sym: Symbol = @bitCast(symbol_key);
-            var sym_name: []const u8 = "<unknown>";
-            if (self.layout_store) |ls| {
-                if (sym.module_idx < ls.all_module_envs.len) {
-                    const env = ls.all_module_envs[sym.module_idx];
-                    if (sym.ident_idx.idx < env.common.idents.interner.bytes.len()) {
-                        sym_name = env.getIdent(sym.ident_idx);
-                    }
-                }
-            }
             std.debug.panic(
-                "generateLookupCall: unresolved symbol={} module={} ident={} name={s} layout={}",
+                "generateLookupCall: unresolved symbol={} layout={}",
                 .{
-                    symbol_key,
-                    sym.module_idx,
-                    sym.ident_idx.idx,
-                    sym_name,
+                    sym.raw(),
                     @intFromEnum(lookup.layout_idx),
                 },
             );

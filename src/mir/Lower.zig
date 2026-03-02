@@ -9,7 +9,7 @@
 //! - `e_type_var_dispatch` → `call` with resolved target
 //! - `e_nominal` → backing expression (strip nominal wrapper)
 //! - `e_closure` → `lambda` with captures
-//! - All lookups unified to `Symbol` (module_idx + ident_idx)
+//! - All lookups unified to opaque global `Symbol`
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -48,6 +48,11 @@ const ResolvedDispatchTarget = struct {
     origin: Ident.Idx,
     method_ident: Ident.Idx,
     fn_var: types.Var,
+};
+
+const SymbolMetadata = struct {
+    module_idx: u32,
+    ident_idx: Ident.Idx,
 };
 
 // --- Fields ---
@@ -89,6 +94,9 @@ lowered_symbols: std.AutoHashMap(u64, MIR.ExprId),
 /// a new synthetic symbol is created, lowered with the new type, and cached here.
 /// Key is (symbol_key << 32 | @intFromEnum(monotype)) as u128.
 poly_specializations: std.AutoHashMap(u128, MIR.Symbol),
+
+/// Metadata for opaque symbol IDs; populated at symbol construction time.
+symbol_metadata: std.AutoHashMap(u64, SymbolMetadata),
 
 /// Counter for generating synthetic ident indices for polymorphic specializations.
 /// Counts down from NONE - 1 to avoid collision with real idents.
@@ -181,6 +189,7 @@ pub fn init(
         .type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
         .lowered_symbols = std.AutoHashMap(u64, MIR.ExprId).init(allocator),
         .poly_specializations = std.AutoHashMap(u128, MIR.Symbol).init(allocator),
+        .symbol_metadata = std.AutoHashMap(u64, SymbolMetadata).init(allocator),
         .next_synthetic_ident = Ident.Idx.NONE.idx - 1,
         .in_progress_defs = std.AutoHashMap(u64, void).init(allocator),
         .in_progress_symbol_monotypes = std.AutoHashMap(u64, Monotype.Idx).init(allocator),
@@ -234,6 +243,7 @@ pub fn deinit(self: *Self) void {
     self.type_var_seen.deinit();
     self.lowered_symbols.deinit();
     self.poly_specializations.deinit();
+    self.symbol_metadata.deinit();
     self.in_progress_defs.deinit();
     self.in_progress_symbol_monotypes.deinit();
     self.deferred_block_lambdas.deinit();
@@ -249,6 +259,38 @@ pub fn deinit(self: *Self) void {
     self.mono_scratches.deinit();
 }
 
+fn packSymbolId(namespace_idx: u32, ident_idx: Ident.Idx) u64 {
+    const ident_bits: u32 = @bitCast(ident_idx);
+    return (@as(u64, namespace_idx) << 32) | @as(u64, ident_bits);
+}
+
+fn internSymbol(self: *Self, namespace_idx: u32, ident_idx: Ident.Idx) Allocator.Error!MIR.Symbol {
+    const raw = packSymbolId(namespace_idx, ident_idx);
+    const gop = try self.symbol_metadata.getOrPut(raw);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = .{ .module_idx = namespace_idx, .ident_idx = ident_idx };
+    } else if (builtin.mode == .Debug) {
+        const existing = gop.value_ptr.*;
+        if (existing.module_idx != namespace_idx or existing.ident_idx != ident_idx) {
+            std.debug.panic(
+                "Symbol metadata mismatch for raw id {d}: existing module={d} ident={d}, new module={d} ident={d}",
+                .{ raw, existing.module_idx, existing.ident_idx.idx, namespace_idx, ident_idx.idx },
+            );
+        }
+    }
+    return MIR.Symbol.fromRaw(raw);
+}
+
+fn getSymbolMetadata(self: *const Self, symbol: MIR.Symbol) SymbolMetadata {
+    const key = symbol.raw();
+    return self.symbol_metadata.get(key) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("Missing symbol metadata for symbol key {d}", .{key});
+        }
+        unreachable;
+    };
+}
+
 /// Copy a CIR string literal into MIR's own string store.
 /// This ensures MIR is self-contained and downstream passes (LIR, codegen)
 /// never need to reach back into CIR module envs for string data.
@@ -259,6 +301,12 @@ fn copyStringToMir(self: *Self, module_env: *const ModuleEnv, cir_str_idx: Strin
 }
 
 // --- Public API ---
+
+/// Create a symbol using MIR lowering's current opaque ID encoding.
+/// Intended for callers that need to invoke APIs like `lowerExternalDef`.
+pub fn makeSymbol(self: *Self, module_idx: u32, ident_idx: Ident.Idx) Allocator.Error!MIR.Symbol {
+    return self.internSymbol(module_idx, ident_idx);
+}
 
 /// Lower a CIR expression to MIR.
 pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId {
@@ -472,7 +520,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
 
                     if (cir_expr) |cir_def_expr| {
                         const spec_key = polySpecKey(symbol_key, monotype);
-                        const spec_symbol = self.makeSyntheticSymbol(symbol);
+                        const spec_symbol = try self.makeSyntheticSymbol(symbol);
                         const spec_symbol_key: u64 = @bitCast(spec_symbol);
 
                         try self.in_progress_defs.put(spec_symbol_key, {});
@@ -531,10 +579,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
             // with an unresolved import means a compiler bug in an earlier phase.
             const target_module_idx: u32 = @intCast(module_env.imports.getResolvedModule(ext.module_idx) orelse
                 unreachable);
-            const symbol = MIR.Symbol{
-                .module_idx = target_module_idx,
-                .ident_idx = ext.ident_idx,
-            };
+            const symbol = try self.internSymbol(target_module_idx, ext.ident_idx);
 
             // Ensure the external definition is lowered.
             const symbol_key: u64 = @bitCast(symbol);
@@ -563,7 +608,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                         const spec_key = polySpecKey(symbol_key, monotype);
                         const def_idx: CIR.Def.Idx = @enumFromInt(ext.target_node_idx);
                         const def = target_env.store.getDef(def_idx);
-                        const spec_symbol = self.makeSyntheticSymbol(symbol);
+                        const spec_symbol = try self.makeSyntheticSymbol(symbol);
 
                         // Lower with lowerExternalDefWithType using the spec_symbol
                         // so it gets its own cache entry and symbol_def registration.
@@ -605,7 +650,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                 switch (pat) {
                     .assign => |assign| {
                         if (std.mem.eql(u8, app_env.getIdent(assign.ident), required_name)) {
-                            const symbol = MIR.Symbol{ .module_idx = app_idx, .ident_idx = assign.ident };
+                            const symbol = try self.internSymbol(app_idx, assign.ident);
                             _ = try self.lowerExternalDefWithType(symbol, def.expr, monotype);
                             return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, monotype, region);
                         }
@@ -760,14 +805,8 @@ fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!MI
     const use_scoped_local_ident = self.current_pattern_scope != 0 and !is_top_level_pattern;
 
     const ident_idx: Ident.Idx = switch (pattern) {
-        .assign => |a| if (use_scoped_local_ident) self.makeSyntheticSymbol(.{
-            .module_idx = self.current_module_idx,
-            .ident_idx = a.ident,
-        }).ident_idx else a.ident,
-        .as => |a| if (use_scoped_local_ident) self.makeSyntheticSymbol(.{
-            .module_idx = self.current_module_idx,
-            .ident_idx = a.ident,
-        }).ident_idx else a.ident,
+        .assign => |a| if (use_scoped_local_ident) self.makeSyntheticIdent(a.ident) else a.ident,
+        .as => |a| if (use_scoped_local_ident) self.makeSyntheticIdent(a.ident) else a.ident,
         .applied_tag,
         .nominal,
         .nominal_external,
@@ -785,24 +824,27 @@ fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!MI
         => Ident.Idx.NONE,
     };
 
-    const symbol = MIR.Symbol{
-        .module_idx = self.current_module_idx,
-        .ident_idx = ident_idx,
-    };
+    const symbol = try self.internSymbol(self.current_module_idx, ident_idx);
 
     try self.pattern_symbols.put(key, symbol);
     return symbol;
 }
 
-/// Create a synthetic symbol for a polymorphic specialization.
-/// Uses a counter that decrements from NONE-1 to generate unique ident indices.
-fn makeSyntheticSymbol(self: *Self, original: MIR.Symbol) MIR.Symbol {
+fn makeSyntheticIdent(self: *Self, original_ident: Ident.Idx) Ident.Idx {
     const idx = self.next_synthetic_ident;
     self.next_synthetic_ident -= 1;
     return .{
-        .module_idx = original.module_idx,
-        .ident_idx = .{ .attributes = original.ident_idx.attributes, .idx = idx },
+        .attributes = original_ident.attributes,
+        .idx = idx,
     };
+}
+
+/// Create a synthetic symbol for a polymorphic specialization.
+/// Uses a counter that decrements from NONE-1 to generate unique ident indices.
+fn makeSyntheticSymbol(self: *Self, original: MIR.Symbol) Allocator.Error!MIR.Symbol {
+    const original_meta = self.getSymbolMetadata(original);
+    const synthetic_ident = self.makeSyntheticIdent(original_meta.ident_idx);
+    return self.internSymbol(original_meta.module_idx, synthetic_ident);
 }
 
 /// Compute the composite cache key for polymorphic specializations.
@@ -1680,7 +1722,7 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
         // Method call: use pre-resolved checker target when available,
         // otherwise fall back to type-driven nominal lookup.
         const method_symbol_opt: ?MIR.Symbol = if (resolved_target_opt) |resolved_target|
-            self.resolvedDispatchTargetToSymbol(module_env, resolved_target)
+            try self.resolvedDispatchTargetToSymbol(module_env, resolved_target)
         else blk: {
             const receiver_type_var = ModuleEnv.varFrom(da.receiver);
             break :blk try self.resolveMethodForTypeVar(
@@ -1832,10 +1874,8 @@ fn lowerRecord(self: *Self, module_env: *const ModuleEnv, record: anytype, monot
         // Bind the update base once so:
         // 1) `{ ..expr, all_fields_overridden }` still evaluates `expr`, and
         // 2) synthesized field accesses never re-evaluate `expr`.
-        const ext_symbol = self.makeSyntheticSymbol(.{
-            .module_idx = self.current_module_idx,
-            .ident_idx = Ident.Idx.NONE,
-        });
+        const ext_base_symbol = try self.internSymbol(self.current_module_idx, Ident.Idx.NONE);
+        const ext_symbol = try self.makeSyntheticSymbol(ext_base_symbol);
         const ext_pattern = try self.store.addPattern(self.allocator, .{ .bind = ext_symbol }, ext_expr_mono);
         const ext_lookup = try self.store.addExpr(self.allocator, .{ .lookup = ext_symbol }, ext_expr_mono, region);
         extension_binding = .{
@@ -1914,7 +1954,7 @@ fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR
 
     // Resolve from checker-recorded target when present; fall back otherwise.
     const method_symbol: ?MIR.Symbol = if (self.lookupResolvedDispatchTarget(expr_idx)) |resolved_target|
-        self.resolvedDispatchTargetToSymbol(module_env, resolved_target)
+        try self.resolvedDispatchTargetToSymbol(module_env, resolved_target)
     else
         try self.resolveMethodForTypeVar(
             module_env,
@@ -1963,12 +2003,9 @@ fn lookupResolvedDispatchTarget(self: *const Self, expr_idx: CIR.Expr.Idx) ?Reso
     return self.resolved_dispatch_targets.get(key);
 }
 
-fn resolvedDispatchTargetToSymbol(self: *Self, source_env: *const ModuleEnv, target: ResolvedDispatchTarget) MIR.Symbol {
+fn resolvedDispatchTargetToSymbol(self: *Self, source_env: *const ModuleEnv, target: ResolvedDispatchTarget) Allocator.Error!MIR.Symbol {
     const target_module_idx = self.findModuleForOrigin(source_env, target.origin);
-    return MIR.Symbol{
-        .module_idx = @intCast(target_module_idx),
-        .ident_idx = target.method_ident,
-    };
+    return self.internSymbol(@intCast(target_module_idx), target.method_ident);
 }
 
 /// Resolve a type variable to a method symbol via nominal type dispatch.
@@ -2036,10 +2073,7 @@ fn resolveMethodForTypeVar(
         method_name,
     ) orelse return null;
 
-    return MIR.Symbol{
-        .module_idx = @intCast(origin_module_idx),
-        .ident_idx = qualified_method,
-    };
+    return self.internSymbol(@intCast(origin_module_idx), qualified_method);
 }
 
 /// Resolve a flex/rigid type variable to nominal info via `type_var_seen`.
@@ -2114,6 +2148,7 @@ fn findDefExprBySymbol(self: *Self, module_idx: u32, ident_idx: Ident.Idx) ?CIR.
 /// be a synthetic symbol unique to (method symbol, caller monotype).
 fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?Monotype.Idx) Allocator.Error!MIR.Symbol {
     const symbol_key: u64 = @bitCast(symbol);
+    const symbol_meta = self.getSymbolMetadata(symbol);
 
     if (caller_func_monotype) |caller_monotype| {
         if (!caller_monotype.isNone()) {
@@ -2134,8 +2169,8 @@ fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?M
                     self.monotypesStructurallyEqual(active_monotype, caller_monotype);
 
                 if (!same_specialization) {
-                    if (self.findDefExprBySymbol(symbol.module_idx, symbol.ident_idx)) |def_expr| {
-                        const spec_symbol = self.makeSyntheticSymbol(symbol);
+                    if (self.findDefExprBySymbol(symbol_meta.module_idx, symbol_meta.ident_idx)) |def_expr| {
+                        const spec_symbol = try self.makeSyntheticSymbol(symbol);
                         try self.poly_specializations.put(spec_key, spec_symbol);
                         errdefer _ = self.poly_specializations.remove(spec_key);
                         _ = try self.lowerExternalDefWithType(spec_symbol, def_expr, caller_monotype);
@@ -2149,8 +2184,8 @@ fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?M
             if (self.lowered_symbols.get(symbol_key)) |cached_expr| {
                 const cached_monotype = self.store.typeOf(cached_expr);
                 if (!self.monotypesStructurallyEqual(cached_monotype, caller_monotype)) {
-                    if (self.findDefExprBySymbol(symbol.module_idx, symbol.ident_idx)) |def_expr| {
-                        const spec_symbol = self.makeSyntheticSymbol(symbol);
+                    if (self.findDefExprBySymbol(symbol_meta.module_idx, symbol_meta.ident_idx)) |def_expr| {
+                        const spec_symbol = try self.makeSyntheticSymbol(symbol);
                         try self.poly_specializations.put(spec_key, spec_symbol);
                         errdefer _ = self.poly_specializations.remove(spec_key);
                         _ = try self.lowerExternalDefWithType(spec_symbol, def_expr, caller_monotype);
@@ -2165,7 +2200,7 @@ fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?M
 
     if (self.lowered_symbols.contains(symbol_key)) return symbol;
 
-    if (self.findDefExprBySymbol(symbol.module_idx, symbol.ident_idx)) |def_expr| {
+    if (self.findDefExprBySymbol(symbol_meta.module_idx, symbol_meta.ident_idx)) |def_expr| {
         _ = try self.lowerExternalDefWithType(symbol, def_expr, caller_func_monotype);
     }
 
@@ -2186,6 +2221,7 @@ pub fn lowerExternalDef(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.Expr.
 /// resolve to the caller's concrete types instead of unit/ZST.
 fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.Expr.Idx, caller_monotype: ?Monotype.Idx) Allocator.Error!MIR.ExprId {
     const symbol_key: u64 = @bitCast(symbol);
+    const symbol_meta = self.getSymbolMetadata(symbol);
 
     // Check cache
     if (self.lowered_symbols.get(symbol_key)) |cached| {
@@ -2211,7 +2247,7 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
     errdefer _ = self.in_progress_symbol_monotypes.remove(symbol_key);
 
     // Switch module context if needed.
-    const switching_module = symbol.module_idx != self.current_module_idx;
+    const switching_module = symbol_meta.module_idx != self.current_module_idx;
     const saved_module_idx = self.current_module_idx;
     const saved_pattern_scope = self.current_pattern_scope;
     const saved_types_store = self.types_store;
@@ -2220,10 +2256,10 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
     const saved_mono_module_idx = self.mono_scratches.current_module_idx;
     self.current_pattern_scope = symbol_key;
     if (switching_module) {
-        self.current_module_idx = symbol.module_idx;
-        self.types_store = &self.all_module_envs[symbol.module_idx].types;
-        self.mono_scratches.ident_store = self.all_module_envs[symbol.module_idx].getIdentStoreConst();
-        self.mono_scratches.current_module_idx = symbol.module_idx;
+        self.current_module_idx = symbol_meta.module_idx;
+        self.types_store = &self.all_module_envs[symbol_meta.module_idx].types;
+        self.mono_scratches.ident_store = self.all_module_envs[symbol_meta.module_idx].getIdentStoreConst();
+        self.mono_scratches.current_module_idx = symbol_meta.module_idx;
     }
 
     // Always isolate type_var_seen per external definition lowering.

@@ -349,6 +349,10 @@ pub fn makeTailRecursive(
     return join_stmt;
 }
 
+fn symbolFromIdent(ident: @import("base").Ident.Idx) Symbol {
+    return Symbol.fromRaw(@as(u64, @as(u32, @bitCast(ident))));
+}
+
 test "TailRecursionPass initialization" {
     const allocator = std.testing.allocator;
     var store = LirExprStore.init(allocator);
@@ -358,7 +362,7 @@ test "TailRecursionPass initialization" {
         .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
         .idx = 42,
     };
-    const symbol = Symbol{ .module_idx = 0, .ident_idx = ident };
+    const symbol = symbolFromIdent(ident);
     const join_id: JoinPointId = @enumFromInt(1);
 
     var pass = TailRecursionPass.init(&store, symbol, join_id, allocator);
@@ -382,9 +386,9 @@ test "TailRecursionPass: tail call is transformed to jump" {
         }
     }.f;
 
-    const target_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(1) };
-    const result_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(2) };
-    const arg_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(3) };
+    const target_sym = symbolFromIdent(makeIdent(1));
+    const result_sym = symbolFromIdent(makeIdent(2));
+    const arg_sym = symbolFromIdent(makeIdent(3));
     const join_id: JoinPointId = @enumFromInt(1);
     const i64_layout = @import("layout").Idx.i64;
 
@@ -443,10 +447,10 @@ test "TailRecursionPass: non-tail call is not transformed" {
         }
     }.f;
 
-    const target_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(1) };
-    const result_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(2) };
-    const other_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(3) };
-    const arg_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(4) };
+    const target_sym = symbolFromIdent(makeIdent(1));
+    const result_sym = symbolFromIdent(makeIdent(2));
+    const other_sym = symbolFromIdent(makeIdent(3));
+    const arg_sym = symbolFromIdent(makeIdent(4));
     const join_id: JoinPointId = @enumFromInt(1);
     const i64_layout = @import("layout").Idx.i64;
 
@@ -501,9 +505,9 @@ test "makeTailRecursive: end-to-end transforms tail-recursive body" {
         }
     }.f;
 
-    const target_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(1) };
-    const result_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(2) };
-    const param_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(3) };
+    const target_sym = symbolFromIdent(makeIdent(1));
+    const result_sym = symbolFromIdent(makeIdent(2));
+    const param_sym = symbolFromIdent(makeIdent(3));
     const join_id: JoinPointId = @enumFromInt(1);
     const i64_layout = layout.Idx.i64;
 
@@ -575,10 +579,10 @@ test "TailRecursionPass: tail call inside switch_stmt branch is transformed" {
         }
     }.f;
 
-    const target_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(1) };
-    const result_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(2) };
-    const arg_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(3) };
-    const cond_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(4) };
+    const target_sym = symbolFromIdent(makeIdent(1));
+    const result_sym = symbolFromIdent(makeIdent(2));
+    const arg_sym = symbolFromIdent(makeIdent(3));
+    const cond_sym = symbolFromIdent(makeIdent(4));
     const join_id: JoinPointId = @enumFromInt(1);
     const i64_layout = @import("layout").Idx.i64;
 
@@ -659,8 +663,8 @@ test "TailRecursionPass: direct ret f(...) is transformed to jump" {
         }
     }.f;
 
-    const target_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(1) };
-    const arg_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(2) };
+    const target_sym = symbolFromIdent(makeIdent(1));
+    const arg_sym = symbolFromIdent(makeIdent(2));
     const join_id: JoinPointId = @enumFromInt(1);
     const i64_layout = @import("layout").Idx.i64;
 
@@ -710,10 +714,10 @@ test "TailRecursionPass: call to non-target function is not detected as tail cal
         }
     }.f;
 
-    const target_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(1) };
-    const other_fn_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(2) };
-    const result_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(3) };
-    const arg_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(4) };
+    const target_sym = symbolFromIdent(makeIdent(1));
+    const other_fn_sym = symbolFromIdent(makeIdent(2));
+    const result_sym = symbolFromIdent(makeIdent(3));
+    const arg_sym = symbolFromIdent(makeIdent(4));
     const join_id: JoinPointId = @enumFromInt(1);
     const i64_layout = @import("layout").Idx.i64;
 

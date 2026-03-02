@@ -2,7 +2,7 @@
 //!
 //! This module defines the IR used after monomorphization and lambda set inference,
 //! before code generation. The key innovation is that all symbol references are
-//! globally unique (module + ident), solving cross-module index collision issues.
+//! globally unique opaque IDs, solving cross-module index collision issues.
 //!
 //! Pipeline position:
 //! ```
@@ -22,7 +22,7 @@
 //! ```
 //!
 //! Key properties:
-//! - All lookups use global Symbol (module_idx + ident_idx) - never module-local indices
+//! - All lookups use global opaque Symbol IDs - never module-local indices
 //! - Every expression has concrete type info via layout.Idx - no type variables
 //! - Flat storage in LirExprStore with LirExprId indices
 //! - No scope/bindings system - all references are global symbols
@@ -1226,12 +1226,9 @@ test "Symbol size and alignment" {
 }
 
 test "Symbol equality" {
-    const ident1 = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 42 };
-    const ident2 = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 42 };
-
-    const sym1 = Symbol{ .module_idx = 0, .ident_idx = ident1 };
-    const sym2 = Symbol{ .module_idx = 0, .ident_idx = ident2 };
-    const sym3 = Symbol{ .module_idx = 1, .ident_idx = ident1 };
+    const sym1 = Symbol.fromRaw(123);
+    const sym2 = Symbol.fromRaw(123);
+    const sym3 = Symbol.fromRaw(456);
 
     try std.testing.expect(sym1.eql(sym2));
     try std.testing.expect(!sym1.eql(sym3));

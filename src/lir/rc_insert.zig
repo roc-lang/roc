@@ -1327,7 +1327,7 @@ pub const RcInsertPass = struct {
             // Mutable bindings are re-bound over time; global symbol use counts
             // over-approximate live refs for the current value at an early_return.
             // Treat the current mutable binding as owning exactly one live ref.
-            const base_count: u32 = if (live.symbol.ident_idx.attributes.reassignable) 1 else global_count;
+            const base_count: u32 = if (live.symbol.isReassignable()) 1 else global_count;
             const branch_adj: i32 = self.pending_branch_rc_adj.get(key) orelse 0;
             const effective_signed: i32 = @as(i32, @intCast(base_count)) + branch_adj;
             if (effective_signed <= 0) continue; // branch wrapper decrefs handle all refs
@@ -2004,7 +2004,7 @@ test "RC pass-through: non-refcounted i64 block unchanged" {
     const i64_layout: LayoutIdx = .i64;
 
     const ident_x = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const sym_x = LIR.Symbol{ .module_idx = 0, .ident_idx = ident_x };
+    const sym_x = LIR.Symbol.fromRaw(@as(u64, @as(u32, @bitCast(ident_x))));
 
     const int_lit = try env.lir_store.addExpr(.{ .i64_literal = 42 }, Region.zero());
     const pat_x = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_x, .layout_idx = i64_layout } }, Region.zero());
@@ -2041,7 +2041,7 @@ test "RC: string binding used twice gets incref" {
     const str_layout: LayoutIdx = .str;
 
     const ident_s = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const sym_s = LIR.Symbol{ .module_idx = 0, .ident_idx = ident_s };
+    const sym_s = LIR.Symbol.fromRaw(@as(u64, @as(u32, @bitCast(ident_s))));
 
     const str_lit = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
     const pat_s = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
@@ -2097,7 +2097,7 @@ test "RC: unused string binding gets decref" {
     const i64_layout: LayoutIdx = .i64;
 
     const ident_s = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const sym_s = LIR.Symbol{ .module_idx = 0, .ident_idx = ident_s };
+    const sym_s = LIR.Symbol.fromRaw(@as(u64, @as(u32, @bitCast(ident_s))));
 
     const str_lit = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
     const pat_s = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
@@ -2345,13 +2345,11 @@ fn countRcOps(store: *const LirExprStore, expr_id: LirExprId) RcOpCounts {
 
 /// Helper to make a symbol with a given ident index.
 fn makeSymbol(idx: u29) LIR.Symbol {
-    return .{
-        .module_idx = 0,
-        .ident_idx = base.Ident.Idx{
-            .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
-            .idx = idx,
-        },
+    const ident = base.Ident.Idx{
+        .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
+        .idx = idx,
     };
+    return LIR.Symbol.fromRaw(@as(u64, @as(u32, @bitCast(ident))));
 }
 
 test "RC branch-aware: symbol used in both match branches — no incref at binding" {

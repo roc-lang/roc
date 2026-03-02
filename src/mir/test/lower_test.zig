@@ -18,6 +18,10 @@ const Ident = base.Ident;
 
 const test_allocator = testing.allocator;
 
+fn testSymbolFromIdent(ident: Ident.Idx) MIR.Symbol {
+    return MIR.Symbol.fromRaw(@as(u64, @as(u32, @bitCast(ident))));
+}
+
 // --- MIR Store tests ---
 
 test "MIR Store: add and get expression" {
@@ -43,12 +47,12 @@ test "MIR Store: add and get pattern" {
     defer store.deinit(test_allocator);
 
     const monotype = store.monotype_store.primIdx(.bool);
-    const symbol = MIR.Symbol{ .module_idx = 0, .ident_idx = Ident.Idx.NONE };
+    const symbol = testSymbolFromIdent(Ident.Idx.NONE);
     const pat_id = try store.addPattern(test_allocator, .{ .bind = symbol }, monotype);
 
     const retrieved = store.getPattern(pat_id);
     switch (retrieved) {
-        .bind => |sym| try testing.expect(sym.module_idx == 0),
+        .bind => |sym| try testing.expect(!sym.isNone()),
         else => return error.TestUnexpectedResult,
     }
 
@@ -130,7 +134,7 @@ test "MIR Store: statements" {
     const expr = try store.addExpr(test_allocator, .{ .int = .{
         .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
     } }, monotype, Region.zero());
-    const symbol = MIR.Symbol{ .module_idx = 0, .ident_idx = Ident.Idx.NONE };
+    const symbol = testSymbolFromIdent(Ident.Idx.NONE);
     const pat = try store.addPattern(test_allocator, .{ .bind = symbol }, monotype);
 
     const stmt_span = try store.addStmts(test_allocator, &.{.{ .decl_const = .{ .pattern = pat, .expr = expr } }});
@@ -162,7 +166,7 @@ test "MIR Store: symbol def registration" {
     const expr_id = try store.addExpr(test_allocator, .{ .int = .{
         .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
     } }, monotype, Region.zero());
-    const symbol = MIR.Symbol{ .module_idx = 0, .ident_idx = Ident.Idx.NONE };
+    const symbol = testSymbolFromIdent(Ident.Idx.NONE);
 
     try store.registerSymbolDef(test_allocator, symbol, expr_id);
     const result = store.getSymbolDef(symbol);
@@ -354,9 +358,9 @@ test "Monotype Store: all primitive types" {
 // --- Symbol tests ---
 
 test "Symbol: equality and hashing" {
-    const s1 = MIR.Symbol{ .module_idx = 0, .ident_idx = Ident.Idx.NONE };
-    const s2 = MIR.Symbol{ .module_idx = 0, .ident_idx = Ident.Idx.NONE };
-    const s3 = MIR.Symbol{ .module_idx = 1, .ident_idx = Ident.Idx.NONE };
+    const s1 = MIR.Symbol.fromRaw(1);
+    const s2 = MIR.Symbol.fromRaw(1);
+    const s3 = MIR.Symbol.fromRaw(2);
 
     try testing.expect(s1.eql(s2));
     try testing.expect(!s1.eql(s3));
@@ -366,7 +370,7 @@ test "Symbol: none sentinel" {
     const none = MIR.Symbol.none;
     try testing.expect(none.isNone());
 
-    const some = MIR.Symbol{ .module_idx = 0, .ident_idx = Ident.Idx.NONE };
+    const some = MIR.Symbol.fromRaw(0);
     try testing.expect(!some.isNone());
 }
 
@@ -667,7 +671,7 @@ test "lowerExternalDef: recursion guard returns lookup placeholder" {
     );
     defer env.deinit();
     const def_info = try env.getDefExprByName("my_val");
-    const symbol = MIR.Symbol{ .module_idx = 1, .ident_idx = def_info.ident_idx };
+    const symbol = try env.lower.makeSymbol(1, def_info.ident_idx);
 
     // Manually insert the symbol into in_progress_defs to simulate recursion
     const symbol_key: u64 = @bitCast(symbol);
@@ -688,7 +692,7 @@ test "lowerExternalDef: caching returns same ExprId on second call" {
     );
     defer env.deinit();
     const def_info = try env.getDefExprByName("my_val");
-    const symbol = MIR.Symbol{ .module_idx = 1, .ident_idx = def_info.ident_idx };
+    const symbol = try env.lower.makeSymbol(1, def_info.ident_idx);
 
     const first = try env.lower.lowerExternalDef(symbol, def_info.expr_idx);
     const second = try env.lower.lowerExternalDef(symbol, def_info.expr_idx);
@@ -927,8 +931,8 @@ test "cross-module: dot-access method call ensures method is lowered" {
     try testing.expect(func == .lookup);
     const method_sym = func.lookup;
 
-    // The method is from module A (idx 1), not module B (idx 2)
-    try testing.expect(method_sym.module_idx != 2);
+    // Symbol IDs are opaque; we only require that lowering resolved a real symbol.
+    try testing.expect(!method_sym.isNone());
 
     // The cross-module method body must have been lowered into the MIR store
     try testing.expect(env_b.mir_store.getSymbolDef(method_sym) != null);

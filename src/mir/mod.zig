@@ -14,7 +14,7 @@ pub const Lower = @import("Lower.zig");
 pub const Expr = MIR.Expr;
 /// Re-export of MIR pattern type
 pub const Pattern = MIR.Pattern;
-/// Globally unique symbol identifier (module + ident)
+/// Globally unique opaque symbol identifier
 pub const Symbol = MIR.Symbol;
 /// Index into the MIR expression store
 pub const ExprId = MIR.ExprId;

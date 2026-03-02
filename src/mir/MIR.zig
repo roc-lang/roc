@@ -6,8 +6,7 @@
 //! - **Monomorphic**: All types are concrete. No type variables or extensions.
 //! - **Desugared**: No `if` (just `match`), no binops, no static dispatch.
 //!   Everything is fully resolved function calls.
-//! - **Globally unique**: Symbols are (module_idx, ident_idx) pairs, not
-//!   module-local indices.
+//! - **Globally unique**: Symbols are opaque 64-bit IDs, not module-local indices.
 //! - **Lambda-aware**: Lambdas are still present as first-class values.
 //!   Lambda set inference happens later on top of MIR.
 //!
@@ -28,33 +27,45 @@ const CIR = @import("can").CIR;
 
 // --- ID types ---
 
-/// Global identifier — combines module index with local identifier.
-/// References are globally unique (not module-local), enabling
-/// cross-module code generation without index collisions.
+/// Global identifier (opaque 64-bit id).
 pub const Symbol = packed struct(u64) {
-    module_idx: u32,
-    ident_idx: Ident.Idx,
+    id: u64,
 
     comptime {
         std.debug.assert(@sizeOf(Symbol) == @sizeOf(u64));
         std.debug.assert(@alignOf(Symbol) == @alignOf(u64));
     }
 
+    pub fn fromRaw(id: u64) Symbol {
+        return .{ .id = id };
+    }
+
+    pub fn raw(self: Symbol) u64 {
+        return self.id;
+    }
+
     pub fn eql(a: Symbol, b: Symbol) bool {
-        return @as(u64, @bitCast(a)) == @as(u64, @bitCast(b));
+        return a.id == b.id;
     }
 
     pub fn hash(self: Symbol) u64 {
-        return @bitCast(self);
+        return self.id;
     }
 
     pub const none: Symbol = .{
-        .module_idx = std.math.maxInt(u32),
-        .ident_idx = Ident.Idx.NONE,
+        .id = std.math.maxInt(u64),
     };
 
     pub fn isNone(self: Symbol) bool {
-        return self.module_idx == std.math.maxInt(u32);
+        return self.id == std.math.maxInt(u64);
+    }
+
+    /// Reassignable bit is carried in the low 32 bits (Ident.Idx encoding).
+    pub fn isReassignable(self: Symbol) bool {
+        if (self.isNone()) return false;
+        const ident_bits: u32 = @intCast(self.id & std.math.maxInt(u32));
+        const ident: Ident.Idx = @bitCast(ident_bits);
+        return ident.attributes.reassignable;
     }
 };
 

@@ -337,13 +337,6 @@ fn isSingleTagUnion(self: *const Self, mono_idx: Monotype.Idx) bool {
     };
 }
 
-/// MIR->LIR no longer depends on module environments for identifier text.
-fn getIdentText(self: *const Self, ident_idx: Ident.Idx) ?[]const u8 {
-    _ = self;
-    _ = ident_idx;
-    return null;
-}
-
 /// Given a tag name and the monotype of the containing tag union,
 /// return the discriminant (sorted index of the tag name).
 fn tagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monotype.Idx) u16 {
@@ -933,21 +926,21 @@ fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, region: Region
 }
 
 fn lowerCall(self: *Self, call_data: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
-    // Intercept Box.box / Box.unbox calls.
-    // These are [ProvidedByCompiler] methods with no Roc body (lowered to runtime_err_anno_only).
-    // Detect them by checking if the func's symbol def is runtime_err_anno_only and the
-    // return/argument monotype is .box.
-    if (self.isBoxIntrinsicCall(call_data)) |box_op| {
-        var box_acc = self.startLetAccumulator();
-        const ret_layout = try self.layoutFromMonotype(mono_idx);
-        const mir_args = self.mir_store.getExprSpan(call_data.args);
-        const lir_args = try self.lowerAnfSpan(&box_acc, mir_args, region);
-        const result = try self.lir_store.addExpr(.{ .low_level = .{
-            .op = box_op,
-            .args = lir_args,
-            .ret_layout = ret_layout,
-        } }, region);
-        return box_acc.finish(result, ret_layout, region);
+    // Annotation-only methods (e.g. Box.box/Box.unbox) are intentionally unsupported.
+    const func_mir_expr = self.mir_store.getExpr(call_data.func);
+    if (func_mir_expr == .lookup) {
+        const sym = func_mir_expr.lookup;
+        if (self.mir_store.getSymbolDef(sym)) |def_expr_id| {
+            if (self.mir_store.getExpr(def_expr_id) == .runtime_err_anno_only) {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "MirToLir unsupported: call to annotation-only symbol key={d}",
+                        .{sym.raw()},
+                    );
+                }
+                unreachable;
+            }
+        }
     }
 
     var acc = self.startLetAccumulator();
@@ -968,65 +961,6 @@ fn lowerCall(self: *Self, call_data: anytype, mono_idx: Monotype.Idx, region: Re
         .called_via = .apply,
     } }, region);
     return acc.finish(call_expr, ret_layout, region);
-}
-
-/// Detect calls to Box.box or Box.unbox, which are [ProvidedByCompiler] methods
-/// with no Roc body. The MIR lowerer produces runtime_err_anno_only for their bodies.
-/// Returns the appropriate LIR low-level op, or null if this is not a Box intrinsic call.
-fn isBoxIntrinsicCall(self: *Self, call_data: anytype) ?LirExpr.LowLevel {
-    const func_expr = self.mir_store.getExpr(call_data.func);
-    const func_sym = switch (func_expr) {
-        .lookup => |sym| sym,
-        else => return null,
-    };
-    const def_expr_id = self.mir_store.getSymbolDef(func_sym) orelse return null;
-    const def_expr = self.mir_store.getExpr(def_expr_id);
-    if (def_expr != .runtime_err_anno_only) return null;
-
-    // It's an annotation-only method. Check monotypes to determine box vs unbox.
-    const func_mono = self.mir_store.typeOf(call_data.func);
-    const func_monotype = self.mir_store.monotype_store.getMonotype(func_mono);
-    if (func_monotype != .func) return null;
-
-    // Check the method name to distinguish box vs unbox.
-    // Monotype comparison alone is insufficient because Box.unbox(Box(Box(T)))
-    // has both a box argument and a box return type, and monotype indices
-    // are not deduplicated, so structural equality via index comparison fails.
-    if (self.getIdentText(func_sym.ident_idx)) |name| {
-        if (std.mem.eql(u8, name, "box")) return .box_box;
-        if (std.mem.eql(u8, name, "unbox")) return .box_unbox;
-    }
-
-    // Fallback: use monotype structure.
-    const ret_mono = self.mir_store.monotype_store.getMonotype(func_monotype.func.ret);
-    const param_monos = self.mir_store.monotype_store.getIdxSpan(func_monotype.func.args);
-    const first_param_mono = if (param_monos.len > 0)
-        self.mir_store.monotype_store.getMonotype(param_monos[0])
-    else
-        null;
-
-    const ret_is_box = ret_mono == .box;
-    const param_is_box = if (first_param_mono) |m| m == .box else false;
-
-    if (ret_is_box and param_is_box) {
-        // Both arg and return are box types. Disambiguate using layouts, which
-        // ARE deduplicated (unlike monotype indices). For box_unbox, the arg's
-        // inner layout equals the return layout. For box_box, the return's inner
-        // layout equals the arg layout.
-        const ret_layout = self.layoutFromMonotype(func_monotype.func.ret) catch return null;
-        const arg_layout = self.layoutFromMonotype(param_monos[0]) catch return null;
-        const ret_layout_data = self.layout_store.getLayout(ret_layout);
-        if (ret_layout_data.tag == .box and ret_layout_data.data.box == arg_layout)
-            return .box_box;
-        // Otherwise it must be unbox
-        return .box_unbox;
-    } else if (ret_is_box) {
-        return .box_box;
-    } else if (param_is_box) {
-        return .box_unbox;
-    }
-
-    return null;
 }
 
 fn lowerBlock(self: *Self, block_data: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
@@ -2076,7 +2010,7 @@ fn inspektRecord(self: *Self, value_expr: LirExprId, record: anytype, mono_idx: 
         const save_exprs = self.scratch_lir_expr_ids.items.len;
         defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
 
-        const field_name = self.getIdentText(fields[0].name) orelse "?";
+        const field_name = "?";
         const field_label = try std.fmt.allocPrint(self.allocator, "{{ {s}: ", .{field_name});
         defer self.allocator.free(field_label);
 
@@ -2140,7 +2074,7 @@ fn inspektRecord(self: *Self, value_expr: LirExprId, record: anytype, mono_idx: 
         }
 
         // Emit "fieldname: "
-        const field_name = self.getIdentText(field.name) orelse "?";
+        const field_name = "?";
         const field_label = try std.fmt.allocPrint(self.allocator, "{s}: ", .{field_name});
         defer self.allocator.free(field_label);
         try self.scratch_lir_expr_ids.append(self.allocator, try self.emitStrLiteral(field_label, region));
@@ -2313,7 +2247,7 @@ fn inspektTagUnion(self: *Self, value_expr: LirExprId, tu: anytype, mono_idx: Mo
 
 /// Inspect a single-tag union (no discriminant).
 fn inspektSingleTag(self: *Self, value_expr: LirExprId, tag: Monotype.Tag, _: Monotype.Idx, union_layout: layout.Idx, region: Region) Allocator.Error!LirExprId {
-    const tag_name = self.getIdentText(tag.name) orelse "?";
+    const tag_name = "?";
     const payloads = self.mir_store.monotype_store.getIdxSpan(tag.payloads);
 
     if (payloads.len == 0) {
@@ -2359,8 +2293,8 @@ fn inspektSingleTag(self: *Self, value_expr: LirExprId, tag: Monotype.Tag, _: Mo
 /// Inspect a bool-like tag union (exactly 2 zero-payload tags, discriminant is bool).
 /// Tags are alphabetically sorted, so discriminant 0 = first alphabetically, 1 = second.
 fn inspektBoolLikeTagUnion(self: *Self, value_expr: LirExprId, tags: []const Monotype.Tag, region: Region) Allocator.Error!LirExprId {
-    const tag0_name = self.getIdentText(tags[0].name) orelse "?";
-    const tag1_name = self.getIdentText(tags[1].name) orelse "?";
+    const tag0_name = "?";
+    const tag1_name = "?";
 
     // value_expr is a bool: 0 = tag0 (alphabetically first), 1 = tag1
     const tag1_str = try self.emitStrLiteral(tag1_name, region);
@@ -2377,7 +2311,7 @@ fn inspektBoolLikeTagUnion(self: *Self, value_expr: LirExprId, tags: []const Mon
 
 /// Generate the inspect expression for a single tag branch (used inside discriminant_switch).
 fn inspektTagBranch(self: *Self, union_value: LirExprId, tag: Monotype.Tag, union_layout: layout.Idx, region: Region) Allocator.Error!LirExprId {
-    const tag_name = self.getIdentText(tag.name) orelse "?";
+    const tag_name = "?";
     const payloads = self.mir_store.monotype_store.getIdxSpan(tag.payloads);
 
     if (payloads.len == 0) {
@@ -2478,14 +2412,13 @@ fn foldStrConcat(self: *Self, parts: []const LirExprId, region: Region) Allocato
 }
 
 /// Create a fresh synthetic symbol for generated code (inspect expansion).
-/// Uses a module_idx of maxInt to avoid colliding with real module indices.
+/// Uses a reserved high 32-bit namespace to avoid colliding with lowered symbols.
 fn freshSymbol(self: *Self, reassignable: bool) Symbol {
     const id = self.next_synthetic_id;
     self.next_synthetic_id += 1;
-    return .{
-        .module_idx = std.math.maxInt(u32),
-        .ident_idx = .{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = reassignable }, .idx = id },
-    };
+    const ident_idx = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = reassignable }, .idx = id };
+    const raw = (@as(u64, std.math.maxInt(u32)) << 32) | @as(u64, @as(u32, @bitCast(ident_idx)));
+    return Symbol.fromRaw(raw);
 }
 
 /// Create a bind pattern for a fresh symbol.
@@ -2669,6 +2602,10 @@ fn testDeinit(self: *@TypeOf(testInit() catch unreachable)) void {
     self.module_env.deinit();
 }
 
+fn testSymbolFromIdent(ident: Ident.Idx) Symbol {
+    return Symbol.fromRaw(@as(u64, @as(u32, @bitCast(ident))));
+}
+
 test "ANF: list of calls Let-binds each call to a symbol" {
     const allocator = testing.allocator;
 
@@ -2692,7 +2629,7 @@ test "ANF: list of calls Let-binds each call to a symbol" {
     } });
 
     const ident_f = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const sym_f = Symbol{ .module_idx = 0, .ident_idx = ident_f };
+    const sym_f = testSymbolFromIdent(ident_f);
 
     // func_lookup: lookup of `f`
     const func_lookup = try env.mir_store.addExpr(allocator, .{ .lookup = sym_f }, func_mono, Region.zero());
@@ -2817,7 +2754,7 @@ test "MIR lookup lowers to LIR lookup" {
     const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
 
     const ident_x = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const sym_x = Symbol{ .module_idx = 0, .ident_idx = ident_x };
+    const sym_x = testSymbolFromIdent(ident_x);
 
     const lookup_expr = try env.mir_store.addExpr(allocator, .{ .lookup = sym_x }, i64_mono, Region.zero());
     var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, env.module_env.idents.true_tag);
@@ -2840,7 +2777,7 @@ test "MIR block lowers to LIR block" {
 
     // Create a simple block: { x = 42; x }
     const ident_x = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const sym_x = Symbol{ .module_idx = 0, .ident_idx = ident_x };
+    const sym_x = testSymbolFromIdent(ident_x);
 
     const int_42 = try env.mir_store.addExpr(allocator, .{ .int = .{
         .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
@@ -3074,7 +3011,7 @@ test "MIR lambda with single capture lowers to closure with unwrapped_capture" {
 
     // Define captured symbol: x = 42
     const ident_x = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const sym_x = Symbol{ .module_idx = 0, .ident_idx = ident_x };
+    const sym_x = testSymbolFromIdent(ident_x);
 
     const int_42 = try env.mir_store.addExpr(allocator, .{ .int = .{
         .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
@@ -3122,9 +3059,9 @@ test "MIR lambda with multiple captures lowers to closure with struct_captures" 
 
     // Define captured symbols: x = 42, y = 99
     const ident_x = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const sym_x = Symbol{ .module_idx = 0, .ident_idx = ident_x };
+    const sym_x = testSymbolFromIdent(ident_x);
     const ident_y = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 2 };
-    const sym_y = Symbol{ .module_idx = 0, .ident_idx = ident_y };
+    const sym_y = testSymbolFromIdent(ident_y);
 
     const int_42 = try env.mir_store.addExpr(allocator, .{ .int = .{
         .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
@@ -3279,7 +3216,7 @@ test "MIR lookup propagates symbol def to LIR store" {
 
     // Register a symbol def in MIR: x = 42
     const ident_x = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const sym_x = Symbol{ .module_idx = 0, .ident_idx = ident_x };
+    const sym_x = testSymbolFromIdent(ident_x);
 
     const int_42 = try env.mir_store.addExpr(allocator, .{ .int = .{
         .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
@@ -3442,7 +3379,7 @@ test "MIR single-tag union pattern with one arg emits payload pattern directly" 
 
     // Create pattern: Ok x (bind the payload)
     const ident_x = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 2 };
-    const sym_x = Symbol{ .module_idx = 0, .ident_idx = ident_x };
+    const sym_x = testSymbolFromIdent(ident_x);
     const bind_pat = try env.mir_store.addPattern(allocator, .{ .bind = sym_x }, i64_mono);
     const pat_args = try env.mir_store.addPatternSpan(allocator, &.{bind_pat});
     const tag_pat = try env.mir_store.addPattern(allocator, .{ .tag = .{
@@ -3480,9 +3417,9 @@ test "MIR hosted lambda lowers to LIR lambda wrapping hosted_call" {
 
     // Create parameter patterns (two binds)
     const ident_a = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const sym_a = Symbol{ .module_idx = 0, .ident_idx = ident_a };
+    const sym_a = testSymbolFromIdent(ident_a);
     const ident_b = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 2 };
-    const sym_b = Symbol{ .module_idx = 0, .ident_idx = ident_b };
+    const sym_b = testSymbolFromIdent(ident_b);
 
     const pat_a = try env.mir_store.addPattern(allocator, .{ .bind = sym_a }, i64_mono);
     const pat_b = try env.mir_store.addPattern(allocator, .{ .bind = sym_b }, i64_mono);
@@ -3537,7 +3474,7 @@ test "MIR block with decl_var and mutate_var lowers to LIR decl and mutate" {
 
     // Build MIR: { var s = 1; s = 2; s }
     const ident_s = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = true }, .idx = 1 };
-    const sym_s = Symbol{ .module_idx = 0, .ident_idx = ident_s };
+    const sym_s = testSymbolFromIdent(ident_s);
 
     const int_1 = try env.mir_store.addExpr(allocator, .{ .int = .{
         .value = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 },
@@ -3601,9 +3538,9 @@ test "MIR lambda with heterogeneous captures (I64 + Str) lowers to closure with 
 
     // Define captured symbols: x = 42 (I64), s = "hello" (Str)
     const ident_x = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const sym_x = Symbol{ .module_idx = 0, .ident_idx = ident_x };
+    const sym_x = testSymbolFromIdent(ident_x);
     const ident_s = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 2 };
-    const sym_s = Symbol{ .module_idx = 0, .ident_idx = ident_s };
+    const sym_s = testSymbolFromIdent(ident_s);
 
     const int_42 = try env.mir_store.addExpr(allocator, .{ .int = .{
         .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
@@ -4049,7 +3986,7 @@ test "record destructure wildcard gets actual field layout not zst" {
     // In layout order: [b, c, a]. So b and c should get wildcard patterns
     // with I64 layout, NOT .zst.
     const ident_a = field_a;
-    const sym_a = Symbol{ .module_idx = 0, .ident_idx = ident_a };
+    const sym_a = testSymbolFromIdent(ident_a);
     const bind_pat = try env.mir_store.addPattern(allocator, .{ .bind = sym_a }, u8_mono);
     const destructs = try env.mir_store.addPatternSpan(allocator, &.{bind_pat});
     const destruct_field_names = try env.mir_store.addFieldNameSpan(allocator, &.{field_a});

@@ -581,7 +581,7 @@ test "pattern storage" {
 
     const region = Region.zero();
     const ident = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 5 };
-    const symbol = Symbol{ .module_idx = 0, .ident_idx = ident };
+    const symbol = Symbol.fromRaw(@as(u64, @as(u32, @bitCast(ident))));
 
     const pat_id = try store.addPattern(.{ .bind = .{
         .symbol = symbol,
@@ -599,7 +599,7 @@ test "symbol def lookup" {
 
     const region = Region.zero();
     const ident = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 42 };
-    const symbol = Symbol{ .module_idx = 1, .ident_idx = ident };
+    const symbol = Symbol.fromRaw(@as(u64, @as(u32, @bitCast(ident))));
 
     const expr_id = try store.addExpr(.{ .i64_literal = 100 }, region);
     try store.registerSymbolDef(symbol, expr_id);
@@ -610,6 +610,6 @@ test "symbol def lookup" {
 
     // Non-existent symbol
     const ident2 = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const other = Symbol{ .module_idx = 2, .ident_idx = ident2 };
+    const other = Symbol.fromRaw(@as(u64, @as(u32, @bitCast(ident2))));
     try std.testing.expect(store.getSymbolDef(other) == null);
 }
