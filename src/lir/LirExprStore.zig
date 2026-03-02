@@ -386,8 +386,20 @@ pub fn getLambdaSetMembers(self: *const Self, span: LambdaSetMemberSpan) []const
 
 /// Register a top-level symbol definition
 pub fn registerSymbolDef(self: *Self, symbol: Symbol, expr_id: LirExprId) Allocator.Error!void {
-    std.debug.assert(!self.symbol_defs.contains(@bitCast(symbol)));
-    try self.symbol_defs.put(@bitCast(symbol), expr_id);
+    const key: u64 = @bitCast(symbol);
+    const gop = try self.symbol_defs.getOrPut(key);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = expr_id;
+        return;
+    }
+
+    if (std.debug.runtime_safety) {
+        std.debug.panic(
+            "LIR duplicate symbol definition for symbol key {d}: existing expr {}, new expr {}",
+            .{ key, @intFromEnum(gop.value_ptr.*), @intFromEnum(expr_id) },
+        );
+    }
+    unreachable;
 }
 
 /// Look up a top-level symbol definition
