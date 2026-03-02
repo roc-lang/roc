@@ -31,7 +31,7 @@ const Self = @This();
 
 allocator: Allocator,
 store: *const LirExprStore,
-layout_store: ?*const LayoutStore,
+layout_store: *const LayoutStore,
 module: WasmModule,
 body: std.ArrayList(u8), // instruction bytes for current function
 storage: Storage,
@@ -164,7 +164,7 @@ const ForwardedCapture = struct {
     layout_idx: layout.Idx,
 };
 
-pub fn init(allocator: Allocator, store: *const LirExprStore, layout_store: ?*const LayoutStore) Self {
+pub fn init(allocator: Allocator, store: *const LirExprStore, layout_store: *const LayoutStore) Self {
     return .{
         .allocator = allocator,
         .store = store,
@@ -1224,19 +1224,13 @@ fn generateMatchBranches(self: *Self, branches: []const LIR.LirMatchBranch, valu
             // For tag unions that fit in a single i32 (discriminant only, no payload),
             // value_local holds the discriminant directly. For larger tag unions,
             // value_local holds a pointer to the tag union in memory.
-            const is_pointer = blk: {
-                if (self.layout_store) |ls| {
-                    const wl = WasmLayout.wasmReprWithStore(tag_pat.union_layout, ls);
-                    break :blk switch (wl) {
-                        .stack_memory => true,
-                        .primitive => false,
-                    };
-                }
-                break :blk false;
+            const ls = self.getLayoutStore();
+            const is_pointer = switch (WasmLayout.wasmReprWithStore(tag_pat.union_layout, ls)) {
+                .stack_memory => true,
+                .primitive => false,
             };
             if (is_pointer) {
                 // Load discriminant from memory at discriminant_offset
-                const ls = self.getLayoutStore();
                 const l = ls.getLayout(tag_pat.union_layout);
                 std.debug.assert(l.tag == .tag_union);
                 const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
@@ -1272,10 +1266,7 @@ fn generateMatchBranches(self: *Self, branches: []const LIR.LirMatchBranch, valu
                             const bind_byte_size = self.layoutByteSize(bind.layout_idx);
                             const local_idx = self.storage.allocLocal(bind.symbol, bind_vt) catch return error.OutOfMemory;
 
-                            const wasm_repr = if (self.layout_store) |ls|
-                                WasmLayout.wasmReprWithStore(bind.layout_idx, ls)
-                            else
-                                WasmLayout.wasmRepr(bind.layout_idx);
+                            const wasm_repr = WasmLayout.wasmReprWithStore(bind.layout_idx, ls);
 
                             switch (wasm_repr) {
                                 .stack_memory => {
@@ -1811,14 +1802,11 @@ fn exprNeedsCompositeCallStabilization(self: *const Self, expr_id: LirExprId) bo
 
 /// Check if a layout represents a composite type stored in stack memory.
 fn isCompositeLayout(self: *const Self, layout_idx: layout.Idx) bool {
-    if (self.layout_store) |ls| {
-        const repr = WasmLayout.wasmReprWithStore(layout_idx, ls);
-        return switch (repr) {
-            .stack_memory => |s| s > 0,
-            .primitive => false,
-        };
-    }
-    return false;
+    const repr = WasmLayout.wasmReprWithStore(layout_idx, self.getLayoutStore());
+    return switch (repr) {
+        .stack_memory => |s| s > 0,
+        .primitive => false,
+    };
 }
 
 /// Generate structural equality comparison for two composite values (records, tuples, tag unions).
@@ -1831,12 +1819,11 @@ fn generateStructuralEq(self: *Self, lhs: LirExprId, rhs: LirExprId, negate: boo
             try self.generateStrEq(lhs, rhs, negate);
             return;
         }
-        if (self.layout_store) |ls| {
-            const l = ls.getLayout(lay_idx);
-            if (l.tag == .list) {
-                try self.generateListEq(lhs, rhs, lay_idx, negate);
-                return;
-            }
+        const ls = self.getLayoutStore();
+        const l = ls.getLayout(lay_idx);
+        if (l.tag == .list) {
+            try self.generateListEq(lhs, rhs, lay_idx, negate);
+            return;
         }
     }
 
@@ -1870,29 +1857,28 @@ fn generateStructuralEq(self: *Self, lhs: LirExprId, rhs: LirExprId, negate: boo
 
     // Try layout-aware comparison for records/tuples/tag unions containing heap types
     if (self.exprLayoutIdx(lhs)) |lay_idx| {
-        if (self.layout_store) |ls| {
-            const l = ls.getLayout(lay_idx);
-            switch (l.tag) {
-                .struct_ => {
-                    try self.compareCompositeByLayout(lhs_local, rhs_local, lay_idx);
+        const ls = self.getLayoutStore();
+        const l = ls.getLayout(lay_idx);
+        switch (l.tag) {
+            .struct_ => {
+                try self.compareCompositeByLayout(lhs_local, rhs_local, lay_idx);
+                if (negate) {
+                    self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+                }
+                return;
+            },
+            .tag_union => {
+                const tu_info = ls.getTagUnionInfo(l);
+                if (tu_info.contains_refcounted) {
+                    try self.compareTagUnionByLayout(lhs_local, rhs_local, lay_idx);
                     if (negate) {
                         self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
                     }
                     return;
-                },
-                .tag_union => {
-                    const tu_info = ls.getTagUnionInfo(l);
-                    if (tu_info.contains_refcounted) {
-                        try self.compareTagUnionByLayout(lhs_local, rhs_local, lay_idx);
-                        if (negate) {
-                            self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
-                        }
-                        return;
-                    }
-                    // No heap types — fall through to bytewise comparison
-                },
-                else => {},
-            }
+                }
+                // No heap types — fall through to bytewise comparison
+            },
+            else => {},
         }
     }
 
@@ -1908,7 +1894,7 @@ fn generateStructuralEq(self: *Self, lhs: LirExprId, rhs: LirExprId, negate: boo
 /// Compare a composite type (record or tuple) field-by-field using layout information.
 /// Pushes an i32 (1=equal, 0=not equal) onto the WASM stack.
 fn compareCompositeByLayout(self: *Self, lhs_local: u32, rhs_local: u32, layout_idx: layout.Idx) Allocator.Error!void {
-    const ls = self.layout_store orelse unreachable;
+    const ls = self.getLayoutStore();
     const l = ls.getLayout(layout_idx);
 
     switch (l.tag) {
@@ -1956,7 +1942,7 @@ fn compareCompositeByLayout(self: *Self, lhs_local: u32, rhs_local: u32, layout_
 /// Compare a tag union by layout: compare discriminants first, then dispatch
 /// per-variant payload comparison. Pushes i32 result onto the WASM stack.
 fn compareTagUnionByLayout(self: *Self, lhs_local: u32, rhs_local: u32, layout_idx: layout.Idx) Allocator.Error!void {
-    const ls = self.layout_store orelse unreachable;
+    const ls = self.getLayoutStore();
     const l = ls.getLayout(layout_idx);
     std.debug.assert(l.tag == .tag_union);
 
@@ -2100,11 +2086,7 @@ fn compareFieldByLayout(
         return;
     }
 
-    const ls = self.layout_store orelse {
-        // No layout store: fallback to bytewise
-        try self.emitBytewiseEqAtOffset(lhs_local, rhs_local, field_offset, field_size);
-        return;
-    };
+    const ls = self.getLayoutStore();
 
     const field_layout = ls.getLayout(field_layout_idx);
     switch (field_layout.tag) {
@@ -4141,10 +4123,7 @@ fn getUnwrappedCaptureLayout(self: *const Self, body_id: LirExprId) ?layout.Idx 
 }
 
 fn resolveValType(self: *const Self, layout_idx: layout.Idx) ValType {
-    if (self.layout_store) |ls| {
-        return WasmLayout.resultValTypeWithStore(layout_idx, ls);
-    }
-    return WasmLayout.resultValType(layout_idx);
+    return WasmLayout.resultValTypeWithStore(layout_idx, self.getLayoutStore());
 }
 
 /// Allocate space on the stack frame, returning the offset from the frame pointer.
@@ -5832,20 +5811,14 @@ fn generateCFMatchBranches(self: *Self, branches: []const LIR.CFMatchBranch, val
             // For composite tag unions (value_local is a pointer to memory),
             // load the discriminant from memory before comparing.
             // For scalar tag unions, value_local holds the discriminant directly.
-            const is_pointer = blk: {
-                if (self.layout_store) |ls| {
-                    const wl = WasmLayout.wasmReprWithStore(tag_pat.union_layout, ls);
-                    break :blk switch (wl) {
-                        .stack_memory => true,
-                        .primitive => false,
-                    };
-                }
-                break :blk false;
+            const ls = self.getLayoutStore();
+            const is_pointer = switch (WasmLayout.wasmReprWithStore(tag_pat.union_layout, ls)) {
+                .stack_memory => true,
+                .primitive => false,
             };
 
             if (is_pointer) {
                 // Load discriminant from memory at discriminant_offset
-                const ls = self.getLayoutStore();
                 const l = ls.getLayout(tag_pat.union_layout);
                 std.debug.assert(l.tag == .tag_union);
                 const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
@@ -6043,19 +6016,13 @@ fn tryGenerateDirectCallFromSimpleTagElseMatch(
     WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
 
     // Compare discriminant.
-    const is_pointer = blk: {
-        if (self.layout_store) |ls| {
-            const wl = WasmLayout.wasmReprWithStore(tag_pat.union_layout, ls);
-            break :blk switch (wl) {
-                .stack_memory => true,
-                .primitive => false,
-            };
-        }
-        break :blk false;
+    const ls = self.getLayoutStore();
+    const is_pointer = switch (WasmLayout.wasmReprWithStore(tag_pat.union_layout, ls)) {
+        .stack_memory => true,
+        .primitive => false,
     };
 
     if (is_pointer) {
-        const ls = self.getLayoutStore();
         const l = ls.getLayout(tag_pat.union_layout);
         std.debug.assert(l.tag == .tag_union);
         const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
@@ -6402,10 +6369,7 @@ fn generateCallArgs(self: *Self, args: LIR.LirExprSpan) Allocator.Error!void {
         // callee's stack frame and reuse the memory, clobbering this result.
         if (arg_exprs.len > 1 and i < arg_exprs.len - 1 and self.isCompositeExpr(arg_id)) {
             const layout_idx = self.exprLayoutIdx(arg_id) orelse continue;
-            const repr = if (self.layout_store) |ls|
-                WasmLayout.wasmReprWithStore(layout_idx, ls)
-            else
-                WasmLayout.wasmRepr(layout_idx);
+            const repr = WasmLayout.wasmReprWithStore(layout_idx, self.getLayoutStore());
             switch (repr) {
                 .stack_memory => |size| if (size > 0) {
                     const stabilized = try self.stabilizeCompositeResult(size);
@@ -7085,14 +7049,14 @@ fn compileLambdaSetMemberAndCall(
 
 // ---- Composite type generation (records, tuples, tags) ----
 
-/// Get the layout store. Panics if none is available (should always be set during codegen).
+/// Get the layout store (required for wasm codegen).
 fn getLayoutStore(self: *const Self) *const LayoutStore {
-    return self.layout_store orelse unreachable;
+    return self.layout_store;
 }
 
 /// Get the byte size of a layout index using the layout store.
 fn layoutByteSize(self: *const Self, layout_idx: layout.Idx) u32 {
-    const ls = self.layout_store orelse return 4; // default to 4 bytes
+    const ls = self.getLayoutStore();
     const l = ls.getLayout(layout_idx);
     return ls.layoutSize(l);
 }
@@ -9087,22 +9051,11 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
             // Determine element size
             const elem_byte_size: u32 = blk: {
-                if (self.layout_store) |ls| {
-                    // The first arg is a list; get its element layout
-                    const first_arg_layout = self.exprLayoutIdx(args[0]);
-                    if (first_arg_layout) |lay_idx| {
-                        const l = ls.getLayout(lay_idx);
-                        if (l.tag == .list) {
-                            break :blk ls.layoutSize(ls.getLayout(l.data.list));
-                        }
-                    }
-                }
-                break :blk switch (needle_vt) {
-                    .i32 => 4,
-                    .i64 => 8,
-                    .f32 => 4,
-                    .f64 => 8,
-                };
+                const ls = self.getLayoutStore();
+                const list_layout_idx = self.exprLayoutIdx(args[0]) orelse unreachable;
+                const list_layout = ls.getLayout(list_layout_idx);
+                std.debug.assert(list_layout.tag == .list);
+                break :blk ls.layoutSize(ls.getLayout(list_layout.data.list));
             };
 
             // result = 0 (not found)
@@ -11543,7 +11496,8 @@ fn generateListEqWithElemLayout(self: *Self, lhs: LirExprId, rhs: LirExprId, ele
         try self.emitLocalGet(rhs_local);
         self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
         WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
-    } else if (self.layout_store) |ls| {
+    } else {
+        const ls = self.getLayoutStore();
         const elem_l = ls.getLayout(elem_layout);
         if (elem_l.tag == .list) {
             // List of lists - use specialized host function with inner element size
@@ -11571,16 +11525,6 @@ fn generateListEqWithElemLayout(self: *Self, lhs: LirExprId, rhs: LirExprId, ele
             self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
         }
-    } else {
-        // No layout store - fall back to byte-wise comparison
-        const import_idx = self.list_eq_import orelse unreachable;
-        const elem_size = self.layoutByteSize(elem_layout);
-        try self.emitLocalGet(lhs_local);
-        try self.emitLocalGet(rhs_local);
-        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-        WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(elem_size)) catch return error.OutOfMemory;
-        self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
     }
 
     // If negate, flip the result
@@ -13008,7 +12952,7 @@ fn emitFloatMod(self: *Self, vt: ValType) Allocator.Error!void {
 
 /// Get the element size for a list layout.
 fn getListElemSize(self: *const Self, list_layout: layout.Idx) u32 {
-    const ls = self.layout_store orelse unreachable;
+    const ls = self.getLayoutStore();
     const l = ls.getLayout(list_layout);
     std.debug.assert(l.tag == .list);
     return ls.layoutSize(ls.getLayout(l.data.list));
@@ -13016,7 +12960,7 @@ fn getListElemSize(self: *const Self, list_layout: layout.Idx) u32 {
 
 /// Get the element alignment for a list layout.
 fn getListElemAlign(self: *const Self, list_layout: layout.Idx) u32 {
-    const ls = self.layout_store orelse unreachable;
+    const ls = self.getLayoutStore();
     const l = ls.getLayout(list_layout);
     std.debug.assert(l.tag == .list);
     return @intCast(ls.getLayout(l.data.list).alignment(ls.targetUsize()).toByteUnits());
