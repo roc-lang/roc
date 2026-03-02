@@ -300,6 +300,428 @@ fn copyStringToMir(self: *Self, module_env: *const ModuleEnv, cir_str_idx: Strin
     return self.store.strings.insert(self.allocator, str_bytes);
 }
 
+fn emitMirStrLiteral(self: *Self, text: []const u8, region: Region) Allocator.Error!MIR.ExprId {
+    const str_idx = try self.store.strings.insert(self.allocator, text);
+    return try self.store.addExpr(
+        self.allocator,
+        .{ .str = str_idx },
+        self.store.monotype_store.primIdx(.str),
+        region,
+    );
+}
+
+fn emitMirStrConcat(self: *Self, left: MIR.ExprId, right: MIR.ExprId, region: Region) Allocator.Error!MIR.ExprId {
+    const args = try self.store.addExprSpan(self.allocator, &.{ left, right });
+    return try self.store.addExpr(
+        self.allocator,
+        .{ .run_low_level = .{ .op = .str_concat, .args = args } },
+        self.store.monotype_store.primIdx(.str),
+        region,
+    );
+}
+
+fn foldMirStrConcat(self: *Self, parts: []const MIR.ExprId, region: Region) Allocator.Error!MIR.ExprId {
+    std.debug.assert(parts.len > 0);
+    var acc = parts[0];
+    for (parts[1..]) |part| {
+        acc = try self.emitMirStrConcat(acc, part, region);
+    }
+    return acc;
+}
+
+fn emitMirLookup(self: *Self, symbol: MIR.Symbol, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
+    return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, monotype, region);
+}
+
+fn emitMirUnitExpr(self: *Self, region: Region) Allocator.Error!MIR.ExprId {
+    return try self.store.addExpr(
+        self.allocator,
+        .{ .record = .{
+            .fields = MIR.ExprSpan.empty(),
+            .field_names = MIR.FieldNameSpan.empty(),
+        } },
+        self.store.monotype_store.unit_idx,
+        region,
+    );
+}
+
+fn emitMirBoolLiteral(self: *Self, module_env: *const ModuleEnv, value: bool, region: Region) Allocator.Error!MIR.ExprId {
+    return try self.store.addExpr(
+        self.allocator,
+        .{ .tag = .{
+            .name = if (value) module_env.idents.true_tag else module_env.idents.false_tag,
+            .args = MIR.ExprSpan.empty(),
+        } },
+        self.store.monotype_store.primIdx(.bool),
+        region,
+    );
+}
+
+fn makeSyntheticBind(
+    self: *Self,
+    monotype: Monotype.Idx,
+    reassignable: bool,
+) Allocator.Error!struct { symbol: MIR.Symbol, pattern: MIR.PatternId } {
+    const template: Ident.Idx = .{
+        .attributes = .{
+            .effectful = false,
+            .ignored = false,
+            .reassignable = reassignable,
+        },
+        .idx = 0,
+    };
+    const sym_ident = self.makeSyntheticIdent(template);
+    const symbol = try self.internSymbol(self.current_module_idx, sym_ident);
+    const pattern = try self.store.addPattern(self.allocator, .{ .bind = symbol }, monotype);
+    return .{ .symbol = symbol, .pattern = pattern };
+}
+
+fn toStrLowLevelForPrim(prim: Monotype.Prim) ?CIR.Expr.LowLevel {
+    return switch (prim) {
+        .u8 => .u8_to_str,
+        .i8 => .i8_to_str,
+        .u16 => .u16_to_str,
+        .i16 => .i16_to_str,
+        .u32 => .u32_to_str,
+        .i32 => .i32_to_str,
+        .u64 => .u64_to_str,
+        .i64 => .i64_to_str,
+        .u128 => .u128_to_str,
+        .i128 => .i128_to_str,
+        .f32 => .f32_to_str,
+        .f64 => .f64_to_str,
+        .dec => .dec_to_str,
+        .bool, .str => null,
+    };
+}
+
+fn lowerStrInspekt(self: *Self, module_env: *const ModuleEnv, run_ll: anytype, region: Region) Allocator.Error!MIR.ExprId {
+    const args = module_env.store.sliceExpr(run_ll.args);
+    if (args.len != 1) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("str_inspekt expected 1 arg in CIR->MIR lowering, got {d}", .{args.len});
+        }
+        unreachable;
+    }
+
+    const arg_cir_expr = args[0];
+    const arg_mono = try self.resolveMonotype(arg_cir_expr);
+    const lowered_arg = try self.lowerExpr(arg_cir_expr);
+
+    // Evaluate the argument once, then inspect the bound lookup.
+    const arg_bind = try self.makeSyntheticBind(arg_mono, false);
+    const arg_lookup = try self.emitMirLookup(arg_bind.symbol, arg_mono, region);
+    const inspected = try self.lowerStrInspektExpr(module_env, arg_lookup, arg_mono, region);
+
+    const stmts = try self.store.addStmts(self.allocator, &.{MIR.Stmt{
+        .decl_const = .{ .pattern = arg_bind.pattern, .expr = lowered_arg },
+    }});
+
+    return try self.store.addExpr(
+        self.allocator,
+        .{ .block = .{
+            .stmts = stmts,
+            .final_expr = inspected,
+        } },
+        self.store.monotype_store.primIdx(.str),
+        region,
+    );
+}
+
+fn lowerStrInspektExpr(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    value_expr: MIR.ExprId,
+    mono_idx: Monotype.Idx,
+    region: Region,
+) Allocator.Error!MIR.ExprId {
+    const mono = self.store.monotype_store.getMonotype(mono_idx);
+    return switch (mono) {
+        .prim => |prim| switch (prim) {
+            .str => blk: {
+                const args = try self.store.addExprSpan(self.allocator, &.{value_expr});
+                break :blk try self.store.addExpr(
+                    self.allocator,
+                    .{ .run_low_level = .{ .op = .str_inspekt, .args = args } },
+                    self.store.monotype_store.primIdx(.str),
+                    region,
+                );
+            },
+            .bool => blk: {
+                const true_str = try self.emitMirStrLiteral("True", region);
+                const false_str = try self.emitMirStrLiteral("False", region);
+                break :blk try self.createBoolMatch(
+                    module_env,
+                    value_expr,
+                    true_str,
+                    false_str,
+                    self.store.monotype_store.primIdx(.str),
+                    region,
+                );
+            },
+            else => |p| blk: {
+                const ll = toStrLowLevelForPrim(p) orelse unreachable;
+                const args = try self.store.addExprSpan(self.allocator, &.{value_expr});
+                break :blk try self.store.addExpr(
+                    self.allocator,
+                    .{ .run_low_level = .{ .op = ll, .args = args } },
+                    self.store.monotype_store.primIdx(.str),
+                    region,
+                );
+            },
+        },
+        .record => |record| self.lowerStrInspektRecord(module_env, value_expr, record, region),
+        .tuple => |tup| self.lowerStrInspektTuple(module_env, value_expr, tup, region),
+        .tag_union => |tu| self.lowerStrInspektTagUnion(module_env, value_expr, tu, mono_idx, region),
+        .list => |list_data| self.lowerStrInspektList(module_env, value_expr, list_data, region),
+        .unit => self.emitMirStrLiteral("{}", region),
+        .box => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("str_inspekt on Box monotype is unsupported in CIR->MIR lowering", .{});
+            }
+            unreachable;
+        },
+        .func => self.emitMirStrLiteral("<function>", region),
+    };
+}
+
+fn lowerStrInspektRecord(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    value_expr: MIR.ExprId,
+    record: anytype,
+    region: Region,
+) Allocator.Error!MIR.ExprId {
+    const fields = self.store.monotype_store.getFields(record.fields);
+    if (fields.len == 0) return self.emitMirStrLiteral("{}", region);
+
+    const save_exprs = self.scratch_expr_ids.top();
+    defer self.scratch_expr_ids.clearFrom(save_exprs);
+
+    if (fields.len == 1) {
+        const field_name = module_env.getIdent(fields[0].name);
+        const open = try std.fmt.allocPrint(self.allocator, "{{ {s}: ", .{field_name});
+        defer self.allocator.free(open);
+        try self.scratch_expr_ids.append(try self.emitMirStrLiteral(open, region));
+        try self.scratch_expr_ids.append(try self.lowerStrInspektExpr(module_env, value_expr, fields[0].type_idx, region));
+        try self.scratch_expr_ids.append(try self.emitMirStrLiteral(" }", region));
+        return self.foldMirStrConcat(self.scratch_expr_ids.sliceFromStart(save_exprs), region);
+    }
+
+    try self.scratch_expr_ids.append(try self.emitMirStrLiteral("{ ", region));
+    for (fields, 0..) |field, i| {
+        if (i > 0) {
+            try self.scratch_expr_ids.append(try self.emitMirStrLiteral(", ", region));
+        }
+        const field_name = module_env.getIdent(field.name);
+        const label = try std.fmt.allocPrint(self.allocator, "{s}: ", .{field_name});
+        defer self.allocator.free(label);
+        try self.scratch_expr_ids.append(try self.emitMirStrLiteral(label, region));
+
+        const field_expr = try self.store.addExpr(
+            self.allocator,
+            .{ .record_access = .{ .record = value_expr, .field_name = field.name } },
+            field.type_idx,
+            region,
+        );
+        try self.scratch_expr_ids.append(try self.lowerStrInspektExpr(module_env, field_expr, field.type_idx, region));
+    }
+    try self.scratch_expr_ids.append(try self.emitMirStrLiteral(" }", region));
+    return self.foldMirStrConcat(self.scratch_expr_ids.sliceFromStart(save_exprs), region);
+}
+
+fn lowerStrInspektTuple(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    value_expr: MIR.ExprId,
+    tup: anytype,
+    region: Region,
+) Allocator.Error!MIR.ExprId {
+    const elems = self.store.monotype_store.getIdxSpan(tup.elems);
+    if (elems.len == 0) return self.emitMirStrLiteral("()", region);
+
+    const save_exprs = self.scratch_expr_ids.top();
+    defer self.scratch_expr_ids.clearFrom(save_exprs);
+
+    try self.scratch_expr_ids.append(try self.emitMirStrLiteral("(", region));
+    for (elems, 0..) |elem_mono, i| {
+        if (i > 0) {
+            try self.scratch_expr_ids.append(try self.emitMirStrLiteral(", ", region));
+        }
+        const elem_expr = try self.store.addExpr(
+            self.allocator,
+            .{ .tuple_access = .{ .tuple = value_expr, .elem_index = @intCast(i) } },
+            elem_mono,
+            region,
+        );
+        try self.scratch_expr_ids.append(try self.lowerStrInspektExpr(module_env, elem_expr, elem_mono, region));
+    }
+    try self.scratch_expr_ids.append(try self.emitMirStrLiteral(")", region));
+
+    return self.foldMirStrConcat(self.scratch_expr_ids.sliceFromStart(save_exprs), region);
+}
+
+fn lowerStrInspektTagUnion(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    value_expr: MIR.ExprId,
+    tu: anytype,
+    mono_idx: Monotype.Idx,
+    region: Region,
+) Allocator.Error!MIR.ExprId {
+    const tags = self.store.monotype_store.getTags(tu.tags);
+    if (tags.len == 0) return self.emitMirStrLiteral("<empty_tag_union>", region);
+
+    const save_branches = self.scratch_branches.top();
+    defer self.scratch_branches.clearFrom(save_branches);
+
+    for (tags) |tag| {
+        const payloads = self.store.monotype_store.getIdxSpan(tag.payloads);
+
+        const save_payload_patterns = self.scratch_pattern_ids.top();
+        defer self.scratch_pattern_ids.clearFrom(save_payload_patterns);
+        const save_payload_symbols = self.scratch_captures.top();
+        defer self.scratch_captures.clearFrom(save_payload_symbols);
+
+        for (payloads) |payload_mono| {
+            const bind = try self.makeSyntheticBind(payload_mono, false);
+            try self.scratch_pattern_ids.append(bind.pattern);
+            try self.scratch_captures.append(.{ .symbol = bind.symbol });
+        }
+
+        const payload_pattern_span = try self.store.addPatternSpan(self.allocator, self.scratch_pattern_ids.sliceFromStart(save_payload_patterns));
+        const tag_pattern = try self.store.addPattern(
+            self.allocator,
+            .{ .tag = .{ .name = tag.name, .args = payload_pattern_span } },
+            mono_idx,
+        );
+        const branch_patterns = try self.store.addBranchPatterns(self.allocator, &.{MIR.BranchPattern{
+            .pattern = tag_pattern,
+            .degenerate = false,
+        }});
+
+        const body = if (payloads.len == 0) blk: {
+            break :blk try self.emitMirStrLiteral(module_env.getIdent(tag.name), region);
+        } else blk: {
+            const save_parts = self.scratch_expr_ids.top();
+            defer self.scratch_expr_ids.clearFrom(save_parts);
+
+            const tag_open = try std.fmt.allocPrint(self.allocator, "{s}(", .{module_env.getIdent(tag.name)});
+            defer self.allocator.free(tag_open);
+            try self.scratch_expr_ids.append(try self.emitMirStrLiteral(tag_open, region));
+
+            const payload_symbols = self.scratch_captures.sliceFromStart(save_payload_symbols);
+            for (payloads, payload_symbols, 0..) |payload_mono, payload_capture, i| {
+                if (i > 0) {
+                    try self.scratch_expr_ids.append(try self.emitMirStrLiteral(", ", region));
+                }
+                const payload_lookup = try self.emitMirLookup(payload_capture.symbol, payload_mono, region);
+                try self.scratch_expr_ids.append(try self.lowerStrInspektExpr(module_env, payload_lookup, payload_mono, region));
+            }
+            try self.scratch_expr_ids.append(try self.emitMirStrLiteral(")", region));
+            break :blk try self.foldMirStrConcat(self.scratch_expr_ids.sliceFromStart(save_parts), region);
+        };
+
+        try self.scratch_branches.append(.{
+            .patterns = branch_patterns,
+            .body = body,
+            .guard = MIR.ExprId.none,
+        });
+    }
+
+    const branches = try self.store.addBranches(self.allocator, self.scratch_branches.sliceFromStart(save_branches));
+    return try self.store.addExpr(
+        self.allocator,
+        .{ .match_expr = .{
+            .cond = value_expr,
+            .branches = branches,
+        } },
+        self.store.monotype_store.primIdx(.str),
+        region,
+    );
+}
+
+fn lowerStrInspektList(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    value_expr: MIR.ExprId,
+    list_data: anytype,
+    region: Region,
+) Allocator.Error!MIR.ExprId {
+    const str_mono = self.store.monotype_store.primIdx(.str);
+    const bool_mono = self.store.monotype_store.primIdx(.bool);
+    const unit_mono = self.store.monotype_store.unit_idx;
+
+    const acc_bind = try self.makeSyntheticBind(str_mono, true);
+    const first_bind = try self.makeSyntheticBind(bool_mono, true);
+    const elem_bind = try self.makeSyntheticBind(list_data.elem, false);
+
+    const open_bracket = try self.emitMirStrLiteral("[", region);
+    const close_bracket = try self.emitMirStrLiteral("]", region);
+    const comma = try self.emitMirStrLiteral(", ", region);
+    const empty = try self.emitMirStrLiteral("", region);
+    const first_true = try self.emitMirBoolLiteral(module_env, true, region);
+    const first_false = try self.emitMirBoolLiteral(module_env, false, region);
+
+    // Build loop body:
+    //   prefix = if first then "" else ", "
+    //   first = False
+    //   acc = acc ++ prefix ++ inspect(elem)
+    const first_lookup = try self.emitMirLookup(first_bind.symbol, bool_mono, region);
+    const prefix = try self.createBoolMatch(module_env, first_lookup, empty, comma, str_mono, region);
+    const elem_lookup = try self.emitMirLookup(elem_bind.symbol, list_data.elem, region);
+    const elem_inspected = try self.lowerStrInspektExpr(module_env, elem_lookup, list_data.elem, region);
+    const prefixed_elem = try self.emitMirStrConcat(prefix, elem_inspected, region);
+    const acc_lookup = try self.emitMirLookup(acc_bind.symbol, str_mono, region);
+    const new_acc = try self.emitMirStrConcat(acc_lookup, prefixed_elem, region);
+
+    const unit_expr = try self.emitMirUnitExpr(region);
+    const body_stmts = try self.store.addStmts(self.allocator, &.{
+        MIR.Stmt{ .mutate_var = .{ .pattern = first_bind.pattern, .expr = first_false } },
+        MIR.Stmt{ .mutate_var = .{ .pattern = acc_bind.pattern, .expr = new_acc } },
+    });
+    const body_expr = try self.store.addExpr(
+        self.allocator,
+        .{ .block = .{
+            .stmts = body_stmts,
+            .final_expr = unit_expr,
+        } },
+        unit_mono,
+        region,
+    );
+
+    const for_expr = try self.store.addExpr(
+        self.allocator,
+        .{ .for_loop = .{
+            .list = value_expr,
+            .elem_pattern = elem_bind.pattern,
+            .body = body_expr,
+        } },
+        unit_mono,
+        region,
+    );
+    const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_mono);
+    const loop_stmt: MIR.Stmt = .{ .decl_const = .{ .pattern = wildcard, .expr = for_expr } };
+
+    const final_acc_lookup = try self.emitMirLookup(acc_bind.symbol, str_mono, region);
+    const final_expr = try self.emitMirStrConcat(final_acc_lookup, close_bracket, region);
+
+    const outer_stmts = try self.store.addStmts(self.allocator, &.{
+        MIR.Stmt{ .decl_var = .{ .pattern = acc_bind.pattern, .expr = open_bracket } },
+        MIR.Stmt{ .decl_var = .{ .pattern = first_bind.pattern, .expr = first_true } },
+        loop_stmt,
+    });
+    return try self.store.addExpr(
+        self.allocator,
+        .{ .block = .{
+            .stmts = outer_stmts,
+            .final_expr = final_expr,
+        } },
+        str_mono,
+        region,
+    );
+}
+
 // --- Public API ---
 
 /// Create a symbol using MIR lowering's current opaque ID encoding.
@@ -729,18 +1151,14 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
             } }, monotype, region);
         },
         .e_run_low_level => |run_ll| {
+            if (run_ll.op == .str_inspekt) {
+                return try self.lowerStrInspekt(module_env, run_ll, region);
+            }
             const args = try self.lowerExprSpan(module_env, run_ll.args);
-            // str_inspekt always returns Str, regardless of input type.
-            // Override monotype when the CIR node was created without type checking
-            // (e.g., programmatic wrapping in test helpers or REPL).
-            const effective_monotype = if (run_ll.op == .str_inspekt)
-                self.store.monotype_store.primIdx(.str)
-            else
-                monotype;
             return try self.store.addExpr(self.allocator, .{ .run_low_level = .{
                 .op = run_ll.op,
                 .args = args,
-            } }, effective_monotype, region);
+            } }, monotype, region);
         },
 
         // --- Error/Debug ---
