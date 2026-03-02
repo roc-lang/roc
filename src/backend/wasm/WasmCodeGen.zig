@@ -7384,7 +7384,7 @@ fn materializeCaptureStructToStack(
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
             try self.emitStoreOp(cap_vt, field_offset);
-        } else if (self.materializeCapturedClosure(cap.symbol)) |ptr_local| {
+        } else if (try self.materializeCapturedClosure(cap.symbol)) |ptr_local| {
             // The capture is a struct_captures closure — materialize its inner
             // captures recursively and store the resulting struct pointer.
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
@@ -7439,7 +7439,7 @@ fn materializeCapturesToStackWithBase(self: *Self, captures_span: LIR.LirCapture
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
             try self.emitStoreOp(cap_vt, offset);
-        } else if (self.materializeCapturedClosure(cap.symbol)) |ptr_local| {
+        } else if (try self.materializeCapturedClosure(cap.symbol)) |ptr_local| {
             // The capture is a struct_captures closure — materialize its inner
             // captures recursively and store the resulting struct pointer.
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
@@ -7469,7 +7469,7 @@ fn materializeCapturesToStackWithBase(self: *Self, captures_span: LIR.LirCapture
 /// When a capture is a struct_captures closure that doesn't have a local,
 /// recursively materialize its inner captures into a new stack struct and
 /// return a local holding the pointer. Returns null if not applicable.
-fn materializeCapturedClosure(self: *Self, symbol: Symbol) ?u32 {
+fn materializeCapturedClosure(self: *Self, symbol: Symbol) Allocator.Error!?u32 {
     const key: u64 = @bitCast(symbol);
     const cv = self.closure_values.get(key) orelse return null;
     const repr = switch (cv.representation) {
@@ -7478,21 +7478,21 @@ fn materializeCapturedClosure(self: *Self, symbol: Symbol) ?u32 {
     };
 
     const info = self.captureStructInfo(repr.struct_layout);
-    const ptr_local = self.storage.allocLocal(symbol, .i32) catch return null;
+    const ptr_local = try self.storage.allocLocal(symbol, .i32);
     if (info.size == 0) {
-        self.body.append(self.allocator, Op.i32_const) catch return null;
-        WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return null;
-        self.emitLocalSet(ptr_local) catch return null;
+        try self.body.append(self.allocator, Op.i32_const);
+        try WasmModule.leb128WriteI32(self.allocator, &self.body, 0);
+        try self.emitLocalSet(ptr_local);
         return ptr_local;
     }
 
     // Allocate stack memory for the inner captures struct
-    const slot = self.allocStackMemory(info.size, info.alignment) catch return null;
+    const slot = try self.allocStackMemory(info.size, info.alignment);
     // Recursively materialize inner captures
-    self.materializeCaptureStructToStack(repr.captures, repr.struct_layout, slot) catch return null;
+    try self.materializeCaptureStructToStack(repr.captures, repr.struct_layout, slot);
     // Create a local for the struct pointer
-    self.emitFpOffset(slot) catch return null;
-    self.emitLocalSet(ptr_local) catch return null;
+    try self.emitFpOffset(slot);
+    try self.emitLocalSet(ptr_local);
     return ptr_local;
 }
 
