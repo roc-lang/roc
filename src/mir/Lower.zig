@@ -2166,7 +2166,14 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
                 }
             }
 
-            return try self.store.addExpr(self.allocator, .runtime_err_type, monotype, region);
+            if (std.debug.runtime_safety) {
+                const method_name = module_env.getIdent(da.field_name);
+                std.debug.panic(
+                    "lowerDotAccess: unresolved method '{s}' (checker/lowering invariant broken)",
+                    .{method_name},
+                );
+            }
+            unreachable;
         }
 
         const method_symbol = method_symbol_opt.?;
