@@ -439,10 +439,9 @@ fn lowerStrInspektExpr(
     return switch (mono) {
         .prim => |prim| switch (prim) {
             .str => blk: {
-                const args = try self.store.addExprSpan(self.allocator, &.{value_expr});
                 break :blk try self.store.addExpr(
                     self.allocator,
-                    .{ .run_low_level = .{ .op = .str_inspekt, .args = args } },
+                    .{ .str_escape_and_quote = value_expr },
                     self.store.monotype_store.primIdx(.str),
                     region,
                 );

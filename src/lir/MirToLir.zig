@@ -529,6 +529,21 @@ fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
         .block => |b| self.lowerBlock(b, mono_idx, region),
         .record_access => |ra| self.lowerRecordAccess(ra, mir_expr_id, region),
         .tuple_access => |ta| self.lowerTupleAccess(ta, mir_expr_id, region),
+        .str_escape_and_quote => |s| blk: {
+            if (builtin.mode == .Debug) {
+                const arg_mono = self.mir_store.typeOf(s);
+                const arg_type = self.mir_store.monotype_store.getMonotype(arg_mono);
+                const ret_type = self.mir_store.monotype_store.getMonotype(mono_idx);
+                if (!(arg_type == .prim and arg_type.prim == .str and ret_type == .prim and ret_type.prim == .str)) {
+                    std.debug.panic("MIR invariant violated: str_escape_and_quote must be Str -> Str", .{});
+                }
+            }
+            const lowered = try self.lowerExpr(s);
+            var acc = self.startLetAccumulator();
+            const arg = try acc.ensureSymbol(lowered, .str, region);
+            const result = try self.lir_store.addExpr(.{ .str_escape_and_quote = arg }, region);
+            break :blk try acc.finish(result, .str, region);
+        },
         .run_low_level => |ll| self.lowerLowLevel(ll, mono_idx, region),
         .hosted => |h| self.lowerHosted(h, mono_idx, region),
         .runtime_err_can, .runtime_err_type, .runtime_err_ellipsis, .runtime_err_anno_only => {
@@ -1141,20 +1156,13 @@ fn lowerLowLevel(self: *Self, ll: anytype, mono_idx: Monotype.Idx, region: Regio
         return acc.finish(result, ret_layout, region);
     }
 
-    // str_inspekt should have been expanded during CIR->MIR lowering.
-    // The only remaining valid case is primitive Str quoting.
+    // str_inspekt should have been fully expanded during CIR->MIR lowering.
+    // MIR uses an explicit `str_escape_and_quote` expression for string quoting.
     if (ll.op == .str_inspekt) {
-        const args_slice = self.lir_store.getExprSpan(lir_args);
-        const arg_mono = self.mir_store.typeOf(mir_args[0]);
-        const arg_type = self.mir_store.monotype_store.getMonotype(arg_mono);
-        if (arg_type == .prim and arg_type.prim == .str) {
-            const result = try self.lir_store.addExpr(.{ .str_escape_and_quote = args_slice[0] }, region);
-            return acc.finish(result, ret_layout, region);
-        }
         if (builtin.mode == .Debug) {
             std.debug.panic(
-                "MIR->LIR invariant violated: str_inspekt for non-Str monotype {s} should be expanded in CIR->MIR lowering",
-                .{@tagName(std.meta.activeTag(arg_type))},
+                "MIR->LIR invariant violated: run_low_level(str_inspekt) should never appear after CIR->MIR lowering",
+                .{},
             );
         }
         unreachable;

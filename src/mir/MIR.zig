@@ -340,6 +340,9 @@ pub const Expr = union(enum) {
 
     // --- Low-level ---
 
+    /// Escape and quote a string for inspect output
+    str_escape_and_quote: ExprId,
+
     /// Low-level builtin operation
     run_low_level: struct {
         op: CIR.Expr.LowLevel,
