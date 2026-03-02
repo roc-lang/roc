@@ -1886,11 +1886,27 @@ test "List.single nested list (single call site)" {
     );
 }
 
+test "tmp List.single nested list length only" {
+    try runExpectI64("List.len(List.single([1, 2, 3]))", 1, .no_trace);
+}
+
+test "tmp Str.inspect list of ints" {
+    try runExpectStr("Str.inspect([1, 2, 3])", "[1.0, 2.0, 3.0]", .no_trace);
+}
+
+test "tmp Str.inspect list of strs" {
+    try runExpectStr("Str.inspect([\"a\", \"b\", \"c\"])", "[\"a\", \"b\", \"c\"]", .no_trace);
+}
+
+test "tmp Str.inspect list of lists" {
+    try runExpectStr("Str.inspect([[1, 2], [3, 4]])", "[[1.0, 2.0], [3.0, 4.0]]", .no_trace);
+}
+
 test "List.single nested list after other specializations" {
     try runExpectStr(
         \\{
-        \\    _ = List.single(1)
-        \\    _ = List.single("hello")
+        \\    n = List.single(1)
+        \\    s = List.single("hello")
         \\    Str.inspect(List.single([1, 2, 3]))
         \\}
         ,

@@ -2062,6 +2062,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             @intFromEnum(ll.ret_layout),
                         },
                     );
+                    const elem_layout_idx_opt: ?layout.Idx = blk: {
+                        if (self.getExprLayout(args[1])) |elem_layout_idx| {
+                            if (@intFromEnum(elem_layout_idx) < ls.layouts.len()) {
+                                break :blk elem_layout_idx;
+                            }
+                        }
+                        const ret_layout_val = ls.getLayout(ll.ret_layout);
+                        if (ret_layout_val.tag == .list) {
+                            break :blk ret_layout_val.data.list;
+                        }
+                        break :blk null;
+                    };
                     // Determine element size from layout.
                     const elem_size_align: layout.SizeAlign = blk: {
                         if (self.getExprLayout(args[1])) |elem_layout_idx| {
@@ -2144,6 +2156,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Append into the reserved list.
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
                     const append_fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_append_unsafe_packed);
+
+                    // list_append borrows the element. append_unsafe performs a raw copy,
+                    // so for refcounted element layouts we must take one extra reference
+                    // for the newly appended list entry.
+                    if (elements_refcounted) {
+                        if (elem_layout_idx_opt) |elem_layout_idx| {
+                            const elem_rc_loc = self.stackLocationForLayout(elem_layout_idx, elem_offset);
+                            try self.emitRcForLayout(elem_rc_loc, elem_layout_idx, .incref, 1);
+                        }
+                    }
 
                     // roc_builtins_list_append_unsafe(out, list_bytes, list_len, list_cap, element, element_width, roc_ops)
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -2558,6 +2580,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             else => unreachable,
                         };
                     };
+                    const elem_layout_idx_opt: ?layout.Idx = blk: {
+                        const ret_layout = ls.getLayout(ll.ret_layout);
+                        break :blk switch (ret_layout.tag) {
+                            .list => ret_layout.data.list,
+                            .list_of_zst => null,
+                            else => null,
+                        };
+                    };
                     const elements_refcounted = blk: {
                         const ret_layout = ls.getLayout(ll.ret_layout);
                         break :blk switch (ret_layout.tag) {
@@ -2617,6 +2647,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Increment counter before the call (so it survives the call)
                     try self.emitAddImm(ctr_reg2, ctr_reg2, 1);
                     try self.emitStore(.w64, frame_ptr, loop_counter_slot, ctr_reg2);
+
+                    // list_repeat reuses the same element value for each append.
+                    // list_append_unsafe consumes one owned element reference per write,
+                    // so for refcounted elements we must take one extra ref on
+                    // iterations after the first (counter > 1).
+                    if (elements_refcounted) {
+                        if (elem_layout_idx_opt) |elem_layout_idx| {
+                            try self.emitCmpImm(ctr_reg2, 1);
+                            const skip_incref_patch = try self.codegen.emitCondJump(condEqual());
+                            const elem_rc_loc = self.stackLocationForLayout(elem_layout_idx, elem_off);
+                            try self.emitRcForLayout(elem_rc_loc, elem_layout_idx, .incref, 1);
+                            self.codegen.patchJump(skip_incref_patch, self.codegen.currentOffset());
+                        }
+                    }
+
                     self.codegen.freeGeneral(ctr_reg2);
 
                     // Call listAppendUnsafeC (capacity is already reserved)

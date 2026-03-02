@@ -143,6 +143,7 @@ pub const RcInsertPass = struct {
             .list_last,
             => arg_index == 0,
             .list_get => arg_index == 0,
+            .list_append => arg_index == 1,
             .list_contains => arg_index < 2,
             else => false,
         };
@@ -1655,24 +1656,32 @@ pub const RcInsertPass = struct {
         try self.countUsesInto(new_body, &self.scratch_uses);
 
         // Emit RC ops for lambda parameters
-        var rc_stmts = std.ArrayList(LirStmt).empty;
-        defer rc_stmts.deinit(self.allocator);
+        var pre_rc_stmts = std.ArrayList(LirStmt).empty;
+        defer pre_rc_stmts.deinit(self.allocator);
+        var post_rc_stmts = std.ArrayList(LirStmt).empty;
+        defer post_rc_stmts.deinit(self.allocator);
 
         const params_after = self.store.getPatternSpan(lam.params);
         for (params_after) |pat_id| {
             const Ctx = struct {
                 pass: *RcInsertPass,
                 local_uses: *const std.AutoHashMap(SymbolUseKey, u32),
+                body_expr: LirExprId,
                 region: Region,
-                rc_stmts: *std.ArrayList(LirStmt),
+                pre_rc_stmts: *std.ArrayList(LirStmt),
+                post_rc_stmts: *std.ArrayList(LirStmt),
                 fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx) Allocator.Error!void {
                     if (!ctx.pass.layoutNeedsRc(layout_idx)) return;
 
                     const use_count = ctx.pass.sumSymbolUses(ctx.local_uses, symbol);
                     if (use_count == 0) {
-                        try ctx.pass.emitDecrefInto(symbol, layout_idx, ctx.region, ctx.rc_stmts);
+                        if (ctx.pass.exprHasBorrowedLookupUseOfSymbol(ctx.body_expr, symbol)) {
+                            try ctx.pass.emitDecrefInto(symbol, layout_idx, ctx.region, ctx.post_rc_stmts);
+                        } else {
+                            try ctx.pass.emitDecrefInto(symbol, layout_idx, ctx.region, ctx.pre_rc_stmts);
+                        }
                     } else if (use_count > 1) {
-                        try ctx.pass.emitIncrefInto(symbol, layout_idx, @intCast(use_count - 1), ctx.region, ctx.rc_stmts);
+                        try ctx.pass.emitIncrefInto(symbol, layout_idx, @intCast(use_count - 1), ctx.region, ctx.pre_rc_stmts);
                     }
                 }
             };
@@ -1680,18 +1689,48 @@ pub const RcInsertPass = struct {
             try walkPatternBinds(self.store, pat_id, Ctx{
                 .pass = self,
                 .local_uses = &self.scratch_uses,
+                .body_expr = new_body,
                 .region = region,
-                .rc_stmts = &rc_stmts,
+                .pre_rc_stmts = &pre_rc_stmts,
+                .post_rc_stmts = &post_rc_stmts,
             });
         }
 
-        // If RC ops needed, wrap body in a block with RC stmts prepended
+        // Wrap body with pre-body and post-body RC cleanup if needed.
         var final_body = new_body;
-        if (rc_stmts.items.len > 0) {
-            const stmts_span = try self.store.addStmts(rc_stmts.items);
+        if (pre_rc_stmts.items.len > 0) {
+            const stmts_span = try self.store.addStmts(pre_rc_stmts.items);
             final_body = try self.store.addExpr(.{ .block = .{
                 .stmts = stmts_span,
                 .final_expr = new_body,
+                .result_layout = lam.ret_layout,
+            } }, region);
+        }
+
+        if (post_rc_stmts.items.len > 0) {
+            var post_stmts = std.ArrayList(LirStmt).empty;
+            defer post_stmts.deinit(self.allocator);
+
+            const temp_symbol = self.freshSyntheticSymbol();
+            const temp_pattern = try self.store.addPattern(.{ .bind = .{
+                .symbol = temp_symbol,
+                .layout_idx = lam.ret_layout,
+            } }, region);
+            try post_stmts.append(self.allocator, .{ .decl = .{
+                .pattern = temp_pattern,
+                .expr = final_body,
+            } });
+            for (post_rc_stmts.items) |stmt| {
+                try post_stmts.append(self.allocator, stmt);
+            }
+            const temp_lookup = try self.store.addExpr(.{ .lookup = .{
+                .symbol = temp_symbol,
+                .layout_idx = lam.ret_layout,
+            } }, region);
+            const post_span = try self.store.addStmts(post_stmts.items);
+            final_body = try self.store.addExpr(.{ .block = .{
+                .stmts = post_span,
+                .final_expr = temp_lookup,
                 .result_layout = lam.ret_layout,
             } }, region);
         }
