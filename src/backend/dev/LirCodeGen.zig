@@ -10019,8 +10019,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Jump over abort call if condition is true (non-zero)
             const skip_patch = try self.codegen.emitCondJump(condNotEqual());
 
-            // Condition was false: call roc_crashed via RocOps
+            // Condition was false: call roc_crashed via RocOps, then trap.
+            // This path must be terminal even if roc_crashed were to return.
             try self.emitRocCrash("expect failed");
+            try self.emitTrap();
 
             // Patch the skip jump to land here
             self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
