@@ -15770,48 +15770,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                     },
                     .wildcard => {
-                        // Consume register slots for this param to maintain correct
-                        // register indexing, but don't bind any symbol.
-                        const is_128bit = if (param_idx < layouts.len) blk: {
-                            const param_layout = layouts[param_idx];
-                            break :blk param_layout == .i128 or param_layout == .u128 or param_layout == .dec;
-                        } else false;
-
-                        if (is_128bit) {
-                            reg_idx += 2;
-                        } else {
-                            const is_str = if (param_idx < layouts.len)
-                                layouts[param_idx] == .str
-                            else
-                                false;
-
-                            const is_list = if (param_idx < layouts.len) blk: {
-                                const param_layout = layouts[param_idx];
-                                if (self.layout_store) |ls| {
-                                    if (builtin.mode == .Debug and @intFromEnum(param_layout) >= ls.layouts.len()) {
-                                        std.debug.panic(
-                                            "LIR/codegen invariant violated: wildcard join point param layout out of bounds ({d} >= {d})",
-                                            .{ @intFromEnum(param_layout), ls.layouts.len() },
-                                        );
-                                    }
-                                    const layout_val = ls.getLayout(param_layout);
-                                    break :blk layout_val.tag == .list or layout_val.tag == .list_of_zst;
-                                }
-                                if (builtin.mode == .Debug) {
-                                    std.debug.panic(
-                                        "LIR/codegen invariant violated: missing layout_store while binding wildcard join point params",
-                                        .{},
-                                    );
-                                }
-                                unreachable;
-                            } else false;
-
-                            if (is_str or is_list) {
-                                reg_idx += 3;
-                            } else {
-                                reg_idx += 1;
-                            }
+                        if (builtin.mode == .Debug) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: wildcard join params are not allowed in canonical tail-recursive form",
+                                .{},
+                            );
                         }
+                        unreachable;
                     },
                     .int_literal, .float_literal, .str_literal, .tag, .struct_, .list, .as_pattern => unreachable, // Join point params must be simple bindings or wildcards
                 }
@@ -15828,6 +15793,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const layouts = self.store.getLayoutIdxSpan(param_layouts_span);
             const pattern_ids = self.store.getPatternSpan(param_patterns_span);
 
+            if (arg_locs.len != pattern_ids.len) {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "LIR/codegen invariant violated: jump arg arity ({d}) does not match join param arity ({d})",
+                        .{ arg_locs.len, pattern_ids.len },
+                    );
+                }
+                unreachable;
+            }
+            if (pattern_ids.len != layouts.len) {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "LIR/codegen invariant violated: join param pattern/layout arity mismatch ({d} != {d})",
+                        .{ pattern_ids.len, layouts.len },
+                    );
+                }
+                unreachable;
+            }
+
             // Optimization: skip temp copy when there's only 1 param (no overlap possible)
             if (arg_locs.len <= 1) {
                 try self.rebindSingleParam(arg_locs, pattern_ids, layouts);
@@ -15843,17 +15827,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer temp_infos.deinit(self.allocator);
 
             for (arg_locs, 0..) |loc, param_idx| {
-                if (param_idx >= pattern_ids.len) {
-                    try temp_infos.append(self.allocator, .{ .offset = 0, .size = 0 });
-                    continue;
-                }
-
                 const pattern = self.store.getPattern(pattern_ids[param_idx]);
                 switch (pattern) {
                     .bind => {},
                     .wildcard => {
-                        try temp_infos.append(self.allocator, .{ .offset = 0, .size = 0 });
-                        continue;
+                        if (builtin.mode == .Debug) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: wildcard join params are not allowed in canonical tail-recursive form",
+                                .{},
+                            );
+                        }
+                        unreachable;
                     },
                     .int_literal, .float_literal, .str_literal, .tag, .struct_, .list, .as_pattern => unreachable,
                 }
@@ -15862,8 +15846,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .bind => |bind| @bitCast(bind.symbol),
                     else => unreachable,
                 }) orelse {
-                    try temp_infos.append(self.allocator, .{ .offset = 0, .size = 0 });
-                    continue;
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: missing destination location for join param during rebind",
+                            .{},
+                        );
+                    }
+                    unreachable;
                 };
 
                 // Determine param size
@@ -15897,16 +15886,32 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Phase 2: Copy from temp slots to destination slots
             for (temp_infos.items, 0..) |temp_info, param_idx| {
-                if (temp_info.size == 0) continue;
-                if (param_idx >= pattern_ids.len) continue;
+                if (temp_info.size == 0) unreachable;
 
                 const pattern = self.store.getPattern(pattern_ids[param_idx]);
                 const symbol_key: u64 = switch (pattern) {
                     .bind => |bind| @bitCast(bind.symbol),
-                    else => continue,
+                    .wildcard => {
+                        if (builtin.mode == .Debug) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: wildcard join params are not allowed in canonical tail-recursive form",
+                                .{},
+                            );
+                        }
+                        unreachable;
+                    },
+                    else => unreachable,
                 };
 
-                const dst_loc = self.symbol_locations.get(symbol_key) orelse continue;
+                const dst_loc = self.symbol_locations.get(symbol_key) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: missing destination symbol location in join param rebind phase 2",
+                            .{},
+                        );
+                    }
+                    unreachable;
+                };
                 const dst_offset: i32 = switch (dst_loc) {
                     .stack => |s| s.offset,
                     .list_stack => |ls_info| ls_info.struct_offset,
@@ -15976,16 +15981,30 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Fast path for single-param rebind (no clobbering possible)
         fn rebindSingleParam(self: *Self, arg_locs: []const ValueLocation, pattern_ids: anytype, layouts: anytype) Allocator.Error!void {
             for (arg_locs, 0..) |loc, param_idx| {
-                if (param_idx >= pattern_ids.len) continue;
-
                 const pattern = self.store.getPattern(pattern_ids[param_idx]);
                 const symbol_key: u64 = switch (pattern) {
                     .bind => |bind| @bitCast(bind.symbol),
-                    .wildcard => continue,
+                    .wildcard => {
+                        if (builtin.mode == .Debug) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: wildcard join params are not allowed in canonical tail-recursive form",
+                                .{},
+                            );
+                        }
+                        unreachable;
+                    },
                     .int_literal, .float_literal, .str_literal, .tag, .struct_, .list, .as_pattern => unreachable,
                 };
 
-                const dst_loc = self.symbol_locations.get(symbol_key) orelse continue;
+                const dst_loc = self.symbol_locations.get(symbol_key) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: missing destination location for join param in single-param rebind",
+                            .{},
+                        );
+                    }
+                    unreachable;
+                };
 
                 const is_str = if (param_idx < layouts.len)
                     layouts[param_idx] == .str

@@ -6232,9 +6232,13 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
                         param_locals[i] = local_idx;
                     },
                     .wildcard => {
-                        const vt = if (i < jp_layouts.len) self.resolveValType(jp_layouts[i]) else .i32;
-                        const local_idx = self.storage.allocAnonymousLocal(vt) catch return error.OutOfMemory;
-                        param_locals[i] = local_idx;
+                        if (std.debug.runtime_safety) {
+                            std.debug.panic(
+                                "WASM/codegen invariant violated: wildcard join params are not allowed in canonical tail-recursive form",
+                                .{},
+                            );
+                        }
+                        unreachable;
                     },
                     .struct_ => |s| {
                         const local_idx = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -6269,6 +6273,15 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
 
             // Get param locals for this join point
             const param_locals = self.join_point_param_locals.get(jp_key) orelse unreachable;
+            if (args.len != param_locals.len) {
+                if (std.debug.runtime_safety) {
+                    std.debug.panic(
+                        "WASM/codegen invariant violated: jump arg arity ({d}) does not match join param arity ({d})",
+                        .{ args.len, param_locals.len },
+                    );
+                }
+                unreachable;
+            }
 
             // Evaluate all arguments first (to temp locals), to avoid
             // overwriting params that are referenced by later args
@@ -6284,7 +6297,7 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
             }
 
             // Copy temp locals to param locals
-            for (0..@min(args.len, param_locals.len)) |i| {
+            for (0..args.len) |i| {
                 try self.emitLocalGet(temp_locals[i]);
                 try self.emitLocalSet(param_locals[i]);
             }
