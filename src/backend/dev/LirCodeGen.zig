@@ -3898,7 +3898,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // TODO: Implement forwarding the user's crash message string from args.
                     // DO NOT replace this with anything hardcoded. either implement it fully
                     // or LEAVE IT AS A PANIC.
-                    std.debug.panic("TODO: ll.crash message forwarding is not implemented", .{});
+                    @panic("TODO: ll.crash message forwarding is not implemented");
                 },
             }
         }
@@ -10376,7 +10376,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // TODO: Implement discriminant_switch codegen fully.
             // DO NOT replace this with anything fallback-based. either implement it
             // fully or LEAVE IT AS A PANIC.
-            std.debug.panic("TODO: discriminant_switch codegen is not implemented", .{});
+            @panic("TODO: discriminant_switch codegen is not implemented");
         }
 
         /// Extract the payload from a tag union value.

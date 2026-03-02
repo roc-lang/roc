@@ -368,7 +368,8 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     self.int_arg_index += 1;
                 } else {
                     // Float args beyond position 3 go on stack
-                    @panic("Stack float args not yet implemented for Windows CallBuilder");
+                    // TODO: Implement stack float args for Windows CallBuilder.
+                    @panic("TODO: stack float args not yet implemented for Windows CallBuilder");
                 }
             } else {
                 // System V: separate float register pool
@@ -384,7 +385,8 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     self.float_arg_index += 1;
                 } else {
                     // Float args beyond XMM7 go on stack
-                    @panic("Stack float args not yet implemented for System V CallBuilder");
+                    // TODO: Implement stack float args for System V CallBuilder.
+                    @panic("TODO: stack float args not yet implemented for System V CallBuilder");
                 }
             }
         }
@@ -414,7 +416,8 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     }
                     self.int_arg_index += 1;
                 } else {
-                    @panic("Stack float args not yet implemented for Windows CallBuilder");
+                    // TODO: Implement stack float args for Windows CallBuilder.
+                    @panic("TODO: stack float args not yet implemented for Windows CallBuilder");
                 }
             } else {
                 // System V: separate float register pool
@@ -427,7 +430,8 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     }
                     self.float_arg_index += 1;
                 } else {
-                    @panic("Stack float args not yet implemented for System V CallBuilder");
+                    // TODO: Implement stack float args for System V CallBuilder.
+                    @panic("TODO: stack float args not yet implemented for System V CallBuilder");
                 }
             }
         }

@@ -189,19 +189,21 @@ pub fn Storage(
         }
 
         /// Claim a general-purpose register for a symbol.
-        /// Panics if no registers are free (spilling not yet implemented).
+        /// Panics if no registers are free.
+        /// TODO: Implement register spilling/reload.
         pub fn claimGeneralReg(self: *Self, symbol: u32) !GeneralReg {
             const reg = self.general_free.popOrNull() orelse
-                @panic("No free general registers - spilling not implemented");
+                @panic("TODO: no free general registers; spilling/reload is not implemented");
             try self.symbol_storage.put(symbol, .{ .general_reg = reg });
             return reg;
         }
 
         /// Claim a floating-point register for a symbol.
-        /// Panics if no registers are free (spilling not yet implemented).
+        /// Panics if no registers are free.
+        /// TODO: Implement register spilling/reload.
         pub fn claimFloatReg(self: *Self, symbol: u32) !FloatReg {
             const reg = self.float_free.popOrNull() orelse
-                @panic("No free float registers - spilling not implemented");
+                @panic("TODO: no free float registers; spilling/reload is not implemented");
             try self.symbol_storage.put(symbol, .{ .float_reg = reg });
             return reg;
         }

@@ -1061,7 +1061,10 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
                 try self.emitLoadOp(payload_vt, 0);
             }
         },
-        .hosted_call => unreachable,
+        .hosted_call => {
+            // TODO: Implement hosted_call expression lowering for wasm.
+            @panic("TODO: wasm hosted_call expression path is not implemented");
+        },
         .break_expr => unreachable,
     }
 }
@@ -3178,9 +3181,8 @@ fn generateCompositeNumericOp(self: *Self, op: anytype, args: []const LirExprId,
         switch (op) {
             .num_neg => try self.generateCompositeI128Negate(args[0], ret_layout),
             .num_abs => {
-                // i128/Dec abs: compare with 0, negate if negative
-                // For now, treat as unimplemented for composite types
-                unreachable;
+                // TODO: Implement composite i128/dec num_abs for wasm.
+                @panic("TODO: wasm composite num_abs is not implemented");
             },
             else => unreachable,
         }
@@ -9431,13 +9433,13 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
 
         .list_sort_with => {
-            // list_sort_with: requires higher-order function call
-            unreachable; // TODO: implement list_sort_with for wasm
+            // TODO: implement list_sort_with for wasm.
+            @panic("TODO: wasm list_sort_with is not implemented");
         },
 
         .list_drop_at => {
-            // list_drop_at: requires host support
-            unreachable; // TODO: implement list_drop_at for wasm
+            // TODO: implement list_drop_at for wasm.
+            @panic("TODO: wasm list_drop_at is not implemented");
         },
 
         // List element access operations (no heap allocation needed)
