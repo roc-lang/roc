@@ -2868,7 +2868,7 @@ expect {
 		(patt (type "Error -> U64"))
 		(patt (type "[Red, ..[Blue, Green, ..]], _arg -> Error"))
 		(patt (type "Error"))
-		(patt (type "List(Error) -> Try({  }, _d)"))
+		(patt (type "List(Error) -> Try({}, _d)"))
 		(patt (type "{}"))
 		(patt (type "Error")))
 	(type_decls
@@ -2915,7 +2915,7 @@ expect {
 		(expr (type "Error -> U64"))
 		(expr (type "[Red, ..[Blue, Green, ..]], _arg -> Error"))
 		(expr (type "Error"))
-		(expr (type "List(Error) -> Try({  }, _d)"))
+		(expr (type "List(Error) -> Try({}, _d)"))
 		(expr (type "{}"))
 		(expr (type "Error"))))
 ~~~

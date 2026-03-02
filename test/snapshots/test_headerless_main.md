@@ -67,11 +67,11 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str => {  }"))
+		(patt (type "Str => {}"))
 		(patt (type "Dec"))
 		(patt (type "_arg -> Dec")))
 	(expressions
-		(expr (type "Str => {  }"))
+		(expr (type "Str => {}"))
 		(expr (type "Dec"))
 		(expr (type "_arg -> Dec"))))
 ~~~

@@ -112,11 +112,11 @@ EndOfFile,
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "[#1_make_adder({ ..a, x: <RecursiveType> }), ..b] -> (_arg -> [#1_make_adder({ ..a, x: <RecursiveType> }), ..b])"))
+		(patt (type "[#1_make_adder({ x: <RecursiveType>, .. }), ..a] -> (_arg -> [#1_make_adder({ x: <RecursiveType>, .. }), ..a])"))
 		(patt (type "I64 -> I64"))
 		(patt (type "I64")))
 	(expressions
-		(expr (type "[#1_make_adder({ ..a, x: <RecursiveType> }), ..b] -> [#1_make_adder({ ..a, x: [#1_make_adder(<RecursiveType>), ..b] }), ..b]"))
-		(expr (type "[#1_make_adder({ .., x: <RecursiveType> }), ..]"))
+		(expr (type "[#1_make_adder({ x: <RecursiveType>, .. }), ..a] -> [#1_make_adder({ x: [#1_make_adder(<RecursiveType>), ..a], .. }), ..a]"))
+		(expr (type "[#1_make_adder({ x: <RecursiveType>, .. }), ..]"))
 		(expr (type "[]"))))
 ~~~
