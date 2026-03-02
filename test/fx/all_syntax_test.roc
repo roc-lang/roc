@@ -309,7 +309,7 @@ color_to_str = |color| match color {
 # str_to_color : Str -> [Red, Green, Blue, Other, ..[]]
 
 # Type alias for an extensible tag union. You can use a type var (`others`) like so:
-Letters(others) : [A, B, ..]
+Letters(others) : [A, B, ..others]
 
 # Use the type alias in a function signature. Pass `[C]` as `others`.
 letter_to_str : Letters([C]) -> Str

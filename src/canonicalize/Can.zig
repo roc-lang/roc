@@ -111,6 +111,8 @@ scratch_bound_vars: base.Scratch(Pattern.Idx),
 scratch_local_type_decls: std.ArrayList(CIR.Statement.Idx),
 /// Counter for generating unique malformed import placeholder names
 malformed_import_count: u32 = 0,
+/// Counter for generating unique anonymous open extension rigid var names
+anon_open_ext_count: u32 = 0,
 /// Counter for generating unique closure tag names (e.g., "Closure_addX_1", "Closure_addX_2")
 closure_counter: u32 = 0,
 /// Current loop depth for validating break statements
@@ -10037,6 +10039,39 @@ fn canonicalizeTypeAnnoTagUnion(
 
     const region = self.parse_ir.tokenizedRegionToRegion(tag_union.region);
 
+    // Canonicalize the ext based on extension type
+    const mb_ext_anno: ?TypeAnno.Idx = switch (tag_union.ext) {
+        .closed => null,
+        .open => blk: {
+            switch (type_anno_ctx.type) {
+                .inline_anno => {
+                    // Anonymous `..` is shorthand for `..a` where `a` is a
+                    // unique rigid var. We use `#` prefix because it's not
+                    // a valid Roc identifier character, preventing collisions.
+                    var buf: [32]u8 = undefined;
+                    const name_text = std.fmt.bufPrint(&buf, "#open_ext_{d}", .{self.anon_open_ext_count}) catch unreachable;
+                    self.anon_open_ext_count += 1;
+                    const name_ident = try self.env.insertIdent(base.Ident.for_text(name_text));
+                    break :blk try self.env.addTypeAnno(.{ .rigid_var = .{
+                        .name = name_ident,
+                    } }, region);
+                },
+                .type_decl_anno, .for_clause_anno => {
+                    return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{
+                        .open_ext_not_allowed_in_type_decl = .{
+                            // TODO: Use the ext region instead of the whole tag union
+                            .region = region,
+                        },
+                    });
+                },
+            }
+        },
+        .named => |open_idx| blk: {
+            // Named extension like `..ext`
+            break :blk try self.canonicalizeTypeAnnoHelp(open_idx, type_anno_ctx);
+        },
+    };
+
     // Canonicalize all tags in the union using tag-specific canonicalization
     const scratch_annos_top = self.env.store.scratchTypeAnnoTop();
     defer self.env.store.clearScratchTypeAnnosFrom(scratch_annos_top);
@@ -10049,19 +10084,6 @@ fn canonicalizeTypeAnnoTagUnion(
     }
 
     const tag_anno_idxs = try self.env.store.typeAnnoSpanFrom(scratch_annos_top);
-
-    // Canonicalize the ext based on extension type
-    const mb_ext_anno: ?TypeAnno.Idx = switch (tag_union.ext) {
-        .closed => null,
-        .open => blk: {
-            // Anonymous open union `..` - create an anonymous underscore (inferred) type
-            break :blk try self.env.addTypeAnno(.{ .underscore = {} }, region);
-        },
-        .named => |open_idx| blk: {
-            // Named extension like `..ext`
-            break :blk try self.canonicalizeTypeAnnoHelp(open_idx, type_anno_ctx);
-        },
-    };
 
     return try self.env.addTypeAnno(.{ .tag_union = .{
         .tags = tag_anno_idxs,

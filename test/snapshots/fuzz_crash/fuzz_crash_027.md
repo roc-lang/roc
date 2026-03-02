@@ -951,7 +951,7 @@ This third branch is trying to match:
 
 But the expression between the `match` parenthesis has the type:
 
-    [Red, Blue, ..]
+    [Blue, Red, ..]
 
 These can never match! Either the pattern or expression has a problem.
 
@@ -2514,7 +2514,7 @@ expect {
 		(patt (type "(Error, Error)"))
 		(patt (type "Bool -> Dec"))
 		(patt (type "U64 -> U64"))
-		(patt (type "[Red, Blue, ..], _arg -> Error"))
+		(patt (type "[Blue, Red, ..], _arg -> Error"))
 		(patt (type "List(Error) -> Try({  }, _d)"))
 		(patt (type "{}"))
 		(patt (type "Error")))
@@ -2551,7 +2551,7 @@ expect {
 		(expr (type "(Error, Error)"))
 		(expr (type "Bool -> Dec"))
 		(expr (type "U64 -> U64"))
-		(expr (type "[Red, Blue, ..], _arg -> Error"))
+		(expr (type "[Blue, Red, ..], _arg -> Error"))
 		(expr (type "List(Error) -> Try({  }, _d)"))
 		(expr (type "{}"))
 		(expr (type "Error"))))

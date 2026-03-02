@@ -1717,6 +1717,36 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .open_ext_not_allowed_in_type_decl => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "OPEN EXT NOT ALLOWED IN TYPE DECLARATION", .warning);
+
+            // Format the message to match origin/main
+            try report.document.addText("You cannot use a ");
+            try report.document.addInlineCode("..");
+            try report.document.addReflowingText(" inside a type declaration:");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addAnnotated("Hint:", .emphasized);
+            try report.document.addReflowingText(" You need a named variable, like ");
+            try report.document.addInlineCode("..others");
+            try report.document.addReflowingText(", to use this here.");
+
+            break :blk report;
+        },
         .type_module_missing_matching_type => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 

@@ -1259,6 +1259,30 @@ test "check type - alias with mismatch arg" {
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
+test "check type - alias open tag union" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyAlias(others) : [A, B, ..others]
+        \\
+        \\x : {} -> MyAlias([C])
+        \\x = |{}| C
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> MyAlias([C])");
+}
+
+test "check type - alias open record" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyAlias(others) : { a: Str, ..others }
+        \\
+        \\x : {} -> MyAlias({b: U8})
+        \\x = |{}| {a: "hello", b: 10} 
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> MyAlias({ b: U8 })");
+}
+
 // nominal types //
 
 test "check type - basic nominal" {
@@ -3429,7 +3453,7 @@ test "check type - recursive type - anonymous recursion" {
         \\
         \\Here is the type I'm inferring. You will see `<RecursiveType>` for parts of the type that repeat.
         \\
-        \\    [Cons(_a, <RecursiveType>), Nil, ..]
+        \\    [Cons(_a, <RecursiveType>), Nil]
         \\
         \\**Hint:** Recursive types are only allowed through nominal types. If you need a recursive data structure, define a nominal type using `:=`.
         \\
@@ -3788,6 +3812,42 @@ test "check type - record extension - mismatch should fail" {
         \\result = getName({ age: 30 })
     ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - record ext - arg inferred as open" {
+    const source =
+        \\main! = |_args| {
+        \\    rec = create_record()
+        \\    use_record(rec)
+        \\}
+        \\create_record = || {
+        \\    {foo: "bar"}
+        \\}
+        \\use_record = |rec| {
+        \\    Str.is_empty(rec.blah)
+        \\}
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The first argument being passed to this function has the wrong type:
+        \\**test:3:5:**
+        \\```roc
+        \\    use_record(rec)
+        \\```
+        \\               ^^^
+        \\
+        \\This argument has the type:
+        \\
+        \\    { foo: Str }
+        \\
+        \\But `use_record` needs the first argument to be:
+        \\
+        \\    { .., blah: Str }
+        \\
+        \\**Hint:** This record is missing the field: `blah`
+        \\
+        \\
+    );
 }
 
 // List method syntax tests
@@ -4870,39 +4930,967 @@ test "check type - mutually recursive functions - inner let-def lambda inside cy
     );
 }
 
-// repros //
+// polarity //
 
-test "check type - zulip repro" {
+test "check type - polarity - output is inferred as open" {
     const source =
-        \\main! = |_args| {
-        \\    rec = create_record()
-        \\    use_record(rec)
+        \\mk_my_tag = || MyTag
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "mk_my_tag", .expected = "({}) -> [MyTag, ..]" },
+        },
+    );
+}
+
+test "check type - polarity - input is inferred as closed" {
+    const source =
+        \\mk_my_tag = |MyTag as a| a
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "mk_my_tag", .expected = "[MyTag] -> [MyTag]" },
+        },
+    );
+}
+
+test "check type - wildcard match is inferred as open" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Red => Try.Ok(x)
+        \\    _ => Try.Err("Not red")
+        \\  }
         \\}
-        \\create_record = || {
-        \\    {foo: "bar"}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Red, ..a] -> Try([Red, ..a], Str)" },
+        },
+    );
+}
+
+test "check type - exhaustive match is inferred as closed" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Red => Try.Ok(x)
+        \\  }
         \\}
-        \\use_record = |rec| {
-        \\    Str.is_empty(rec.blah)
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Red] -> Try([Red], err)" },
+        },
+    );
+}
+
+test "check type - annotation with named open ext prevents closing" {
+    // Using a named ext var `..a` links both occurrences to the same rigid,
+    // so the annotation unification succeeds and the match cannot close it.
+    // A wildcard is needed because the rigid ext means unknown tags could exist.
+    const source =
+        \\test : [Red, ..a] -> Try([Red, ..a], err)
+        \\test = |x| {
+        \\  match(x) {
+        \\    Red => Try.Ok(x)
+        \\    _ => Try.Ok(x)
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Red, ..a] -> Try([Red, ..a], err)" },
+        },
+    );
+}
+
+test "check type - annotation with open ext without wildcard is non-exhaustive" {
+    // The annotation says [Red, ..a] so matching only Red without a wildcard
+    // is non-exhaustive — unknown tags could exist.
+    const source =
+        \\test : [Red, ..a] -> Try([Red, ..a], err)
+        \\test = |x| {
+        \\  match(x) {
+        \\    Red => Try.Ok(x)
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "NON-EXHAUSTIVE MATCH");
+}
+
+test "check type - exhaustive match with nested payload is inferred as closed" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok(Red) => "red"
+        \\    Ok(Blue) => "blue"
+        \\    Err(msg) => msg
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Err(Str), Ok([Blue, Red])] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match with nested payload with wildcard is inferred as open" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok(Red) => "red"
+        \\    Ok(Blue) => "blue"
+        \\    Ok(_) => "unknown"
+        \\    Err(msg) => msg
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Err(Str), Ok([Blue, Red, ..])] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match with multiple tags is inferred as closed" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Red => "red"
+        \\    Blue => "blue"
+        \\    Green => "green"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Blue, Green, Red] -> Str" },
+        },
+    );
+}
+
+test "check type - match with underscore binding is inferred as open" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Red => "red"
+        \\    _ => "not red"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Red, ..] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match with deeply nested tags is inferred as closed" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Outer(Inner(Leaf)) => "leaf"
+        \\    Outer(Inner(Node)) => "node"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Outer([Inner([Leaf, Node])])] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match mixed nested closure" {
+    // Outer is closed (Ok + Err exhaustive), inner Ok payload is closed (A + B),
+    // inner Err payload stays open (variable binding)
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok(A) => "a"
+        \\    Ok(B) => "b"
+        \\    Err(e) => e
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Err(Str), Ok([A, B])] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match with multi-arg tag mixed open closed" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Pair(Red, _y) => "red"
+        \\    Pair(Blue, _y) => "blue"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            // First arg: Red, Blue (no wildcard -> closed)
+            // Second arg: _y, _y (variable bindings -> open)
+            .{ .def = "test", .expected = "[Pair([Blue, Red], _a)] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match nested wildcard keeps inner open" {
+    // Inner wildcard means inner tag union stays open, but outer is still closed
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Wrapper(Red) => "red"
+        \\    Wrapper(_) => "other"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Wrapper([Red, ..])] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match single tag no payload is closed" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Done => "done"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Done] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match with underscore-as keeps tag union open" {
+    // `_ as x` should unwrap to `_` via unwrapAsPatternIdx,
+    // triggering the catch-all early return and keeping the union open.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Red => Red
+        \\    _ as other => other
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Red, ..a] -> [Red, ..a]" },
+        },
+    );
+}
+
+test "check type - exhaustive match closes tag union inside tuple element" {
+    // The tag union [Red, Blue] lives inside the first tuple element.
+    // Closure must traverse through the tuple pattern to find and close it.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    (Red, _) => "r"
+        \\    (Blue, _) => "b"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "([Blue, Red], _field) -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match closes tag union inside record field" {
+    // The tag union [Active, Inactive] lives inside the record's `status` field.
+    // Closure must traverse through the record destructure to find and close it.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    { status: Active } => "active"
+        \\    { status: Inactive } => "inactive"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "{ .., status: [Active, Inactive] } -> Str" },
+        },
+    );
+}
+
+test "check type - wildcard in record field keeps nested tag union open" {
+    // Same structure as above but with a wildcard — the traversal through the
+    // record finds the wildcard and correctly keeps the tag union open.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    { status: Active } => "active"
+        \\    { status: _ } => "other"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "{ .., status: [Active, ..] } -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match closes tag union through tag then tuple" {
+    // Path to closure: tag payload (Ok/Err) -> tuple element -> tag union (Red/Blue).
+    // Tests that closure traverses tag -> tuple -> tag union correctly.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok((Red, _a)) => "ok-red"
+        \\    Ok((Blue, _a)) => "ok-blue"
+        \\    Err(_e) => "err"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Err(_a), Ok(([Blue, Red], _field))] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match closes tag union through tag then record" {
+    // Path to closure: tag payload (Ok/Err) -> record field (status) -> tag union (On/Off).
+    // Tests that closure traverses tag -> record -> tag union correctly.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok({ status: On }) => "ok-on"
+        \\    Ok({ status: Off }) => "ok-off"
+        \\    Err(_e) => "err"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Err(_a), Ok({ .., status: [Off, On] })] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match opens and closes tag unions through tag then record then tuple" {
+    // Two record fields inside Ok's payload: `status` is exhaustively matched (On/Off)
+    // so it should be closed, while `mode` always has a wildcard so it stays open.
+    // Tests that closure traverses tag -> record -> field independently per field.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok({ status: On, mode: (Big, Fast) }) => "ok-on"
+        \\    Ok({ status: Off, mode: (Big, _) }) => "ok-off"
+        \\    Err(_e) => "err"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Err(_a), Ok({ .., mode: ([Big], [Fast, ..]), status: [Off, On] })] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match closes tag union through tuple then record" {
+    // Path: tuple element -> record field -> tag union.
+    // First tuple element is a record whose `color` field has an exhaustive tag union.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    ({ color: Red }, _) => "r"
+        \\    ({ color: Blue }, _) => "b"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "({ .., color: [Blue, Red] }, _field) -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match closes tag union through record then tuple" {
+    // Path: record field -> tuple -> tag union.
+    // The record's `pair` field is a tuple, and the tag union inside the first
+    // tuple element should be closed.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    { pair: (On, _) } => "on"
+        \\    { pair: (Off, _) } => "off"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "{ .., pair: ([Off, On], _field) } -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match with different payload structures per tag" {
+    // Ok has a record payload, Err has a plain tag payload.
+    // The outer tag union ends up as a chained extension due to different payload types,
+    // but the closure logic follows the ext var chain to close all levels.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok({ level: High }) => "ok-high"
+        \\    Ok({ level: Low }) => "ok-low"
+        \\    Err(Critical) => "err-crit"
+        \\    Err(Warning) => "err-warn"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Err([Critical, Warning]), Ok({ .., level: [High, Low] })] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match with different payload structures per tag, mixed" {
+    // Ok has a record payload, Err has a plain tag payload.
+    // The outer tag union ends up as a chained extension due to different payload types,
+    // but the closure logic follows the ext var chain to close all levels.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok({ level: High }) => "ok-high"
+        \\    Ok({ level: _ }) => "ok-low"
+        \\    Err(Critical) => "err-crit"
+        \\    Err(_) => "err-warn"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Err([Critical, ..]), Ok({ .., level: [High, ..] })] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match with different payload structures per tag, mixed, with same branches" {
+    // Ok has a record payload, Err has a plain tag payload.
+    // The outer tag union ends up as a chained extension due to different payload types,
+    // but the closure logic follows the ext var chain to close all levels.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok({ level: High }) | Ok({ level: _ }) => "ok"
+        \\    Err(Critical) | Err(_) => "err"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Err([Critical, ..]), Ok({ .., level: [High, ..] })] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match deeply nested 3 levels mixed open closed" {
+    // 3 levels of tags: outer closed, one middle branch closed, one middle open
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    L1a(L2a(L3a)) => "aaa"
+        \\    L1a(L2a(L3b)) => "aab"
+        \\    L1a(L2b(_y)) => "ab"
+        \\    L1b => "b"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            // Outer [L1a, L1b]: closed
+            // Middle [L2a, L2b]: closed
+            // L2a's payload [L3a, L3b]: closed (both listed)
+            // L2b's payload _y: open (variable binding)
+            .{ .def = "test", .expected = "[L1a([L2a([L3a, L3b]), L2b(_a)]), L1b] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match 4 levels deep all closed" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    W(X(Y(Z))) => "wxyz"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[W([X([Y([Z])])])] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match 4 levels deep all but top closed" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    W(X(Y(Z))) | W(A) => "wxyz"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[W([A, X([Y([Z])])])] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match same tag name at multiple nesting levels" {
+    // "Ok" appears at both level 1 and level 2.
+    // The closure logic must not confuse the two — each level filters
+    // only the patterns passed to it by the parent.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok(Ok(A)) => "ok-ok-a"
+        \\    Ok(Ok(B)) => "ok-ok-b"
+        \\    Ok(Err(C)) => "ok-err-c"
+        \\    Ok(Err(D)) => "ok-err-d"
+        \\    Err(Ok(E)) => "err-ok-e"
+        \\    Err(Err(_)) => "err-err"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            // Outer [Ok, Err]: closed (both listed, no catch-all)
+            // Ok's payload [Ok, Err]: closed
+            // Ok>Ok payload [A, B]: closed
+            // Ok>Err payload [C, D]: closed
+            // Err's payload [Ok, Err]: closed
+            // Err>Ok payload [E]: closed (only one tag but exhaustive)
+            // Err>Err payload _: open (catch-all)
+            .{ .def = "test", .expected = "[Err([Err(_a), Ok([E])]), Ok([Err([C, D]), Ok([A, B])])] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match same record field at multiple nesting levels" {
+    // Field "a" appears in both outer and inner record destructures.
+    // Each level should independently close the tag union in its own "a" field.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    { a: { a: Red } } => "red"
+        \\    { a: { a: Blue } } => "blue"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            // Inner "a" field's tag union [Red, Blue]: closed
+            .{ .def = "test", .expected = "{ .., a: { .., a: [Blue, Red] } } -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match same tuple position at multiple nesting levels" {
+    // Position 0 used at both outer and inner tuple levels.
+    // Each level independently closes tag unions at its own position.
+    // All branches destructure both levels so closure can recurse through.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    ((Red, On), (A, B)) => "1"
+        \\    ((Red, Off), (A, B)) => "2"
+        \\    ((Blue, On), (A, B)) => "3"
+        \\    ((Blue, Off), (A, B)) => "4"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            // Inner tuple pos 0: [Red, Blue] closed, pos 1: [On, Off] closed
+            // Outer tuple pos 1: single-element tuple with [A] closed
+            .{ .def = "test", .expected = "(([Blue, Red], [Off, On]), ([A], [B])) -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match does not over-close static dispatch return type" {
+    // A static dispatch method returns a tag (inferred as open tag union).
+    // The caller pattern matches it exhaustively without wildcards.
+    // Each call site gets a fresh instantiation, so closing at one site
+    // should not affect the type at another.
+    const source =
+        \\Maker := {}.{
+        \\  get = |_maker| Red
+        \\}
+        \\
+        \\narrow = {
+        \\  val = Maker.get(Maker)
+        \\  match val {
+        \\    Red => "red"
+        \\  }
+        \\}
+        \\
+        \\broad = {
+        \\  val = Maker.get(Maker)
+        \\  match val {
+        \\    Red => "red"
+        \\    Blue => "blue"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Maker.get", .expected = "_arg -> [Red, ..]" },
+            .{ .def = "narrow", .expected = "Str" },
+            .{ .def = "broad", .expected = "Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match close does not leak through shared variable" {
+    // A value is returned from a match AND also used after the match.
+    // The match closes the tag union, but the value is the same variable
+    // used in both places. This tests that closing at the match site
+    // doesn't prevent the value from being used at a broader type.
+    const source =
+        \\Maker := {}.{
+        \\  get = |_maker| Red
+        \\}
+        \\
+        \\test = {
+        \\  val = Maker.get(Maker)
+        \\  matched = match val {
+        \\    Red => "red"
+        \\  }
+        \\  matched
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Maker.get", .expected = "_arg -> [Red, ..]" },
+            .{ .def = "test", .expected = "Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match close with value reuse after match" {
+    // The match condition variable is used both in the match and passed
+    // to a function that expects a broader union type.
+    //
+    // Exhaustively matching `val` without a wildcard closes its tag union
+    // to [Red]. When `val` is then passed to `accept_broad` (which expects
+    // [Blue, Red]), the closed [Red] can't unify with [Blue, Red].
+    // This is the correct Roc semantics (confirmed by the Rust compiler).
+    const source =
+        \\Maker := {}.{
+        \\  get = |_maker| Red
+        \\}
+        \\
+        \\accept_broad = |color| {
+        \\  match color {
+        \\    Red => "red"
+        \\    Blue => "blue"
+        \\  }
+        \\}
+        \\
+        \\test = {
+        \\  val = Maker.get(Maker)
+        \\  _narrow_result = match val {
+        \\    Red => "red"
+        \\  }
+        \\  broad_result = accept_broad(val)
+        \\  broad_result
         \\}
     ;
     try checkTypesModule(source, .fail_with,
         \\**TYPE MISMATCH**
         \\The first argument being passed to this function has the wrong type:
-        \\**test:3:5:**
+        \\**test:17:18:**
         \\```roc
-        \\    use_record(rec)
+        \\  broad_result = accept_broad(val)
         \\```
-        \\               ^^^
+        \\                              ^^^
         \\
         \\This argument has the type:
         \\
-        \\    { foo: Str }
+        \\    [Red]
         \\
-        \\But `use_record` needs the first argument to be:
+        \\But `accept_broad` needs the first argument to be:
         \\
-        \\    { .., blah: Str }
+        \\    [Blue, Red]
         \\
-        \\**Hint:** This record is missing the field: `blah`
+        \\
+    );
+}
+
+test "check type - exhaustive match close with value reuse - no static dispatch" {
+    // Same closing behavior as above, without static dispatch.
+    // Exhaustively matching without a wildcard closes the tag union,
+    // preventing it from unifying with a broader type afterward.
+    const source =
+        \\make = |{}| Red
+        \\
+        \\accept_broad = |color| {
+        \\  match color {
+        \\    Red => "red"
+        \\    Blue => "blue"
+        \\  }
+        \\}
+        \\
+        \\test = {
+        \\  val = make({})
+        \\  _narrow_result = match val {
+        \\    Red => "red"
+        \\  }
+        \\  broad_result = accept_broad(val)
+        \\  broad_result
+        \\}
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The first argument being passed to this function has the wrong type:
+        \\**test:15:18:**
+        \\```roc
+        \\  broad_result = accept_broad(val)
+        \\```
+        \\                              ^^^
+        \\
+        \\This argument has the type:
+        \\
+        \\    [Red]
+        \\
+        \\But `accept_broad` needs the first argument to be:
+        \\
+        \\    [Blue, Red]
+        \\
+        \\
+    );
+}
+
+test "check type - annotation keeps tag union open despite exhaustive match" {
+    // The function annotation declares an open return type [Red, ..].
+    // Even though the caller matches exhaustively without a wildcard,
+    // the rigid ext var from the annotation prevents closing.
+    // Each call site gets an instantiation with the rigid ext var,
+    // so the value can still be used at a broader type.
+    const source =
+        \\make : {} -> [Red, ..]
+        \\make = |{}| Red
+        \\
+        \\accept_broad = |color| {
+        \\  match color {
+        \\    Red => "red"
+        \\    Blue => "blue"
+        \\  }
+        \\}
+        \\
+        \\test = {
+        \\  val = make({})
+        \\  _narrow_result = match val {
+        \\    Red => "red"
+        \\    _ => "other"
+        \\  }
+        \\  broad_result = accept_broad(val)
+        \\  broad_result
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "make", .expected = "{  } -> [Red, ..]" },
+            .{ .def = "test", .expected = "Str" },
+        },
+    );
+}
+
+test "check type - annotated open arg not closed by exhaustive match in body" {
+    // The function arg is annotated as open [Red, ..].
+    // Matching all known tags in the body doesn't close it because
+    // the ext var is rigid (from annotation), not flex.
+    const source =
+        \\test : [Red, ..] -> Str
+        \\test = |x| {
+        \\  match x {
+        \\    Red => "red"
+        \\    _ => "other"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Red, ..] -> Str" },
+        },
+    );
+}
+
+test "check type - annotated open return type preserved after caller exhaustive match" {
+    // Static dispatch method annotated with open return type.
+    // Caller matches exhaustively then reuses the value — the annotation
+    // prevents closing, so the second use at a broader type succeeds.
+    const source =
+        \\Maker := {}.{
+        \\  get : Maker -> [Red, ..]
+        \\  get = |_maker| Red
+        \\}
+        \\
+        \\accept_broad = |color| {
+        \\  match color {
+        \\    Red => "red"
+        \\    Blue => "blue"
+        \\  }
+        \\}
+        \\
+        \\test = {
+        \\  val = Maker.get(Maker)
+        \\  _narrow_result = match val {
+        \\    Red => "red"
+        \\    _ => "other"
+        \\  }
+        \\  broad_result = accept_broad(val)
+        \\  broad_result
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Maker.get", .expected = "Maker -> [Red, ..]" },
+            .{ .def = "test", .expected = "Str" },
+        },
+    );
+}
+
+test "check type - annotated open return type still closed by exhaustive match without wildcard" {
+    // `make` is annotated as returning [Red, ..] (open), but when instantiated
+    // at the call site, the rigid ext var becomes flex. The exhaustive match
+    // without a wildcard closes that flex var, so `val` becomes [Red] (closed)
+    // and can't unify with [Blue, Red]. Confirmed by Rust compiler.
+    const source =
+        \\make : {} -> [Red, ..]
+        \\make = |{}| Red
+        \\
+        \\accept_broad = |color| {
+        \\  match color {
+        \\    Red => "red"
+        \\    Blue => "blue"
+        \\  }
+        \\}
+        \\
+        \\test = {
+        \\  val = make({})
+        \\  _narrow_result = match val {
+        \\    Red => "red"
+        \\  }
+        \\  broad_result = accept_broad(val)
+        \\  broad_result
+        \\}
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The first argument being passed to this function has the wrong type:
+        \\**test:16:18:**
+        \\```roc
+        \\  broad_result = accept_broad(val)
+        \\```
+        \\                              ^^^
+        \\
+        \\This argument has the type:
+        \\
+        \\    [Red]
+        \\
+        \\But `accept_broad` needs the first argument to be:
+        \\
+        \\    [Blue, Red]
+        \\
+        \\
+    );
+}
+
+test "check type - annotated open arg not closed even with exhaustive match" {
+    // Function arg annotated as [Red, ..] (open). The `..` creates a rigid
+    // ext var that the exhaustive match cannot close. The arg stays open as
+    // [Red, ..], which still can't unify with [Blue, Red] (closed) because
+    // the rigid ext prevents adding Blue.
+    // A wildcard is needed in the match because the rigid ext makes it non-exhaustive.
+    const source =
+        \\accept_broad = |color| {
+        \\  match color {
+        \\    Red => "red"
+        \\    Blue => "blue"
+        \\  }
+        \\}
+        \\
+        \\test : [Red, ..] -> Str
+        \\test = |x| {
+        \\  _narrow_result = match x {
+        \\    Red => "red"
+        \\    _ => "other"
+        \\  }
+        \\  accept_broad(x)
+        \\}
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The first argument being passed to this function has the wrong type:
+        \\**test:14:3:**
+        \\```roc
+        \\  accept_broad(x)
+        \\```
+        \\               ^
+        \\
+        \\This argument has the type:
+        \\
+        \\    [Red, ..]
+        \\
+        \\But `accept_broad` needs the first argument to be:
+        \\
+        \\    [Blue, Red]
         \\
         \\
     );
