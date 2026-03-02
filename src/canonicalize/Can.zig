@@ -1680,6 +1680,13 @@ fn processAssociatedItemsFirstPass(
 
                 // Look up the fully qualified type that was just registered
                 if (self.scopeLookupTypeDecl(fully_qualified_ident_idx)) |type_decl_idx| {
+                    // Register nested type for cross-module import so copy_import can find it.
+                    // Register with both the fully qualified name AND the bare type name,
+                    // since pending lookup resolution searches by bare name via findIdent.
+                    const node_idx_u16: u16 = @intCast(@intFromEnum(type_decl_idx));
+                    try self.env.setExposedNodeIndexById(fully_qualified_ident_idx, node_idx_u16);
+                    try self.env.setExposedNodeIndexById(nested_type_ident, node_idx_u16);
+
                     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
                     // Build user-facing qualified name by stripping module prefix
@@ -1732,6 +1739,11 @@ fn processAssociatedItemsFirstPass(
 
                 // Look up the type alias
                 if (self.scopeLookupTypeDecl(fully_qualified_ident_idx)) |type_decl_idx| {
+                    // Register nested type alias for cross-module import
+                    const node_idx_u16: u16 = @intCast(@intFromEnum(type_decl_idx));
+                    try self.env.setExposedNodeIndexById(fully_qualified_ident_idx, node_idx_u16);
+                    try self.env.setExposedNodeIndexById(nested_type_ident, node_idx_u16);
+
                     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
                     // Build user-facing qualified name by stripping module prefix
