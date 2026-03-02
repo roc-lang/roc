@@ -473,6 +473,16 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         const src_list: *const builtins.list.RocList = builtins.utils.alignedPtrCast(*const builtins.list.RocList, @as([*]u8, @ptrCast(self.ptr.?)), @src());
         const dest_list: *builtins.list.RocList = builtins.utils.alignedPtrCast(*builtins.list.RocList, @as([*]u8, @ptrCast(dest_ptr)), @src());
         dest_list.* = src_list.*;
+        // Incref the allocation if it exists. This is necessary because both the
+        // source and destination now reference the same heap allocation, so the
+        // refcount must reflect both references. Without this, when one copy is
+        // decremented the allocation is freed, and decrementing the other copy
+        // causes a use-after-free. This can happen when a list of an opaque type
+        // (e.g. List(Package.Idx) where Idx := { idx : U32 }) gets list_of_zst
+        // layout because the element type resolves to flex during type translation.
+        if (src_list.getAllocationDataPtr(roc_ops)) |alloc_ptr| {
+            builtins.utils.increfDataPtrC(alloc_ptr, 1, roc_ops);
+        }
         return;
     }
 
