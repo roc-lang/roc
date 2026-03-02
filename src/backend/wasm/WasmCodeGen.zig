@@ -6661,8 +6661,10 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
                         try self.generateCallFromFnExpr(def_expr_id, c.args, c.ret_layout);
                         return;
                     }
-                    // Not a lambda/closure — unexpected
-                    std.debug.panic("Unexpected non-lambda/closure definition for symbol lookup in call", .{});
+                    if (std.debug.runtime_safety) {
+                        std.debug.panic("WasmCodeGen invariant: expected callable definition for lookup call target", .{});
+                    }
+                    unreachable;
                 }
             } else if (!self.in_proc) {
                 // Top-level: symbol with no definition — should have been lazy-loaded
@@ -6886,8 +6888,13 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
                     for (captures) |cap| {
                         if (self.storage.getLocal(cap.symbol)) |local_idx| {
                             try self.emitLocalGet(local_idx);
+                        } else if (self.resolveCaptureThroughClosure(cap.symbol)) |local_idx| {
+                            try self.emitLocalGet(local_idx);
                         } else {
-                            try self.emitDummyValue(self.resolveValType(cap.layout_idx));
+                            if (std.debug.runtime_safety) {
+                                std.debug.panic("WasmCodeGen invariant: closure capture local missing in struct field call", .{});
+                            }
+                            unreachable;
                         }
                     }
                     try self.emitForwardedCaptures(func_idx);
@@ -6939,8 +6946,11 @@ fn emitForwardedCaptures(self: *Self, func_idx: u32) Allocator.Error!void {
             if (self.storage.getLocal(fc.symbol)) |local_idx| {
                 try self.emitLocalGet(local_idx);
             } else {
-                // Capture not available in current scope — emit zero default
-                try self.emitDummyValue(self.resolveValType(fc.layout_idx));
+                _ = fc.layout_idx;
+                if (std.debug.runtime_safety) {
+                    std.debug.panic("WasmCodeGen invariant: forwarded capture local missing at call site", .{});
+                }
+                unreachable;
             }
         }
     }
@@ -7192,27 +7202,26 @@ fn generateClosureValue(self: *Self, closure: anytype) Allocator.Error!void {
             const func_idx = try self.directCallableFuncIdx(closure);
             try self.emitDirectCallableValue(func_idx);
         },
-        .unwrapped_capture => |repr| {
+        .unwrapped_capture => |_| {
             // Single capture - push the capture value directly.
             const captures = self.store.getCaptures(closure.captures);
-            if (captures.len > 0) {
-                const cap = captures[0];
-                if (self.storage.getLocal(cap.symbol)) |local_idx| {
-                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
-                } else {
-                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+            if (captures.len != 1) {
+                if (std.debug.runtime_safety) {
+                    std.debug.panic("WasmCodeGen invariant: unwrapped_capture must have exactly one capture", .{});
                 }
+                unreachable;
+            }
+            const cap = captures[0];
+            if (self.storage.getLocal(cap.symbol)) |local_idx| {
+                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
+            } else if (self.resolveCaptureThroughClosure(cap.symbol)) |local_idx| {
+                try self.emitLocalGet(local_idx);
             } else {
-                const cap_size = self.layoutByteSize(repr.capture_layout);
-                if (cap_size <= 4) {
-                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-                } else {
-                    self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteI64(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                if (std.debug.runtime_safety) {
+                    std.debug.panic("WasmCodeGen invariant: unwrapped_capture capture local missing", .{});
                 }
+                unreachable;
             }
         },
         .struct_captures => |_| {
@@ -7445,11 +7454,10 @@ fn dispatchClosureCall(
                     // value IS its own capture. Push the inner capture's local.
                     try self.emitLocalGet(local_idx);
                 } else {
-                    // Capture not available in current scope — push dummy value to
-                    // keep wasm type stack valid. This happens when a closure is
-                    // dispatched from inside a compiled function where the capture
-                    // wasn't forwarded as a parameter.
-                    try self.emitDummyValue(self.resolveValType(cap.layout_idx));
+                    if (std.debug.runtime_safety) {
+                        std.debug.panic("WasmCodeGen invariant: closure dispatch capture local missing", .{});
+                    }
+                    unreachable;
                 }
             }
 
