@@ -450,9 +450,43 @@ pub const Store = struct {
                                     break :rows;
                                 },
                                 .empty_record => break :rows,
-                                else => break :rows,
+                                else => {
+                                    if (std.debug.runtime_safety) {
+                                        std.debug.panic(
+                                            "Monotype.fromTypeVar(record): unexpected row extension flat type '{s}'",
+                                            .{@tagName(ext_flat)},
+                                        );
+                                    }
+                                    unreachable;
+                                },
                             },
-                            else => break :rows, // flex/rigid/err -> end of known chain
+                            .flex => {
+                                if (std.debug.runtime_safety) {
+                                    std.debug.panic(
+                                        "Monotype.fromTypeVar(record): unresolved flex row extension tail",
+                                        .{},
+                                    );
+                                }
+                                unreachable;
+                            },
+                            .rigid => {
+                                if (std.debug.runtime_safety) {
+                                    std.debug.panic(
+                                        "Monotype.fromTypeVar(record): unresolved rigid row extension tail",
+                                        .{},
+                                    );
+                                }
+                                unreachable;
+                            },
+                            .err => {
+                                if (std.debug.runtime_safety) {
+                                    std.debug.panic(
+                                        "Monotype.fromTypeVar(record): error row extension tail",
+                                        .{},
+                                    );
+                                }
+                                unreachable;
+                            },
                         }
                     }
                 }
@@ -515,7 +549,7 @@ pub const Store = struct {
                 // Roc's type system represents tag unions as linked rows:
                 // [Ok a | ext] where ext -> [Err b | ext2] where ext2 -> empty_tag_union
                 var current_row = tag_union_row;
-                while (true) {
+                rows: while (true) {
                     const tags_slice = types_store.getTagsSlice(current_row.tags);
                     const tag_names = tags_slice.items(.name);
                     const tag_args = tags_slice.items(.args);
@@ -535,17 +569,58 @@ pub const Store = struct {
                     }
 
                     // Follow extension variable to find more tags
-                    const ext_resolved = types_store.resolveVar(current_row.ext);
-                    switch (ext_resolved.desc.content) {
-                        .structure => |ext_flat| switch (ext_flat) {
-                            .tag_union => |next_row| {
-                                current_row = next_row;
+                    var ext_var = current_row.ext;
+                    while (true) {
+                        const ext_resolved = types_store.resolveVar(ext_var);
+                        switch (ext_resolved.desc.content) {
+                            .alias => |alias| {
+                                ext_var = types_store.getAliasBackingVar(alias);
                                 continue;
                             },
-                            .empty_tag_union => break,
-                            else => break,
-                        },
-                        else => break, // flex/rigid/alias/err → end of chain
+                            .structure => |ext_flat| switch (ext_flat) {
+                                .tag_union => |next_row| {
+                                    current_row = next_row;
+                                    continue :rows;
+                                },
+                                .empty_tag_union => break :rows,
+                                else => {
+                                    if (std.debug.runtime_safety) {
+                                        std.debug.panic(
+                                            "Monotype.fromTypeVar(tag_union): unexpected row extension flat type '{s}'",
+                                            .{@tagName(ext_flat)},
+                                        );
+                                    }
+                                    unreachable;
+                                },
+                            },
+                            .flex => {
+                                if (std.debug.runtime_safety) {
+                                    std.debug.panic(
+                                        "Monotype.fromTypeVar(tag_union): unresolved flex row extension tail",
+                                        .{},
+                                    );
+                                }
+                                unreachable;
+                            },
+                            .rigid => {
+                                if (std.debug.runtime_safety) {
+                                    std.debug.panic(
+                                        "Monotype.fromTypeVar(tag_union): unresolved rigid row extension tail",
+                                        .{},
+                                    );
+                                }
+                                unreachable;
+                            },
+                            .err => {
+                                if (std.debug.runtime_safety) {
+                                    std.debug.panic(
+                                        "Monotype.fromTypeVar(tag_union): error row extension tail",
+                                        .{},
+                                    );
+                                }
+                                unreachable;
+                            },
+                        }
                     }
                 }
 
