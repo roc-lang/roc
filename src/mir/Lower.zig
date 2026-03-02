@@ -852,10 +852,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
             const symbol = try self.patternToSymbol(lookup.pattern_idx);
 
             // Check for a deferred block-local polymorphic lambda. If found,
-            // seed the definition's type vars from the call-site monotype and
-            // lower with concrete types, patching the block's placeholder stmt.
-            // Check for a deferred block-local polymorphic lambda. If found,
-            // seed the definition's type vars from the call-site monotype and
+            // bind the definition's type vars from the call-site monotype and
             // lower with concrete types, patching the block's placeholder stmt.
             const symbol_key: u64 = @bitCast(symbol);
             if (self.deferred_block_lambdas.get(@intFromEnum(lookup.pattern_idx))) |deferred| {
@@ -882,7 +879,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                         self.type_var_seen.deinit();
                         self.type_var_seen = saved_type_var_seen;
                     }
-                    try self.seedTypeVarSeen(ModuleEnv.varFrom(saved_deferred.cir_expr), monotype);
+                    try self.bindTypeVarMonotypes(ModuleEnv.varFrom(saved_deferred.cir_expr), monotype);
                     const saved_pattern_scope = self.current_pattern_scope;
                     self.current_pattern_scope = symbol_key;
                     defer self.current_pattern_scope = saved_pattern_scope;
@@ -920,12 +917,12 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                 for (defs) |def_idx| {
                     const def = module_env.store.getDef(def_idx);
                     if (def.pattern == lookup.pattern_idx) {
-                        // Seed the definition's type vars from the call-site
+                        // Bind the definition's type vars from the call-site
                         // monotype. The definition has its own type scheme
                         // (e.g. range_to's `b`) separate from the caller's
-                        // instantiated copy (e.g. `a` in `to`), so we seed
+                        // instantiated copy (e.g. `a` in `to`), so we bind
                         // before lowering to connect them.
-                        try self.seedTypeVarSeen(ModuleEnv.varFrom(def.expr), monotype);
+                        try self.bindTypeVarMonotypes(ModuleEnv.varFrom(def.expr), monotype);
                         _ = try self.lowerExternalDef(symbol, def.expr);
                         break;
                     }
@@ -972,7 +969,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                             self.type_var_seen.deinit();
                             self.type_var_seen = saved_type_var_seen;
                         }
-                        try self.seedTypeVarSeen(ModuleEnv.varFrom(cir_def_expr), monotype);
+                        try self.bindTypeVarMonotypes(ModuleEnv.varFrom(cir_def_expr), monotype);
                         const saved_pattern_scope = self.current_pattern_scope;
                         self.current_pattern_scope = spec_symbol_key;
                         defer self.current_pattern_scope = saved_pattern_scope;
@@ -1719,7 +1716,7 @@ fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype:
     defer self.scratch_expr_ids.clearFrom(args_top);
     for (call_arg_exprs, 0..) |arg_idx, i| {
         if (i < expected_arg_monos.len and !expected_arg_monos[i].isNone()) {
-            try self.seedTypeVarSeen(ModuleEnv.varFrom(arg_idx), expected_arg_monos[i]);
+            try self.bindTypeVarMonotypes(ModuleEnv.varFrom(arg_idx), expected_arg_monos[i]);
         }
         const arg = try self.lowerExpr(arg_idx);
         try self.scratch_expr_ids.append(arg);
@@ -1986,8 +1983,8 @@ fn lowerBinop(self: *Self, binop: CIR.Expr.Binop, monotype: Monotype.Idx, region
             const lhs_monotype = try self.resolveMonotype(binop.lhs);
             if (!lhs_monotype.isNone()) {
                 // Binops dispatch off the LHS nominal method (e.g. U32.plus),
-                // so seed RHS lowering to the same monotype for polymorphic literals.
-                try self.seedTypeVarSeen(ModuleEnv.varFrom(binop.rhs), lhs_monotype);
+                // so bind RHS lowering to the same monotype for polymorphic literals.
+                try self.bindTypeVarMonotypes(ModuleEnv.varFrom(binop.rhs), lhs_monotype);
             }
             const rhs = try self.lowerExpr(binop.rhs);
 
@@ -2228,7 +2225,7 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
         try self.scratch_expr_ids.append(receiver);
         for (explicit_args, 0..) |arg_idx, i| {
             if (i + 1 < expected_param_monos.len and !expected_param_monos[i + 1].isNone()) {
-                try self.seedTypeVarSeen(ModuleEnv.varFrom(arg_idx), expected_param_monos[i + 1]);
+                try self.bindTypeVarMonotypes(ModuleEnv.varFrom(arg_idx), expected_param_monos[i + 1]);
             }
             const arg = try self.lowerExpr(arg_idx);
             try self.scratch_expr_ids.append(arg);
@@ -2700,7 +2697,7 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
     // and rigid vars to an earlier specialization.
     self.type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
 
-    // Pre-seed type_var_seen with the caller's concrete types so that
+    // Pre-bind type_var_seen with the caller's concrete types so that
     // flex/rigid vars in the definition resolve to concrete monotypes instead
     // of unit. Each definition has its own type vars (not unified with
     // the caller's instantiated copies), so they must be seeded here.
@@ -2711,7 +2708,7 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
     if (caller_monotype) |cmt| {
         if (!cmt.isNone()) {
             const target_type_var = ModuleEnv.varFrom(cir_expr_idx);
-            try self.seedTypeVarSeen(target_type_var, cmt);
+            try self.bindTypeVarMonotypes(target_type_var, cmt);
         }
     }
     defer {
@@ -2750,16 +2747,97 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
     return result;
 }
 
-/// Walk a polymorphic type variable from the target module's type store in
-/// parallel with a concrete monotype from the MIR monotype store. For each
-/// flex/rigid var encountered, record it in type_var_seen so that subsequent
-/// fromTypeVar calls resolve it to the concrete monotype instead of unit.
-fn seedTypeVarSeen(self: *Self, type_var: types.Var, monotype: Monotype.Idx) Allocator.Error!void {
+fn typeBindingInvariant(comptime fmt: []const u8, args: anytype) noreturn {
+    if (std.debug.runtime_safety) {
+        std.debug.panic(fmt, args);
+    }
+    unreachable;
+}
+
+fn builtinPrimForNominal(ident: Ident.Idx, common: ModuleEnv.CommonIdents) ?Monotype.Prim {
+    if (ident.eql(common.bool)) return .bool;
+    if (ident.eql(common.str)) return .str;
+    if (ident.eql(common.u8_type)) return .u8;
+    if (ident.eql(common.i8_type)) return .i8;
+    if (ident.eql(common.u16_type)) return .u16;
+    if (ident.eql(common.i16_type)) return .i16;
+    if (ident.eql(common.u32_type)) return .u32;
+    if (ident.eql(common.i32_type)) return .i32;
+    if (ident.eql(common.u64_type)) return .u64;
+    if (ident.eql(common.i64_type)) return .i64;
+    if (ident.eql(common.u128_type)) return .u128;
+    if (ident.eql(common.i128_type)) return .i128;
+    if (ident.eql(common.f32_type)) return .f32;
+    if (ident.eql(common.f64_type)) return .f64;
+    if (ident.eql(common.dec_type)) return .dec;
+    return null;
+}
+
+fn bindRecordFieldByName(
+    self: *Self,
+    field_name: Ident.Idx,
+    field_var: types.Var,
+    mono_fields: []const Monotype.Field,
+) Allocator.Error!void {
+    for (mono_fields) |mono_field| {
+        if (mono_field.name.eql(field_name)) {
+            try self.bindTypeVarMonotypes(field_var, mono_field.type_idx);
+            return;
+        }
+    }
+
+    const module_env = self.all_module_envs[self.current_module_idx];
+    typeBindingInvariant(
+        "bindFlatTypeMonotypes(record): field '{s}' missing from monotype",
+        .{module_env.getIdent(field_name)},
+    );
+}
+
+fn bindTagPayloadsByName(
+    self: *Self,
+    tag_name: Ident.Idx,
+    payload_vars: []const types.Var,
+    mono_tags: []const Monotype.Tag,
+) Allocator.Error!void {
+    for (mono_tags) |mono_tag| {
+        if (!mono_tag.name.eql(tag_name)) continue;
+
+        const mono_payloads = self.store.monotype_store.getIdxSpan(mono_tag.payloads);
+        if (payload_vars.len != mono_payloads.len) {
+            const module_env = self.all_module_envs[self.current_module_idx];
+            typeBindingInvariant(
+                "bindFlatTypeMonotypes(tag_union): payload arity mismatch for tag '{s}'",
+                .{module_env.getIdent(tag_name)},
+            );
+        }
+        for (payload_vars, mono_payloads) |payload_var, mono_payload| {
+            try self.bindTypeVarMonotypes(payload_var, mono_payload);
+        }
+        return;
+    }
+
+    const module_env = self.all_module_envs[self.current_module_idx];
+    typeBindingInvariant(
+        "bindFlatTypeMonotypes(tag_union): tag '{s}' missing from monotype",
+        .{module_env.getIdent(tag_name)},
+    );
+}
+
+/// Bind concrete monotypes to polymorphic vars for the current lowering scope.
+fn bindTypeVarMonotypes(self: *Self, type_var: types.Var, monotype: Monotype.Idx) Allocator.Error!void {
     if (monotype.isNone()) return;
 
     const resolved = self.types_store.resolveVar(type_var);
 
-    if (self.type_var_seen.contains(resolved.var_)) return;
+    if (self.type_var_seen.get(resolved.var_)) |existing| {
+        if (!(try self.monotypesStructurallyEqual(existing, monotype))) {
+            typeBindingInvariant(
+                "bindTypeVarMonotypes: conflicting monotype binding for type var root {d}",
+                .{@intFromEnum(resolved.var_)},
+            );
+        }
+        return;
+    }
 
     switch (resolved.desc.content) {
         .flex, .rigid => {
@@ -2767,190 +2845,450 @@ fn seedTypeVarSeen(self: *Self, type_var: types.Var, monotype: Monotype.Idx) All
         },
         .alias => |alias| {
             const backing_var = self.types_store.getAliasBackingVar(alias);
-            try self.seedTypeVarSeen(backing_var, monotype);
+            try self.bindTypeVarMonotypes(backing_var, monotype);
         },
         .structure => |flat_type| {
-            if (!self.monotypeCompatibleWithFlatType(flat_type, monotype)) return;
-            // Seed this structure var so that any expression whose type var
-            // resolves to this same root (e.g. a numeric literal inside a
-            // polymorphic lambda body) will find the concrete monotype
-            // instead of falling through to the default Dec/unit.
+            // Register before recursing so recursive structures short-circuit.
             try self.type_var_seen.put(resolved.var_, monotype);
-            try self.seedTypeVarSeenStructure(flat_type, monotype);
+            try self.bindFlatTypeMonotypes(flat_type, monotype);
         },
         .err => {},
     }
 }
 
-fn monotypeCompatibleWithFlatType(self: *Self, flat_type: types.FlatType, monotype: Monotype.Idx) bool {
-    if (monotype.isNone()) return false;
-
-    const mono = self.store.monotype_store.getMonotype(monotype);
-    const common = self.currentCommonIdents();
-
-    return switch (flat_type) {
-        .fn_pure, .fn_effectful, .fn_unbound => mono == .func,
-        .record, .record_unbound => mono == .record,
-        .tuple => mono == .tuple,
-        .tag_union, .empty_tag_union => switch (mono) {
-            .tag_union => true,
-            .prim => |p| p == .bool,
-            else => false,
-        },
-        .empty_record => mono == .unit or mono == .record,
-        .nominal_type => |nominal| blk: {
-            if (nominal.origin_module.eql(common.builtin_module) and nominal.ident.ident_idx.eql(common.list)) {
-                break :blk mono == .list;
-            }
-            if (nominal.origin_module.eql(common.builtin_module) and nominal.ident.ident_idx.eql(common.box)) {
-                break :blk mono == .box;
-            }
-            // Non-builtin nominals are represented by their backing monotype.
-            break :blk true;
-        },
-    };
-}
-
-fn seedTypeVarSeenStructure(self: *Self, flat_type: types.FlatType, monotype: Monotype.Idx) Allocator.Error!void {
+fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monotype.Idx) Allocator.Error!void {
     if (monotype.isNone()) return;
+
     const mono = self.store.monotype_store.getMonotype(monotype);
+    const module_env = self.all_module_envs[self.current_module_idx];
 
     switch (flat_type) {
         .fn_pure, .fn_effectful, .fn_unbound => |func| {
-            switch (mono) {
-                .func => |mfunc| {
-                    const type_args = self.types_store.sliceVars(func.args);
-                    const mono_args = self.store.monotype_store.getIdxSpan(mfunc.args);
-                    const min_len = @min(type_args.len, mono_args.len);
-                    for (type_args[0..min_len], mono_args[0..min_len]) |ta, ma| {
-                        try self.seedTypeVarSeen(ta, ma);
-                    }
-                    try self.seedTypeVarSeen(func.ret, mfunc.ret);
-                },
-                else => {},
+            const mfunc = switch (mono) {
+                .func => |mfunc| mfunc,
+                else => typeBindingInvariant(
+                    "bindFlatTypeMonotypes(fn): expected function monotype, found '{s}'",
+                    .{@tagName(mono)},
+                ),
+            };
+            const type_args = self.types_store.sliceVars(func.args);
+            const mono_args = self.store.monotype_store.getIdxSpan(mfunc.args);
+            if (type_args.len != mono_args.len) {
+                typeBindingInvariant(
+                    "bindFlatTypeMonotypes(fn): arity mismatch (type={d}, monotype={d})",
+                    .{ type_args.len, mono_args.len },
+                );
             }
+            for (type_args, mono_args) |ta, ma| {
+                try self.bindTypeVarMonotypes(ta, ma);
+            }
+            try self.bindTypeVarMonotypes(func.ret, mfunc.ret);
         },
         .nominal_type => |nominal| {
             const common = self.currentCommonIdents();
             const ident = nominal.ident.ident_idx;
             const origin = nominal.origin_module;
 
-            if (origin.eql(common.builtin_module)) {
-                if (ident.eql(common.list)) {
-                    switch (mono) {
-                        .list => |mlist| {
-                            const type_args = self.types_store.sliceNominalArgs(nominal);
-                            if (type_args.len > 0) {
-                                try self.seedTypeVarSeen(type_args[0], mlist.elem);
-                            }
-                        },
-                        else => {},
-                    }
-                    return;
+            if (origin.eql(common.builtin_module) and ident.eql(common.list)) {
+                const mlist = switch (mono) {
+                    .list => |mlist| mlist,
+                    else => typeBindingInvariant(
+                        "bindFlatTypeMonotypes(nominal List): expected list monotype, found '{s}'",
+                        .{@tagName(mono)},
+                    ),
+                };
+                const type_args = self.types_store.sliceNominalArgs(nominal);
+                if (type_args.len != 1) {
+                    typeBindingInvariant(
+                        "bindFlatTypeMonotypes(nominal List): expected exactly 1 type arg, found {d}",
+                        .{type_args.len},
+                    );
                 }
-                if (ident.eql(common.box)) {
+                try self.bindTypeVarMonotypes(type_args[0], mlist.elem);
+                return;
+            }
+            if (origin.eql(common.builtin_module) and ident.eql(common.box)) {
+                const mbox = switch (mono) {
+                    .box => |mbox| mbox,
+                    else => typeBindingInvariant(
+                        "bindFlatTypeMonotypes(nominal Box): expected box monotype, found '{s}'",
+                        .{@tagName(mono)},
+                    ),
+                };
+                const type_args = self.types_store.sliceNominalArgs(nominal);
+                if (type_args.len != 1) {
+                    typeBindingInvariant(
+                        "bindFlatTypeMonotypes(nominal Box): expected exactly 1 type arg, found {d}",
+                        .{type_args.len},
+                    );
+                }
+                try self.bindTypeVarMonotypes(type_args[0], mbox.inner);
+                return;
+            }
+
+            if (origin.eql(common.builtin_module)) {
+                if (builtinPrimForNominal(ident, common)) |expected_prim| {
                     switch (mono) {
-                        .box => |mbox| {
-                            const type_args = self.types_store.sliceNominalArgs(nominal);
-                            if (type_args.len > 0) {
-                                try self.seedTypeVarSeen(type_args[0], mbox.inner);
+                        .prim => |actual_prim| {
+                            if (actual_prim != expected_prim) {
+                                typeBindingInvariant(
+                                    "bindFlatTypeMonotypes(nominal prim): expected '{s}', found '{s}'",
+                                    .{ @tagName(expected_prim), @tagName(actual_prim) },
+                                );
                             }
                         },
-                        else => {},
+                        else => typeBindingInvariant(
+                            "bindFlatTypeMonotypes(nominal prim): expected prim monotype, found '{s}'",
+                            .{@tagName(mono)},
+                        ),
                     }
                     return;
                 }
             }
 
-            // For other nominal types, follow the backing type
+            // Non-builtin nominals (and non-primitive builtin nominals) resolve by backing var.
             const backing_var = self.types_store.getNominalBackingVar(nominal);
-            try self.seedTypeVarSeen(backing_var, monotype);
+            try self.bindTypeVarMonotypes(backing_var, monotype);
         },
         .record => |record| {
-            switch (mono) {
-                .record => |mrec| {
-                    const fields_slice = self.types_store.getRecordFieldsSlice(record.fields);
-                    const field_vars = fields_slice.items(.var_);
-                    const mono_fields = self.store.monotype_store.getFields(mrec.fields);
-                    const min_len = @min(field_vars.len, mono_fields.len);
-                    for (field_vars[0..min_len], mono_fields[0..min_len]) |fv, mf| {
-                        try self.seedTypeVarSeen(fv, mf.type_idx);
+            const mrec = switch (mono) {
+                .record => |mrec| mrec,
+                else => typeBindingInvariant(
+                    "bindFlatTypeMonotypes(record): expected record monotype, found '{s}'",
+                    .{@tagName(mono)},
+                ),
+            };
+            const mono_fields = self.store.monotype_store.getFields(mrec.fields);
+            const seen_top = self.scratch_ident_idxs.top();
+            defer self.scratch_ident_idxs.clearFrom(seen_top);
+
+            var current_row = record;
+            rows: while (true) {
+                const fields_slice = self.types_store.getRecordFieldsSlice(current_row.fields);
+                const field_names = fields_slice.items(.name);
+                const field_vars = fields_slice.items(.var_);
+
+                for (field_names, field_vars) |field_name, field_var| {
+                    var seen_name = false;
+                    for (self.scratch_ident_idxs.sliceFromStart(seen_top)) |existing_name| {
+                        if (existing_name.eql(field_name)) {
+                            seen_name = true;
+                            break;
+                        }
                     }
-                },
-                else => {},
+                    if (!seen_name) {
+                        try self.scratch_ident_idxs.append(field_name);
+                    }
+                    try self.bindRecordFieldByName(field_name, field_var, mono_fields);
+                }
+
+                var ext_var = current_row.ext;
+                while (true) {
+                    const ext_resolved = self.types_store.resolveVar(ext_var);
+                    switch (ext_resolved.desc.content) {
+                        .alias => |alias| {
+                            ext_var = self.types_store.getAliasBackingVar(alias);
+                            continue;
+                        },
+                        .structure => |ext_flat| switch (ext_flat) {
+                            .record => |next_row| {
+                                current_row = next_row;
+                                continue :rows;
+                            },
+                            .record_unbound => |fields_range| {
+                                const ext_fields = self.types_store.getRecordFieldsSlice(fields_range);
+                                const ext_field_names = ext_fields.items(.name);
+                                const ext_field_vars = ext_fields.items(.var_);
+                                for (ext_field_names, ext_field_vars) |field_name, field_var| {
+                                    var seen_name = false;
+                                    for (self.scratch_ident_idxs.sliceFromStart(seen_top)) |existing_name| {
+                                        if (existing_name.eql(field_name)) {
+                                            seen_name = true;
+                                            break;
+                                        }
+                                    }
+                                    if (!seen_name) {
+                                        try self.scratch_ident_idxs.append(field_name);
+                                    }
+                                    try self.bindRecordFieldByName(field_name, field_var, mono_fields);
+                                }
+                                break :rows;
+                            },
+                            .empty_record => break :rows,
+                            else => typeBindingInvariant(
+                                "bindFlatTypeMonotypes(record): unexpected ext flat type '{s}'",
+                                .{@tagName(ext_flat)},
+                            ),
+                        },
+                        .flex => typeBindingInvariant(
+                            "bindFlatTypeMonotypes(record): unresolved flex extension",
+                            .{},
+                        ),
+                        .rigid => typeBindingInvariant(
+                            "bindFlatTypeMonotypes(record): unresolved rigid extension",
+                            .{},
+                        ),
+                        .err => typeBindingInvariant(
+                            "bindFlatTypeMonotypes(record): error extension",
+                            .{},
+                        ),
+                    }
+                }
+            }
+
+            for (mono_fields) |mono_field| {
+                var found = false;
+                for (self.scratch_ident_idxs.sliceFromStart(seen_top)) |seen_name| {
+                    if (seen_name.eql(mono_field.name)) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    typeBindingInvariant(
+                        "bindFlatTypeMonotypes(record): monotype field '{s}' missing from type row",
+                        .{module_env.getIdent(mono_field.name)},
+                    );
+                }
             }
         },
         .record_unbound => |fields_range| {
-            switch (mono) {
-                .record => |mrec| {
-                    const fields_slice = self.types_store.getRecordFieldsSlice(fields_range);
-                    const field_vars = fields_slice.items(.var_);
-                    const mono_fields = self.store.monotype_store.getFields(mrec.fields);
-                    const min_len = @min(field_vars.len, mono_fields.len);
-                    for (field_vars[0..min_len], mono_fields[0..min_len]) |fv, mf| {
-                        try self.seedTypeVarSeen(fv, mf.type_idx);
-                    }
-                },
-                else => {},
+            const mrec = switch (mono) {
+                .record => |mrec| mrec,
+                else => typeBindingInvariant(
+                    "bindFlatTypeMonotypes(record_unbound): expected record monotype, found '{s}'",
+                    .{@tagName(mono)},
+                ),
+            };
+            const fields_slice = self.types_store.getRecordFieldsSlice(fields_range);
+            const field_names = fields_slice.items(.name);
+            const field_vars = fields_slice.items(.var_);
+            const mono_fields = self.store.monotype_store.getFields(mrec.fields);
+
+            if (field_names.len != mono_fields.len) {
+                typeBindingInvariant(
+                    "bindFlatTypeMonotypes(record_unbound): field count mismatch (type={d}, monotype={d})",
+                    .{ field_names.len, mono_fields.len },
+                );
+            }
+
+            for (field_names, field_vars) |field_name, field_var| {
+                try self.bindRecordFieldByName(field_name, field_var, mono_fields);
             }
         },
         .tuple => |tuple| {
-            switch (mono) {
-                .tuple => |mtuple| {
-                    const elem_vars = self.types_store.sliceVars(tuple.elems);
-                    const mono_elems = self.store.monotype_store.getIdxSpan(mtuple.elems);
-                    const min_len = @min(elem_vars.len, mono_elems.len);
-                    for (elem_vars[0..min_len], mono_elems[0..min_len]) |ev, me| {
-                        try self.seedTypeVarSeen(ev, me);
-                    }
-                },
-                else => {},
+            const mtuple = switch (mono) {
+                .tuple => |mtuple| mtuple,
+                else => typeBindingInvariant(
+                    "bindFlatTypeMonotypes(tuple): expected tuple monotype, found '{s}'",
+                    .{@tagName(mono)},
+                ),
+            };
+            const elem_vars = self.types_store.sliceVars(tuple.elems);
+            const mono_elems = self.store.monotype_store.getIdxSpan(mtuple.elems);
+            if (elem_vars.len != mono_elems.len) {
+                typeBindingInvariant(
+                    "bindFlatTypeMonotypes(tuple): arity mismatch (type={d}, monotype={d})",
+                    .{ elem_vars.len, mono_elems.len },
+                );
+            }
+            for (elem_vars, mono_elems) |ev, me| {
+                try self.bindTypeVarMonotypes(ev, me);
             }
         },
         .tag_union => |tag_union_row| {
-            switch (mono) {
-                .tag_union => |mtu| {
-                    const mono_tags = self.store.monotype_store.getTags(mtu.tags);
+            const mono_tags = switch (mono) {
+                .tag_union => |mtu| self.store.monotype_store.getTags(mtu.tags),
+                .prim => |p| {
+                    if (p == .bool) {
+                        const common = self.currentCommonIdents();
+                        var found_true = false;
+                        var found_false = false;
+                        var current_row = tag_union_row;
+                        rows: while (true) {
+                            const type_tags = self.types_store.getTagsSlice(current_row.tags);
+                            const type_tag_names = type_tags.items(.name);
+                            const type_tag_args = type_tags.items(.args);
+                            for (type_tag_names, type_tag_args) |tag_name, tag_args| {
+                                const payload_vars = self.types_store.sliceVars(tag_args);
+                                if (payload_vars.len != 0) {
+                                    typeBindingInvariant(
+                                        "bindFlatTypeMonotypes(tag_union Bool): non-empty payload for tag '{s}'",
+                                        .{module_env.getIdent(tag_name)},
+                                    );
+                                }
+                                if (tag_name.eql(common.true_tag)) {
+                                    found_true = true;
+                                } else if (tag_name.eql(common.false_tag)) {
+                                    found_false = true;
+                                } else {
+                                    typeBindingInvariant(
+                                        "bindFlatTypeMonotypes(tag_union Bool): unexpected tag '{s}'",
+                                        .{module_env.getIdent(tag_name)},
+                                    );
+                                }
+                            }
 
-                    // Follow the tag union extension chain to match ALL tags.
-                    var current_row = tag_union_row;
-                    while (true) {
-                        const type_tags = self.types_store.getTagsSlice(current_row.tags);
-                        const type_tag_names = type_tags.items(.name);
-                        const type_tag_args = type_tags.items(.args);
-
-                        for (type_tag_names, type_tag_args) |tname, targs| {
-                            for (mono_tags) |mtag| {
-                                if (tname.eql(mtag.name)) {
-                                    const targ_vars = self.types_store.sliceVars(targs);
-                                    const marg_idxs = self.store.monotype_store.getIdxSpan(mtag.payloads);
-                                    const n = @min(targ_vars.len, marg_idxs.len);
-                                    for (targ_vars[0..n], marg_idxs[0..n]) |tv, mi| {
-                                        try self.seedTypeVarSeen(tv, mi);
-                                    }
-                                    break;
+                            var ext_var = current_row.ext;
+                            while (true) {
+                                const ext_resolved = self.types_store.resolveVar(ext_var);
+                                switch (ext_resolved.desc.content) {
+                                    .alias => |alias| {
+                                        ext_var = self.types_store.getAliasBackingVar(alias);
+                                        continue;
+                                    },
+                                    .structure => |ext_flat| switch (ext_flat) {
+                                        .tag_union => |next_row| {
+                                            current_row = next_row;
+                                            continue :rows;
+                                        },
+                                        .empty_tag_union => break :rows,
+                                        else => typeBindingInvariant(
+                                            "bindFlatTypeMonotypes(tag_union Bool): unexpected ext flat type '{s}'",
+                                            .{@tagName(ext_flat)},
+                                        ),
+                                    },
+                                    .flex => typeBindingInvariant(
+                                        "bindFlatTypeMonotypes(tag_union Bool): unresolved flex extension",
+                                        .{},
+                                    ),
+                                    .rigid => typeBindingInvariant(
+                                        "bindFlatTypeMonotypes(tag_union Bool): unresolved rigid extension",
+                                        .{},
+                                    ),
+                                    .err => typeBindingInvariant(
+                                        "bindFlatTypeMonotypes(tag_union Bool): error extension",
+                                        .{},
+                                    ),
                                 }
                             }
                         }
+                        if (!(found_true and found_false)) {
+                            typeBindingInvariant(
+                                "bindFlatTypeMonotypes(tag_union Bool): missing True/False tags",
+                                .{},
+                            );
+                        }
+                        return;
+                    }
+                    typeBindingInvariant(
+                        "bindFlatTypeMonotypes(tag_union): expected tag_union/bool monotype, found prim '{s}'",
+                        .{@tagName(p)},
+                    );
+                },
+                else => typeBindingInvariant(
+                    "bindFlatTypeMonotypes(tag_union): expected tag_union monotype, found '{s}'",
+                    .{@tagName(mono)},
+                ),
+            };
 
-                        // Follow extension variable
-                        const ext_resolved = self.types_store.resolveVar(current_row.ext);
-                        switch (ext_resolved.desc.content) {
-                            .structure => |ext_flat| switch (ext_flat) {
-                                .tag_union => |next_row| {
-                                    current_row = next_row;
-                                    continue;
-                                },
-                                .empty_tag_union => break,
-                                else => break,
-                            },
-                            else => break,
+            const seen_top = self.scratch_ident_idxs.top();
+            defer self.scratch_ident_idxs.clearFrom(seen_top);
+
+            var current_row = tag_union_row;
+            rows: while (true) {
+                const type_tags = self.types_store.getTagsSlice(current_row.tags);
+                const type_tag_names = type_tags.items(.name);
+                const type_tag_args = type_tags.items(.args);
+
+                for (type_tag_names, type_tag_args) |tag_name, tag_args| {
+                    var seen_tag = false;
+                    for (self.scratch_ident_idxs.sliceFromStart(seen_top)) |existing_name| {
+                        if (existing_name.eql(tag_name)) {
+                            seen_tag = true;
+                            break;
                         }
                     }
-                },
-                else => {},
+                    if (!seen_tag) {
+                        try self.scratch_ident_idxs.append(tag_name);
+                    }
+                    const payload_vars = self.types_store.sliceVars(tag_args);
+                    try self.bindTagPayloadsByName(tag_name, payload_vars, mono_tags);
+                }
+
+                var ext_var = current_row.ext;
+                while (true) {
+                    const ext_resolved = self.types_store.resolveVar(ext_var);
+                    switch (ext_resolved.desc.content) {
+                        .alias => |alias| {
+                            ext_var = self.types_store.getAliasBackingVar(alias);
+                            continue;
+                        },
+                        .structure => |ext_flat| switch (ext_flat) {
+                            .tag_union => |next_row| {
+                                current_row = next_row;
+                                continue :rows;
+                            },
+                            .empty_tag_union => break :rows,
+                            else => typeBindingInvariant(
+                                "bindFlatTypeMonotypes(tag_union): unexpected ext flat type '{s}'",
+                                .{@tagName(ext_flat)},
+                            ),
+                        },
+                        .flex => typeBindingInvariant(
+                            "bindFlatTypeMonotypes(tag_union): unresolved flex extension",
+                            .{},
+                        ),
+                        .rigid => typeBindingInvariant(
+                            "bindFlatTypeMonotypes(tag_union): unresolved rigid extension",
+                            .{},
+                        ),
+                        .err => typeBindingInvariant(
+                            "bindFlatTypeMonotypes(tag_union): error extension",
+                            .{},
+                        ),
+                    }
+                }
+            }
+
+            for (mono_tags) |mono_tag| {
+                var found = false;
+                for (self.scratch_ident_idxs.sliceFromStart(seen_top)) |seen_name| {
+                    if (seen_name.eql(mono_tag.name)) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    typeBindingInvariant(
+                        "bindFlatTypeMonotypes(tag_union): monotype tag '{s}' missing from type row",
+                        .{module_env.getIdent(mono_tag.name)},
+                    );
+                }
             }
         },
-        .empty_record, .empty_tag_union => {},
+        .empty_record => {
+            switch (mono) {
+                .unit => {},
+                .record => |mrec| {
+                    const fields = self.store.monotype_store.getFields(mrec.fields);
+                    if (fields.len != 0) {
+                        typeBindingInvariant(
+                            "bindFlatTypeMonotypes(empty_record): expected zero record fields, found {d}",
+                            .{fields.len},
+                        );
+                    }
+                },
+                else => typeBindingInvariant(
+                    "bindFlatTypeMonotypes(empty_record): expected unit/empty-record monotype, found '{s}'",
+                    .{@tagName(mono)},
+                ),
+            }
+        },
+        .empty_tag_union => {
+            const mono_tags = switch (mono) {
+                .tag_union => |mtu| self.store.monotype_store.getTags(mtu.tags),
+                else => typeBindingInvariant(
+                    "bindFlatTypeMonotypes(empty_tag_union): expected empty tag union monotype, found '{s}'",
+                    .{@tagName(mono)},
+                ),
+            };
+            if (mono_tags.len != 0) {
+                typeBindingInvariant(
+                    "bindFlatTypeMonotypes(empty_tag_union): expected zero tags, found {d}",
+                    .{mono_tags.len},
+                );
+            }
+        },
     }
 }
