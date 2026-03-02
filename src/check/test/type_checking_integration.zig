@@ -6121,7 +6121,7 @@ test "check type - annotated open arg not closed even with exhaustive match" {
     );
 }
 
-test "check type - xxx" {
+test "check type - tag union - ext hints 1" {
     const source =
         \\bar : [A, B] -> [X, Y]
         \\bar = |_| X
@@ -6129,10 +6129,53 @@ test "check type - xxx" {
         \\foo : [A, B] -> [X, Y, ..]
         \\foo = |tag| bar(tag)
     ;
-    try checkTypesModuleDefs(
-        source,
-        &.{
-            .{ .def = "bar", .expected = "{ .., status: [Active, Inactive] } -> Str" },
-        },
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\This expression is used in an unexpected way:
+        \\**test:5:13:5:21:**
+        \\```roc
+        \\foo = |tag| bar(tag)
+        \\```
+        \\            ^^^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    [X, Y]
+        \\
+        \\But the annotation say it should be:
+        \\
+        \\    [X, Y, ..]
+        \\
+        \\**Hint:** This tag union is closed, but I expected it to be open.
+        \\
+        \\
+    );
+}
+
+test "check type - tag union - ext hints 2" {
+    const source =
+        \\foo : [A, B, ..] -> [A, B]
+        \\foo = |a| a
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\This expression is used in an unexpected way:
+        \\**test:2:11:2:12:**
+        \\```roc
+        \\foo = |a| a
+        \\```
+        \\          ^
+        \\
+        \\It has the type:
+        \\
+        \\    [A, B, ..]
+        \\
+        \\But the annotation say it should be:
+        \\
+        \\    [A, B]
+        \\
+        \\**Hint:** This tag union open, but I expected it to be closed.
+        \\
+        \\
     );
 }

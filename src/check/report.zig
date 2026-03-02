@@ -632,6 +632,62 @@ pub const ReportBuilder = struct {
                         },
                     }
                 },
+                .ext_mismatch => |em| {
+                    switch (em.type) {
+                        .tag_union => {
+                            switch (em.situation) {
+                                .expected_rigid_was_closed => |rigid_idx| {
+                                    const name = self.can_ir.getIdent(rigid_idx);
+                                    if (name.len > 10 and std.mem.eql(u8, name[0..10], "#open_ext_")) {
+                                        // `#open_ext_{n}` is the internal name assigned to
+                                        // rigid vars defined via `..`, eg [A, B, ..]
+                                        //
+                                        // These can only come from annotation
+                                        //
+                                        // The above check is a little fragile,
+                                        // can we store this with structured
+                                        // data somehow?
+                                        try D.renderSlice(&.{
+                                            D.bytes("Hint:").withAnnotation(.emphasized),
+                                            D.bytes("This tag union is closed, but I expected it to be open."),
+                                        }, self, report);
+                                    } else {
+                                        try D.renderSlice(&.{
+                                            D.bytes("Hint:").withAnnotation(.emphasized),
+                                            D.bytes("This tag union is closed, but I expected it be extended by"),
+                                            D.ident(rigid_idx).withAnnotation(.inline_code),
+                                            D.bytes(".").withNoPrecedingSpace(),
+                                        }, self, report);
+                                    }
+                                },
+                                .expected_closed_was_rigid => |rigid_idx| {
+                                    const name = self.can_ir.getIdent(rigid_idx);
+                                    if (name.len > 10 and std.mem.eql(u8, name[0..10], "#open_ext_")) {
+                                        // `#open_ext_{n}` is the internal name assigned to
+                                        // rigid vars defined via `..`, eg [A, B, ..]
+                                        //
+                                        // These can only come from annotation
+                                        //
+                                        // The above check is a little fragile,
+                                        // can we store this with structured
+                                        // data somehow?
+                                        try D.renderSlice(&.{
+                                            D.bytes("Hint:").withAnnotation(.emphasized),
+                                            D.bytes("This tag union open, but I expected it to be closed."),
+                                        }, self, report);
+                                    } else {
+                                        try D.renderSlice(&.{
+                                            D.bytes("Hint:").withAnnotation(.emphasized),
+                                            D.bytes("This tag union is extended by"),
+                                            D.ident(rigid_idx).withAnnotation(.inline_code),
+                                            D.bytes(", but I expected it to be closed."),
+                                        }, self, report);
+                                    }
+                                },
+                            }
+                        },
+                    }
+                },
             }
         }
     }

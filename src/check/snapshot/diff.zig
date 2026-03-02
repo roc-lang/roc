@@ -23,6 +23,7 @@ pub const Hint = union(enum) {
     field_typo: FieldTypo,
     tag_typo: TagTypo,
     effect_mismatch: EffectMismatch,
+    ext_mismatch: ExtMismatch,
 };
 
 /// Hint about fn arity mismatch
@@ -52,6 +53,15 @@ pub const TagTypo = struct {
 /// Hint about a function effect/pure mismatch
 pub const EffectMismatch = struct {
     expected: enum { pure, effectful },
+};
+
+/// Hint about a mismatch of extension variables
+pub const ExtMismatch = struct {
+    type: enum { tag_union },
+    situation: union(enum) {
+        expected_rigid_was_closed: Ident.Idx,
+        expected_closed_was_rigid: Ident.Idx,
+    },
 };
 
 /// A bounded list of hints (max 5)
@@ -542,11 +552,13 @@ fn compareTagUnions(
     tags: *SnapshotTagSafeList,
 ) void {
     // Gather ALL tags from expected (including extensions)
-    const exp_range = gatherTagsFromUnion(snap_store, exp_union, gpa, tags);
+    const exp_gathered = gatherTagsFromUnion(snap_store, exp_union, gpa, tags);
+    const exp_range = exp_gathered.fields;
     const exp_tag_names = tags.sliceRange(exp_range).items(.name);
 
     // Gather ALL tags from actual (including extensions)
-    const act_range = gatherTagsFromUnion(snap_store, act_union, gpa, tags);
+    const act_gathered = gatherTagsFromUnion(snap_store, act_union, gpa, tags);
+    const act_range = act_gathered.fields;
     const act_tag_names = tags.sliceRange(act_range).items(.name);
 
     // Look for tags in actual that might be typos of expected tags
@@ -570,7 +582,42 @@ fn compareTagUnions(
             }
         }
     }
+
+    // Look for a mismatch with the ext variables
+    switch (exp_gathered.ext) {
+        .rigid => |rigid_idx| {
+            switch (act_gathered.ext) {
+                .closed => {
+                    hints.append(.{ .ext_mismatch = .{
+                        .type = .tag_union,
+                        .situation = .{ .expected_rigid_was_closed = rigid_idx },
+                    } });
+                },
+                .rigid, .flex, .other => {},
+            }
+        },
+        .closed => {
+            switch (act_gathered.ext) {
+                .rigid => |rigid_idx| {
+                    hints.append(.{ .ext_mismatch = .{
+                        .type = .tag_union,
+                        .situation = .{ .expected_closed_was_rigid = rigid_idx },
+                    } });
+                },
+                .closed, .flex, .other => {},
+            }
+        },
+        else => {},
+    }
 }
+
+/// The unwrapped extension of the tag union
+const TagExt = union(enum) {
+    closed,
+    flex: ?Ident.Idx,
+    rigid: Ident.Idx,
+    other,
+};
 
 /// Gather all tags from a tag union, following extension chain.
 /// Returns a Range into tags buffer.
@@ -579,7 +626,7 @@ fn gatherTagsFromUnion(
     union_: snapshot.SnapshotTagUnion,
     gpa: Allocator,
     tags: *SnapshotTagSafeList,
-) SnapshotTagSafeList.Range {
+) struct { fields: SnapshotTagSafeList.Range, ext: TagExt } {
     const start: u32 = tags.len();
 
     // Add immediate tags
@@ -587,6 +634,8 @@ fn gatherTagsFromUnion(
     for (union_tags.items(.name), union_tags.items(.args), union_tags.items(.formatted)) |name, args, formatted| {
         _ = tags.append(gpa, .{ .name = name, .args = args, .formatted = formatted }) catch {};
     }
+
+    var ext: TagExt = .other;
 
     // Follow extension chain
     var ext_idx = union_.ext;
@@ -601,17 +650,33 @@ fn gatherTagsFromUnion(
                     }
                     ext_idx = ext_union.ext;
                 },
-                .empty_tag_union => break,
+                .empty_tag_union => {
+                    ext = TagExt.closed;
+                    break;
+                },
                 else => break,
             },
             .alias => |alias| {
                 ext_idx = alias.backing;
             },
-            .flex, .rigid, .err, .recursive => break,
+            .flex => |flex| {
+                ext = TagExt{ .flex = flex.name };
+                break;
+            },
+            .rigid => |rigid| {
+                ext = TagExt{ .rigid = rigid.name };
+                break;
+            },
+            .err, .recursive => {
+                break;
+            },
         }
     }
 
-    return tags.rangeToEnd(start);
+    return .{
+        .fields = tags.rangeToEnd(start),
+        .ext = ext,
+    };
 }
 
 // Tests
