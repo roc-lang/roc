@@ -7508,23 +7508,25 @@ fn valTypeSize(vt: ValType) u32 {
 /// closure in closure_values, the closure's value is its own inner capture.
 /// Resolve through the closure to find the inner capture's local.
 fn resolveCaptureThroughClosure(self: *Self, symbol: Symbol) ?u32 {
-    return self.resolveCaptureThroughClosureImpl(symbol, 0);
-}
+    // By the pigeonhole principle, a non-cyclic chain of closure values
+    // cannot exceed the total number of entries in the map.
+    const max_steps = self.closure_values.count();
+    var current = symbol;
+    var steps: u32 = 0;
 
-fn resolveCaptureThroughClosureImpl(self: *Self, symbol: Symbol, depth: u32) ?u32 {
-    // Guard against infinite recursion from mutual captures (e.g., is_even captures is_odd,
-    // is_odd captures is_even). A chain longer than 8 means we're in a cycle.
-    if (depth > 8) return null;
-    const key: u64 = @bitCast(symbol);
-    const cv = self.closure_values.get(key) orelse return null;
-    if (cv.representation != .unwrapped_capture) return null;
-    const inner_caps = self.store.getCaptures(cv.captures);
-    if (inner_caps.len == 0) return null;
-    // The unwrapped_capture closure IS its single capture value.
-    // Try to find that inner capture as a local.
-    return self.storage.getLocal(inner_caps[0].symbol) orelse
-        // Recurse: the inner capture might also be an unwrapped_capture closure
-        self.resolveCaptureThroughClosureImpl(inner_caps[0].symbol, depth + 1);
+    while (steps < max_steps) : (steps += 1) {
+        const key: u64 = @bitCast(current);
+        const cv = self.closure_values.get(key) orelse return null;
+        if (cv.representation != .unwrapped_capture) return null;
+        const inner_caps = self.store.getCaptures(cv.captures);
+        if (inner_caps.len == 0) return null;
+        // The unwrapped_capture closure IS its single capture value.
+        // Try to find that inner capture as a local.
+        if (self.storage.getLocal(inner_caps[0].symbol)) |local| return local;
+        current = inner_caps[0].symbol;
+    }
+    // Exceeded closure_values size — must be a cycle (e.g., mutual captures).
+    return null;
 }
 
 /// Dispatch a closure call based on its ClosureValue.
