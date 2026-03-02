@@ -759,14 +759,34 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
         .e_typed_int => |ti| try self.store.addExpr(self.allocator, .{ .int = .{ .value = ti.value } }, monotype, region),
         .e_typed_frac => |tf| {
             const roc_dec = builtins.dec.RocDec{ .num = tf.value.toI128() };
-            if (tf.type_name.eql(module_env.idents.f64)) {
-                return try self.store.addExpr(self.allocator, .{ .frac_f64 = roc_dec.toF64() }, monotype, region);
-            } else if (tf.type_name.eql(module_env.idents.f32)) {
-                return try self.store.addExpr(self.allocator, .{ .frac_f32 = @floatCast(roc_dec.toF64()) }, monotype, region);
-            } else {
-                // Dec or fallback
-                return try self.store.addExpr(self.allocator, .{ .dec = roc_dec }, monotype, region);
-            }
+            const mono = self.store.monotype_store.getMonotype(monotype);
+            return switch (mono) {
+                .prim => |p| switch (p) {
+                    .f64 => try self.store.addExpr(self.allocator, .{ .frac_f64 = roc_dec.toF64() }, monotype, region),
+                    .f32 => try self.store.addExpr(self.allocator, .{ .frac_f32 = @floatCast(roc_dec.toF64()) }, monotype, region),
+                    .dec => try self.store.addExpr(self.allocator, .{ .dec = roc_dec }, monotype, region),
+                    else => {
+                        if (std.debug.runtime_safety) {
+                            const type_name = module_env.getIdent(tf.type_name);
+                            std.debug.panic(
+                                "lowerExpr(e_typed_frac): unsupported monotype for type '{s}' (checker/lowering invariant broken)",
+                                .{type_name},
+                            );
+                        }
+                        unreachable;
+                    },
+                },
+                else => {
+                    if (std.debug.runtime_safety) {
+                        const type_name = module_env.getIdent(tf.type_name);
+                        std.debug.panic(
+                            "lowerExpr(e_typed_frac): non-prim monotype for type '{s}' (checker/lowering invariant broken)",
+                            .{type_name},
+                        );
+                    }
+                    unreachable;
+                },
+            };
         },
 
         // --- Strings ---
