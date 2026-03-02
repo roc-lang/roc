@@ -337,10 +337,16 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize, roc_ops: *RocOps) ca
     // Debug-only assertions to catch refcount bugs early.
     if (builtin.mode == .Debug) {
         if (refcount == POISON_VALUE) {
+            if (comptime builtin.os.tag != .freestanding) {
+                DebugRefcountTracker.dumpHistoryFor(@intFromPtr(ptr_to_refcount));
+            }
             roc_ops.crash("Use-after-free: incref on already-freed memory");
             return;
         }
         if (refcount <= 0 and !rcConstant(refcount)) {
+            if (comptime builtin.os.tag != .freestanding) {
+                DebugRefcountTracker.dumpHistoryFor(@intFromPtr(ptr_to_refcount));
+            }
             roc_ops.crash("Invalid incref: incrementing non-positive refcount");
             return;
         }

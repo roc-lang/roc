@@ -1878,6 +1878,24 @@ test "List.append - zst case" {
     );
 }
 
+test "List.single nested list (single call site)" {
+    try runExpectStr(
+        "Str.inspect(List.single([1, 2, 3]))",
+        "[[1.0, 2.0, 3.0]]",
+        .no_trace,
+    );
+}
+
+test "List.single nested list after other specializations" {
+    try runExpectStr(
+        \\{
+        \\    _ = List.single(1)
+        \\    _ = List.single("hello")
+        \\    Str.inspect(List.single([1, 2, 3]))
+        \\}
+    , "[[1.0, 2.0, 3.0]]", .no_trace);
+}
+
 // Test for List.repeat
 
 test "List.repeat - basic case" {
