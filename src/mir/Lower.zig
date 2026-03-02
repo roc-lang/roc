@@ -2485,21 +2485,19 @@ fn resolveMethodForTypeVar(
 
     const origin_env = self.all_module_envs[origin_module_idx];
 
-    // Look up the method in the origin module
-    // `info.ident` can come from either the caller/source env (e.g. builtin
-    // primitives mapped via common idents) or the origin env (e.g. nominals
-    // inferred from another module). Try both provenances before giving up.
-    const qualified_method = origin_env.lookupMethodIdentFromTwoEnvsConst(
-        source_env,
-        info.ident,
-        source_env,
-        method_name,
-    ) orelse origin_env.lookupMethodIdentFromTwoEnvsConst(
-        origin_env,
-        info.ident,
-        source_env,
-        method_name,
-    ) orelse return null;
+    // Authoritative method resolution:
+    // 1. Translate the resolved nominal type ident and requested method ident
+    //    into the origin module's ident space.
+    // 2. Resolve the method in the origin module's method_idents table.
+    //
+    // No multi-provenance probing is allowed here; the lookup target must be
+    // the actual resolved nominal type in its defining module.
+    const type_name = source_env.getIdent(info.ident);
+    const method_name_text = source_env.getIdent(method_name);
+
+    const origin_type_ident = origin_env.common.findIdent(type_name) orelse return null;
+    const origin_method_ident = origin_env.common.findIdent(method_name_text) orelse return null;
+    const qualified_method = origin_env.lookupMethodIdentConst(origin_type_ident, origin_method_ident) orelse return null;
 
     return self.internSymbol(@intCast(origin_module_idx), qualified_method);
 }
