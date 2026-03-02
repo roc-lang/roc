@@ -8,6 +8,7 @@ platform ""
         FunctionInfo,
         HostedFunctionInfo,
         ModuleTypeInfo,
+        RecordFieldInfo,
         TypeId,
         Types,
     ]
@@ -32,6 +33,7 @@ import EntryPoint exposing [EntryPoint]
 import ModuleTypeInfo exposing [ModuleTypeInfo]
 import FunctionInfo exposing [FunctionInfo]
 import HostedFunctionInfo exposing [HostedFunctionInfo]
+import RecordFieldInfo exposing [RecordFieldInfo]
 
 make_glue_for_host : List(Types) -> Try(List(File), Str)
 make_glue_for_host = make_glue

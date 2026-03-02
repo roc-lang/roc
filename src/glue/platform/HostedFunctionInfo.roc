@@ -1,5 +1,9 @@
+import RecordFieldInfo exposing [RecordFieldInfo]
+
 HostedFunctionInfo := {
+    arg_fields : List(RecordFieldInfo),
     index : U64,
     name : Str,
-    type_str : Str
+    ret_fields : List(RecordFieldInfo),
+    type_str : Str,
 }

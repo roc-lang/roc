@@ -3,6 +3,7 @@ app [make_glue] { pf: platform "../platform/main.roc" }
 
 import pf.Types exposing [Types]
 import pf.File exposing [File]
+import pf.RecordFieldInfo exposing [RecordFieldInfo]
 
 make_glue : List(Types) -> Try(List(File), Str)
 make_glue = |types_list| {
@@ -15,8 +16,10 @@ make_glue = |types_list| {
 				full_qualified_name = "${mod.name}.${func.name}"
 
 				hosted_func = {
+					arg_fields: func.arg_fields,
 					index: func.index,
 					name: full_qualified_name,
+					ret_fields: func.ret_fields,
 					type_str: func.type_str,
 				}
 
@@ -355,7 +358,7 @@ expect lowercase_first("") == ""
 # =============================================================================
 
 ## Generate the complete Zig source file
-generate_zig_file : List({ index : U64, name : Str, type_str : Str }) -> Str
+generate_zig_file : List({ arg_fields : List(RecordFieldInfo), index : U64, name : Str, ret_fields : List(RecordFieldInfo), type_str : Str }) -> Str
 generate_zig_file = |hosted_functions| {
 	count = List.len(hosted_functions)
 
@@ -364,6 +367,7 @@ generate_zig_file = |hosted_functions| {
 		.concat("\n")
 		.concat(generate_index_constants(hosted_functions, count))
 		.concat("\n")
+		.concat(generate_all_record_structs(hosted_functions))
 		.concat(generate_all_args_structs(hosted_functions))
 		.concat(generate_platform_fns_struct(hosted_functions))
 		.concat("\n")
@@ -383,7 +387,7 @@ generate_imports =
 	"const std = @import(\"std\");\nconst builtins = @import(\"builtins\");\nconst RocStr = builtins.str.RocStr;\nconst RocList = builtins.list.RocList;\nconst RocOps = builtins.host_abi.RocOps;\nconst HostedFn = builtins.host_abi.HostedFn;\n"
 
 ## Generate index constants and count
-generate_index_constants : List({ index : U64, name : Str, type_str : Str }), U64 -> Str
+generate_index_constants : List({ arg_fields : List(RecordFieldInfo), index : U64, name : Str, ret_fields : List(RecordFieldInfo), type_str : Str }), U64 -> Str
 generate_index_constants = |hosted_functions, count| {
 	var $constants = "pub const hosted_function_count: u32 = ${U64.to_str(count)};\n\n"
 
@@ -398,8 +402,35 @@ generate_index_constants = |hosted_functions, count| {
 	$constants
 }
 
+## Generate extern structs for record return types from field info
+generate_all_record_structs : List({ arg_fields : List(RecordFieldInfo), index : U64, name : Str, ret_fields : List(RecordFieldInfo), type_str : Str }) -> Str
+generate_all_record_structs = |hosted_functions| {
+	var $structs = ""
+	for func in hosted_functions {
+		if !(List.is_empty(func.ret_fields)) {
+			struct_name = name_to_struct_name(func.name)
+
+			var $fields = ""
+			for field in func.ret_fields {
+				zig_type = roc_type_to_zig(field.type_str)
+				$fields = Str.concat(
+					$fields,
+					"    ${field.name}: ${zig_type}, // ${field.type_str}\n",
+				)
+			}
+
+			doc = "/// Return type record for ${func.name}\n/// Fields are alphabetically ordered (Roc C ABI)\n"
+			$structs = Str.concat(
+				$structs,
+				"${doc}pub const ${struct_name}RetRecord = extern struct {\n${$fields}};\n\n",
+			)
+		}
+	}
+	$structs
+}
+
 ## Generate all argument extern structs
-generate_all_args_structs : List({ index : U64, name : Str, type_str : Str }) -> Str
+generate_all_args_structs : List({ arg_fields : List(RecordFieldInfo), index : U64, name : Str, ret_fields : List(RecordFieldInfo), type_str : Str }) -> Str
 generate_all_args_structs = |hosted_functions| {
 	var $structs = ""
 	for func in hosted_functions {
@@ -409,7 +440,7 @@ generate_all_args_structs = |hosted_functions| {
 }
 
 ## Generate a single argument extern struct (empty string if no args)
-generate_args_struct : { index : U64, name : Str, type_str : Str } -> Str
+generate_args_struct : { arg_fields : List(RecordFieldInfo), index : U64, name : Str, ret_fields : List(RecordFieldInfo), type_str : Str } -> Str
 generate_args_struct = |func| {
 	parsed = parse_type_str(func.type_str)
 
@@ -419,15 +450,29 @@ generate_args_struct = |func| {
 
 	struct_name = name_to_struct_name(func.name)
 
-	var $fields = ""
-	var $idx = 0
-	for arg in parsed.args {
-		zig_type = roc_type_to_zig(arg)
-		$fields = Str.concat(
-			$fields,
-			"    arg${U64.to_str($idx)}: ${zig_type}, // ${arg}\n",
-		)
-		$idx = $idx + 1
+	# If we have arg_fields with named fields, use those instead of positional arg0, arg1
+	$fields = if !(List.is_empty(func.arg_fields)) {
+		var $named_fields = ""
+		for field in func.arg_fields {
+			zig_type = roc_type_to_zig(field.type_str)
+			$named_fields = Str.concat(
+				$named_fields,
+				"    ${field.name}: ${zig_type}, // ${field.type_str}\n",
+			)
+		}
+		$named_fields
+	} else {
+		var $positional_fields = ""
+		var $idx = 0
+		for arg in parsed.args {
+			zig_type = roc_type_to_zig(arg)
+			$positional_fields = Str.concat(
+				$positional_fields,
+				"    arg${U64.to_str($idx)}: ${zig_type}, // ${arg}\n",
+			)
+			$idx = $idx + 1
+		}
+		$positional_fields
 	}
 
 	doc = "/// Arguments for ${func.name}\n/// Roc signature: ${func.type_str}\n"
@@ -436,7 +481,7 @@ generate_args_struct = |func| {
 }
 
 ## Generate the PlatformHostedFns struct type
-generate_platform_fns_struct : List({ index : U64, name : Str, type_str : Str }) -> Str
+generate_platform_fns_struct : List({ arg_fields : List(RecordFieldInfo), index : U64, name : Str, ret_fields : List(RecordFieldInfo), type_str : Str }) -> Str
 generate_platform_fns_struct = |hosted_functions| {
 	var $fields = ""
 
@@ -454,16 +499,21 @@ generate_platform_fns_struct = |hosted_functions| {
 }
 
 ## Get the Zig function pointer type for a hosted function
-hosted_fn_type : { index : U64, name : Str, type_str : Str } -> Str
+hosted_fn_type : { arg_fields : List(RecordFieldInfo), index : U64, name : Str, ret_fields : List(RecordFieldInfo), type_str : Str } -> Str
 hosted_fn_type = |func| {
 	parsed = parse_type_str(func.type_str)
 	struct_name = name_to_struct_name(func.name)
 
-	zig_ret = roc_type_to_zig(parsed.ret)
-	ret_param = if zig_ret == "void" {
-		"*anyopaque"
+	# Use typed return pointer when ret_fields are available
+	ret_param = if !(List.is_empty(func.ret_fields)) {
+		"*${struct_name}RetRecord"
 	} else {
-		"*${zig_ret}"
+		zig_ret = roc_type_to_zig(parsed.ret)
+		if zig_ret == "void" or zig_ret == "*anyopaque" {
+			"*anyopaque"
+		} else {
+			"*${zig_ret}"
+		}
 	}
 
 	args_param = if List.is_empty(parsed.args) {
@@ -476,7 +526,7 @@ hosted_fn_type = |func| {
 }
 
 ## Generate the hostedFunctions() helper that builds the dispatch table
-generate_hosted_functions_helper : List({ index : U64, name : Str, type_str : Str }) -> Str
+generate_hosted_functions_helper : List({ arg_fields : List(RecordFieldInfo), index : U64, name : Str, ret_fields : List(RecordFieldInfo), type_str : Str }) -> Str
 generate_hosted_functions_helper = |hosted_functions| {
 	var $entries = ""
 

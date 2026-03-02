@@ -5170,10 +5170,6 @@ const GlueError = error{
     BuildEnvInit,
     CompilationFailed,
     ModuleRetrieval,
-    JsonSerialization,
-    ExePathResolution,
-    ProcessSpawn,
-    ProcessFailed,
     OutOfMemory,
 };
 
@@ -5196,10 +5192,6 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
             error.BuildEnvInit => stderr.print("Error: Failed to initialize build environment\n", .{}),
             error.CompilationFailed => stderr.print("Error: Compilation failed\n", .{}),
             error.ModuleRetrieval => stderr.print("Error: Failed to get compiled modules\n", .{}),
-            error.JsonSerialization => stderr.print("Error: Failed to serialize types to JSON\n", .{}),
-            error.ExePathResolution => stderr.print("Error: Could not determine roc executable path\n", .{}),
-            error.ProcessSpawn => stderr.print("Error: Could not spawn process\n", .{}),
-            error.ProcessFailed => stderr.print("Error: Process failed\n", .{}),
             error.OutOfMemory => stderr.print("Error: Out of memory\n", .{}),
         }) catch {};
         return err;
@@ -5399,118 +5391,125 @@ fn rocGlueInner(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
         }
     }
 
-    // Serialize collected module type infos to JSON
-    const types_json = serializeModuleTypeInfosToJson(ctx.gpa, collected_modules.items) catch {
-        return error.JsonSerialization;
+    // 5. Compile glue spec in-process and run via interpreter
+    const glue_spec_abs = std.fs.cwd().realpathAlloc(ctx.gpa, args.glue_spec) catch {
+        return error.GlueSpecNotFound;
     };
-    defer ctx.gpa.free(types_json);
+    defer ctx.gpa.free(glue_spec_abs);
 
-    // 5. Build and run the glue spec
-    // Get path to current roc executable
-    const roc_exe_path = std.fs.selfExePathAlloc(ctx.gpa) catch {
-        return error.ExePathResolution;
+    var glue_build_env = BuildEnv.init(ctx.gpa, .single_threaded, 1, RocTarget.detectNative()) catch {
+        return error.BuildEnvInit;
     };
-    defer ctx.gpa.free(roc_exe_path);
+    defer glue_build_env.deinit();
 
-    // Use the same temp directory for glue spec executable
-    const glue_exe_path = std.fs.path.join(ctx.gpa, &.{ temp_dir, "glue_spec" }) catch {
-        return error.OutOfMemory;
+    glue_build_env.build(glue_spec_abs) catch {
+        // Drain and display error reports
+        const drained = glue_build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
+        defer glue_build_env.gpa.free(drained);
+        for (drained) |glue_mod| {
+            for (glue_mod.reports) |*report| {
+                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+                const config = reporting.ReportingConfig.initColorTerminal();
+                reporting.renderReportToTerminal(report, stderr, palette, config) catch {};
+            }
+        }
+        return error.CompilationFailed;
     };
-    defer ctx.gpa.free(glue_exe_path);
 
-    // Build the glue spec using roc build
+    // Drain any glue spec warnings
     {
-        var build_argv = std.ArrayList([]const u8).empty;
-        defer build_argv.deinit(ctx.gpa);
-
-        try build_argv.append(ctx.gpa, roc_exe_path);
-        try build_argv.append(ctx.gpa, "build");
-        try build_argv.append(ctx.gpa, args.glue_spec);
-        // Use --output=path format (CLI expects = not space)
-        const output_arg = std.fmt.allocPrint(ctx.gpa, "--output={s}", .{glue_exe_path}) catch {
-            return error.OutOfMemory;
-        };
-        defer ctx.gpa.free(output_arg);
-        try build_argv.append(ctx.gpa, output_arg);
-
-        var build_child = std.process.Child.init(build_argv.items, ctx.gpa);
-        build_child.stdout_behavior = .Inherit;
-        build_child.stderr_behavior = .Inherit;
-
-        build_child.spawn() catch {
-            return error.ProcessSpawn;
-        };
-
-        const term = build_child.wait() catch {
-            return error.ProcessFailed;
-        };
-
-        switch (term) {
-            .Exited => |exit_code| {
-                if (exit_code != 0) {
-                    return error.ProcessFailed;
-                }
-            },
-            else => {
-                return error.ProcessFailed;
-            },
+        const drained = glue_build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
+        defer glue_build_env.gpa.free(drained);
+        for (drained) |glue_mod| {
+            for (glue_mod.reports) |*report| {
+                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+                const config = reporting.ReportingConfig.initColorTerminal();
+                reporting.renderReportToTerminal(report, stderr, palette, config) catch {};
+            }
         }
     }
 
-    // Run the glue spec with platform source path as argument
-    // The glue platform will compile the modules and extract types directly
-    {
-        var run_argv = std.ArrayList([]const u8).empty;
-        defer run_argv.deinit(ctx.gpa);
+    // Get resolved module envs and find entrypoint
+    var arena = std.heap.ArenaAllocator.init(ctx.gpa);
+    defer arena.deinit();
 
-        try run_argv.append(ctx.gpa, glue_exe_path);
+    var resolved = glue_build_env.getResolvedModuleEnvs(arena.allocator()) catch {
+        return error.ModuleRetrieval;
+    };
 
-        // Pass platform source file path - the glue platform will do its own compilation
-        try run_argv.append(ctx.gpa, args.platform_path);
+    resolved.processHostedFunctions(ctx.gpa, null) catch {};
 
-        // Pass types JSON as argument
-        const types_json_arg = std.fmt.allocPrint(ctx.gpa, "--types-json={s}", .{types_json}) catch {
+    const entry = resolved.findEntrypoint() catch {
+        stderr.print("Error: Could not find glue spec entrypoint\n", .{}) catch {};
+        return error.CompilationFailed;
+    };
+
+    // 6. Construct List(Types) as C-ABI structs
+    const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{};
+    var roc_ops = echo_platform.makeDefaultRocOps(@constCast(&hosted_function_ptrs));
+
+    var types_list = constructTypesRocList(collected_modules.items, &platform_info, &roc_ops);
+
+    // 7. Run glue spec via interpreter
+    var result_buf: ResultListFileStr = undefined;
+
+    compile.runner.runViaInterpreter(
+        ctx.gpa,
+        entry.platform_env,
+        glue_build_env.builtin_modules,
+        resolved.all_module_envs,
+        entry.app_module_env,
+        entry.entrypoint_expr,
+        &roc_ops,
+        @ptrCast(&types_list),
+        @ptrCast(&result_buf),
+        RocTarget.detectNative(),
+    ) catch |err| {
+        stderr.print("Interpreter error running glue spec: {}\n", .{err}) catch {};
+        return error.CompilationFailed;
+    };
+
+    // 8. Extract Try(List(File), Str) and write files
+    const glue_result = extractGlueResult(&result_buf);
+
+    if (glue_result.err_msg) |err_msg| {
+        stderr.print("Glue spec error: {s}\n", .{err_msg}) catch {};
+        return error.CompilationFailed;
+    }
+
+    const files = glue_result.files;
+    if (files.len == 0) {
+        const stdout = ctx.io.stdout();
+        stdout.print("Glue spec returned 0 files.\n", .{}) catch {};
+        return;
+    }
+
+    // Create output directory if needed
+    std.fs.cwd().makePath(args.output_dir) catch {
+        stderr.print("Error: Could not create output directory: {s}\n", .{args.output_dir}) catch {};
+        return error.CompilationFailed;
+    };
+
+    const stdout = ctx.io.stdout();
+    stdout.print("Glue spec returned {d} file(s):\n", .{files.len}) catch {};
+
+    // Write each file
+    for (files) |file| {
+        const file_name = file.name.asSlice();
+        const file_path = std.fs.path.join(ctx.gpa, &.{ args.output_dir, file_name }) catch {
             return error.OutOfMemory;
         };
-        defer ctx.gpa.free(types_json_arg);
-        try run_argv.append(ctx.gpa, types_json_arg);
+        defer ctx.gpa.free(file_path);
 
-        // Pass output directory as argument
-        const output_dir_arg = std.fmt.allocPrint(ctx.gpa, "--output-dir={s}", .{args.output_dir}) catch {
-            return error.OutOfMemory;
-        };
-        defer ctx.gpa.free(output_dir_arg);
-        try run_argv.append(ctx.gpa, output_dir_arg);
-
-        // Pass entry point names as additional arguments
-        for (platform_info.requires_entries) |entry| {
-            try run_argv.append(ctx.gpa, entry.name);
-        }
-
-        var run_child = std.process.Child.init(run_argv.items, ctx.gpa);
-        run_child.stdout_behavior = .Inherit;
-        run_child.stderr_behavior = .Inherit;
-
-        run_child.spawn() catch {
-            return error.ProcessSpawn;
+        std.fs.cwd().writeFile(.{
+            .sub_path = file_path,
+            .data = file.content.asSlice(),
+        }) catch {
+            stderr.print("Error: Could not write file '{s}'\n", .{file_path}) catch {};
+            return error.CompilationFailed;
         };
 
-        const term = run_child.wait() catch {
-            return error.ProcessFailed;
-        };
-
-        switch (term) {
-            .Exited => |exit_code| {
-                if (exit_code != 0) {
-                    stderr.print("Glue spec exited with code {}\n", .{exit_code}) catch {};
-                    return error.ProcessFailed;
-                }
-            },
-            else => {
-                stderr.print("Glue spec terminated abnormally\n", .{}) catch {};
-                return error.ProcessFailed;
-            },
-        }
+        stdout.print("  Wrote: {s}\n", .{file_path}) catch {};
     }
 }
 
@@ -5654,7 +5653,7 @@ fn parsePlatformHeader(ctx: *CliContext, platform_path: []const u8) !PlatformHea
     }
 }
 
-/// Collected module type information for JSON serialization
+/// Collected module type information for glue generation
 const CollectedModuleTypeInfo = struct {
     name: []const u8,
     main_type: []const u8,
@@ -5666,18 +5665,17 @@ const CollectedModuleTypeInfo = struct {
         type_str: []const u8,
     };
 
-    const CollectedHostedFunctionInfo = struct {
-        index: usize,
+    const CollectedRecordFieldInfo = struct {
         name: []const u8,
         type_str: []const u8,
     };
 
-    /// JSON-serializable view of CollectedModuleTypeInfo (uses slices instead of ArrayLists)
-    const JsonView = struct {
+    const CollectedHostedFunctionInfo = struct {
+        index: usize,
         name: []const u8,
-        main_type: []const u8,
-        functions: []const CollectedFunctionInfo,
-        hosted_functions: []const CollectedHostedFunctionInfo,
+        type_str: []const u8,
+        arg_fields: []const CollectedRecordFieldInfo,
+        ret_fields: []const CollectedRecordFieldInfo,
     };
 
     fn deinit(self: *CollectedModuleTypeInfo, gpa: std.mem.Allocator) void {
@@ -5691,10 +5689,374 @@ const CollectedModuleTypeInfo = struct {
         for (self.hosted_functions.items) |h| {
             gpa.free(h.name);
             gpa.free(h.type_str);
+            for (h.arg_fields) |field| {
+                gpa.free(field.name);
+                gpa.free(field.type_str);
+            }
+            gpa.free(h.arg_fields);
+            for (h.ret_fields) |field| {
+                gpa.free(field.name);
+                gpa.free(field.type_str);
+            }
+            gpa.free(h.ret_fields);
         }
         self.hosted_functions.deinit(gpa);
     }
 };
+
+// Roc C-ABI struct definitions for glue platform types.
+// Fields are ordered alphabetically to match Roc's C ABI layout.
+
+const builtins = @import("builtins");
+const RocStr = builtins.str.RocStr;
+const RocList = builtins.list.RocList;
+
+/// RecordFieldInfo := { name : Str, type_str : Str }
+const RecordFieldInfoRoc = extern struct {
+    name: RocStr, // offset 0
+    type_str: RocStr, // offset 24
+};
+
+/// HostedFunctionInfo := { arg_fields : List(RecordFieldInfo), index : U64, name : Str, ret_fields : List(RecordFieldInfo), type_str : Str }
+const HostedFunctionInfoRoc = extern struct {
+    arg_fields: RocList, // offset 0
+    index: u64, // offset 24
+    name: RocStr, // offset 32
+    ret_fields: RocList, // offset 56
+    type_str: RocStr, // offset 80
+};
+
+/// FunctionInfo := { name : Str, type_str : Str }
+const FunctionInfoRoc = extern struct {
+    name: RocStr,
+    type_str: RocStr,
+};
+
+/// ModuleTypeInfo := { functions : List(FunctionInfo), hosted_functions : List(HostedFunctionInfo), main_type : Str, name : Str }
+const ModuleTypeInfoRoc = extern struct {
+    functions: RocList,
+    hosted_functions: RocList,
+    main_type: RocStr,
+    name: RocStr,
+};
+
+/// Types := { entrypoints : List(EntryPoint), modules : List(ModuleTypeInfo) }
+const TypesInnerRoc = extern struct {
+    entrypoints: RocList,
+    modules: RocList,
+};
+
+/// File := { name : Str, content : Str }
+const FileRoc = extern struct {
+    content: RocStr,
+    name: RocStr,
+};
+
+/// Result tag: Err=0, Ok=1 (alphabetical)
+const ResultTag = enum(u8) {
+    Err = 0,
+    Ok = 1,
+};
+
+/// Try(List(File), Str) result layout
+const ResultListFileStr = extern struct {
+    payload: extern union {
+        ok: RocList,
+        err: RocStr,
+    },
+    tag: ResultTag,
+};
+
+const SMALL_STRING_SIZE = @sizeOf(RocStr);
+
+/// Create a big RocStr from a slice (avoids small string encoding issues).
+fn createBigRocStr(str: []const u8, roc_ops: *builtins.host_abi.RocOps) RocStr {
+    if (str.len < SMALL_STRING_SIZE) {
+        const first_element = builtins.utils.allocateWithRefcount(
+            SMALL_STRING_SIZE,
+            @sizeOf(usize),
+            false,
+            roc_ops,
+        );
+        @memcpy(first_element[0..str.len], str);
+        @memset(first_element[str.len..SMALL_STRING_SIZE], 0);
+
+        return RocStr{
+            .bytes = first_element,
+            .length = str.len,
+            .capacity_or_alloc_ptr = SMALL_STRING_SIZE,
+        };
+    } else {
+        return RocStr.fromSlice(str, roc_ops);
+    }
+}
+
+/// Build a RocList of RecordFieldInfoRoc from collected field info.
+fn buildRecordFieldsRocList(
+    fields: []const CollectedModuleTypeInfo.CollectedRecordFieldInfo,
+    roc_ops: *builtins.host_abi.RocOps,
+) RocList {
+    if (fields.len == 0) return RocList.empty();
+
+    const data_size = fields.len * @sizeOf(RecordFieldInfoRoc);
+    const bytes = builtins.utils.allocateWithRefcount(
+        data_size,
+        @alignOf(RecordFieldInfoRoc),
+        true,
+        roc_ops,
+    );
+    const ptr: [*]RecordFieldInfoRoc = @ptrCast(@alignCast(bytes));
+
+    for (fields, 0..) |field, i| {
+        ptr[i] = RecordFieldInfoRoc{
+            .name = createBigRocStr(field.name, roc_ops),
+            .type_str = createBigRocStr(field.type_str, roc_ops),
+        };
+    }
+
+    return RocList{
+        .bytes = bytes,
+        .length = fields.len,
+        .capacity_or_alloc_ptr = fields.len,
+    };
+}
+
+/// Construct the List(Types) Roc value from collected module type info.
+fn constructTypesRocList(
+    collected_modules: []const CollectedModuleTypeInfo,
+    platform_info: *const PlatformHeaderInfo,
+    roc_ops: *builtins.host_abi.RocOps,
+) RocList {
+    // Build modules list
+    const modules_list = if (collected_modules.len > 0) blk: {
+        const modules_data_size = collected_modules.len * @sizeOf(ModuleTypeInfoRoc);
+        const modules_bytes = builtins.utils.allocateWithRefcount(
+            modules_data_size,
+            @alignOf(ModuleTypeInfoRoc),
+            true,
+            roc_ops,
+        );
+        const modules_ptr: [*]ModuleTypeInfoRoc = @ptrCast(@alignCast(modules_bytes));
+
+        for (collected_modules, 0..) |mod, mod_idx| {
+            // Build functions list
+            const functions_list = if (mod.functions.items.len > 0) fblk: {
+                const funcs_data_size = mod.functions.items.len * @sizeOf(FunctionInfoRoc);
+                const funcs_bytes = builtins.utils.allocateWithRefcount(
+                    funcs_data_size,
+                    @alignOf(FunctionInfoRoc),
+                    true,
+                    roc_ops,
+                );
+                const funcs_ptr: [*]FunctionInfoRoc = @ptrCast(@alignCast(funcs_bytes));
+
+                for (mod.functions.items, 0..) |func, func_idx| {
+                    funcs_ptr[func_idx] = FunctionInfoRoc{
+                        .name = createBigRocStr(func.name, roc_ops),
+                        .type_str = createBigRocStr(func.type_str, roc_ops),
+                    };
+                }
+
+                break :fblk RocList{
+                    .bytes = funcs_bytes,
+                    .length = mod.functions.items.len,
+                    .capacity_or_alloc_ptr = mod.functions.items.len,
+                };
+            } else RocList.empty();
+
+            // Build hosted_functions list
+            const hosted_functions_list = if (mod.hosted_functions.items.len > 0) hblk: {
+                const hosted_data_size = mod.hosted_functions.items.len * @sizeOf(HostedFunctionInfoRoc);
+                const hosted_bytes = builtins.utils.allocateWithRefcount(
+                    hosted_data_size,
+                    @alignOf(HostedFunctionInfoRoc),
+                    true,
+                    roc_ops,
+                );
+                const hosted_ptr: [*]HostedFunctionInfoRoc = @ptrCast(@alignCast(hosted_bytes));
+
+                for (mod.hosted_functions.items, 0..) |hosted, hosted_idx| {
+                    hosted_ptr[hosted_idx] = HostedFunctionInfoRoc{
+                        .arg_fields = buildRecordFieldsRocList(hosted.arg_fields, roc_ops),
+                        .index = hosted.index,
+                        .name = createBigRocStr(hosted.name, roc_ops),
+                        .ret_fields = buildRecordFieldsRocList(hosted.ret_fields, roc_ops),
+                        .type_str = createBigRocStr(hosted.type_str, roc_ops),
+                    };
+                }
+
+                break :hblk RocList{
+                    .bytes = hosted_bytes,
+                    .length = mod.hosted_functions.items.len,
+                    .capacity_or_alloc_ptr = mod.hosted_functions.items.len,
+                };
+            } else RocList.empty();
+
+            modules_ptr[mod_idx] = ModuleTypeInfoRoc{
+                .functions = functions_list,
+                .hosted_functions = hosted_functions_list,
+                .main_type = createBigRocStr(mod.main_type, roc_ops),
+                .name = createBigRocStr(mod.name, roc_ops),
+            };
+        }
+
+        break :blk RocList{
+            .bytes = modules_bytes,
+            .length = collected_modules.len,
+            .capacity_or_alloc_ptr = collected_modules.len,
+        };
+    } else RocList.empty();
+
+    // Build entrypoints list
+    const EntryPointRoc = extern struct {
+        name: RocStr,
+        type_id: u64,
+    };
+
+    const entrypoints_list = if (platform_info.requires_entries.len > 0) eblk: {
+        const ep_data_size = platform_info.requires_entries.len * @sizeOf(EntryPointRoc);
+        const ep_bytes = builtins.utils.allocateWithRefcount(
+            ep_data_size,
+            @alignOf(EntryPointRoc),
+            true,
+            roc_ops,
+        );
+        const ep_ptr: [*]EntryPointRoc = @ptrCast(@alignCast(ep_bytes));
+
+        for (platform_info.requires_entries, 0..) |entry, idx| {
+            ep_ptr[idx] = EntryPointRoc{
+                .name = createBigRocStr(entry.name, roc_ops),
+                .type_id = 0,
+            };
+        }
+
+        break :eblk RocList{
+            .bytes = ep_bytes,
+            .length = platform_info.requires_entries.len,
+            .capacity_or_alloc_ptr = platform_info.requires_entries.len,
+        };
+    } else RocList.empty();
+
+    // Build TypesInner and wrap in a List(Types) with one element
+    const types_inner_bytes = builtins.utils.allocateWithRefcount(
+        @sizeOf(TypesInnerRoc),
+        @alignOf(TypesInnerRoc),
+        true,
+        roc_ops,
+    );
+    const types_inner_ptr: *TypesInnerRoc = @ptrCast(@alignCast(types_inner_bytes));
+    types_inner_ptr.* = TypesInnerRoc{
+        .entrypoints = entrypoints_list,
+        .modules = modules_list,
+    };
+
+    return RocList{
+        .bytes = types_inner_bytes,
+        .length = 1,
+        .capacity_or_alloc_ptr = 1,
+    };
+}
+
+/// Extract files from a Try(List(File), Str) result buffer.
+/// Returns the file list on Ok, or an error message on Err.
+const GlueResultFiles = struct {
+    files: []const FileRoc,
+    err_msg: ?[]const u8,
+};
+
+fn extractGlueResult(result: *const ResultListFileStr) GlueResultFiles {
+    switch (result.tag) {
+        .Ok => {
+            const files = result.payload.ok;
+            if (files.bytes) |file_bytes| {
+                const file_slice: [*]const FileRoc = @ptrCast(@alignCast(file_bytes));
+                return .{ .files = file_slice[0..files.length], .err_msg = null };
+            }
+            return .{ .files = &[_]FileRoc{}, .err_msg = null };
+        },
+        .Err => {
+            return .{ .files = &[_]FileRoc{}, .err_msg = result.payload.err.asSlice() };
+        },
+    }
+}
+
+/// Extract record fields from a type variable, returning field names and type strings.
+/// If the type is a nominal wrapping a record, unwraps the nominal first.
+/// Returns an empty slice for non-record types.
+fn extractRecordFields(
+    gpa: std.mem.Allocator,
+    env: *ModuleEnv,
+    type_var: @import("types").Var,
+) []const CollectedModuleTypeInfo.CollectedRecordFieldInfo {
+    const resolved = env.types.resolveVar(type_var);
+
+    // Check for nominal type wrapping a record
+    const content = switch (resolved.desc.content) {
+        .structure => |flat_type| switch (flat_type) {
+            .nominal_type => |nominal| blk: {
+                if (nominal.vars.nonempty.count > 0) {
+                    const backing_var = env.types.getNominalBackingVar(nominal);
+                    const backing_resolved = env.types.resolveVar(backing_var);
+                    break :blk backing_resolved.desc.content;
+                }
+                break :blk resolved.desc.content;
+            },
+            else => resolved.desc.content,
+        },
+        else => resolved.desc.content,
+    };
+
+    // Check if the (possibly unwrapped) content is a record
+    const record = content.unwrapRecord() orelse return &[_]CollectedModuleTypeInfo.CollectedRecordFieldInfo{};
+
+    const fields_slice = env.types.getRecordFieldsSlice(record.fields);
+    const field_names = fields_slice.items(.name);
+    const field_vars = fields_slice.items(.var_);
+
+    var result = std.ArrayList(CollectedModuleTypeInfo.CollectedRecordFieldInfo).empty;
+
+    // Collect fields sorted by name (Roc's C ABI uses alphabetical order)
+    const ident_store = env.getIdentStoreConst();
+
+    // Build sortable array of field indices
+    var field_indices = gpa.alloc(usize, field_names.len) catch return &[_]CollectedModuleTypeInfo.CollectedRecordFieldInfo{};
+    defer gpa.free(field_indices);
+    for (0..field_names.len) |i| {
+        field_indices[i] = i;
+    }
+
+    // Sort by name text
+    const SortCtx = struct {
+        names: []const base.Ident.Idx,
+        idents: *const base.Ident.Store,
+
+        pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
+            const a_text = ctx.idents.getText(ctx.names[a]);
+            const b_text = ctx.idents.getText(ctx.names[b]);
+            return std.mem.order(u8, a_text, b_text) == .lt;
+        }
+    };
+    std.mem.sort(usize, field_indices, SortCtx{ .names = field_names, .idents = ident_store }, SortCtx.lessThan);
+
+    for (field_indices) |idx| {
+        const name_text = ident_store.getText(field_names[idx]);
+        const field_var = field_vars[idx];
+
+        // Write field type to string
+        var type_writer = env.initTypeWriter() catch continue;
+        defer type_writer.deinit();
+
+        type_writer.write(field_var, .one_line) catch continue;
+        const field_type_str = type_writer.get();
+
+        result.append(gpa, .{
+            .name = gpa.dupe(u8, name_text) catch continue,
+            .type_str = gpa.dupe(u8, field_type_str) catch continue,
+        }) catch continue;
+    }
+
+    return result.toOwnedSlice(gpa) catch &[_]CollectedModuleTypeInfo.CollectedRecordFieldInfo{};
+}
 
 /// Collect type information from a compiled module (same logic as printCompiledModuleTypes).
 fn collectModuleTypeInfo(
@@ -5773,10 +6135,50 @@ fn collectModuleTypeInfo(
                     type_writer.write(type_var, .one_line) catch continue;
                     const type_str = type_writer.get();
 
+                    // Extract record fields from function arg and return types
+                    const resolved = env.types.resolveVar(type_var);
+                    var arg_fields: []const CollectedModuleTypeInfo.CollectedRecordFieldInfo = &.{};
+                    var ret_fields: []const CollectedModuleTypeInfo.CollectedRecordFieldInfo = &.{};
+
+                    if (resolved.desc.content.unwrapFunc()) |func| {
+                        // Extract return type record fields
+                        ret_fields = extractRecordFields(ctx.gpa, env, func.ret);
+
+                        // Extract arg type record fields (from the first arg if it's a record)
+                        const arg_vars = env.types.sliceVars(func.args);
+                        if (arg_vars.len == 1) {
+                            arg_fields = extractRecordFields(ctx.gpa, env, arg_vars[0]);
+                        }
+                    } else {
+                        // May be a nominal wrapping a function
+                        switch (resolved.desc.content) {
+                            .structure => |flat_type| {
+                                switch (flat_type) {
+                                    .nominal_type => |nominal| {
+                                        if (nominal.vars.nonempty.count > 0) {
+                                            const backing_var = env.types.getNominalBackingVar(nominal);
+                                            const backing_resolved = env.types.resolveVar(backing_var);
+                                            if (backing_resolved.desc.content.unwrapFunc()) |func| {
+                                                ret_fields = extractRecordFields(ctx.gpa, env, func.ret);
+                                                const arg_vars = env.types.sliceVars(func.args);
+                                                if (arg_vars.len == 1) {
+                                                    arg_fields = extractRecordFields(ctx.gpa, env, arg_vars[0]);
+                                                }
+                                            }
+                                        }
+                                    },
+                                    else => {},
+                                }
+                            },
+                            else => {},
+                        }
+                    }
                     hosted_functions.append(ctx.gpa, .{
                         .index = global_idx,
                         .name = ctx.gpa.dupe(u8, local_name) catch continue,
                         .type_str = ctx.gpa.dupe(u8, type_str) catch continue,
+                        .arg_fields = arg_fields,
+                        .ret_fields = ret_fields,
                     }) catch continue;
                     break;
                 }
@@ -5804,31 +6206,6 @@ fn collectModuleTypeInfo(
         .functions = functions,
         .hosted_functions = hosted_functions,
     };
-}
-
-/// Serialize collected module type infos to JSON.
-fn serializeModuleTypeInfosToJson(
-    gpa: std.mem.Allocator,
-    module_infos: []const CollectedModuleTypeInfo,
-) ![]const u8 {
-    // Create JSON-serializable views (slices instead of ArrayLists)
-    var json_views = std.ArrayList(CollectedModuleTypeInfo.JsonView).empty;
-    defer json_views.deinit(gpa);
-
-    for (module_infos) |mod| {
-        json_views.append(gpa, .{
-            .name = mod.name,
-            .main_type = mod.main_type,
-            .functions = mod.functions.items,
-            .hosted_functions = mod.hosted_functions.items,
-        }) catch return error.OutOfMemory;
-    }
-
-    // Serialize using std.json
-    var writer: std.io.Writer.Allocating = .init(gpa);
-    defer writer.deinit();
-    std.json.Stringify.value(json_views.items, .{}, &writer.writer) catch return error.OutOfMemory;
-    return writer.toOwnedSlice();
 }
 
 /// Print a type annotation to a buffer (for requires entries which use AST types)
