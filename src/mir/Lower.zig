@@ -2168,22 +2168,6 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
         };
 
         if (method_symbol_opt == null) {
-            // No nominal method found — check if this is a known structural op
-            // (e.g. `is_eq` on a where-clause type var that resolved to a structural type like unit).
-            const common = self.currentCommonIdents();
-            if (da.field_name.eql(common.is_eq)) {
-                // Emit structural equality via run_low_level
-                const explicit_args = module_env.store.sliceExpr(args_span);
-                if (explicit_args.len == 1) {
-                    const rhs = try self.lowerExpr(explicit_args[0]);
-                    const ll_args = try self.store.addExprSpan(self.allocator, &.{ receiver, rhs });
-                    return try self.store.addExpr(self.allocator, .{ .run_low_level = .{
-                        .op = .num_is_eq,
-                        .args = ll_args,
-                    } }, monotype, region);
-                }
-            }
-
             if (std.debug.runtime_safety) {
                 const method_name = module_env.getIdent(da.field_name);
                 std.debug.panic(
