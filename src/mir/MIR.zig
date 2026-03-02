@@ -59,14 +59,6 @@ pub const Symbol = packed struct(u64) {
     pub fn isNone(self: Symbol) bool {
         return self.id == std.math.maxInt(u64);
     }
-
-    /// Reassignable bit is carried in the low 32 bits (Ident.Idx encoding).
-    pub fn isReassignable(self: Symbol) bool {
-        if (self.isNone()) return false;
-        const ident_bits: u32 = @intCast(self.id & std.math.maxInt(u32));
-        const ident: Ident.Idx = @bitCast(ident_bits);
-        return ident.attributes.reassignable;
-    }
 };
 
 /// Index into Store.exprs
@@ -508,6 +500,10 @@ pub const Store = struct {
     /// Map from global symbol key (u64 bitcast) to its definition ExprId
     symbol_defs: std.AutoHashMapUnmanaged(u64, ExprId),
 
+    /// Explicit mutability metadata for symbols.
+    /// `true` means symbol is reassignable (mutable), `false` means immutable.
+    symbol_reassignable: std.AutoHashMapUnmanaged(u64, bool),
+
     /// String literals copied from CIR during lowering.
     /// MIR owns its own string data so downstream passes (LIR, codegen)
     /// never need to reach back into CIR module envs.
@@ -527,6 +523,7 @@ pub const Store = struct {
             .captures = .empty,
             .monotype_store = try Monotype.Store.init(allocator),
             .symbol_defs = .empty,
+            .symbol_reassignable = .empty,
             .strings = .{},
         };
     }
@@ -544,6 +541,7 @@ pub const Store = struct {
         self.captures.deinit(allocator);
         self.monotype_store.deinit(allocator);
         self.symbol_defs.deinit(allocator);
+        self.symbol_reassignable.deinit(allocator);
         self.strings.deinit(allocator);
     }
 
@@ -710,11 +708,55 @@ pub const Store = struct {
 
     /// Register a symbol definition.
     pub fn registerSymbolDef(self: *Store, allocator: Allocator, symbol: Symbol, expr_id: ExprId) !void {
-        try self.symbol_defs.put(allocator, @bitCast(symbol), expr_id);
+        const key: u64 = @bitCast(symbol);
+        const gop = try self.symbol_defs.getOrPut(allocator, key);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = expr_id;
+            return;
+        }
+
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "MIR duplicate symbol definition for symbol key {d}: existing expr {}, new expr {}",
+                .{ key, @intFromEnum(gop.value_ptr.*), @intFromEnum(expr_id) },
+            );
+        }
+        unreachable;
     }
 
     /// Look up a symbol definition.
     pub fn getSymbolDef(self: *const Store, symbol: Symbol) ?ExprId {
         return self.symbol_defs.get(@bitCast(symbol));
+    }
+
+    /// Register mutability metadata for a symbol.
+    pub fn registerSymbolReassignable(self: *Store, allocator: Allocator, symbol: Symbol, reassignable: bool) !void {
+        const key = symbol.raw();
+        const gop = try self.symbol_reassignable.getOrPut(allocator, key);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = reassignable;
+            return;
+        }
+
+        if (std.debug.runtime_safety and gop.value_ptr.* != reassignable) {
+            std.debug.panic(
+                "MIR symbol mutability mismatch for symbol key {d}: existing={any}, new={any}",
+                .{ key, gop.value_ptr.*, reassignable },
+            );
+        }
+    }
+
+    /// Query mutability metadata for a symbol.
+    pub fn isSymbolReassignable(self: *const Store, symbol: Symbol) bool {
+        if (symbol.isNone()) return false;
+        return self.symbol_reassignable.get(symbol.raw()) orelse {
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "Missing MIR symbol mutability metadata for symbol key {d}",
+                    .{symbol.raw()},
+                );
+            }
+            unreachable;
+        };
     }
 };
