@@ -4567,7 +4567,6 @@ fn compileLambda(self: *Self, expr_id: LirExprId, lambda: anytype) Allocator.Err
 
     // Generate the body expression
     self.generateExpr(lambda.body) catch |err| {
-        self.module.setFunctionBody(func_idx, &.{ 0x00, Op.@"unreachable", Op.end }) catch {};
         self.restoreState(saved);
         return err;
     };
@@ -4885,7 +4884,6 @@ fn compileClosure(self: *Self, expr_id: LirExprId, closure: anytype) Allocator.E
 
     // Generate the body
     self.generateExpr(lambda.body) catch |err| {
-        self.module.setFunctionBody(func_idx, &.{ 0x00, Op.@"unreachable", Op.end }) catch {};
         self.restoreState(saved);
         return err;
     };
@@ -4963,11 +4961,7 @@ pub fn compileAllProcs(self: *Self, procs: []const LirProc) Allocator.Error!void
     }
     // Pass 2: Compile proc bodies.
     for (procs) |proc| {
-        self.compileProcBody(proc) catch {
-            // Failed to compile proc body (e.g., unsupported callback dispatch).
-            // The proc has a trap body set, so it exists but traps when called.
-            continue;
-        };
+        try self.compileProcBody(proc);
     }
 }
 
@@ -5488,9 +5482,6 @@ fn compileProcBody(self: *Self, proc: LirProc) Allocator.Error!void {
 
     // Generate CFStmt body
     self.generateCFStmt(proc.body) catch |err| {
-        // Body compilation failed (e.g., unsupported callback dispatch).
-        // Set a trap body so the function exists but traps when called.
-        self.module.setFunctionBody(func_idx, &.{ 0x00, Op.@"unreachable", Op.end }) catch {};
         self.restoreState(saved);
         return err;
     };
