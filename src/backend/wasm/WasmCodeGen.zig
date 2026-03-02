@@ -4549,7 +4549,7 @@ fn compileLambda(self: *Self, expr_id: LirExprId, lambda: anytype) Allocator.Err
                                     const cap_key: u64 = @bitCast(captures[0].symbol);
                                     if (!self.storage.locals.contains(cap_key)) {
                                         const cap_vt = self.resolveValType(captures[0].layout_idx);
-                                        self.storage.locals.put(cap_key, .{ .idx = param_local, .val_type = cap_vt }) catch {};
+                                        try self.storage.locals.put(cap_key, .{ .idx = param_local, .val_type = cap_vt });
                                     }
                                 }
                             }
@@ -4751,24 +4751,24 @@ fn compileClosure(self: *Self, expr_id: LirExprId, closure: anytype) Allocator.E
                 switch (def_expr) {
                     .closure => |cap_closure_id| {
                         const cap_closure = self.store.getClosureData(cap_closure_id);
-                        const fid = self.compileClosure(def_expr_id, cap_closure) catch null;
-                        self.closure_values.put(cap_key, .{
+                        const fid = try self.compileClosure(def_expr_id, cap_closure);
+                        try self.closure_values.put(cap_key, .{
                             .representation = cap_closure.representation,
                             .stack_offset = 0,
                             .lambda_expr = def_expr_id,
                             .captures = cap_closure.captures,
                             .func_idx = fid,
-                        }) catch {};
+                        });
                     },
                     .lambda => |cap_lambda| {
-                        const fid = self.compileLambda(def_expr_id, cap_lambda) catch null;
-                        self.closure_values.put(cap_key, .{
+                        const fid = try self.compileLambda(def_expr_id, cap_lambda);
+                        try self.closure_values.put(cap_key, .{
                             .representation = .{ .direct_call = {} },
                             .stack_offset = 0,
                             .lambda_expr = def_expr_id,
                             .captures = .{ .start = 0, .len = 0 },
                             .func_idx = fid,
-                        }) catch {};
+                        });
                     },
                     else => {},
                 }
@@ -4790,7 +4790,7 @@ fn compileClosure(self: *Self, expr_id: LirExprId, closure: anytype) Allocator.E
                         const inner_cap_key: u64 = @bitCast(inner_caps[0].symbol);
                         if (!self.storage.locals.contains(inner_cap_key)) {
                             const inner_cap_vt = self.resolveValType(inner_caps[0].layout_idx);
-                            self.storage.locals.put(inner_cap_key, .{ .idx = cap_local, .val_type = inner_cap_vt }) catch {};
+                            try self.storage.locals.put(inner_cap_key, .{ .idx = cap_local, .val_type = inner_cap_vt });
                         }
                     }
                 }
@@ -4836,7 +4836,7 @@ fn compileClosure(self: *Self, expr_id: LirExprId, closure: anytype) Allocator.E
                                     const cap_key: u64 = @bitCast(cb_captures[0].symbol);
                                     if (!self.storage.locals.contains(cap_key)) {
                                         const cap_vt = self.resolveValType(cb_captures[0].layout_idx);
-                                        self.storage.locals.put(cap_key, .{ .idx = param_local, .val_type = cap_vt }) catch {};
+                                        try self.storage.locals.put(cap_key, .{ .idx = param_local, .val_type = cap_vt });
                                     }
                                 }
                             }
@@ -4868,10 +4868,10 @@ fn compileClosure(self: *Self, expr_id: LirExprId, closure: anytype) Allocator.E
                             const sub_vt = self.resolveValType(sub_cap.layout_idx);
                             const sub_cap_key: u64 = @bitCast(sub_cap.symbol);
                             if (!self.storage.locals.contains(sub_cap_key)) {
-                                const sub_local = self.storage.allocLocal(sub_cap.symbol, sub_vt) catch continue;
-                                self.emitLocalGet(struct_local) catch continue;
-                                self.emitLoadOp(sub_vt, field_offset) catch continue;
-                                self.emitLocalSet(sub_local) catch continue;
+                                const sub_local = self.storage.allocLocal(sub_cap.symbol, sub_vt) catch return error.OutOfMemory;
+                                try self.emitLocalGet(struct_local);
+                                try self.emitLoadOp(sub_vt, field_offset);
+                                try self.emitLocalSet(sub_local);
                             }
                             const vs: u32 = valTypeSize(sub_vt);
                             field_offset += if (vs < 8) 8 else vs;
@@ -5012,19 +5012,19 @@ fn preBindCallableArgs(self: *Self, def_expr: LirExpr, call_args: LIR.LirExprSpa
         // Only pre-bind callable arguments (lambda, closure, nominal wrapping one)
         switch (arg_expr) {
             .lambda, .closure, .nominal => {
-                _ = self.tryBindFunction(args[i], arg_expr, param_sym) catch continue;
+                _ = try self.tryBindFunction(args[i], arg_expr, param_sym);
             },
             .lookup => |lk| {
                 // If the argument is a lookup to a known closure, propagate it
                 const src_key: u64 = @bitCast(lk.symbol);
                 const dst_key: u64 = @bitCast(param_sym);
                 if (self.closure_values.get(src_key)) |cv| {
-                    self.closure_values.put(dst_key, cv) catch continue;
+                    try self.closure_values.put(dst_key, cv);
                 } else if (self.store.getSymbolDef(lk.symbol)) |sym_def_id| {
                     const sym_def = self.store.getExpr(sym_def_id);
                     switch (sym_def) {
                         .lambda, .closure, .nominal => {
-                            _ = self.tryBindFunction(sym_def_id, sym_def, param_sym) catch continue;
+                            _ = try self.tryBindFunction(sym_def_id, sym_def, param_sym);
                         },
                         else => {},
                     }
@@ -5043,29 +5043,14 @@ fn tryBindFunction(self: *Self, expr_id: LirExprId, expr: LirExpr, symbol: Symbo
     switch (expr) {
         .lambda => {
             // Lambda with no captures - store as closure_value with direct_call representation.
-            // compileLambda may fail for higher-order functions whose body calls
-            // parameter-bound functions (e.g., compose = |f, g| |x| f(g(x))).
-            // In that case, register with func_idx=null for deferred compilation
-            // at the call site where the actual arguments are known.
-            const fid = self.compileLambda(expr_id, expr.lambda) catch |err| switch (err) {
-                error.OutOfMemory => {
-                    self.closure_values.put(key, .{
-                        .representation = .{ .direct_call = {} },
-                        .stack_offset = 0,
-                        .lambda_expr = expr_id,
-                        .captures = .{ .start = 0, .len = 0 },
-                        .func_idx = null,
-                    }) catch return error.OutOfMemory;
-                    return true;
-                },
-            };
-            self.closure_values.put(key, .{
+            const fid = try self.compileLambda(expr_id, expr.lambda);
+            try self.closure_values.put(key, .{
                 .representation = .{ .direct_call = {} },
                 .stack_offset = 0,
                 .lambda_expr = expr_id,
                 .captures = .{ .start = 0, .len = 0 },
                 .func_idx = fid,
-            }) catch return error.OutOfMemory;
+            });
             return true;
         },
         .closure => |closure_id| {
@@ -5124,13 +5109,13 @@ fn tryBindFunction(self: *Self, expr_id: LirExprId, expr: LirExpr, symbol: Symbo
                 },
             }
 
-            self.closure_values.put(key, .{
+            try self.closure_values.put(key, .{
                 .representation = closure.representation,
                 .stack_offset = slot,
                 .lambda_expr = expr_id,
                 .captures = closure.captures,
                 .func_idx = fid,
-            }) catch return error.OutOfMemory;
+            });
 
             // For unwrapped_capture closures, if the symbol is already a local
             // (e.g., it's a capture parameter of the current compiled function),
@@ -5144,7 +5129,7 @@ fn tryBindFunction(self: *Self, expr_id: LirExprId, expr: LirExpr, symbol: Symbo
                         const cap_key: u64 = @bitCast(caps[0].symbol);
                         if (!self.storage.locals.contains(cap_key)) {
                             const cap_vt = self.resolveValType(caps[0].layout_idx);
-                            self.storage.locals.put(cap_key, .{ .idx = local_idx, .val_type = cap_vt }) catch {};
+                            try self.storage.locals.put(cap_key, .{ .idx = local_idx, .val_type = cap_vt });
                         }
                     }
                 }
@@ -5160,7 +5145,7 @@ fn tryBindFunction(self: *Self, expr_id: LirExprId, expr: LirExpr, symbol: Symbo
             // Function alias: g = f — propagate closure_value
             const src_key: u64 = @bitCast(lookup_expr.symbol);
             if (self.closure_values.get(src_key)) |cv| {
-                self.closure_values.put(key, cv) catch return error.OutOfMemory;
+                try self.closure_values.put(key, cv);
                 return true;
             }
             // Symbol not in closure_values yet — try resolving through its definition.
@@ -5187,10 +5172,10 @@ fn tryBindFunction(self: *Self, expr_id: LirExprId, expr: LirExpr, symbol: Symbo
                 const fn_sym_key: u64 = @bitCast(fn_expr_data.lookup.symbol);
                 if (self.closure_values.get(fn_sym_key)) |cv| {
                     const fn_def = self.store.getExpr(cv.lambda_expr);
-                    self.preBindCallableArgs(fn_def, call_expr.args) catch {};
+                    try self.preBindCallableArgs(fn_def, call_expr.args);
                 } else if (self.store.getSymbolDef(fn_expr_data.lookup.symbol)) |def_id| {
                     const def = self.store.getExpr(def_id);
-                    self.preBindCallableArgs(def, call_expr.args) catch {};
+                    try self.preBindCallableArgs(def, call_expr.args);
                 }
             }
 
@@ -5272,14 +5257,14 @@ fn tryBindFunction(self: *Self, expr_id: LirExprId, expr: LirExpr, symbol: Symbo
             }
 
             // Register for later dispatch
-            self.closure_values.put(key, .{
+            try self.closure_values.put(key, .{
                 .representation = closure_info.representation,
                 .stack_offset = 0,
                 .lambda_expr = closure_info.lambda_expr,
                 .captures = closure_info.captures,
                 .func_idx = func_idx,
                 .bound_symbol = symbol,
-            }) catch return error.OutOfMemory;
+            });
 
             return true;
         },
@@ -6129,7 +6114,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
                 // can resolve calls through those parameters.
                 if (cv.func_idx == null) {
                     const fn_def = self.store.getExpr(cv.lambda_expr);
-                    self.preBindCallableArgs(fn_def, c.args) catch {};
+                    try self.preBindCallableArgs(fn_def, c.args);
                 }
                 try self.dispatchClosureCall(cv, c.args, c.ret_layout);
             } else if (self.store.getSymbolDef(lookup.symbol)) |def_expr_id| {
@@ -6140,32 +6125,28 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
                 try self.preBindCallableArgs(def_expr, c.args);
 
                 // Compile the function as a separate wasm function.
-                if (self.tryBindFunction(def_expr_id, def_expr, lookup.symbol)) |bound| {
-                    if (bound) {
-                        const cv = self.closure_values.get(key) orelse unreachable;
-                        try self.dispatchClosureCall(cv, c.args, c.ret_layout);
-                    } else {
-                        if (def_expr == .match_expr) {
-                            if (try self.tryGenerateDirectCallFromSimpleTagElseMatch(def_expr.match_expr, c.args, c.ret_layout)) {
-                                return;
-                            }
-                        }
-                        if (def_expr == .call) {
-                            // Evaluate the definition call to produce a callable, then invoke it.
-                            try self.generateCallFromFnExpr(def_expr_id, c.args, c.ret_layout);
+                const bound = try self.tryBindFunction(def_expr_id, def_expr, lookup.symbol);
+                if (bound) {
+                    const cv = self.closure_values.get(key) orelse unreachable;
+                    try self.dispatchClosureCall(cv, c.args, c.ret_layout);
+                } else {
+                    if (def_expr == .match_expr) {
+                        if (try self.tryGenerateDirectCallFromSimpleTagElseMatch(def_expr.match_expr, c.args, c.ret_layout)) {
                             return;
                         }
-                        if (def_expr == .block or def_expr == .struct_access) {
-                            // Definition computes a callable via an expression chain.
-                            try self.generateCallFromFnExpr(def_expr_id, c.args, c.ret_layout);
-                            return;
-                        }
-                        // Not a lambda/closure — unexpected
-                        std.debug.panic("Unexpected non-lambda/closure definition for symbol lookup in call", .{});
                     }
-                } else |err| {
-                    // Compilation failed (e.g., body has callback param calls).
-                    std.debug.panic("Failed to compile function for symbol lookup: {}", .{err});
+                    if (def_expr == .call) {
+                        // Evaluate the definition call to produce a callable, then invoke it.
+                        try self.generateCallFromFnExpr(def_expr_id, c.args, c.ret_layout);
+                        return;
+                    }
+                    if (def_expr == .block or def_expr == .struct_access) {
+                        // Definition computes a callable via an expression chain.
+                        try self.generateCallFromFnExpr(def_expr_id, c.args, c.ret_layout);
+                        return;
+                    }
+                    // Not a lambda/closure — unexpected
+                    std.debug.panic("Unexpected non-lambda/closure definition for symbol lookup in call", .{});
                 }
             } else if (!self.in_proc) {
                 // Top-level: symbol with no definition — should have been lazy-loaded
