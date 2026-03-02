@@ -91,6 +91,14 @@ pub const RcInsertPass = struct {
     /// Synthetic identifier counter for internal post-final cleanup bindings.
     next_synthetic_ident: u29,
 
+    /// Nesting depth while processing loop bodies.
+    /// Used to apply loop-carried ownership protections only where needed.
+    loop_body_depth: u32,
+
+    /// Nested block depth while inside a loop body.
+    /// Protection increfs are emitted only at the outermost block.
+    loop_body_block_depth: u32,
+
     const LiveRcSymbol = struct {
         symbol: Symbol,
         layout_idx: LayoutIdx,
@@ -115,6 +123,8 @@ pub const RcInsertPass = struct {
             .scratch_uses = std.AutoHashMap(SymbolUseKey, u32).init(allocator),
             .scratch_keys = try base.Scratch(SymbolUseKey).init(allocator),
             .next_synthetic_ident = base.Ident.Idx.NONE.idx - 1,
+            .loop_body_depth = 0,
+            .loop_body_block_depth = 0,
         };
     }
 
@@ -176,6 +186,26 @@ pub const RcInsertPass = struct {
                     continue;
                 },
                 else => return,
+            }
+        }
+    }
+
+    fn rootLookupKey(self: *RcInsertPass, expr_id: LirExprId) ?SymbolUseKey {
+        if (expr_id.isNone()) return null;
+
+        var cur = expr_id;
+        while (true) {
+            const expr = self.store.getExpr(cur);
+            switch (expr) {
+                .lookup => |lookup| {
+                    if (lookup.symbol.isNone()) return null;
+                    return makeKey(lookup.symbol, lookup.layout_idx);
+                },
+                .nominal => |n| {
+                    cur = n.backing_expr;
+                    continue;
+                },
+                else => return null,
             }
         }
     }
@@ -473,6 +503,182 @@ pub const RcInsertPass = struct {
         }
     }
 
+    fn collectReassignableCallArgLookups(
+        self: *RcInsertPass,
+        expr_id: LirExprId,
+        target: *std.AutoHashMap(SymbolUseKey, void),
+    ) Allocator.Error!void {
+        if (expr_id.isNone()) return;
+
+        const expr = self.store.getExpr(expr_id);
+        switch (expr) {
+            .call => |call| {
+                if (self.rootLookupKey(call.fn_expr)) |key| {
+                    const symbol = keyToSymbol(key);
+                    if (symbol.ident_idx.attributes.reassignable) {
+                        try target.put(key, {});
+                    }
+                }
+
+                const args = self.store.getExprSpan(call.args);
+                for (args) |arg_id| {
+                    if (self.rootLookupKey(arg_id)) |key| {
+                        const symbol = keyToSymbol(key);
+                        if (symbol.ident_idx.attributes.reassignable) {
+                            try target.put(key, {});
+                        }
+                    }
+                }
+
+                try self.collectReassignableCallArgLookups(call.fn_expr, target);
+                for (args) |arg_id| {
+                    try self.collectReassignableCallArgLookups(arg_id, target);
+                }
+            },
+            .block => |block| {
+                const stmts = self.store.getStmts(block.stmts);
+                for (stmts) |stmt| {
+                    try self.collectReassignableCallArgLookups(stmt.binding().expr, target);
+                }
+                try self.collectReassignableCallArgLookups(block.final_expr, target);
+            },
+            .if_then_else => |ite| {
+                const branches = self.store.getIfBranches(ite.branches);
+                for (branches) |branch| {
+                    try self.collectReassignableCallArgLookups(branch.cond, target);
+                }
+            },
+            .match_expr => |w| {
+                try self.collectReassignableCallArgLookups(w.value, target);
+            },
+            .discriminant_switch => |ds| {
+                try self.collectReassignableCallArgLookups(ds.value, target);
+            },
+            .for_loop => |fl| {
+                try self.collectReassignableCallArgLookups(fl.list_expr, target);
+            },
+            .while_loop => |wl| {
+                try self.collectReassignableCallArgLookups(wl.cond, target);
+            },
+            .low_level => |ll| {
+                const args = self.store.getExprSpan(ll.args);
+                for (args) |arg_id| {
+                    try self.collectReassignableCallArgLookups(arg_id, target);
+                }
+            },
+            .hosted_call => |hc| {
+                const args = self.store.getExprSpan(hc.args);
+                for (args) |arg_id| {
+                    try self.collectReassignableCallArgLookups(arg_id, target);
+                }
+            },
+            .list => |l| {
+                const elems = self.store.getExprSpan(l.elems);
+                for (elems) |elem_id| {
+                    try self.collectReassignableCallArgLookups(elem_id, target);
+                }
+            },
+            .struct_ => |s| {
+                const fields = self.store.getExprSpan(s.fields);
+                for (fields) |field_id| {
+                    try self.collectReassignableCallArgLookups(field_id, target);
+                }
+            },
+            .tag => |t| {
+                const args = self.store.getExprSpan(t.args);
+                for (args) |arg_id| {
+                    try self.collectReassignableCallArgLookups(arg_id, target);
+                }
+            },
+            .struct_access => |sa| try self.collectReassignableCallArgLookups(sa.struct_expr, target),
+            .nominal => |n| try self.collectReassignableCallArgLookups(n.backing_expr, target),
+            .early_return => |ret| try self.collectReassignableCallArgLookups(ret.expr, target),
+            .dbg => |d| try self.collectReassignableCallArgLookups(d.expr, target),
+            .expect => |e| {
+                try self.collectReassignableCallArgLookups(e.cond, target);
+                try self.collectReassignableCallArgLookups(e.body, target);
+            },
+            .str_concat => |span| {
+                const parts = self.store.getExprSpan(span);
+                for (parts) |part_id| {
+                    try self.collectReassignableCallArgLookups(part_id, target);
+                }
+            },
+            .int_to_str => |its| try self.collectReassignableCallArgLookups(its.value, target),
+            .float_to_str => |fts| try self.collectReassignableCallArgLookups(fts.value, target),
+            .dec_to_str => |d| try self.collectReassignableCallArgLookups(d, target),
+            .str_escape_and_quote => |s| try self.collectReassignableCallArgLookups(s, target),
+            .tag_payload_access => |tpa| try self.collectReassignableCallArgLookups(tpa.value, target),
+            .crash => |crash| try self.collectReassignableCallArgLookups(crash.msg_expr, target),
+            .lambda,
+            .closure,
+            .lookup,
+            .incref,
+            .decref,
+            .free,
+            .i64_literal,
+            .i128_literal,
+            .f64_literal,
+            .f32_literal,
+            .dec_literal,
+            .str_literal,
+            .bool_literal,
+            .empty_list,
+            .zero_arg_tag,
+            .runtime_error,
+            .break_expr,
+            => {},
+        }
+    }
+
+    fn emitProtectiveCallArgIncrefsForExpr(
+        self: *RcInsertPass,
+        expr_id: LirExprId,
+        region: Region,
+        rc_stmts: *std.ArrayList(LirStmt),
+        require_outer_live: ?*const std.AutoHashMap(u64, void),
+        require_mutated: ?*const std.AutoHashMap(u64, void),
+        skip_symbols: ?*const std.AutoHashMap(u64, void),
+    ) Allocator.Error!void {
+        var keys = std.AutoHashMap(SymbolUseKey, void).init(self.allocator);
+        defer keys.deinit();
+
+        try self.collectReassignableCallArgLookups(expr_id, &keys);
+        if (keys.count() == 0) return;
+
+        const keys_start = self.scratch_keys.top();
+        defer self.scratch_keys.clearFrom(keys_start);
+        {
+            var it = keys.keyIterator();
+            while (it.next()) |key_ptr| {
+                const key = key_ptr.*;
+                const symbol = keyToSymbol(key);
+                if (symbol.isNone()) continue;
+                const sym_id: u64 = @bitCast(symbol);
+                if (require_outer_live) |set| {
+                    if (!set.contains(sym_id)) continue;
+                }
+                if (require_mutated) |set| {
+                    if (!set.contains(sym_id)) continue;
+                }
+                if (skip_symbols) |skip| {
+                    if (skip.contains(sym_id)) continue;
+                }
+                const layout_idx = self.symbol_layouts.get(key) orelse keyToLayout(key);
+                if (!self.layoutNeedsRc(layout_idx)) continue;
+                try self.scratch_keys.append(key);
+            }
+        }
+
+        const sorted_keys = self.scratch_keys.sliceFromStart(keys_start);
+        if (sorted_keys.len == 0) return;
+        std.mem.sort(SymbolUseKey, sorted_keys, {}, std.sort.asc(SymbolUseKey));
+
+        for (sorted_keys) |key| {
+            try self.emitIncrefInto(keyToSymbol(key), keyToLayout(key), 1, region, rc_stmts);
+        }
+    }
+
     /// Sum all use counts for a symbol across every layout key.
     fn sumSymbolUses(_: *RcInsertPass, uses: *const std.AutoHashMap(SymbolUseKey, u32), symbol: Symbol) u32 {
         var total: u32 = 0;
@@ -519,6 +725,8 @@ pub const RcInsertPass = struct {
         self.cumulative_consumed_uses.clearRetainingCapacity();
         self.pending_branch_rc_adj.clearRetainingCapacity();
         self.scratch_uses.clearRetainingCapacity();
+        self.loop_body_depth = 0;
+        self.loop_body_block_depth = 0;
 
         // Phase 1: Count all symbol uses and record layouts
         try self.countUses(expr_id);
@@ -1206,6 +1414,13 @@ pub const RcInsertPass = struct {
         const saved_live_len = self.live_rc_symbols.items.len;
         defer self.live_rc_symbols.shrinkRetainingCapacity(saved_live_len);
 
+        var protect_loop_calls = false;
+        if (self.loop_body_depth > 0) {
+            self.loop_body_block_depth += 1;
+            defer self.loop_body_block_depth -= 1;
+            protect_loop_calls = self.loop_body_block_depth == 1;
+        }
+
         // Save and reset block_consumed_uses for this block scope.
         // Before saving, accumulate current block's consumed uses into cumulative map
         // so that processEarlyReturn in nested blocks can see all enclosing uses.
@@ -1285,6 +1500,25 @@ pub const RcInsertPass = struct {
         // Process each statement
         for (stmts, 0..) |stmt, stmt_index| {
             const b = stmt.binding();
+            var skip_incref_symbols = std.AutoHashMap(u64, void).init(self.allocator);
+            defer skip_incref_symbols.deinit();
+            if (stmt == .mutate) {
+                try self.collectPatternSymbolIds(b.pattern, &skip_incref_symbols);
+            }
+
+            if (protect_loop_calls) {
+                const before_protect_len = stmt_buf.items.len;
+                try self.emitProtectiveCallArgIncrefsForExpr(
+                    b.expr,
+                    region,
+                    &stmt_buf,
+                    &outer_live_symbol_ids,
+                    &mutated_symbol_ids,
+                    if (stmt == .mutate) &skip_incref_symbols else null,
+                );
+                if (stmt_buf.items.len > before_protect_len) changed = true;
+            }
+
             // Recursively process the statement's expression
             const new_expr = try self.processExpr(b.expr);
             if (new_expr != b.expr) changed = true;
@@ -1913,6 +2147,8 @@ pub const RcInsertPass = struct {
             list_added.deinit();
         }
 
+        self.loop_body_depth += 1;
+        defer self.loop_body_depth -= 1;
         const new_body = try self.processExpr(fl.body);
 
         // Count uses locally within the transformed loop body (using scratch_uses)
@@ -1951,6 +2187,8 @@ pub const RcInsertPass = struct {
     /// While loops don't bind new symbols — just recurse into cond and body.
     fn processWhileLoop(self: *RcInsertPass, wl: anytype, region: Region, expr_id: LirExprId) Allocator.Error!LirExprId {
         const new_cond = try self.processExpr(wl.cond);
+        self.loop_body_depth += 1;
+        defer self.loop_body_depth -= 1;
         const new_body = try self.processExpr(wl.body);
         if (new_cond != wl.cond or new_body != wl.body) {
             return self.store.addExpr(.{ .while_loop = .{
