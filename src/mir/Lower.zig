@@ -1077,29 +1077,52 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
         },
         .e_lookup_required => |lookup| {
             const app_idx = self.app_module_idx orelse {
-                return try self.store.addExpr(self.allocator, .runtime_err_type, monotype, region);
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "e_lookup_required encountered without app module (module_idx={d}, requires_idx={d})",
+                        .{ self.current_module_idx, lookup.requires_idx.toU32() },
+                    );
+                }
+                unreachable;
             };
             const required_type = module_env.requires_types.get(lookup.requires_idx);
             const required_name = module_env.getIdent(required_type.ident);
 
-            // Find matching export in app module
             const app_env = self.all_module_envs[app_idx];
+            const app_ident = app_env.common.findIdent(required_name) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "required lookup not translated into app ident space: {s}",
+                        .{required_name},
+                    );
+                }
+                unreachable;
+            };
+
             const app_exports = app_env.store.sliceDefs(app_env.exports);
+            var exported_def: ?CIR.Def.Idx = null;
             for (app_exports) |def_idx| {
                 const def = app_env.store.getDef(def_idx);
                 const pat = app_env.store.getPattern(def.pattern);
-                switch (pat) {
-                    .assign => |assign| {
-                        if (std.mem.eql(u8, app_env.getIdent(assign.ident), required_name)) {
-                            const symbol = try self.internSymbol(app_idx, assign.ident);
-                            _ = try self.lowerExternalDefWithType(symbol, def.expr, monotype);
-                            return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, monotype, region);
-                        }
-                    },
-                    else => {},
+                if (pat == .assign and pat.assign.ident.eql(app_ident)) {
+                    exported_def = def_idx;
+                    break;
                 }
             }
-            return try self.store.addExpr(self.allocator, .runtime_err_type, monotype, region);
+
+            const def_idx = exported_def orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "required lookup resolved to non-exported app ident: {s}",
+                        .{required_name},
+                    );
+                }
+                unreachable;
+            };
+            const def = app_env.store.getDef(def_idx);
+            const symbol = try self.internSymbol(app_idx, app_ident);
+            _ = try self.lowerExternalDefWithType(symbol, def.expr, monotype);
+            return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, monotype, region);
         },
 
         // --- Control flow ---
