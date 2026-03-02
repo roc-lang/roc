@@ -588,7 +588,7 @@ pub const NominalType = struct {
         if (self.is_opaque) {
             // If opaque, then can only lift inner type if the current module is
             // the same
-            return self.origin_module == cur_module_idx;
+            return self.origin_module.eql(cur_module_idx);
         }
 
         // If not opaque, then the inner type can always be lifted

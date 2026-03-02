@@ -346,7 +346,7 @@ fn tagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monot
             // Bool is a primitive, not a tag_union. Its discriminants are:
             // False = 0, True = 1 (sorted alphabetically).
             std.debug.assert(p == .bool);
-            return if (@as(u32, @bitCast(tag_name)) == @as(u32, @bitCast(self.true_tag))) 1 else 0;
+            return if (tag_name.eql(self.true_tag)) 1 else 0;
         },
         .tag_union => |tu| {
             const tags = self.mir_store.monotype_store.getTags(tu.tags);
@@ -358,18 +358,17 @@ fn tagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monot
                 const p0 = self.mir_store.monotype_store.getIdxSpan(tags[0].payloads);
                 const p1 = self.mir_store.monotype_store.getIdxSpan(tags[1].payloads);
                 if (p0.len == 0 and p1.len == 0) {
-                    const true_u32: u32 = @bitCast(self.true_tag);
-                    if (@as(u32, @bitCast(tags[0].name)) == true_u32 or
-                        @as(u32, @bitCast(tags[1].name)) == true_u32)
+                    if (tags[0].name.eql(self.true_tag) or
+                        tags[1].name.eql(self.true_tag))
                     {
-                        return if (@as(u32, @bitCast(tag_name)) == true_u32) 1 else 0;
+                        return if (tag_name.eql(self.true_tag)) 1 else 0;
                     }
                 }
             }
 
             // Only direct Ident.Idx equality is supported.
             for (tags, 0..) |tag, i| {
-                if (@as(u32, @bitCast(tag.name)) == @as(u32, @bitCast(tag_name))) {
+                if (tag.name.eql(tag_name)) {
                     return @intCast(i);
                 }
             }
@@ -637,7 +636,7 @@ fn lowerRecord(self: *Self, rec: anytype, mono_idx: Monotype.Idx, region: Region
         const layout_field_name = layout_fields.get(li).name;
         var found = false;
         for (mir_field_names, 0..) |mir_name, mi| {
-            if (@as(u32, @bitCast(mir_name)) == @as(u32, @bitCast(layout_field_name))) {
+            if (mir_name.eql(layout_field_name)) {
                 const lir_expr = try self.lowerExpr(mir_fields[mi]);
                 const field_mono = self.mir_store.typeOf(mir_fields[mi]);
                 const field_layout = try self.layoutFromMonotype(field_mono);
@@ -1058,7 +1057,7 @@ fn lowerRecordAccess(self: *Self, ra: anytype, mir_expr_id: MIR.ExprId, region: 
         const struct_data = self.layout_store.getStructData(struct_layout_val.data.struct_.idx);
         const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
         for (0..layout_fields.len) |li| {
-            if (@as(u32, @bitCast(layout_fields.get(li).name)) == @as(u32, @bitCast(ra.field_name))) {
+            if (layout_fields.get(li).name.eql(ra.field_name)) {
                 field_idx = @intCast(li);
                 break;
             }
@@ -1466,7 +1465,7 @@ fn lowerPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Error!LirPatte
                     // Find the MIR pattern with this field name
                     var found = false;
                     for (mir_field_names, 0..) |mir_name, mi| {
-                        if (@as(u32, @bitCast(mir_name)) == @as(u32, @bitCast(layout_field_name))) {
+                        if (mir_name.eql(layout_field_name)) {
                             const lir_pat = try self.lowerPattern(mir_patterns[mi]);
                             try self.scratch_lir_pattern_ids.append(self.allocator, lir_pat);
                             found = true;

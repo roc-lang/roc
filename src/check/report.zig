@@ -1333,7 +1333,7 @@ pub const ReportBuilder = struct {
             while (iter.next()) |tag_index| {
                 const cur_expected_tag = self.snapshots.tags.get(tag_index);
 
-                if (actual_tag.name == cur_expected_tag.name) {
+                if (actual_tag.name.eql(cur_expected_tag.name)) {
                     const cur_expected_tag_str = try report.addOwnedString(snapshot.Store.getFormattedTagString(cur_expected_tag));
 
                     try report.document.addLineBreak();
@@ -2222,7 +2222,7 @@ pub const ReportBuilder = struct {
                     .record => |fields| blk: {
                         const slice = self.diff_fields.sliceRange(fields);
                         for (slice.items(.name), slice.items(.content)) |name, content| {
-                            if (name == ctx.field_name) break :blk SnapshotRecordField{
+                            if (name.eql(ctx.field_name)) break :blk SnapshotRecordField{
                                 .name = name,
                                 .content = content,
                             };
@@ -2245,7 +2245,7 @@ pub const ReportBuilder = struct {
                 const mb_expected_field = blk: {
                     const slice = self.diff_fields.sliceRange(expected_fields);
                     for (slice.items(.name), slice.items(.content)) |name, content| {
-                        if (name == ctx.field_name) break :blk SnapshotRecordField{
+                        if (name.eql(ctx.field_name)) break :blk SnapshotRecordField{
                             .name = name,
                             .content = content,
                         };
@@ -3193,19 +3193,19 @@ pub const ReportBuilder = struct {
     /// Maps method idents like plus, minus, times, div_by to their corresponding operator symbols.
     fn getOperatorForMethod(self: *const Self, method_ident: Ident.Idx) ?[]const u8 {
         const idents = self.can_ir.idents;
-        if (method_ident == idents.plus) return "+";
-        if (method_ident == idents.minus) return "-";
-        if (method_ident == idents.times) return "*";
-        if (method_ident == idents.div_by) return "/";
-        if (method_ident == idents.div_trunc_by) return "//";
-        if (method_ident == idents.rem_by) return "%";
-        if (method_ident == idents.negate) return "-";
-        if (method_ident == idents.is_eq) return "==";
-        if (method_ident == idents.is_lt) return "<";
-        if (method_ident == idents.is_lte) return "<=";
-        if (method_ident == idents.is_gt) return ">";
-        if (method_ident == idents.is_gte) return ">=";
-        if (method_ident == idents.not) return "not";
+        if (method_ident.eql(idents.plus)) return "+";
+        if (method_ident.eql(idents.minus)) return "-";
+        if (method_ident.eql(idents.times)) return "*";
+        if (method_ident.eql(idents.div_by)) return "/";
+        if (method_ident.eql(idents.div_trunc_by)) return "//";
+        if (method_ident.eql(idents.rem_by)) return "%";
+        if (method_ident.eql(idents.negate)) return "-";
+        if (method_ident.eql(idents.is_eq)) return "==";
+        if (method_ident.eql(idents.is_lt)) return "<";
+        if (method_ident.eql(idents.is_lte)) return "<=";
+        if (method_ident.eql(idents.is_gt)) return ">";
+        if (method_ident.eql(idents.is_gte)) return ">=";
+        if (method_ident.eql(idents.not)) return "not";
         return null;
     }
 };

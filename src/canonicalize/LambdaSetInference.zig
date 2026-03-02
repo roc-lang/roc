@@ -69,7 +69,7 @@ pub const ClosureKey = struct {
     local_closure_id: u32,
 
     pub fn eql(a: ClosureKey, b: ClosureKey) bool {
-        return @as(u32, @bitCast(a.display_module_name_idx)) == @as(u32, @bitCast(b.display_module_name_idx)) and
+        return a.display_module_name_idx.eql(b.display_module_name_idx) and
             a.local_closure_id == b.local_closure_id;
     }
 
@@ -422,7 +422,7 @@ fn buildLambdaSetsFromExpr(self: *Self, module: *ModuleEnv, expr_idx: Expr.Idx) 
                     // Find which closure this is
                     for (self.collected_closures.items) |closure_info| {
                         if (@intFromEnum(closure_info.closure_expr_idx) == @intFromEnum(arg_idx) and
-                            @as(u32, @bitCast(closure_info.display_module_name_idx)) == @as(u32, @bitCast(module.qualified_module_ident)))
+                            closure_info.display_module_name_idx.eql(module.qualified_module_ident))
                         {
                             const closure_key = ClosureKey{
                                 .display_module_name_idx = closure_info.display_module_name_idx,

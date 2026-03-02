@@ -549,7 +549,7 @@ fn processTypeDeclFirstPass(
     } else type_header.relative_name;
 
     // Create a new header with the qualified name if needed
-    const final_header_idx = if (parent_name != null and qualified_name_idx.idx != type_header.name.idx) blk: {
+    const final_header_idx = if (parent_name != null and !qualified_name_idx.eql(type_header.name)) blk: {
         const qualified_header = CIR.TypeHeader{
             .name = qualified_name_idx,
             .relative_name = relative_name_idx,
@@ -694,7 +694,7 @@ fn processTypeDeclFirstPass(
     // display_module_name_idx is the bare module name (e.g., "Color"), which matches
     // what canonicalization produces for unqualified type module references.
     if (self.env.module_kind == .type_module) {
-        if (qualified_name_idx == self.env.display_module_name_idx) {
+        if (qualified_name_idx.eql(self.env.display_module_name_idx)) {
             // This is the main type of the type module - set its node index
             const node_idx_u16 = @as(u16, @intCast(@intFromEnum(type_decl_stmt_idx)));
             try self.env.setExposedNodeIndexById(qualified_name_idx, node_idx_u16);
@@ -794,7 +794,7 @@ fn processTypeDeclFirstPassWithExisting(
     // display_module_name_idx is the bare module name (e.g., "Color"), which matches
     // what canonicalization produces for unqualified type module references.
     if (self.env.module_kind == .type_module) {
-        if (qualified_name_idx == self.env.display_module_name_idx) {
+        if (qualified_name_idx.eql(self.env.display_module_name_idx)) {
             const node_idx_u16 = @as(u16, @intCast(@intFromEnum(type_decl_stmt_idx)));
             try self.env.setExposedNodeIndexById(qualified_name_idx, node_idx_u16);
         }
@@ -1422,7 +1422,7 @@ fn processAssociatedItemsSecondPass(
                             const pattern_ident_tok = pattern.ident.ident_tok;
                             if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
                                 // Check if names match
-                                if (name_ident.idx == decl_ident.idx) {
+                                if (name_ident.eql(decl_ident)) {
                                     // Skip the next statement since we're processing it now
                                     i = next_i;
 
@@ -2026,7 +2026,7 @@ pub fn canonicalizeFile(
                                 const next_pattern = self.parse_ir.store.getPattern(next_stmt.decl.pattern);
                                 if (next_pattern == .ident) {
                                     if (self.parse_ir.tokens.resolveIdentifier(next_pattern.ident.ident_tok)) |decl_ident| {
-                                        break :blk name_ident.idx == decl_ident.idx;
+                                        break :blk name_ident.eql(decl_ident);
                                     }
                                 }
                             }
@@ -2516,7 +2516,7 @@ pub fn canonicalizeFile(
                                     const check_pattern = self.parse_ir.store.getPattern(check_stmt.decl.pattern);
                                     if (check_pattern == .ident) {
                                         if (self.parse_ir.tokens.resolveIdentifier(check_pattern.ident.ident_tok)) |decl_ident| {
-                                            break :blk name_ident.idx == decl_ident.idx;
+                                            break :blk name_ident.eql(decl_ident);
                                         }
                                     }
                                 }
@@ -2587,7 +2587,7 @@ pub fn canonicalizeFile(
                             const names_match = if (ast_pattern == .ident) blk: {
                                 const pattern_ident = ast_pattern.ident;
                                 if (self.parse_ir.tokens.resolveIdentifier(pattern_ident.ident_tok)) |decl_ident| {
-                                    break :blk name_ident.idx == decl_ident.idx;
+                                    break :blk name_ident.eql(decl_ident);
                                 }
                                 break :blk false;
                             } else false;
@@ -2840,7 +2840,7 @@ fn canonicalizeStmtDecl(self: *Self, decl: AST.Statement.Decl, mb_last_anno: ?Ty
         if (ast_pattern == .ident) {
             const pattern_ident = ast_pattern.ident;
             if (self.parse_ir.tokens.resolveIdentifier(pattern_ident.ident_tok)) |decl_ident| {
-                if (anno_info.name.idx == decl_ident.idx) {
+                if (anno_info.name.eql(decl_ident)) {
                     // This declaration matches the type annotation
                     const pattern_region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.to_tokenized_region());
                     mb_validated_anno = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, anno_info.where, pattern_region);
@@ -4836,7 +4836,7 @@ pub fn canonicalizeExpr(
                         // Check if this is a required identifier from the platform's `requires` clause
                         const requires_items = self.env.requires_types.items.items;
                         for (requires_items, 0..) |req, idx| {
-                            if (req.ident == ident) {
+                            if (req.ident.eql(ident)) {
                                 // Found a required identifier - create a lookup expression for it
                                 const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_required = .{
                                     .requires_idx = ModuleEnv.RequiredType.SafeList.Idx.fromU32(@intCast(idx)),
@@ -5333,7 +5333,7 @@ pub fn canonicalizeExpr(
                     // Check for duplicate field names
                     var found_duplicate = false;
                     for (self.scratch_seen_record_fields.sliceFromStart(seen_fields_top)) |seen_field| {
-                        if (field_name_ident.idx == seen_field.ident.idx) {
+                        if (field_name_ident.eql(seen_field.ident)) {
                             // Found a duplicate - add diagnostic
                             const diagnostic = Diagnostic{
                                 .duplicate_record_field = .{
@@ -9158,7 +9158,7 @@ fn processCollectedTypeVars(self: *Self) std.mem.Allocator.Error!void {
         // Check if there are any other occurrences of this variable
         var i: usize = 0;
         while (i < self.scratch_type_var_validation.items.items.len) {
-            if (self.scratch_type_var_validation.items.items[i].idx == first_ident.idx) {
+            if (self.scratch_type_var_validation.items.items[i].eql(first_ident)) {
                 found_another = true;
                 // Remove this occurrence by swapping with the last element and shrinking
                 const last = self.scratch_type_var_validation.items.items.len - 1;
@@ -9469,7 +9469,7 @@ fn canonicalizeTypeAnnoBasicType(
                             if (alias_stmt == .s_alias_decl and alias_stmt.s_alias_decl.anno == .placeholder) {
                                 // Check if this is a self-reference (same type name as current alias)
                                 const is_self_reference = if (self.current_alias_name) |current_name|
-                                    current_name == type_name_ident
+                                    current_name.eql(type_name_ident)
                                 else
                                     false;
 
@@ -10846,7 +10846,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                         const names_match = name_check: {
                             if (decl_pattern == .ident) {
                                 if (self.parse_ir.tokens.resolveIdentifier(decl_pattern.ident.ident_tok)) |decl_ident| {
-                                    break :name_check name_ident.idx == decl_ident.idx;
+                                    break :name_check name_ident.eql(decl_ident);
                                 }
                             }
                             break :name_check false;
@@ -10933,7 +10933,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                     .@"var" => |var_stmt| {
                         // Check if the var name matches the anno name
                         const names_match = if (self.parse_ir.tokens.resolveIdentifier(var_stmt.name)) |var_ident|
-                            name_ident.idx == var_ident.idx
+                            name_ident.eql(var_ident)
                         else
                             false;
 
@@ -11365,7 +11365,7 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
         if (ast_pattern == .ident) {
             const pattern_ident = ast_pattern.ident;
             if (self.parse_ir.tokens.resolveIdentifier(pattern_ident.ident_tok)) |decl_ident| {
-                if (anno_info.name.idx == decl_ident.idx) {
+                if (anno_info.name.eql(decl_ident)) {
                     // This declaration matches the type annotation
                     const pattern_region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.to_tokenized_region());
                     mb_validated_anno = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, anno_info.where, pattern_region);
@@ -11458,7 +11458,7 @@ const TypeVarLookupResult = union(enum) {
 /// Lookup a type variable in the scope hierarchy
 fn scopeLookupTypeVar(self: *const Self, name_ident: Ident.Idx) TypeVarLookupResult {
     for (self.type_vars_scope.items.items) |entry| {
-        if (entry.ident.idx == name_ident.idx) {
+        if (entry.ident.eql(name_ident)) {
             return TypeVarLookupResult{ .found = entry.anno_idx };
         }
     }
@@ -11475,7 +11475,7 @@ const TypeVarIntroduceResult = union(enum) {
 fn scopeIntroduceTypeVar(self: *Self, name_ident: Ident.Idx, type_var_anno: TypeAnno.Idx) std.mem.Allocator.Error!TypeVarIntroduceResult {
     // Check if it's already in scope
     for (self.type_vars_scope.items.items) |entry| {
-        if (entry.ident.idx == name_ident.idx) {
+        if (entry.ident.eql(name_ident)) {
             return .{ .already_in_scope = entry.anno_idx };
         }
     }
@@ -11612,7 +11612,7 @@ fn extractTypeVarIdentsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, iden
             if (self.parse_ir.tokens.resolveIdentifier(ty_var.tok)) |ident| {
                 // Check if we already have this type variable
                 for (self.scratch_idents.sliceFromStart(idents_start_idx)) |existing| {
-                    if (existing.idx == ident.idx) return; // Already added
+                    if (existing.eql(ident)) return; // Already added
                 }
                 try self.scratch_idents.append(ident);
             }
@@ -11621,7 +11621,7 @@ fn extractTypeVarIdentsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, iden
             if (self.parse_ir.tokens.resolveIdentifier(underscore_ty_var.tok)) |ident| {
                 // Check if we already have this type variable
                 for (self.scratch_idents.sliceFromStart(idents_start_idx)) |existing| {
-                    if (existing.idx == ident.idx) return; // Already added
+                    if (existing.eql(ident)) return; // Already added
                 }
                 try self.scratch_idents.append(ident);
             }
@@ -11677,7 +11677,7 @@ fn getTypeVarRegionFromAST(self: *Self, anno_idx: AST.TypeAnno.Idx, target_ident
     switch (ast_anno) {
         .ty_var => |ty_var| {
             if (self.parse_ir.tokens.resolveIdentifier(ty_var.tok)) |ident| {
-                if (ident.idx == target_ident.idx) {
+                if (ident.eql(target_ident)) {
                     return self.parse_ir.tokenizedRegionToRegion(ty_var.region);
                 }
             }
@@ -11685,7 +11685,7 @@ fn getTypeVarRegionFromAST(self: *Self, anno_idx: AST.TypeAnno.Idx, target_ident
         },
         .underscore_type_var => |underscore_ty_var| {
             if (self.parse_ir.tokens.resolveIdentifier(underscore_ty_var.tok)) |ident| {
-                if (ident.idx == target_ident.idx) {
+                if (ident.eql(target_ident)) {
                     return self.parse_ir.tokenizedRegionToRegion(underscore_ty_var.region);
                 }
             }
@@ -11848,7 +11848,7 @@ pub fn scopeIntroduceInternal(
 
     var iter = map.iterator();
     while (iter.next()) |entry| {
-        if (ident_idx.idx == entry.key_ptr.idx) {
+        if (ident_idx.eql(entry.key_ptr.*)) {
             // Duplicate in same scope - still introduce but return shadowing warning
             try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
 
@@ -12188,7 +12188,7 @@ fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Id
             const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
             const local_ident = exposed_item.alias orelse exposed_item.name;
 
-            if (local_ident.idx == alias_name.idx) {
+            if (local_ident.eql(alias_name)) {
                 // The alias has the same name as an exposed item, so skip reporting
                 // the error here - it will be reported by introduceItemsAliased
                 return;

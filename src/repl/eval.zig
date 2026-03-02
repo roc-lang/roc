@@ -1262,7 +1262,7 @@ fn formatRecord(
         // Find the matching layout field by name
         const layout_idx = blk: {
             for (0..layout_fields.len) |li| {
-                if (@as(u32, @bitCast(layout_fields.get(li).name)) == @as(u32, @bitCast(t_fld.name))) {
+                if (layout_fields.get(li).name.eql(t_fld.name)) {
                     break :blk li;
                 }
             }

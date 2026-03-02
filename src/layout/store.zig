@@ -1031,8 +1031,8 @@ pub const Store = struct {
                 const flat_type = resolved.desc.content.structure;
                 if (flat_type == .nominal_type) {
                     const nom = flat_type.nominal_type;
-                    if (nom.ident.ident_idx == nominal_key.ident_idx and
-                        nom.origin_module == nominal_key.origin_module)
+                    if (nom.ident.ident_idx.eql(nominal_key.ident_idx) and
+                        nom.origin_module.eql(nominal_key.origin_module))
                     {
                         return self.getLayout(boxed_idx);
                     }
@@ -1854,11 +1854,11 @@ pub const Store = struct {
                             // Check if this nominal type's identifier matches Builtin.Str
                             const is_builtin_str = blk: {
                                 if (self.builtin_str_ident) |builtin_str| {
-                                    if (nominal_type.ident.ident_idx == builtin_str) break :blk true;
+                                    if (nominal_type.ident.ident_idx.eql(builtin_str)) break :blk true;
                                 }
-                                if (nominal_type.origin_module == self.currentEnv().idents.builtin_module) {
+                                if (nominal_type.origin_module.eql(self.currentEnv().idents.builtin_module)) {
                                     if (self.builtin_str_plain_ident) |plain_str| {
-                                        if (nominal_type.ident.ident_idx == plain_str) break :blk true;
+                                        if (nominal_type.ident.ident_idx.eql(plain_str)) break :blk true;
                                     }
                                 }
                                 break :blk false;
@@ -1872,11 +1872,11 @@ pub const Store = struct {
                             // but should have u8 layout.
                             const is_builtin_bool = blk: {
                                 if (self.bool_ident) |bool_id| {
-                                    if (nominal_type.ident.ident_idx == bool_id) break :blk true;
+                                    if (nominal_type.ident.ident_idx.eql(bool_id)) break :blk true;
                                 }
-                                if (nominal_type.origin_module == self.currentEnv().idents.builtin_module) {
+                                if (nominal_type.origin_module.eql(self.currentEnv().idents.builtin_module)) {
                                     if (self.bool_plain_ident) |plain_bool| {
-                                        if (nominal_type.ident.ident_idx == plain_bool) break :blk true;
+                                        if (nominal_type.ident.ident_idx.eql(plain_bool)) break :blk true;
                                     }
                                 }
                                 break :blk false;
@@ -1890,8 +1890,8 @@ pub const Store = struct {
 
                             // Special handling for Builtin.Box
                             const is_builtin_box = if (self.box_ident) |box_ident|
-                                nominal_type.origin_module == self.currentEnv().idents.builtin_module and
-                                    nominal_type.ident.ident_idx == box_ident
+                                nominal_type.origin_module.eql(self.currentEnv().idents.builtin_module) and
+                                    nominal_type.ident.ident_idx.eql(box_ident)
                             else
                                 false;
                             if (is_builtin_box) {
@@ -1930,8 +1930,8 @@ pub const Store = struct {
 
                             // Special handling for Builtin.List
                             const is_builtin_list = if (self.list_ident) |list_ident|
-                                nominal_type.origin_module == self.currentEnv().idents.builtin_module and
-                                    nominal_type.ident.ident_idx == list_ident
+                                nominal_type.origin_module.eql(self.currentEnv().idents.builtin_module) and
+                                    nominal_type.ident.ident_idx.eql(list_ident)
                             else
                                 false;
                             if (is_builtin_list) {
@@ -2051,22 +2051,22 @@ pub const Store = struct {
 
                             // Special handling for built-in numeric types from Builtin module
                             // These have empty tag union backings but need scalar layouts
-                            if (nominal_type.origin_module == self.currentEnv().idents.builtin_module) {
+                            if (nominal_type.origin_module.eql(self.currentEnv().idents.builtin_module)) {
                                 const ident_idx = nominal_type.ident.ident_idx;
                                 const num_layout: ?Layout = blk: {
-                                    if (self.u8_ident) |u8_id| if (ident_idx == u8_id) break :blk Layout.int(types.Int.Precision.u8);
-                                    if (self.i8_ident) |i8_id| if (ident_idx == i8_id) break :blk Layout.int(types.Int.Precision.i8);
-                                    if (self.u16_ident) |u16_id| if (ident_idx == u16_id) break :blk Layout.int(types.Int.Precision.u16);
-                                    if (self.i16_ident) |i16_id| if (ident_idx == i16_id) break :blk Layout.int(types.Int.Precision.i16);
-                                    if (self.u32_ident) |u32_id| if (ident_idx == u32_id) break :blk Layout.int(types.Int.Precision.u32);
-                                    if (self.i32_ident) |i32_id| if (ident_idx == i32_id) break :blk Layout.int(types.Int.Precision.i32);
-                                    if (self.u64_ident) |u64_id| if (ident_idx == u64_id) break :blk Layout.int(types.Int.Precision.u64);
-                                    if (self.i64_ident) |i64_id| if (ident_idx == i64_id) break :blk Layout.int(types.Int.Precision.i64);
-                                    if (self.u128_ident) |u128_id| if (ident_idx == u128_id) break :blk Layout.int(types.Int.Precision.u128);
-                                    if (self.i128_ident) |i128_id| if (ident_idx == i128_id) break :blk Layout.int(types.Int.Precision.i128);
-                                    if (self.f32_ident) |f32_id| if (ident_idx == f32_id) break :blk Layout.frac(types.Frac.Precision.f32);
-                                    if (self.f64_ident) |f64_id| if (ident_idx == f64_id) break :blk Layout.frac(types.Frac.Precision.f64);
-                                    if (self.dec_ident) |dec_id| if (ident_idx == dec_id) break :blk Layout.frac(types.Frac.Precision.dec);
+                                    if (self.u8_ident) |u8_id| if (ident_idx.eql(u8_id)) break :blk Layout.int(types.Int.Precision.u8);
+                                    if (self.i8_ident) |i8_id| if (ident_idx.eql(i8_id)) break :blk Layout.int(types.Int.Precision.i8);
+                                    if (self.u16_ident) |u16_id| if (ident_idx.eql(u16_id)) break :blk Layout.int(types.Int.Precision.u16);
+                                    if (self.i16_ident) |i16_id| if (ident_idx.eql(i16_id)) break :blk Layout.int(types.Int.Precision.i16);
+                                    if (self.u32_ident) |u32_id| if (ident_idx.eql(u32_id)) break :blk Layout.int(types.Int.Precision.u32);
+                                    if (self.i32_ident) |i32_id| if (ident_idx.eql(i32_id)) break :blk Layout.int(types.Int.Precision.i32);
+                                    if (self.u64_ident) |u64_id| if (ident_idx.eql(u64_id)) break :blk Layout.int(types.Int.Precision.u64);
+                                    if (self.i64_ident) |i64_id| if (ident_idx.eql(i64_id)) break :blk Layout.int(types.Int.Precision.i64);
+                                    if (self.u128_ident) |u128_id| if (ident_idx.eql(u128_id)) break :blk Layout.int(types.Int.Precision.u128);
+                                    if (self.i128_ident) |i128_id| if (ident_idx.eql(i128_id)) break :blk Layout.int(types.Int.Precision.i128);
+                                    if (self.f32_ident) |f32_id| if (ident_idx.eql(f32_id)) break :blk Layout.frac(types.Frac.Precision.f32);
+                                    if (self.f64_ident) |f64_id| if (ident_idx.eql(f64_id)) break :blk Layout.frac(types.Frac.Precision.f64);
+                                    if (self.dec_ident) |dec_id| if (ident_idx.eql(dec_id)) break :blk Layout.frac(types.Frac.Precision.dec);
                                     break :blk null;
                                 };
 

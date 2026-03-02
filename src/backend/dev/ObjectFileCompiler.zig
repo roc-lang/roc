@@ -141,7 +141,7 @@ fn compileWithCodeGen(
         lir_store,
         layout_store,
         &static_interner,
-    ) catch return CompilationError.CodeGenerationFailed;
+    ) catch return CompilationError.OutOfMemory;
     defer codegen.deinit();
 
     // Set object file mode to generate relocatable symbol references instead of direct pointers
@@ -149,10 +149,7 @@ fn compileWithCodeGen(
 
     // Compile all procedures first
     if (procs.len > 0) {
-        codegen.compileAllProcs(procs) catch |err| {
-            std.debug.print("ERROR in compileAllProcs: {}\n", .{err});
-            return CompilationError.CodeGenerationFailed;
-        };
+        codegen.compileAllProcs(procs) catch return CompilationError.OutOfMemory;
     }
 
     // Track symbols for object file generation
@@ -166,10 +163,7 @@ fn compileWithCodeGen(
             entrypoint.body_expr,
             entrypoint.arg_layouts,
             entrypoint.ret_layout,
-        ) catch |err| {
-            std.debug.print("ERROR in generateEntrypointWrapper: {}\n", .{err});
-            return CompilationError.CodeGenerationFailed;
-        };
+        ) catch return CompilationError.OutOfMemory;
 
         symbols.append(allocator, .{
             .name = entrypoint.symbol_name,
@@ -252,8 +246,10 @@ fn compileWithCodeGen(
         symbols.items,
         relocations,
         &output,
-    ) catch {
-        return CompilationError.ObjectGenerationFailed;
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return CompilationError.OutOfMemory,
+        error.UnsupportedTarget => return CompilationError.UnsupportedTarget,
+        else => return CompilationError.ObjectGenerationFailed,
     };
 
     return CompilationResult{

@@ -1348,7 +1348,7 @@ fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 
             // Assert that this alias header is well formed
             const alias_lhs = self.cir.store.getTypeHeader(alias.header);
-            std.debug.assert(alias_lhs.name == alias_lhs.relative_name);
+            std.debug.assert(alias_lhs.name.eql(alias_lhs.relative_name));
             std.debug.assert(alias_lhs.args.span.len == 0);
 
             // Assert that this alias body is well formed
@@ -1428,7 +1428,7 @@ pub fn checkPlatformRequirements(
 
             if (pattern == .assign) {
                 // Compare ident indices - if app_required_ident is null, there's no match
-                if (app_required_ident != null and pattern.assign.ident == app_required_ident.?) {
+                if (app_required_ident != null and pattern.assign.ident.eql(app_required_ident.?)) {
                     found_export = def_idx;
                     break;
                 }
@@ -1479,7 +1479,7 @@ pub fn checkPlatformRequirements(
                         var found_in_required_aliases = false;
                         for (type_aliases_slice) |alias| {
                             const app_rigid_name = platform_to_app_idents.get(alias.rigid_name) orelse continue;
-                            if (app_rigid_name == flex_name) {
+                            if (app_rigid_name.eql(flex_name)) {
                                 found_in_required_aliases = true;
                                 break;
                             }
@@ -1591,7 +1591,7 @@ pub fn checkPlatformRequirements(
 
                             if (pattern == .assign) {
                                 // Compare ident indices - if app_required_ident is null, there's no match
-                                if (app_required_ident != null and pattern.assign.ident == app_required_ident.?) {
+                                if (app_required_ident != null and pattern.assign.ident.eql(app_required_ident.?)) {
                                     found_def = def_idx;
                                     break;
                                 }
@@ -1626,7 +1626,7 @@ fn findTypeAliasBodyVar(self: *Self, name: Ident.Idx) ?Var {
         switch (stmt) {
             .s_alias_decl => |alias| {
                 const header = self.cir.store.getTypeHeader(alias.header);
-                if (header.relative_name == name) {
+                if (header.relative_name.eql(name)) {
                     // Return the var for the alias body annotation, not the statement
                     return ModuleEnv.varFrom(alias.anno);
                 }
@@ -6148,13 +6148,13 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
             const original_module_ident = nominal_type.origin_module;
 
             // Check if the nominal type in question is defined in this module
-            const is_this_module = original_module_ident == self.builtin_ctx.module_name;
+            const is_this_module = original_module_ident.eql(self.builtin_ctx.module_name);
 
             // Get the list of exposed items to check
             const original_env: *const ModuleEnv = blk: {
                 if (is_this_module) {
                     break :blk self.cir;
-                } else if (original_module_ident == self.cir.idents.builtin_module) {
+                } else if (original_module_ident.eql(self.cir.idents.builtin_module)) {
                     // For builtin types, use the builtin module environment directly
                     if (self.builtin_ctx.builtin_module) |builtin_env| {
                         break :blk builtin_env;
@@ -6173,7 +6173,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                         else
                             imported_env.module_name;
                         const imported_module_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text(imported_name));
-                        if (imported_module_ident == original_module_ident) {
+                        if (imported_module_ident.eql(original_module_ident)) {
                             break :blk imported_env;
                         }
                     }
@@ -6367,7 +6367,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
             for (constraints) |constraint| {
                 // Check if this is a call to is_eq (anonymous types have implicit structural equality)
-                if (constraint.fn_name == self.cir.idents.is_eq) {
+                if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
                     // Check if all components of this anonymous type support is_eq
                     if (self.typeSupportsIsEq(dispatcher_content.structure)) {
                         // All components support is_eq, unify return type with Bool
@@ -6412,7 +6412,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                 for (constraints) |constraint| {
                     // For is_eq constraints, use the specific equality error message
                     // Use ident index comparison instead of string comparison
-                    if (constraint.fn_name == self.cir.idents.is_eq) {
+                    if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
                         try self.reportEqualityError(
                             deferred_constraint.var_,
                             constraint,

@@ -1345,7 +1345,7 @@ pub const ComptimeEvaluator = struct {
             // Step 2: Look up the from_numeral method for this nominal type
             // Get the module where the type is defined
             const origin_module_ident = nominal_type.origin_module;
-            const is_builtin = origin_module_ident == self.env.idents.builtin_module;
+            const is_builtin = origin_module_ident.eql(self.env.idents.builtin_module);
 
             const origin_env: *const ModuleEnv = if (is_builtin) blk: {
                 break :blk self.interpreter.builtin_module_env orelse {
@@ -1356,7 +1356,7 @@ pub const ComptimeEvaluator = struct {
                 // For user-defined types, use interpreter's module lookup
                 break :blk self.interpreter.module_envs.get(origin_module_ident) orelse {
                     // Module not found - might be current module
-                    if (origin_module_ident == self.env.qualified_module_ident) {
+                    if (origin_module_ident.eql(self.env.qualified_module_ident)) {
                         break :blk self.env;
                     }
                     // Unknown module - skip for now

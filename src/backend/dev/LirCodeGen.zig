@@ -3892,11 +3892,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .crash => {
                     // Runtime crash: call roc_crashed via RocOps.
-                    // TODO: Pass the user's crash message string from the args
-                    // instead of this static message.
-                    try self.emitRocCrash("Roc crashed");
-                    try self.emitTrap();
-                    return .noreturn;
+                    // TODO: Implement forwarding the user's crash message string from args.
+                    // DO NOT replace this with anything hardcoded. either implement it fully
+                    // or LEAVE IT AS A PANIC.
+                    std.debug.panic("TODO: ll.crash message forwarding is not implemented", .{});
                 },
             }
         }
@@ -10319,187 +10318,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Generate code for discriminant switch
         fn generateDiscriminantSwitch(self: *Self, ds: anytype) Allocator.Error!ValueLocation {
-            // Get the value and read its discriminant
-            const value_loc = try self.generateExpr(ds.value);
-
-            const ls = self.layout_store orelse unreachable;
-            const union_layout = ls.getLayout(ds.union_layout);
-
-            // Load discriminant value into a register using its exact width.
-            const disc_info: struct { reg: GeneralReg, disc_size: u8 } = if (union_layout.tag == .tag_union) blk: {
-                const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
-                const disc_offset: i32 = @intCast(tu_data.discriminant_offset);
-                const disc_size = tu_data.discriminant_size;
-
-                const base_offset: i32 = switch (value_loc) {
-                    .stack => |s| s.offset,
-                    .stack_str => |off| off,
-                    else => unreachable,
-                };
-
-                const reg = try self.allocTempGeneral();
-                switch (disc_size) {
-                    1 => try self.emitLoadW8(reg, frame_ptr, base_offset + disc_offset),
-                    2 => try self.emitLoadW16(reg, frame_ptr, base_offset + disc_offset),
-                    4 => try self.emitLoad(.w32, reg, frame_ptr, base_offset + disc_offset),
-                    8 => try self.emitLoad(.w64, reg, frame_ptr, base_offset + disc_offset),
-                    else => unreachable,
-                }
-                break :blk .{ .reg = reg, .disc_size = disc_size };
-            } else if (union_layout.tag == .scalar or union_layout.tag == .zst) blk: {
-                // For scalar layouts (e.g., Bool, enums with no payloads),
-                // the value itself IS the discriminant.
-                break :blk .{ .reg = try self.ensureInGeneralReg(value_loc), .disc_size = 8 };
-            } else if (union_layout.tag == .box) blk: {
-                // Boxed nominal type: check the inner layout to determine how to read
-                // the discriminant.
-                const inner_layout = ls.getLayout(union_layout.data.box);
-                if (inner_layout.tag == .scalar or inner_layout.tag == .zst) {
-                    // Box of scalar/ZST (e.g., Color := [Red, Green, Blue]):
-                    // The value IS the discriminant directly — not a heap pointer.
-                    // No-payload tag unions are never actually heap-allocated.
-                    break :blk .{ .reg = try self.ensureInGeneralReg(value_loc), .disc_size = 8 };
-                } else if (inner_layout.tag == .tag_union) {
-                    // Box of tag union with payloads: dereference the box pointer,
-                    // then read the discriminant from heap memory.
-                    const box_ptr_reg = try self.ensureInGeneralReg(value_loc);
-                    const tu_data = ls.getTagUnionData(inner_layout.data.tag_union.idx);
-                    const disc_offset: i32 = @intCast(tu_data.discriminant_offset);
-                    const disc_size = tu_data.discriminant_size;
-                    const disc_reg = try self.allocTempGeneral();
-                    switch (disc_size) {
-                        1 => try self.emitLoadW8(disc_reg, box_ptr_reg, disc_offset),
-                        2 => try self.emitLoadW16(disc_reg, box_ptr_reg, disc_offset),
-                        4 => try self.emitLoad(.w32, disc_reg, box_ptr_reg, disc_offset),
-                        8 => try self.emitLoad(.w64, disc_reg, box_ptr_reg, disc_offset),
-                        else => unreachable,
-                    }
-                    self.codegen.freeGeneral(box_ptr_reg);
-                    break :blk .{ .reg = disc_reg, .disc_size = disc_size };
-                } else {
-                    unreachable;
-                }
-            } else {
-                unreachable;
-            };
-            const disc_reg = disc_info.reg;
-            const disc_size = disc_info.disc_size;
-
-            // Get the branches
-            const branches = self.store.getExprSpan(ds.branches);
-            if (branches.len == 0) {
-                self.codegen.freeGeneral(disc_reg);
-                unreachable;
-            }
-
-            // For single branch, just return it
-            if (branches.len == 1) {
-                self.codegen.freeGeneral(disc_reg);
-                return try self.generateExpr(branches[0]);
-            }
-
-            // TODO: Implement full switch with jump table for many branches
-            // For now, use if-else chain for small number of branches
-
-            var exit_patches = std.ArrayList(usize).empty;
-            defer exit_patches.deinit(self.allocator);
-
-            // Track result characteristics to determine slot size and return type
-            var result_is_str = false;
-            var result_is_i128 = false;
-
-            // Determine result slot size from the result layout (not the scrutinee layout).
-            // The result layout tells us the type that each branch produces.
-            // For scalars with unknown result layout, defer allocation until the first branch.
-            var result_slot_size: u32 = 0;
-            var result_slot: i32 = 0;
-
-            const result_layout_val = ls.getLayout(ds.result_layout);
-            const result_sa = ls.layoutSizeAlign(result_layout_val);
-            if (result_sa.size > 0) {
-                result_slot_size = result_sa.size;
-                result_slot = self.codegen.allocStackSlot(result_slot_size);
-            }
-
-            // Spill disc_reg to stack so branch bodies can freely use caller-saved regs.
-            const disc_slot = self.codegen.allocStackSlot(disc_size);
-            switch (disc_size) {
-                1 => try self.emitStoreW8(frame_ptr, disc_slot, disc_reg),
-                2 => try self.emitStoreW16(frame_ptr, disc_slot, disc_reg),
-                4 => try self.emitStore(.w32, frame_ptr, disc_slot, disc_reg),
-                8 => try self.emitStore(.w64, frame_ptr, disc_slot, disc_reg),
-                else => unreachable,
-            }
-            self.codegen.freeGeneral(disc_reg);
-
-            for (branches, 0..) |branch_expr, i| {
-                if (i < branches.len - 1) {
-                    // Reload discriminant — previous branch body may have clobbered it
-                    const cmp_reg = try self.allocTempGeneral();
-                    switch (disc_size) {
-                        1 => try self.emitLoadW8(cmp_reg, frame_ptr, disc_slot),
-                        2 => try self.emitLoadW16(cmp_reg, frame_ptr, disc_slot),
-                        4 => try self.emitLoad(.w32, cmp_reg, frame_ptr, disc_slot),
-                        8 => try self.emitLoad(.w64, cmp_reg, frame_ptr, disc_slot),
-                        else => unreachable,
-                    }
-
-                    // Compare discriminant with branch index
-                    try self.emitCmpImm(cmp_reg, @intCast(i));
-                    self.codegen.freeGeneral(cmp_reg);
-                    const skip_patch = try self.emitJumpIfNotEqual();
-
-                    // Generate branch body
-                    const branch_loc = try self.generateExpr(branch_expr);
-                    if (branch_loc == .stack_i128 or branch_loc == .immediate_i128) result_is_i128 = true;
-                    if (branch_loc == .stack_str) result_is_str = true;
-
-                    // For scalar switches, allocate result slot after first branch
-                    // so we know the actual result size from the ValueLocation.
-                    if (result_slot_size == 0) {
-                        result_slot_size = self.valueSizeFromLoc(branch_loc);
-                        result_slot = self.codegen.allocStackSlot(result_slot_size);
-                    }
-
-                    try self.storeResultToSlot(result_slot, branch_loc, result_slot_size);
-
-                    // Jump to end
-                    const exit_patch = try self.emitJumpUnconditional();
-                    try exit_patches.append(self.allocator, exit_patch);
-
-                    // Patch the skip jump to current location
-                    const skip_offset = self.codegen.currentOffset();
-                    self.codegen.patchJump(skip_patch, skip_offset);
-                } else {
-                    // Last branch is the default
-                    const branch_loc = try self.generateExpr(branch_expr);
-                    if (branch_loc == .stack_i128 or branch_loc == .immediate_i128) result_is_i128 = true;
-                    if (branch_loc == .stack_str) result_is_str = true;
-
-                    // For scalar switches, allocate result slot after first branch
-                    if (result_slot_size == 0) {
-                        result_slot_size = self.valueSizeFromLoc(branch_loc);
-                        result_slot = self.codegen.allocStackSlot(result_slot_size);
-                    }
-
-                    try self.storeResultToSlot(result_slot, branch_loc, result_slot_size);
-                }
-            }
-
-            // Patch all exit jumps to current location
-            const end_offset = self.codegen.currentOffset();
-            for (exit_patches.items) |patch| {
-                self.codegen.patchJump(patch, end_offset);
-            }
-
-            // Return with appropriate value location type
-            if (result_is_str or result_slot_size == roc_str_size) {
-                return .{ .stack_str = result_slot };
-            } else if (result_is_i128 or result_slot_size == 16) {
-                return .{ .stack_i128 = result_slot };
-            } else {
-                return .{ .stack = .{ .offset = result_slot } };
-            }
+            _ = self;
+            _ = ds;
+            // TODO: Implement discriminant_switch codegen fully.
+            // DO NOT replace this with anything fallback-based. either implement it
+            // fully or LEAVE IT AS A PANIC.
+            std.debug.panic("TODO: discriminant_switch codegen is not implemented", .{});
         }
 
         /// Extract the payload from a tag union value.
@@ -17748,82 +17572,14 @@ pub const X64LinuxLirCodeGen = LirCodeGen(.x64linux);
 pub const X64ElfLirCodeGen = LirCodeGen(.x64elf);
 
 /// Host LirCodeGen for the host platform (the machine running the compiler).
-/// Falls back to UnsupportedArchCodeGen for architectures that don't support native code generation
-/// (e.g., wasm32 when compiling the playground).
+/// Fails at compile time on architectures that don't support native code generation.
 pub const HostLirCodeGen = blk: {
     const native_target = RocTarget.detectNative();
     const arch = native_target.toCpuArch();
     if (arch == .x86_64 or arch == .aarch64 or arch == .aarch64_be) {
         break :blk LirCodeGen(native_target);
     } else {
-        break :blk UnsupportedArchCodeGen;
-    }
-};
-
-/// Stub code generator for unsupported architectures.
-/// This allows the code to compile for cross-compilation targets like 32-bit ARM/x86,
-/// but will error at runtime if actually used.
-pub const UnsupportedArchCodeGen = struct {
-    const Self = @This();
-
-    pub const CodeResult = struct {
-        code: []const u8,
-        entry_offset: usize,
-    };
-
-    pub const ExportedSymbol = struct {
-        name: []const u8,
-        offset: usize,
-        size: usize,
-    };
-
-    allocator: Allocator,
-
-    pub fn init(
-        allocator: Allocator,
-        _: *const LirExprStore,
-        _: ?*const LayoutStore,
-        _: ?*StaticDataInterner,
-    ) Allocator.Error!Self {
-        return .{ .allocator = allocator };
-    }
-
-    pub fn deinit(_: *Self) void {}
-
-    pub fn compileAllProcs(_: *Self, _: anytype) Allocator.Error!void {
-        unreachable;
-    }
-
-    pub fn generateCode(_: *Self, _: anytype, _: anytype, _: anytype) Allocator.Error!CodeResult {
-        unreachable;
-    }
-
-    pub fn generateExpr(_: *Self, _: anytype) Allocator.Error!void {
-        unreachable;
-    }
-
-    pub fn generateProc(_: *Self, _: anytype) Allocator.Error!void {
-        unreachable;
-    }
-
-    pub fn generateEntrypointWrapper(_: *Self, _: []const u8, _: anytype, _: anytype, _: anytype) Allocator.Error!ExportedSymbol {
-        unreachable;
-    }
-
-    pub fn finalize(_: *Self) Allocator.Error![]const u8 {
-        unreachable;
-    }
-
-    pub fn getCode(_: *const Self) []const u8 {
-        return &[_]u8{};
-    }
-
-    pub fn getGeneratedCode(_: *const Self) []const u8 {
-        return &[_]u8{};
-    }
-
-    pub fn getRelocations(_: *const Self) []const Relocation {
-        return &[_]Relocation{};
+        @compileError("HostLirCodeGen requires x86_64, aarch64, or aarch64_be host architecture");
     }
 };
 

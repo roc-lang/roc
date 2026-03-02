@@ -493,8 +493,8 @@ const Unifier = struct {
             },
             .alias => |b_alias| {
                 const b_backing_var = self.types_store.getAliasBackingVar(b_alias);
-                if (a_alias.origin_module == b_alias.origin_module and
-                    a_alias.ident.ident_idx == b_alias.ident.ident_idx)
+                if (a_alias.origin_module.eql(b_alias.origin_module) and
+                    a_alias.ident.ident_idx.eql(b_alias.ident.ident_idx))
                 {
                     try self.unifyTwoAliases(vars, a_alias, b_alias);
                 } else {
@@ -1024,8 +1024,8 @@ const Unifier = struct {
             return;
         }
 
-        if (a_type.origin_module != b_type.origin_module or
-            a_type.ident.ident_idx != b_type.ident.ident_idx)
+        if (!a_type.origin_module.eql(b_type.origin_module) or
+            !a_type.ident.ident_idx.eql(b_type.ident.ident_idx))
         {
             return error.TypeMismatch;
         }
@@ -1119,7 +1119,7 @@ const Unifier = struct {
             for (anon_names) |anon_name| {
                 var found = false;
                 for (nominal_names) |nominal_name| {
-                    if (anon_name == nominal_name) {
+                    if (anon_name.eql(nominal_name)) {
                         found = true;
                         break;
                     }
@@ -2576,7 +2576,7 @@ pub const Scratch = struct {
         var new_count: usize = 0;
         for (ext_names) |ext_name| {
             const is_dup = for (current_fields) |existing| {
-                if (existing.name == ext_name) break true;
+                if (existing.name.eql(ext_name)) break true;
             } else false;
             if (!is_dup) new_count += 1;
         }
@@ -2593,7 +2593,7 @@ pub const Scratch = struct {
         // Append non-duplicate extension fields
         for (ext_names, ext_vars) |name, var_| {
             const is_dup = for (current_fields) |existing| {
-                if (existing.name == name) break true;
+                if (existing.name.eql(name)) break true;
             } else false;
             if (!is_dup) {
                 self.gathered_fields.items.appendAssumeCapacity(RecordField{ .name = name, .var_ = var_ });
@@ -2635,7 +2635,7 @@ pub const Scratch = struct {
         var new_count: usize = 0;
         for (ext_names) |ext_name| {
             const is_dup = for (current_tags) |existing| {
-                if (existing.name == ext_name) break true;
+                if (existing.name.eql(ext_name)) break true;
             } else false;
             if (!is_dup) new_count += 1;
         }
@@ -2648,7 +2648,7 @@ pub const Scratch = struct {
         // Append non-duplicate extension tags
         for (ext_names, ext_args) |name, args| {
             const is_dup = for (current_tags) |existing| {
-                if (existing.name == name) break true;
+                if (existing.name.eql(name)) break true;
             } else false;
             if (!is_dup) {
                 self.gathered_tags.items.appendAssumeCapacity(Tag{ .name = name, .args = args });

@@ -35,10 +35,10 @@ pub const Backend = struct {
     pub const VTable = struct {
         /// Allocate space for static data, returns pointer to write data and runtime address
         /// The backend is responsible for copying the data.
-        alloc: *const fn (ptr: *anyopaque, data: []const u8, alignment: usize) ?InternedData,
+        alloc: *const fn (ptr: *anyopaque, data: []const u8, alignment: usize) Allocator.Error!InternedData,
     };
 
-    pub fn alloc(self: Backend, data: []const u8, alignment: usize) ?InternedData {
+    pub fn alloc(self: Backend, data: []const u8, alignment: usize) Allocator.Error!InternedData {
         return self.vtable.alloc(self.ptr, data, alignment);
     }
 };
@@ -75,7 +75,7 @@ pub fn deinit(self: *Self) void {
 }
 
 /// Intern a byte blob - returns existing allocation if already interned, else allocates new
-pub fn intern(self: *Self, data: []const u8, alignment: usize) ?InternedData {
+pub fn intern(self: *Self, data: []const u8, alignment: usize) Allocator.Error!InternedData {
     const hash = std.hash.Wyhash.hash(0, data);
 
     if (self.intern_map.get(hash)) |existing| {
@@ -103,8 +103,8 @@ pub fn intern(self: *Self, data: []const u8, alignment: usize) ?InternedData {
     return self.allocateNew(data, alignment, hash);
 }
 
-fn allocateNew(self: *Self, data: []const u8, alignment: usize, hash: u64) ?InternedData {
-    const result = self.backend.alloc(data, alignment) orelse return null;
+fn allocateNew(self: *Self, data: []const u8, alignment: usize, hash: u64) Allocator.Error!InternedData {
+    const result = try self.backend.alloc(data, alignment);
 
     // Create entry with prefix for quick collision detection
     var entry = InternEntry{
@@ -116,12 +116,12 @@ fn allocateNew(self: *Self, data: []const u8, alignment: usize, hash: u64) ?Inte
         @memcpy(entry.prefix[0..entry.prefix_len], data[0..entry.prefix_len]);
     }
 
-    self.intern_map.put(hash, entry) catch return null;
+    try self.intern_map.put(hash, entry);
     return result;
 }
 
 /// Convenience for interning strings (alignment 1)
-pub fn internString(self: *Self, str: []const u8) ?InternedData {
+pub fn internString(self: *Self, str: []const u8) Allocator.Error!InternedData {
     return self.intern(str, 1);
 }
 
@@ -160,7 +160,7 @@ pub const MemoryBackend = struct {
     /// Static refcount marker (isize::MIN) - RC operations skip values with this refcount
     const REFCOUNT_STATIC: isize = std.math.minInt(isize);
 
-    fn alloc(ptr: *anyopaque, data: []const u8, alignment: usize) ?InternedData {
+    fn alloc(ptr: *anyopaque, data: []const u8, alignment: usize) Allocator.Error!InternedData {
         const self: *MemoryBackend = @ptrCast(@alignCast(ptr));
         const allocator = self.arena.allocator();
 
@@ -168,7 +168,7 @@ pub const MemoryBackend = struct {
         // This allows RC operations to safely check and skip static data
         _ = alignment; // Strings just need byte alignment
         const total_size = @sizeOf(isize) + data.len;
-        const allocated = allocator.alignedAlloc(u8, .@"8", total_size) catch return null;
+        const allocated = try allocator.alignedAlloc(u8, .@"8", total_size);
 
         // Write static refcount at the start
         const refcount_ptr: *isize = @ptrCast(@alignCast(allocated.ptr));
@@ -196,19 +196,16 @@ test "basic interning" {
     defer interner.deinit();
 
     // Intern a string
-    const result1 = interner.internString("hello world");
-    try std.testing.expect(result1 != null);
-    try std.testing.expectEqualStrings("hello world", result1.?.slice());
+    const result1 = try interner.internString("hello world");
+    try std.testing.expectEqualStrings("hello world", result1.slice());
 
     // Intern the same string - should return same pointer
-    const result2 = interner.internString("hello world");
-    try std.testing.expect(result2 != null);
-    try std.testing.expectEqual(result1.?.ptr, result2.?.ptr);
+    const result2 = try interner.internString("hello world");
+    try std.testing.expectEqual(result1.ptr, result2.ptr);
 
     // Intern a different string - should return different pointer
-    const result3 = interner.internString("goodbye world");
-    try std.testing.expect(result3 != null);
-    try std.testing.expect(result1.?.ptr != result3.?.ptr);
+    const result3 = try interner.internString("goodbye world");
+    try std.testing.expect(result1.ptr != result3.ptr);
 
     // Should have 2 unique entries
     try std.testing.expectEqual(@as(usize, 2), interner.count());
@@ -223,9 +220,8 @@ test "empty string interning" {
     var interner = init(allocator, memory_backend.backend());
     defer interner.deinit();
 
-    const result = interner.internString("");
-    try std.testing.expect(result != null);
-    try std.testing.expectEqual(@as(usize, 0), result.?.len);
+    const result = try interner.internString("");
+    try std.testing.expectEqual(@as(usize, 0), result.len);
 }
 
 test "deduplication of identical long strings" {
@@ -239,11 +235,9 @@ test "deduplication of identical long strings" {
 
     const long_string = "this is a very long string that exceeds the small string optimization threshold of 23 bytes";
 
-    const result1 = interner.internString(long_string);
-    const result2 = interner.internString(long_string);
+    const result1 = try interner.internString(long_string);
+    const result2 = try interner.internString(long_string);
 
-    try std.testing.expect(result1 != null);
-    try std.testing.expect(result2 != null);
-    try std.testing.expectEqual(result1.?.ptr, result2.?.ptr);
+    try std.testing.expectEqual(result1.ptr, result2.ptr);
     try std.testing.expectEqual(@as(usize, 1), interner.count());
 }

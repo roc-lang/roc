@@ -173,7 +173,7 @@ pub fn isRecordStyleStruct(lay: Layout, layout_store: *layout.Store) bool {
     const fields = layout_store.struct_fields.sliceRange(struct_data.getFields());
     if (fields.len == 0) return false;
     // If the first field has a non-NONE name, it's record-style
-    return fields.get(0).name != base_pkg.Ident.Idx.NONE;
+    return !fields.get(0).name.eql(base_pkg.Ident.Idx.NONE);
 }
 
 /// For a struct representing a tag union (record-style or tuple-style), return the
@@ -233,7 +233,7 @@ fn getStructTagFieldWithRtVar(
                 var i: usize = 0;
                 while (i < fields.len) : (i += 1) {
                     const f = fields.get(i);
-                    if (f.name == self.env.idents.tag) {
+                    if (f.name.eql(self.env.idents.tag)) {
                         break :blk f.var_;
                     }
                 }
@@ -887,7 +887,7 @@ pub const Interpreter = struct {
             switch (stmt) {
                 .s_alias_decl => |alias_decl| {
                     const header = module.store.getTypeHeader(alias_decl.header);
-                    if (header.relative_name == name) {
+                    if (header.relative_name.eql(name)) {
                         // Return the var for the alias body annotation
                         return can.ModuleEnv.varFrom(alias_decl.anno);
                     }
@@ -1996,9 +1996,9 @@ pub const Interpreter = struct {
                 const err_ident = self.env.idents.err;
 
                 for (tag_list.items, 0..) |tag_info, i| {
-                    if (tag_info.name == ok_ident) {
+                    if (tag_info.name.eql(ok_ident)) {
                         ok_index = i;
-                    } else if (tag_info.name == err_ident) {
+                    } else if (tag_info.name.eql(err_ident)) {
                         err_index = i;
                     }
                 }
@@ -3897,13 +3897,13 @@ pub const Interpreter = struct {
                 const err_ident = self.env.idents.err;
 
                 for (tag_list.items, 0..) |tag_info, i| {
-                    if (tag_info.name == ok_ident) {
+                    if (tag_info.name.eql(ok_ident)) {
                         ok_index = i;
                         const arg_vars = self.runtime_types.sliceVars(tag_info.args);
                         if (arg_vars.len >= 1) {
                             ok_payload_var = arg_vars[0];
                         }
-                    } else if (tag_info.name == err_ident) {
+                    } else if (tag_info.name.eql(err_ident)) {
                         err_index = i;
                         const arg_vars = self.runtime_types.sliceVars(tag_info.args);
                         if (arg_vars.len >= 1) {
@@ -4878,9 +4878,9 @@ pub const Interpreter = struct {
         const err_ident = self.env.idents.err;
 
         for (tag_list.items, 0..) |tag_info, i| {
-            if (tag_info.name == ok_ident) {
+            if (tag_info.name.eql(ok_ident)) {
                 ok_index = i;
-            } else if (tag_info.name == err_ident) {
+            } else if (tag_info.name.eql(err_ident)) {
                 err_index = i;
             }
         }
@@ -5403,7 +5403,7 @@ pub const Interpreter = struct {
 
         const ok_ident = self.env.idents.ok;
         for (tag_list.items) |tag_info| {
-            if (tag_info.name == ok_ident) {
+            if (tag_info.name.eql(ok_ident)) {
                 const arg_vars = self.runtime_types.sliceVars(tag_info.args);
                 if (arg_vars.len >= 1) {
                     return arg_vars[0];
@@ -5428,9 +5428,9 @@ pub const Interpreter = struct {
         const err_ident = self.env.idents.err;
 
         for (tag_list.items, 0..) |tag_info, i| {
-            if (tag_info.name == ok_ident) {
+            if (tag_info.name.eql(ok_ident)) {
                 ok_index = i;
-            } else if (tag_info.name == err_ident) {
+            } else if (tag_info.name.eql(err_ident)) {
                 err_index = i;
             }
         }
@@ -6759,7 +6759,7 @@ pub const Interpreter = struct {
 
         // Compare ident indices directly (O(1) per comparison instead of string comparison)
         for (runtime_tags.items(.name), 0..) |tag_name_ident, i| {
-            if (tag_name_ident == rt_tag_ident) {
+            if (tag_name_ident.eql(rt_tag_ident)) {
                 return i;
             }
         }
@@ -6780,7 +6780,7 @@ pub const Interpreter = struct {
 
         // Compare ident indices directly (O(1) per comparison instead of string comparison)
         for (tag_list, 0..) |tag_info, i| {
-            if (tag_info.name == rt_tag_ident) {
+            if (tag_info.name.eql(rt_tag_ident)) {
                 return i;
             }
         }
@@ -7954,7 +7954,7 @@ pub const Interpreter = struct {
                             while (i < fields.len) : (i += 1) {
                                 const f = fields.get(i);
                                 // Use translated field name for comparison (both are in runtime ident store)
-                                if (f.name == runtime_label) {
+                                if (f.name.eql(runtime_label)) {
                                     break :blk f.var_;
                                 }
                             }
@@ -8013,12 +8013,12 @@ pub const Interpreter = struct {
                 // Compare tag names directly instead of comparing discriminant indices.
                 // This handles the case where a value's discriminant was set based on a narrower
                 // type and needs to match a pattern from a wider type.
-                if (actual_tag_name != expected_ident) return false;
+                if (!actual_tag_name.eql(expected_ident)) return false;
 
                 // Find the expected tag's index in the expected type's tag list for payload access
                 var expected_index: ?usize = null;
                 for (tag_list.items, 0..) |tag_info, i| {
-                    if (tag_info.name == expected_ident) {
+                    if (tag_info.name.eql(expected_ident)) {
                         expected_index = i;
                         break;
                     }
@@ -8193,32 +8193,32 @@ pub const Interpreter = struct {
     /// or in the original ident space (for direct lookups), so we check both maps.
     fn getModuleEnvForOrigin(self: *const Interpreter, origin_module: base_pkg.Ident.Idx) ?*const can.ModuleEnv {
         // Check if it's the Builtin module (using pre-translated ident for runtime-translated case)
-        if (origin_module.idx == self.translated_builtin_module.idx) {
+        if (origin_module.eql(self.translated_builtin_module)) {
             // In shim context, builtins are embedded in the main module env
             // (builtin_module_env is null), so fall back to self.env
             return self.builtin_module_env orelse self.env;
         }
         // Also check original builtin ident for non-translated case
-        if (origin_module == self.root_env.idents.builtin_module) {
+        if (origin_module.eql(self.root_env.idents.builtin_module)) {
             return self.builtin_module_env orelse self.env;
         }
 
         // Check if it's the root module (both translated and original idents)
         // Note: we return root_env instead of self.env because self.env may have changed
         // during evaluation (e.g., when evaluating cross-module calls)
-        if (!self.translated_env_module.isNone() and origin_module.idx == self.translated_env_module.idx) {
+        if (!self.translated_env_module.isNone() and origin_module.eql(self.translated_env_module)) {
             return self.root_env;
         }
-        if (self.root_env.qualified_module_ident == origin_module) {
+        if (self.root_env.qualified_module_ident.eql(origin_module)) {
             return self.root_env;
         }
 
         // Check if it's the app module (both translated and original idents)
         if (self.app_env) |a_env| {
-            if (!self.translated_app_module.isNone() and origin_module.idx == self.translated_app_module.idx) {
+            if (!self.translated_app_module.isNone() and origin_module.eql(self.translated_app_module)) {
                 return a_env;
             }
-            if (a_env.qualified_module_ident == origin_module) {
+            if (a_env.qualified_module_ident.eql(origin_module)) {
                 return a_env;
             }
         }
@@ -8237,7 +8237,7 @@ pub const Interpreter = struct {
     /// Returns current_module_id (always 0) for the current module, otherwise looks it up in the module ID map.
     fn getModuleIdForOrigin(self: *const Interpreter, origin_module: base_pkg.Ident.Idx) u32 {
         // Check if it's the current module
-        if (self.env.qualified_module_ident == origin_module) {
+        if (self.env.qualified_module_ident.eql(origin_module)) {
             return self.current_module_id;
         }
         // Look up in imported modules (should always exist if getModuleEnvForOrigin succeeded)
@@ -8262,7 +8262,7 @@ pub const Interpreter = struct {
 
         // Linear search for the matching method name (constraints are typically few)
         for (constraints) |constraint| {
-            if (constraint.fn_name == method_name) {
+            if (constraint.fn_name.eql(method_name)) {
                 return constraint;
             }
         }
@@ -8324,7 +8324,7 @@ pub const Interpreter = struct {
                     if (!origin_env.store.isDefNode(def_idx_u16)) continue;
                     const def = origin_env.store.getDef(def_idx);
                     const pat = origin_env.store.getPattern(def.pattern);
-                    if (pat == .assign and pat.assign.ident == method_ident) {
+                    if (pat == .assign and pat.assign.ident.eql(method_ident)) {
                         break :node_idx_blk def_idx_u16;
                     }
                 }
@@ -8450,7 +8450,7 @@ pub const Interpreter = struct {
                     if (!origin_env.store.isDefNode(def_idx_u16)) continue;
                     const def = origin_env.store.getDef(def_idx);
                     const pat = origin_env.store.getPattern(def.pattern);
-                    if (pat == .assign and pat.assign.ident == method_ident) {
+                    if (pat == .assign and pat.assign.ident.eql(method_ident)) {
                         break :node_idx_blk2 def_idx_u16;
                     }
                 }
@@ -9248,7 +9248,7 @@ pub const Interpreter = struct {
 
                             // Find matching tag in RT type by ident index
                             for (rt_tags.items(.name), rt_tags.items(.args)) |rt_tag_name, rt_tag_args| {
-                                if (rt_ct_tag_ident == rt_tag_name) {
+                                if (rt_ct_tag_ident.eql(rt_tag_name)) {
                                     // Found matching tag - propagate argument mappings
                                     const ct_args = module.types.sliceVars(ct_tag_args);
                                     const rt_args = self.runtime_types.sliceVars(rt_tag_args);
@@ -11290,7 +11290,7 @@ pub const Interpreter = struct {
                         const pattern = app_env.store.getPattern(def.pattern);
                         if (pattern == .assign) {
                             // Compare ident indices directly (O(1) instead of string comparison)
-                            if (pattern.assign.ident == app_required_ident) {
+                            if (pattern.assign.ident.eql(app_required_ident)) {
                                 found_expr = def.expr;
                                 break;
                             }
@@ -12223,7 +12223,7 @@ pub const Interpreter = struct {
                 // Handle flex types for True/False
                 // Note: We also need to handle non-flex Bool types that might come from
                 // type inference (e.g., in `if True then ...` the condition has Bool type)
-                const is_bool_tag = tag.name == self.env.idents.true_tag or tag.name == self.env.idents.false_tag;
+                const is_bool_tag = tag.name.eql(self.env.idents.true_tag) or tag.name.eql(self.env.idents.false_tag);
                 if (is_bool_tag) {
                     // Always use canonical Bool for True/False to ensure consistent layout
                     rt_var = try self.getCanonicalBoolRuntimeVar();
@@ -12533,8 +12533,8 @@ pub const Interpreter = struct {
                         const target_pattern = builtin_env.store.getPattern(target_def.pattern);
                         if (target_pattern == .assign) {
                             const method_ident = target_pattern.assign.ident;
-                            const is_box_method = method_ident == builtin_env.idents.builtin_box_box;
-                            const is_unbox_method = method_ident == builtin_env.idents.builtin_box_unbox;
+                            const is_box_method = method_ident.eql(builtin_env.idents.builtin_box_box);
+                            const is_unbox_method = method_ident.eql(builtin_env.idents.builtin_box_unbox);
                             // Check if this is Box.box
                             if (is_box_method and arg_indices.len == 1) {
                                 const arg_expr = arg_indices[0];
@@ -13923,7 +13923,7 @@ pub const Interpreter = struct {
 
             // Check both pattern_idx AND source module to avoid cross-module collisions.
             const same_module = (b.source_env == self.env) or
-                (b.source_env.qualified_module_ident == self.env.qualified_module_ident);
+                (b.source_env.qualified_module_ident.eql(self.env.qualified_module_ident));
             if (b.pattern_idx == lookup.pattern_idx and same_module) {
                 // Check if this binding came from an e_anno_only expression
                 if (b.expr_idx) |expr_idx| {
@@ -14009,7 +14009,7 @@ pub const Interpreter = struct {
                                 // Same module: compare ident indices directly
                                 for (captures) |cap_idx| {
                                     const cap = header.source_env.store.getCapture(cap_idx);
-                                    if (@as(u32, @bitCast(cap.name)) == @as(u32, @bitCast(var_ident))) {
+                                    if (cap.name.eql(var_ident)) {
                                         captured_pattern_idx = cap.pattern_idx;
                                         captured_ident = cap.name;
                                         break;
@@ -14021,7 +14021,7 @@ pub const Interpreter = struct {
                                 if (header.source_env.common.idents.lookup(base_pkg.Ident.for_text(var_ident_text))) |translated_ident| {
                                     for (captures) |cap_idx| {
                                         const cap = header.source_env.store.getCapture(cap_idx);
-                                        if (@as(u32, @bitCast(cap.name)) == @as(u32, @bitCast(translated_ident))) {
+                                        if (cap.name.eql(translated_ident)) {
                                             captured_pattern_idx = cap.pattern_idx;
                                             captured_ident = cap.name;
                                             break;
@@ -17147,7 +17147,7 @@ pub const Interpreter = struct {
                 // Route nominal equality through the centralized structural-equality dispatcher.
                 // This keeps equality behavior consistent across call sites and avoids ad-hoc
                 // polymorphic context leakage from generic method invocation.
-                if (ba.method_ident == self.root_env.idents.is_eq and
+                if (ba.method_ident.eql(self.root_env.idents.is_eq) and
                     current_resolved.desc.content == .structure and
                     current_resolved.desc.content.structure == .nominal_type)
                 {
@@ -17174,54 +17174,54 @@ pub const Interpreter = struct {
                     (rhs.layout.data.scalar.tag == .int or rhs.layout.data.scalar.tag == .frac);
                 if (lhs_is_numeric_layout and rhs_is_numeric_layout and defaulted_to_dec) {
                     // Handle numeric comparisons directly via low-level ops
-                    if (ba.method_ident == self.root_env.idents.is_gt) {
+                    if (ba.method_ident.eql(self.root_env.idents.is_gt)) {
                         const result = try self.compareNumericValues(lhs, rhs, .gt);
                         const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
                         try value_stack.push(result_val);
                         return true;
-                    } else if (ba.method_ident == self.root_env.idents.is_gte) {
+                    } else if (ba.method_ident.eql(self.root_env.idents.is_gte)) {
                         const result = try self.compareNumericValues(lhs, rhs, .gte);
                         const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
                         try value_stack.push(result_val);
                         return true;
-                    } else if (ba.method_ident == self.root_env.idents.is_lt) {
+                    } else if (ba.method_ident.eql(self.root_env.idents.is_lt)) {
                         const result = try self.compareNumericValues(lhs, rhs, .lt);
                         const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
                         try value_stack.push(result_val);
                         return true;
-                    } else if (ba.method_ident == self.root_env.idents.is_lte) {
+                    } else if (ba.method_ident.eql(self.root_env.idents.is_lte)) {
                         const result = try self.compareNumericValues(lhs, rhs, .lte);
                         const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
                         try value_stack.push(result_val);
                         return true;
-                    } else if (ba.method_ident == self.root_env.idents.is_eq) {
+                    } else if (ba.method_ident.eql(self.root_env.idents.is_eq)) {
                         const result = try self.compareNumericValues(lhs, rhs, .eq);
                         const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
                         try value_stack.push(result_val);
                         return true;
                     }
                     // Handle numeric arithmetic via type-aware evalNumericBinop
-                    if (ba.method_ident == self.root_env.idents.plus) {
+                    if (ba.method_ident.eql(self.root_env.idents.plus)) {
                         const result = try self.evalNumericBinop(.add, lhs, rhs, roc_ops);
                         try value_stack.push(result);
                         return true;
-                    } else if (ba.method_ident == self.root_env.idents.minus) {
+                    } else if (ba.method_ident.eql(self.root_env.idents.minus)) {
                         const result = try self.evalNumericBinop(.sub, lhs, rhs, roc_ops);
                         try value_stack.push(result);
                         return true;
-                    } else if (ba.method_ident == self.root_env.idents.times) {
+                    } else if (ba.method_ident.eql(self.root_env.idents.times)) {
                         const result = try self.evalNumericBinop(.mul, lhs, rhs, roc_ops);
                         try value_stack.push(result);
                         return true;
-                    } else if (ba.method_ident == self.root_env.idents.div_by) {
+                    } else if (ba.method_ident.eql(self.root_env.idents.div_by)) {
                         const result = try self.evalNumericBinop(.div, lhs, rhs, roc_ops);
                         try value_stack.push(result);
                         return true;
-                    } else if (ba.method_ident == self.root_env.idents.div_trunc_by) {
+                    } else if (ba.method_ident.eql(self.root_env.idents.div_trunc_by)) {
                         const result = try self.evalNumericBinop(.div_trunc, lhs, rhs, roc_ops);
                         try value_stack.push(result);
                         return true;
-                    } else if (ba.method_ident == self.root_env.idents.rem_by) {
+                    } else if (ba.method_ident.eql(self.root_env.idents.rem_by)) {
                         const result = try self.evalNumericBinop(.rem, lhs, rhs, roc_ops);
                         try value_stack.push(result);
                         return true;
@@ -17236,7 +17236,7 @@ pub const Interpreter = struct {
                         },
                         .record, .tuple, .tag_union, .empty_record, .empty_tag_union => blk: {
                             // Anonymous structural types have implicit is_eq
-                            if (ba.method_ident == self.root_env.idents.is_eq) {
+                            if (ba.method_ident.eql(self.root_env.idents.is_eq)) {
                                 var result = self.valuesStructurallyEqual(lhs, effective_receiver_rt_var, rhs, ba.rhs_rt_var, roc_ops) catch |err| switch (err) {
                                     error.NotImplemented => {
                                         self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
@@ -17259,7 +17259,7 @@ pub const Interpreter = struct {
                     // prove the scalar is numeric; otherwise fall back to structural equality when the type is structural.
                     // Error types can occur during generic instantiation when types couldn't be resolved.
                     .flex, .rigid, .err => blk: {
-                        if (ba.method_ident == self.root_env.idents.is_eq) {
+                        if (ba.method_ident.eql(self.root_env.idents.is_eq)) {
                             // Numeric scalar fast-path:
                             // Only use layout-based scalar comparison when both sides are scalar *and*
                             // the scalar tag is numeric (int/frac). This keeps the optimization
@@ -17325,51 +17325,51 @@ pub const Interpreter = struct {
                     // Before failing, check if this is a numeric operation we can handle directly
                     if (lhs_is_numeric_layout and rhs_is_numeric_layout) {
                         // Handle numeric arithmetic via type-aware evalNumericBinop as fallback
-                        if (ba.method_ident == self.root_env.idents.plus) {
+                        if (ba.method_ident.eql(self.root_env.idents.plus)) {
                             const result = try self.evalNumericBinop(.add, lhs, rhs, roc_ops);
                             try value_stack.push(result);
                             return true;
-                        } else if (ba.method_ident == self.root_env.idents.minus) {
+                        } else if (ba.method_ident.eql(self.root_env.idents.minus)) {
                             const result = try self.evalNumericBinop(.sub, lhs, rhs, roc_ops);
                             try value_stack.push(result);
                             return true;
-                        } else if (ba.method_ident == self.root_env.idents.times) {
+                        } else if (ba.method_ident.eql(self.root_env.idents.times)) {
                             const result = try self.evalNumericBinop(.mul, lhs, rhs, roc_ops);
                             try value_stack.push(result);
                             return true;
-                        } else if (ba.method_ident == self.root_env.idents.div_by) {
+                        } else if (ba.method_ident.eql(self.root_env.idents.div_by)) {
                             const result = try self.evalNumericBinop(.div, lhs, rhs, roc_ops);
                             try value_stack.push(result);
                             return true;
-                        } else if (ba.method_ident == self.root_env.idents.div_trunc_by) {
+                        } else if (ba.method_ident.eql(self.root_env.idents.div_trunc_by)) {
                             const result = try self.evalNumericBinop(.div_trunc, lhs, rhs, roc_ops);
                             try value_stack.push(result);
                             return true;
-                        } else if (ba.method_ident == self.root_env.idents.rem_by) {
+                        } else if (ba.method_ident.eql(self.root_env.idents.rem_by)) {
                             const result = try self.evalNumericBinop(.rem, lhs, rhs, roc_ops);
                             try value_stack.push(result);
                             return true;
-                        } else if (ba.method_ident == self.root_env.idents.is_gt) {
+                        } else if (ba.method_ident.eql(self.root_env.idents.is_gt)) {
                             const result = try self.compareNumericValues(lhs, rhs, .gt);
                             const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
                             try value_stack.push(result_val);
                             return true;
-                        } else if (ba.method_ident == self.root_env.idents.is_gte) {
+                        } else if (ba.method_ident.eql(self.root_env.idents.is_gte)) {
                             const result = try self.compareNumericValues(lhs, rhs, .gte);
                             const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
                             try value_stack.push(result_val);
                             return true;
-                        } else if (ba.method_ident == self.root_env.idents.is_lt) {
+                        } else if (ba.method_ident.eql(self.root_env.idents.is_lt)) {
                             const result = try self.compareNumericValues(lhs, rhs, .lt);
                             const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
                             try value_stack.push(result_val);
                             return true;
-                        } else if (ba.method_ident == self.root_env.idents.is_lte) {
+                        } else if (ba.method_ident.eql(self.root_env.idents.is_lte)) {
                             const result = try self.compareNumericValues(lhs, rhs, .lte);
                             const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
                             try value_stack.push(result_val);
                             return true;
-                        } else if (ba.method_ident == self.root_env.idents.is_eq) {
+                        } else if (ba.method_ident.eql(self.root_env.idents.is_eq)) {
                             const result = try self.compareNumericValues(lhs, rhs, .eq);
                             const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
                             try value_stack.push(result_val);
@@ -17721,7 +17721,7 @@ pub const Interpreter = struct {
                                         var i: usize = 0;
                                         while (i < fields.len) : (i += 1) {
                                             const f = fields.get(i);
-                                            if (f.name == rt_field_name) {
+                                            if (f.name.eql(rt_field_name)) {
                                                 // If the field type is a rigid, check type arg mappings
                                                 const field_resolved = self.runtime_types.resolveVar(f.var_);
                                                 if (field_resolved.desc.content == .rigid) {
@@ -17739,7 +17739,7 @@ pub const Interpreter = struct {
                                         var i: usize = 0;
                                         while (i < fields.len) : (i += 1) {
                                             const f = fields.get(i);
-                                            if (f.name == rt_field_name) {
+                                            if (f.name.eql(rt_field_name)) {
                                                 // If the field type is a rigid, check type arg mappings
                                                 const field_resolved = self.runtime_types.resolveVar(f.var_);
                                                 if (field_resolved.desc.content == .rigid) {
@@ -17824,7 +17824,7 @@ pub const Interpreter = struct {
                                     var i: usize = 0;
                                     while (i < fields.len) : (i += 1) {
                                         const f = fields.get(i);
-                                        if (f.name == rt_field_name) {
+                                        if (f.name.eql(rt_field_name)) {
                                             field_rt_var = f.var_;
                                             break;
                                         }
@@ -17907,7 +17907,7 @@ pub const Interpreter = struct {
                             }
 
                             // Fall through: Structural types have implicit is_eq - handle directly
-                            if (da.field_name == self.root_env.idents.is_eq and arg_exprs.len == 1) {
+                            if (da.field_name.eql(self.root_env.idents.is_eq) and arg_exprs.len == 1) {
                                 // Evaluate the RHS argument
                                 const rhs_expr_idx = arg_exprs[0];
                                 const rhs_value = try self.evalWithExpectedType(rhs_expr_idx, roc_ops, null);
@@ -17935,7 +17935,7 @@ pub const Interpreter = struct {
                         },
                         .tuple, .tag_union, .empty_record, .empty_tag_union => blk: {
                             // Structural types have implicit is_eq - handle directly
-                            if (da.field_name == self.root_env.idents.is_eq and arg_exprs.len == 1) {
+                            if (da.field_name.eql(self.root_env.idents.is_eq) and arg_exprs.len == 1) {
                                 // Evaluate the RHS argument
                                 const rhs_expr_idx = arg_exprs[0];
                                 const rhs_value = try self.evalWithExpectedType(rhs_expr_idx, roc_ops, null);
@@ -17965,7 +17965,7 @@ pub const Interpreter = struct {
                     },
                     .flex, .rigid, .err => blk: {
                         // For flex/rigid types, check if it's numeric is_eq that we can handle directly
-                        if (da.field_name == self.root_env.idents.is_eq and arg_exprs.len == 1) {
+                        if (da.field_name.eql(self.root_env.idents.is_eq) and arg_exprs.len == 1) {
                             // Check if receiver is numeric
                             if (receiver_value.layout.tag == .scalar) {
                                 const scalar_tag = receiver_value.layout.data.scalar.tag;
@@ -18097,8 +18097,8 @@ pub const Interpreter = struct {
 
                 // Handle Box.box intrinsic - must intercept before resolveMethodFunction
                 // since Box.box has no implementation body
-                if (nominal_info.?.ident == self.root_env.idents.box and
-                    da.field_name == self.root_env.idents.box_method and
+                if (nominal_info.?.ident.eql(self.root_env.idents.box) and
+                    da.field_name.eql(self.root_env.idents.box_method) and
                     arg_exprs.len == 1)
                 {
                     const arg_expr = arg_exprs[0];
@@ -18114,8 +18114,8 @@ pub const Interpreter = struct {
 
                 // Handle Box.unbox intrinsic - must intercept before resolveMethodFunction
                 // since Box.unbox has no implementation body
-                if (nominal_info.?.ident == self.root_env.idents.box and
-                    da.field_name == self.root_env.idents.unbox_method)
+                if (nominal_info.?.ident.eql(self.root_env.idents.box) and
+                    da.field_name.eql(self.root_env.idents.unbox_method))
                 {
                     defer receiver_value.decref(&self.runtime_layout_store, roc_ops);
 

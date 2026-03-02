@@ -405,7 +405,7 @@ pub const Store = struct {
                     for (names, vars) |name, field_var| {
                         var seen_name = false;
                         for (scratches.fields.sliceFromStart(scratch_top)) |existing| {
-                            if (@as(u32, @bitCast(existing.name)) == @as(u32, @bitCast(name))) {
+                            if (existing.name.eql(name)) {
                                 seen_name = true;
                                 break;
                             }
@@ -437,7 +437,7 @@ pub const Store = struct {
                                     for (ext_names, ext_vars) |name, field_var| {
                                         var seen_name = false;
                                         for (scratches.fields.sliceFromStart(scratch_top)) |existing| {
-                                            if (@as(u32, @bitCast(existing.name)) == @as(u32, @bitCast(name))) {
+                                            if (existing.name.eql(name)) {
                                                 seen_name = true;
                                                 break;
                                             }
@@ -612,16 +612,16 @@ pub const Store = struct {
         const ident = nominal.ident.ident_idx;
         const origin = nominal.origin_module;
 
-        if (origin == common_idents.builtin_module) {
+        if (origin.eql(common_idents.builtin_module)) {
             // Bool/Str: unqualified idents from source declarations
-            if (ident == common_idents.str) return self.primIdx(.str);
-            if (ident == common_idents.bool) return self.primIdx(.bool);
+            if (ident.eql(common_idents.str)) return self.primIdx(.str);
+            if (ident.eql(common_idents.bool)) return self.primIdx(.bool);
         }
 
-        if (origin == common_idents.builtin_module) {
+        if (origin.eql(common_idents.builtin_module)) {
 
             // List: unqualified ident from mkListContent
-            if (ident == common_idents.list) {
+            if (ident.eql(common_idents.list)) {
                 const type_args = types_store.sliceNominalArgs(nominal);
                 if (type_args.len > 0) {
                     const elem_type = try self.fromTypeVar(allocator, types_store, type_args[0], common_idents, seen, scratches);
@@ -631,7 +631,7 @@ pub const Store = struct {
             }
 
             // Box: unqualified ident from mkBoxContent
-            if (ident == common_idents.box) {
+            if (ident.eql(common_idents.box)) {
                 const type_args = types_store.sliceNominalArgs(nominal);
                 if (type_args.len > 0) {
                     const inner_type = try self.fromTypeVar(allocator, types_store, type_args[0], common_idents, seen, scratches);
@@ -641,19 +641,19 @@ pub const Store = struct {
             }
 
             // Numeric types: qualified idents from mkNumberTypeContent (e.g. "Builtin.Num.I64")
-            if (ident == common_idents.i64_type) return self.primIdx(.i64);
-            if (ident == common_idents.u8_type) return self.primIdx(.u8);
-            if (ident == common_idents.i8_type) return self.primIdx(.i8);
-            if (ident == common_idents.u16_type) return self.primIdx(.u16);
-            if (ident == common_idents.i16_type) return self.primIdx(.i16);
-            if (ident == common_idents.u32_type) return self.primIdx(.u32);
-            if (ident == common_idents.i32_type) return self.primIdx(.i32);
-            if (ident == common_idents.u64_type) return self.primIdx(.u64);
-            if (ident == common_idents.u128_type) return self.primIdx(.u128);
-            if (ident == common_idents.i128_type) return self.primIdx(.i128);
-            if (ident == common_idents.f32_type) return self.primIdx(.f32);
-            if (ident == common_idents.f64_type) return self.primIdx(.f64);
-            if (ident == common_idents.dec_type) return self.primIdx(.dec);
+            if (ident.eql(common_idents.i64_type)) return self.primIdx(.i64);
+            if (ident.eql(common_idents.u8_type)) return self.primIdx(.u8);
+            if (ident.eql(common_idents.i8_type)) return self.primIdx(.i8);
+            if (ident.eql(common_idents.u16_type)) return self.primIdx(.u16);
+            if (ident.eql(common_idents.i16_type)) return self.primIdx(.i16);
+            if (ident.eql(common_idents.u32_type)) return self.primIdx(.u32);
+            if (ident.eql(common_idents.i32_type)) return self.primIdx(.i32);
+            if (ident.eql(common_idents.u64_type)) return self.primIdx(.u64);
+            if (ident.eql(common_idents.u128_type)) return self.primIdx(.u128);
+            if (ident.eql(common_idents.i128_type)) return self.primIdx(.i128);
+            if (ident.eql(common_idents.f32_type)) return self.primIdx(.f32);
+            if (ident.eql(common_idents.f64_type)) return self.primIdx(.f64);
+            if (ident.eql(common_idents.dec_type)) return self.primIdx(.dec);
         }
 
         // For all other nominal types, strip the wrapper and follow the backing var.

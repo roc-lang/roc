@@ -194,7 +194,7 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
         const struct_data = ctx.layout_store.getStructData(self.lay.data.struct_.idx);
         const fields = ctx.layout_store.struct_fields.sliceRange(struct_data.getFields());
         // Check if this is a record-style struct (has named fields) or tuple-style
-        const is_record_style = fields.len > 0 and fields.get(0).name != base.Ident.Idx.NONE;
+        const is_record_style = fields.len > 0 and !fields.get(0).name.eql(base.Ident.Idx.NONE);
         if (is_record_style) {
             // --- Records ---
             var out = std.array_list.AlignedManaged(u8, null).init(allocator);

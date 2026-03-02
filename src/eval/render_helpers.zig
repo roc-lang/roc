@@ -96,7 +96,7 @@ fn shouldPreferIntegerLayoutRendering(ctx: *RenderCtx, rt_var: types.Var) bool {
             .flex, .rigid => return true,
             .structure => |st| switch (st) {
                 .nominal_type => |nt| {
-                    return nt.ident.ident_idx == ctx.env.idents.builtin_numeral;
+                    return nt.ident.ident_idx.eql(ctx.env.idents.builtin_numeral);
                 },
                 else => return false,
             },
@@ -156,7 +156,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                         }
                     }
                     // Special handling for Box before unwrapping
-                    if (nt.ident.ident_idx == ctx.env.idents.box) {
+                    if (nt.ident.ident_idx.eql(ctx.env.idents.box)) {
                         // Use sliceNominalArgs which skips the backing var (first element)
                         const arg_vars = ctx.runtime_types.sliceNominalArgs(nt);
                         if (arg_vars.len != 1) {
@@ -208,7 +208,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                         return out.toOwnedSlice();
                     }
                     // Special handling for List before unwrapping - render with element type info
-                    if (nt.ident.ident_idx == ctx.env.idents.list) {
+                    if (nt.ident.ident_idx.eql(ctx.env.idents.list)) {
                         // Use sliceNominalArgs which skips the backing var (first element)
                         const arg_vars = ctx.runtime_types.sliceNominalArgs(nt);
                         if (arg_vars.len != 1) {

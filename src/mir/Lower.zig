@@ -271,7 +271,7 @@ fn internSymbol(self: *Self, namespace_idx: u32, ident_idx: Ident.Idx) Allocator
         gop.value_ptr.* = .{ .module_idx = namespace_idx, .ident_idx = ident_idx };
     } else if (builtin.mode == .Debug) {
         const existing = gop.value_ptr.*;
-        if (existing.module_idx != namespace_idx or existing.ident_idx != ident_idx) {
+        if (existing.module_idx != namespace_idx or !existing.ident_idx.eql(ident_idx)) {
             std.debug.panic(
                 "Symbol metadata mismatch for raw id {d}: existing module={d} ident={d}, new module={d} ident={d}",
                 .{ raw, existing.module_idx, existing.ident_idx.idx, namespace_idx, ident_idx.idx },
@@ -338,9 +338,9 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
         .e_typed_int => |ti| try self.store.addExpr(self.allocator, .{ .int = .{ .value = ti.value } }, monotype, region),
         .e_typed_frac => |tf| {
             const roc_dec = builtins.dec.RocDec{ .num = tf.value.toI128() };
-            if (tf.type_name == module_env.idents.f64) {
+            if (tf.type_name.eql(module_env.idents.f64)) {
                 return try self.store.addExpr(self.allocator, .{ .frac_f64 = roc_dec.toF64() }, monotype, region);
-            } else if (tf.type_name == module_env.idents.f32) {
+            } else if (tf.type_name.eql(module_env.idents.f32)) {
                 return try self.store.addExpr(self.allocator, .{ .frac_f32 = @floatCast(roc_dec.toF64()) }, monotype, region);
             } else {
                 // Dec or fallback
@@ -441,7 +441,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                         self.type_var_seen.deinit();
                         self.type_var_seen = saved_type_var_seen;
                     }
-                    self.seedTypeVarSeen(ModuleEnv.varFrom(saved_deferred.cir_expr), monotype);
+                    try self.seedTypeVarSeen(ModuleEnv.varFrom(saved_deferred.cir_expr), monotype);
                     const saved_pattern_scope = self.current_pattern_scope;
                     self.current_pattern_scope = symbol_key;
                     defer self.current_pattern_scope = saved_pattern_scope;
@@ -484,7 +484,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                         // (e.g. range_to's `b`) separate from the caller's
                         // instantiated copy (e.g. `a` in `to`), so we seed
                         // before lowering to connect them.
-                        self.seedTypeVarSeen(ModuleEnv.varFrom(def.expr), monotype);
+                        try self.seedTypeVarSeen(ModuleEnv.varFrom(def.expr), monotype);
                         _ = try self.lowerExternalDef(symbol, def.expr);
                         break;
                     }
@@ -493,10 +493,10 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                 // Symbol is already lowered. Check if this is a polymorphic
                 // re-specialization: the same function called with a different type.
                 const cached_monotype = self.store.typeOf(cached_expr);
-                const monotype_matches_cached = self.monotypesStructurallyEqual(cached_monotype, monotype);
+                const monotype_matches_cached = try self.monotypesStructurallyEqual(cached_monotype, monotype);
                 if (!monotype.isNone() and !monotype_matches_cached) {
                     // Check for an existing specialization with this monotype.
-                    if (self.lookupPolySpecialization(symbol_key, monotype)) |spec_symbol| {
+                    if (try self.lookupPolySpecialization(symbol_key, monotype)) |spec_symbol| {
                         return try self.store.addExpr(self.allocator, .{ .lookup = spec_symbol }, monotype, region);
                     }
 
@@ -531,7 +531,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                             self.type_var_seen.deinit();
                             self.type_var_seen = saved_type_var_seen;
                         }
-                        self.seedTypeVarSeen(ModuleEnv.varFrom(cir_def_expr), monotype);
+                        try self.seedTypeVarSeen(ModuleEnv.varFrom(cir_def_expr), monotype);
                         const saved_pattern_scope = self.current_pattern_scope;
                         self.current_pattern_scope = spec_symbol_key;
                         defer self.current_pattern_scope = saved_pattern_scope;
@@ -560,13 +560,13 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                 &self.type_var_seen,
                 &self.mono_scratches,
             );
-            if (self.monotypesStructurallyEqual(pattern_monotype, monotype)) {
+            if (try self.monotypesStructurallyEqual(pattern_monotype, monotype)) {
                 return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, pattern_monotype, region);
             }
 
             if (self.lowered_symbols.get(symbol_key)) |cached_expr| {
                 const cached_monotype = self.store.typeOf(cached_expr);
-                const monotype_matches_cached = self.monotypesStructurallyEqual(cached_monotype, monotype);
+                const monotype_matches_cached = try self.monotypesStructurallyEqual(cached_monotype, monotype);
                 if (monotype_matches_cached) {
                     return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, cached_monotype, region);
                 }
@@ -596,9 +596,9 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
             // Symbol already lowered. Check for polymorphic re-specialization.
             if (self.lowered_symbols.get(symbol_key)) |cached_expr| {
                 const cached_monotype = self.store.typeOf(cached_expr);
-                const monotype_matches_cached = self.monotypesStructurallyEqual(cached_monotype, monotype);
+                const monotype_matches_cached = try self.monotypesStructurallyEqual(cached_monotype, monotype);
                 if (!monotype.isNone() and !monotype_matches_cached) {
-                    if (self.lookupPolySpecialization(symbol_key, monotype)) |spec_symbol| {
+                    if (try self.lookupPolySpecialization(symbol_key, monotype)) |spec_symbol| {
                         return try self.store.addExpr(self.allocator, .{ .lookup = spec_symbol }, monotype, region);
                     }
 
@@ -622,7 +622,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
 
             if (self.lowered_symbols.get(symbol_key)) |cached_expr| {
                 const cached_monotype = self.store.typeOf(cached_expr);
-                if (self.monotypesStructurallyEqual(cached_monotype, monotype)) {
+                if (try self.monotypesStructurallyEqual(cached_monotype, monotype)) {
                     return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, cached_monotype, region);
                 }
             }
@@ -852,7 +852,7 @@ fn polySpecKey(symbol_key: u64, monotype: Monotype.Idx) u128 {
     return (@as(u128, symbol_key) << 32) | @as(u128, @intFromEnum(monotype));
 }
 
-fn lookupPolySpecialization(self: *Self, symbol_key: u64, caller_monotype: Monotype.Idx) ?MIR.Symbol {
+fn lookupPolySpecialization(self: *Self, symbol_key: u64, caller_monotype: Monotype.Idx) Allocator.Error!?MIR.Symbol {
     const exact_key = polySpecKey(symbol_key, caller_monotype);
     if (self.poly_specializations.get(exact_key)) |exact| return exact;
 
@@ -866,7 +866,7 @@ fn lookupPolySpecialization(self: *Self, symbol_key: u64, caller_monotype: Monot
 
         const cached_mono_raw: u32 = @truncate(cache_key);
         const cached_mono: Monotype.Idx = @enumFromInt(cached_mono_raw);
-        if (self.monotypesStructurallyEqual(cached_mono, caller_monotype)) {
+        if (try self.monotypesStructurallyEqual(cached_mono, caller_monotype)) {
             return entry.value_ptr.*;
         }
     }
@@ -874,13 +874,13 @@ fn lookupPolySpecialization(self: *Self, symbol_key: u64, caller_monotype: Monot
     return null;
 }
 
-fn monotypesStructurallyEqual(self: *Self, lhs: Monotype.Idx, rhs: Monotype.Idx) bool {
+fn monotypesStructurallyEqual(self: *Self, lhs: Monotype.Idx, rhs: Monotype.Idx) Allocator.Error!bool {
     if (lhs == rhs) return true;
 
     var seen = std.AutoHashMap(u64, void).init(self.allocator);
     defer seen.deinit();
 
-    return self.monotypesStructurallyEqualRec(lhs, rhs, &seen);
+    return try self.monotypesStructurallyEqualRec(lhs, rhs, &seen);
 }
 
 fn monotypesStructurallyEqualRec(
@@ -888,7 +888,7 @@ fn monotypesStructurallyEqualRec(
     lhs: Monotype.Idx,
     rhs: Monotype.Idx,
     seen: *std.AutoHashMap(u64, void),
-) bool {
+) Allocator.Error!bool {
     if (lhs == rhs) return true;
 
     const lhs_u32: u32 = @intFromEnum(lhs);
@@ -896,7 +896,7 @@ fn monotypesStructurallyEqualRec(
     const key: u64 = (@as(u64, lhs_u32) << 32) | @as(u64, rhs_u32);
 
     if (seen.contains(key)) return true;
-    seen.put(key, {}) catch return false;
+    try seen.put(key, {});
 
     const lhs_mono = self.store.monotype_store.getMonotype(lhs);
     const rhs_mono = self.store.monotype_store.getMonotype(rhs);
@@ -905,14 +905,14 @@ fn monotypesStructurallyEqualRec(
     return switch (lhs_mono) {
         .unit => true,
         .prim => |lhs_prim| lhs_prim == rhs_mono.prim,
-        .list => |lhs_list| self.monotypesStructurallyEqualRec(lhs_list.elem, rhs_mono.list.elem, seen),
-        .box => |lhs_box| self.monotypesStructurallyEqualRec(lhs_box.inner, rhs_mono.box.inner, seen),
+        .list => |lhs_list| try self.monotypesStructurallyEqualRec(lhs_list.elem, rhs_mono.list.elem, seen),
+        .box => |lhs_box| try self.monotypesStructurallyEqualRec(lhs_box.inner, rhs_mono.box.inner, seen),
         .tuple => |lhs_tuple| blk: {
             const lhs_elems = self.store.monotype_store.getIdxSpan(lhs_tuple.elems);
             const rhs_elems = self.store.monotype_store.getIdxSpan(rhs_mono.tuple.elems);
             if (lhs_elems.len != rhs_elems.len) break :blk false;
             for (lhs_elems, rhs_elems) |lhs_elem, rhs_elem| {
-                if (!self.monotypesStructurallyEqualRec(lhs_elem, rhs_elem, seen)) {
+                if (!try self.monotypesStructurallyEqualRec(lhs_elem, rhs_elem, seen)) {
                     break :blk false;
                 }
             }
@@ -925,19 +925,19 @@ fn monotypesStructurallyEqualRec(
             const rhs_args = self.store.monotype_store.getIdxSpan(rhs_func.args);
             if (lhs_args.len != rhs_args.len) break :blk false;
             for (lhs_args, rhs_args) |lhs_arg, rhs_arg| {
-                if (!self.monotypesStructurallyEqualRec(lhs_arg, rhs_arg, seen)) {
+                if (!try self.monotypesStructurallyEqualRec(lhs_arg, rhs_arg, seen)) {
                     break :blk false;
                 }
             }
-            break :blk self.monotypesStructurallyEqualRec(lhs_func.ret, rhs_func.ret, seen);
+            break :blk try self.monotypesStructurallyEqualRec(lhs_func.ret, rhs_func.ret, seen);
         },
         .record => |lhs_record| blk: {
             const lhs_fields = self.store.monotype_store.getFields(lhs_record.fields);
             const rhs_fields = self.store.monotype_store.getFields(rhs_mono.record.fields);
             if (lhs_fields.len != rhs_fields.len) break :blk false;
             for (lhs_fields, rhs_fields) |lhs_field, rhs_field| {
-                if (lhs_field.name.idx != rhs_field.name.idx) break :blk false;
-                if (!self.monotypesStructurallyEqualRec(lhs_field.type_idx, rhs_field.type_idx, seen)) {
+                if (!lhs_field.name.eql(rhs_field.name)) break :blk false;
+                if (!try self.monotypesStructurallyEqualRec(lhs_field.type_idx, rhs_field.type_idx, seen)) {
                     break :blk false;
                 }
             }
@@ -948,12 +948,12 @@ fn monotypesStructurallyEqualRec(
             const rhs_tags = self.store.monotype_store.getTags(rhs_mono.tag_union.tags);
             if (lhs_tags.len != rhs_tags.len) break :blk false;
             for (lhs_tags, rhs_tags) |lhs_tag, rhs_tag| {
-                if (lhs_tag.name.idx != rhs_tag.name.idx) break :blk false;
+                if (!lhs_tag.name.eql(rhs_tag.name)) break :blk false;
                 const lhs_payloads = self.store.monotype_store.getIdxSpan(lhs_tag.payloads);
                 const rhs_payloads = self.store.monotype_store.getIdxSpan(rhs_tag.payloads);
                 if (lhs_payloads.len != rhs_payloads.len) break :blk false;
                 for (lhs_payloads, rhs_payloads) |lhs_payload, rhs_payload| {
-                    if (!self.monotypesStructurallyEqualRec(lhs_payload, rhs_payload, seen)) {
+                    if (!try self.monotypesStructurallyEqualRec(lhs_payload, rhs_payload, seen)) {
                         break :blk false;
                     }
                 }
@@ -1259,7 +1259,7 @@ fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype:
     defer self.scratch_expr_ids.clearFrom(args_top);
     for (call_arg_exprs, 0..) |arg_idx, i| {
         if (i < expected_arg_monos.len and !expected_arg_monos[i].isNone()) {
-            self.seedTypeVarSeen(ModuleEnv.varFrom(arg_idx), expected_arg_monos[i]);
+            try self.seedTypeVarSeen(ModuleEnv.varFrom(arg_idx), expected_arg_monos[i]);
         }
         const arg = try self.lowerExpr(arg_idx);
         try self.scratch_expr_ids.append(arg);
@@ -1527,7 +1527,7 @@ fn lowerBinop(self: *Self, binop: CIR.Expr.Binop, monotype: Monotype.Idx, region
             if (!lhs_monotype.isNone()) {
                 // Binops dispatch off the LHS nominal method (e.g. U32.plus),
                 // so seed RHS lowering to the same monotype for polymorphic literals.
-                self.seedTypeVarSeen(ModuleEnv.varFrom(binop.rhs), lhs_monotype);
+                try self.seedTypeVarSeen(ModuleEnv.varFrom(binop.rhs), lhs_monotype);
             }
             const rhs = try self.lowerExpr(binop.rhs);
 
@@ -1736,7 +1736,7 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
             // No nominal method found — check if this is a known structural op
             // (e.g. `is_eq` on a where-clause type var that resolved to a structural type like unit).
             const common = self.currentCommonIdents();
-            if (da.field_name == common.is_eq) {
+            if (da.field_name.eql(common.is_eq)) {
                 // Emit structural equality via run_low_level
                 const explicit_args = module_env.store.sliceExpr(args_span);
                 if (explicit_args.len == 1) {
@@ -1774,7 +1774,7 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
                 };
                 if (fn_args.len > 0 and !receiver_monotype.isNone()) {
                     const arg0_root = self.types_store.resolveVar(fn_args[0]).var_;
-                    self.type_var_seen.put(arg0_root, receiver_monotype) catch {};
+                    try self.type_var_seen.put(arg0_root, receiver_monotype);
                 }
             }
 
@@ -1790,7 +1790,7 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
                 const dispatch_mono = self.store.monotype_store.getMonotype(dispatch_func_monotype);
                 if (dispatch_mono == .func) {
                     const dispatch_args = self.store.monotype_store.getIdxSpan(dispatch_mono.func.args);
-                    if (dispatch_args.len > 0 and self.monotypesStructurallyEqual(dispatch_args[0], receiver_monotype)) {
+                    if (dispatch_args.len > 0 and try self.monotypesStructurallyEqual(dispatch_args[0], receiver_monotype)) {
                         expected_param_monos = dispatch_args;
                     }
                 }
@@ -1802,7 +1802,7 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
         try self.scratch_expr_ids.append(receiver);
         for (explicit_args, 0..) |arg_idx, i| {
             if (i + 1 < expected_param_monos.len and !expected_param_monos[i + 1].isNone()) {
-                self.seedTypeVarSeen(ModuleEnv.varFrom(arg_idx), expected_param_monos[i + 1]);
+                try self.seedTypeVarSeen(ModuleEnv.varFrom(arg_idx), expected_param_monos[i + 1]);
             }
             const arg = try self.lowerExpr(arg_idx);
             try self.scratch_expr_ids.append(arg);
@@ -1897,7 +1897,7 @@ fn lowerRecord(self: *Self, module_env: *const ModuleEnv, record: anytype, monot
         for (mono_fields) |mono_field| {
             var maybe_expr: ?MIR.ExprId = null;
             for (provided_fields.items) |provided| {
-                if (@as(u32, @bitCast(provided.name)) == @as(u32, @bitCast(mono_field.name))) {
+                if (provided.name.eql(mono_field.name)) {
                     maybe_expr = provided.expr;
                     break;
                 }
@@ -1984,7 +1984,7 @@ fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR
 /// Find the module index for a given origin module ident.
 fn findModuleForOrigin(self: *Self, source_env: *const ModuleEnv, origin_module: Ident.Idx) u32 {
     // Check if origin is source_env itself
-    if (origin_module == source_env.qualified_module_ident) {
+    if (origin_module.eql(source_env.qualified_module_ident)) {
         return self.current_module_idx;
     }
 
@@ -2135,7 +2135,7 @@ fn findDefExprBySymbol(self: *Self, module_idx: u32, ident_idx: Ident.Idx) ?CIR.
         const pat = target_env.store.getPattern(def.pattern);
         switch (pat) {
             .assign => |assign| {
-                if (assign.ident.idx == ident_idx.idx) return def.expr;
+                if (assign.ident.eql(ident_idx)) return def.expr;
             },
             else => {},
         }
@@ -2154,7 +2154,7 @@ fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?M
         if (!caller_monotype.isNone()) {
             const spec_key = polySpecKey(symbol_key, caller_monotype);
 
-            if (self.lookupPolySpecialization(symbol_key, caller_monotype)) |spec_symbol| {
+            if (try self.lookupPolySpecialization(symbol_key, caller_monotype)) |spec_symbol| {
                 return spec_symbol;
             }
 
@@ -2166,7 +2166,7 @@ fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?M
                 const same_specialization = if (active_monotype.isNone())
                     false
                 else
-                    self.monotypesStructurallyEqual(active_monotype, caller_monotype);
+                    try self.monotypesStructurallyEqual(active_monotype, caller_monotype);
 
                 if (!same_specialization) {
                     if (self.findDefExprBySymbol(symbol_meta.module_idx, symbol_meta.ident_idx)) |def_expr| {
@@ -2183,7 +2183,7 @@ fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?M
 
             if (self.lowered_symbols.get(symbol_key)) |cached_expr| {
                 const cached_monotype = self.store.typeOf(cached_expr);
-                if (!self.monotypesStructurallyEqual(cached_monotype, caller_monotype)) {
+                if (!try self.monotypesStructurallyEqual(cached_monotype, caller_monotype)) {
                     if (self.findDefExprBySymbol(symbol_meta.module_idx, symbol_meta.ident_idx)) |def_expr| {
                         const spec_symbol = try self.makeSyntheticSymbol(symbol);
                         try self.poly_specializations.put(spec_key, spec_symbol);
@@ -2278,7 +2278,7 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
     if (caller_monotype) |cmt| {
         if (!cmt.isNone()) {
             const target_type_var = ModuleEnv.varFrom(cir_expr_idx);
-            self.seedTypeVarSeen(target_type_var, cmt);
+            try self.seedTypeVarSeen(target_type_var, cmt);
         }
     }
     defer {
@@ -2321,7 +2321,7 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
 /// parallel with a concrete monotype from the MIR monotype store. For each
 /// flex/rigid var encountered, record it in type_var_seen so that subsequent
 /// fromTypeVar calls resolve it to the concrete monotype instead of unit.
-fn seedTypeVarSeen(self: *Self, type_var: types.Var, monotype: Monotype.Idx) void {
+fn seedTypeVarSeen(self: *Self, type_var: types.Var, monotype: Monotype.Idx) Allocator.Error!void {
     if (monotype.isNone()) return;
 
     const resolved = self.types_store.resolveVar(type_var);
@@ -2330,11 +2330,11 @@ fn seedTypeVarSeen(self: *Self, type_var: types.Var, monotype: Monotype.Idx) voi
 
     switch (resolved.desc.content) {
         .flex, .rigid => {
-            self.type_var_seen.put(resolved.var_, monotype) catch return;
+            try self.type_var_seen.put(resolved.var_, monotype);
         },
         .alias => |alias| {
             const backing_var = self.types_store.getAliasBackingVar(alias);
-            self.seedTypeVarSeen(backing_var, monotype);
+            try self.seedTypeVarSeen(backing_var, monotype);
         },
         .structure => |flat_type| {
             if (!self.monotypeCompatibleWithFlatType(flat_type, monotype)) return;
@@ -2342,8 +2342,8 @@ fn seedTypeVarSeen(self: *Self, type_var: types.Var, monotype: Monotype.Idx) voi
             // resolves to this same root (e.g. a numeric literal inside a
             // polymorphic lambda body) will find the concrete monotype
             // instead of falling through to the default Dec/unit.
-            self.type_var_seen.put(resolved.var_, monotype) catch return;
-            self.seedTypeVarSeenStructure(flat_type, monotype);
+            try self.type_var_seen.put(resolved.var_, monotype);
+            try self.seedTypeVarSeenStructure(flat_type, monotype);
         },
         .err => {},
     }
@@ -2366,10 +2366,10 @@ fn monotypeCompatibleWithFlatType(self: *Self, flat_type: types.FlatType, monoty
         },
         .empty_record => mono == .unit or mono == .record,
         .nominal_type => |nominal| blk: {
-            if (nominal.origin_module == common.builtin_module and nominal.ident.ident_idx == common.list) {
+            if (nominal.origin_module.eql(common.builtin_module) and nominal.ident.ident_idx.eql(common.list)) {
                 break :blk mono == .list;
             }
-            if (nominal.origin_module == common.builtin_module and nominal.ident.ident_idx == common.box) {
+            if (nominal.origin_module.eql(common.builtin_module) and nominal.ident.ident_idx.eql(common.box)) {
                 break :blk mono == .box;
             }
             // Non-builtin nominals are represented by their backing monotype.
@@ -2378,7 +2378,7 @@ fn monotypeCompatibleWithFlatType(self: *Self, flat_type: types.FlatType, monoty
     };
 }
 
-fn seedTypeVarSeenStructure(self: *Self, flat_type: types.FlatType, monotype: Monotype.Idx) void {
+fn seedTypeVarSeenStructure(self: *Self, flat_type: types.FlatType, monotype: Monotype.Idx) Allocator.Error!void {
     if (monotype.isNone()) return;
     const mono = self.store.monotype_store.getMonotype(monotype);
 
@@ -2390,9 +2390,9 @@ fn seedTypeVarSeenStructure(self: *Self, flat_type: types.FlatType, monotype: Mo
                     const mono_args = self.store.monotype_store.getIdxSpan(mfunc.args);
                     const min_len = @min(type_args.len, mono_args.len);
                     for (type_args[0..min_len], mono_args[0..min_len]) |ta, ma| {
-                        self.seedTypeVarSeen(ta, ma);
+                        try self.seedTypeVarSeen(ta, ma);
                     }
-                    self.seedTypeVarSeen(func.ret, mfunc.ret);
+                    try self.seedTypeVarSeen(func.ret, mfunc.ret);
                 },
                 else => {},
             }
@@ -2402,25 +2402,25 @@ fn seedTypeVarSeenStructure(self: *Self, flat_type: types.FlatType, monotype: Mo
             const ident = nominal.ident.ident_idx;
             const origin = nominal.origin_module;
 
-            if (origin == common.builtin_module) {
-                if (ident == common.list) {
+            if (origin.eql(common.builtin_module)) {
+                if (ident.eql(common.list)) {
                     switch (mono) {
                         .list => |mlist| {
                             const type_args = self.types_store.sliceNominalArgs(nominal);
                             if (type_args.len > 0) {
-                                self.seedTypeVarSeen(type_args[0], mlist.elem);
+                                try self.seedTypeVarSeen(type_args[0], mlist.elem);
                             }
                         },
                         else => {},
                     }
                     return;
                 }
-                if (ident == common.box) {
+                if (ident.eql(common.box)) {
                     switch (mono) {
                         .box => |mbox| {
                             const type_args = self.types_store.sliceNominalArgs(nominal);
                             if (type_args.len > 0) {
-                                self.seedTypeVarSeen(type_args[0], mbox.inner);
+                                try self.seedTypeVarSeen(type_args[0], mbox.inner);
                             }
                         },
                         else => {},
@@ -2431,7 +2431,7 @@ fn seedTypeVarSeenStructure(self: *Self, flat_type: types.FlatType, monotype: Mo
 
             // For other nominal types, follow the backing type
             const backing_var = self.types_store.getNominalBackingVar(nominal);
-            self.seedTypeVarSeen(backing_var, monotype);
+            try self.seedTypeVarSeen(backing_var, monotype);
         },
         .record => |record| {
             switch (mono) {
@@ -2441,7 +2441,7 @@ fn seedTypeVarSeenStructure(self: *Self, flat_type: types.FlatType, monotype: Mo
                     const mono_fields = self.store.monotype_store.getFields(mrec.fields);
                     const min_len = @min(field_vars.len, mono_fields.len);
                     for (field_vars[0..min_len], mono_fields[0..min_len]) |fv, mf| {
-                        self.seedTypeVarSeen(fv, mf.type_idx);
+                        try self.seedTypeVarSeen(fv, mf.type_idx);
                     }
                 },
                 else => {},
@@ -2455,7 +2455,7 @@ fn seedTypeVarSeenStructure(self: *Self, flat_type: types.FlatType, monotype: Mo
                     const mono_fields = self.store.monotype_store.getFields(mrec.fields);
                     const min_len = @min(field_vars.len, mono_fields.len);
                     for (field_vars[0..min_len], mono_fields[0..min_len]) |fv, mf| {
-                        self.seedTypeVarSeen(fv, mf.type_idx);
+                        try self.seedTypeVarSeen(fv, mf.type_idx);
                     }
                 },
                 else => {},
@@ -2468,7 +2468,7 @@ fn seedTypeVarSeenStructure(self: *Self, flat_type: types.FlatType, monotype: Mo
                     const mono_elems = self.store.monotype_store.getIdxSpan(mtuple.elems);
                     const min_len = @min(elem_vars.len, mono_elems.len);
                     for (elem_vars[0..min_len], mono_elems[0..min_len]) |ev, me| {
-                        self.seedTypeVarSeen(ev, me);
+                        try self.seedTypeVarSeen(ev, me);
                     }
                 },
                 else => {},
@@ -2488,12 +2488,12 @@ fn seedTypeVarSeenStructure(self: *Self, flat_type: types.FlatType, monotype: Mo
 
                         for (type_tag_names, type_tag_args) |tname, targs| {
                             for (mono_tags) |mtag| {
-                                if (tname == mtag.name) {
+                                if (tname.eql(mtag.name)) {
                                     const targ_vars = self.types_store.sliceVars(targs);
                                     const marg_idxs = self.store.monotype_store.getIdxSpan(mtag.payloads);
                                     const n = @min(targ_vars.len, marg_idxs.len);
                                     for (targ_vars[0..n], marg_idxs[0..n]) |tv, mi| {
-                                        self.seedTypeVarSeen(tv, mi);
+                                        try self.seedTypeVarSeen(tv, mi);
                                     }
                                     break;
                                 }
