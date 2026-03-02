@@ -3988,7 +3988,7 @@ fn processDevObjectSnapshot(
     var lir_store = lir_mod.LirExprStore.init(allocator);
     defer lir_store.deinit();
 
-    var mir_to_lir = lir_mod.MirToLir.init(allocator, &mir_store, &lir_store, &layout_store, all_module_envs, all_module_envs[0].idents.true_tag);
+    var mir_to_lir = lir_mod.MirToLir.init(allocator, &mir_store, &lir_store, &layout_store, all_module_envs[0].idents.true_tag);
     defer mir_to_lir.deinit();
 
     // Use provides entries from build pipeline (centralized in CompiledModuleInfo)

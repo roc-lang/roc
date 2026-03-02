@@ -778,7 +778,7 @@ pub const DevEvaluator = struct {
         var lir_store = LirExprStore.init(self.allocator);
         defer lir_store.deinit();
 
-        var mir_to_lir = lir.MirToLir.init(self.allocator, &mir_store, &lir_store, layout_store_ptr, all_module_envs, module_env.idents.true_tag);
+        var mir_to_lir = lir.MirToLir.init(self.allocator, &mir_store, &lir_store, layout_store_ptr, module_env.idents.true_tag);
         defer mir_to_lir.deinit();
 
         const lir_expr_id = mir_to_lir.lower(mir_expr_id) catch {

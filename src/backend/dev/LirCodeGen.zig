@@ -1737,34 +1737,50 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     // Generate element value
                     const elem_loc = try self.generateExpr(args[1]);
-                    // Determine element size from layout.
-                    // Cross-module layout resolution can produce incorrect ret_layout
-                    // (e.g., list_of_zst instead of list(i64)) when the builtin function's
-                    // layout index refers to a layout in the wrong module context.
-                    // When this happens, derive the correct element size from the list
-                    // argument's layout.
-                    const elem_size_align: layout.SizeAlign = blk: {
-                        const ret_layout_val = ls.getLayout(ll.ret_layout);
-                        if (ret_layout_val.tag == .list) {
-                            const sa = ls.layoutSizeAlign(ls.getLayout(ret_layout_val.data.list));
-                            if (sa.size > 0) break :blk sa;
+                    const ret_layout_val = ls.getLayout(ll.ret_layout);
+                    if (builtin.mode == .Debug and ret_layout_val.tag != .list and ret_layout_val.tag != .list_of_zst) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: list_append ret_layout must be list/list_of_zst, got {s}",
+                            .{@tagName(ret_layout_val.tag)},
+                        );
+                    }
+                    if (builtin.mode == .Debug) {
+                        const list_layout_idx = self.getExprLayout(args[0]) orelse {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: list_append missing list argument layout",
+                                .{},
+                            );
+                        };
+                        const list_layout_val = ls.getLayout(list_layout_idx);
+                        switch (list_layout_val.tag) {
+                            .list => {
+                                if (ret_layout_val.tag != .list or ret_layout_val.data.list != list_layout_val.data.list) {
+                                    std.debug.panic(
+                                        "LIR/codegen invariant violated: list_append return/list arg element layout mismatch",
+                                        .{},
+                                    );
+                                }
+                            },
+                            .list_of_zst => {
+                                if (ret_layout_val.tag != .list_of_zst) {
+                                    std.debug.panic(
+                                        "LIR/codegen invariant violated: list_append expected list_of_zst return layout",
+                                        .{},
+                                    );
+                                }
+                            },
+                            else => {
+                                std.debug.panic(
+                                    "LIR/codegen invariant violated: list_append first argument must have list/list_of_zst layout, got {s}",
+                                    .{@tagName(list_layout_val.tag)},
+                                );
+                            },
                         }
-                        // ret_layout is list_of_zst or has ZST element — try deriving
-                        // the correct element size from the list argument's layout
-                        if (self.getExprLayout(args[0])) |list_layout_idx| {
-                            const list_layout = ls.getLayout(list_layout_idx);
-                            if (list_layout.tag == .list) {
-                                const derived = ls.layoutSizeAlign(ls.getLayout(list_layout.data.list));
-                                if (derived.size > 0) break :blk derived;
-                            }
-                        }
-                        // Also check the element argument's layout
-                        if (self.getExprLayout(args[1])) |elem_layout_idx| {
-                            const sa = ls.layoutSizeAlign(ls.getLayout(elem_layout_idx));
-                            if (sa.size > 0) break :blk sa;
-                        }
-                        // Truly ZST
-                        break :blk .{ .size = 0, .alignment = .@"1" };
+                    }
+                    const elem_size_align: layout.SizeAlign = switch (ret_layout_val.tag) {
+                        .list => ls.layoutSizeAlign(ls.getLayout(ret_layout_val.data.list)),
+                        .list_of_zst => .{ .size = 0, .alignment = .@"1" },
+                        else => unreachable,
                     };
 
                     const is_zst = (elem_size_align.size == 0);
@@ -1875,41 +1891,59 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const ls = self.layout_store orelse unreachable;
                     const ret_layout_val = ls.getLayout(ll.ret_layout);
 
-                    const list_elem_layout_opt: ?layout.Idx = blk: {
-                        if (self.getExprLayout(args[0])) |list_layout_idx| {
-                            const list_layout_val = ls.getLayout(list_layout_idx);
-                            if (list_layout_val.tag == .list) {
-                                break :blk list_layout_val.data.list;
-                            }
+                    const list_layout_idx = self.getExprLayout(args[0]) orelse {
+                        if (builtin.mode == .Debug) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: list_get missing list argument layout",
+                                .{},
+                            );
                         }
-                        break :blk null;
+                        unreachable;
+                    };
+                    const list_layout_val = ls.getLayout(list_layout_idx);
+                    const list_elem_layout: layout.Idx = switch (list_layout_val.tag) {
+                        .list => list_layout_val.data.list,
+                        .list_of_zst => .zst,
+                        else => {
+                            if (builtin.mode == .Debug) {
+                                std.debug.panic(
+                                    "LIR/codegen invariant violated: list_get argument must have list/list_of_zst layout, got {s}",
+                                    .{@tagName(list_layout_val.tag)},
+                                );
+                            }
+                            unreachable;
+                        },
                     };
 
-                    const is_safe_get = blk: {
-                        if (ret_layout_val.tag != .tag_union) break :blk false;
-                        if (list_elem_layout_opt) |list_elem_layout| {
-                            // list_get_unsafe can return a tag-union element directly.
-                            // Only treat this as safe List.get when return type differs
-                            // from the list's element layout (i.e. Try(elem, err)).
-                            break :blk ll.ret_layout != list_elem_layout;
-                        }
-                        break :blk true;
-                    };
+                    // list_get_unsafe can return a tag-union element directly.
+                    // Only treat this as safe List.get when return type differs
+                    // from the list's element layout (i.e. Try(elem, err)).
+                    const is_safe_get = ret_layout_val.tag == .tag_union and ll.ret_layout != list_elem_layout;
+                    if (builtin.mode == .Debug and !is_safe_get and ll.ret_layout != list_elem_layout) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: unsafe list_get ret_layout must equal list element layout",
+                            .{},
+                        );
+                    }
 
-                    const elem_layout_idx: layout.Idx = blk: {
-                        if (list_elem_layout_opt) |list_elem_layout| {
-                            break :blk list_elem_layout;
+                    const elem_layout_idx: layout.Idx = if (is_safe_get) blk: {
+                        if (builtin.mode == .Debug and ret_layout_val.tag != .tag_union) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: safe list_get must use a tag_union return layout",
+                                .{},
+                            );
                         }
-                        if (is_safe_get and ret_layout_val.tag == .tag_union) {
-                            const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
-                            const variants = ls.getTagUnionVariants(tu_data);
-                            // Ok is discriminant 1 (tags sorted alphabetically: Err=0, Ok=1)
-                            if (variants.len > 1) {
-                                break :blk variants.get(1).payload_layout;
-                            }
+                        const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
+                        const variants = ls.getTagUnionVariants(tu_data);
+                        // Ok is discriminant 1 (tags sorted alphabetically: Err=0, Ok=1)
+                        if (builtin.mode == .Debug and variants.len <= 1) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: safe list_get return union missing Ok variant",
+                                .{},
+                            );
                         }
-                        break :blk ll.ret_layout;
-                    };
+                        break :blk variants.get(1).payload_layout;
+                    } else list_elem_layout;
                     const elem_layout_val = ls.getLayout(elem_layout_idx);
                     const elem_size: u32 = ls.layoutSizeAlign(elem_layout_val).size;
 
@@ -7290,12 +7324,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // On first branch, determine result storage strategy
                 if (first_branch) {
                     first_branch = false;
-                    // Detect list results from body_loc when layout check failed
-                    // (cross-module layouts may be out of bounds)
-                    if (!is_list_result and body_loc == .list_stack) {
-                        is_list_result = true;
-                        // Update result_size since layout check might have defaulted to target_ptr_size
-                        result_size = roc_list_size;
+                    if (builtin.mode == .Debug and !is_list_result and body_loc == .list_stack) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: if branch produced list_stack but result_layout is not a list",
+                            .{},
+                        );
                     }
                     // Use stack for types > 8 bytes (e.g., i128, Dec) or stack-based values
                     if (result_size > 8) {
@@ -7336,6 +7369,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Handle case where all branches were composite but else is the first evaluation
             if (result_slot == null and result_reg == null) {
+                if (builtin.mode == .Debug and !is_list_result and else_loc == .list_stack) {
+                    std.debug.panic(
+                        "LIR/codegen invariant violated: if else branch produced list_stack but result_layout is not a list",
+                        .{},
+                    );
+                }
                 // Use stack for types > 8 bytes (e.g., i128, Dec) or stack-based values
                 if (result_size > 8) {
                     result_slot = self.codegen.allocStackSlot(result_size);
@@ -8168,21 +8207,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     } else if (result_layout_val.tag == .tag_union or result_layout_val.tag == .struct_) {
                         // Non-scalar composite types stay as generic stack values
                         // so downstream code uses the layout for proper sizing.
-                        // However, if result_size was dynamically upgraded (e.g., a branch
-                        // produced a larger value than the declared layout, which happens when
-                        // the ? operator's deferred type constraint munges the body type),
-                        // fall through to size-based heuristics for correct ValueLocation type.
                         const declared_size = ls.layoutSizeAlign(result_layout_val).size;
-                        if (result_size <= declared_size or result_size <= 8) {
-                            return .{ .stack = .{ .offset = result_slot } };
+                        if (builtin.mode == .Debug and result_size > declared_size) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: match result slot size {d} exceeds declared layout size {d}",
+                                .{ result_size, declared_size },
+                            );
                         }
+                        return .{ .stack = .{ .offset = result_slot } };
                     }
                 }
-                // Fallback: use size-based heuristics (covers dynamic upgrade case)
-                if (result_size >= roc_str_size) {
-                    return .{ .stack_str = result_slot };
-                } else if (result_size >= 16) {
-                    return .{ .stack_i128 = result_slot };
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "LIR/codegen invariant violated: unhandled stack match result layout {s}",
+                        .{@tagName(result_layout_val.tag)},
+                    );
                 }
                 return .{ .stack = .{ .offset = result_slot } };
             }
@@ -8193,9 +8232,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        /// Store a match-branch result, dynamically upgrading from register to stack
-        /// mode if the body produces a multi-register value (e.g., string, i128, list)
-        /// but the declared result layout was ZST/small.
+        /// Store a match-branch result.
         fn storeMatchResult(
             self: *Self,
             body_loc: ValueLocation,
@@ -8206,23 +8243,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!void {
             if (body_loc == .noreturn) return;
 
-            // Check if we need to upgrade from register to stack mode
             if (!use_stack_result.*) {
-                const needed_size: ?u32 = switch (body_loc) {
-                    .stack_str => roc_str_size,
-                    .list_stack => roc_list_size,
-                    .stack_i128 => 16,
-                    .immediate_i128 => 16,
-                    else => null,
-                };
-                if (needed_size) |size| {
-                    // Upgrade to stack mode
-                    use_stack_result.* = true;
-                    result_size.* = size;
-                    result_slot.* = self.codegen.allocStackSlot(size);
-                    if (result_reg.*) |reg| {
-                        self.codegen.freeGeneral(reg);
-                        result_reg.* = null;
+                if (builtin.mode == .Debug) {
+                    switch (body_loc) {
+                        .stack_str, .list_stack, .stack_i128, .immediate_i128 => {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: match branch produced multi-word value in register-result mode",
+                                .{},
+                            );
+                        },
+                        else => {},
                     }
                 }
             }
@@ -8655,13 +8685,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Get the struct layout to find field offset and size
             const struct_layout = ls.getLayout(access.struct_layout);
             if (struct_layout.tag != .struct_) {
-                // Cross-module layout index mismatch: the struct_layout index from
-                // a builtin module may map to a different layout in the current module.
-                // When field_idx is 0, just return the value as-is (first field = whole value).
-                if (access.field_idx == 0) {
-                    return struct_loc;
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "LIR/codegen invariant violated: struct_access expected struct_ layout, got {s} (field_idx={d})",
+                        .{ @tagName(struct_layout.tag), access.field_idx },
+                    );
                 }
-                // Any other field access on non-struct is a compiler bug
                 unreachable;
             }
 
@@ -9671,48 +9700,51 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 else => unreachable,
             };
 
-            // Get element layout and size.
-            // Cross-module layout resolution can produce incorrect elem_layout indices
-            // (e.g., for builtin functions like List.fold where the for loop's elem_layout
-            // refers to a layout index in the wrong module context). When this happens,
-            // derive the correct element layout from the list expression's layout.
+            // Get element layout and size from LIR.
             const ls = self.layout_store orelse unreachable;
-            const effective_elem_layout: layout.Idx = blk: {
-                const stored_layout = ls.getLayout(for_loop.elem_layout);
-                const stored_size = ls.layoutSizeAlign(stored_layout).size;
-                if (stored_size > 0 or for_loop.elem_layout == .bool) {
-                    // Stored layout has non-zero size, trust it
-                    break :blk for_loop.elem_layout;
+            if (builtin.mode == .Debug) {
+                if (@intFromEnum(for_loop.elem_layout) >= ls.layouts.len()) {
+                    std.debug.panic(
+                        "LIR/codegen invariant violated: for_loop.elem_layout out of bounds ({d} >= {d})",
+                        .{ @intFromEnum(for_loop.elem_layout), ls.layouts.len() },
+                    );
                 }
-                // Stored layout is ZST — try to derive the correct element layout
-                if (self.getExprLayout(for_loop.list_expr)) |list_layout_idx| {
-                    const list_layout = ls.getLayout(list_layout_idx);
-                    if (list_layout.tag == .list) {
-                        const derived = list_layout.data.list;
-                        const derived_layout = ls.getLayout(derived);
-                        const derived_size = ls.layoutSizeAlign(derived_layout).size;
-                        if (derived_size > 0) {
-                            break :blk derived;
-                        }
-                    }
-                }
-                // Also check the element pattern's layout_idx
-                const elem_pattern = self.store.getPattern(for_loop.elem_pattern);
-                switch (elem_pattern) {
-                    .bind => |bind| {
-                        const pat_layout = ls.getLayout(bind.layout_idx);
-                        const pat_size = ls.layoutSizeAlign(pat_layout).size;
-                        if (pat_size > 0) {
-                            break :blk bind.layout_idx;
+
+                const list_layout_idx = self.getExprLayout(for_loop.list_expr) orelse {
+                    std.debug.panic(
+                        "LIR/codegen invariant violated: missing list_expr layout for for_loop",
+                        .{},
+                    );
+                };
+                const list_layout = ls.getLayout(list_layout_idx);
+                switch (list_layout.tag) {
+                    .list => {
+                        if (list_layout.data.list != for_loop.elem_layout) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: for_loop elem layout mismatch (loop={d}, list={d})",
+                                .{ @intFromEnum(for_loop.elem_layout), @intFromEnum(list_layout.data.list) },
+                            );
                         }
                     },
-                    .wildcard => {}, // Fall through to use for_loop.elem_layout
-                    // Other patterns not valid for for loop element
-                    else => unreachable,
+                    .list_of_zst => {
+                        const elem_size = ls.layoutSizeAlign(ls.getLayout(for_loop.elem_layout)).size;
+                        if (elem_size != 0) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: list_of_zst used with non-ZST for_loop elem layout {d}",
+                                .{@intFromEnum(for_loop.elem_layout)},
+                            );
+                        }
+                    },
+                    else => {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: for_loop list_expr must be list/list_of_zst, got {s}",
+                            .{@tagName(list_layout.tag)},
+                        );
+                    },
                 }
-                break :blk for_loop.elem_layout;
-            };
-            const elem_layout = ls.getLayout(effective_elem_layout);
+            }
+
+            const elem_layout = ls.getLayout(for_loop.elem_layout);
             const elem_size: u32 = ls.layoutSizeAlign(elem_layout).size;
             // ZST elements (size 0) are valid - they have no data but we still iterate
             std.debug.assert(elem_size <= 1024 * 1024); // Sanity check: < 1MB
@@ -9805,11 +9837,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.freeGeneral(ptr_reg);
             }
 
-            // Bind the element to the pattern, passing the element layout so list patterns
-            // can use the correct inner element size (the pattern's stored elem_layout may be wrong)
             // For ZST elements, bind to immediate 0 (no actual data)
-            const elem_loc: ValueLocation = if (is_zst) .{ .immediate_i64 = 0 } else self.stackLocationForLayout(effective_elem_layout, elem_slot);
-            try self.bindPatternWithLayout(for_loop.elem_pattern, elem_loc, effective_elem_layout);
+            const elem_loc: ValueLocation = if (is_zst) .{ .immediate_i64 = 0 } else self.stackLocationForLayout(for_loop.elem_layout, elem_slot);
+            try self.bindPattern(for_loop.elem_pattern, elem_loc);
 
             // Save break patches length before body generation
             const saved_break_patches_len = self.loop_break_patches.items.len;
@@ -9855,7 +9885,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const elem_sa_for_dec = ls.layoutSizeAlign(elem_layout);
             const elem_alignment_for_dec: u32 = @intCast(elem_sa_for_dec.alignment.toByteUnits());
             const elems_refcounted_for_dec = ls.layoutContainsRefcounted(elem_layout);
-            try self.emitListDecref(list_loc, elem_alignment_for_dec, elems_refcounted_for_dec, effective_elem_layout);
+            try self.emitListDecref(list_loc, elem_alignment_for_dec, elems_refcounted_for_dec, for_loop.elem_layout);
 
             // For loops return unit (empty record)
             return .{ .immediate_i64 = 0 };
@@ -10802,56 +10832,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 // Generate code for the expression
                 const expr_loc = try self.generateExpr(b.expr);
-                // Get the expression's layout (for mutable variable binding with correct size)
-                const expr_layout = self.getExprLayout(b.expr);
-                // Bind the result to the pattern, using expr layout for mutable vars
-                try self.bindPatternWithLayout(b.pattern, expr_loc, expr_layout);
+                try self.bindPattern(b.pattern, expr_loc);
             }
 
             // Generate the final expression
             return self.generateExpr(block.final_expr);
         }
 
-        /// Bind a value to a pattern
-        /// expr_layout_override: Optional layout from the expression being bound. If provided,
-        /// this is used for mutable variables instead of the pattern's layout_idx (which may be wrong).
+        /// Bind a value to a pattern.
         fn bindPattern(self: *Self, pattern_id: LirPatternId, value_loc: ValueLocation) Allocator.Error!void {
-            return self.bindPatternWithLayout(pattern_id, value_loc, null);
-        }
-
-        /// Ensure a reassignable symbol has a tracked mutable slot from its current location.
-        fn trackMutableSlotFromSymbolLocation(self: *Self, bind: anytype, symbol_key: u64) Allocator.Error!void {
-            if (!bind.symbol.ident_idx.attributes.reassignable) return;
-            const loc = self.symbol_locations.get(symbol_key) orelse return;
-
-            const slot: i32 = switch (loc) {
-                .stack => |s| s.offset,
-                .stack_i128 => |off| off,
-                .stack_str => |off| off,
-                .list_stack => |ls_info| ls_info.struct_offset,
-                else => return,
-            };
-
-            const size: u32 = switch (loc) {
-                .stack_i128 => 16,
-                .stack_str, .list_stack => roc_str_size,
-                .stack => blk: {
-                    if (self.layout_store) |ls| {
-                        if (@intFromEnum(bind.layout_idx) < ls.layouts.len()) {
-                            const raw = ls.layoutSizeAlign(ls.getLayout(bind.layout_idx)).size;
-                            break :blk if (raw != 0 and raw < 8) 8 else raw;
-                        }
-                    }
-                    break :blk 8;
-                },
-                else => 8,
-            };
-
-            try self.mutable_var_slots.put(symbol_key, .{ .slot = slot, .size = size });
-        }
-
-        /// Bind a value to a pattern with an optional expression layout override
-        fn bindPatternWithLayout(self: *Self, pattern_id: LirPatternId, value_loc: ValueLocation, expr_layout_override: ?layout.Idx) Allocator.Error!void {
             const pattern = self.store.getPattern(pattern_id);
 
             switch (pattern) {
@@ -10872,12 +10861,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const ls = self.layout_store orelse unreachable;
 
                             // Use the pattern's layout for the mutable variable size.
-                            // The pattern's layout_idx reflects the variable's declared/inferred type
-                            // which includes all unification constraints (e.g., from both the initial
-                            // assignment and subsequent rebindings). The expression's layout
-                            // (expr_layout_override) can be wrong when the expression is wrapped in
-                            // a call whose ret_layout wasn't properly resolved (e.g., List.with_capacity
-                            // wrapped in a call with ret_layout=u8 instead of List).
                             const size: u32 = blk: {
                                 const layout_val = ls.getLayout(bind.layout_idx);
                                 const raw_size = ls.layoutSizeAlign(layout_val).size;
@@ -10976,17 +10959,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // List layout: ptr at offset 0, len at offset 8, capacity at offset 16
                     // Elements are at ptr[0], ptr[1], etc.
 
-                    // Get element size from layout
-                    // Use element layout from the expression override if it's a list,
-                    // otherwise use the pattern's element layout.
+                    // Get element size from the pattern layout.
                     const ls = self.layout_store orelse return;
-                    const elem_layout_idx: layout.Idx = if (expr_layout_override) |override_idx| blk: {
-                        const override_layout = ls.getLayout(override_idx);
-                        if (override_layout.tag == .list) {
-                            break :blk override_layout.data.list;
-                        }
-                        break :blk lst.elem_layout;
-                    } else lst.elem_layout;
+                    const elem_layout_idx: layout.Idx = lst.elem_layout;
                     const elem_layout = ls.getLayout(elem_layout_idx);
                     const elem_size_align = ls.layoutSizeAlign(elem_layout);
                     const elem_size = elem_size_align.size;
@@ -11219,6 +11194,47 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // They are used for matching in match expressions, not for binding
                 },
             }
+        }
+
+        /// Ensure a reassignable symbol has a tracked mutable slot from its current location.
+        fn trackMutableSlotFromSymbolLocation(self: *Self, bind: anytype, symbol_key: u64) Allocator.Error!void {
+            if (!bind.symbol.ident_idx.attributes.reassignable) return;
+            const loc = self.symbol_locations.get(symbol_key) orelse return;
+
+            const slot: i32 = switch (loc) {
+                .stack => |s| s.offset,
+                .stack_i128 => |off| off,
+                .stack_str => |off| off,
+                .list_stack => |ls_info| ls_info.struct_offset,
+                else => return,
+            };
+
+            const size: u32 = switch (loc) {
+                .stack_i128 => 16,
+                .stack_str, .list_stack => roc_str_size,
+                .stack => blk: {
+                    const ls = self.layout_store orelse {
+                        if (builtin.mode == .Debug) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: missing layout_store while tracking mutable slot",
+                                .{},
+                            );
+                        }
+                        unreachable;
+                    };
+                    if (builtin.mode == .Debug and @intFromEnum(bind.layout_idx) >= ls.layouts.len()) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: mutable bind layout out of bounds ({d} >= {d})",
+                            .{ @intFromEnum(bind.layout_idx), ls.layouts.len() },
+                        );
+                    }
+                    const raw = ls.layoutSizeAlign(ls.getLayout(bind.layout_idx)).size;
+                    break :blk if (raw != 0 and raw < 8) 8 else raw;
+                },
+                else => 8,
+            };
+
+            try self.mutable_var_slots.put(symbol_key, .{ .slot = slot, .size = size });
         }
 
         /// Map a layout index to the correct ValueLocation for a value on the stack.
@@ -15887,14 +15903,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const is_list = if (param_idx < layouts.len) blk: {
                                 const param_layout = layouts[param_idx];
                                 if (self.layout_store) |ls| {
-                                    // Bounds check for cross-module layouts
-                                    if (@intFromEnum(param_layout) >= ls.layouts.len()) {
-                                        break :blk false;
+                                    if (builtin.mode == .Debug and @intFromEnum(param_layout) >= ls.layouts.len()) {
+                                        std.debug.panic(
+                                            "LIR/codegen invariant violated: join point param layout out of bounds ({d} >= {d})",
+                                            .{ @intFromEnum(param_layout), ls.layouts.len() },
+                                        );
                                     }
                                     const layout_val = ls.getLayout(param_layout);
                                     break :blk layout_val.tag == .list or layout_val.tag == .list_of_zst;
                                 }
-                                break :blk false;
+                                if (builtin.mode == .Debug) {
+                                    std.debug.panic(
+                                        "LIR/codegen invariant violated: missing layout_store while binding join point params",
+                                        .{},
+                                    );
+                                }
+                                unreachable;
                             } else false;
 
                             if (is_str) {
@@ -15962,13 +15986,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const is_list = if (param_idx < layouts.len) blk: {
                                 const param_layout = layouts[param_idx];
                                 if (self.layout_store) |ls| {
-                                    if (@intFromEnum(param_layout) >= ls.layouts.len()) {
-                                        break :blk false;
+                                    if (builtin.mode == .Debug and @intFromEnum(param_layout) >= ls.layouts.len()) {
+                                        std.debug.panic(
+                                            "LIR/codegen invariant violated: wildcard join point param layout out of bounds ({d} >= {d})",
+                                            .{ @intFromEnum(param_layout), ls.layouts.len() },
+                                        );
                                     }
                                     const layout_val = ls.getLayout(param_layout);
                                     break :blk layout_val.tag == .list or layout_val.tag == .list_of_zst;
                                 }
-                                break :blk false;
+                                if (builtin.mode == .Debug) {
+                                    std.debug.panic(
+                                        "LIR/codegen invariant violated: missing layout_store while binding wildcard join point params",
+                                        .{},
+                                    );
+                                }
+                                unreachable;
                             } else false;
 
                             if (is_str or is_list) {
