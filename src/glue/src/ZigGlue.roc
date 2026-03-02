@@ -368,6 +368,8 @@ generate_zig_file = |hosted_functions| {
 		.concat(generate_platform_fns_struct(hosted_functions))
 		.concat("\n")
 		.concat(generate_hosted_functions_helper(hosted_functions))
+		.concat("\n")
+		.concat(generate_host_helpers)
 }
 
 ## File header comment
@@ -378,7 +380,7 @@ file_header =
 ## Import section
 generate_imports : Str
 generate_imports =
-	"const builtins = @import(\"builtins\");\nconst RocStr = builtins.str.RocStr;\nconst RocList = builtins.list.RocList;\nconst RocOps = builtins.host_abi.RocOps;\nconst HostedFn = builtins.host_abi.HostedFn;\n"
+	"const std = @import(\"std\");\nconst builtins = @import(\"builtins\");\nconst RocStr = builtins.str.RocStr;\nconst RocList = builtins.list.RocList;\nconst RocOps = builtins.host_abi.RocOps;\nconst HostedFn = builtins.host_abi.HostedFn;\n"
 
 ## Generate index constants and count
 generate_index_constants : List({ index : U64, name : Str, type_str : Str }), U64 -> Str
@@ -481,3 +483,174 @@ generate_hosted_functions_helper = |hosted_functions| {
 
 	"/// Create a HostedFunctions dispatch table from your implementations.\n/// The comptime parameter + nested struct ensures the function pointer array\n/// lives in static memory, not on the stack.\npub fn hostedFunctions(comptime fns: PlatformHostedFns) builtins.host_abi.HostedFunctions {\n    const Static = struct {\n        const ptrs = [_]HostedFn{\n${$entries}        };\n    };\n    return .{\n        .count = Static.ptrs.len,\n        .fns = @constCast(&Static.ptrs),\n    };\n}\n"
 }
+
+# =============================================================================
+# Host Helper Utilities
+# =============================================================================
+
+## Generate DefaultAllocators, DefaultHandlers, and makeRocOps helpers.
+## These are static Zig code blocks that don't depend on specific hosted functions.
+generate_host_helpers : Str
+generate_host_helpers =
+	generate_default_allocators
+		.concat("\n")
+		.concat(generate_default_handlers)
+		.concat("\n")
+		.concat(generate_make_roc_ops)
+
+## Generate the DefaultAllocators generic function
+generate_default_allocators : Str
+generate_default_allocators =
+	\\/// Default memory management functions for Roc platforms.
+	\\///
+	\\/// Returns a struct with `rocAlloc`, `rocDealloc`, and `rocRealloc` functions
+	\\/// that follow the Roc ABI and use `EnvType.allocator()` for allocation.
+	\\///
+	\\/// Memory layout: each allocation prepends size metadata so that dealloc/realloc
+	\\/// can recover the original allocation size (required because `roc_dealloc` does
+	\\/// not receive a length parameter).
+	\\///
+	\\/// `EnvType` must have an `.allocator()` method that returns `std.mem.Allocator`.
+	\\pub fn DefaultAllocators(comptime EnvType: type) type {
+	\\    return struct {
+	\\        pub fn rocAlloc(alloc_args: *builtins.host_abi.RocAlloc, env_ptr: *anyopaque) callconv(.c) void {
+	\\            const host_env: *EnvType = @ptrCast(@alignCast(env_ptr));
+	\\            const allocator = host_env.allocator();
+	\\
+	\\            const min_alignment: usize = @max(alloc_args.alignment, @alignOf(usize));
+	\\            const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
+	\\            const size_storage_bytes = min_alignment;
+	\\            const total_size = alloc_args.length + size_storage_bytes;
+	\\
+	\\            const base_ptr = allocator.rawAlloc(total_size, align_enum, @returnAddress()) orelse {
+	\\                const stderr_file: std.fs.File = .stderr();
+	\\                stderr_file.writeAll("roc_alloc: out of memory\\n") catch {};
+	\\                std.process.exit(1);
+	\\            };
+	\\
+	\\            // Store total size immediately before the user data pointer
+	\\            const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
+	\\            size_ptr.* = total_size;
+	\\
+	\\            alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
+	\\        }
+	\\
+	\\        pub fn rocDealloc(dealloc_args: *builtins.host_abi.RocDealloc, env_ptr: *anyopaque) callconv(.c) void {
+	\\            const host_env: *EnvType = @ptrCast(@alignCast(env_ptr));
+	\\            const allocator = host_env.allocator();
+	\\
+	\\            const min_alignment: usize = @max(dealloc_args.alignment, @alignOf(usize));
+	\\            const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
+	\\            const size_storage_bytes = min_alignment;
+	\\
+	\\            const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
+	\\            const total_size = size_ptr.*;
+	\\
+	\\            const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - size_storage_bytes);
+	\\            const slice = base_ptr[0..total_size];
+	\\            allocator.rawFree(slice, align_enum, @returnAddress());
+	\\        }
+	\\
+	\\        pub fn rocRealloc(realloc_args: *builtins.host_abi.RocRealloc, env_ptr: *anyopaque) callconv(.c) void {
+	\\            const host_env: *EnvType = @ptrCast(@alignCast(env_ptr));
+	\\            const allocator = host_env.allocator();
+	\\
+	\\            const min_alignment: usize = @max(realloc_args.alignment, @alignOf(usize));
+	\\            const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
+	\\            const size_storage_bytes = min_alignment;
+	\\
+	\\            // Read old size from metadata
+	\\            const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));
+	\\            const old_total_size = old_size_ptr.*;
+	\\            const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(realloc_args.answer) - size_storage_bytes);
+	\\
+	\\            // Allocate new block
+	\\            const new_total_size = realloc_args.new_length + size_storage_bytes;
+	\\            const new_base_ptr = allocator.rawAlloc(new_total_size, align_enum, @returnAddress()) orelse {
+	\\                const stderr_file: std.fs.File = .stderr();
+	\\                stderr_file.writeAll("roc_realloc: out of memory\\n") catch {};
+	\\                std.process.exit(1);
+	\\            };
+	\\
+	\\            // Copy old user data to new location
+	\\            const old_user_data_size = old_total_size - size_storage_bytes;
+	\\            const copy_size = @min(old_user_data_size, realloc_args.new_length);
+	\\            const new_user_ptr: [*]u8 = @ptrFromInt(@intFromPtr(new_base_ptr) + size_storage_bytes);
+	\\            const old_user_ptr: [*]const u8 = @ptrCast(realloc_args.answer);
+	\\            @memcpy(new_user_ptr[0..copy_size], old_user_ptr[0..copy_size]);
+	\\
+	\\            // Free old allocation
+	\\            allocator.rawFree(old_base_ptr[0..old_total_size], align_enum, @returnAddress());
+	\\
+	\\            // Store new size and return user pointer
+	\\            const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_base_ptr) + size_storage_bytes - @sizeOf(usize));
+	\\            new_size_ptr.* = new_total_size;
+	\\            realloc_args.answer = new_user_ptr;
+	\\        }
+	\\    };
+	\\}
+	\\
+
+## Generate the DefaultHandlers namespace
+generate_default_handlers : Str
+generate_default_handlers =
+	\\/// Default handlers for dbg, expect-failed, and crash.
+	\\///
+	\\/// These print to stderr and don't use the env pointer. Suitable for most
+	\\/// platform hosts that don't need custom handling of these events.
+	\\pub const DefaultHandlers = struct {
+	\\    pub fn rocDbg(dbg_args: *const builtins.host_abi.RocDbg, _: *anyopaque) callconv(.c) void {
+	\\        const msg = dbg_args.utf8_bytes[0..dbg_args.len];
+	\\        const stderr_file: std.fs.File = .stderr();
+	\\        stderr_file.writeAll("\\x1b[36m[ROC DBG]\\x1b[0m ") catch {};
+	\\        stderr_file.writeAll(msg) catch {};
+	\\        stderr_file.writeAll("\\n") catch {};
+	\\    }
+	\\
+	\\    pub fn rocExpectFailed(expect_args: *const builtins.host_abi.RocExpectFailed, _: *anyopaque) callconv(.c) void {
+	\\        const msg = expect_args.utf8_bytes[0..expect_args.len];
+	\\        const stderr_file: std.fs.File = .stderr();
+	\\        stderr_file.writeAll("\\x1b[33m[ROC EXPECT]\\x1b[0m ") catch {};
+	\\        stderr_file.writeAll(msg) catch {};
+	\\        stderr_file.writeAll("\\n") catch {};
+	\\    }
+	\\
+	\\    pub fn rocCrashed(crash_args: *const builtins.host_abi.RocCrashed, _: *anyopaque) callconv(.c) void {
+	\\        const msg = crash_args.utf8_bytes[0..crash_args.len];
+	\\        const stderr_file: std.fs.File = .stderr();
+	\\        stderr_file.writeAll("\\x1b[31m[ROC CRASHED]\\x1b[0m ") catch {};
+	\\        stderr_file.writeAll(msg) catch {};
+	\\        stderr_file.writeAll("\\n") catch {};
+	\\        std.process.exit(1);
+	\\    }
+	\\};
+	\\
+
+## Generate the makeRocOps convenience function
+generate_make_roc_ops : Str
+generate_make_roc_ops =
+	\\/// Create a RocOps struct with default memory management and error handlers.
+	\\///
+	\\/// This is a convenience function that wires together `DefaultAllocators(EnvType)`,
+	\\/// `DefaultHandlers`, and the provided hosted functions into a ready-to-use `RocOps`.
+	\\///
+	\\/// `EnvType` must have an `.allocator()` method that returns `std.mem.Allocator`.
+	\\///
+	\\/// Example usage:
+	\\/// ```
+	\\/// var roc_ops = makeRocOps(HostEnv, &host_env, hostedFunctions(.{ ... }));
+	\\/// ```
+	\\pub fn makeRocOps(comptime EnvType: type, env: *EnvType, hosted_fns: builtins.host_abi.HostedFunctions) RocOps {
+	\\    const Allocs = DefaultAllocators(EnvType);
+	\\    return .{
+	\\        .env = @ptrCast(env),
+	\\        .roc_alloc = &Allocs.rocAlloc,
+	\\        .roc_dealloc = &Allocs.rocDealloc,
+	\\        .roc_realloc = &Allocs.rocRealloc,
+	\\        .roc_dbg = &DefaultHandlers.rocDbg,
+	\\        .roc_expect_failed = &DefaultHandlers.rocExpectFailed,
+	\\        .roc_crashed = &DefaultHandlers.rocCrashed,
+	\\        .hosted_fns = hosted_fns,
+	\\    };
+	\\}
+	\\
