@@ -267,7 +267,16 @@ resolve_tag_union_type = |type_table, tu| {
 generate_roc_list_generic : Str
 generate_roc_list_generic =
 	\\/// A generic Roc list. Elements are reference-counted and heap-allocated.
+	\\///
+	\\/// When `elements_refcounted` is true (the default), an extra `ptr_width` bytes
+	\\/// are reserved in the allocation header for the element count, matching the Roc
+	\\/// runtime's `allocateWithRefcount` layout. Set to `false` for lists of
+	\\/// non-refcounted primitives (e.g. `U8`, `I32`).
 	\\pub fn RocList(comptime T: type) type {
+	\\    return RocListWith(T, true);
+	\\}
+	\\
+	\\pub fn RocListWith(comptime T: type, comptime elements_refcounted: bool) type {
 	\\    return extern struct {
 	\\        elements_ptr: ?[*]T,
 	\\        length: usize,
@@ -275,7 +284,8 @@ generate_roc_list_generic =
 	\\
 	\\        const Self = @This();
 	\\        const ptr_width = @sizeOf(usize);
-	\\        const header_bytes = @max(ptr_width, @alignOf(T));
+	\\        const required_space: usize = if (elements_refcounted) (2 * ptr_width) else ptr_width;
+	\\        const header_bytes = @max(required_space, @alignOf(T));
 	\\        const alloc_align = @max(ptr_width, @alignOf(T));
 	\\
 	\\        /// Return the list elements as a `[]const T` slice.
@@ -348,8 +358,7 @@ generate_roc_list_generic =
 	\\        }
 	\\
 	\\        /// Increment the reference count by `amount`.
-	\\        pub fn incref(self: Self, amount: isize, roc_ops: *RocOps) void {
-	\\            _ = roc_ops;
+	\\        pub fn incref(self: Self, amount: isize) void {
 	\\            const ptr = self.elements_ptr orelse return;
 	\\            const rc: *isize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(isize));
 	\\            _ = @atomicRmw(isize, rc, .Add, amount, .monotonic);
@@ -923,8 +932,7 @@ generate_roc_str =
 	\\    }
 	\\
 	\\    /// Increment the reference count by `amount`.
-	\\    pub fn incref(self: Self, amount: isize, roc_ops: *RocOps) void {
-	\\        _ = roc_ops;
+	\\    pub fn incref(self: Self, amount: isize) void {
 	\\        if (self.isSmallStr()) return;
 	\\        const alloc_ptr = self.getAllocationPtr() orelse return;
 	\\        const rc: *isize = @ptrFromInt(@intFromPtr(alloc_ptr) - @sizeOf(isize));
