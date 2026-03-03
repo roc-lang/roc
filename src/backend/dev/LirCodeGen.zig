@@ -15459,7 +15459,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                 }
                 const num_regs = self.calcArgRegCount(arg_loc, arg_layout);
-                if (arg_loc == .list_stack) {} else if (arg_loc == .stack) {}
                 try self.scratch_arg_infos.append(.{ .loc = arg_loc, .layout_idx = arg_layout, .num_regs = num_regs });
             }
             const arg_infos = self.scratch_arg_infos.sliceFromStart(arg_infos_start);

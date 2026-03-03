@@ -20,13 +20,6 @@ else => {},  // arg_layout stays null
 ```
 When `arg_layout` is null for non-immediate locations (`.stack`, `.stack_str`, `.list_stack`), `calcArgRegCount` falls back to 1 register. Multi-word types like strings (3 words) would get wrong register count → call corruption.
 
-### 22. Dead no-op conditional
-**`src/backend/dev/LirCodeGen.zig:15489`**
-```zig
-if (arg_loc == .list_stack) {} else if (arg_loc == .stack) {}
-```
-Completely dead statement — both branches have empty bodies. Leftover debugging code.
-
 ### 23. `getExprLayout` `else => null` drops available layout info
 **`src/backend/dev/LirCodeGen.zig:1401`**
 
