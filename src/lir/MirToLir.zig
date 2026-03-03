@@ -1917,7 +1917,7 @@ fn mapLowLevel(cir_op: CIR.Expr.LowLevel) ?LirExpr.LowLevel {
         .dec_to_f32_try_unsafe => .dec_to_f32_try_unsafe,
         .dec_to_f64 => .dec_to_f64,
 
-        // Numeric to_str operations
+        // *_to_str ops are handled by lowerLowLevel before reaching mapLowLevel
         .u8_to_str,
         .i8_to_str,
         .u16_to_str,
@@ -1931,7 +1931,7 @@ fn mapLowLevel(cir_op: CIR.Expr.LowLevel) ?LirExpr.LowLevel {
         .dec_to_str,
         .f32_to_str,
         .f64_to_str,
-        => .num_to_str,
+        => unreachable,
 
         // Arithmetic ops
         .num_plus => .num_add,

@@ -464,7 +464,7 @@ pub const RcInsertPass = struct {
         // Guard against sentinel/out-of-range layout indices (e.g., named_fn, none)
         // which can appear for function-typed symbols that don't need RC.
         const idx_int = @intFromEnum(layout_idx);
-        if (idx_int >= self.layout_store.layouts.len()) return false;
+        if (idx_int >= self.layout_store.layouts.len()) unreachable;
         const l = self.layout_store.getLayout(layout_idx);
         return self.layout_store.layoutContainsRefcounted(l);
     }
@@ -1570,7 +1570,7 @@ pub const RcInsertPass = struct {
         std.mem.sort(u64, sorted_keys, {}, std.sort.asc(u64));
 
         for (sorted_keys) |key| {
-            const layout_idx = self.symbol_layouts.get(key) orelse continue;
+            const layout_idx = self.symbol_layouts.get(key) orelse unreachable;
             const symbol: Symbol = @bitCast(key);
             const local_count = local_uses.get(key) orelse 0;
 
@@ -1622,7 +1622,7 @@ pub const RcInsertPass = struct {
         for (sorted_keys) |key| {
             const count = guard_uses.get(key) orelse 0;
             if (count == 0) continue;
-            const layout_idx = self.symbol_layouts.get(key) orelse continue;
+            const layout_idx = self.symbol_layouts.get(key) orelse unreachable;
             if (!self.layoutNeedsRc(layout_idx)) continue;
             const symbol: Symbol = @bitCast(key);
             try self.emitIncrefInto(symbol, layout_idx, @intCast(count), region, &rc_stmts);
