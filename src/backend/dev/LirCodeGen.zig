@@ -11785,9 +11785,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             .general_reg, .stack, .immediate_i64 => {
                                 return try self.generateCallFromCallableValue(loc, call.args, call.ret_layout);
                             },
-                            // Other locations (registers, stack, immediates) fall through
-                            // to generateLookupCall for function pointer handling
-                            else => {},
+                            .float_reg,
+                            .stack_i128,
+                            .stack_str,
+                            .list_stack,
+                            .immediate_f64,
+                            .immediate_i128,
+                            .noreturn,
+                            => {
+                                if (builtin.mode == .Debug) std.debug.panic(
+                                    "LIR/codegen invariant violated: callable symbol resolved to non-callable location '{s}'",
+                                    .{@tagName(loc)},
+                                );
+                                unreachable;
+                            },
                         }
                     }
                     return try self.generateLookupCall(lookup, call.args, call.ret_layout);

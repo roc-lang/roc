@@ -13,11 +13,6 @@ else => {},
 ```
 The `else => {}` silently skips RC for `.closure` layouts. Closures can capture refcounted values (Str, List). Silent skip → memory leaks or use-after-free.
 
-### 18. `generateLookupCall` silent `else => {}` for non-callable symbol locations
-**`src/backend/dev/LirCodeGen.zig:12930`**
-
-When a symbol IS found but has an unexpected location type (`.float_reg`, `.stack_str`, etc.), silently falls through to a debug panic that says "unresolved symbol" — misleading, since the symbol *was* resolved.
-
 ### 20. `generateCall` (lookup branch) silent `else => {}` fallthrough
 **`src/backend/dev/LirCodeGen.zig:11825`**
 
