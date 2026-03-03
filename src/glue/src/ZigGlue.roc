@@ -270,6 +270,9 @@ generate_roc_list_generic =
 	\\        capacity_or_alloc_ptr: usize,
 	\\
 	\\        const Self = @This();
+	\\        const ptr_width = @sizeOf(usize);
+	\\        const header_bytes = @max(ptr_width, @alignOf(T));
+	\\        const alloc_align = @max(ptr_width, @alignOf(T));
 	\\
 	\\        pub fn items(self: Self) []const T {
 	\\            if (self.elements_ptr) |ptr| return ptr[0..self.length];
@@ -279,12 +282,80 @@ generate_roc_list_generic =
 	\\        pub fn len(self: Self) usize {
 	\\            return self.length;
 	\\        }
+	\\
+	\\        pub fn isEmpty(self: Self) bool {
+	\\            return self.length == 0;
+	\\        }
+	\\
+	\\        pub fn empty() Self {
+	\\            return .{ .elements_ptr = null, .length = 0, .capacity_or_alloc_ptr = 0 };
+	\\        }
+	\\
+	\\        pub fn allocate(length: usize, roc_ops: *RocOps) Self {
+	\\            if (length == 0) return empty();
+	\\            const data_bytes = length * @sizeOf(T);
+	\\            const total = data_bytes + header_bytes;
+	\\            var alloc_args: builtins.host_abi.RocAlloc = .{
+	\\                .alignment = alloc_align,
+	\\                .length = total,
+	\\                .answer = undefined,
+	\\            };
+	\\            roc_ops.roc_alloc(&alloc_args, roc_ops.env);
+	\\            const base: [*]u8 = @ptrCast(alloc_args.answer);
+	\\            const data_ptr = base + header_bytes;
+	\\            const rc: *isize = @ptrFromInt(@intFromPtr(data_ptr) - @sizeOf(isize));
+	\\            rc.* = 1;
+	\\            return .{
+	\\                .elements_ptr = @ptrCast(@alignCast(data_ptr)),
+	\\                .length = length,
+	\\                .capacity_or_alloc_ptr = length,
+	\\            };
+	\\        }
+	\\
+	\\        pub fn fromSlice(slice: []const T, roc_ops: *RocOps) Self {
+	\\            if (slice.len == 0) return empty();
+	\\            const list = allocate(slice.len, roc_ops);
+	\\            const dest: [*]u8 = @ptrCast(list.elements_ptr.?);
+	\\            const src: [*]const u8 = @ptrCast(slice.ptr);
+	\\            @memcpy(dest[0 .. slice.len * @sizeOf(T)], src[0 .. slice.len * @sizeOf(T)]);
+	\\            return list;
+	\\        }
+	\\
+	\\        pub fn decref(self: Self, roc_ops: *RocOps) void {
+	\\            const ptr = self.elements_ptr orelse return;
+	\\            const data_addr = @intFromPtr(ptr);
+	\\            const rc: *isize = @ptrFromInt(data_addr - @sizeOf(isize));
+	\\            const prev = @atomicRmw(isize, rc, .Sub, 1, .monotonic);
+	\\            if (prev == 1) {
+	\\                const base: *anyopaque = @ptrFromInt(data_addr - header_bytes);
+	\\                var dealloc_args: builtins.host_abi.RocDealloc = .{
+	\\                    .alignment = alloc_align,
+	\\                    .ptr = base,
+	\\                };
+	\\                roc_ops.roc_dealloc(&dealloc_args, roc_ops.env);
+	\\            }
+	\\        }
+	\\
+	\\        pub fn incref(self: Self, amount: isize, roc_ops: *RocOps) void {
+	\\            _ = roc_ops;
+	\\            const ptr = self.elements_ptr orelse return;
+	\\            const rc: *isize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(isize));
+	\\            _ = @atomicRmw(isize, rc, .Add, amount, .monotonic);
+	\\        }
+	\\
+	\\        pub fn isUnique(self: Self) bool {
+	\\            const ptr = self.elements_ptr orelse return true;
+	\\            if (self.capacity_or_alloc_ptr == 0) return true;
+	\\            const rc: *const isize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(isize));
+	\\            return rc.* == 1;
+	\\        }
 	\\    };
 	\\}
 	\\
 
 ## Generate extern structs for element types found in the type table.
 ## Scans for Record types and generates Zig extern structs for them.
+## Fields arrive pre-sorted by alignment descending from the compiler.
 generate_element_type_structs : List(TypeRepr) -> Str
 generate_element_type_structs = |type_table| {
 	var $structs = ""
@@ -306,9 +377,16 @@ generate_element_type_structs = |type_table| {
 						)
 					}
 
+					# Comptime size/alignment assertions
+					assertions = if rec.size > 0 {
+						"comptime {\n    if (@sizeOf(${struct_name}) != ${U64.to_str(rec.size)}) @compileError(\"${struct_name} size mismatch\");\n    if (@alignOf(${struct_name}) != ${U64.to_str(rec.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n}\n\n"
+					} else {
+						""
+					}
+
 					$structs = Str.concat(
 						$structs,
-						"/// Element type for ${rec.name}\npub const ${struct_name} = extern struct {\n${$field_strs}};\n\n",
+						"/// Element type for ${rec.name}\npub const ${struct_name} = extern struct {\n${$field_strs}};\n\n${assertions}",
 					)
 				}
 			_ => {}
@@ -485,6 +563,42 @@ expect lowercase_first("hello") == "hello"
 expect lowercase_first("") == ""
 
 # =============================================================================
+# Type Table Helpers
+# =============================================================================
+
+## Look up a type_id in the type table and return record fields if it's a record.
+## Follows single-variant tag unions (unwrapping to their payload).
+lookup_record_in_type_table = |type_table, type_id| {
+	match List.get(type_table, type_id) {
+		Ok(type_repr) =>
+			match type_repr {
+				RocRecord(rec) =>
+					if List.len(rec.fields) > 0 {
+						{ found: Bool.True, fields: rec.fields, size: rec.size, alignment: rec.alignment }
+					} else {
+						{ found: Bool.False, fields: [], size: 0, alignment: 0 }
+					}
+				RocTagUnion(tu) =>
+					# Follow single-variant tag unions to their payload
+					if List.len(tu.tags) == 1 {
+						match List.first(tu.tags) {
+							Ok(tag) =>
+								match List.first(tag.payload) {
+									Ok(payload_id) => lookup_record_in_type_table(type_table, payload_id)
+									_ => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+								}
+							_ => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+						}
+					} else {
+						{ found: Bool.False, fields: [], size: 0, alignment: 0 }
+					}
+				_ => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+			}
+		Err(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+	}
+}
+
+# =============================================================================
 # Zig Code Generation
 # =============================================================================
 
@@ -500,8 +614,8 @@ generate_zig_file = |hosted_functions, type_table| {
 		.concat(generate_index_constants(hosted_functions, count))
 		.concat("\n")
 		.concat(generate_element_type_structs(type_table))
-		.concat(generate_all_record_structs(hosted_functions))
-		.concat(generate_all_args_structs(hosted_functions))
+		.concat(generate_all_record_structs(hosted_functions, type_table))
+		.concat(generate_all_args_structs(hosted_functions, type_table))
 		.concat(generate_platform_fns_struct(hosted_functions, type_table))
 		.concat("\n")
 		.concat(generate_hosted_functions_helper(hosted_functions))
@@ -534,43 +648,56 @@ generate_index_constants = |hosted_functions, count| {
 	$constants
 }
 
-## Generate extern structs for record return types from field info
-generate_all_record_structs = |hosted_functions| {
+## Generate extern structs for record return types using type table (correctly sorted by alignment).
+## Only generates RetRecord structs when ret_type_id resolves to a record in the type table.
+## Tag union return types (e.g., Try(Record, Str)) are not yet supported and are skipped.
+generate_all_record_structs = |hosted_functions, type_table| {
 	var $structs = ""
 	for func in hosted_functions {
-		if !(List.is_empty(func.ret_fields)) {
+		# Only generate RetRecord if the return type is actually a record
+		type_table_result = lookup_record_in_type_table(type_table, func.ret_type_id)
+
+		if type_table_result.found {
 			struct_name = name_to_struct_name(func.name)
 
 			var $fields = ""
-			for field in func.ret_fields {
-				zig_type = roc_type_to_zig(field.type_str)
+			for field in type_table_result.fields {
+				zig_type = type_id_to_zig(type_table, field.type_id)
 				$fields = Str.concat(
 					$fields,
-					"    ${field.name}: ${zig_type}, // ${field.type_str}\n",
+					"    ${field.name}: ${zig_type},\n",
 				)
 			}
 
-			doc = "/// Return type record for ${func.name}\n/// Fields are alphabetically ordered (Roc C ABI)\n"
+			assertions = if type_table_result.size > 0 {
+				"comptime {\n    if (@sizeOf(${struct_name}RetRecord) != ${U64.to_str(type_table_result.size)}) @compileError(\"${struct_name}RetRecord size mismatch\");\n    if (@alignOf(${struct_name}RetRecord) != ${U64.to_str(type_table_result.alignment)}) @compileError(\"${struct_name}RetRecord alignment mismatch\");\n}\n\n"
+			} else {
+				""
+			}
+
+			doc = "/// Return type record for ${func.name}\n/// Fields ordered by alignment descending (Roc ABI)\n"
 			$structs = Str.concat(
 				$structs,
-				"${doc}pub const ${struct_name}RetRecord = extern struct {\n${$fields}};\n\n",
+				"${doc}pub const ${struct_name}RetRecord = extern struct {\n${$fields}};\n\n${assertions}",
 			)
 		}
+		# else: return type is not a record (tag union, primitive, etc.) — skip RetRecord generation
 	}
 	$structs
 }
 
 ## Generate all argument extern structs
-generate_all_args_structs = |hosted_functions| {
+generate_all_args_structs = |hosted_functions, type_table| {
 	var $structs = ""
 	for func in hosted_functions {
-		$structs = Str.concat($structs, generate_args_struct(func))
+		$structs = Str.concat($structs, generate_args_struct(func, type_table))
 	}
 	$structs
 }
 
-## Generate a single argument extern struct (empty string if no args)
-generate_args_struct = |func| {
+## Generate a single argument extern struct (empty string if no args).
+## Uses type table for single-record args; positional for multi-arg or primitive args.
+generate_args_struct = |func, type_table| {
 	parsed = parse_type_str(func.type_str)
 
 	if List.is_empty(parsed.args) {
@@ -579,34 +706,51 @@ generate_args_struct = |func| {
 
 	struct_name = name_to_struct_name(func.name)
 
-	# If we have arg_fields with named fields, use those instead of positional arg0, arg1
-	$fields = if !(List.is_empty(func.arg_fields)) {
-		var $named_fields = ""
-		for field in func.arg_fields {
-			zig_type = roc_type_to_zig(field.type_str)
-			$named_fields = Str.concat(
-				$named_fields,
-				"    ${field.name}: ${zig_type}, // ${field.type_str}\n",
-			)
+	# Try type table lookup for single-record arg
+	type_table_result = if List.len(func.arg_type_ids) == 1 {
+		match List.first(func.arg_type_ids) {
+			Ok(arg_id) => lookup_record_in_type_table(type_table, arg_id)
+			Err(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
 		}
-		$named_fields
 	} else {
-		var $positional_fields = ""
-		var $idx = 0
-		for arg in parsed.args {
-			zig_type = roc_type_to_zig(arg)
-			$positional_fields = Str.concat(
-				$positional_fields,
-				"    arg${U64.to_str($idx)}: ${zig_type}, // ${arg}\n",
+		{ found: Bool.False, fields: [], size: 0, alignment: 0 }
+	}
+
+	if type_table_result.found {
+		var $fields = ""
+		for field in type_table_result.fields {
+			zig_type = type_id_to_zig(type_table, field.type_id)
+			$fields = Str.concat(
+				$fields,
+				"    ${field.name}: ${zig_type},\n",
 			)
-			$idx = $idx + 1
 		}
-		$positional_fields
+
+		assertions = if type_table_result.size > 0 {
+			"comptime {\n    if (@sizeOf(${struct_name}Args) != ${U64.to_str(type_table_result.size)}) @compileError(\"${struct_name}Args size mismatch\");\n    if (@alignOf(${struct_name}Args) != ${U64.to_str(type_table_result.alignment)}) @compileError(\"${struct_name}Args alignment mismatch\");\n}\n\n"
+		} else {
+			""
+		}
+
+		doc = "/// Arguments for ${func.name}\n/// Roc signature: ${func.type_str}\n"
+		return "${doc}pub const ${struct_name}Args = extern struct {\n${$fields}};\n\n${assertions}"
+	}
+
+	# Multi-arg or primitive args: use positional fields from type table
+	var $positional_fields = ""
+	var $idx = 0
+	for arg_type_id in func.arg_type_ids {
+		zig_type = type_id_to_zig(type_table, arg_type_id)
+		$positional_fields = Str.concat(
+			$positional_fields,
+			"    arg${U64.to_str($idx)}: ${zig_type},\n",
+		)
+		$idx = $idx + 1
 	}
 
 	doc = "/// Arguments for ${func.name}\n/// Roc signature: ${func.type_str}\n"
 
-	"${doc}pub const ${struct_name}Args = extern struct {\n${$fields}};\n\n"
+	"${doc}pub const ${struct_name}Args = extern struct {\n${$positional_fields}};\n\n"
 }
 
 ## Generate the PlatformHostedFns struct type
@@ -631,8 +775,9 @@ hosted_fn_type = |func, type_table| {
 	parsed = parse_type_str(func.type_str)
 	struct_name = name_to_struct_name(func.name)
 
-	# Use typed return pointer: prefer ret_fields for records, then type_id_to_zig for typed returns
-	ret_param = if !(List.is_empty(func.ret_fields)) {
+	# Use type table to detect record return types
+	ret_record = lookup_record_in_type_table(type_table, func.ret_type_id)
+	ret_param = if ret_record.found {
 		"*${struct_name}RetRecord"
 	} else {
 		zig_ret = type_id_to_zig(type_table, func.ret_type_id)

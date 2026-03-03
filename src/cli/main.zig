@@ -5731,7 +5731,7 @@ const CollectedTypeRepr = union(enum) {
     unit,
     list: u64,
     function: struct { arg_ids: []const u64, ret_id: u64 },
-    record: struct { name: []const u8, fields: []const CollectedRecordField },
+    record: struct { name: []const u8, fields: []const CollectedRecordField, size: u64, alignment: u64 },
     tag_union: struct { name: []const u8, tags: []const CollectedTagInfo },
     unknown: []const u8,
 };
@@ -5739,6 +5739,8 @@ const CollectedTypeRepr = union(enum) {
 const CollectedRecordField = struct {
     name: []const u8,
     type_id: u64,
+    size: u64,
+    alignment: u64,
 };
 
 const CollectedTagInfo = struct {
@@ -5832,6 +5834,33 @@ const TypeTable = struct {
         return idx;
     }
 
+    const SizeAlign = struct { size: u64, alignment: u64 };
+
+    /// Get the size and alignment for a type table entry by index.
+    fn getSizeAlign(self: *const TypeTable, type_id: u64) SizeAlign {
+        if (type_id >= self.entries.items.len) return .{ .size = 0, .alignment = 1 };
+        return getSizeAlignForRepr(self.entries.items[type_id]);
+    }
+
+    /// Get the size and alignment for a CollectedTypeRepr.
+    fn getSizeAlignForRepr(repr: CollectedTypeRepr) SizeAlign {
+        return switch (repr) {
+            .bool_ => .{ .size = 1, .alignment = 1 },
+            .u8_, .i8_ => .{ .size = 1, .alignment = 1 },
+            .u16_, .i16_ => .{ .size = 2, .alignment = 2 },
+            .u32_, .i32_, .f32_ => .{ .size = 4, .alignment = 4 },
+            .u64_, .i64_, .f64_, .dec => .{ .size = 8, .alignment = 8 },
+            .u128_, .i128_ => .{ .size = 16, .alignment = 16 },
+            .str_ => .{ .size = 24, .alignment = 8 },
+            .list => .{ .size = 24, .alignment = 8 },
+            .unit => .{ .size = 0, .alignment = 0 },
+            .record => |rec| .{ .size = rec.size, .alignment = rec.alignment },
+            .function => .{ .size = 0, .alignment = 1 },
+            .tag_union => .{ .size = 0, .alignment = 1 },
+            .unknown => .{ .size = 0, .alignment = 1 },
+        };
+    }
+
     fn convertContent(self: *TypeTable, env: *const ModuleEnv, content: types.Content) CollectedTypeRepr {
         switch (content) {
             .structure => |flat_type| return self.convertFlatType(env, flat_type),
@@ -5901,6 +5930,8 @@ const TypeTable = struct {
                         return .{ .record = .{
                             .name = self.gpa.dupe(u8, display_name) catch "",
                             .fields = rec.fields,
+                            .size = rec.size,
+                            .alignment = rec.alignment,
                         } };
                     },
                     else => return record_repr,
@@ -5922,6 +5953,20 @@ const TypeTable = struct {
 
         if (field_names.len == 0) return .unit;
 
+        // First pass: getOrInsert all field type_ids so nested types are in the table
+        const field_type_ids = self.gpa.alloc(u64, field_names.len) catch return .{ .unknown = "record" };
+        defer self.gpa.free(field_type_ids);
+        for (0..field_names.len) |i| {
+            field_type_ids[i] = self.getOrInsert(env, field_vars[i]);
+        }
+
+        // Get size/alignment for each field
+        const field_sizes = self.gpa.alloc(SizeAlign, field_names.len) catch return .{ .unknown = "record" };
+        defer self.gpa.free(field_sizes);
+        for (0..field_names.len) |i| {
+            field_sizes[i] = self.getSizeAlign(field_type_ids[i]);
+        }
+
         // Build sortable array of field indices
         var field_indices = self.gpa.alloc(usize, field_names.len) catch return .{ .unknown = "record" };
         defer self.gpa.free(field_indices);
@@ -5929,31 +5974,64 @@ const TypeTable = struct {
             field_indices[i] = i;
         }
 
-        // Sort by name
+        // Sort by alignment descending, then name ascending (matching store.zig ABI)
         const SortCtx = struct {
             names: []const base.Ident.Idx,
             idents: *const base.Ident.Store,
+            sizes: []const SizeAlign,
 
             pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
+                const a_align = ctx.sizes[a].alignment;
+                const b_align = ctx.sizes[b].alignment;
+                if (a_align != b_align) {
+                    return a_align > b_align; // descending alignment
+                }
                 const a_text = ctx.idents.getText(ctx.names[a]);
                 const b_text = ctx.idents.getText(ctx.names[b]);
                 return std.mem.order(u8, a_text, b_text) == .lt;
             }
         };
-        std.mem.sort(usize, field_indices, SortCtx{ .names = field_names, .idents = ident_store }, SortCtx.lessThan);
+        std.mem.sort(usize, field_indices, SortCtx{ .names = field_names, .idents = ident_store, .sizes = field_sizes }, SortCtx.lessThan);
 
+        // Build collected fields in sorted order and compute record size
         const collected_fields = self.gpa.alloc(CollectedRecordField, field_names.len) catch return .{ .unknown = "record" };
+        var max_alignment: u64 = 0;
+        var current_offset: u64 = 0;
         for (field_indices, 0..) |src_idx, dst_idx| {
             const name_text = ident_store.getText(field_names[src_idx]);
+            const f_size = field_sizes[src_idx].size;
+            const f_align = field_sizes[src_idx].alignment;
+
+            // Track max alignment for the record
+            if (f_align > max_alignment) max_alignment = f_align;
+
+            // Align current offset
+            if (f_align > 0) {
+                const rem = current_offset % f_align;
+                if (rem != 0) current_offset += f_align - rem;
+            }
+            current_offset += f_size;
+
             collected_fields[dst_idx] = .{
                 .name = self.gpa.dupe(u8, name_text) catch "",
-                .type_id = self.getOrInsert(env, field_vars[src_idx]),
+                .type_id = field_type_ids[src_idx],
+                .size = f_size,
+                .alignment = f_align,
             };
+        }
+
+        // Round total size up to max alignment
+        var record_size = current_offset;
+        if (max_alignment > 0) {
+            const rem = record_size % max_alignment;
+            if (rem != 0) record_size += max_alignment - rem;
         }
 
         return .{ .record = .{
             .name = "",
             .fields = collected_fields,
+            .size = record_size,
+            .alignment = max_alignment,
         } };
     }
 
@@ -6137,10 +6215,12 @@ const FunctionPayload = extern struct {
     ret: u64,
 };
 
-/// RecordRepr := { fields : List(RecordField), name : Str } — fields alphabetical
+/// RecordRepr := { alignment : U64, fields : List(RecordField), name : Str, size : U64 } — fields alphabetical
 const RecordPayload = extern struct {
+    alignment: u64,
     fields: RocList,
     name: RocStr,
+    size: u64,
 };
 
 /// TagUnionRepr := { name : Str, tags : List(TagVariant) } — fields alphabetical
@@ -6149,7 +6229,7 @@ const TagUnionPayload = extern struct {
     tags: RocList,
 };
 
-/// Payload union for TypeRepr — max payload is 48 bytes (Record/TagUnion)
+/// Payload union for TypeRepr — max payload is 64 bytes (RecordPayload)
 const TypeReprPayload = extern union {
     function: FunctionPayload,
     list_elem: u64,
@@ -6164,9 +6244,11 @@ const TypeReprRoc = extern struct {
     tag: TypeReprTag,
 };
 
-/// RecordField := { name : Str, type_id : U64 }
+/// RecordField := { alignment : U64, name : Str, size : U64, type_id : U64 }
 const RecordFieldTypeReprRoc = extern struct {
+    alignment: u64,
     name: RocStr,
+    size: u64,
     type_id: u64,
 };
 
@@ -6306,7 +6388,9 @@ fn serializeTypeRepr(
                 const fptr: [*]RecordFieldTypeReprRoc = @ptrCast(@alignCast(fb));
                 for (rec.fields, 0..) |field, i| {
                     fptr[i] = .{
+                        .alignment = field.alignment,
                         .name = createBigRocStr(field.name, roc_ops),
+                        .size = field.size,
                         .type_id = field.type_id,
                     };
                 }
@@ -6318,8 +6402,10 @@ fn serializeTypeRepr(
             } else RocList.empty();
 
             result.payload.record = .{
+                .alignment = rec.alignment,
                 .fields = fields_list,
                 .name = createBigRocStr(rec.name, roc_ops),
+                .size = rec.size,
             };
         },
         .tag_union => |tu| {

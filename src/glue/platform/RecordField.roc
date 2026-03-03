@@ -1,1 +1,1 @@
-RecordField := { name : Str, type_id : U64 }
+RecordField := { alignment : U64, name : Str, size : U64, type_id : U64 }
