@@ -231,7 +231,12 @@ type_repr_to_zig = |type_table, type_repr| {
 		RocF32 => "f32"
 		RocF64 => "f64"
 		RocDec => "f64"
-		RocList(elem_id) => "RocList(${type_id_to_zig(type_table, elem_id)})"
+		RocList(elem_id) =>
+			if is_type_refcounted(type_table, elem_id) {
+				"RocList(${type_id_to_zig(type_table, elem_id)})"
+			} else {
+				"RocListWith(${type_id_to_zig(type_table, elem_id)}, false)"
+			}
 		RocRecord(rec) =>
 			if rec.name == "" {
 				"*anyopaque"
@@ -241,6 +246,28 @@ type_repr_to_zig = |type_table, type_repr| {
 		RocTagUnion(tu) => resolve_tag_union_type(type_table, tu)
 		RocFunction(_) => "*anyopaque"
 		RocUnknown(_) => "*anyopaque"
+	}
+}
+
+## Determine whether a type is refcounted (heap-allocated).
+## Refcounted types need 2*ptr_width header space in list allocations.
+is_type_refcounted : List(TypeRepr), U64 -> Bool
+is_type_refcounted = |type_table, type_id| {
+	match List.get(type_table, type_id) {
+		Ok(type_repr) => is_repr_refcounted(type_table, type_repr)
+		Err(_) => Bool.False
+	}
+}
+
+is_repr_refcounted : List(TypeRepr), TypeRepr -> Bool
+is_repr_refcounted = |type_table, type_repr| {
+	match type_repr {
+		RocStr => Bool.True
+		RocList(_) => Bool.True
+		RocFunction(_) => Bool.True
+		RocRecord(rec) => List.any(rec.fields, |field| is_type_refcounted(type_table, field.type_id))
+		RocTagUnion(tu) => List.any(tu.tags, |tag| List.any(tag.payload, |pid| is_type_refcounted(type_table, pid)))
+		_ => Bool.False
 	}
 }
 
@@ -268,10 +295,16 @@ generate_roc_list_generic : Str
 generate_roc_list_generic =
 	\\/// A generic Roc list. Elements are reference-counted and heap-allocated.
 	\\///
-	\\/// The allocation header is always `max(ptr_width, @alignOf(T))` bytes,
-	\\/// matching the Roc runtime's `allocateWithRefcount` layout (one pointer-width
-	\\/// slot for the refcount, padded to element alignment).
+	\\/// When `elements_refcounted` is true (the default), an extra `ptr_width` bytes
+	\\/// are reserved in the allocation header for the element count, matching the Roc
+	\\/// runtime's `allocateWithRefcount` layout. Set to `false` for lists of
+	\\/// non-refcounted primitives (e.g. `U8`, `I32`).
 	\\pub fn RocList(comptime T: type) type {
+	\\    return RocListWith(T, true);
+	\\}
+	\\
+	\\/// Parameterized list constructor; use `RocList(T)` for refcounted elements.
+	\\pub fn RocListWith(comptime T: type, comptime elements_refcounted: bool) type {
 	\\    return extern struct {
 	\\        elements_ptr: ?[*]T,
 	\\        length: usize,
@@ -279,7 +312,8 @@ generate_roc_list_generic =
 	\\
 	\\        const Self = @This();
 	\\        const ptr_width = @sizeOf(usize);
-	\\        const header_bytes = @max(ptr_width, @alignOf(T));
+	\\        const required_space: usize = if (elements_refcounted) (2 * ptr_width) else ptr_width;
+	\\        const header_bytes = @max(required_space, @alignOf(T));
 	\\        const alloc_align = @max(ptr_width, @alignOf(T));
 	\\
 	\\        /// Return the list elements as a `[]const T` slice.

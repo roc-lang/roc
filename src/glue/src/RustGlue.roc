@@ -58,7 +58,7 @@ compare_by_index = |a, b| {
 }
 
 # =============================================================================
-# Type String Parsing (shared with ZigGlue)
+# Type String Parsing
 # =============================================================================
 
 ## Parse a type string like "Str => {}"
@@ -190,7 +190,7 @@ expect roc_type_to_rust("List(U8)") == "RocList"
 expect roc_type_to_rust("{ foo : Str }") == "*mut c_void"
 
 # =============================================================================
-# TypeRepr-based Type Mapping (Rust)
+# TypeRepr-based Type Mapping
 # =============================================================================
 
 ## Map a type table entry to its Rust type string using structured TypeRepr
@@ -222,7 +222,12 @@ type_repr_to_rust = |type_table, type_repr| {
 		RocF32 => "f32"
 		RocF64 => "f64"
 		RocDec => "f64"
-		RocList(elem_id) => "RocList<${type_id_to_rust(type_table, elem_id)}>"
+		RocList(elem_id) =>
+			if is_type_refcounted(type_table, elem_id) {
+				"RocList<${type_id_to_rust(type_table, elem_id)}>"
+			} else {
+				"RocListWith<${type_id_to_rust(type_table, elem_id)}, false>"
+			}
 		RocRecord(rec) =>
 			if rec.name == "" {
 				"*mut c_void"
@@ -254,8 +259,30 @@ resolve_tag_union_type_rust = |type_table, tu| {
 	}
 }
 
+## Determine whether a type is refcounted (heap-allocated).
+## Refcounted types need 2*ptr_width header space in list allocations.
+is_type_refcounted : List(TypeRepr), U64 -> Bool
+is_type_refcounted = |type_table, type_id| {
+	match List.get(type_table, type_id) {
+		Ok(type_repr) => is_repr_refcounted(type_table, type_repr)
+		Err(_) => Bool.False
+	}
+}
+
+is_repr_refcounted : List(TypeRepr), TypeRepr -> Bool
+is_repr_refcounted = |type_table, type_repr| {
+	match type_repr {
+		RocStr => Bool.True
+		RocList(_) => Bool.True
+		RocFunction(_) => Bool.True
+		RocRecord(rec) => List.any(rec.fields, |field| is_type_refcounted(type_table, field.type_id))
+		RocTagUnion(tu) => List.any(tu.tags, |tag| List.any(tag.payload, |pid| is_type_refcounted(type_table, pid)))
+		_ => Bool.False
+	}
+}
+
 # =============================================================================
-# String Utilities (shared with ZigGlue)
+# String Utilities
 # =============================================================================
 
 ## Replace all occurrences of a substring
@@ -823,15 +850,27 @@ generate_rust_roc_list : Str
 generate_rust_roc_list =
 	\\/// A generic Roc list. Elements are reference-counted and heap-allocated.
 	\\///
-	\\/// This type is ABI-compatible with the Zig RocList (24 bytes, `#[repr(C)]`).
+	\\/// When `ELEMENTS_REFCOUNTED` is true (the default via `RocList<T>`), an extra
+	\\/// `ptr_width` bytes are reserved in the allocation header for the element count,
+	\\/// matching the Roc runtime's `allocateWithRefcount` layout.
+	\\pub type RocList<T> = RocListWith<T, true>;
+	\\
+	\\/// Parameterized list constructor; use `RocList<T>` for refcounted elements.
 	\\#[repr(C)]
-	\\pub struct RocList<T> {
+	\\pub struct RocListWith<T, const ELEMENTS_REFCOUNTED: bool> {
 	\\    pub elements: *mut T,
 	\\    pub length: usize,
 	\\    pub capacity_or_alloc_ptr: usize,
 	\\}
 	\\
-	\\impl<T> RocList<T> {
+	\\impl<T, const ELEMENTS_REFCOUNTED: bool> RocListWith<T, ELEMENTS_REFCOUNTED> {
+	\\    #[inline]
+	\\    fn header_bytes() -> usize {
+	\\        let ptr_width = core::mem::size_of::<usize>();
+	\\        let required_space = if ELEMENTS_REFCOUNTED { 2 * ptr_width } else { ptr_width };
+	\\        required_space.max(core::mem::align_of::<T>())
+	\\    }
+	\\
 	\\    /// Return an empty RocList.
 	\\    pub fn empty() -> Self {
 	\\        Self {
@@ -868,7 +907,7 @@ generate_rust_roc_list =
 	\\            return Self::empty();
 	\\        }
 	\\        let align = core::mem::align_of::<T>().max(core::mem::align_of::<usize>());
-	\\        let header_bytes = core::mem::size_of::<usize>().max(core::mem::align_of::<T>());
+	\\        let header_bytes = Self::header_bytes();
 	\\        let data_bytes = length * core::mem::size_of::<T>();
 	\\        let total = data_bytes + header_bytes;
 	\\        let base = unsafe { roc_ops.alloc(align, total) };
@@ -907,8 +946,7 @@ generate_rust_roc_list =
 	\\            return;
 	\\        }
 	\\        let align = core::mem::align_of::<T>().max(core::mem::align_of::<usize>());
-	\\        // Must match the header_bytes used during allocation.
-	\\        let header_bytes = core::mem::size_of::<usize>().max(core::mem::align_of::<T>());
+	\\        let header_bytes = Self::header_bytes();
 	\\        unsafe {
 	\\            let rc = (self.elements as *mut isize).sub(1);
 	\\            let prev = *rc;
@@ -921,7 +959,7 @@ generate_rust_roc_list =
 	\\    }
 	\\}
 	\\
-	\\impl<T: core::fmt::Debug> core::fmt::Debug for RocList<T> {
+	\\impl<T: core::fmt::Debug, const ELEMENTS_REFCOUNTED: bool> core::fmt::Debug for RocListWith<T, ELEMENTS_REFCOUNTED> {
 	\\    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
 	\\        f.debug_list().entries(self.as_slice().iter()).finish()
 	\\    }
