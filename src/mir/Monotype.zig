@@ -580,24 +580,8 @@ pub const Store = struct {
                                     unreachable;
                                 },
                             },
-                            .flex => {
-                                if (std.debug.runtime_safety) {
-                                    std.debug.panic(
-                                        "Monotype.fromTypeVar(tag_union): unresolved flex row extension tail",
-                                        .{},
-                                    );
-                                }
-                                unreachable;
-                            },
-                            .rigid => {
-                                if (std.debug.runtime_safety) {
-                                    std.debug.panic(
-                                        "Monotype.fromTypeVar(tag_union): unresolved rigid row extension tail",
-                                        .{},
-                                    );
-                                }
-                                unreachable;
-                            },
+                            .flex => break :rows, // Open tag union — treat as closed with collected tags
+                            .rigid => break :rows, // Rigid tag union — treat as closed with collected tags
                             .err => {
                                 if (std.debug.runtime_safety) {
                                     std.debug.panic(
