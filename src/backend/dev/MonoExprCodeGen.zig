@@ -8723,7 +8723,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
         /// Generate code for a bytes literal (List(U8) from file import).
         /// The layout is identical to RocList: {pointer, length, capacity}.
-        fn generateBytesLiteral(self: *Self, bytes_idx: base.StringLiteral.Idx) Error!ValueLocation {
+        fn generateBytesLiteral(self: *Self, bytes_idx: base.StringLiteral.Idx) Allocator.Error!ValueLocation {
             const bytes = self.store.getString(bytes_idx);
 
             if (bytes.len == 0) {

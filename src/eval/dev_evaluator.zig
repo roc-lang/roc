@@ -214,6 +214,7 @@ fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoEx
         .str_literal => .str,
         .unary_not => .bool,
         // Expressions whose result layout is handled by the fromTypeVar fallback
+        .bytes_literal,
         .for_loop,
         .while_loop,
         .list,
