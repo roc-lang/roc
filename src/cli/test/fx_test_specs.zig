@@ -318,6 +318,7 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/file_import_str.roc",
         .io_spec = "1>bytes: 370077",
         .description = "File import as Str: import large file and verify byte count",
+    },
     .{
         .roc_file = "test/fx/record_field_access.roc",
         .io_spec = "1>Alice|1>30|1>100",
