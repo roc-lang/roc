@@ -13,11 +13,6 @@ else => {},
 ```
 The `else => {}` silently skips RC for `.closure` layouts. Closures can capture refcounted values (Str, List). Silent skip → memory leaks or use-after-free.
 
-### 20. `generateCall` (lookup branch) silent `else => {}` fallthrough
-**`src/backend/dev/LirCodeGen.zig:11825`**
-
-Comment says "other locations fall through" but `.general_reg`, `.stack`, `.immediate_i64` are already handled above. Actual `else` catches unexpected types silently.
-
 ### 21. Null layout for non-immediate args can produce wrong register counts
 **`src/backend/dev/LirCodeGen.zig:15485`**
 ```zig
