@@ -266,6 +266,7 @@ resolve_tag_union_type = |type_table, tu| {
 ## Generate the RocList(T) generic type function (static Zig code)
 generate_roc_list_generic : Str
 generate_roc_list_generic =
+	\\/// A generic Roc list. Elements are reference-counted and heap-allocated.
 	\\pub fn RocList(comptime T: type) type {
 	\\    return extern struct {
 	\\        elements_ptr: ?[*]T,
@@ -277,28 +278,33 @@ generate_roc_list_generic =
 	\\        const header_bytes = @max(ptr_width, @alignOf(T));
 	\\        const alloc_align = @max(ptr_width, @alignOf(T));
 	\\
+	\\        /// Return the list elements as a `[]const T` slice.
 	\\        pub fn items(self: Self) []const T {
 	\\            if (self.elements_ptr) |ptr| return ptr[0..self.length];
 	\\            return &[_]T{};
 	\\        }
 	\\
+	\\        /// Return the number of elements in the list.
 	\\        pub fn len(self: Self) usize {
 	\\            return self.length;
 	\\        }
 	\\
+	\\        /// Return true if the list has zero elements.
 	\\        pub fn isEmpty(self: Self) bool {
 	\\            return self.length == 0;
 	\\        }
 	\\
+	\\        /// Return an empty RocList.
 	\\        pub fn empty() Self {
 	\\            return .{ .elements_ptr = null, .length = 0, .capacity_or_alloc_ptr = 0 };
 	\\        }
 	\\
+	\\        /// Allocate a new list with space for `length` elements.
 	\\        pub fn allocate(length: usize, roc_ops: *RocOps) Self {
 	\\            if (length == 0) return empty();
 	\\            const data_bytes = length * @sizeOf(T);
 	\\            const total = data_bytes + header_bytes;
-	\\            var alloc_args: builtins.host_abi.RocAlloc = .{
+	\\            var alloc_args: RocAlloc = .{
 	\\                .alignment = alloc_align,
 	\\                .length = total,
 	\\                .answer = undefined,
@@ -315,6 +321,7 @@ generate_roc_list_generic =
 	\\            };
 	\\        }
 	\\
+	\\        /// Create a RocList from a slice, copying elements into a new allocation.
 	\\        pub fn fromSlice(slice: []const T, roc_ops: *RocOps) Self {
 	\\            if (slice.len == 0) return empty();
 	\\            const list = allocate(slice.len, roc_ops);
@@ -324,6 +331,7 @@ generate_roc_list_generic =
 	\\            return list;
 	\\        }
 	\\
+	\\        /// Decrement the reference count; frees the allocation when it reaches zero.
 	\\        pub fn decref(self: Self, roc_ops: *RocOps) void {
 	\\            const ptr = self.elements_ptr orelse return;
 	\\            const data_addr = @intFromPtr(ptr);
@@ -331,7 +339,7 @@ generate_roc_list_generic =
 	\\            const prev = @atomicRmw(isize, rc, .Sub, 1, .monotonic);
 	\\            if (prev == 1) {
 	\\                const base: *anyopaque = @ptrFromInt(data_addr - header_bytes);
-	\\                var dealloc_args: builtins.host_abi.RocDealloc = .{
+	\\                var dealloc_args: RocDealloc = .{
 	\\                    .alignment = alloc_align,
 	\\                    .ptr = base,
 	\\                };
@@ -339,6 +347,7 @@ generate_roc_list_generic =
 	\\            }
 	\\        }
 	\\
+	\\        /// Increment the reference count by `amount`.
 	\\        pub fn incref(self: Self, amount: isize, roc_ops: *RocOps) void {
 	\\            _ = roc_ops;
 	\\            const ptr = self.elements_ptr orelse return;
@@ -346,6 +355,7 @@ generate_roc_list_generic =
 	\\            _ = @atomicRmw(isize, rc, .Add, amount, .monotonic);
 	\\        }
 	\\
+	\\        /// Return true if this list has a reference count of exactly one.
 	\\        pub fn isUnique(self: Self) bool {
 	\\            const ptr = self.elements_ptr orelse return true;
 	\\            if (self.capacity_or_alloc_ptr == 0) return true;
@@ -380,9 +390,9 @@ generate_element_type_structs = |type_table| {
 						)
 					}
 
-					# Comptime size/alignment assertions
+					# Comptime size/alignment assertions (guarded by pointer width)
 					assertions = if rec.size > 0 {
-						"comptime {\n    if (@sizeOf(${struct_name}) != ${U64.to_str(rec.size)}) @compileError(\"${struct_name} size mismatch\");\n    if (@alignOf(${struct_name}) != ${U64.to_str(rec.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n}\n\n"
+						"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(rec.size)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(rec.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n    }\n}\n\n"
 					} else {
 						""
 					}
@@ -454,7 +464,7 @@ generate_single_tag_union = |type_table, tu| {
 					$tuple_fields = Str.concat($tuple_fields, "    _${U64.to_str($ti)}: ${zig_type},\n")
 					$ti = $ti + 1
 				}
-				$tuple_structs = Str.concat($tuple_structs, "pub const ${tuple_name} = extern struct {\n${$tuple_fields}};\n\n")
+				$tuple_structs = Str.concat($tuple_structs, "/// Payload struct for ${tag.name} variant.\npub const ${tuple_name} = extern struct {\n${$tuple_fields}};\n\n")
 			}
 		}
 
@@ -487,12 +497,12 @@ generate_single_tag_union = |type_table, tu| {
 
 		# Comptime assertions
 		assertions = if tu.size > 0 {
-			"comptime {\n    if (@sizeOf(${struct_name}) != ${U64.to_str(tu.size)}) @compileError(\"${struct_name} size mismatch\");\n    if (@alignOf(${struct_name}) != ${U64.to_str(tu.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n}\n\n"
+			"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(tu.size)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(tu.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n    }\n}\n\n"
 		} else {
 			""
 		}
 
-		"${$tuple_structs}/// Tag union: ${tu.name}\npub const ${struct_name}Tag = enum(${disc_type}) {\n${$enum_variants}};\n\npub const ${struct_name} = extern struct {\n    payload: extern union {\n${$union_fields}    },\n    tag: ${struct_name}Tag,\n};\n\n${assertions}"
+		"${$tuple_structs}/// Tag discriminant for ${tu.name}.\npub const ${struct_name}Tag = enum(${disc_type}) {\n${$enum_variants}};\n\n/// Tag union: ${tu.name}\npub const ${struct_name} = extern struct {\n    payload: extern union {\n${$union_fields}    },\n    tag: ${struct_name}Tag,\n};\n\n${assertions}"
 	}
 }
 
@@ -720,6 +730,10 @@ generate_zig_file = |hosted_functions, type_table| {
 	file_header
 		.concat(generate_imports)
 		.concat("\n")
+		.concat(generate_host_abi_types)
+		.concat("\n")
+		.concat(generate_roc_str)
+		.concat("\n")
 		.concat(generate_roc_list_generic)
 		.concat("\n")
 		.concat(generate_index_constants(hosted_functions, count))
@@ -743,17 +757,208 @@ file_header =
 ## Import section
 generate_imports : Str
 generate_imports =
-	"const std = @import(\"std\");\nconst builtins = @import(\"builtins\");\nconst RocStr = builtins.str.RocStr;\nconst RocOps = builtins.host_abi.RocOps;\nconst HostedFn = builtins.host_abi.HostedFn;\n"
+	"const std = @import(\"std\");\n"
+
+## Generate self-contained host ABI type definitions
+generate_host_abi_types : Str
+generate_host_abi_types =
+	\\/// Type-erased function pointer for hosted function dispatch.
+	\\pub const HostedFn = *const fn (*anyopaque, *anyopaque, *anyopaque) callconv(.c) void;
+	\\
+	\\/// Table of hosted function pointers passed to the Roc runtime.
+	\\pub const HostedFunctions = extern struct {
+	\\    count: u32,
+	\\    fns: [*]HostedFn,
+	\\};
+	\\
+	\\/// Arguments for a Roc allocation request.
+	\\pub const RocAlloc = extern struct { alignment: usize, length: usize, answer: *anyopaque };
+	\\/// Arguments for a Roc deallocation request.
+	\\pub const RocDealloc = extern struct { alignment: usize, ptr: *anyopaque };
+	\\/// Arguments for a Roc reallocation request.
+	\\pub const RocRealloc = extern struct { alignment: usize, new_length: usize, answer: *anyopaque };
+	\\/// Arguments for a Roc `dbg` expression.
+	\\pub const RocDbg = extern struct { utf8_bytes: [*]u8, len: usize };
+	\\/// Arguments for a failed Roc `expect`.
+	\\pub const RocExpectFailed = extern struct { utf8_bytes: [*]u8, len: usize };
+	\\/// Arguments for a Roc `crash`.
+	\\pub const RocCrashed = extern struct { utf8_bytes: [*]u8, len: usize };
+	\\
+	\\/// The operations table passed from the host to the Roc runtime.
+	\\pub const RocOps = extern struct {
+	\\    env: *anyopaque,
+	\\    roc_alloc: *const fn (*RocAlloc, *anyopaque) callconv(.c) void,
+	\\    roc_dealloc: *const fn (*RocDealloc, *anyopaque) callconv(.c) void,
+	\\    roc_realloc: *const fn (*RocRealloc, *anyopaque) callconv(.c) void,
+	\\    roc_dbg: *const fn (*const RocDbg, *anyopaque) callconv(.c) void,
+	\\    roc_expect_failed: *const fn (*const RocExpectFailed, *anyopaque) callconv(.c) void,
+	\\    roc_crashed: *const fn (*const RocCrashed, *anyopaque) callconv(.c) void,
+	\\    hosted_fns: HostedFunctions,
+	\\};
+	\\
+	\\/// Type-erase a hosted function pointer to `HostedFn`.
+	\\///
+	\\/// Hosted functions are typically written with concrete parameter types for clarity
+	\\/// (e.g. `*RocOps`, `*RocStr`, `[*]u8`), but must be stored as `HostedFn` which
+	\\/// uses `*anyopaque` for all parameters. This helper performs that cast.
+	\\pub fn hostedFn(func: anytype) HostedFn {
+	\\    const T = @TypeOf(func);
+	\\    const info = @typeInfo(T);
+	\\    if (info == .pointer) {
+	\\        const child = @typeInfo(info.pointer.child);
+	\\        if (child == .@"fn") {
+	\\            const f = child.@"fn";
+	\\            if (f.params.len != 3)
+	\\                @compileError("hostedFn: function must take exactly 3 parameters (ops, ret_ptr, args_ptr)");
+	\\            if (f.return_type != void)
+	\\                @compileError("hostedFn: function must return void");
+	\\        }
+	\\    }
+	\\    return @ptrCast(func);
+	\\}
+	\\
+
+## Generate self-contained RocStr type definition
+generate_roc_str : Str
+generate_roc_str =
+	\\/// A Roc string value. Small strings (up to 23 bytes) are stored inline;
+	\\/// larger strings are heap-allocated with a reference count.
+	\\pub const RocStr = extern struct {
+	\\    bytes: ?[*]u8,
+	\\    length: usize,
+	\\    capacity_or_alloc_ptr: usize,
+	\\
+	\\    const Self = @This();
+	\\    const small_string_size = @sizeOf(RocStr);
+	\\    const small_str_max_length = small_string_size - 1;
+	\\    const seamless_slice_bit: usize = @as(usize, @bitCast(@as(isize, std.math.minInt(isize))));
+	\\
+	\\    /// Return the string contents as a `[]const u8` slice.
+	\\    pub fn asSlice(self: *const Self) []const u8 {
+	\\        return self.asU8ptr()[0..self.len()];
+	\\    }
+	\\
+	\\    /// Return the length of the string in bytes.
+	\\    pub fn len(self: Self) usize {
+	\\        if (self.isSmallStr()) {
+	\\            return @as([*]const u8, @ptrCast(&self))[@sizeOf(Self) - 1] ^ 0b1000_0000;
+	\\        } else {
+	\\            return self.length & ~seamless_slice_bit;
+	\\        }
+	\\    }
+	\\
+	\\    /// Return true if the string has zero length.
+	\\    pub fn isEmpty(self: Self) bool {
+	\\        return self.len() == 0;
+	\\    }
+	\\
+	\\    /// Return true if this string is stored inline (small string optimization).
+	\\    pub fn isSmallStr(self: Self) bool {
+	\\        return @as(isize, @bitCast(self.capacity_or_alloc_ptr)) < 0;
+	\\    }
+	\\
+	\\    /// Return true if this string is a seamless slice into another allocation.
+	\\    pub fn isSeamlessSlice(self: Self) bool {
+	\\        return !self.isSmallStr() and @as(isize, @bitCast(self.length)) < 0;
+	\\    }
+	\\
+	\\    /// Return a pointer to the raw UTF-8 bytes.
+	\\    pub fn asU8ptr(self: *const Self) [*]const u8 {
+	\\        if (self.isSmallStr()) {
+	\\            return @as([*]const u8, @ptrCast(self));
+	\\        } else {
+	\\            return @as([*]const u8, @ptrCast(self.bytes));
+	\\        }
+	\\    }
+	\\
+	\\    /// Return an empty RocStr.
+	\\    pub fn empty() Self {
+	\\        return .{ .bytes = null, .length = 0, .capacity_or_alloc_ptr = seamless_slice_bit };
+	\\    }
+	\\
+	\\    /// Create a RocStr from a byte slice, using `roc_ops` for heap allocation if needed.
+	\\    pub fn fromSlice(slice: []const u8, roc_ops: *RocOps) Self {
+	\\        if (slice.len < small_string_size) {
+	\\            var result = Self.empty();
+	\\            const ptr: [*]u8 = @ptrCast(&result);
+	\\            @memcpy(ptr[0..slice.len], slice);
+	\\            ptr[@sizeOf(Self) - 1] = @as(u8, @intCast(slice.len)) | 0b1000_0000;
+	\\            return result;
+	\\        } else {
+	\\            const ptr_width = @sizeOf(usize);
+	\\            const extra_bytes = ptr_width;
+	\\            const total = extra_bytes + slice.len;
+	\\            var alloc_args: RocAlloc = .{
+	\\                .alignment = @alignOf(usize),
+	\\                .length = total,
+	\\                .answer = undefined,
+	\\            };
+	\\            roc_ops.roc_alloc(&alloc_args, roc_ops.env);
+	\\            const base: [*]u8 = @ptrCast(alloc_args.answer);
+	\\            const data_ptr = base + extra_bytes;
+	\\            const rc: *isize = @ptrFromInt(@intFromPtr(data_ptr) - @sizeOf(isize));
+	\\            rc.* = 1;
+	\\            @memcpy(data_ptr[0..slice.len], slice.ptr[0..slice.len]);
+	\\            return .{
+	\\                .bytes = data_ptr,
+	\\                .length = slice.len,
+	\\                .capacity_or_alloc_ptr = slice.len,
+	\\            };
+	\\        }
+	\\    }
+	\\
+	\\    /// Decrement the reference count; frees the allocation when it reaches zero.
+	\\    pub fn decref(self: Self, roc_ops: *RocOps) void {
+	\\        if (self.isSmallStr()) return;
+	\\        const alloc_ptr = self.getAllocationPtr() orelse return;
+	\\        const data_addr = @intFromPtr(alloc_ptr);
+	\\        const rc: *isize = @ptrFromInt(data_addr - @sizeOf(isize));
+	\\        const prev = @atomicRmw(isize, rc, .Sub, 1, .monotonic);
+	\\        if (prev == 1) {
+	\\            const ptr_width = @sizeOf(usize);
+	\\            const base: *anyopaque = @ptrFromInt(data_addr - ptr_width);
+	\\            var dealloc_args: RocDealloc = .{ .alignment = @alignOf(usize), .ptr = base };
+	\\            roc_ops.roc_dealloc(&dealloc_args, roc_ops.env);
+	\\        }
+	\\    }
+	\\
+	\\    /// Increment the reference count by `amount`.
+	\\    pub fn incref(self: Self, amount: isize, roc_ops: *RocOps) void {
+	\\        _ = roc_ops;
+	\\        if (self.isSmallStr()) return;
+	\\        const alloc_ptr = self.getAllocationPtr() orelse return;
+	\\        const rc: *isize = @ptrFromInt(@intFromPtr(alloc_ptr) - @sizeOf(isize));
+	\\        _ = @atomicRmw(isize, rc, .Add, amount, .monotonic);
+	\\    }
+	\\
+	\\    /// Return true if this string has a reference count of exactly one.
+	\\    pub fn isUnique(self: Self) bool {
+	\\        if (self.isSmallStr()) return true;
+	\\        if (self.capacity_or_alloc_ptr == 0) return true;
+	\\        const alloc_ptr = self.getAllocationPtr() orelse return true;
+	\\        const rc: *const isize = @ptrFromInt(@intFromPtr(alloc_ptr) - @sizeOf(isize));
+	\\        return rc.* == 1;
+	\\    }
+	\\
+	\\    fn getAllocationPtr(self: Self) ?[*]u8 {
+	\\        if (self.isSeamlessSlice()) {
+	\\            return @as(?[*]u8, @ptrFromInt(self.capacity_or_alloc_ptr << 1));
+	\\        } else {
+	\\            return self.bytes;
+	\\        }
+	\\    }
+	\\};
+	\\
 
 ## Generate index constants and count
 generate_index_constants = |hosted_functions, count| {
-	var $constants = "pub const hosted_function_count: u32 = ${U64.to_str(count)};\n\n"
+	var $constants = "/// Total number of hosted functions in this platform.\npub const hosted_function_count: u32 = ${U64.to_str(count)};\n\n"
 
 	for func in hosted_functions {
 		snake = name_to_snake(func.name)
 		$constants = Str.concat(
 			$constants,
-			"pub const hosted_idx_${snake}: u32 = ${U64.to_str(func.index)};\n",
+			"/// Dispatch index for ${func.name}.\npub const hosted_idx_${snake}: u32 = ${U64.to_str(func.index)};\n",
 		)
 	}
 
@@ -782,7 +987,7 @@ generate_all_record_structs = |hosted_functions, type_table| {
 			}
 
 			assertions = if type_table_result.size > 0 {
-				"comptime {\n    if (@sizeOf(${struct_name}RetRecord) != ${U64.to_str(type_table_result.size)}) @compileError(\"${struct_name}RetRecord size mismatch\");\n    if (@alignOf(${struct_name}RetRecord) != ${U64.to_str(type_table_result.alignment)}) @compileError(\"${struct_name}RetRecord alignment mismatch\");\n}\n\n"
+				"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}RetRecord) != ${U64.to_str(type_table_result.size)}) @compileError(\"${struct_name}RetRecord size mismatch\");\n        if (@alignOf(${struct_name}RetRecord) != ${U64.to_str(type_table_result.alignment)}) @compileError(\"${struct_name}RetRecord alignment mismatch\");\n    }\n}\n\n"
 			} else {
 				""
 			}
@@ -839,7 +1044,7 @@ generate_args_struct = |func, type_table| {
 		}
 
 		assertions = if type_table_result.size > 0 {
-			"comptime {\n    if (@sizeOf(${struct_name}Args) != ${U64.to_str(type_table_result.size)}) @compileError(\"${struct_name}Args size mismatch\");\n    if (@alignOf(${struct_name}Args) != ${U64.to_str(type_table_result.alignment)}) @compileError(\"${struct_name}Args alignment mismatch\");\n}\n\n"
+			"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}Args) != ${U64.to_str(type_table_result.size)}) @compileError(\"${struct_name}Args size mismatch\");\n        if (@alignOf(${struct_name}Args) != ${U64.to_str(type_table_result.alignment)}) @compileError(\"${struct_name}Args alignment mismatch\");\n    }\n}\n\n"
 		} else {
 			""
 		}
@@ -917,11 +1122,11 @@ generate_hosted_functions_helper = |hosted_functions| {
 		snake = name_to_snake(func.name)
 		$entries = Str.concat(
 			$entries,
-			"            builtins.host_abi.hostedFn(fns.${snake}), // ${func.name} (index ${U64.to_str(func.index)})\n",
+			"            hostedFn(fns.${snake}), // ${func.name} (index ${U64.to_str(func.index)})\n",
 		)
 	}
 
-	"/// Create a HostedFunctions dispatch table from your implementations.\n/// The comptime parameter + nested struct ensures the function pointer array\n/// lives in static memory, not on the stack.\npub fn hostedFunctions(comptime fns: PlatformHostedFns) builtins.host_abi.HostedFunctions {\n    const Static = struct {\n        const ptrs = [_]HostedFn{\n${$entries}        };\n    };\n    return .{\n        .count = Static.ptrs.len,\n        .fns = @constCast(&Static.ptrs),\n    };\n}\n"
+	"/// Create a HostedFunctions dispatch table from your implementations.\n/// The comptime parameter + nested struct ensures the function pointer array\n/// lives in static memory, not on the stack.\npub fn hostedFunctions(comptime fns: PlatformHostedFns) HostedFunctions {\n    const Static = struct {\n        const ptrs = [_]HostedFn{\n${$entries}        };\n    };\n    return .{\n        .count = Static.ptrs.len,\n        .fns = @constCast(&Static.ptrs),\n    };\n}\n"
 }
 
 # =============================================================================
@@ -953,7 +1158,8 @@ generate_default_allocators =
 	\\/// `EnvType` must have an `.allocator()` method that returns `std.mem.Allocator`.
 	\\pub fn DefaultAllocators(comptime EnvType: type) type {
 	\\    return struct {
-	\\        pub fn rocAlloc(alloc_args: *builtins.host_abi.RocAlloc, env_ptr: *anyopaque) callconv(.c) void {
+	\\        /// Allocate memory for the Roc runtime using the host environment's allocator.
+	\\        pub fn rocAlloc(alloc_args: *RocAlloc, env_ptr: *anyopaque) callconv(.c) void {
 	\\            const host_env: *EnvType = @ptrCast(@alignCast(env_ptr));
 	\\            const allocator = host_env.allocator();
 	\\
@@ -975,7 +1181,8 @@ generate_default_allocators =
 	\\            alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
 	\\        }
 	\\
-	\\        pub fn rocDealloc(dealloc_args: *builtins.host_abi.RocDealloc, env_ptr: *anyopaque) callconv(.c) void {
+	\\        /// Free memory previously allocated by `rocAlloc`.
+	\\        pub fn rocDealloc(dealloc_args: *RocDealloc, env_ptr: *anyopaque) callconv(.c) void {
 	\\            const host_env: *EnvType = @ptrCast(@alignCast(env_ptr));
 	\\            const allocator = host_env.allocator();
 	\\
@@ -991,7 +1198,8 @@ generate_default_allocators =
 	\\            allocator.rawFree(slice, align_enum, @returnAddress());
 	\\        }
 	\\
-	\\        pub fn rocRealloc(realloc_args: *builtins.host_abi.RocRealloc, env_ptr: *anyopaque) callconv(.c) void {
+	\\        /// Reallocate memory, copying existing data to the new allocation.
+	\\        pub fn rocRealloc(realloc_args: *RocRealloc, env_ptr: *anyopaque) callconv(.c) void {
 	\\            const host_env: *EnvType = @ptrCast(@alignCast(env_ptr));
 	\\            const allocator = host_env.allocator();
 	\\
@@ -1039,7 +1247,8 @@ generate_default_handlers =
 	\\/// These print to stderr and don't use the env pointer. Suitable for most
 	\\/// platform hosts that don't need custom handling of these events.
 	\\pub const DefaultHandlers = struct {
-	\\    pub fn rocDbg(dbg_args: *const builtins.host_abi.RocDbg, _: *anyopaque) callconv(.c) void {
+	\\    /// Print a `dbg` expression to stderr.
+	\\    pub fn rocDbg(dbg_args: *const RocDbg, _: *anyopaque) callconv(.c) void {
 	\\        const msg = dbg_args.utf8_bytes[0..dbg_args.len];
 	\\        const stderr_file: std.fs.File = .stderr();
 	\\        stderr_file.writeAll("\\x1b[36m[ROC DBG]\\x1b[0m ") catch {};
@@ -1047,7 +1256,8 @@ generate_default_handlers =
 	\\        stderr_file.writeAll("\\n") catch {};
 	\\    }
 	\\
-	\\    pub fn rocExpectFailed(expect_args: *const builtins.host_abi.RocExpectFailed, _: *anyopaque) callconv(.c) void {
+	\\    /// Print a failed `expect` to stderr.
+	\\    pub fn rocExpectFailed(expect_args: *const RocExpectFailed, _: *anyopaque) callconv(.c) void {
 	\\        const msg = expect_args.utf8_bytes[0..expect_args.len];
 	\\        const stderr_file: std.fs.File = .stderr();
 	\\        stderr_file.writeAll("\\x1b[33m[ROC EXPECT]\\x1b[0m ") catch {};
@@ -1055,7 +1265,8 @@ generate_default_handlers =
 	\\        stderr_file.writeAll("\\n") catch {};
 	\\    }
 	\\
-	\\    pub fn rocCrashed(crash_args: *const builtins.host_abi.RocCrashed, _: *anyopaque) callconv(.c) void {
+	\\    /// Print a `crash` message to stderr and exit.
+	\\    pub fn rocCrashed(crash_args: *const RocCrashed, _: *anyopaque) callconv(.c) void {
 	\\        const msg = crash_args.utf8_bytes[0..crash_args.len];
 	\\        const stderr_file: std.fs.File = .stderr();
 	\\        stderr_file.writeAll("\\x1b[31m[ROC CRASHED]\\x1b[0m ") catch {};
@@ -1080,7 +1291,7 @@ generate_make_roc_ops =
 	\\/// ```
 	\\/// var roc_ops = makeRocOps(HostEnv, &host_env, hostedFunctions(.{ ... }));
 	\\/// ```
-	\\pub fn makeRocOps(comptime EnvType: type, env: *EnvType, hosted_fns: builtins.host_abi.HostedFunctions) RocOps {
+	\\pub fn makeRocOps(comptime EnvType: type, env: *EnvType, hosted_fns: HostedFunctions) RocOps {
 	\\    const Allocs = DefaultAllocators(EnvType);
 	\\    return .{
 	\\        .env = @ptrCast(env),
