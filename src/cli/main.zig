@@ -5383,9 +5383,13 @@ fn rocGlueInner(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
         collected_modules.deinit(ctx.gpa);
     }
 
+    var type_table = TypeTable.init(ctx.gpa);
+    defer type_table.deinit();
+
     for (modules) |mod| {
         if (mod.is_platform_sibling or mod.is_platform_main) {
-            if (collectModuleTypeInfo(ctx, &mod, mod.name, &all_hosted_fns)) |mod_info| {
+            type_table.clearVarMap();
+            if (collectModuleTypeInfo(ctx, &mod, mod.name, &all_hosted_fns, &type_table)) |mod_info| {
                 collected_modules.append(ctx.gpa, mod_info) catch {};
             }
         }
@@ -5448,7 +5452,7 @@ fn rocGlueInner(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
     const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{};
     var roc_ops = echo_platform.makeDefaultRocOps(@constCast(&hosted_function_ptrs));
 
-    var types_list = constructTypesRocList(collected_modules.items, &platform_info, &roc_ops);
+    var types_list = constructTypesRocList(collected_modules.items, &platform_info, &type_table, &roc_ops);
 
     // 7. Run glue spec via interpreter
     var result_buf: ResultListFileStr = undefined;
@@ -5676,6 +5680,8 @@ const CollectedModuleTypeInfo = struct {
         type_str: []const u8,
         arg_fields: []const CollectedRecordFieldInfo,
         ret_fields: []const CollectedRecordFieldInfo,
+        arg_type_ids: []const u64,
+        ret_type_id: u64,
     };
 
     fn deinit(self: *CollectedModuleTypeInfo, gpa: std.mem.Allocator) void {
@@ -5699,8 +5705,336 @@ const CollectedModuleTypeInfo = struct {
                 gpa.free(field.type_str);
             }
             gpa.free(h.ret_fields);
+            if (h.arg_type_ids.len > 0) gpa.free(h.arg_type_ids);
         }
         self.hosted_functions.deinit(gpa);
+    }
+};
+
+/// Internal representation of a collected type for the type table.
+const CollectedTypeRepr = union(enum) {
+    bool_,
+    dec,
+    f32_,
+    f64_,
+    i8_,
+    i16_,
+    i32_,
+    i64_,
+    i128_,
+    u8_,
+    u16_,
+    u32_,
+    u64_,
+    u128_,
+    str_,
+    unit,
+    list: u64,
+    function: struct { arg_ids: []const u64, ret_id: u64 },
+    record: struct { name: []const u8, fields: []const CollectedRecordField },
+    tag_union: struct { name: []const u8, tags: []const CollectedTagInfo },
+    unknown: []const u8,
+};
+
+const CollectedRecordField = struct {
+    name: []const u8,
+    type_id: u64,
+};
+
+const CollectedTagInfo = struct {
+    name: []const u8,
+    payload_ids: []const u64,
+};
+
+/// Builds a type table from compiler type vars, deduplicating entries.
+const TypeTable = struct {
+    entries: std.ArrayList(CollectedTypeRepr),
+    var_map: std.AutoHashMap(@import("types").Var, u64),
+    gpa: std.mem.Allocator,
+
+    const types = @import("types");
+
+    fn init(gpa: std.mem.Allocator) TypeTable {
+        return .{
+            .entries = std.ArrayList(CollectedTypeRepr).empty,
+            .var_map = std.AutoHashMap(types.Var, u64).init(gpa),
+            .gpa = gpa,
+        };
+    }
+
+    fn deinit(self: *TypeTable) void {
+        for (self.entries.items) |entry| {
+            self.freeEntry(entry);
+        }
+        self.entries.deinit(self.gpa);
+        self.var_map.deinit();
+    }
+
+    fn freeEntry(self: *TypeTable, entry: CollectedTypeRepr) void {
+        switch (entry) {
+            .record => |rec| {
+                for (rec.fields) |field| {
+                    self.freeDuped(field.name);
+                }
+                self.gpa.free(rec.fields);
+                self.freeDuped(rec.name);
+            },
+            .tag_union => |tu| {
+                for (tu.tags) |tag| {
+                    self.freeDuped(tag.name);
+                    self.gpa.free(tag.payload_ids);
+                }
+                self.gpa.free(tu.tags);
+                self.freeDuped(tu.name);
+            },
+            .function => |func| {
+                self.gpa.free(func.arg_ids);
+            },
+            .unknown => |text| {
+                self.freeDuped(text);
+            },
+            else => {},
+        }
+    }
+
+    /// Free a slice that was created with gpa.dupe. Skips empty slices and
+    /// slices that point into static memory (from catch fallbacks).
+    fn freeDuped(self: *TypeTable, slice: []const u8) void {
+        if (slice.len == 0) return;
+        self.gpa.free(slice);
+    }
+
+    /// Clear the var map when switching modules (vars are module-local).
+    fn clearVarMap(self: *TypeTable) void {
+        self.var_map.clearRetainingCapacity();
+    }
+
+    /// Get an existing type table index for a var, or insert a new entry.
+    fn getOrInsert(self: *TypeTable, env: *const ModuleEnv, type_var: types.Var) u64 {
+        if (self.var_map.get(type_var)) |idx| {
+            return idx;
+        }
+
+        const resolved = env.types.resolveVar(type_var);
+        const repr = self.convertContent(env, resolved.desc.content);
+
+        const idx: u64 = @intCast(self.entries.items.len);
+        self.entries.append(self.gpa, repr) catch return 0;
+        self.var_map.put(type_var, idx) catch {};
+
+        return idx;
+    }
+
+    /// Insert a Unit type and return its index.
+    fn insertUnit(self: *TypeTable) u64 {
+        const idx: u64 = @intCast(self.entries.items.len);
+        self.entries.append(self.gpa, .unit) catch return 0;
+        return idx;
+    }
+
+    fn convertContent(self: *TypeTable, env: *const ModuleEnv, content: types.Content) CollectedTypeRepr {
+        switch (content) {
+            .structure => |flat_type| return self.convertFlatType(env, flat_type),
+            .alias => |alias| {
+                const backing_var = env.types.getAliasBackingVar(alias);
+                return self.convertContent(env, env.types.resolveVar(backing_var).desc.content);
+            },
+            .flex => return .{ .unknown = "flex" },
+            .rigid => return .{ .unknown = "rigid" },
+            .err => return .{ .unknown = "error" },
+        }
+    }
+
+    fn convertFlatType(self: *TypeTable, env: *const ModuleEnv, flat_type: types.FlatType) CollectedTypeRepr {
+        switch (flat_type) {
+            .nominal_type => |nominal| return self.convertNominal(env, nominal),
+            .record => |record| return self.convertRecord(env, record),
+            .tag_union => |tag_union| return self.convertTagUnion(env, tag_union),
+            .fn_pure, .fn_effectful, .fn_unbound => |func| return self.convertFunc(env, func),
+            .empty_record => return .unit,
+            .empty_tag_union => return .unit,
+            .tuple => return .{ .unknown = "tuple" },
+            .record_unbound => return .{ .unknown = "record_unbound" },
+        }
+    }
+
+    fn convertNominal(self: *TypeTable, env: *const ModuleEnv, nominal: types.NominalType) CollectedTypeRepr {
+        const ident_store = env.getIdentStoreConst();
+        const raw_name = ident_store.getText(nominal.ident.ident_idx);
+        const display_name = getTypeDisplayName(raw_name);
+
+        // Check for known builtin types
+        if (std.mem.eql(u8, display_name, "List")) {
+            const args = env.types.sliceNominalArgs(nominal);
+            if (args.len >= 1) {
+                const elem_id = self.getOrInsert(env, args[0]);
+                return .{ .list = elem_id };
+            }
+            return .{ .unknown = "List" };
+        }
+        if (std.mem.eql(u8, display_name, "Str")) return .str_;
+        if (std.mem.eql(u8, display_name, "Bool")) return .bool_;
+        if (std.mem.eql(u8, display_name, "Dec")) return .dec;
+        if (std.mem.eql(u8, display_name, "U8")) return .u8_;
+        if (std.mem.eql(u8, display_name, "U16")) return .u16_;
+        if (std.mem.eql(u8, display_name, "U32")) return .u32_;
+        if (std.mem.eql(u8, display_name, "U64")) return .u64_;
+        if (std.mem.eql(u8, display_name, "U128")) return .u128_;
+        if (std.mem.eql(u8, display_name, "I8")) return .i8_;
+        if (std.mem.eql(u8, display_name, "I16")) return .i16_;
+        if (std.mem.eql(u8, display_name, "I32")) return .i32_;
+        if (std.mem.eql(u8, display_name, "I64")) return .i64_;
+        if (std.mem.eql(u8, display_name, "I128")) return .i128_;
+        if (std.mem.eql(u8, display_name, "F32")) return .f32_;
+        if (std.mem.eql(u8, display_name, "F64")) return .f64_;
+
+        // Not a known builtin — check if it's an opaque wrapping something
+        if (nominal.vars.nonempty.count > 0) {
+            const backing_var = env.types.getNominalBackingVar(nominal);
+            const backing_resolved = env.types.resolveVar(backing_var);
+
+            // If it wraps a record, convert it but preserve the qualified name
+            if (backing_resolved.desc.content.unwrapRecord()) |record| {
+                const record_repr = self.convertRecord(env, record);
+                switch (record_repr) {
+                    .record => |rec| {
+                        return .{ .record = .{
+                            .name = self.gpa.dupe(u8, display_name) catch "",
+                            .fields = rec.fields,
+                        } };
+                    },
+                    else => return record_repr,
+                }
+            }
+
+            // Otherwise, follow the backing var
+            return self.convertContent(env, backing_resolved.desc.content);
+        }
+
+        return .{ .unknown = self.gpa.dupe(u8, display_name) catch "" };
+    }
+
+    fn convertRecord(self: *TypeTable, env: *const ModuleEnv, record: types.Record) CollectedTypeRepr {
+        const ident_store = env.getIdentStoreConst();
+        const fields_slice = env.types.getRecordFieldsSlice(record.fields);
+        const field_names = fields_slice.items(.name);
+        const field_vars = fields_slice.items(.var_);
+
+        if (field_names.len == 0) return .unit;
+
+        // Build sortable array of field indices
+        var field_indices = self.gpa.alloc(usize, field_names.len) catch return .{ .unknown = "record" };
+        defer self.gpa.free(field_indices);
+        for (0..field_names.len) |i| {
+            field_indices[i] = i;
+        }
+
+        // Sort by name
+        const SortCtx = struct {
+            names: []const base.Ident.Idx,
+            idents: *const base.Ident.Store,
+
+            pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
+                const a_text = ctx.idents.getText(ctx.names[a]);
+                const b_text = ctx.idents.getText(ctx.names[b]);
+                return std.mem.order(u8, a_text, b_text) == .lt;
+            }
+        };
+        std.mem.sort(usize, field_indices, SortCtx{ .names = field_names, .idents = ident_store }, SortCtx.lessThan);
+
+        const collected_fields = self.gpa.alloc(CollectedRecordField, field_names.len) catch return .{ .unknown = "record" };
+        for (field_indices, 0..) |src_idx, dst_idx| {
+            const name_text = ident_store.getText(field_names[src_idx]);
+            collected_fields[dst_idx] = .{
+                .name = self.gpa.dupe(u8, name_text) catch "",
+                .type_id = self.getOrInsert(env, field_vars[src_idx]),
+            };
+        }
+
+        return .{ .record = .{
+            .name = "",
+            .fields = collected_fields,
+        } };
+    }
+
+    fn convertTagUnion(self: *TypeTable, env: *const ModuleEnv, tag_union: types.TagUnion) CollectedTypeRepr {
+        const ident_store = env.getIdentStoreConst();
+        const tags_slice = env.types.getTagsSlice(tag_union.tags);
+        const tag_names = tags_slice.items(.name);
+        const tag_args = tags_slice.items(.args);
+
+        if (tag_names.len == 0) return .unit;
+
+        // Build sortable array of tag indices
+        var tag_indices = self.gpa.alloc(usize, tag_names.len) catch return .{ .unknown = "tag_union" };
+        defer self.gpa.free(tag_indices);
+        for (0..tag_names.len) |i| {
+            tag_indices[i] = i;
+        }
+
+        // Sort by name
+        const SortCtx = struct {
+            names: []const base.Ident.Idx,
+            idents: *const base.Ident.Store,
+
+            pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
+                const a_text = ctx.idents.getText(ctx.names[a]);
+                const b_text = ctx.idents.getText(ctx.names[b]);
+                return std.mem.order(u8, a_text, b_text) == .lt;
+            }
+        };
+        std.mem.sort(usize, tag_indices, SortCtx{ .names = tag_names, .idents = ident_store }, SortCtx.lessThan);
+
+        const collected_tags = self.gpa.alloc(CollectedTagInfo, tag_names.len) catch return .{ .unknown = "tag_union" };
+        for (tag_indices, 0..) |src_idx, dst_idx| {
+            const name_text = ident_store.getText(tag_names[src_idx]);
+            const args_range = tag_args[src_idx];
+            const arg_vars = env.types.sliceVars(args_range);
+
+            const payload_ids = self.gpa.alloc(u64, arg_vars.len) catch return .{ .unknown = "tag_union" };
+            for (arg_vars, 0..) |av, i| {
+                payload_ids[i] = self.getOrInsert(env, av);
+            }
+
+            collected_tags[dst_idx] = .{
+                .name = self.gpa.dupe(u8, name_text) catch "",
+                .payload_ids = payload_ids,
+            };
+        }
+
+        return .{ .tag_union = .{
+            .name = "",
+            .tags = collected_tags,
+        } };
+    }
+
+    fn convertFunc(self: *TypeTable, env: *const ModuleEnv, func: types.Func) CollectedTypeRepr {
+        const arg_vars = env.types.sliceVars(func.args);
+        const arg_ids = self.gpa.alloc(u64, arg_vars.len) catch return .{ .unknown = "function" };
+        for (arg_vars, 0..) |av, i| {
+            arg_ids[i] = self.getOrInsert(env, av);
+        }
+        const ret_id = self.getOrInsert(env, func.ret);
+
+        return .{ .function = .{
+            .arg_ids = arg_ids,
+            .ret_id = ret_id,
+        } };
+    }
+
+    /// Strip "Builtin." and "Num." prefixes from type names (mirrors TypeWriter.getDisplayName).
+    fn getTypeDisplayName(raw_name: []const u8) []const u8 {
+        if (std.mem.startsWith(u8, raw_name, "Builtin.")) {
+            const without_builtin = raw_name[8..];
+            if (std.mem.startsWith(u8, without_builtin, "Num.")) {
+                return without_builtin[4..];
+            }
+            return without_builtin;
+        }
+        if (std.mem.startsWith(u8, raw_name, "Num.")) {
+            return raw_name[4..];
+        }
+        return raw_name;
     }
 };
 
@@ -5717,13 +6051,15 @@ const RecordFieldInfoRoc = extern struct {
     type_str: RocStr, // offset 24
 };
 
-/// HostedFunctionInfo := { arg_fields : List(RecordFieldInfo), index : U64, name : Str, ret_fields : List(RecordFieldInfo), type_str : Str }
+/// HostedFunctionInfo := { arg_fields : List(RecordFieldInfo), arg_type_ids : List(U64), index : U64, name : Str, ret_fields : List(RecordFieldInfo), ret_type_id : U64, type_str : Str }
 const HostedFunctionInfoRoc = extern struct {
-    arg_fields: RocList, // offset 0
-    index: u64, // offset 24
-    name: RocStr, // offset 32
-    ret_fields: RocList, // offset 56
-    type_str: RocStr, // offset 80
+    arg_fields: RocList,
+    arg_type_ids: RocList,
+    index: u64,
+    name: RocStr,
+    ret_fields: RocList,
+    ret_type_id: u64,
+    type_str: RocStr,
 };
 
 /// FunctionInfo := { name : Str, type_str : Str }
@@ -5740,10 +6076,11 @@ const ModuleTypeInfoRoc = extern struct {
     name: RocStr,
 };
 
-/// Types := { entrypoints : List(EntryPoint), modules : List(ModuleTypeInfo) }
+/// Types := { entrypoints : List(EntryPoint), modules : List(ModuleTypeInfo), type_table : List(TypeRepr) }
 const TypesInnerRoc = extern struct {
     entrypoints: RocList,
     modules: RocList,
+    type_table: RocList,
 };
 
 /// File := { name : Str, content : Str }
@@ -5765,6 +6102,78 @@ const ResultListFileStr = extern struct {
         err: RocStr,
     },
     tag: ResultTag,
+};
+
+// TypeRepr ABI structs for the type table
+
+/// Tag discriminant for TypeRepr tagged union (21 variants, alphabetical with Roc prefix)
+const TypeReprTag = enum(u8) {
+    RocBool = 0,
+    RocDec = 1,
+    RocF32 = 2,
+    RocF64 = 3,
+    RocFunction = 4,
+    RocI128 = 5,
+    RocI16 = 6,
+    RocI32 = 7,
+    RocI64 = 8,
+    RocI8 = 9,
+    RocList = 10,
+    RocRecord = 11,
+    RocStr = 12,
+    RocTagUnion = 13,
+    RocU128 = 14,
+    RocU16 = 15,
+    RocU32 = 16,
+    RocU64 = 17,
+    RocU8 = 18,
+    RocUnit = 19,
+    RocUnknown = 20,
+};
+
+/// FunctionRepr := { args : List(U64), ret : U64 } — fields alphabetical
+const FunctionPayload = extern struct {
+    args: RocList,
+    ret: u64,
+};
+
+/// RecordRepr := { fields : List(RecordField), name : Str } — fields alphabetical
+const RecordPayload = extern struct {
+    fields: RocList,
+    name: RocStr,
+};
+
+/// TagUnionRepr := { name : Str, tags : List(TagVariant) } — fields alphabetical
+const TagUnionPayload = extern struct {
+    name: RocStr,
+    tags: RocList,
+};
+
+/// Payload union for TypeRepr — max payload is 48 bytes (Record/TagUnion)
+const TypeReprPayload = extern union {
+    function: FunctionPayload,
+    list_elem: u64,
+    record: RecordPayload,
+    tag_union: TagUnionPayload,
+    unknown: RocStr,
+};
+
+/// TypeRepr Roc ABI layout: payload then discriminant
+const TypeReprRoc = extern struct {
+    payload: TypeReprPayload,
+    tag: TypeReprTag,
+};
+
+/// RecordField := { name : Str, type_id : U64 }
+const RecordFieldTypeReprRoc = extern struct {
+    name: RocStr,
+    type_id: u64,
+};
+
+/// TagVariant := { name : Str, payload : List(U64) }
+const TagVariantRoc = extern struct {
+    name: RocStr,
+    payload: RocList,
 };
 
 const SMALL_STRING_SIZE = @sizeOf(RocStr);
@@ -5821,10 +6230,168 @@ fn buildRecordFieldsRocList(
     };
 }
 
+/// Build a RocList of u64 from a slice of u64.
+fn buildU64RocList(
+    ids: []const u64,
+    roc_ops: *builtins.host_abi.RocOps,
+) RocList {
+    if (ids.len == 0) return RocList.empty();
+
+    const data_size = ids.len * @sizeOf(u64);
+    const bytes = builtins.utils.allocateWithRefcount(
+        data_size,
+        @alignOf(u64),
+        true,
+        roc_ops,
+    );
+    const ptr: [*]u64 = @ptrCast(@alignCast(bytes));
+    for (ids, 0..) |id, i| {
+        ptr[i] = id;
+    }
+    return RocList{
+        .bytes = bytes,
+        .length = ids.len,
+        .capacity_or_alloc_ptr = ids.len,
+    };
+}
+
+/// Serialize a CollectedTypeRepr into a TypeReprRoc for the Roc ABI.
+fn serializeTypeRepr(
+    entry: CollectedTypeRepr,
+    roc_ops: *builtins.host_abi.RocOps,
+) TypeReprRoc {
+    var result: TypeReprRoc = undefined;
+    // Zero-initialize the payload to avoid undefined bytes
+    result.payload = std.mem.zeroes(TypeReprPayload);
+
+    switch (entry) {
+        .bool_ => result.tag = .RocBool,
+        .dec => result.tag = .RocDec,
+        .f32_ => result.tag = .RocF32,
+        .f64_ => result.tag = .RocF64,
+        .i8_ => result.tag = .RocI8,
+        .i16_ => result.tag = .RocI16,
+        .i32_ => result.tag = .RocI32,
+        .i64_ => result.tag = .RocI64,
+        .i128_ => result.tag = .RocI128,
+        .u8_ => result.tag = .RocU8,
+        .u16_ => result.tag = .RocU16,
+        .u32_ => result.tag = .RocU32,
+        .u64_ => result.tag = .RocU64,
+        .u128_ => result.tag = .RocU128,
+        .str_ => result.tag = .RocStr,
+        .unit => result.tag = .RocUnit,
+        .list => |elem_id| {
+            result.tag = .RocList;
+            result.payload.list_elem = elem_id;
+        },
+        .function => |func| {
+            result.tag = .RocFunction;
+            result.payload.function = .{
+                .args = buildU64RocList(func.arg_ids, roc_ops),
+                .ret = func.ret_id,
+            };
+        },
+        .record => |rec| {
+            result.tag = .RocRecord;
+            // Build RocList of RecordFieldTypeReprRoc
+            const fields_list = if (rec.fields.len > 0) fblk: {
+                const data_size = rec.fields.len * @sizeOf(RecordFieldTypeReprRoc);
+                const fb = builtins.utils.allocateWithRefcount(
+                    data_size,
+                    @alignOf(RecordFieldTypeReprRoc),
+                    true,
+                    roc_ops,
+                );
+                const fptr: [*]RecordFieldTypeReprRoc = @ptrCast(@alignCast(fb));
+                for (rec.fields, 0..) |field, i| {
+                    fptr[i] = .{
+                        .name = createBigRocStr(field.name, roc_ops),
+                        .type_id = field.type_id,
+                    };
+                }
+                break :fblk RocList{
+                    .bytes = fb,
+                    .length = rec.fields.len,
+                    .capacity_or_alloc_ptr = rec.fields.len,
+                };
+            } else RocList.empty();
+
+            result.payload.record = .{
+                .fields = fields_list,
+                .name = createBigRocStr(rec.name, roc_ops),
+            };
+        },
+        .tag_union => |tu| {
+            result.tag = .RocTagUnion;
+            // Build RocList of TagVariantRoc
+            const tags_list = if (tu.tags.len > 0) tblk: {
+                const data_size = tu.tags.len * @sizeOf(TagVariantRoc);
+                const tb = builtins.utils.allocateWithRefcount(
+                    data_size,
+                    @alignOf(TagVariantRoc),
+                    true,
+                    roc_ops,
+                );
+                const tptr: [*]TagVariantRoc = @ptrCast(@alignCast(tb));
+                for (tu.tags, 0..) |tag, i| {
+                    tptr[i] = .{
+                        .name = createBigRocStr(tag.name, roc_ops),
+                        .payload = buildU64RocList(tag.payload_ids, roc_ops),
+                    };
+                }
+                break :tblk RocList{
+                    .bytes = tb,
+                    .length = tu.tags.len,
+                    .capacity_or_alloc_ptr = tu.tags.len,
+                };
+            } else RocList.empty();
+
+            result.payload.tag_union = .{
+                .name = createBigRocStr(tu.name, roc_ops),
+                .tags = tags_list,
+            };
+        },
+        .unknown => |text| {
+            result.tag = .RocUnknown;
+            result.payload.unknown = createBigRocStr(text, roc_ops);
+        },
+    }
+    return result;
+}
+
+/// Build a RocList of TypeReprRoc from the type table.
+fn buildTypeTableRocList(
+    type_table: *const TypeTable,
+    roc_ops: *builtins.host_abi.RocOps,
+) RocList {
+    if (type_table.entries.items.len == 0) return RocList.empty();
+
+    const data_size = type_table.entries.items.len * @sizeOf(TypeReprRoc);
+    const bytes = builtins.utils.allocateWithRefcount(
+        data_size,
+        @alignOf(TypeReprRoc),
+        true,
+        roc_ops,
+    );
+    const ptr: [*]TypeReprRoc = @ptrCast(@alignCast(bytes));
+
+    for (type_table.entries.items, 0..) |entry, i| {
+        ptr[i] = serializeTypeRepr(entry, roc_ops);
+    }
+
+    return RocList{
+        .bytes = bytes,
+        .length = type_table.entries.items.len,
+        .capacity_or_alloc_ptr = type_table.entries.items.len,
+    };
+}
+
 /// Construct the List(Types) Roc value from collected module type info.
 fn constructTypesRocList(
     collected_modules: []const CollectedModuleTypeInfo,
     platform_info: *const PlatformHeaderInfo,
+    type_table: *const TypeTable,
     roc_ops: *builtins.host_abi.RocOps,
 ) RocList {
     // Build modules list
@@ -5878,9 +6445,11 @@ fn constructTypesRocList(
                 for (mod.hosted_functions.items, 0..) |hosted, hosted_idx| {
                     hosted_ptr[hosted_idx] = HostedFunctionInfoRoc{
                         .arg_fields = buildRecordFieldsRocList(hosted.arg_fields, roc_ops),
+                        .arg_type_ids = buildU64RocList(hosted.arg_type_ids, roc_ops),
                         .index = hosted.index,
                         .name = createBigRocStr(hosted.name, roc_ops),
                         .ret_fields = buildRecordFieldsRocList(hosted.ret_fields, roc_ops),
+                        .ret_type_id = hosted.ret_type_id,
                         .type_str = createBigRocStr(hosted.type_str, roc_ops),
                     };
                 }
@@ -5948,6 +6517,7 @@ fn constructTypesRocList(
     types_inner_ptr.* = TypesInnerRoc{
         .entrypoints = entrypoints_list,
         .modules = modules_list,
+        .type_table = buildTypeTableRocList(type_table, roc_ops),
     };
 
     return RocList{
@@ -6064,6 +6634,7 @@ fn collectModuleTypeInfo(
     compiled_module: *const BuildEnv.CompiledModuleInfo,
     module_name: []const u8,
     all_hosted_fns: *const std.ArrayList(can.HostedCompiler.HostedFunctionInfo),
+    type_table: *TypeTable,
 ) ?CollectedModuleTypeInfo {
     const env = compiled_module.env;
 
@@ -6173,12 +6744,43 @@ fn collectModuleTypeInfo(
                             else => {},
                         }
                     }
+                    // Build type IDs for args and return type
+                    var arg_type_ids: []const u64 = &.{};
+                    var ret_type_id: u64 = type_table.insertUnit();
+
+                    const func_content = blk: {
+                        if (resolved.desc.content.unwrapFunc()) |func| break :blk func;
+                        // Check for nominal wrapping a function
+                        if (resolved.desc.content.unwrapNominalType()) |nom| {
+                            if (nom.vars.nonempty.count > 0) {
+                                const bv = env.types.getNominalBackingVar(nom);
+                                const br = env.types.resolveVar(bv);
+                                if (br.desc.content.unwrapFunc()) |func| break :blk func;
+                            }
+                        }
+                        break :blk null;
+                    };
+
+                    if (func_content) |func| {
+                        ret_type_id = type_table.getOrInsert(env, func.ret);
+                        const arg_vars_for_ids = env.types.sliceVars(func.args);
+                        if (arg_vars_for_ids.len > 0) {
+                            const ids = ctx.gpa.alloc(u64, arg_vars_for_ids.len) catch continue;
+                            for (arg_vars_for_ids, 0..) |av, i| {
+                                ids[i] = type_table.getOrInsert(env, av);
+                            }
+                            arg_type_ids = ids;
+                        }
+                    }
+
                     hosted_functions.append(ctx.gpa, .{
                         .index = global_idx,
                         .name = ctx.gpa.dupe(u8, local_name) catch continue,
                         .type_str = ctx.gpa.dupe(u8, type_str) catch continue,
                         .arg_fields = arg_fields,
                         .ret_fields = ret_fields,
+                        .arg_type_ids = arg_type_ids,
+                        .ret_type_id = ret_type_id,
                     }) catch continue;
                     break;
                 }

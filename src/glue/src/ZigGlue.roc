@@ -4,22 +4,33 @@ app [make_glue] { pf: platform "../platform/main.roc" }
 import pf.Types exposing [Types]
 import pf.File exposing [File]
 import pf.RecordFieldInfo exposing [RecordFieldInfo]
+import pf.TypeRepr exposing [TypeRepr]
+import pf.FunctionRepr exposing [FunctionRepr]
+import pf.RecordRepr exposing [RecordRepr]
+import pf.TagUnionRepr exposing [TagUnionRepr]
+import pf.RecordField exposing [RecordField]
+import pf.TagVariant exposing [TagVariant]
 
 make_glue : List(Types) -> Try(List(File), Str)
 make_glue = |types_list| {
 	# Collect all hosted functions from all modules, with module name prefix
 	var $hosted_functions = []
+	var $type_table = []
 
 	for types in types_list {
+		$type_table = types.type_table
+
 		for mod in types.modules {
 			for func in mod.hosted_functions {
 				full_qualified_name = "${mod.name}.${func.name}"
 
 				hosted_func = {
 					arg_fields: func.arg_fields,
+					arg_type_ids: func.arg_type_ids,
 					index: func.index,
 					name: full_qualified_name,
 					ret_fields: func.ret_fields,
+					ret_type_id: func.ret_type_id,
 					type_str: func.type_str,
 				}
 
@@ -31,7 +42,7 @@ make_glue = |types_list| {
 	# Sort by index so array entries are in the correct order
 	sorted = List.sort_with($hosted_functions, compare_by_index)
 
-	zig_content = generate_zig_file(sorted)
+	zig_content = generate_zig_file(sorted, $type_table)
 
 	Ok([{ name: "roc_platform_abi.zig", content: zig_content }])
 }
@@ -186,6 +197,126 @@ expect roc_type_to_zig("{}") == "void"
 expect roc_type_to_zig("()") == "void"
 expect roc_type_to_zig("List(U8)") == "RocList"
 expect roc_type_to_zig("{ foo : Str }") == "*anyopaque"
+
+# =============================================================================
+# TypeRepr-based Type Mapping
+# =============================================================================
+
+## Map a type table entry to its Zig type string using structured TypeRepr
+type_id_to_zig : List(TypeRepr), U64 -> Str
+type_id_to_zig = |type_table, type_id| {
+	match List.get(type_table, type_id) {
+		Ok(type_repr) => type_repr_to_zig(type_table, type_repr)
+		Err(_) => "*anyopaque"
+	}
+}
+
+## Convert a TypeRepr to its Zig type string
+type_repr_to_zig : List(TypeRepr), TypeRepr -> Str
+type_repr_to_zig = |type_table, type_repr| {
+	match type_repr {
+		RocBool => "bool"
+		RocStr => "RocStr"
+		RocUnit => "void"
+		RocU8 => "u8"
+		RocU16 => "u16"
+		RocU32 => "u32"
+		RocU64 => "u64"
+		RocU128 => "u128"
+		RocI8 => "i8"
+		RocI16 => "i16"
+		RocI32 => "i32"
+		RocI64 => "i64"
+		RocI128 => "i128"
+		RocF32 => "f32"
+		RocF64 => "f64"
+		RocDec => "f64"
+		RocList(elem_id) => "RocList(${type_id_to_zig(type_table, elem_id)})"
+		RocRecord(rec) =>
+			if rec.name == "" {
+				"*anyopaque"
+			} else {
+				name_to_struct_name(rec.name)
+			}
+		RocTagUnion(tu) => resolve_tag_union_type(type_table, tu.tags)
+		RocFunction(_) => "*anyopaque"
+		RocUnknown(_) => "*anyopaque"
+	}
+}
+
+## Resolve a tag union to a Zig type. Single-variant unions are optimized to their payload.
+resolve_tag_union_type = |type_table, tags| {
+	if List.len(tags) == 1 {
+		match List.first(tags) {
+			Ok(tag) =>
+				match List.first(tag.payload) {
+					Ok(payload_id) => type_id_to_zig(type_table, payload_id)
+					_ => "*anyopaque"
+				}
+			_ => "*anyopaque"
+		}
+	} else {
+		"*anyopaque"
+	}
+}
+
+## Generate the RocList(T) generic type function (static Zig code)
+generate_roc_list_generic : Str
+generate_roc_list_generic =
+	\\pub fn RocList(comptime T: type) type {
+	\\    return extern struct {
+	\\        elements_ptr: ?[*]T,
+	\\        length: usize,
+	\\        capacity_or_alloc_ptr: usize,
+	\\
+	\\        const Self = @This();
+	\\
+	\\        pub fn items(self: Self) []const T {
+	\\            if (self.elements_ptr) |ptr| return ptr[0..self.length];
+	\\            return &[_]T{};
+	\\        }
+	\\
+	\\        pub fn len(self: Self) usize {
+	\\            return self.length;
+	\\        }
+	\\    };
+	\\}
+	\\
+
+## Generate extern structs for element types found in the type table.
+## Scans for Record types and generates Zig extern structs for them.
+generate_element_type_structs : List(TypeRepr) -> Str
+generate_element_type_structs = |type_table| {
+	var $structs = ""
+	var $seen_names = []
+
+	for type_repr in type_table {
+		match type_repr {
+			RocRecord(rec) =>
+				if rec.name != "" and !(List.contains($seen_names, rec.name)) {
+					$seen_names = $seen_names.append(rec.name)
+
+					struct_name = name_to_struct_name(rec.name)
+					var $field_strs = ""
+					for field in rec.fields {
+						zig_type = type_id_to_zig(type_table, field.type_id)
+						$field_strs = Str.concat(
+							$field_strs,
+							"    ${field.name}: ${zig_type},\n",
+						)
+					}
+
+					$structs = Str.concat(
+						$structs,
+						"/// Element type for ${rec.name}\npub const ${struct_name} = extern struct {\n${$field_strs}};\n\n",
+					)
+				}
+			_ => {}
+		}
+	}
+
+	$structs
+}
 
 # =============================================================================
 # String Utilities
@@ -358,18 +489,20 @@ expect lowercase_first("") == ""
 # =============================================================================
 
 ## Generate the complete Zig source file
-generate_zig_file : List({ arg_fields : List(RecordFieldInfo), index : U64, name : Str, ret_fields : List(RecordFieldInfo), type_str : Str }) -> Str
-generate_zig_file = |hosted_functions| {
+generate_zig_file = |hosted_functions, type_table| {
 	count = List.len(hosted_functions)
 
 	file_header
 		.concat(generate_imports)
 		.concat("\n")
+		.concat(generate_roc_list_generic)
+		.concat("\n")
 		.concat(generate_index_constants(hosted_functions, count))
 		.concat("\n")
+		.concat(generate_element_type_structs(type_table))
 		.concat(generate_all_record_structs(hosted_functions))
 		.concat(generate_all_args_structs(hosted_functions))
-		.concat(generate_platform_fns_struct(hosted_functions))
+		.concat(generate_platform_fns_struct(hosted_functions, type_table))
 		.concat("\n")
 		.concat(generate_hosted_functions_helper(hosted_functions))
 		.concat("\n")
@@ -384,10 +517,9 @@ file_header =
 ## Import section
 generate_imports : Str
 generate_imports =
-	"const std = @import(\"std\");\nconst builtins = @import(\"builtins\");\nconst RocStr = builtins.str.RocStr;\nconst RocList = builtins.list.RocList;\nconst RocOps = builtins.host_abi.RocOps;\nconst HostedFn = builtins.host_abi.HostedFn;\n"
+	"const std = @import(\"std\");\nconst builtins = @import(\"builtins\");\nconst RocStr = builtins.str.RocStr;\nconst RocOps = builtins.host_abi.RocOps;\nconst HostedFn = builtins.host_abi.HostedFn;\n"
 
 ## Generate index constants and count
-generate_index_constants : List({ arg_fields : List(RecordFieldInfo), index : U64, name : Str, ret_fields : List(RecordFieldInfo), type_str : Str }), U64 -> Str
 generate_index_constants = |hosted_functions, count| {
 	var $constants = "pub const hosted_function_count: u32 = ${U64.to_str(count)};\n\n"
 
@@ -403,7 +535,6 @@ generate_index_constants = |hosted_functions, count| {
 }
 
 ## Generate extern structs for record return types from field info
-generate_all_record_structs : List({ arg_fields : List(RecordFieldInfo), index : U64, name : Str, ret_fields : List(RecordFieldInfo), type_str : Str }) -> Str
 generate_all_record_structs = |hosted_functions| {
 	var $structs = ""
 	for func in hosted_functions {
@@ -430,7 +561,6 @@ generate_all_record_structs = |hosted_functions| {
 }
 
 ## Generate all argument extern structs
-generate_all_args_structs : List({ arg_fields : List(RecordFieldInfo), index : U64, name : Str, ret_fields : List(RecordFieldInfo), type_str : Str }) -> Str
 generate_all_args_structs = |hosted_functions| {
 	var $structs = ""
 	for func in hosted_functions {
@@ -440,7 +570,6 @@ generate_all_args_structs = |hosted_functions| {
 }
 
 ## Generate a single argument extern struct (empty string if no args)
-generate_args_struct : { arg_fields : List(RecordFieldInfo), index : U64, name : Str, ret_fields : List(RecordFieldInfo), type_str : Str } -> Str
 generate_args_struct = |func| {
 	parsed = parse_type_str(func.type_str)
 
@@ -481,13 +610,12 @@ generate_args_struct = |func| {
 }
 
 ## Generate the PlatformHostedFns struct type
-generate_platform_fns_struct : List({ arg_fields : List(RecordFieldInfo), index : U64, name : Str, ret_fields : List(RecordFieldInfo), type_str : Str }) -> Str
-generate_platform_fns_struct = |hosted_functions| {
+generate_platform_fns_struct = |hosted_functions, type_table| {
 	var $fields = ""
 
 	for func in hosted_functions {
 		snake = name_to_snake(func.name)
-		fn_type = hosted_fn_type(func)
+		fn_type = hosted_fn_type(func, type_table)
 
 		$fields = Str.concat(
 			$fields,
@@ -499,16 +627,15 @@ generate_platform_fns_struct = |hosted_functions| {
 }
 
 ## Get the Zig function pointer type for a hosted function
-hosted_fn_type : { arg_fields : List(RecordFieldInfo), index : U64, name : Str, ret_fields : List(RecordFieldInfo), type_str : Str } -> Str
-hosted_fn_type = |func| {
+hosted_fn_type = |func, type_table| {
 	parsed = parse_type_str(func.type_str)
 	struct_name = name_to_struct_name(func.name)
 
-	# Use typed return pointer when ret_fields are available
+	# Use typed return pointer: prefer ret_fields for records, then type_id_to_zig for typed returns
 	ret_param = if !(List.is_empty(func.ret_fields)) {
 		"*${struct_name}RetRecord"
 	} else {
-		zig_ret = roc_type_to_zig(parsed.ret)
+		zig_ret = type_id_to_zig(type_table, func.ret_type_id)
 		if zig_ret == "void" or zig_ret == "*anyopaque" {
 			"*anyopaque"
 		} else {
@@ -526,7 +653,6 @@ hosted_fn_type = |func| {
 }
 
 ## Generate the hostedFunctions() helper that builds the dispatch table
-generate_hosted_functions_helper : List({ arg_fields : List(RecordFieldInfo), index : U64, name : Str, ret_fields : List(RecordFieldInfo), type_str : Str }) -> Str
 generate_hosted_functions_helper = |hosted_functions| {
 	var $entries = ""
 
