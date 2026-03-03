@@ -18,12 +18,35 @@ canonicalize: *const fn (relative_path: []const u8, allocator: Allocator) Canoni
 makePath: *const fn (path: []const u8) MakePathError!void,
 rename: *const fn (old_path: []const u8, new_path: []const u8) RenameError!void,
 getFileInfo: *const fn (path: []const u8) GetFileInfoError!FileInfo,
+getEnvVar: *const fn (key: []const u8, allocator: Allocator) GetEnvVarError![]u8,
+fetchUrl: *const fn (allocator: Allocator, url: []const u8, dest_dir: std.fs.Dir) FetchUrlError!void,
+
+const is_freestanding = @import("builtin").target.os.tag == .freestanding;
 
 // TODO: replace this with a method that gets the right
 // filesystem manager for the current context.
 //
 /// Get the default filesystem manager.
+/// On freestanding (wasm32), returns stubs that return errors — callers must
+/// override with a suitable implementation (e.g. WasmFilesystem).
 pub fn default() Self {
+    if (comptime is_freestanding) {
+        return Self{
+            .fileExists = &fileExistsFreestanding,
+            .readFile = &readFileFreestanding,
+            .readFileInto = &readFileIntoFreestanding,
+            .writeFile = &writeFileFreestanding,
+            .openDir = &openDirFreestanding,
+            .dirName = &dirNameFreestanding,
+            .baseName = &baseNameFreestanding,
+            .canonicalize = &canonicalizeDefault,
+            .makePath = &makePathFreestanding,
+            .rename = &renameFreestanding,
+            .getFileInfo = &getFileInfoFreestanding,
+            .getEnvVar = &getEnvVarFreestanding,
+            .fetchUrl = &fetchUrlDefault,
+        };
+    }
     return Self{
         .fileExists = &fileExistsDefault,
         .readFile = &readFileDefault,
@@ -36,6 +59,8 @@ pub fn default() Self {
         .makePath = &makePathDefault,
         .rename = &renameDefault,
         .getFileInfo = &getFileInfoDefault,
+        .getEnvVar = &getEnvVarDefault,
+        .fetchUrl = &fetchUrlDefault,
     };
 }
 
@@ -55,6 +80,8 @@ pub fn testing() Self {
         .makePath = &makePathTesting,
         .rename = &renameTesting,
         .getFileInfo = &getFileInfoTesting,
+        .getEnvVar = &getEnvVarTesting,
+        .fetchUrl = &fetchUrlTesting,
     };
 }
 
@@ -82,6 +109,12 @@ pub const RenameError = std.fs.Dir.RenameError || std.posix.RenameError;
 
 /// All errors that can occur when getting file information.
 pub const GetFileInfoError = std.fs.File.OpenError || std.fs.File.StatError;
+
+/// All errors that can occur when looking up an environment variable.
+pub const GetEnvVarError = error{ EnvironmentVariableNotFound, OutOfMemory };
+
+/// All errors that can occur when fetching a URL.
+pub const FetchUrlError = error{ Unsupported, DownloadFailed, OutOfMemory };
 
 /// File information structure containing metadata.
 pub const FileInfo = struct {
@@ -127,7 +160,7 @@ pub const Dir = struct {
 
     /// Canonicalize the given filepath relative to this dir's path.
     pub fn canonicalize(dir: *Dir, filename: []const u8, allocator: Allocator) CanonicalizeError![]const u8 {
-        if (comptime @import("builtin").target.os.tag == .freestanding) {
+        if (comptime is_freestanding) {
             // Freestanding doesn't support realpath, so we'll just resolve the path
             // without following symlinks
             return std.fs.path.resolve(allocator, &.{filename}) catch |err| {
@@ -235,7 +268,7 @@ fn baseNameDefault(absolute_path: []const u8) ?[]const u8 {
 }
 
 fn canonicalizeDefault(root_relative_path: []const u8, allocator: Allocator) CanonicalizeError![]const u8 {
-    if (comptime @import("builtin").target.os.tag == .freestanding) {
+    if (comptime is_freestanding) {
         // Freestanding doesn't support realpath, so we'll just resolve the path
         // without following symlinks
         return std.fs.path.resolve(allocator, &.{root_relative_path}) catch |err| {
@@ -327,6 +360,25 @@ fn renameTesting(_: []const u8, _: []const u8) RenameError!void {
     @panic("rename should not be called in this test");
 }
 
+fn getEnvVarDefault(key: []const u8, allocator: Allocator) GetEnvVarError![]u8 {
+    return std.process.getEnvVarOwned(allocator, key) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.EnvironmentVariableNotFound,
+    };
+}
+
+fn fetchUrlDefault(_: Allocator, _: []const u8, _: std.fs.Dir) FetchUrlError!void {
+    return error.Unsupported;
+}
+
+fn fetchUrlTesting(_: Allocator, _: []const u8, _: std.fs.Dir) FetchUrlError!void {
+    return error.Unsupported;
+}
+
+fn getEnvVarTesting(_: []const u8, _: Allocator) GetEnvVarError![]u8 {
+    return error.EnvironmentVariableNotFound;
+}
+
 fn getFileInfoTesting(path: []const u8) GetFileInfoError!FileInfo {
     // Return deterministic file info for testing
     // Hash the path to get consistent results
@@ -341,4 +393,59 @@ fn getFileInfoTesting(path: []const u8) GetFileInfoError!FileInfo {
         .mtime_ns = mtime_ns,
         .size = size,
     };
+}
+
+// Freestanding implementations — return errors for all OS-dependent operations.
+// Used on wasm32-freestanding where there is no real filesystem.
+// Callers must override with a proper implementation (e.g. WasmFilesystem).
+
+fn fileExistsFreestanding(_: []const u8) OpenError!bool {
+    return false;
+}
+
+fn readFileFreestanding(_: []const u8, _: Allocator) ReadError![]const u8 {
+    return error.FileNotFound;
+}
+
+fn readFileIntoFreestanding(_: []const u8, _: []u8) ReadError!usize {
+    return error.FileNotFound;
+}
+
+fn writeFileFreestanding(_: []const u8, _: []const u8) WriteError!void {
+    return error.AccessDenied;
+}
+
+fn openDirFreestanding(_: []const u8) OpenError!Dir {
+    return error.FileNotFound;
+}
+
+fn dirNameFreestanding(absolute_path: []const u8) ?[]const u8 {
+    if (std.mem.lastIndexOfScalar(u8, absolute_path, '/')) |last_slash| {
+        if (last_slash == 0) return "/";
+        return absolute_path[0..last_slash];
+    }
+    return null;
+}
+
+fn baseNameFreestanding(absolute_path: []const u8) ?[]const u8 {
+    if (std.mem.lastIndexOfScalar(u8, absolute_path, '/')) |last_slash| {
+        return absolute_path[last_slash + 1 ..];
+    }
+    return absolute_path;
+}
+
+fn makePathFreestanding(_: []const u8) MakePathError!void {
+    return error.AccessDenied;
+}
+
+fn renameFreestanding(_: []const u8, _: []const u8) RenameError!void {
+    return error.AccessDenied;
+}
+
+fn getFileInfoFreestanding(_: []const u8) GetFileInfoError!FileInfo {
+    return error.FileNotFound;
+}
+
+fn getEnvVarFreestanding(_: []const u8, _: Allocator) GetEnvVarError![]u8 {
+    return error.EnvironmentVariableNotFound;
 }

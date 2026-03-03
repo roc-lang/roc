@@ -63,6 +63,8 @@ pub fn wasm() Filesystem {
         .makePath = &makePathWasm,
         .rename = &renameWasm,
         .getFileInfo = &getFileInfoWasm,
+        .getEnvVar = &getEnvVarWasm,
+        .fetchUrl = &fetchUrlWasm,
     };
 }
 
@@ -176,4 +178,12 @@ fn getFileInfoWasm(path: []const u8) Filesystem.GetFileInfoError!Filesystem.File
     }
 
     return error.FileNotFound;
+}
+
+fn getEnvVarWasm(_: []const u8, _: Allocator) Filesystem.GetEnvVarError![]u8 {
+    return error.EnvironmentVariableNotFound;
+}
+
+fn fetchUrlWasm(_: Allocator, _: []const u8, _: std.fs.Dir) Filesystem.FetchUrlError!void {
+    return error.Unsupported;
 }

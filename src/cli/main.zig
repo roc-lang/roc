@@ -89,6 +89,7 @@ const Mode = compile.package.Mode;
 const TimingInfo = compile.package.TimingInfo;
 const CacheManager = compile.CacheManager;
 const CacheConfig = compile.CacheConfig;
+const cache_config_mod = compile.config;
 const serialize_modules = compile.serialize_modules;
 const TestRunner = eval.TestRunner;
 const backend = @import("backend");
@@ -459,7 +460,7 @@ fn generateRandomSuffix(ctx: *CliContext) ![]u8 {
 /// Uses system temp directory to avoid race conditions when cache is cleared.
 pub fn createUniqueTempDir(ctx: *CliContext) ![]const u8 {
     // Get the version-specific temp directory: {temp}/roc/{version}
-    const version_temp_dir = try CacheConfig.getVersionTempDir(ctx.arena);
+    const version_temp_dir = try cache_config_mod.getVersionTempDir(Filesystem.default(), ctx.arena);
 
     // Ensure the roc/{version} directory exists
     // makePath automatically handles PathAlreadyExists internally
@@ -522,7 +523,7 @@ pub fn writeFdCoordinationFile(ctx: *CliContext, temp_exe_path: []const u8, shm_
 /// The exe_display_name is the name that will appear in `ps` output (e.g., "app.roc").
 pub fn createTempDirStructure(allocs: *Allocators, exe_path: []const u8, exe_display_name: []const u8, shm_handle: SharedMemoryHandle, _: ?[]const u8) ![]const u8 {
     // Get the version-specific temp directory: {temp}/roc/{version}
-    const version_temp_dir = try CacheConfig.getVersionTempDir(allocs.arena);
+    const version_temp_dir = try cache_config_mod.getVersionTempDir(Filesystem.default(), allocs.arena);
 
     // Ensure the roc/{version} directory exists
     // makePath automatically handles PathAlreadyExists internally
@@ -667,7 +668,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
     //
     // Uses page_allocator instead of GPA to avoid leak detection false positives
     // (the thread may still be running when the main thread's leak check fires).
-    if (compile.CacheCleanup.startBackgroundCleanup(std.heap.page_allocator)) |_| {
+    if (compile.CacheCleanup.startBackgroundCleanup(std.heap.page_allocator, Filesystem.default())) |_| {
         // Thread started successfully, will run in background
     } else |_| {
         // Non-fatal: cleanup failure shouldn't prevent compilation
@@ -1379,7 +1380,9 @@ fn rocRunDefaultApp(ctx: *CliContext, args: cli_args.RunArgs, original_source: [
     defer ctx.gpa.free(synthetic_source);
 
     // Phase 2: Compile through standard pipeline
-    var build_env = try BuildEnv.init(ctx.gpa, .single_threaded, 1, target);
+    const cwd = try std.process.getCwdAlloc(ctx.gpa);
+    defer ctx.gpa.free(cwd);
+    var build_env = try BuildEnv.init(ctx.gpa, .single_threaded, 1, target, cwd);
     defer build_env.deinit();
 
     var echo_fp = EchoFileProvider{
@@ -3127,7 +3130,9 @@ fn validateBundleWithCoordinator(
     defer ctx.gpa.free(abs_entry);
 
     // Create a BuildEnv to parse headers and discover modules via the Coordinator
-    var build_env = try BuildEnv.init(ctx.gpa, .single_threaded, 1, RocTarget.detectNative());
+    const cwd = try std.process.getCwdAlloc(ctx.gpa);
+    defer ctx.gpa.free(cwd);
+    var build_env = try BuildEnv.init(ctx.gpa, .single_threaded, 1, RocTarget.detectNative(), cwd);
     defer build_env.deinit();
 
     // Run the build — the Coordinator discovers all transitive module dependencies
@@ -3548,7 +3553,10 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     const thread_count: usize = if (args.max_threads) |t| t else (std.Thread.getCpuCount() catch 1);
     const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative());
+    const cwd = try std.process.getCwdAlloc(ctx.gpa);
+    defer ctx.gpa.free(cwd);
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd);
+
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
 
@@ -4025,7 +4033,10 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     const thread_count: usize = if (args.max_threads) |t| t else (std.Thread.getCpuCount() catch 1);
     const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative());
+    const cwd = try std.process.getCwdAlloc(ctx.gpa);
+    defer ctx.gpa.free(cwd);
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd);
+
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
 
@@ -4753,10 +4764,16 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     const mode: Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
     // Initialize BuildEnv for compilation
-    var build_env = BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative()) catch |err| {
+    const cwd = std.process.getCwdAlloc(ctx.gpa) catch |err| {
+        try stderr.print("Failed to get current working directory: {}\n", .{err});
+        return err;
+    };
+    defer ctx.gpa.free(cwd);
+    var build_env = BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd) catch |err| {
         try stderr.print("Failed to initialize build environment: {}\n", .{err});
         return err;
     };
+
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
 
@@ -5293,9 +5310,14 @@ fn rocGlueInner(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
     const thread_count: usize = 1;
     const mode: Mode = .single_threaded;
 
-    var build_env = BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative()) catch {
+    const cwd = std.process.getCwdAlloc(ctx.gpa) catch {
         return error.BuildEnvInit;
     };
+    defer ctx.gpa.free(cwd);
+    var build_env = BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd) catch {
+        return error.BuildEnvInit;
+    };
+
     defer build_env.deinit();
 
     // Build the synthetic app (which compiles the platform as a dependency)
@@ -5401,7 +5423,11 @@ fn rocGlueInner(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
     };
     defer ctx.gpa.free(glue_spec_abs);
 
-    var glue_build_env = BuildEnv.init(ctx.gpa, .single_threaded, 1, RocTarget.detectNative()) catch {
+    const glue_cwd = std.process.getCwdAlloc(ctx.gpa) catch {
+        return error.BuildEnvInit;
+    };
+    defer ctx.gpa.free(glue_cwd);
+    var glue_build_env = BuildEnv.init(ctx.gpa, .single_threaded, 1, RocTarget.detectNative(), glue_cwd) catch {
         return error.BuildEnvInit;
     };
     defer glue_build_env.deinit();
@@ -7423,7 +7449,10 @@ fn checkFileWithBuildEnvPreserved(
     const thread_count: usize = if (max_threads) |t| t else (std.Thread.getCpuCount() catch 1);
     const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative());
+    const cwd = try std.process.getCwdAlloc(ctx.gpa);
+    defer ctx.gpa.free(cwd);
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd);
+
     build_env.compiler_version = build_options.compiler_version;
     // Note: We do NOT defer build_env.deinit() here because we're returning it
 
@@ -7530,7 +7559,10 @@ fn checkFileWithBuildEnv(
     const thread_count: usize = if (max_threads) |t| t else (std.Thread.getCpuCount() catch 1);
     const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative());
+    const cwd = try std.process.getCwdAlloc(ctx.gpa);
+    defer ctx.gpa.free(cwd);
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd);
+
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
 

@@ -3604,7 +3604,12 @@ fn processDocsSnapshot(
     const BuildEnv = compile.BuildEnv;
     const native_target = roc_target.RocTarget.detectNative();
 
-    var build_env = BuildEnv.init(allocator, .single_threaded, 1, native_target) catch |err| {
+    const cwd = std.process.getCwdAlloc(allocator) catch |err| {
+        std.log.err("Failed to get cwd: {}", .{err});
+        return false;
+    };
+    defer allocator.free(cwd);
+    var build_env = BuildEnv.init(allocator, .single_threaded, 1, native_target, cwd) catch |err| {
         std.log.err("Failed to init BuildEnv: {}", .{err});
         return false;
     };
@@ -3909,7 +3914,12 @@ fn processDevObjectSnapshot(
     const BuildEnv = compile.BuildEnv;
     const native_target = roc_target.RocTarget.detectNative();
 
-    var build_env = BuildEnv.init(allocator, .single_threaded, 1, native_target) catch |err| {
+    const cwd = std.process.getCwdAlloc(allocator) catch |err| {
+        std.log.err("Failed to get cwd: {}", .{err});
+        return false;
+    };
+    defer allocator.free(cwd);
+    var build_env = BuildEnv.init(allocator, .single_threaded, 1, native_target, cwd) catch |err| {
         std.log.err("Failed to init BuildEnv: {}", .{err});
         return false;
     };

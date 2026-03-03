@@ -59,7 +59,9 @@ pub fn runViaInterpreter(
         roc_ops,
         args_ptr,
     ) catch |err| {
-        std.debug.print("Interpreter error: {}\n", .{err});
+        if (comptime !@import("threading.zig").is_freestanding) {
+            std.debug.print("Interpreter error: {}\n", .{err});
+        }
         return error.InterpreterFailed;
     };
 }

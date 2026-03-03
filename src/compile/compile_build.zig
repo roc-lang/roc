@@ -18,6 +18,7 @@ const reporting = @import("reporting");
 const eval = @import("eval");
 const check = @import("check");
 const unbundle = @import("unbundle");
+const Filesystem = @import("fs").Filesystem;
 
 const Report = reporting.Report;
 const ReportBuilder = check.ReportBuilder;
@@ -47,11 +48,26 @@ const trace_build = if (@hasDecl(build_options, "trace_build")) build_options.tr
 
 // Threading features aren't available when targeting WebAssembly,
 // so we disable them at comptime to prevent builds from failing.
-const threads_available = builtin.target.cpu.arch != .wasm32;
+const threading = @import("threading.zig");
+const is_freestanding = threading.is_freestanding;
 
-const Thread = if (threads_available) std.Thread else struct {};
-const Mutex = if (threads_available) std.Thread.Mutex else struct {};
-const ThreadCondition = if (threads_available) std.Thread.Condition else struct {};
+const Mutex = threading.Mutex;
+const ThreadCondition = threading.Condition;
+
+/// Native fetchUrl implementation that downloads a tar.zst bundle via HTTP
+/// and extracts it into the destination directory. Used by the CLI to wire up
+/// real download support through the Filesystem vtable.
+pub const nativeFetchUrl: ?*const fn (Allocator, []const u8, std.fs.Dir) Filesystem.FetchUrlError!void = if (!is_freestanding)
+    &nativeFetchUrlImpl
+else
+    null;
+
+fn nativeFetchUrlImpl(allocator: Allocator, url: []const u8, dest_dir: std.fs.Dir) Filesystem.FetchUrlError!void {
+    var alloc = allocator;
+    unbundle.download.downloadAndExtract(&alloc, url, dest_dir) catch {
+        return error.DownloadFailed;
+    };
+}
 
 fn freeSlice(gpa: Allocator, s: []u8) void {
     gpa.free(s);
@@ -125,6 +141,10 @@ pub const BuildEnv = struct {
     cache_manager: ?*CacheManager = null,
     // File provider for reading sources (defaults to filesystem)
     file_provider: FileProvider = FileProvider.filesystem,
+    // Filesystem abstraction for OS operations (getEnvVar, readFile, etc.)
+    filesystem: Filesystem = Filesystem.default(),
+    // Explicit working directory for resolving relative paths
+    cwd: []const u8,
 
     // Builtin modules (Bool, Try, Str) shared across all packages (heap-allocated to prevent moves)
     builtin_modules: *BuiltinModules,
@@ -150,7 +170,7 @@ pub const BuildEnv = struct {
         import_name: []const u8, // e.g., "pf.Stdout"
     };
 
-    pub fn init(gpa: Allocator, mode: Mode, max_threads: usize, target: roc_target.RocTarget) !BuildEnv {
+    pub fn init(gpa: Allocator, mode: Mode, max_threads: usize, target: roc_target.RocTarget, cwd: []const u8) !BuildEnv {
         // Allocate builtin modules on heap to prevent moves that would invalidate internal pointers
         const builtin_modules = try gpa.create(BuiltinModules);
         errdefer gpa.destroy(builtin_modules);
@@ -158,11 +178,12 @@ pub const BuildEnv = struct {
         builtin_modules.* = try BuiltinModules.init(gpa);
         errdefer builtin_modules.deinit();
 
-        return .{
+        var env = BuildEnv{
             .gpa = gpa,
             .mode = mode,
             .max_threads = max_threads,
             .target = target,
+            .cwd = cwd,
             .workspace_roots = std.array_list.Managed([]const u8).init(gpa),
             .sink = OrderedSink.init(gpa),
             .builtin_modules = builtin_modules,
@@ -171,6 +192,14 @@ pub const BuildEnv = struct {
             .schedule_ctxs = std.array_list.Managed(*ScheduleCtx).init(gpa),
             .pending_known_modules = std.array_list.Managed(PendingKnownModule).init(gpa),
         };
+
+        // On native targets, enable HTTP downloads for URL packages.
+        // On freestanding (WASM), fetchUrl remains the default stub (returns error.Unsupported).
+        if (nativeFetchUrl) |fetch_fn| {
+            env.filesystem.fetchUrl = fetch_fn;
+        }
+
+        return env;
     }
 
     pub fn deinit(self: *BuildEnv) void {
@@ -1551,11 +1580,7 @@ pub const BuildEnv = struct {
 
     fn makeAbsolute(self: *BuildEnv, path: []const u8) ![]const u8 {
         if (std.fs.path.isAbsolute(path)) return try std.fs.path.resolve(self.gpa, &.{path});
-
-        // Resolve relative to process cwd, then canonicalize
-        const cwd_tmp = try std.process.getCwdAlloc(std.heap.page_allocator);
-        defer std.heap.page_allocator.free(cwd_tmp);
-        return try std.fs.path.resolve(self.gpa, &.{ cwd_tmp, path });
+        return try std.fs.path.resolve(self.gpa, &.{ self.cwd, path });
     }
 
     fn readFile(self: *BuildEnv, path: []const u8, max_bytes: usize) ![]u8 {
@@ -1570,33 +1595,33 @@ pub const BuildEnv = struct {
     }
 
     /// Cross-platform environment variable lookup.
-    /// Uses std.process.getEnvVarOwned which works on both POSIX and Windows,
-    /// unlike std.posix.getenv which only works on POSIX systems.
-    fn getEnvVar(allocator: Allocator, key: []const u8) ?[]const u8 {
-        return std.process.getEnvVarOwned(allocator, key) catch null;
+    /// Uses the filesystem vtable which works on both POSIX, Windows, and wasm
+    /// (unlike std.posix.getenv which only works on POSIX systems).
+    fn getEnvVar(self: *BuildEnv, allocator: Allocator, key: []const u8) ?[]const u8 {
+        return self.filesystem.getEnvVar(key, allocator) catch null;
     }
 
     /// Get the roc cache directory for downloaded packages.
     /// Standard cache locations by platform:
     /// - Linux/macOS: ~/.cache/roc/packages/ (respects XDG_CACHE_HOME if set)
     /// - Windows: %LOCALAPPDATA%\roc\packages\
-    fn getRocCacheDir(allocator: Allocator) ![]const u8 {
+    fn getRocCacheDir(self: *BuildEnv, allocator: Allocator) ![]const u8 {
         // Check XDG_CACHE_HOME first (Linux/macOS)
-        if (getEnvVar(allocator, "XDG_CACHE_HOME")) |xdg_cache| {
+        if (self.getEnvVar(allocator, "XDG_CACHE_HOME")) |xdg_cache| {
             defer allocator.free(xdg_cache);
             return std.fs.path.join(allocator, &.{ xdg_cache, "roc", "packages" });
         }
 
         // Fall back to %LOCALAPPDATA%\roc\packages (Windows)
         if (comptime builtin.os.tag == .windows) {
-            if (getEnvVar(allocator, "LOCALAPPDATA")) |local_app_data| {
+            if (self.getEnvVar(allocator, "LOCALAPPDATA")) |local_app_data| {
                 defer allocator.free(local_app_data);
                 return std.fs.path.join(allocator, &.{ local_app_data, "roc", "packages" });
             }
         }
 
         // Fall back to ~/.cache/roc/packages (Unix)
-        if (getEnvVar(allocator, "HOME")) |home| {
+        if (self.getEnvVar(allocator, "HOME")) |home| {
             defer allocator.free(home);
             return std.fs.path.join(allocator, &.{ home, ".cache", "roc", "packages" });
         }
@@ -1607,6 +1632,8 @@ pub const BuildEnv = struct {
     /// Resolve a URL package by downloading and caching it.
     /// Returns the local path to the cached package's main.roc or platform.roc file.
     fn resolveUrlPackage(self: *BuildEnv, url: []const u8) ![]const u8 {
+        if (comptime is_freestanding)
+            return error.DownloadFailed;
         const download = unbundle.download;
 
         // Validate URL and extract hash
@@ -1616,7 +1643,7 @@ pub const BuildEnv = struct {
         };
 
         // Get cache directory
-        const cache_dir_path = getRocCacheDir(self.gpa) catch {
+        const cache_dir_path = self.getRocCacheDir(self.gpa) catch {
             std.log.err("Could not determine cache directory", .{});
             return error.NoCacheDir;
         };
@@ -1651,13 +1678,12 @@ pub const BuildEnv = struct {
                     return error.FileError;
                 };
 
-                // Download and extract
-                var gpa_copy = self.gpa;
-                download.downloadAndExtract(&gpa_copy, url, new_package_dir) catch |download_err| {
+                // Download and extract via filesystem vtable
+                self.filesystem.fetchUrl(self.gpa, url, new_package_dir) catch |fetch_err| {
                     // Clean up failed download
                     new_package_dir.close();
                     std.fs.cwd().deleteTree(package_dir_path) catch {};
-                    std.log.err("Failed to download package: {}", .{download_err});
+                    std.log.err("Failed to download package: {} (url: {s})", .{ fetch_err, url });
                     return error.DownloadFailed;
                 };
 
