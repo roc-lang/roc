@@ -9771,6 +9771,22 @@ pub const Interpreter = struct {
                                 for (0..num_mappings) |i| {
                                     try self.translate_rigid_subst.put(rigids.items[i], ct_args[i]);
                                 }
+
+                                // Remove translate_cache entries for the backing var and its
+                                // rigid vars. The backing var is shared across all instantiations
+                                // of this nominal type, and the rigid vars are cached with their
+                                // substituted types from a previous instantiation. We must clear
+                                // them so the backing is re-translated with the current
+                                // translate_rigid_subst mappings. We only clear the backing and
+                                // rigids (not all sub-types) because concrete types like Str
+                                // don't depend on substitutions and should keep their cached
+                                // runtime vars for consistency.
+                                const backing_resolved = module.types.resolveVar(ct_backing);
+                                _ = self.translate_cache.remove(.{ .module = module, .var_ = backing_resolved.var_ });
+                                for (rigids.items) |rigid_var| {
+                                    const rigid_resolved = module.types.resolveVar(rigid_var);
+                                    _ = self.translate_cache.remove(.{ .module = module, .var_ = rigid_resolved.var_ });
+                                }
                             }
 
                             // Translate backing (rigids will be substituted via translate_rigid_subst)
@@ -12370,6 +12386,41 @@ pub const Interpreter = struct {
                         if (expected_resolved.desc.content == .structure or
                             expected_resolved.desc.content == .alias)
                         {
+                            // Verify the expected type actually contains the tag we're constructing.
+                            // When a polymorphic function's param and return types share the same
+                            // type variable (e.g. map_err where the type checker unified the error
+                            // type variables), prepareCallWithFuncVar's unification can corrupt the
+                            // expected_rt_var to reflect the INPUT type rather than the OUTPUT type.
+                            // In that case, the expected type won't contain our tag, and we should
+                            // fall through to CT translation for the correct type.
+                            var check_resolved = expected_resolved;
+                            // Unwrap nominal types to get to the tag union
+                            if (check_resolved.desc.content == .structure and check_resolved.desc.content.structure == .nominal_type) {
+                                const nom_backing = self.runtime_types.getNominalBackingVar(check_resolved.desc.content.structure.nominal_type);
+                                check_resolved = self.runtime_types.resolveVar(nom_backing);
+                            }
+                            if (check_resolved.desc.content == .alias) {
+                                const alias_backing = self.runtime_types.getAliasBackingVar(check_resolved.desc.content.alias);
+                                check_resolved = self.runtime_types.resolveVar(alias_backing);
+                            }
+                            if (check_resolved.desc.content == .structure and check_resolved.desc.content.structure == .tag_union) {
+                                const tag_name_str = self.env.getIdent(tag.name);
+                                const rt_tag_ident = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(tag_name_str));
+                                const check_tu = check_resolved.desc.content.structure.tag_union;
+                                const check_tags = self.runtime_types.getTagsSlice(check_tu.tags);
+                                var tag_found = false;
+                                for (check_tags.items(.name)) |tn| {
+                                    if (tn == rt_tag_ident) {
+                                        tag_found = true;
+                                        break;
+                                    }
+                                }
+                                if (!tag_found) {
+                                    // Tag not found in expected type - fall through to CT translation
+                                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                                    break :blk try self.translateTypeVar(self.env, ct_var);
+                                }
+                            }
                             break :blk expected;
                         }
                     }
@@ -13008,6 +13059,7 @@ pub const Interpreter = struct {
                         entry.return_var,
                         .none,
                     );
+
                     // Use the function's return type - it has properly instantiated type args
                     break :blk entry.return_var;
                 } else call_ret_rt_var;
@@ -17004,18 +17056,26 @@ pub const Interpreter = struct {
                     const cleanup_saved_rigid_subst = saved_rigid_subst;
                     saved_rigid_subst = null;
 
-                    try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
-                        .saved_env = saved_env,
-                        .saved_bindings_len = saved_bindings_len,
-                        .param_count = params.len,
-                        .has_active_closure = true,
-                        .did_instantiate = ci.did_instantiate,
-                        .call_ret_rt_var = ci.call_ret_rt_var,
-                        .saved_rigid_subst = cleanup_saved_rigid_subst,
-                        .saved_flex_type_context = saved_flex_type_context,
-                        .arg_rt_vars_to_free = ci.arg_rt_vars_to_free,
-                        .saved_stack_ptr = self.stack_memory.next(),
-                    } } });
+                    try work_stack.push(.{
+                        .apply_continuation = .{
+                            .call_cleanup = .{
+                                .saved_env = saved_env,
+                                .saved_bindings_len = saved_bindings_len,
+                                .param_count = params.len,
+                                .has_active_closure = true,
+                                .did_instantiate = ci.did_instantiate,
+                                // Don't pass call_ret_rt_var for regular (non-method) calls.
+                                // The rt_var override is only needed for dot_access method calls
+                                // where the method body's module may have unified type variables
+                                // that don't reflect the call site's concrete types.
+                                .call_ret_rt_var = null,
+                                .saved_rigid_subst = cleanup_saved_rigid_subst,
+                                .saved_flex_type_context = saved_flex_type_context,
+                                .arg_rt_vars_to_free = ci.arg_rt_vars_to_free,
+                                .saved_stack_ptr = self.stack_memory.next(),
+                            },
+                        },
+                    });
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = header.body_idx,
                         .expected_rt_var = ci.call_ret_rt_var,
@@ -17210,7 +17270,19 @@ pub const Interpreter = struct {
                     self.stack_memory.restore(cleanup.saved_stack_ptr);
                 }
 
-                // rt_var is already set by the function's return value creation
+                // Override rt_var with call_ret_rt_var if available and concrete.
+                // This corrects the return type for polymorphic method calls where the
+                // function body's type (from the method's module, e.g. Builtin) may have
+                // unified type variables that don't reflect the actual concrete types from
+                // the call site (the user module). For example, map_err's body produces a
+                // value typed as Try(ok, a) where a=b in the Builtin module's type store,
+                // but the user module knows the correct type is Try(ok, [Wrapped(...)]).
+                if (cleanup.call_ret_rt_var) |ret_var| {
+                    const ret_resolved = self.runtime_types.resolveVar(ret_var);
+                    if (ret_resolved.desc.content == .structure or ret_resolved.desc.content == .alias) {
+                        result.rt_var = ret_var;
+                    }
+                }
                 try value_stack.push(result);
                 return true;
             },
@@ -19028,13 +19100,29 @@ pub const Interpreter = struct {
                     arg.decref(&self.runtime_layout_store, roc_ops);
                 }
 
+                // Translate the call expression's return type from the CALLER'S module
+                // (saved_env, which is the user module) to get the correct concrete type
+                // for the method call result. This is critical for polymorphic methods like
+                // map_err where the method body's module (Builtin) has unified type variables
+                // that don't distinguish between input and output types.
+                const dot_access_ret_rt_var: ?types.Var = blk: {
+                    const ret_ct_var = can.ModuleEnv.varFrom(dac.expr_idx);
+                    const ret_rt_var = try self.translateTypeVar(@constCast(saved_env), ret_ct_var);
+                    const ret_resolved = self.runtime_types.resolveVar(ret_rt_var);
+                    // Only use if it's a concrete type (not flex/rigid/err)
+                    break :blk if (ret_resolved.desc.content == .structure or ret_resolved.desc.content == .alias)
+                        ret_rt_var
+                    else
+                        null;
+                };
+
                 try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
                     .saved_env = saved_env,
                     .saved_bindings_len = saved_bindings_len,
                     .param_count = expected_params,
                     .has_active_closure = true,
                     .did_instantiate = did_instantiate,
-                    .call_ret_rt_var = null,
+                    .call_ret_rt_var = dot_access_ret_rt_var,
                     .saved_rigid_subst = saved_rigid_subst,
                     .saved_flex_type_context = saved_flex_type_context,
                     .arg_rt_vars_to_free = null,
