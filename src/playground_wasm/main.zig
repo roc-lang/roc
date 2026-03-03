@@ -31,6 +31,7 @@ const WasmFilesystem = @import("WasmFilesystem.zig");
 
 // WASM filesystem context — module-level so it persists across compilations.
 var wasm_ctx: WasmFilesystem.WasmContext = .{};
+const roc_target = @import("roc_target");
 const layout = @import("layout");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
@@ -45,6 +46,10 @@ const Allocator = std.mem.Allocator;
 const AST = parse.AST;
 const Repl = repl.Repl;
 const RocOps = builtins.host_abi.RocOps;
+const HostedFn = builtins.host_abi.HostedFn;
+const RocStr = builtins.str.RocStr;
+const RocList = builtins.list.RocList;
+const Interpreter = eval.Interpreter;
 const TestRunner = eval.TestRunner;
 
 // A fixed-size buffer to act as the heap inside the WASM linear memory.
@@ -70,6 +75,7 @@ const MessageType = enum {
     QUERY_FORMATTED,
     GET_HOVER_INFO,
     EVALUATE_TESTS,
+    RUN_MAIN,
     RESET,
     INIT_REPL,
     REPL_STEP,
@@ -85,6 +91,7 @@ const MessageType = enum {
         if (std.mem.eql(u8, str, "QUERY_FORMATTED")) return .QUERY_FORMATTED;
         if (std.mem.eql(u8, str, "GET_HOVER_INFO")) return .GET_HOVER_INFO;
         if (std.mem.eql(u8, str, "EVALUATE_TESTS")) return .EVALUATE_TESTS;
+        if (std.mem.eql(u8, str, "RUN_MAIN")) return .RUN_MAIN;
         if (std.mem.eql(u8, str, "RESET")) return .RESET;
         if (std.mem.eql(u8, str, "INIT_REPL")) return .INIT_REPL;
         if (std.mem.eql(u8, str, "REPL_STEP")) return .REPL_STEP;
@@ -220,6 +227,29 @@ const CompilerStageData = struct {
 /// Global state machine
 var current_state: State = .START;
 var compiler_data: ?CompilerStageData = null;
+
+/// Echo output capture buffer for RUN_MAIN
+var echo_output_buf: [64 * 1024]u8 = undefined;
+var echo_output_len: usize = 0;
+
+/// Echo host function for playground: captures output into echo_output_buf.
+fn playgroundEchoFn(_: *anyopaque, _: [*]u8, roc_str: *RocStr) callconv(.c) void {
+    const message = roc_str.asSlice();
+    // Append message
+    const remaining = echo_output_buf.len - echo_output_len;
+    if (message.len <= remaining) {
+        @memcpy(echo_output_buf[echo_output_len..][0..message.len], message);
+        echo_output_len += message.len;
+    } else if (remaining > 0) {
+        @memcpy(echo_output_buf[echo_output_len..][0..remaining], message[0..remaining]);
+        echo_output_len += remaining;
+    }
+    // Append newline
+    if (echo_output_len < echo_output_buf.len) {
+        echo_output_buf[echo_output_len] = '\n';
+        echo_output_len += 1;
+    }
+}
 
 /// REPL state management
 const ReplSession = struct {
@@ -735,6 +765,9 @@ fn handleLoadedState(message_type: MessageType, message_json: std.json.Value, re
         },
         .EVALUATE_TESTS => {
             try writeEvaluateTestsResponse(response_buffer, data);
+        },
+        .RUN_MAIN => {
+            try writeRunMainResponse(response_buffer, data);
         },
         .RESET => {
             resetGlobalState();
@@ -1341,7 +1374,13 @@ fn writeLoadedResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
 
     const html_content = html_writer.buffer[0..html_writer.end];
     try writeJsonString(w, html_content);
-    try w.writeAll("\"}}");
+    try w.writeAll("\"}");
+
+    // Add is_runnable flag for default_app modules
+    const is_runnable = data.module_env.module_kind == .default_app;
+    try w.print(",\"is_runnable\":{}", .{is_runnable});
+
+    try w.writeAll("}");
 
     try resp_writer.finalize();
 }
@@ -1643,6 +1682,197 @@ fn writeEvaluateTestsResponse(response_buffer: []u8, data: CompilerStageData) Re
     try w.writeAll("\"}");
     try resp_writer.finalize();
     return;
+}
+
+fn writeRunMainResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
+    const env = data.module_env;
+
+    // Verify this is a default_app module
+    if (env.module_kind != .default_app) {
+        try writeErrorResponse(response_buffer, .ERROR, "Not a runnable program (no main! function).");
+        return;
+    }
+
+    const builtin_types_for_run = data.builtin_types orelse {
+        try writeErrorResponse(response_buffer, .ERROR, "Builtin types not available for execution.");
+        return;
+    };
+
+    const solver = data.solver orelse {
+        try writeErrorResponse(response_buffer, .ERROR, "Type checker not available for execution.");
+        return;
+    };
+
+    // Find main! expression by iterating defs
+    const all_defs = env.store.sliceDefs(env.all_defs);
+    var main_expr: ?can.CIR.Expr.Idx = null;
+    for (all_defs) |def_idx| {
+        const def = env.store.getDef(def_idx);
+        const pattern = env.store.getPattern(def.pattern);
+        if (pattern == .assign) {
+            const ident_text = env.getIdent(pattern.assign.ident);
+            if (std.mem.eql(u8, ident_text, "main!")) {
+                main_expr = def.expr;
+                break;
+            }
+        }
+    }
+
+    const entrypoint_expr = main_expr orelse {
+        try writeErrorResponse(response_buffer, .ERROR, "Could not find main! definition.");
+        return;
+    };
+
+    // Create arena for evaluation
+    var local_arena = std.heap.ArenaAllocator.init(allocator);
+    defer local_arena.deinit();
+
+    const empty_modules: []const *const ModuleEnv = &.{};
+    const builtin_module_env: ?*const ModuleEnv = if (data.builtin_module) |bm| bm.env else null;
+
+    var interpreter = Interpreter.init(
+        local_arena.allocator(),
+        env,
+        builtin_types_for_run,
+        builtin_module_env,
+        empty_modules,
+        &solver.import_mapping,
+        null,
+        null,
+        roc_target.RocTarget.detectNative(),
+    ) catch {
+        try writeErrorResponse(response_buffer, .ERROR, "Failed to initialize interpreter.");
+        return;
+    };
+    defer interpreter.deinit();
+
+    // Reset echo output buffer
+    echo_output_len = 0;
+
+    // Set up crash context
+    var crash_ctx = CrashContext.init(local_arena.allocator());
+    defer crash_ctx.deinit();
+
+    // Set up RocOps with echo hosted function
+    var hosted_fn_array = [_]HostedFn{builtins.host_abi.hostedFn(&playgroundEchoFn)};
+    var roc_ops = RocOps{
+        .env = @ptrCast(&crash_ctx),
+        .roc_alloc = &playgroundRocAlloc,
+        .roc_dealloc = &playgroundRocDealloc,
+        .roc_realloc = &playgroundRocRealloc,
+        .roc_dbg = &playgroundRocDbg,
+        .roc_expect_failed = &playgroundRocExpectFailed,
+        .roc_crashed = &playgroundRocCrashed,
+        .hosted_fns = .{ .count = 1, .fns = &hosted_fn_array },
+    };
+
+    // Create empty CLI args
+    var cli_args = RocList.empty();
+    var result_buf: [16]u8 align(16) = undefined;
+
+    interpreter.evaluateExpression(
+        entrypoint_expr,
+        @ptrCast(&result_buf),
+        &roc_ops,
+        @ptrCast(&cli_args),
+    ) catch {
+        // Check if we crashed
+        if (crash_ctx.crashMessage()) |crash_msg| {
+            var resp_writer = ResponseWriter.init(response_buffer);
+            resp_writer.pos = @sizeOf(u32);
+            const w = &resp_writer.interface;
+            try w.writeAll("{\"status\":\"ERROR\",\"message\":\"");
+            try writeJsonString(w, crash_msg);
+            try w.writeAll("\"}");
+            try resp_writer.finalize();
+            return;
+        }
+        try writeErrorResponse(response_buffer, .ERROR, "Execution failed.");
+        return;
+    };
+
+    // Check for crash after successful return
+    if (crash_ctx.crashMessage()) |crash_msg| {
+        var resp_writer = ResponseWriter.init(response_buffer);
+        resp_writer.pos = @sizeOf(u32);
+        const w = &resp_writer.interface;
+        try w.writeAll("{\"status\":\"ERROR\",\"message\":\"");
+        try writeJsonString(w, crash_msg);
+        try w.writeAll("\"}");
+        try resp_writer.finalize();
+        return;
+    }
+
+    // Write success response with captured echo output
+    var resp_writer = ResponseWriter.init(response_buffer);
+    resp_writer.pos = @sizeOf(u32);
+    const w = &resp_writer.interface;
+
+    try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
+    try writeJsonString(w, echo_output_buf[0..echo_output_len]);
+    try w.writeAll("\"}");
+
+    try resp_writer.finalize();
+}
+
+// RocOps callbacks for RUN_MAIN execution
+fn playgroundRocAlloc(alloc_args: *builtins.host_abi.RocAlloc, _: *anyopaque) callconv(.c) void {
+    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
+    const size_storage_bytes = @max(alloc_args.alignment, @alignOf(usize));
+    const total_size = alloc_args.length + size_storage_bytes;
+    const result = allocator.rawAlloc(total_size, align_enum, @returnAddress());
+    const base_ptr = result orelse {
+        @panic("Out of memory during playgroundRocAlloc");
+    };
+    const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
+    size_ptr.* = total_size;
+    alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
+}
+
+fn playgroundRocDealloc(dealloc_args: *builtins.host_abi.RocDealloc, _: *anyopaque) callconv(.c) void {
+    const size_storage_bytes = @max(dealloc_args.alignment, @alignOf(usize));
+    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
+    const total_size = size_ptr.*;
+    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - size_storage_bytes);
+    const log2_align = std.math.log2_int(u32, @intCast(dealloc_args.alignment));
+    const align_enum: std.mem.Alignment = @enumFromInt(log2_align);
+    const slice = @as([*]u8, @ptrCast(base_ptr))[0..total_size];
+    allocator.rawFree(slice, align_enum, @returnAddress());
+}
+
+fn playgroundRocRealloc(realloc_args: *builtins.host_abi.RocRealloc, _: *anyopaque) callconv(.c) void {
+    const size_storage_bytes = @max(realloc_args.alignment, @alignOf(usize));
+    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));
+    const old_total_size = old_size_ptr.*;
+    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(realloc_args.answer) - size_storage_bytes);
+    const new_total_size = realloc_args.new_length + size_storage_bytes;
+    const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
+    const new_slice = allocator.realloc(old_slice, new_total_size) catch {
+        @panic("Out of memory during playgroundRocRealloc");
+    };
+    const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
+    new_size_ptr.* = new_total_size;
+    realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
+}
+
+fn playgroundRocDbg(_: *const builtins.host_abi.RocDbg, _: *anyopaque) callconv(.c) void {
+    // No-op in playground
+}
+
+fn playgroundRocExpectFailed(expect_args: *const builtins.host_abi.RocExpectFailed, env: *anyopaque) callconv(.c) void {
+    const crash_ctx: *CrashContext = @ptrCast(@alignCast(env));
+    const source_bytes = expect_args.utf8_bytes[0..expect_args.len];
+    const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
+    const formatted = std.fmt.allocPrint(crash_ctx.allocator, "Expect failed: {s}", .{trimmed}) catch return;
+    crash_ctx.recordCrash(formatted) catch {
+        crash_ctx.allocator.free(formatted);
+    };
+}
+
+fn playgroundRocCrashed(crashed_args: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.c) void {
+    const crash_ctx: *CrashContext = @ptrCast(@alignCast(env));
+    const msg_slice = crashed_args.utf8_bytes[0..crashed_args.len];
+    crash_ctx.recordCrash(msg_slice) catch {};
 }
 
 const HoverInfo = struct {
