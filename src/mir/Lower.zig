@@ -1644,37 +1644,6 @@ fn lowerDeferredBlockLambda(
     }
 
     if (!caller_monotype.isNone()) {
-        if (std.debug.runtime_safety) {
-            var type_writer = try types.TypeWriter.initFromParts(
-                self.allocator,
-                self.types_store,
-                self.all_module_envs[self.current_module_idx].getIdentStoreConst(),
-                null,
-            );
-            defer type_writer.deinit();
-            const pattern_ty = try type_writer.writeGet(ModuleEnv.varFrom(deferred.pattern_idx), .one_line);
-            const expr_ty = try type_writer.writeGet(ModuleEnv.varFrom(deferred.cir_expr), .one_line);
-            const caller_mono = self.store.monotype_store.getMonotype(caller_monotype);
-            std.debug.print(
-                "deferred bind symbol={d} caller_mono={s} pattern_ty={s} expr_ty={s}\n",
-                .{ symbol.raw(), @tagName(caller_mono), pattern_ty, expr_ty },
-            );
-            if (caller_mono == .func) {
-                const args = self.store.monotype_store.getIdxSpan(caller_mono.func.args);
-                for (args, 0..) |arg_mono_idx, arg_i| {
-                    const arg_mono = self.store.monotype_store.getMonotype(arg_mono_idx);
-                    std.debug.print("  caller_arg[{d}]={s}\n", .{ arg_i, @tagName(arg_mono) });
-                    if (arg_mono == .prim) {
-                        std.debug.print("    prim={s}\n", .{@tagName(arg_mono.prim)});
-                    }
-                }
-                const ret_mono = self.store.monotype_store.getMonotype(caller_mono.func.ret);
-                std.debug.print("  caller_ret={s}\n", .{@tagName(ret_mono)});
-                if (ret_mono == .prim) {
-                    std.debug.print("    ret_prim={s}\n", .{@tagName(ret_mono.prim)});
-                }
-            }
-        }
         // Bind via the declaration pattern's type root. This is the
         // generalized let-binding type that call sites instantiate.
         try self.bindTypeVarMonotypes(ModuleEnv.varFrom(deferred.pattern_idx), caller_monotype);
@@ -1846,6 +1815,7 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
 
     for (cir_stmt_indices) |stmt_idx| {
         const cir_stmt = module_env.store.getStatement(stmt_idx);
+        const stmt_region = module_env.store.getStatementRegion(stmt_idx);
         switch (cir_stmt) {
             .s_decl => |decl| {
                 const pat = try self.lowerPattern(module_env, decl.pattern);
@@ -1911,7 +1881,7 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
             .s_crash => |s_crash| {
                 const unit_monotype = self.store.monotype_store.unit_idx;
                 const mir_str = try self.copyStringToMir(module_env, s_crash.msg);
-                const expr = try self.store.addExpr(self.allocator, .{ .crash = mir_str }, unit_monotype, Region.zero());
+                const expr = try self.store.addExpr(self.allocator, .{ .crash = mir_str }, unit_monotype, stmt_region);
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
                 try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = wildcard, .expr = expr } });
             },
@@ -1924,7 +1894,7 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                     .list = list_expr,
                     .elem_pattern = pat,
                     .body = body,
-                } }, unit_monotype, Region.zero());
+                } }, unit_monotype, stmt_region);
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
                 try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = wildcard, .expr = expr } });
             },
@@ -1935,13 +1905,13 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                 const expr = try self.store.addExpr(self.allocator, .{ .while_loop = .{
                     .cond = cond,
                     .body = body,
-                } }, unit_monotype, Region.zero());
+                } }, unit_monotype, stmt_region);
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
                 try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = wildcard, .expr = expr } });
             },
             .s_break => {
                 const unit_monotype = self.store.monotype_store.unit_idx;
-                const expr = try self.store.addExpr(self.allocator, .{ .break_expr = {} }, unit_monotype, Region.zero());
+                const expr = try self.store.addExpr(self.allocator, .{ .break_expr = {} }, unit_monotype, stmt_region);
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
                 try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = wildcard, .expr = expr } });
             },
@@ -1950,7 +1920,7 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                 const unit_monotype = self.store.monotype_store.unit_idx;
                 const expr = try self.store.addExpr(self.allocator, .{ .return_expr = .{
                     .expr = inner,
-                } }, unit_monotype, Region.zero());
+                } }, unit_monotype, stmt_region);
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
                 try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = wildcard, .expr = expr } });
             },
@@ -1958,7 +1928,7 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                 const unit_monotype = self.store.monotype_store.unit_idx;
                 const expr = try self.store.addExpr(self.allocator, .{ .runtime_err_can = .{
                     .diagnostic = s_re.diagnostic,
-                } }, unit_monotype, Region.zero());
+                } }, unit_monotype, stmt_region);
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
                 try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = wildcard, .expr = expr } });
             },
@@ -2220,7 +2190,13 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
                 .fn_pure => |f| self.types_store.sliceVars(f.args),
                 .fn_effectful => |f| self.types_store.sliceVars(f.args),
                 .fn_unbound => |f| self.types_store.sliceVars(f.args),
-                else => &.{},
+                .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => {
+                    if (builtin.mode == .Debug) std.debug.panic(
+                        "CIR→MIR invariant violated: dispatch fn_var resolved to non-function structure '{s}'",
+                        .{@tagName(resolved_fn.desc.content.structure)},
+                    );
+                    unreachable;
+                },
             };
             if (fn_args.len > 0 and !receiver_monotype.isNone()) {
                 const arg0_root = self.types_store.resolveVar(fn_args[0]).var_;
@@ -2468,7 +2444,28 @@ fn findDefExprBySymbol(self: *Self, module_idx: u32, ident_idx: Ident.Idx) ?CIR.
             .assign => |assign| {
                 if (assign.ident.eql(ident_idx)) return def.expr;
             },
-            else => {},
+            .as,
+            .applied_tag,
+            .nominal,
+            .nominal_external,
+            .record_destructure,
+            .list,
+            .tuple,
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            .underscore,
+            .runtime_error,
+            => {
+                if (builtin.mode == .Debug) std.debug.panic(
+                    "CIR→MIR invariant violated: top-level def has non-assign pattern '{s}'",
+                    .{@tagName(pat)},
+                );
+                unreachable;
+            },
         }
     }
     return null;
