@@ -17,7 +17,6 @@ const roc_target = @import("roc_target");
 const reporting = @import("reporting");
 
 const WasmFilesystem = @import("WasmFilesystem.zig");
-const Filesystem = @import("fs").Filesystem;
 
 const BuildEnv = compile.BuildEnv;
 const FileProvider = compile.package.FileProvider;
@@ -86,6 +85,9 @@ var extra_file_count: usize = 0;
 
 // Static buffer for copying source before FBA reset (avoids 64KB stack allocation in WASM).
 var source_copy_buf: [MAX_CONTENT_LEN]u8 = undefined;
+
+// WASM filesystem context — static so it survives FBA reset.
+var wasm_ctx: WasmFilesystem.WasmContext = .{};
 
 // --- Virtual file provider ---
 
@@ -247,13 +249,13 @@ fn compileAndRunInner(source: []const u8) !u8 {
     const synthetic_source = std.mem.concat(allocator, u8, &.{ header, source }) catch return error.OutOfMemory;
 
     // Set the app source into WasmFilesystem so canonicalize/fileExists work.
-    WasmFilesystem.setSource(allocator, synthetic_source);
-    WasmFilesystem.setFilename(allocator, "main.roc");
+    wasm_ctx.setSource(allocator, synthetic_source);
+    wasm_ctx.setFilename(allocator, "main.roc");
 
     // Initialize the build environment with WASM filesystem.
     var build_env = try BuildEnv.init(allocator, .single_threaded, 1, target, "/app");
     defer build_env.deinit();
-    build_env.filesystem = WasmFilesystem.wasm();
+    build_env.filesystem = WasmFilesystem.wasm(&wasm_ctx);
 
     // Wire up the echo file provider.
     var echo_fp = EchoFileProvider{

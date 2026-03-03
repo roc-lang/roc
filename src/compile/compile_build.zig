@@ -57,12 +57,12 @@ const ThreadCondition = threading.Condition;
 /// Native fetchUrl implementation that downloads a tar.zst bundle via HTTP
 /// and extracts it into the destination directory. Used by the CLI to wire up
 /// real download support through the Filesystem vtable.
-pub const nativeFetchUrl: ?*const fn (Allocator, []const u8, std.fs.Dir) Filesystem.FetchUrlError!void = if (!is_freestanding)
+pub const nativeFetchUrl: ?*const fn (?*anyopaque, Allocator, []const u8, std.fs.Dir) Filesystem.FetchUrlError!void = if (!is_freestanding)
     &nativeFetchUrlImpl
 else
     null;
 
-fn nativeFetchUrlImpl(allocator: Allocator, url: []const u8, dest_dir: std.fs.Dir) Filesystem.FetchUrlError!void {
+fn nativeFetchUrlImpl(_: ?*anyopaque, allocator: Allocator, url: []const u8, dest_dir: std.fs.Dir) Filesystem.FetchUrlError!void {
     var alloc = allocator;
     unbundle.download.downloadAndExtract(&alloc, url, dest_dir) catch {
         return error.DownloadFailed;
@@ -196,7 +196,7 @@ pub const BuildEnv = struct {
         // On native targets, enable HTTP downloads for URL packages.
         // On freestanding (WASM), fetchUrl remains the default stub (returns error.Unsupported).
         if (nativeFetchUrl) |fetch_fn| {
-            env.filesystem.fetchUrl = fetch_fn;
+            env.filesystem.vtable.fetchUrl = fetch_fn;
         }
 
         return env;
