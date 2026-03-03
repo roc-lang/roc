@@ -14514,38 +14514,152 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Move a value to the return register(s), using layout information for proper sizing.
         fn moveToReturnRegisterWithLayout(self: *Self, loc: ValueLocation, ret_layout: layout.Idx) Allocator.Error!void {
-            // First check if the layout tells us this is a multi-register type > 8 bytes
-            {
-                const ls = self.layout_store;
-                const layout_val = ls.getLayout(ret_layout);
+            if (loc == .noreturn) return;
 
-                // Lists and strings are always 24 bytes (3 registers)
-                if (layout_val.tag == .list or layout_val.tag == .list_of_zst) {
+            const ls = self.layout_store;
+            const layout_val = ls.getLayout(ret_layout);
+
+            switch (layout_val.tag) {
+                // 3 registers (24 bytes): lists
+                .list, .list_of_zst => {
                     const stack_offset: i32 = switch (loc) {
                         .stack => |s| s.offset,
                         .list_stack => |info| info.struct_offset,
-                        else => return self.moveToReturnRegister(loc),
+                        .stack_str => |off| off, // same 24-byte representation
+                        else => unreachable,
                     };
                     try self.codegen.emitLoadStack(.w64, ret_reg_0, stack_offset);
                     try self.codegen.emitLoadStack(.w64, ret_reg_1, stack_offset + 8);
                     try self.codegen.emitLoadStack(.w64, ret_reg_2, stack_offset + 16);
-                    return;
-                }
-
-                if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
+                },
+                // Scalars: dispatch by scalar kind
+                .scalar => {
+                    const scalar = layout_val.data.scalar;
+                    switch (scalar.tag) {
+                        // 3 registers (24 bytes): strings
+                        .str => {
+                            const stack_offset: i32 = switch (loc) {
+                                .stack => |s| s.offset,
+                                .stack_str => |off| off,
+                                .list_stack => |info| info.struct_offset, // same 24-byte representation
+                                else => unreachable,
+                            };
+                            try self.codegen.emitLoadStack(.w64, ret_reg_0, stack_offset);
+                            try self.codegen.emitLoadStack(.w64, ret_reg_1, stack_offset + 8);
+                            try self.codegen.emitLoadStack(.w64, ret_reg_2, stack_offset + 16);
+                        },
+                        .frac => {
+                            const precision = scalar.data.frac;
+                            if (precision == .dec) {
+                                // Dec is 128-bit fixed-point: 2 general registers
+                                switch (loc) {
+                                    .stack_i128 => |offset| {
+                                        try self.codegen.emitLoadStack(.w64, ret_reg_0, offset);
+                                        try self.codegen.emitLoadStack(.w64, ret_reg_1, offset + 8);
+                                    },
+                                    .stack => |s| {
+                                        try self.codegen.emitLoadStack(.w64, ret_reg_0, s.offset);
+                                        try self.codegen.emitLoadStack(.w64, ret_reg_1, s.offset + 8);
+                                    },
+                                    .immediate_i128 => |val| {
+                                        const low: i64 = @truncate(val);
+                                        const high: i64 = @truncate(val >> 64);
+                                        try self.codegen.emitLoadImm(ret_reg_0, low);
+                                        try self.codegen.emitLoadImm(ret_reg_1, high);
+                                    },
+                                    .immediate_i64 => |val| {
+                                        try self.codegen.emitLoadImm(ret_reg_0, @bitCast(val));
+                                        try self.codegen.emitLoadImm(ret_reg_1, if (val < 0) @as(i64, -1) else 0);
+                                    },
+                                    else => unreachable,
+                                }
+                            } else {
+                                // f32/f64: float register return
+                                switch (loc) {
+                                    .float_reg => |freg| {
+                                        if (comptime target.toCpuArch() == .aarch64) {
+                                            if (freg != .V0) try self.codegen.emit.fmovRegReg(.double, .V0, freg);
+                                        } else {
+                                            if (freg != .XMM0) try self.codegen.emit.movsdRegReg(.XMM0, freg);
+                                        }
+                                    },
+                                    .stack => |s| {
+                                        try self.codegen.emitLoadStackF64(if (comptime target.toCpuArch() == .aarch64) .V0 else .XMM0, s.offset);
+                                    },
+                                    .immediate_f64 => |val| {
+                                        const bits: u64 = @bitCast(val);
+                                        if (bits == 0) {
+                                            if (comptime target.toCpuArch() == .aarch64) {
+                                                try self.codegen.emit.fmovFloatFromGen(.double, .V0, .ZRSP);
+                                            } else {
+                                                try self.codegen.emit.xorpdRegReg(.XMM0, .XMM0);
+                                            }
+                                        } else {
+                                            if (comptime target.toCpuArch() == .aarch64) {
+                                                try self.codegen.emit.movRegImm64(.IP0, @bitCast(bits));
+                                                try self.codegen.emit.fmovFloatFromGen(.double, .V0, .IP0);
+                                            } else {
+                                                const stack_offset = self.codegen.allocStackSlot(8);
+                                                try self.codegen.emit.movRegImm64(.R11, @bitCast(bits));
+                                                try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset, .R11);
+                                                try self.codegen.emit.movsdRegMem(.XMM0, .RBP, stack_offset);
+                                            }
+                                        }
+                                    },
+                                    else => unreachable,
+                                }
+                            }
+                        },
+                        // Integer scalars: 1 or 2 registers depending on precision
+                        .int => {
+                            const precision = scalar.data.int;
+                            if (precision == .i128 or precision == .u128) {
+                                // 2 registers (16 bytes)
+                                switch (loc) {
+                                    .stack_i128 => |offset| {
+                                        try self.codegen.emitLoadStack(.w64, ret_reg_0, offset);
+                                        try self.codegen.emitLoadStack(.w64, ret_reg_1, offset + 8);
+                                    },
+                                    .stack => |s| {
+                                        try self.codegen.emitLoadStack(.w64, ret_reg_0, s.offset);
+                                        try self.codegen.emitLoadStack(.w64, ret_reg_1, s.offset + 8);
+                                    },
+                                    .immediate_i128 => |val| {
+                                        const low: i64 = @truncate(val);
+                                        const high: i64 = @truncate(val >> 64);
+                                        try self.codegen.emitLoadImm(ret_reg_0, low);
+                                        try self.codegen.emitLoadImm(ret_reg_1, high);
+                                    },
+                                    .immediate_i64 => |val| {
+                                        try self.codegen.emitLoadImm(ret_reg_0, @bitCast(val));
+                                        try self.codegen.emitLoadImm(ret_reg_1, if (val < 0) @as(i64, -1) else 0);
+                                    },
+                                    else => unreachable,
+                                }
+                            } else {
+                                // 1 register (≤ 8 bytes)
+                                try self.moveOneRegToReturn(loc);
+                            }
+                        },
+                    }
+                },
+                // Structs and tag unions: size determines register count
+                .struct_, .tag_union, .closure => {
                     const size_align = ls.layoutSizeAlign(layout_val);
-                    if (size_align.size > 8) {
-                        // Large struct - need to return in multiple registers
+                    if (size_align.size == 0) {
+                        // Zero-sized — nothing to move
+                    } else if (size_align.size <= 8) {
+                        // 1 register
+                        try self.moveOneRegToReturn(loc);
+                    } else {
+                        // Multi-register: load N words from stack
                         const stack_offset: i32 = switch (loc) {
                             .stack => |s| s.offset,
-                            else => {
-                                // For non-stack locations, fall through to regular handling
-                                return self.moveToReturnRegister(loc);
-                            },
+                            .stack_i128 => |off| off,
+                            else => unreachable,
                         };
                         const num_regs = (size_align.size + 7) / 8;
                         if (comptime target.toCpuArch() == .aarch64) {
-                            // Use X0-X7 for first 8 words, then X9-X12 for overflow
                             const regs = [_]@TypeOf(GeneralReg.X0){ .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7, .XR, .X9, .X10, .X11, .X12, .X13, .X14, .X15 };
                             for (0..@min(num_regs, regs.len)) |i| {
                                 try self.codegen.emitLoadStack(.w64, regs[i], stack_offset + @as(i32, @intCast(i * 8)));
@@ -14556,31 +14670,38 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 try self.codegen.emitLoadStack(.w64, regs[i], stack_offset + @as(i32, @intCast(i * 8)));
                             }
                         }
-                        return;
                     }
-                }
+                },
+                // Zero-sized types: nothing to move
+                .zst => {},
+                // Box: single pointer (1 register)
+                .box, .box_of_zst => try self.moveOneRegToReturn(loc),
             }
-            // i128/u128/Dec need two registers (X0/X1 or RAX/RDX)
-            if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec) {
-                switch (loc) {
-                    .stack_i128 => |offset| {
-                        try self.codegen.emitLoadStack(.w64, ret_reg_0, offset);
-                        try self.codegen.emitLoadStack(.w64, ret_reg_1, offset + 8);
-                        return;
-                    },
-                    .stack => |s| {
-                        const offset = s.offset;
-                        try self.codegen.emitLoadStack(.w64, ret_reg_0, offset);
-                        try self.codegen.emitLoadStack(.w64, ret_reg_1, offset + 8);
-                        return;
-                    },
-                    // Other locations (immediates, etc.) fall through to regular handling
-                    else => {},
-                }
-            }
+        }
 
-            // Fall back to regular handling
-            return self.moveToReturnRegister(loc);
+        /// Move a single-register value to the return register (ret_reg_0).
+        fn moveOneRegToReturn(self: *Self, loc: ValueLocation) Allocator.Error!void {
+            const ret_reg = ret_reg_0;
+            switch (loc) {
+                .general_reg => |reg| {
+                    if (reg != ret_reg) {
+                        try self.codegen.emit.movRegReg(.w64, ret_reg, reg);
+                    }
+                },
+                .stack => |s| {
+                    try self.emitSizedLoadStack(ret_reg, s.offset, s.size);
+                },
+                .immediate_i64 => |val| {
+                    try self.codegen.emitLoadImm(ret_reg, @bitCast(val));
+                },
+                .lambda_code => |lc| {
+                    try self.emitCodePointerToReg(ret_reg, lc.code_offset);
+                },
+                .closure_value => |cv| {
+                    try self.codegen.emitLoadStack(.w64, ret_reg, cv.stack_offset);
+                },
+                else => unreachable,
+            }
         }
 
         /// Store the value currently in the return register(s) to a stack slot.
@@ -14658,57 +14779,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const off: i32 = @intCast(w * 8);
                 try self.emitLoad(.w64, temp_reg, frame_ptr, result_offset + off);
                 try self.emitStore(.w64, ptr_reg, off, temp_reg);
-            }
-        }
-
-        fn moveToReturnRegister(self: *Self, loc: ValueLocation) Allocator.Error!void {
-            const ret_reg = self.getReturnRegister();
-            switch (loc) {
-                .general_reg => |reg| {
-                    if (reg != ret_reg) {
-                        try self.codegen.emit.movRegReg(.w64, ret_reg, reg);
-                    }
-                },
-                .stack => |s| {
-                    try self.emitSizedLoadStack(ret_reg, s.offset, s.size);
-                },
-                .immediate_i64 => |val| {
-                    try self.codegen.emitLoadImm(ret_reg, @bitCast(val));
-                },
-                .stack_str => |offset| {
-                    // String return (24 bytes) - load into X0/X1/X2 or RAX/RDX/RCX
-                    try self.codegen.emitLoadStack(.w64, ret_reg, offset);
-                    try self.codegen.emitLoadStack(.w64, ret_reg_1, offset + 8);
-                    try self.codegen.emitLoadStack(.w64, ret_reg_2, offset + 16);
-                },
-                .list_stack => |info| {
-                    // List return (24 bytes) - load into X0/X1/X2 or RAX/RDX/RCX
-                    try self.codegen.emitLoadStack(.w64, ret_reg, info.struct_offset);
-                    try self.codegen.emitLoadStack(.w64, ret_reg_1, info.struct_offset + 8);
-                    try self.codegen.emitLoadStack(.w64, ret_reg_2, info.struct_offset + 16);
-                },
-                .stack_i128 => |offset| {
-                    // For i128/Dec return values, load both halves
-                    // X0 = low 64 bits, X1 = high 64 bits
-                    try self.codegen.emitLoadStack(.w64, ret_reg, offset);
-                    try self.codegen.emitLoadStack(.w64, ret_reg_1, offset + 8);
-                },
-                .immediate_i128 => |val| {
-                    // Load low 64 bits to X0, high 64 bits to X1
-                    const low: i64 = @truncate(val);
-                    const high: i64 = @truncate(val >> 64);
-                    try self.codegen.emitLoadImm(ret_reg, low);
-                    try self.codegen.emitLoadImm(ret_reg_1, high);
-                },
-                .lambda_code => |lc| {
-                    try self.emitCodePointerToReg(ret_reg, lc.code_offset);
-                },
-                .closure_value => |cv| {
-                    try self.codegen.emitLoadStack(.w64, ret_reg, cv.stack_offset);
-                },
-                else => {
-                    // For other types (like float_reg), try to handle appropriately
-                },
             }
         }
 

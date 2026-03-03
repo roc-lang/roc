@@ -2,16 +2,6 @@
 
 ## LIR → Dev Backend (`src/backend/dev/`)
 
-### 24. Callable-arg inlining silently skipped for block/if_then_else defs
-**`src/backend/dev/LirCodeGen.zig:12818`**
-
-When `call_has_callable_args` is true but the def is a `.block`/`.if_then_else`/`.match_expr` that returns a callable, `else => {}` skips inlining. Falls through to compiled proc route, but closure capture data may go stale.
-
-### 25. Multi-word return values silently truncated to single register
-**`src/backend/dev/LirCodeGen.zig:15167, 15181`**
-
-For lists or large structs in non-stack locations, falls back to `moveToReturnRegister` which moves a single 64-bit value. A non-empty list (24 bytes, 3 registers) would only set the first return register.
-
 ### 26. Inner tag patterns silently dropped in `emitStringPatternCheck`
 **`src/backend/dev/LirCodeGen.zig:7652`**
 ```zig
