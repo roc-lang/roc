@@ -238,16 +238,17 @@ type_repr_to_zig = |type_table, type_repr| {
 			} else {
 				name_to_struct_name(rec.name)
 			}
-		RocTagUnion(tu) => resolve_tag_union_type(type_table, tu.tags)
+		RocTagUnion(tu) => resolve_tag_union_type(type_table, tu)
 		RocFunction(_) => "*anyopaque"
 		RocUnknown(_) => "*anyopaque"
 	}
 }
 
-## Resolve a tag union to a Zig type. Single-variant unions are optimized to their payload.
-resolve_tag_union_type = |type_table, tags| {
-	if List.len(tags) == 1 {
-		match List.first(tags) {
+## Resolve a tag union to a Zig type. Single-variant unions are unwrapped to their payload.
+## Multi-variant unions with a name return a generated struct name.
+resolve_tag_union_type = |type_table, tu| {
+	if List.len(tu.tags) == 1 {
+		match List.first(tu.tags) {
 			Ok(tag) =>
 				match List.first(tag.payload) {
 					Ok(payload_id) => type_id_to_zig(type_table, payload_id)
@@ -255,6 +256,8 @@ resolve_tag_union_type = |type_table, tags| {
 				}
 			_ => "*anyopaque"
 		}
+	} else if tu.name != "" {
+		name_to_struct_name(tu.name)
 	} else {
 		"*anyopaque"
 	}
@@ -394,6 +397,114 @@ generate_element_type_structs = |type_table| {
 	}
 
 	$structs
+}
+
+## Generate extern structs for tag union types found in the type table.
+## Multi-variant tag unions get a tag enum, payload extern union, and wrapping extern struct.
+## Pure enums (all variants have no payload) get just an enum.
+generate_tag_union_structs : List(TypeRepr) -> Str
+generate_tag_union_structs = |type_table| {
+	var $structs = ""
+	var $seen_names = []
+
+	for type_repr in type_table {
+		match type_repr {
+			RocTagUnion(tu) =>
+				if List.len(tu.tags) >= 2 and tu.name != "" and !(List.contains($seen_names, tu.name)) {
+					$seen_names = $seen_names.append(tu.name)
+					$structs = Str.concat($structs, generate_single_tag_union(type_table, tu))
+				}
+			_ => {}
+		}
+	}
+
+	$structs
+}
+
+## Generate Zig code for a single multi-variant tag union.
+generate_single_tag_union = |type_table, tu| {
+	struct_name = name_to_struct_name(tu.name)
+	tag_count = List.len(tu.tags)
+	disc_type = disc_type_for_count(tag_count)
+
+	# Check if this is a pure enum (all variants have no payload)
+	is_pure_enum = List.all(tu.tags, |tag| List.is_empty(tag.payload))
+
+	if is_pure_enum {
+		# Pure enum: just emit the enum type
+		var $variants = ""
+		var $idx = 0
+		for tag in tu.tags {
+			snake = to_lower_snake_case(tag.name)
+			$variants = Str.concat($variants, "    ${snake} = ${U64.to_str($idx)},\n")
+			$idx = $idx + 1
+		}
+
+		"/// Tag union: ${tu.name}\npub const ${struct_name} = enum(${disc_type}) {\n${$variants}};\n\n"
+	} else {
+		# Generate tuple structs for any variant with >1 payload
+		var $tuple_structs = ""
+		for tag in tu.tags {
+			if List.len(tag.payload) > 1 {
+				tuple_name = "${struct_name}${capitalize_first(tag.name)}Payload"
+				var $tuple_fields = ""
+				var $ti = 0
+				for pid in tag.payload {
+					zig_type = type_id_to_zig(type_table, pid)
+					$tuple_fields = Str.concat($tuple_fields, "    _${U64.to_str($ti)}: ${zig_type},\n")
+					$ti = $ti + 1
+				}
+				$tuple_structs = Str.concat($tuple_structs, "pub const ${tuple_name} = extern struct {\n${$tuple_fields}};\n\n")
+			}
+		}
+
+		# Tag enum
+		var $enum_variants = ""
+		var $idx = 0
+		for enum_tag in tu.tags {
+			$enum_variants = Str.concat($enum_variants, "    ${enum_tag.name} = ${U64.to_str($idx)},\n")
+			$idx = $idx + 1
+		}
+
+		# Payload extern union
+		var $union_fields = ""
+		for union_tag in tu.tags {
+			snake = to_lower_snake_case(union_tag.name)
+			if List.is_empty(union_tag.payload) {
+				# No-payload variant: use [0]u8 (Zig extern unions can't have void)
+				$union_fields = Str.concat($union_fields, "        ${snake}: [0]u8,\n")
+			} else if List.len(union_tag.payload) == 1 {
+				zig_type = match List.first(union_tag.payload) {
+					Ok(pid) => type_id_to_zig(type_table, pid)
+					Err(_) => "*anyopaque"
+				}
+				$union_fields = Str.concat($union_fields, "        ${snake}: ${zig_type},\n")
+			} else {
+				tuple_name = "${struct_name}${capitalize_first(union_tag.name)}Payload"
+				$union_fields = Str.concat($union_fields, "        ${snake}: ${tuple_name},\n")
+			}
+		}
+
+		# Comptime assertions
+		assertions = if tu.size > 0 {
+			"comptime {\n    if (@sizeOf(${struct_name}) != ${U64.to_str(tu.size)}) @compileError(\"${struct_name} size mismatch\");\n    if (@alignOf(${struct_name}) != ${U64.to_str(tu.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n}\n\n"
+		} else {
+			""
+		}
+
+		"${$tuple_structs}/// Tag union: ${tu.name}\npub const ${struct_name}Tag = enum(${disc_type}) {\n${$enum_variants}};\n\npub const ${struct_name} = extern struct {\n    payload: extern union {\n${$union_fields}    },\n    tag: ${struct_name}Tag,\n};\n\n${assertions}"
+	}
+}
+
+## Return the Zig discriminant type for a given tag count.
+disc_type_for_count = |count| {
+	if count <= 256 {
+		"u8"
+	} else if count <= 65536 {
+		"u16"
+	} else {
+		"u32"
+	}
 }
 
 # =============================================================================
@@ -614,6 +725,7 @@ generate_zig_file = |hosted_functions, type_table| {
 		.concat(generate_index_constants(hosted_functions, count))
 		.concat("\n")
 		.concat(generate_element_type_structs(type_table))
+		.concat(generate_tag_union_structs(type_table))
 		.concat(generate_all_record_structs(hosted_functions, type_table))
 		.concat(generate_all_args_structs(hosted_functions, type_table))
 		.concat(generate_platform_fns_struct(hosted_functions, type_table))

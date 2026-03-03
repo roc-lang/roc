@@ -1,3 +1,3 @@
 import TagVariant exposing [TagVariant]
 
-TagUnionRepr := { name : Str, tags : List(TagVariant) }
+TagUnionRepr := { alignment : U64, name : Str, size : U64, tags : List(TagVariant) }

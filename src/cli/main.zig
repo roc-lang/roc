@@ -5732,7 +5732,7 @@ const CollectedTypeRepr = union(enum) {
     list: u64,
     function: struct { arg_ids: []const u64, ret_id: u64 },
     record: struct { name: []const u8, fields: []const CollectedRecordField, size: u64, alignment: u64 },
-    tag_union: struct { name: []const u8, tags: []const CollectedTagInfo },
+    tag_union: struct { name: []const u8, tags: []const CollectedTagInfo, size: u64, alignment: u64 },
     unknown: []const u8,
 };
 
@@ -5746,6 +5746,8 @@ const CollectedRecordField = struct {
 const CollectedTagInfo = struct {
     name: []const u8,
     payload_ids: []const u64,
+    payload_size: u64,
+    payload_alignment: u64,
 };
 
 /// Builds a type table from compiler type vars, deduplicating entries.
@@ -5856,7 +5858,7 @@ const TypeTable = struct {
             .unit => .{ .size = 0, .alignment = 0 },
             .record => |rec| .{ .size = rec.size, .alignment = rec.alignment },
             .function => .{ .size = 0, .alignment = 1 },
-            .tag_union => .{ .size = 0, .alignment = 1 },
+            .tag_union => |tu| .{ .size = tu.size, .alignment = tu.alignment },
             .unknown => .{ .size = 0, .alignment = 1 },
         };
     }
@@ -5935,6 +5937,22 @@ const TypeTable = struct {
                         } };
                     },
                     else => return record_repr,
+                }
+            }
+
+            // If it wraps a tag union, convert it but preserve the qualified name
+            if (backing_resolved.desc.content.unwrapTagUnion()) |tu| {
+                const tu_repr = self.convertTagUnion(env, tu);
+                switch (tu_repr) {
+                    .tag_union => |collected_tu| {
+                        return .{ .tag_union = .{
+                            .name = self.gpa.dupe(u8, display_name) catch "",
+                            .tags = collected_tu.tags,
+                            .size = collected_tu.size,
+                            .alignment = collected_tu.alignment,
+                        } };
+                    },
+                    else => return tu_repr,
                 }
             }
 
@@ -6050,7 +6068,7 @@ const TypeTable = struct {
             tag_indices[i] = i;
         }
 
-        // Sort by name
+        // Sort by name (alphabetical = discriminant order)
         const SortCtx = struct {
             names: []const base.Ident.Idx,
             idents: *const base.Ident.Store,
@@ -6063,7 +6081,22 @@ const TypeTable = struct {
         };
         std.mem.sort(usize, tag_indices, SortCtx{ .names = tag_names, .idents = ident_store }, SortCtx.lessThan);
 
+        // Collect tags and compute per-variant payload layout
         const collected_tags = self.gpa.alloc(CollectedTagInfo, tag_names.len) catch return .{ .unknown = "tag_union" };
+        var max_payload_size: u64 = 0;
+        var max_payload_alignment: u64 = 0;
+
+        // Also build auto-generated name from variant names joined with "Or"
+        var name_len: usize = 0;
+        for (tag_indices) |src_idx| {
+            const nt = ident_store.getText(tag_names[src_idx]);
+            name_len += nt.len;
+        }
+        // Add "Or" separators between names
+        if (tag_names.len > 1) name_len += (tag_names.len - 1) * 2;
+        const auto_name_buf: []u8 = self.gpa.alloc(u8, name_len) catch return .{ .unknown = "tag_union" };
+        var name_pos: usize = 0;
+
         for (tag_indices, 0..) |src_idx, dst_idx| {
             const name_text = ident_store.getText(tag_names[src_idx]);
             const args_range = tag_args[src_idx];
@@ -6074,15 +6107,78 @@ const TypeTable = struct {
                 payload_ids[i] = self.getOrInsert(env, av);
             }
 
+            // Compute payload as a tuple: sequential fields with alignment padding
+            var payload_size: u64 = 0;
+            var payload_alignment: u64 = 0;
+            for (payload_ids) |pid| {
+                const sa = self.getSizeAlign(pid);
+                if (sa.alignment > payload_alignment) payload_alignment = sa.alignment;
+                // Align current offset
+                if (sa.alignment > 0) {
+                    const rem = payload_size % sa.alignment;
+                    if (rem != 0) payload_size += sa.alignment - rem;
+                }
+                payload_size += sa.size;
+            }
+            // Round up to payload alignment
+            if (payload_alignment > 0) {
+                const rem = payload_size % payload_alignment;
+                if (rem != 0) payload_size += payload_alignment - rem;
+            }
+
+            if (payload_size > max_payload_size) max_payload_size = payload_size;
+            if (payload_alignment > max_payload_alignment) max_payload_alignment = payload_alignment;
+
             collected_tags[dst_idx] = .{
                 .name = self.gpa.dupe(u8, name_text) catch "",
                 .payload_ids = payload_ids,
+                .payload_size = payload_size,
+                .payload_alignment = payload_alignment,
             };
+
+            // Build auto-name
+            if (auto_name_buf.len > 0) {
+                if (dst_idx > 0) {
+                    if (name_pos + 2 <= auto_name_buf.len) {
+                        auto_name_buf[name_pos] = 'O';
+                        auto_name_buf[name_pos + 1] = 'r';
+                        name_pos += 2;
+                    }
+                }
+                if (name_pos + name_text.len <= auto_name_buf.len) {
+                    @memcpy(auto_name_buf[name_pos .. name_pos + name_text.len], name_text);
+                    name_pos += name_text.len;
+                }
+            }
         }
 
+        // Compute discriminant size/alignment from tag count
+        const disc_size: u64 = if (tag_names.len <= 256) 1 else if (tag_names.len <= 65536) 2 else if (tag_names.len <= 4294967296) 4 else 8;
+        const disc_align: u64 = disc_size;
+
+        // Compute overall tag union layout: payload at offset 0, discriminant at end
+        // disc_offset = alignForward(max_payload_size, disc_align)
+        var disc_offset = max_payload_size;
+        if (disc_align > 0) {
+            const rem = disc_offset % disc_align;
+            if (rem != 0) disc_offset += disc_align - rem;
+        }
+
+        const total_align = @max(max_payload_alignment, disc_align);
+        // total_size = alignForward(disc_offset + disc_size, total_align)
+        var total_size = disc_offset + disc_size;
+        if (total_align > 0) {
+            const rem = total_size % total_align;
+            if (rem != 0) total_size += total_align - rem;
+        }
+
+        const auto_name: []const u8 = auto_name_buf[0..name_pos];
+
         return .{ .tag_union = .{
-            .name = "",
+            .name = auto_name,
             .tags = collected_tags,
+            .size = total_size,
+            .alignment = total_align,
         } };
     }
 
@@ -6223,9 +6319,11 @@ const RecordPayload = extern struct {
     size: u64,
 };
 
-/// TagUnionRepr := { name : Str, tags : List(TagVariant) } — fields alphabetical
+/// TagUnionRepr := { alignment : U64, name : Str, size : U64, tags : List(TagVariant) } — fields alphabetical
 const TagUnionPayload = extern struct {
+    alignment: u64,
     name: RocStr,
+    size: u64,
     tags: RocList,
 };
 
@@ -6252,10 +6350,12 @@ const RecordFieldTypeReprRoc = extern struct {
     type_id: u64,
 };
 
-/// TagVariant := { name : Str, payload : List(U64) }
+/// TagVariant := { name : Str, payload : List(U64), payload_alignment : U64, payload_size : U64 }
 const TagVariantRoc = extern struct {
     name: RocStr,
     payload: RocList,
+    payload_alignment: u64,
+    payload_size: u64,
 };
 
 const SMALL_STRING_SIZE = @sizeOf(RocStr);
@@ -6424,6 +6524,8 @@ fn serializeTypeRepr(
                     tptr[i] = .{
                         .name = createBigRocStr(tag.name, roc_ops),
                         .payload = buildU64RocList(tag.payload_ids, roc_ops),
+                        .payload_alignment = tag.payload_alignment,
+                        .payload_size = tag.payload_size,
                     };
                 }
                 break :tblk RocList{
@@ -6434,7 +6536,9 @@ fn serializeTypeRepr(
             } else RocList.empty();
 
             result.payload.tag_union = .{
+                .alignment = tu.alignment,
                 .name = createBigRocStr(tu.name, roc_ops),
+                .size = tu.size,
                 .tags = tags_list,
             };
         },
