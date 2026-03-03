@@ -1323,7 +1323,7 @@ pub const RcInsertPass = struct {
             // The branch wrapper will prepend RC ops that execute before
             // the early return: increfs (positive adj) add refs to clean up,
             // decrefs (negative adj) reduce refs since they're already handled.
-            const global_count = self.symbol_use_counts.get(key) orelse 1;
+            const global_count = self.symbol_use_counts.get(key) orelse unreachable;
             // Mutable bindings are re-bound over time; global symbol use counts
             // over-approximate live refs for the current value at an early_return.
             // Treat the current mutable binding as owning exactly one live ref.
