@@ -6,9 +6,16 @@ platform ""
         EntryPoint,
         File,
         FunctionInfo,
+        FunctionRepr,
         HostedFunctionInfo,
         ModuleTypeInfo,
+        RecordField,
+        RecordFieldInfo,
+        RecordRepr,
+        TagUnionRepr,
+        TagVariant,
         TypeId,
+        TypeRepr,
         Types,
     ]
     packages {}
@@ -32,6 +39,13 @@ import EntryPoint exposing [EntryPoint]
 import ModuleTypeInfo exposing [ModuleTypeInfo]
 import FunctionInfo exposing [FunctionInfo]
 import HostedFunctionInfo exposing [HostedFunctionInfo]
+import RecordFieldInfo exposing [RecordFieldInfo]
+import FunctionRepr exposing [FunctionRepr]
+import RecordField exposing [RecordField]
+import RecordRepr exposing [RecordRepr]
+import TagUnionRepr exposing [TagUnionRepr]
+import TagVariant exposing [TagVariant]
+import TypeRepr exposing [TypeRepr]
 
 make_glue_for_host : List(Types) -> Try(List(File), Str)
 make_glue_for_host = make_glue

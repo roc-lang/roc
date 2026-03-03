@@ -44,15 +44,16 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
             const def_node_idx: @TypeOf(env.store.nodes).Idx = @enumFromInt(@intFromEnum(def_idx));
             const def_region = env.store.getRegionAt(def_node_idx);
 
-            // Extract the unqualified name (e.g., "line!" from "Stdout.line!")
-            // The identifier might contain a qualified name, but we need the unqualified one
-            // This matches each module's local name, and qualification happens in collectAndSortHostedFunctions
+            // Extract the local name by stripping the module name prefix (first dot-separated segment).
+            // Use indexOfScalar (first dot) instead of lastIndexOfScalar to preserve nested type paths.
+            // e.g., "PartDef.Idx.get!" -> "Idx.get!" (not just "get!")
+            // e.g., "Echo.line!" -> "line!"
             const full_name = env.getIdent(full_ident);
-            const unqualified_name = if (std.mem.lastIndexOfScalar(u8, full_name, '.')) |dot_idx|
+            const local_name = if (std.mem.indexOfScalar(u8, full_name, '.')) |dot_idx|
                 full_name[dot_idx + 1 ..]
             else
                 full_name;
-            const ident = env.common.findIdent(unqualified_name) orelse try env.common.insertIdent(gpa, base.Ident.for_text(unqualified_name));
+            const ident = env.common.findIdent(local_name) orelse try env.common.insertIdent(gpa, base.Ident.for_text(local_name));
 
             // Extract the number of arguments from the annotation
             const annotation = env.store.getAnnotation(def.annotation.?);

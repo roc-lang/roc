@@ -2490,6 +2490,42 @@ pub fn build(b: *std.Build) void {
     const playground_install = b.addInstallArtifact(playground_exe, .{});
     playground_step.dependOn(&playground_install.step);
 
+    // Build echo.wasm — echo platform compiled to wasm32-freestanding.
+    // Also serves as a regression test that the compile module stays wasm-compatible.
+    {
+        const echo_wasm_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding });
+        const echo_wasm = b.addExecutable(.{
+            .name = "echo",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/echo_platform/echo.zig"),
+                .target = echo_wasm_target,
+                .optimize = .ReleaseSmall,
+            }),
+        });
+        configureBackend(echo_wasm, echo_wasm_target);
+        echo_wasm.entry = .disabled;
+        echo_wasm.rdynamic = true;
+        roc_modules.addAll(echo_wasm);
+        echo_wasm.root_module.addImport("compiled_builtins", compiled_builtins_module);
+        echo_wasm.root_module.addImport("WasmFilesystem.zig", b.createModule(.{
+            .root_source_file = b.path("src/playground_wasm/WasmFilesystem.zig"),
+            .target = echo_wasm_target,
+            .imports = &.{.{ .name = "fs", .module = roc_modules.fs }},
+        }));
+        echo_wasm.step.dependOn(&write_compiled_builtins.step);
+
+        const echo_wasm_install = b.addInstallArtifact(echo_wasm, .{
+            .dest_dir = .{ .override = .lib },
+        });
+        playground_step.dependOn(&echo_wasm_install.step);
+
+        // Copy the echo platform www files alongside echo.wasm
+        inline for (.{ "index.html", "app.js" }) |filename| {
+            const install_file = b.addInstallFile(b.path("src/echo_platform/www/" ++ filename), "lib/" ++ filename);
+            playground_step.dependOn(&install_file.step);
+        }
+    }
+
     const bytebox = b.dependency("bytebox", .{
         .target = target,
         .optimize = optimize,
@@ -3379,7 +3415,7 @@ fn addMainExe(
         configureBackend(cross_shim_lib, cross_resolved_target);
 
         // For wasm32, only add the modules needed by the interpreter shim
-        // (compile, watch, lsp, repl, ipc use threading/file I/O not available on freestanding)
+        // (watch, lsp, repl, ipc use threading/file I/O not available on freestanding)
         if (cross_target.query.cpu_arch == .wasm32 and cross_target.query.os_tag == .freestanding) {
             cross_shim_lib.root_module.addImport("base", roc_modules.base);
             cross_shim_lib.root_module.addImport("collections", roc_modules.collections);
@@ -3394,6 +3430,9 @@ fn addMainExe(
             cross_shim_lib.root_module.addImport("tracy", roc_modules.tracy);
             cross_shim_lib.root_module.addImport("build_options", roc_modules.build_options);
             cross_shim_lib.root_module.addImport("roc_target", roc_modules.roc_target);
+            cross_shim_lib.root_module.addImport("compile", roc_modules.compile);
+            cross_shim_lib.root_module.addImport("unbundle", roc_modules.unbundle);
+            cross_shim_lib.root_module.addImport("fs", roc_modules.fs);
             // Note: ipc module is NOT added for wasm32-freestanding as it uses POSIX calls
             // The interpreter shim main.zig has a stub for wasm32
         } else {

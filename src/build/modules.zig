@@ -508,10 +508,10 @@ pub const RocModules = struct {
         step.root_module.addImport("mono", self.mono);
         step.root_module.addImport("echo_platform", self.echo_platform);
         step.root_module.addImport("docs", self.docs);
+        step.root_module.addImport("compile", self.compile);
 
-        // Don't add thread-dependent modules for WASM targets (threads not supported)
+        // Don't add thread-dependent or native-only modules for WASM targets
         if (!is_wasm) {
-            step.root_module.addImport("compile", self.compile);
             step.root_module.addImport("ipc", self.ipc);
             step.root_module.addImport("watch", self.watch);
             step.root_module.addImport("lsp", self.lsp);
