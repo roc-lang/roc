@@ -612,3 +612,25 @@ test "closure: monomorphic Str identity with if-else (exact failing scenario but
     ;
     try runExpectStr(code, "Hello", .no_trace);
 }
+
+// Regression: refcounting silently skips `.closure` layouts.
+//
+// When a closure capturing a heap-allocated string (>23 bytes, avoids SSO) is used
+// multiple times, the RC pass emits incref(closure_sym, closure_layout). Since
+// emitIncrefValueByLayout has `else => {}` for .closure, the captured string's
+// refcount stays at 1. The first call decrefs it to 0 and frees it; the second
+// call accesses freed memory → SIGABRT (use-after-free detected by poisoned refcount).
+//
+// Same test with a short string (SSO) or integer capture passes, confirming
+// the failure is specifically from missing .closure refcount handling.
+test "closure: multi-use closure with captured heap string needs incref" {
+    const code =
+        \\{
+        \\    s = "This string is definitely longer than twenty three bytes"
+        \\    f = |_x| s
+        \\    _a = f(0)
+        \\    f(0)
+        \\}
+    ;
+    try runExpectStr(code, "This string is definitely longer than twenty three bytes", .no_trace);
+}
