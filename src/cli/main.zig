@@ -5867,7 +5867,7 @@ const TypeTable = struct {
     /// Get the size and alignment for a type table entry by index.
     fn getSizeAlign(self: *const TypeTable, type_id: u64) SizeAlign {
         if (type_id >= self.entries.items.len) return .{ .size = 0, .alignment = 1 };
-        return getSizeAlignForRepr(self.entries.items[type_id]);
+        return getSizeAlignForRepr(self.entries.items[@intCast(type_id)]);
     }
 
     /// Get the size and alignment for a CollectedTypeRepr.
