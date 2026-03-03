@@ -652,6 +652,9 @@ pub fn main() !void {
     builtin_modules_ptr.* = try eval_mod.BuiltinModules.init(gpa);
     defer builtin_modules_ptr.deinit();
 
+    const cwd = try std.process.getCwdAlloc(gpa);
+    defer gpa.free(cwd);
+
     const config = Config{
         .maybe_fuzz_corpus_path = maybe_fuzz_corpus_path,
         .generate_html = generate_html,
@@ -661,6 +664,7 @@ pub fn main() !void {
         .linecol_mode = linecol_mode,
         .builtin_module = builtin_modules_ptr.builtin_module.env,
         .builtin_indices = builtin_modules_ptr.builtin_indices,
+        .cwd = cwd,
     };
 
     if (config.maybe_fuzz_corpus_path != null) {
@@ -705,6 +709,9 @@ fn checkSnapshotExpectations(gpa: Allocator) !bool {
     builtin_modules_ptr.* = try eval_mod.BuiltinModules.init(gpa);
     defer builtin_modules_ptr.deinit();
 
+    const cwd = try std.process.getCwdAlloc(gpa);
+    defer gpa.free(cwd);
+
     const config = Config{
         .maybe_fuzz_corpus_path = null,
         .generate_html = false,
@@ -713,6 +720,7 @@ fn checkSnapshotExpectations(gpa: Allocator) !bool {
         .disable_updates = true,
         .builtin_module = builtin_modules_ptr.builtin_module.env,
         .builtin_indices = builtin_modules_ptr.builtin_indices,
+        .cwd = cwd,
     };
     const snapshots_dir = "test/snapshots";
     var work_list = WorkList.init(gpa);
@@ -1490,6 +1498,7 @@ const Config = struct {
     // Compiled Builtin module (contains nested Bool, Try, Str, Dict, Set)
     builtin_module: ?*const ModuleEnv = null,
     builtin_indices: CIR.BuiltinIndices,
+    cwd: []const u8,
 };
 
 const ProcessResult = struct {
@@ -3604,12 +3613,7 @@ fn processDocsSnapshot(
     const BuildEnv = compile.BuildEnv;
     const native_target = roc_target.RocTarget.detectNative();
 
-    const cwd = std.process.getCwdAlloc(allocator) catch |err| {
-        std.log.err("Failed to get cwd: {}", .{err});
-        return false;
-    };
-    defer allocator.free(cwd);
-    var build_env = BuildEnv.init(allocator, .single_threaded, 1, native_target, cwd) catch |err| {
+    var build_env = BuildEnv.init(allocator, .single_threaded, 1, native_target, config.cwd) catch |err| {
         std.log.err("Failed to init BuildEnv: {}", .{err});
         return false;
     };
@@ -3914,12 +3918,7 @@ fn processDevObjectSnapshot(
     const BuildEnv = compile.BuildEnv;
     const native_target = roc_target.RocTarget.detectNative();
 
-    const cwd = std.process.getCwdAlloc(allocator) catch |err| {
-        std.log.err("Failed to get cwd: {}", .{err});
-        return false;
-    };
-    defer allocator.free(cwd);
-    var build_env = BuildEnv.init(allocator, .single_threaded, 1, native_target, cwd) catch |err| {
+    var build_env = BuildEnv.init(allocator, .single_threaded, 1, native_target, config.cwd) catch |err| {
         std.log.err("Failed to init BuildEnv: {}", .{err});
         return false;
     };
