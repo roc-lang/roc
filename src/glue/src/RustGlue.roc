@@ -739,6 +739,7 @@ generate_rust_roc_str =
 	\\
 	\\    /// Return the string contents as a `&str`, assuming valid UTF-8.
 	\\    pub fn as_str(&self) -> &str {
+	\\        // SAFETY: Roc guarantees all strings are valid UTF-8.
 	\\        unsafe { core::str::from_utf8_unchecked(self.as_slice()) }
 	\\    }
 	\\
@@ -759,7 +760,7 @@ generate_rust_roc_str =
 	\\            let data_ptr = unsafe { (base as *mut u8).add(ptr_width) };
 	\\            // Write refcount = 1
 	\\            unsafe {
-	\\                let rc = data_ptr.sub(core::mem::size_of::<isize>()) as *mut isize;
+	\\                let rc = (data_ptr as *mut isize).sub(1);
 	\\                *rc = 1;
 	\\                core::ptr::copy_nonoverlapping(slice.as_ptr(), data_ptr, slice.len());
 	\\            }
@@ -876,7 +877,7 @@ generate_rust_roc_list =
 	\\        let data_ptr = unsafe { (base as *mut u8).add(header_bytes) };
 	\\        // Write refcount = 1
 	\\        unsafe {
-	\\            let rc = data_ptr.sub(core::mem::size_of::<isize>()) as *mut isize;
+	\\            let rc = (data_ptr as *mut isize).sub(1);
 	\\            *rc = 1;
 	\\        }
 	\\        Self {
@@ -887,7 +888,7 @@ generate_rust_roc_list =
 	\\    }
 	\\
 	\\    /// Create a RocList from a slice, copying elements into a new allocation.
-	\\    pub fn from_slice(slice: &[T], roc_ops: &RocOps) -> Self {
+	\\    pub fn from_slice(slice: &[T], roc_ops: &RocOps) -> Self where T: Copy {
 	\\        if slice.is_empty() {
 	\\            return Self::empty();
 	\\        }
@@ -912,7 +913,7 @@ generate_rust_roc_list =
 	\\        let required_space = 2 * core::mem::size_of::<usize>();
 	\\        let header_bytes = required_space.max(core::mem::align_of::<T>());
 	\\        unsafe {
-	\\            let rc = (self.elements as *mut u8).sub(core::mem::size_of::<isize>()) as *mut isize;
+	\\            let rc = (self.elements as *mut isize).sub(1);
 	\\            let prev = *rc;
 	\\            *rc = prev - 1;
 	\\            if prev == 1 {
@@ -1259,6 +1260,7 @@ generate_default_allocators_rust =
 	\\            let size_storage_bytes = min_alignment;
 	\\            let total_size = args.length + size_storage_bytes;
 	\\
+	\\            debug_assert!(min_alignment.is_power_of_two(), "alignment must be a power of two");
 	\\            let layout = Layout::from_size_align_unchecked(total_size, min_alignment);
 	\\            let base_ptr = std::alloc::alloc(layout);
 	\\            if base_ptr.is_null() {
@@ -1285,12 +1287,13 @@ generate_default_allocators_rust =
 	\\            let total_size = *size_ptr;
 	\\
 	\\            let base_ptr = (args.ptr as *mut u8).sub(size_storage_bytes);
+	\\            debug_assert!(min_alignment.is_power_of_two(), "alignment must be a power of two");
 	\\            let layout = Layout::from_size_align_unchecked(total_size, min_alignment);
 	\\            std::alloc::dealloc(base_ptr, layout);
 	\\        }
 	\\    }
 	\\
-	\\    /// Reallocate memory, copying existing data to the new allocation.
+	\\    /// Reallocate memory, potentially extending the existing allocation in-place.
 	\\    pub extern "C" fn roc_realloc(realloc_args: *mut RocRealloc, _env: *mut c_void) {
 	\\        unsafe {
 	\\            let args = &mut *realloc_args;
@@ -1302,26 +1305,18 @@ generate_default_allocators_rust =
 	\\            let old_total_size = *old_size_ptr;
 	\\            let old_base_ptr = (args.answer as *mut u8).sub(size_storage_bytes);
 	\\
-	\\            // Allocate new block
+	\\            // Realloc (may extend in-place without copying)
 	\\            let new_total_size = args.new_length + size_storage_bytes;
-	\\            let new_layout = Layout::from_size_align_unchecked(new_total_size, min_alignment);
-	\\            let new_base_ptr = std::alloc::alloc(new_layout);
+	\\            debug_assert!(min_alignment.is_power_of_two(), "alignment must be a power of two");
+	\\            let old_layout = Layout::from_size_align_unchecked(old_total_size, min_alignment);
+	\\            let new_base_ptr = std::alloc::realloc(old_base_ptr, old_layout, new_total_size);
 	\\            if new_base_ptr.is_null() {
 	\\                eprintln!("roc_realloc: out of memory");
 	\\                std::process::exit(1);
 	\\            }
 	\\
-	\\            // Copy old user data to new location
-	\\            let old_user_data_size = old_total_size - size_storage_bytes;
-	\\            let copy_size = old_user_data_size.min(args.new_length);
-	\\            let new_user_ptr = new_base_ptr.add(size_storage_bytes);
-	\\            core::ptr::copy_nonoverlapping(args.answer as *const u8, new_user_ptr, copy_size);
-	\\
-	\\            // Free old allocation
-	\\            let old_layout = Layout::from_size_align_unchecked(old_total_size, min_alignment);
-	\\            std::alloc::dealloc(old_base_ptr, old_layout);
-	\\
 	\\            // Store new size and return user pointer
+	\\            let new_user_ptr = new_base_ptr.add(size_storage_bytes);
 	\\            let new_size_ptr = new_user_ptr.sub(core::mem::size_of::<usize>()) as *mut usize;
 	\\            *new_size_ptr = new_total_size;
 	\\            args.answer = new_user_ptr as *mut c_void;
@@ -1344,6 +1339,7 @@ generate_default_handlers_rust =
 	\\        unsafe {
 	\\            let args = &*dbg_args;
 	\\            let msg = core::slice::from_raw_parts(args.utf8_bytes, args.len);
+	\\            // SAFETY: Roc guarantees all strings are valid UTF-8.
 	\\            let msg = core::str::from_utf8_unchecked(msg);
 	\\            eprintln!("\\x1b[36m[ROC DBG]\\x1b[0m {}", msg);
 	\\        }
@@ -1354,6 +1350,7 @@ generate_default_handlers_rust =
 	\\        unsafe {
 	\\            let args = &*expect_args;
 	\\            let msg = core::slice::from_raw_parts(args.utf8_bytes, args.len);
+	\\            // SAFETY: Roc guarantees all strings are valid UTF-8.
 	\\            let msg = core::str::from_utf8_unchecked(msg);
 	\\            eprintln!("\\x1b[33m[ROC EXPECT]\\x1b[0m {}", msg);
 	\\        }
@@ -1364,6 +1361,7 @@ generate_default_handlers_rust =
 	\\        unsafe {
 	\\            let args = &*crash_args;
 	\\            let msg = core::slice::from_raw_parts(args.utf8_bytes, args.len);
+	\\            // SAFETY: Roc guarantees all strings are valid UTF-8.
 	\\            let msg = core::str::from_utf8_unchecked(msg);
 	\\            eprintln!("\\x1b[31m[ROC CRASHED]\\x1b[0m {}", msg);
 	\\            std::process::exit(1);
