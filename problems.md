@@ -2,17 +2,6 @@
 
 ## LIR → Dev Backend (`src/backend/dev/`)
 
-### 26. Inner tag patterns silently dropped in `emitStringPatternCheck`
-**`src/backend/dev/LirCodeGen.zig:7652`**
-```zig
-switch (inner_arg) {
-    .bind => { ... },
-    .wildcard => {},
-    else => {},
-}
-```
-Pattern types like `.int_literal`, `.str_literal`, `.tag` (nested), `.as_pattern` are silently ignored.
-
 ### 27. ObjectFileCompiler `else => {}` for non-function/data relocations
 **`src/backend/dev/ObjectFileCompiler.zig:234`**
 

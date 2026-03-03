@@ -7508,128 +7508,53 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Bind tag payload fields to symbols after a tag pattern match.
+        /// Computes the payload location for each arg and delegates to bindPattern,
+        /// which handles all pattern types (bind, wildcard, tag, struct, list, as_pattern, etc.).
         fn bindTagPayloadFields(
             self: *Self,
             tag_pattern: anytype,
             value_loc: ValueLocation,
             value_layout_val: anytype,
-            tu_disc_offset: i32,
         ) Allocator.Error!void {
             const ls = self.layout_store;
             const args = self.store.getPatternSpan(tag_pattern.args);
             if (args.len == 0) return;
 
-            // Get variant payload layout for proper binding
+            // Get variant payload layout
             const variant_payload_layout: ?layout.Idx = if (value_layout_val.tag == .tag_union) vl_blk: {
                 const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
                 const variants = ls.getTagUnionVariants(tu_data);
                 if (tag_pattern.discriminant < variants.len) {
-                    const variant = variants.get(tag_pattern.discriminant);
-                    break :vl_blk variant.payload_layout;
+                    break :vl_blk variants.get(tag_pattern.discriminant).payload_layout;
                 }
                 break :vl_blk null;
             } else null;
 
+            // Get base offset of the tag union value
+            const base_offset: i32 = switch (value_loc) {
+                .stack => |s| s.offset,
+                .stack_str => |off| off,
+                else => unreachable,
+            };
+
             // Determine if payload is a tuple (multi-field payload)
-            const payload_is_tuple = if (variant_payload_layout) |pl| blk_pt: {
-                const pl_val = ls.getLayout(pl);
-                break :blk_pt pl_val.tag == .struct_;
+            const payload_is_tuple = if (variant_payload_layout) |pl| blk: {
+                break :blk ls.getLayout(pl).tag == .struct_;
             } else false;
 
             for (args, 0..) |arg_pattern_id, arg_idx| {
-                const arg_pattern = self.store.getPattern(arg_pattern_id);
-                switch (arg_pattern) {
-                    .bind => |arg_bind| {
-                        const symbol_key: u64 = @bitCast(arg_bind.symbol);
-                        switch (value_loc) {
-                            .stack => |s| {
-                                const base_offset = s.offset;
-                                const arg_loc: ValueLocation = if (payload_is_tuple and variant_payload_layout != null) plblk: {
-                                    // Multi-arg tag: payload is a tuple, use tuple element offsets/layouts
-                                    const pl_val = ls.getLayout(variant_payload_layout.?);
-                                    const elem_offset = ls.getStructFieldOffsetByOriginalIndex(pl_val.data.struct_.idx, @intCast(arg_idx));
-                                    const elem_layout = ls.getStructFieldLayoutByOriginalIndex(pl_val.data.struct_.idx, @intCast(arg_idx));
-                                    const arg_offset = base_offset + @as(i32, @intCast(elem_offset));
-                                    break :plblk self.stackLocationForLayout(elem_layout, arg_offset);
-                                } else if (variant_payload_layout) |pl| plblk: {
-                                    // Single-arg tag: use variant payload layout directly
-                                    const payload_offset = base_offset;
-                                    if (pl == .i128 or pl == .u128 or pl == .dec) {
-                                        break :plblk .{ .stack_i128 = payload_offset };
-                                    } else if (pl == .str) {
-                                        break :plblk .{ .stack_str = payload_offset };
-                                    } else {
-                                        const pl_val = ls.getLayout(pl);
-                                        if (pl_val.tag == .list or pl_val.tag == .list_of_zst) {
-                                            break :plblk .{ .list_stack = .{
-                                                .struct_offset = payload_offset,
-                                                .data_offset = 0,
-                                                .num_elements = 0,
-                                            } };
-                                        }
-                                        // For small payloads (< 8 bytes), the discriminant is adjacent.
-                                        // We must extract only the payload bytes to avoid reading
-                                        // discriminant data when the value is later used as 8 bytes.
-                                        const pl_size = ls.layoutSizeAlign(pl_val).size;
-                                        if (pl_size > 0 and pl_size < 8 and tu_disc_offset < 8) {
-                                            const fresh_slot = self.codegen.allocStackSlot(8);
-                                            const tmp_reg = try self.allocTempGeneral();
-                                            // Zero the slot first
-                                            try self.codegen.emitLoadImm(tmp_reg, 0);
-                                            try self.codegen.emitStoreStack(.w64, fresh_slot, tmp_reg);
-                                            // Load only payload bytes (w32 for 1-4 bytes, w64 for 5-7)
-                                            if (pl_size <= 4) {
-                                                try self.codegen.emitLoadStack(.w32, tmp_reg, payload_offset);
-                                                // Mask to exact size if discriminant is within the 4 bytes
-                                                if (pl_size < 4) {
-                                                    const pl_mask: i64 = (@as(i64, 1) << @intCast(pl_size * 8)) - 1;
-                                                    const mask_reg = try self.allocTempGeneral();
-                                                    try self.codegen.emitLoadImm(mask_reg, pl_mask);
-                                                    try self.emitAndRegs(.w64, tmp_reg, tmp_reg, mask_reg);
-                                                    self.codegen.freeGeneral(mask_reg);
-                                                }
-                                            } else {
-                                                try self.codegen.emitLoadStack(.w64, tmp_reg, payload_offset);
-                                            }
-                                            try self.codegen.emitStoreStack(.w64, fresh_slot, tmp_reg);
-                                            self.codegen.freeGeneral(tmp_reg);
-                                            break :plblk .{ .stack = .{ .offset = fresh_slot } };
-                                        }
-                                        break :plblk .{ .stack = .{ .offset = payload_offset } };
-                                    }
-                                } else .{ .stack = .{ .offset = base_offset + @as(i32, @intCast(arg_idx)) * 8 } };
-                                try self.symbol_locations.put(symbol_key, arg_loc);
-                            },
-                            else => {
-                                try self.symbol_locations.put(symbol_key, value_loc);
-                            },
-                        }
-                    },
-                    .wildcard => {},
-                    .tag => |inner_tag| {
-                        // Nested tag pattern (e.g., Err(ListWasEmpty) where ListWasEmpty is a zero-arg tag)
-                        const inner_args = self.store.getPatternSpan(inner_tag.args);
-                        for (inner_args) |inner_arg_id| {
-                            const inner_arg = self.store.getPattern(inner_arg_id);
-                            switch (inner_arg) {
-                                .bind => |inner_bind| {
-                                    const inner_key: u64 = @bitCast(inner_bind.symbol);
-                                    const inner_loc: ValueLocation = if (variant_payload_layout) |pl| inner_blk: {
-                                        const pl_val = ls.getLayout(pl);
-                                        if (pl_val.tag == .tag_union) {
-                                            break :inner_blk value_loc;
-                                        }
-                                        break :inner_blk value_loc;
-                                    } else value_loc;
-                                    try self.symbol_locations.put(inner_key, inner_loc);
-                                },
-                                .wildcard => {},
-                                else => {},
-                            }
-                        }
-                    },
-                    else => unreachable,
-                }
+                const arg_loc: ValueLocation = if (payload_is_tuple and variant_payload_layout != null) blk: {
+                    // Multi-arg tag: payload is a tuple, use tuple element offsets/layouts
+                    const pl_val = ls.getLayout(variant_payload_layout.?);
+                    const elem_offset = ls.getStructFieldOffsetByOriginalIndex(pl_val.data.struct_.idx, @intCast(arg_idx));
+                    const elem_layout = ls.getStructFieldLayoutByOriginalIndex(pl_val.data.struct_.idx, @intCast(arg_idx));
+                    break :blk self.stackLocationForLayout(elem_layout, base_offset + @as(i32, @intCast(elem_offset)));
+                } else if (variant_payload_layout) |pl| blk: {
+                    // Single-arg tag: use variant payload layout directly
+                    break :blk self.stackLocationForLayout(pl, base_offset);
+                } else .{ .stack = .{ .offset = base_offset + @as(i32, @intCast(arg_idx)) * 8 } };
+
+                try self.bindPattern(arg_pattern_id, arg_loc);
             }
         }
 
@@ -8036,7 +7961,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
 
                         // Bind tag payload fields
-                        try self.bindTagPayloadFields(tag_pattern, value_loc, value_layout_val, tu_disc_offset);
+                        try self.bindTagPayloadFields(tag_pattern, value_loc, value_layout_val);
 
                         // Guard check (after bindings, since guard may reference bound vars)
                         const guard_patch = try self.emitGuardCheck(branch.guard);
@@ -15720,7 +15645,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
 
                         // Bind tag payload fields
-                        try self.bindTagPayloadFields(tag_pattern, value_loc, value_layout_val, tu_disc_offset);
+                        try self.bindTagPayloadFields(tag_pattern, value_loc, value_layout_val);
 
                         // Guard check (after bindings, since guard may reference bound vars)
                         const guard_patch = try self.emitGuardCheck(branch.guard);
