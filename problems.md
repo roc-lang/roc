@@ -2,29 +2,6 @@
 
 ## LIR → Dev Backend (`src/backend/dev/`)
 
-### 16. Refcounting silently skips `closure` layouts (6 sites)
-**`src/backend/dev/LirCodeGen.zig:16675, 16810, 16837, 16936, 16965, 16998`**
-```zig
-.list, .list_of_zst => { ... },
-.scalar => { ... },
-.box, .box_of_zst => { ... },
-.struct_, .tag_union => { ... },
-else => {},
-```
-The `else => {}` silently skips RC for `.closure` layouts. Closures can capture refcounted values (Str, List). Silent skip → memory leaks or use-after-free.
-
-### 21. Null layout for non-immediate args can produce wrong register counts
-**`src/backend/dev/LirCodeGen.zig:15485`**
-```zig
-else => {},  // arg_layout stays null
-```
-When `arg_layout` is null for non-immediate locations (`.stack`, `.stack_str`, `.list_stack`), `calcArgRegCount` falls back to 1 register. Multi-word types like strings (3 words) would get wrong register count → call corruption.
-
-### 23. `getExprLayout` `else => null` drops available layout info
-**`src/backend/dev/LirCodeGen.zig:1401`**
-
-Returns `null` for `.tag_payload_access` (which has `.payload_layout`), `.zero_arg_tag` (has `.union_layout`), `.hosted_call` (has `.ret_layout`), and others. Callers must fall back to less precise resolution.
-
 ### 24. Callable-arg inlining silently skipped for block/if_then_else defs
 **`src/backend/dev/LirCodeGen.zig:12818`**
 

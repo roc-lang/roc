@@ -1351,7 +1351,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Get the layout of an expression (if available and valid for our layout store)
         fn getExprLayout(self: *Self, expr_id: LirExprId) ?layout.Idx {
             const expr = self.store.getExpr(expr_id);
-            const raw_layout: ?layout.Idx = switch (expr) {
+            return switch (expr) {
                 // Expressions that store their layout
                 .struct_ => |s| s.struct_layout,
                 .tag => |tag| tag.union_layout,
@@ -1367,31 +1367,29 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .dbg => |d| d.result_layout,
                 .expect => |e| e.result_layout,
                 .early_return => |er| er.ret_layout,
+                .discriminant_switch => |ds| ds.result_layout,
+                .tag_payload_access => |tpa| tpa.payload_layout,
+                .zero_arg_tag => |zat| zat.union_layout,
+                .nominal => |nom| nom.nominal_layout,
+                .lambda => |l| l.fn_layout,
+                .closure => |cid| self.store.getClosureData(cid).closure_layout,
                 // Literals with known layouts
-                // Numeric integer literals are polymorphic; avoid hardcoding layout here.
-                .i64_literal => null,
                 .f64_literal => .f64,
                 .f32_literal => .f32,
                 .bool_literal => .bool,
-                // i128_literal is also used as a wide literal carrier before final
-                // numeric specialization, so don't force i128 ABI from this alone.
-                .i128_literal => null,
                 .dec_literal => .dec,
-                .str_literal => .str,
-                .str_concat => .str,
-                .int_to_str => .str,
-                .float_to_str => .str,
-                .dec_to_str => .str,
-                .str_escape_and_quote => .str,
-                .discriminant_switch => null,
-                // For other expressions, no layout available
-                else => null,
+                .str_literal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote => .str,
+                // Polymorphic integer literals — layout depends on call-site specialization
+                .i64_literal, .i128_literal => null,
+                // List layout is the list itself, not elem_layout; handled by ValueLocation
+                .empty_list, .list => null,
+                // Loops return unit (ZST)
+                .for_loop, .while_loop => null,
+                // Statements, not value-producing expressions
+                .incref, .decref, .free => null,
+                // Noreturn
+                .crash, .runtime_error, .break_expr => null,
             };
-
-            if (raw_layout) |layout_idx| {
-                return layout_idx;
-            }
-            return null;
         }
 
         /// Best-effort extraction of a parameter layout from a lambda pattern.
