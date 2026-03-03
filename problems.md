@@ -63,21 +63,6 @@ else => {},
 ```
 Same issue as #16. `else => {}` silently drops RC for `.closure`, `.box`, etc. after `layoutContainsRefcounted` returned true.
 
-### 29. `compileProcBody` silently returns on missing closure_value
-**`src/backend/wasm/WasmCodeGen.zig:5991-5992`**
-```zig
-const self_cv = self.closure_values.get(key) orelse return;
-const func_idx = self_cv.func_idx orelse return;
-```
-If registration failed, the wasm function will be declared but have no body — producing a broken module at runtime. No error or assertion.
-
-### 30. Struct field call errors masked as `OutOfMemory`
-**`src/backend/wasm/WasmCodeGen.zig:6937, 6969`**
-```zig
-return error.OutOfMemory;  // actually: struct field call target not resolvable
-```
-When a struct field expression can't be resolved or the field value isn't a lambda/closure, returns `error.OutOfMemory` instead of a meaningful error. Misleads all upstream error handling.
-
 ### 31. `list_contains` uses bytewise equality for all element types
 **`src/backend/wasm/WasmCodeGen.zig:9800-9919`**
 
@@ -87,16 +72,6 @@ For composite-type elements (strings, records containing strings), does scalar w
 **`src/backend/wasm/WasmCodeGen.zig:2286-2302`**
 
 When `exprLayoutIdx` returns null and the expr isn't a known composite, falls back to ValType-derived size. All `.i32` expressions (including pointers to larger structures) report as 4 bytes.
-
-### 33. `exprLayoutIdx` catch-all `else => null`
-**`src/backend/wasm/WasmCodeGen.zig:2230`**
-
-Returns `null` for `.list`, `.empty_list` (which has `.elem_layout`), `.hosted_call` (has `.ret_layout`), and others. Callers fall back to imprecise behavior.
-
-### 34. `isCompositeExpr` catch-all `else => false`
-**`src/backend/wasm/WasmCodeGen.zig:2334`**
-
-`.while_loop`, `.for_loop`, `.discriminant_switch` reported as non-composite. If they return records, binding code treats the result as scalar → incorrect codegen.
 
 ### 35. `emitConversion` silently no-ops for unhandled cross-type conversions
 **`src/backend/wasm/WasmCodeGen.zig:4897-4927`**

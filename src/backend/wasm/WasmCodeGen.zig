@@ -5,6 +5,7 @@
 //! to linear memory (for composites).
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const layout = @import("layout");
 
@@ -1862,10 +1863,9 @@ fn generateMatchBranches(self: *Self, branches: []const LIR.LirMatchBranch, valu
                             WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
                             payload_offset += bind_byte_size;
                         },
-                        .wildcard => {
-                            // Skip this payload field — still need to advance the offset
-                            // Use i32 size as default for wildcards since we don't know the layout
-                            payload_offset += 4;
+                        .wildcard => |wc| {
+                            // Skip this payload field — use wildcard's layout for size
+                            payload_offset += self.layoutByteSize(wc.layout_idx);
                         },
                         .struct_ => |inner_struct| {
                             // Struct destructuring of tag payload field
@@ -2227,7 +2227,12 @@ fn exprLayoutIdx(self: *Self, expr_id: LirExprId) ?layout.Idx {
         .dec_to_str => layout.Idx.str,
         .str_escape_and_quote => layout.Idx.str,
         .tag_payload_access => |tpa| tpa.payload_layout,
-        else => null,
+        .hosted_call => |hc| hc.ret_layout,
+        .discriminant_switch => |ds| ds.result_layout,
+        .early_return => |er| er.ret_layout,
+        .lambda => |l| l.fn_layout,
+        .for_loop, .while_loop, .break_expr, .crash, .runtime_error => layout.Idx.zst,
+        .empty_list, .list => null, // element layout only, not list layout
     };
 }
 
@@ -2273,7 +2278,12 @@ fn exprValType(self: *Self, expr_id: LirExprId) ValType {
         .dec_to_str => .i32, // pointer to 12-byte RocStr
         .str_escape_and_quote => .i32, // pointer to 12-byte RocStr
         .tag_payload_access => |tpa| self.resolveValType(tpa.payload_layout),
-        else => .i64, // conservative default
+        .hosted_call => |hc| self.resolveValType(hc.ret_layout),
+        .for_loop, .while_loop => .i32, // returns unit (empty record)
+        .crash, .runtime_error, .break_expr => {
+            if (builtin.mode == .Debug) std.debug.panic("LIR/wasm invariant violated: exprValType called on non-value expression {s}", .{@tagName(expr)});
+            unreachable;
+        },
     };
 }
 
@@ -2326,7 +2336,13 @@ fn isCompositeExpr(self: *const Self, expr_id: LirExprId) bool {
         .incref => |inc| self.isCompositeExpr(inc.value),
         .decref => |dec| self.isCompositeExpr(dec.value),
         .free => |f| self.isCompositeExpr(f.value),
-        else => false,
+        .discriminant_switch => |ds| self.isCompositeLayout(ds.result_layout),
+        .hosted_call => |hc| self.isCompositeLayout(hc.ret_layout),
+        .early_return => |er| self.isCompositeLayout(er.ret_layout),
+        .closure => |c| self.isCompositeLayout(self.store.getClosureData(c).closure_layout),
+        .i64_literal, .f64_literal, .f32_literal, .bool_literal => false, // scalars
+        .lambda => false, // function value, not composite data
+        .for_loop, .while_loop, .break_expr, .crash, .runtime_error => false, // unit/noreturn
     };
 }
 
@@ -4954,9 +4970,8 @@ fn compileLambda(self: *Self, expr_id: LirExprId, lambda: anytype) Allocator.Err
                 } else self.resolveValType(bind.layout_idx);
                 param_types.append(self.allocator, vt) catch return error.OutOfMemory;
             },
-            .wildcard => {
-                // Wildcard param — still needs a slot. Use i32 as default.
-                param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
+            .wildcard => |wc| {
+                param_types.append(self.allocator, self.resolveValType(wc.layout_idx)) catch return error.OutOfMemory;
             },
             .struct_, .list => {
                 // Struct/list destructuring param — passed as i32 pointer
@@ -5061,8 +5076,8 @@ fn compileLambda(self: *Self, expr_id: LirExprId, lambda: anytype) Allocator.Err
                 } else self.resolveValType(bind.layout_idx);
                 _ = self.storage.allocLocal(bind.symbol, vt) catch return error.OutOfMemory;
             },
-            .wildcard => {
-                _ = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            .wildcard => |wc| {
+                _ = self.storage.allocAnonymousLocal(self.resolveValType(wc.layout_idx)) catch return error.OutOfMemory;
             },
             .struct_ => |s| {
                 const ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -5236,8 +5251,8 @@ fn compileClosure(self: *Self, expr_id: LirExprId, closure: anytype) Allocator.E
                 const vt = self.resolveValType(bind.layout_idx);
                 param_types.append(self.allocator, vt) catch return error.OutOfMemory;
             },
-            .wildcard => {
-                param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
+            .wildcard => |wc| {
+                param_types.append(self.allocator, self.resolveValType(wc.layout_idx)) catch return error.OutOfMemory;
             },
             .struct_, .list => {
                 param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
@@ -5352,8 +5367,8 @@ fn compileClosure(self: *Self, expr_id: LirExprId, closure: anytype) Allocator.E
                 const vt = self.resolveValType(bind.layout_idx);
                 _ = self.storage.allocLocal(bind.symbol, vt) catch return error.OutOfMemory;
             },
-            .wildcard => {
-                _ = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            .wildcard => |wc| {
+                _ = self.storage.allocAnonymousLocal(self.resolveValType(wc.layout_idx)) catch return error.OutOfMemory;
             },
             .struct_ => |s| {
                 const ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -5983,9 +5998,9 @@ fn registerProc(self: *Self, proc: LirProc) Allocator.Error!void {
 fn compileProcBody(self: *Self, proc: LirProc) Allocator.Error!void {
     const key: u64 = @bitCast(proc.name);
 
-    // Get the pre-registered func_idx
-    const self_cv = self.closure_values.get(key) orelse return;
-    const func_idx = self_cv.func_idx orelse return;
+    // Get the pre-registered func_idx (must exist — registerProc runs in pass 1)
+    const self_cv = self.closure_values.get(key) orelse unreachable;
+    const func_idx = self_cv.func_idx orelse unreachable;
 
     const arg_layouts = self.store.getLayoutIdxSpan(proc.arg_layouts);
     const ret_vt = self.resolveValType(proc.ret_layout);
@@ -6930,7 +6945,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
                         }
                     }
                 }
-                return error.OutOfMemory;
+                unreachable; // struct field call target must be resolvable
             };
             const field_val = self.store.getExpr(field_expr_id);
             switch (field_val) {
@@ -6962,7 +6977,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
                     try self.generateCallArgs(c.args);
                     try self.emitCall(func_idx);
                 },
-                else => return error.OutOfMemory,
+                else => unreachable, // struct field value must be lambda or closure
             }
         },
         else => unreachable, // Call target should be lambda, closure, lookup, nominal, call, struct_access, or block
@@ -7440,18 +7455,11 @@ fn materializeCapturesToStackWithBase(self: *Self, captures_span: LIR.LirCapture
             WasmModule.leb128WriteU32(self.allocator, &self.body, ptr_local) catch return error.OutOfMemory;
             try self.emitStoreOp(cap_vt, offset);
         } else {
-            // Capture not found - zero-initialize
-            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
-            if (val_size <= 4) {
-                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-                try self.emitStoreOp(.i32, offset);
-            } else {
-                self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-                WasmModule.leb128WriteI64(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-                try self.emitStoreOp(.i64, offset);
-            }
+            if (builtin.mode == .Debug) std.debug.panic(
+                "LIR/wasm invariant violated: closure capture materialization failed for symbol — capture must always be resolvable",
+                .{},
+            );
+            unreachable;
         }
 
         offset += if (val_size < 8) 8 else val_size;
@@ -8199,8 +8207,8 @@ fn bindTagPattern(self: *Self, ptr_local: u32, tag: anytype) Allocator.Error!voi
                 }
                 payload_offset += bind_byte_size;
             },
-            .wildcard => {
-                payload_offset += 4;
+            .wildcard => |wc| {
+                payload_offset += self.layoutByteSize(wc.layout_idx);
             },
             .struct_ => |inner_struct| {
                 const field_byte_size = self.layoutByteSize(inner_struct.struct_layout);
@@ -9967,8 +9975,39 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.generateLLListSplitLast(args, ll.ret_layout);
         },
         // list_sublist(list, {len: U64, start: U64}) -> list
-        // Record fields sorted alphabetically: len at offset 0, start at offset 8
         .list_sublist => {
+            // Look up field offsets structurally from the record layout.
+            // The record is { start : U64, len : U64 }. Sorted alphabetically: len=0, start=1.
+            const ls = self.getLayoutStore();
+            const record_layout_idx = self.exprLayoutIdx(args[1]) orelse {
+                if (builtin.mode == .Debug) std.debug.panic("LIR/wasm invariant violated: list_sublist record arg has no layout", .{});
+                unreachable;
+            };
+            const record_layout = ls.getLayout(record_layout_idx);
+            const record_idx = record_layout.data.struct_.idx;
+            const len_sorted_idx: u32 = 0;
+            const start_sorted_idx: u32 = 1;
+            if (builtin.mode == .Debug) {
+                const sd = ls.getStructData(record_idx);
+                const sorted_fields = ls.struct_fields.sliceRange(sd.getFields());
+                if (sorted_fields.len != 2) {
+                    std.debug.panic(
+                        "LIR/wasm invariant violated: list_sublist record expected 2 fields, got {d}",
+                        .{sorted_fields.len},
+                    );
+                }
+                const f0_name = ls.getFieldName(sorted_fields.get(0).name);
+                const f1_name = ls.getFieldName(sorted_fields.get(1).name);
+                if (!std.mem.eql(u8, f0_name, "len") or !std.mem.eql(u8, f1_name, "start")) {
+                    std.debug.panic(
+                        "LIR/wasm invariant violated: list_sublist record expected sorted fields [len, start], got [{s}, {s}]",
+                        .{ f0_name, f1_name },
+                    );
+                }
+            }
+            const len_field_off = ls.getStructFieldOffset(record_idx, len_sorted_idx);
+            const start_field_off = ls.getStructFieldOffset(record_idx, start_sorted_idx);
+
             // Generate list arg (pointer to {data_ptr, len, capacity})
             try self.generateExpr(args[0]);
             const list_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -9981,19 +10020,19 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, rec_local) catch return error.OutOfMemory;
 
-            // Load "len" field (U64 at record offset 0), wrap to i32
+            // Load "len" field from structural offset, wrap to i32
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, rec_local) catch return error.OutOfMemory;
-            try self.emitLoadOp(.i64, 0);
+            try self.emitLoadOp(.i64, len_field_off);
             self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
             const sub_len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, sub_len) catch return error.OutOfMemory;
 
-            // Load "start" field (U64 at record offset 8), wrap to i32
+            // Load "start" field from structural offset, wrap to i32
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, rec_local) catch return error.OutOfMemory;
-            try self.emitLoadOp(.i64, 8);
+            try self.emitLoadOp(.i64, start_field_off);
             self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
             const start_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
@@ -10083,7 +10122,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitDecodeListAllocPtr(list_local, source_alloc_ptr, source_is_slice);
 
             const elements_refcounted = blk: {
-                const ls = self.getLayoutStore();
                 const list_layout = ls.getLayout(ll.ret_layout);
                 if (list_layout.tag == .list) {
                     break :blk ls.layoutContainsRefcounted(ls.getLayout(list_layout.data.list));
