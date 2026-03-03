@@ -648,8 +648,8 @@ fn lowerStrInspektList(
 
     const unit_expr = try self.emitMirUnitExpr(region);
     const body_stmts = try self.store.addStmts(self.allocator, &.{
-        MIR.Stmt{ .mutate_var = .{ .pattern = first_bind.pattern, .expr = first_false } },
         MIR.Stmt{ .mutate_var = .{ .pattern = acc_bind.pattern, .expr = new_acc } },
+        MIR.Stmt{ .mutate_var = .{ .pattern = first_bind.pattern, .expr = first_false } },
     });
     const body_expr = try self.store.addExpr(
         self.allocator,
