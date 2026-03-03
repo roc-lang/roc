@@ -463,7 +463,6 @@ pub const LirExpr = union(enum) {
 
     /// Debug expression (prints and returns value)
     dbg: struct {
-        msg: StringLiteral.Idx,
         expr: LirExprId,
         result_layout: layout.Idx,
     },

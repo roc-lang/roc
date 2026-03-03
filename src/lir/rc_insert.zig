@@ -547,7 +547,6 @@ pub const RcInsertPass = struct {
                 const new_expr = try self.processExpr(d.expr);
                 if (new_expr == d.expr) return expr_id;
                 return self.store.addExpr(.{ .dbg = .{
-                    .msg = d.msg,
                     .expr = new_expr,
                     .result_layout = d.result_layout,
                 } }, region);

@@ -189,12 +189,15 @@ fn isFunctionLayout(self: *Self, layout_idx: layout.Idx) bool {
     if (layout_idx == layout.Idx.none) return false;
     if (layout_idx == layout.Idx.named_fn) return true;
     const idx_int = @intFromEnum(layout_idx);
-    if (idx_int >= self.layout_store.layouts.len()) return false;
+    if (idx_int >= self.layout_store.layouts.len()) unreachable;
     return self.layout_store.getLayout(layout_idx).tag == .closure;
 }
 
-fn isCallableExpr(self: *Self, expr_id: LirExprId, depth: u8) bool {
-    if (depth > 64) return false;
+fn isCallableExpr(self: *Self, expr_id: LirExprId, depth: u16) bool {
+    if (depth > 256) std.debug.panic(
+        "isCallableExpr: debug-only heuristic detected likely infinite recursion (depth > 256) at expr {}",
+        .{@intFromEnum(expr_id)},
+    );
     const expr = self.lir_store.getExpr(expr_id);
     return switch (expr) {
         .lambda, .closure => true,
@@ -1273,7 +1276,7 @@ fn lowerHosted(self: *Self, h: anytype, mono_idx: Monotype.Idx, region: Region) 
         const param_layout = if (i < func_args.len)
             try self.layoutFromMonotype(func_args[i])
         else
-            layout.Idx.zst;
+            unreachable;
 
         const lookup = try self.lir_store.addExpr(.{ .lookup = .{
             .symbol = symbol,
@@ -1304,7 +1307,6 @@ fn lowerDbg(self: *Self, d: anytype, mono_idx: Monotype.Idx, region: Region) All
     const lir_expr = try self.lowerExpr(d.expr);
 
     return self.lir_store.addExpr(.{ .dbg = .{
-        .msg = StringLiteral.Idx.none,
         .expr = lir_expr,
         .result_layout = result_layout,
     } }, region);
