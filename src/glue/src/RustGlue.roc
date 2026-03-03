@@ -868,9 +868,7 @@ generate_rust_roc_list =
 	\\            return Self::empty();
 	\\        }
 	\\        let align = core::mem::align_of::<T>().max(core::mem::align_of::<usize>());
-	\\        // Elements are assumed refcounted (safe default): reserve 2 * ptr_width.
-	\\        let required_space = 2 * core::mem::size_of::<usize>();
-	\\        let header_bytes = required_space.max(core::mem::align_of::<T>());
+	\\        let header_bytes = core::mem::size_of::<usize>().max(core::mem::align_of::<T>());
 	\\        let data_bytes = length * core::mem::size_of::<T>();
 	\\        let total = data_bytes + header_bytes;
 	\\        let base = unsafe { roc_ops.alloc(align, total) };
@@ -910,8 +908,7 @@ generate_rust_roc_list =
 	\\        }
 	\\        let align = core::mem::align_of::<T>().max(core::mem::align_of::<usize>());
 	\\        // Must match the header_bytes used during allocation.
-	\\        let required_space = 2 * core::mem::size_of::<usize>();
-	\\        let header_bytes = required_space.max(core::mem::align_of::<T>());
+	\\        let header_bytes = core::mem::size_of::<usize>().max(core::mem::align_of::<T>());
 	\\        unsafe {
 	\\            let rc = (self.elements as *mut isize).sub(1);
 	\\            let prev = *rc;

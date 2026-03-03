@@ -268,15 +268,10 @@ generate_roc_list_generic : Str
 generate_roc_list_generic =
 	\\/// A generic Roc list. Elements are reference-counted and heap-allocated.
 	\\///
-	\\/// When `elements_refcounted` is true (the default), an extra `ptr_width` bytes
-	\\/// are reserved in the allocation header for the element count, matching the Roc
-	\\/// runtime's `allocateWithRefcount` layout. Set to `false` for lists of
-	\\/// non-refcounted primitives (e.g. `U8`, `I32`).
+	\\/// The allocation header is always `max(ptr_width, @alignOf(T))` bytes,
+	\\/// matching the Roc runtime's `allocateWithRefcount` layout (one pointer-width
+	\\/// slot for the refcount, padded to element alignment).
 	\\pub fn RocList(comptime T: type) type {
-	\\    return RocListWith(T, true);
-	\\}
-	\\
-	\\pub fn RocListWith(comptime T: type, comptime elements_refcounted: bool) type {
 	\\    return extern struct {
 	\\        elements_ptr: ?[*]T,
 	\\        length: usize,
@@ -284,8 +279,7 @@ generate_roc_list_generic =
 	\\
 	\\        const Self = @This();
 	\\        const ptr_width = @sizeOf(usize);
-	\\        const required_space: usize = if (elements_refcounted) (2 * ptr_width) else ptr_width;
-	\\        const header_bytes = @max(required_space, @alignOf(T));
+	\\        const header_bytes = @max(ptr_width, @alignOf(T));
 	\\        const alloc_align = @max(ptr_width, @alignOf(T));
 	\\
 	\\        /// Return the list elements as a `[]const T` slice.
