@@ -422,6 +422,11 @@ pub const Interpreter = struct {
     bindings: std.array_list.Managed(Binding),
     // Track active closures during calls (for capture lookup)
     active_closures: std.array_list.Managed(StackValue),
+    // Track the current function call's bindings start for scoping `var` declarations.
+    // This prevents `var` in a recursive function from clobbering the same-named var
+    // in an outer recursive call, while still allowing updates across block boundaries
+    // within the same function (e.g., tuple destructuring in while loops).
+    function_scope_start: usize,
     canonical_bool_rt_var: ?types.Var,
     canonical_str_rt_var: ?types.Var,
     cached_list_u8_rt_var: ?types.Var,
@@ -583,6 +588,7 @@ pub const Interpreter = struct {
             .stack_memory = try stack.Stack.initCapacity(allocator, stack_size),
             .bindings = try std.array_list.Managed(Binding).initCapacity(allocator, 8),
             .active_closures = try std.array_list.Managed(StackValue).initCapacity(allocator, 4),
+            .function_scope_start = 0,
             .canonical_bool_rt_var = null,
             .canonical_str_rt_var = null,
             .cached_list_u8_rt_var = null,
@@ -1308,7 +1314,9 @@ pub const Interpreter = struct {
             .saved_flex_type_context = null,
             .arg_rt_vars_to_free = null,
             .saved_stack_ptr = self.stack_memory.next(),
+            .saved_function_scope_start = self.function_scope_start,
         } } });
+        self.function_scope_start = bindings_start;
         try work_stack.push(.{ .eval_expr = .{
             .expr_idx = cmp_header.body_idx,
             .expected_rt_var = null,
@@ -7740,16 +7748,19 @@ pub const Interpreter = struct {
         search_start: usize,
         roc_ops: *RocOps,
     ) !void {
-        // Check if this is a var reassignment (pattern for a reassignable identifier)
-        // In that case, we need to search from 0 to update the original binding,
-        // not just from search_start (which would miss bindings from outer scopes)
+        // For reassignable variables (`var $x`), search from function_scope_start rather than
+        // the block's search_start. This allows `var` updates across block boundaries within
+        // the same function (e.g., tuple destructuring `(word, $index) = ...` in a while loop
+        // body can find `$index` declared before the loop). But it prevents searching into
+        // outer recursive function calls (which share the same pattern_idx for the same
+        // function body), avoiding the bug where inner fold!'s `var $state = init` would
+        // clobber outer fold!'s `$state` binding.
         const actual_search_start = blk: {
             const pat = self.env.store.getPattern(binding.pattern_idx);
             if (pat == .assign) {
                 const ident = pat.assign.ident;
                 if (ident.attributes.reassignable) {
-                    // This is a var ($var) - search from beginning to find outer binding
-                    break :blk 0;
+                    break :blk self.function_scope_start;
                 }
             }
             break :blk search_start;
@@ -10718,6 +10729,8 @@ pub const Interpreter = struct {
             /// Saved stack pointer to restore after call completes.
             /// This ensures stack memory allocated during the function body is reclaimed.
             saved_stack_ptr: *anyopaque,
+            /// Saved function_scope_start to restore after call completes.
+            saved_function_scope_start: usize,
         };
 
         /// Unary operation - apply method after operand is evaluated
@@ -11668,7 +11681,9 @@ pub const Interpreter = struct {
                             .saved_flex_type_context = null,
                             .arg_rt_vars_to_free = null,
                             .saved_stack_ptr = self.stack_memory.next(),
+                            .saved_function_scope_start = self.function_scope_start,
                         } } });
+                        self.function_scope_start = saved_bindings_len;
 
                         // Push body evaluation
                         try work_stack.push(.{ .eval_expr = .{
@@ -11701,7 +11716,9 @@ pub const Interpreter = struct {
                             .saved_flex_type_context = null,
                             .arg_rt_vars_to_free = null,
                             .saved_stack_ptr = self.stack_memory.next(),
+                            .saved_function_scope_start = self.function_scope_start,
                         } } });
+                        self.function_scope_start = saved_bindings_len;
 
                         // Push body evaluation
                         try work_stack.push(.{ .eval_expr = .{
@@ -17015,7 +17032,9 @@ pub const Interpreter = struct {
                         .saved_flex_type_context = saved_flex_type_context,
                         .arg_rt_vars_to_free = ci.arg_rt_vars_to_free,
                         .saved_stack_ptr = self.stack_memory.next(),
+                        .saved_function_scope_start = self.function_scope_start,
                     } } });
+                    self.function_scope_start = saved_bindings_len;
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = header.body_idx,
                         .expected_rt_var = ci.call_ret_rt_var,
@@ -17065,6 +17084,7 @@ pub const Interpreter = struct {
                     // Use trimBindingList to properly decref all bindings created by pattern matching
                     // (which may be more than param_count due to destructuring)
                     self.env = cleanup.saved_env;
+                    self.function_scope_start = cleanup.saved_function_scope_start;
                     self.trimBindingList(&self.bindings, cleanup.saved_bindings_len, roc_ops);
                     if (cleanup.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
 
@@ -17151,6 +17171,7 @@ pub const Interpreter = struct {
                 // Use trimBindingList to properly decref all bindings created by pattern matching
                 // (which may be more than param_count due to destructuring)
                 self.env = cleanup.saved_env;
+                self.function_scope_start = cleanup.saved_function_scope_start;
                 self.trimBindingList(&self.bindings, cleanup.saved_bindings_len, roc_ops);
                 if (cleanup.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
 
@@ -17340,7 +17361,9 @@ pub const Interpreter = struct {
                     .saved_flex_type_context = null,
                     .arg_rt_vars_to_free = null,
                     .saved_stack_ptr = self.stack_memory.next(),
+                    .saved_function_scope_start = self.function_scope_start,
                 } } });
+                self.function_scope_start = saved_bindings_len;
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = closure_header.body_idx,
                     .expected_rt_var = null,
@@ -17850,7 +17873,9 @@ pub const Interpreter = struct {
                     .saved_flex_type_context = saved_flex_type_context,
                     .arg_rt_vars_to_free = null,
                     .saved_stack_ptr = self.stack_memory.next(),
+                    .saved_function_scope_start = self.function_scope_start,
                 } } });
+                self.function_scope_start = saved_bindings_len;
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = closure_header.body_idx,
                     .expected_rt_var = null,
@@ -18129,7 +18154,9 @@ pub const Interpreter = struct {
                                                 .saved_flex_type_context = null,
                                                 .arg_rt_vars_to_free = null,
                                                 .saved_stack_ptr = self.stack_memory.next(),
+                                                .saved_function_scope_start = self.function_scope_start,
                                             } } });
+                                            self.function_scope_start = saved_bindings_len;
 
                                             const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
                                             if (lambda_expr == .e_lambda) {
@@ -18564,7 +18591,9 @@ pub const Interpreter = struct {
                         .saved_flex_type_context = null,
                         .arg_rt_vars_to_free = null,
                         .saved_stack_ptr = self.stack_memory.next(),
+                        .saved_function_scope_start = self.function_scope_start,
                     } } });
+                    self.function_scope_start = saved_bindings_len;
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = closure_header.body_idx,
                         .expected_rt_var = effective_ret_var,
@@ -19039,7 +19068,9 @@ pub const Interpreter = struct {
                     .saved_flex_type_context = saved_flex_type_context,
                     .arg_rt_vars_to_free = null,
                     .saved_stack_ptr = self.stack_memory.next(),
+                    .saved_function_scope_start = self.function_scope_start,
                 } } });
+                self.function_scope_start = saved_bindings_len;
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = closure_header.body_idx,
                     .expected_rt_var = null,
@@ -19213,7 +19244,9 @@ pub const Interpreter = struct {
                         .saved_flex_type_context = null,
                         .arg_rt_vars_to_free = null,
                         .saved_stack_ptr = self.stack_memory.next(),
+                        .saved_function_scope_start = self.function_scope_start,
                     } } });
+                    self.function_scope_start = saved_bindings_len;
 
                     // Push body evaluation
                     try work_stack.push(.{ .eval_expr = .{
@@ -19306,7 +19339,9 @@ pub const Interpreter = struct {
                         .saved_flex_type_context = null,
                         .arg_rt_vars_to_free = null,
                         .saved_stack_ptr = self.stack_memory.next(),
+                        .saved_function_scope_start = self.function_scope_start,
                     } } });
+                    self.function_scope_start = saved_bindings_len;
 
                     // Push body evaluation
                     try work_stack.push(.{ .eval_expr = .{
@@ -19715,6 +19750,7 @@ pub const Interpreter = struct {
                     self.triggerCrash("reassign_value: value_stack empty", false, roc_ops);
                     return error.Crash;
                 };
+
                 // Search through all bindings and reassign
                 var j: usize = self.bindings.items.len;
                 while (j > 0) {
@@ -19940,7 +19976,9 @@ pub const Interpreter = struct {
                             .saved_flex_type_context = null,
                             .arg_rt_vars_to_free = null,
                             .saved_stack_ptr = self.stack_memory.next(),
+                            .saved_function_scope_start = self.function_scope_start,
                         } } });
+                        self.function_scope_start = bindings_start;
                         try work_stack.push(.{ .eval_expr = .{
                             .expr_idx = cmp_header.body_idx,
                             .expected_rt_var = null,
@@ -20060,7 +20098,9 @@ pub const Interpreter = struct {
                         .saved_flex_type_context = null,
                         .arg_rt_vars_to_free = null,
                         .saved_stack_ptr = self.stack_memory.next(),
+                        .saved_function_scope_start = self.function_scope_start,
                     } } });
+                    self.function_scope_start = bindings_start;
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = cmp_header.body_idx,
                         .expected_rt_var = null,

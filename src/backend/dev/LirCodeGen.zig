@@ -8132,6 +8132,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (field_exprs, 0..) |field_expr_id, i| {
                 const field_offset = ls.getRecordFieldOffset(record_layout.data.record.idx, @intCast(i));
                 const field_size = ls.getRecordFieldSize(record_layout.data.record.idx, @intCast(i));
+                _ = ls.getRecordFieldLayout(record_layout.data.record.idx, @intCast(i));
                 const field_loc = try self.generateExpr(field_expr_id);
                 try self.copyBytesToStackOffset(base_offset + @as(i32, @intCast(field_offset)), field_loc, field_size);
             }
@@ -11763,11 +11764,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 return switch (def_expr) {
                     .lambda => |lambda| {
+                        const has_callable = self.hasCallableArguments(args_span);
+                        const body_returns = self.bodyReturnsCallable(lambda.body);
+                        const ret_mismatch = lambda.ret_layout != ret_layout;
                         // Inline when:
                         // 1. Args contain callables (higher-order calls)
                         // 2. Body returns callable (closure-returning functions)
                         // 3. Polymorphic lambda with different ret_layout
-                        if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(lambda.body) or lambda.ret_layout != ret_layout) {
+                        if (has_callable or body_returns or ret_mismatch) {
                             return try self.callLambdaBodyDirect(lambda, args_span);
                         }
                         const offset = try self.compileLambdaAsProc(def_expr_id, lambda);
@@ -14556,17 +14560,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try self.codegen.emitLoadStack(.w64, ret_reg_0, offset);
                             try self.codegen.emitLoadStack(.w64, ret_reg_1, offset + 8);
                         } else if (is_large_record) {
-                            // Large record return - load into multiple registers
+                            // Large record return - load into multiple registers.
+                            // Must use the same register sequence as moveToReturnRegisterWithLayout
+                            // and saveCallReturnValue so caller and callee agree on the ABI.
                             const offset = value_loc.stack.offset;
                             const num_regs = (record_size + 7) / 8;
                             if (comptime target.toCpuArch() == .aarch64) {
-                                const regs = [_]@TypeOf(GeneralReg.X0){ .X0, .X1, .X2, .X3 };
-                                for (0..@min(num_regs, 4)) |i| {
+                                const regs = [_]@TypeOf(GeneralReg.X0){ .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7, .XR, .X9, .X10, .X11, .X12, .X13, .X14, .X15 };
+                                for (0..@min(num_regs, regs.len)) |i| {
                                     try self.codegen.emitLoadStack(.w64, regs[i], offset + @as(i32, @intCast(i * 8)));
                                 }
                             } else {
-                                const regs = [_]@TypeOf(GeneralReg.RAX){ .RAX, .RDX, .RCX, .R8 };
-                                for (0..@min(num_regs, 4)) |i| {
+                                const regs = [_]@TypeOf(GeneralReg.RAX){ .RAX, .RDX, .RCX, .R8, .R9, .R10, .R11, .RDI, .RSI };
+                                for (0..@min(num_regs, regs.len)) |i| {
                                     try self.codegen.emitLoadStack(.w64, regs[i], offset + @as(i32, @intCast(i * 8)));
                                 }
                             }
