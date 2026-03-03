@@ -765,7 +765,7 @@ pub const ReportBuilder = struct {
                 D.bytes("if").withAnnotation(.inline_code),
                 D.bytes("condition must evaluate to a"),
                 D.bytes("Bool").withAnnotation(.inline_code),
-                D.bytes("–either").withNoPrecedingSpace(),
+                D.bytes("– either"),
                 D.bytes("True").withAnnotation(.inline_code),
                 D.bytes("or"),
                 D.bytes("False").withAnnotation(.inline_code),
@@ -1628,7 +1628,7 @@ pub const ReportBuilder = struct {
             D.bytes("Type aliases cannot be recursive. If you need a recursive type, use a nominal type"),
             D.bytes(":=").withAnnotation(.inline_code),
             D.bytes("instead of an alias"),
-            D.bytes(":").withAnnotation(.inline_code).withNoPrecedingSpace(),
+            D.bytes(":").withAnnotation(.inline_code),
             D.bytes(".").withNoPrecedingSpace(),
         }, self, &report);
 
@@ -1706,7 +1706,7 @@ pub const ReportBuilder = struct {
 
         try D.renderSlice(&.{
             D.bytes("The value's type, which does not have a method named"),
-            D.ident(data.method_name).withAnnotation(.emphasized).withNoPrecedingSpace(),
+            D.ident(data.method_name).withAnnotation(.emphasized),
             D.bytes(",").withNoPrecedingSpace(),
             D.bytes("is:"),
         }, self, &report);
@@ -1777,7 +1777,7 @@ pub const ReportBuilder = struct {
 
         try D.renderSlice(&.{
             D.bytes("The value's type, which does not have a method named"),
-            D.ident(data.method_name).withAnnotation(.emphasized).withNoPrecedingSpace(),
+            D.ident(data.method_name).withAnnotation(.emphasized),
             D.bytes(",").withNoPrecedingSpace(),
             D.bytes("is:"),
         }, self, &report);
@@ -2019,7 +2019,7 @@ pub const ReportBuilder = struct {
                 D.bytes("expect").withAnnotation(.inline_code),
                 D.bytes("statement must evaluate to a"),
                 D.bytes("Bool").withAnnotation(.inline_code),
-                D.bytes("–either").withNoPrecedingSpace(),
+                D.bytes("– either"),
                 D.bytes("True").withAnnotation(.inline_code),
                 D.bytes("or"),
                 D.bytes("False").withAnnotation(.inline_code),
@@ -2326,7 +2326,7 @@ pub const ReportBuilder = struct {
 
         try D.renderSlice(&.{
             D.bytes("You're attempting to create an instance of"),
-            D.ident(data.nominal_type_name).withAnnotation(.inline_code).withNoPrecedingSpace(),
+            D.ident(data.nominal_type_name).withAnnotation(.inline_code),
             D.bytes(",").withNoPrecedingSpace(),
             D.bytes("but it's an"),
             D.bytes("opaque").withAnnotation(.emphasized),
@@ -2351,7 +2351,7 @@ pub const ReportBuilder = struct {
             D.bytes("To create an instance of this type outside the module it's defined in, you have to define it with"),
             D.bytes(":=").withAnnotation(.emphasized),
             D.bytes("instead of"),
-            D.bytes("::").withAnnotation(.emphasized).withNoPrecedingSpace(),
+            D.bytes("::").withAnnotation(.emphasized),
             D.bytes(".").withNoPrecedingSpace(),
         }, self, &report);
 
@@ -2841,7 +2841,7 @@ pub const ReportBuilder = struct {
             D.bytes("The platform expects your"),
             D.bytes("app").withAnnotation(.inline_code),
             D.bytes("module to define a type alias named"),
-            D.ident(data.expected_alias_ident).withAnnotation(.type_variable).withNoPrecedingSpace(),
+            D.ident(data.expected_alias_ident).withAnnotation(.type_variable),
             D.bytes(",").withNoPrecedingSpace(),
             D.bytes("but I couldn't find one."),
         }, self, &report);
@@ -2863,7 +2863,7 @@ pub const ReportBuilder = struct {
                 try D.renderSlice(&.{
                     D.bytes("Hint:").withAnnotation(.emphasized),
                     D.bytes("You have a definition named"),
-                    D.ident(data.expected_alias_ident).withAnnotation(.type_variable).withNoPrecedingSpace(),
+                    D.ident(data.expected_alias_ident).withAnnotation(.type_variable),
                     D.bytes(",").withNoPrecedingSpace(),
                     D.bytes("but it's not a type alias. The platform requires a type alias (defined with"),
                     D.bytes(":").withAnnotation(.inline_code).withNoPrecedingSpace(),
@@ -2884,7 +2884,7 @@ pub const ReportBuilder = struct {
             D.bytes("The platform expects your"),
             D.bytes("app").withAnnotation(.inline_code),
             D.bytes("module to export a definition named"),
-            D.ident(data.expected_def_ident).withAnnotation(.inline_code).withNoPrecedingSpace(),
+            D.ident(data.expected_def_ident).withAnnotation(.inline_code),
             D.bytes(",").withNoPrecedingSpace(),
             D.bytes("but I couldn't find one."),
         }, self, &report);
@@ -2906,7 +2906,7 @@ pub const ReportBuilder = struct {
                 try D.renderSlice(&.{
                     D.bytes("Hint:").withAnnotation(.emphasized),
                     D.bytes("You have a definition named"),
-                    D.ident(data.expected_def_ident).withAnnotation(.inline_code).withNoPrecedingSpace(),
+                    D.ident(data.expected_def_ident).withAnnotation(.inline_code),
                     D.bytes(",").withNoPrecedingSpace(),
                     D.bytes("but it's not exported. Add it to your module's"),
                     D.bytes("exposes").withAnnotation(.inline_code),

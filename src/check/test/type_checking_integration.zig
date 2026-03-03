@@ -1499,7 +1499,7 @@ test "check type - if else - invalid condition 1" {
         source,
         .fail_with,
         \\**TYPE MISMATCH**
-        \\This `if` condition must evaluate to a `Bool`–either `True` or `False`:
+        \\This `if` condition must evaluate to a `Bool` – either `True` or `False`:
         \\**test:2:8:2:13:**
         \\```roc
         \\x = if 5.I64 "true" else "false"
@@ -1798,7 +1798,7 @@ test "check type - record - access func polymorphic" {
     const source =
         \\x = |r| r.my_field
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "{ .., my_field: a } -> a");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ my_field: a, .. } -> a");
 }
 
 test "check type - record - access - not a record" {
@@ -1819,7 +1819,7 @@ test "check type - record - update 1" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "update_data" } },
-        "{ ..a, data: b }, b -> { ..a, data: b }",
+        "{ data: a, ..b }, a -> { data: a, ..b }",
     );
 }
 
@@ -2028,6 +2028,28 @@ test "check type - record - update - fail 2" {
         \\    Str
         \\
         \\
+    );
+}
+
+test "check type - record - pattern destructure rest 1" {
+    const source =
+        \\strip_name = |{ name: _, ..rest}| rest
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "strip_name" } },
+        "{ name: _field, .. } -> a",
+    );
+}
+
+test "check type - record - pattern destructure rest 2" {
+    const source =
+        \\strip_name = |{ name: _, ..rest}| rest.age
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "strip_name" } },
+        "{ age: a, name: _field, .. } -> a",
     );
 }
 
@@ -2292,7 +2314,7 @@ test "check type - expect not bool" {
         source,
         .fail_with,
         \\**TYPE MISMATCH**
-        \\This `expect` statement must evaluate to a `Bool`–either `True` or `False`:
+        \\This `expect` statement must evaluate to a `Bool` – either `True` or `False`:
         \\**test:3:10:3:11:**
         \\```roc
         \\  expect x
@@ -3379,7 +3401,7 @@ test "check type - recursive type - recursive alias" {
         \\```
         \\                              ^^^^^^^^^^^^^
         \\
-        \\Type aliases cannot be recursive. If you need a recursive type, use a nominal type `:=` instead of an alias`:`.
+        \\Type aliases cannot be recursive. If you need a recursive type, use a nominal type `:=` instead of an alias `:`.
         \\
         \\
     );
@@ -3600,7 +3622,7 @@ test "check type - effectful zero-arg function annotation" {
     // If the parser bug exists, this would fail with TYPE MISMATCH because:
     // - annotation parses as: (()) => {} (one empty-tuple arg)
     // - lambda infers as: ({}) -> {} (zero args, pure)
-    try checkTypesModule(source, .{ .pass = .last_def }, "({}) => {  }");
+    try checkTypesModule(source, .{ .pass = .last_def }, "({}) => {}");
 }
 
 test "check type - pure zero-arg function annotation" {
@@ -3611,7 +3633,7 @@ test "check type - pure zero-arg function annotation" {
         \\foo = || {}
     ;
     // Expected: zero-arg pure function returning empty record
-    try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> {  }");
+    try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> {}");
 }
 
 test "qualified imports don't produce MODULE NOT FOUND during canonicalization" {
@@ -3689,7 +3711,7 @@ test "check type - try return with match and error propagation should type-check
         \\}
     ;
     // Expected: should pass type-checking with combined error type (open tag union)
-    try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> Try(Str, [Impossible, ListWasEmpty, ..])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> Try(Str, [Impossible, ListWasEmpty, ..])");
 }
 
 test "check type - try operator on method call should apply to whole expression (#8646)" {
@@ -3716,7 +3738,7 @@ test "check type - record extension - basic open record annotation" {
         \\getName : { name: Str, ..others } -> Str
         \\getName = |record| record.name
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "{ ..others, name: Str } -> Str");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ name: Str, ..others } -> Str");
 }
 
 test "check type - record extension - closed record satisfies open record" {
@@ -3736,7 +3758,7 @@ test "check type - record extension - multiple fields with extension" {
         \\getFullName : { first: Str, last: Str, ..others } -> Str
         \\getFullName = |record| Str.concat(Str.concat(record.first, " "), record.last)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "{ ..others, first: Str, last: Str } -> Str");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ first: Str, last: Str, ..others } -> Str");
 }
 
 test "check type - record extension - nested records with extension" {
@@ -3745,7 +3767,7 @@ test "check type - record extension - nested records with extension" {
         \\getPersonName : { person: { name: Str, ..inner }, ..outer } -> Str
         \\getPersonName = |record| record.person.name
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "{ ..outer, person: { ..inner, name: Str } } -> Str");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ person: { name: Str, ..inner }, ..outer } -> Str");
 }
 
 test "check type - record extension - empty record with extension" {
@@ -3755,6 +3777,19 @@ test "check type - record extension - empty record with extension" {
         \\takeAnyRecord = |_record| "got a record"
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "{ ..others } -> Str");
+}
+
+test "check type - record extension - named flex ext from instantiation" {
+    // When a function with a named extension annotation (..others) is aliased
+    // by another def, rigid vars become flex vars with names during instantiation.
+    // Verify the extension prints correctly after fields (no trailing comma).
+    const source =
+        \\use_record : { name: Str, ..others } -> Str
+        \\use_record = |record| record.name
+        \\
+        \\bar = use_record
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "bar" } }, "{ name: Str, ..others } -> Str");
 }
 
 test "check type - record extension - mismatch should fail" {
@@ -3816,7 +3851,7 @@ test "check type - nested error in function return should use annotation" {
         \\get_nested : {} -> Try(Try(I64, Str), Bool)
         \\get_nested = |{}| Ok(Err("inner error"))
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> Try(Try(I64, Str), Bool)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> Try(Try(I64, Str), Bool)");
 }
 
 // List.first method syntax tests - REGRESSION TEST for cycle detection bug
@@ -4040,6 +4075,20 @@ test "check type - self recursive function - fibonacci - pass" {
     try checkTypesModule(source, .{ .pass = .{ .def = "fib" } }, "U8 -> U8");
 }
 
+test "check type - mutually recursive functions - constraint propagation" {
+    const source =
+        \\f = |x| { a: x, b: g(x) }
+        \\g = |y| f(y).a
+        \\test = (f ,g)
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "(c -> { a: c, b: c }, d -> d)" },
+        },
+    );
+}
+
 test "check type - self recursive function - fibonacci - fail" {
     const source =
         \\fib = |n| {
@@ -4095,6 +4144,745 @@ test "check type - mutually recursive functions - is_even and is_odd" {
     try checkTypesModule(source, .{ .pass = .{ .def = "is_odd" } }, "U64 -> Bool");
 }
 
+// self recursive functions - additional //
+
+test "check type - self recursive function - factorial" {
+    const source =
+        \\fact = |n| {
+        \\  if n <= 1.U64 {
+        \\    1.U64
+        \\  } else {
+        \\    n * fact(n - 1.U64)
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "fact" } }, "U64 -> U64");
+}
+
+test "check type - self recursive function - multiple args" {
+    const source =
+        \\power = |base, exp| {
+        \\  if exp <= 0.U64 {
+        \\    1.U64
+        \\  } else {
+        \\    base * power(base, exp - 1.U64)
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "power" } }, "U64, U64 -> U64");
+}
+
+test "check type - self recursive function - with accumulator" {
+    const source =
+        \\sum_to : U64, U64 -> U64
+        \\sum_to = |n, acc| {
+        \\  if n <= 0.U64 {
+        \\    acc
+        \\  } else {
+        \\    sum_to(n - 1.U64, acc + n)
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "sum_to" } }, "U64, U64 -> U64");
+}
+
+test "check type - self recursive function - returning record" {
+    const source =
+        \\count = |n| {
+        \\  if n <= 0.U64 {
+        \\    { value: 0.U64, calls: 1.U64 }
+        \\  } else {
+        \\    prev = count(n - 1.U64)
+        \\    { value: prev.value + n, calls: prev.calls + 1.U64 }
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "count" } }, "U64 -> { calls: U64, value: U64 }");
+}
+
+test "check type - self recursive function - polymorphic after generalization" {
+    const source =
+        \\const_rec = |n, x| {
+        \\  if n <= 0.U64 {
+        \\    x
+        \\  } else {
+        \\    const_rec(n - 1.U64, x)
+        \\  }
+        \\}
+        \\test = (const_rec(1.U64, "hello"), const_rec(1.U64, 42.U8))
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "const_rec", .expected = "U64, a -> a" },
+            .{ .def = "test", .expected = "(Str, U8)" },
+        },
+    );
+}
+
+test "check type - self recursive function - inner lambda calls outer" {
+    const source =
+        \\apply_recursive = |n| {
+        \\  if n <= 0.U64 {
+        \\    0.U64
+        \\  } else {
+        \\    (|x| apply_recursive(x))(n - 1.U64) + 1.U64
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "apply_recursive" } }, "U64 -> U64");
+}
+
+test "check type - self recursive function - with annotation" {
+    const source =
+        \\fact : U64 -> U64
+        \\fact = |n| {
+        \\  if n <= 1.U64 {
+        \\    1.U64
+        \\  } else {
+        \\    n * fact(n - 1.U64)
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "fact" } }, "U64 -> U64");
+}
+
+test "check type - self recursive function - wrong arg type" {
+    const source =
+        \\bad = |x| {
+        \\  if x == 0.U64 {
+        \\    x
+        \\  } else {
+        \\    bad(Bool.True)
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .fail,
+        "TYPE MISMATCH",
+    );
+}
+
+// self recursive static dispatch //
+
+test "check type - self recursive static dispatch - method calls itself" {
+    const source =
+        \\Counter := [Val(U64)].{
+        \\  count_down = |Counter.Val(n)| {
+        \\    if n == 0.U64 {
+        \\      0.U64
+        \\    } else {
+        \\      Counter.Val(n - 1.U64).count_down()
+        \\    }
+        \\  }
+        \\}
+        \\
+        \\main = Counter.Val(5.U64).count_down()
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Counter.count_down", .expected = "Counter -> U64" },
+            .{ .def = "main", .expected = "U64" },
+        },
+    );
+}
+
+test "check type - self recursive static dispatch - method with args" {
+    const source =
+        \\Acc := [Val(U64)].{
+        \\  add_n = |Acc.Val(current), n| {
+        \\    if n == 0.U64 {
+        \\      Acc.Val(current)
+        \\    } else {
+        \\      Acc.Val(current + 1.U64).add_n(n - 1.U64)
+        \\    }
+        \\  }
+        \\}
+        \\
+        \\main = Acc.Val(0.U64).add_n(5.U64)
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Acc.add_n", .expected = "Acc, U64 -> Acc" },
+            .{ .def = "main", .expected = "Acc" },
+        },
+    );
+}
+
+// mutually recursive static dispatch //
+
+test "check type - mutually recursive static dispatch - methods on same type" {
+    const source =
+        \\Checker := [Val(U64)].{
+        \\  is_even = |Checker.Val(n)| {
+        \\    if n == 0.U64 {
+        \\      Bool.True
+        \\    } else {
+        \\      Checker.Val(n - 1.U64).is_odd()
+        \\    }
+        \\  }
+        \\  is_odd = |Checker.Val(n)| {
+        \\    if n == 0.U64 {
+        \\      Bool.False
+        \\    } else {
+        \\      Checker.Val(n - 1.U64).is_even()
+        \\    }
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Checker.is_even", .expected = "Checker -> Bool" },
+            .{ .def = "Test.Checker.is_odd", .expected = "Checker -> Bool" },
+        },
+    );
+}
+
+test "check type - self recursive static dispatch - with annotation" {
+    const source =
+        \\Counter := [Val(U64)].{
+        \\  count_down : Counter -> U64
+        \\  count_down = |Counter.Val(n)| {
+        \\    if n == 0.U64 {
+        \\      0.U64
+        \\    } else {
+        \\      Counter.Val(n - 1.U64).count_down()
+        \\    }
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "Test.Counter.count_down" } },
+        "Counter -> U64",
+    );
+}
+
+test "check type - self recursive static dispatch - returning record" {
+    const source =
+        \\Counter := [Val(U64)].{
+        \\  count_info = |Counter.Val(n)| {
+        \\    if n == 0.U64 {
+        \\      { done: Bool.True, value: n }
+        \\    } else {
+        \\      Counter.Val(n - 1.U64).count_info()
+        \\    }
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "Test.Counter.count_info" } },
+        "Counter -> { done: Bool, value: U64 }",
+    );
+}
+
+test "check type - self recursive static dispatch - polymorphic" {
+    const source =
+        \\Wrapper(a) := [Val(a)].{
+        \\  apply_n = |Wrapper.Val(x), f, n| {
+        \\    if n == 0.U64 {
+        \\      Wrapper.Val(x)
+        \\    } else {
+        \\      Wrapper.Val(f(x)).apply_n(f, n - 1.U64)
+        \\    }
+        \\  }
+        \\}
+        \\test = (Wrapper.Val(1.U64).apply_n(|x| x + 1.U64, 3.U64), Wrapper.Val("hi").apply_n(|s| s, 1.U64))
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Wrapper.apply_n", .expected = "Wrapper(a), (a -> a), U64 -> Wrapper(a)" },
+            .{ .def = "test", .expected = "(Wrapper(U64), Wrapper(Str))" },
+        },
+    );
+}
+
+test "check type - self recursive static dispatch - wrong arg type" {
+    const source =
+        \\Counter := [Val(U64)].{
+        \\  bad_count = |Counter.Val(n)| {
+        \\    if n == 0.U64 {
+        \\      0.U64
+        \\    } else {
+        \\      Counter.Val("bad").bad_count()
+        \\    }
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .fail,
+        "INVALID NOMINAL TAG",
+    );
+}
+
+// mutually recursive functions - additional //
+
+test "check type - mutually recursive functions - three-way cycle" {
+    const source =
+        \\f = |n| {
+        \\  if n <= 0.U64 {
+        \\    0.U64
+        \\  } else {
+        \\    g(n - 1.U64)
+        \\  }
+        \\}
+        \\g = |n| {
+        \\  if n <= 0.U64 {
+        \\    0.U64
+        \\  } else {
+        \\    h(n - 1.U64)
+        \\  }
+        \\}
+        \\h = |n| {
+        \\  if n <= 0.U64 {
+        \\    0.U64
+        \\  } else {
+        \\    f(n - 1.U64)
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "f", .expected = "U64 -> U64" },
+            .{ .def = "g", .expected = "U64 -> U64" },
+            .{ .def = "h", .expected = "U64 -> U64" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - polymorphic" {
+    const source =
+        \\ping = |n, x| {
+        \\  if n <= 0.U64 {
+        \\    x
+        \\  } else {
+        \\    pong(n - 1.U64, x)
+        \\  }
+        \\}
+        \\pong = |n, x| {
+        \\  if n <= 0.U64 {
+        \\    x
+        \\  } else {
+        \\    ping(n - 1.U64, x)
+        \\  }
+        \\}
+        \\test = (ping(2.U64, "hello"), pong(1.U64, 42.U8))
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "ping", .expected = "U64, a -> a" },
+            .{ .def = "pong", .expected = "U64, a -> a" },
+            .{ .def = "test", .expected = "(Str, U8)" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - record constraint propagation" {
+    const source =
+        \\make_pair = |x| { fst: x, snd: get_fst(x) }
+        \\get_fst = |y| make_pair(y).fst
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "make_pair", .expected = "a -> { fst: a, snd: a }" },
+            .{ .def = "get_fst", .expected = "a -> a" },
+        },
+    );
+}
+
+// mutually recursive static dispatch - additional //
+
+test "check type - mutually recursive static dispatch - three-way cycle" {
+    const source =
+        \\Triple := [Val(U64)].{
+        \\  step_a = |Triple.Val(n)| {
+        \\    if n == 0.U64 {
+        \\      0.U64
+        \\    } else {
+        \\      Triple.Val(n - 1.U64).step_b()
+        \\    }
+        \\  }
+        \\  step_b = |Triple.Val(n)| {
+        \\    if n == 0.U64 {
+        \\      0.U64
+        \\    } else {
+        \\      Triple.Val(n - 1.U64).step_c()
+        \\    }
+        \\  }
+        \\  step_c = |Triple.Val(n)| {
+        \\    if n == 0.U64 {
+        \\      0.U64
+        \\    } else {
+        \\      Triple.Val(n - 1.U64).step_a()
+        \\    }
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Triple.step_a", .expected = "Triple -> U64" },
+            .{ .def = "Test.Triple.step_b", .expected = "Triple -> U64" },
+            .{ .def = "Test.Triple.step_c", .expected = "Triple -> U64" },
+        },
+    );
+}
+
+test "check type - mutually recursive static dispatch - polymorphic" {
+    const source =
+        \\Stepper(a) := [Val(a)].{
+        \\  step_even = |Stepper.Val(x), n| {
+        \\    if n == 0.U64 {
+        \\      x
+        \\    } else {
+        \\      Stepper.Val(x).step_odd(n - 1.U64)
+        \\    }
+        \\  }
+        \\  step_odd = |Stepper.Val(x), n| {
+        \\    if n == 0.U64 {
+        \\      x
+        \\    } else {
+        \\      Stepper.Val(x).step_even(n - 1.U64)
+        \\    }
+        \\  }
+        \\}
+        \\test = (Stepper.Val(1.U64).step_even(2.U64), Stepper.Val("hi").step_odd(1.U64))
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Stepper.step_even", .expected = "Stepper(a), U64 -> a" },
+            .{ .def = "Test.Stepper.step_odd", .expected = "Stepper(a), U64 -> a" },
+            .{ .def = "test", .expected = "(U64, Str)" },
+        },
+    );
+}
+
+test "check type - associated items with operators - no mutual recursion regression" {
+    const source =
+        \\MyType := [C].{
+        \\  a = b + c
+        \\  b = 10
+        \\  c = d + 5
+        \\  d = 20
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.MyType.a", .expected = "Dec" },
+            .{ .def = "Test.MyType.b", .expected = "Dec" },
+            .{ .def = "Test.MyType.c", .expected = "Dec" },
+            .{ .def = "Test.MyType.d", .expected = "Dec" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - type mismatch error" {
+    const source =
+        \\f = |n| {
+        \\  if n <= 0.U64 {
+        \\    "hello"
+        \\  } else {
+        \\    g(n - 1.U64)
+        \\  }
+        \\}
+        \\g = |n| {
+        \\  if n <= 0.U64 {
+        \\    42.U64
+        \\  } else {
+        \\    f(n - 1.U64)
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - mutually recursive functions - three-way polymorphic" {
+    const source =
+        \\f = |n, x| {
+        \\  if n <= 0.U64 {
+        \\    x
+        \\  } else {
+        \\    g(n - 1.U64, x)
+        \\  }
+        \\}
+        \\g = |n, x| {
+        \\  if n <= 0.U64 {
+        \\    x
+        \\  } else {
+        \\    h(n - 1.U64, x)
+        \\  }
+        \\}
+        \\h = |n, x| {
+        \\  if n <= 0.U64 {
+        \\    x
+        \\  } else {
+        \\    f(n - 1.U64, x)
+        \\  }
+        \\}
+        \\test = (f(3.U64, "hi"), g(2.U64, 42.U8), h(1.U64, Bool.True))
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "f", .expected = "U64, a -> a" },
+            .{ .def = "g", .expected = "U64, a -> a" },
+            .{ .def = "h", .expected = "U64, a -> a" },
+            .{ .def = "test", .expected = "(Str, U8, Bool)" },
+        },
+    );
+}
+
+test "check type - mutually recursive static dispatch - three-way polymorphic" {
+    const source =
+        \\Relay(a) := [Val(a)].{
+        \\  step_a = |Relay.Val(x), n| {
+        \\    if n == 0.U64 {
+        \\      x
+        \\    } else {
+        \\      Relay.Val(x).step_b(n - 1.U64)
+        \\    }
+        \\  }
+        \\  step_b = |Relay.Val(x), n| {
+        \\    if n == 0.U64 {
+        \\      x
+        \\    } else {
+        \\      Relay.Val(x).step_c(n - 1.U64)
+        \\    }
+        \\  }
+        \\  step_c = |Relay.Val(x), n| {
+        \\    if n == 0.U64 {
+        \\      x
+        \\    } else {
+        \\      Relay.Val(x).step_a(n - 1.U64)
+        \\    }
+        \\  }
+        \\}
+        \\test = (Relay.Val(1.U64).step_a(2.U64), Relay.Val("hi").step_c(1.U64))
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Relay.step_a", .expected = "Relay(a), U64 -> a" },
+            .{ .def = "Test.Relay.step_b", .expected = "Relay(a), U64 -> a" },
+            .{ .def = "Test.Relay.step_c", .expected = "Relay(a), U64 -> a" },
+            .{ .def = "test", .expected = "(U64, Str)" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - annotated" {
+    const source =
+        \\is_even : U64 -> Bool
+        \\is_even = |n| {
+        \\  if n == 0.U64 {
+        \\    Bool.True
+        \\  } else {
+        \\    is_odd(n - 1.U64)
+        \\  }
+        \\}
+        \\is_odd : U64 -> Bool
+        \\is_odd = |n| {
+        \\  if n == 0.U64 {
+        \\    Bool.False
+        \\  } else {
+        \\    is_even(n - 1.U64)
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "is_even", .expected = "U64 -> Bool" },
+            .{ .def = "is_odd", .expected = "U64 -> Bool" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - different arities" {
+    const source =
+        \\f = |a| {
+        \\  if a <= 0.U64 {
+        \\    0.U64
+        \\  } else {
+        \\    g(a - 1.U64, a)
+        \\  }
+        \\}
+        \\g = |a, b| {
+        \\  if a <= 0.U64 {
+        \\    b
+        \\  } else {
+        \\    f(a - 1.U64)
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "f", .expected = "U64 -> U64" },
+            .{ .def = "g", .expected = "U64, U64 -> U64" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - diamond pattern" {
+    const source =
+        \\f = |n| if n <= 0.U64 { 0.U64 } else { g(n - 1.U64) + h(n - 1.U64) }
+        \\g = |n| if n <= 0.U64 { 0.U64 } else { shared(n - 1.U64) }
+        \\h = |n| if n <= 0.U64 { 0.U64 } else { shared(n - 1.U64) }
+        \\shared = |n| if n <= 0.U64 { 0.U64 } else { f(n - 1.U64) }
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "f", .expected = "U64 -> U64" },
+            .{ .def = "g", .expected = "U64 -> U64" },
+            .{ .def = "h", .expected = "U64 -> U64" },
+            .{ .def = "shared", .expected = "U64 -> U64" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - mixed function and value defs" {
+    const source =
+        \\f = |x| if x <= 0.U64 { 0.U64 } else { g(x - 1.U64) }
+        \\g = |x| if x <= 0.U64 { 0.U64 } else { f(x - 1.U64) }
+        \\val = f(10.U64)
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "f", .expected = "U64 -> U64" },
+            .{ .def = "g", .expected = "U64 -> U64" },
+            .{ .def = "val", .expected = "U64" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - entry order independence" {
+    const source =
+        \\ping = |n, x| if n <= 0.U64 { x } else { pong(n - 1.U64, x) }
+        \\pong = |n, x| if n <= 0.U64 { x } else { ping(n - 1.U64, x) }
+        \\use_ping = ping(1.U64, "hello")
+        \\use_pong = pong(1.U64, 42.U8)
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "ping", .expected = "U64, a -> a" },
+            .{ .def = "pong", .expected = "U64, a -> a" },
+            .{ .def = "use_ping", .expected = "Str" },
+            .{ .def = "use_pong", .expected = "U8" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - polymorphic diamond" {
+    const source =
+        \\wrap = |n, x| if n <= 0.U64 { x } else { via_a(n - 1.U64, x) }
+        \\via_a = |n, x| if n <= 0.U64 { x } else { core(n - 1.U64, x) }
+        \\via_b = |n, x| if n <= 0.U64 { x } else { core(n - 1.U64, x) }
+        \\core = |n, x| if n <= 0.U64 { x } else { wrap(n - 1.U64, x) }
+        \\test = (wrap(1.U64, "hi"), via_b(1.U64, 42.U8))
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "wrap", .expected = "U64, a -> a" },
+            .{ .def = "via_a", .expected = "U64, a -> a" },
+            .{ .def = "via_b", .expected = "U64, a -> a" },
+            .{ .def = "core", .expected = "U64, a -> a" },
+            .{ .def = "test", .expected = "(Str, U8)" },
+        },
+    );
+}
+
+test "check type - mutually recursive static dispatch - diamond pattern" {
+    const source =
+        \\Router(a) := [Val(a)].{
+        \\  route = |Router.Val(x), n| if n == 0.U64 { x } else { Router.Val(x).path_a(n - 1.U64) }
+        \\  path_a = |Router.Val(x), n| if n == 0.U64 { x } else { Router.Val(x).hub(n - 1.U64) }
+        \\  path_b = |Router.Val(x), n| if n == 0.U64 { x } else { Router.Val(x).hub(n - 1.U64) }
+        \\  hub = |Router.Val(x), n| if n == 0.U64 { x } else { Router.Val(x).route(n - 1.U64) }
+        \\}
+        \\test = (Router.Val(1.U64).route(2.U64), Router.Val("hi").path_b(1.U64))
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Router.route", .expected = "Router(a), U64 -> a" },
+            .{ .def = "Test.Router.path_a", .expected = "Router(a), U64 -> a" },
+            .{ .def = "Test.Router.path_b", .expected = "Router(a), U64 -> a" },
+            .{ .def = "Test.Router.hub", .expected = "Router(a), U64 -> a" },
+            .{ .def = "test", .expected = "(U64, Str)" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - partially annotated" {
+    const source =
+        \\f : U64 -> U64
+        \\f = |x| if x <= 0.U64 { 0.U64 } else { g(x - 1.U64) }
+        \\g = |x| if x <= 0.U64 { 0.U64 } else { f(x - 1.U64) }
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "f", .expected = "U64 -> U64" },
+            .{ .def = "g", .expected = "U64 -> U64" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - partially annotated polymorphic" {
+    const source =
+        \\ping : U64, a -> a
+        \\ping = |n, x| if n <= 0.U64 { x } else { pong(n - 1.U64, x) }
+        \\pong = |n, x| if n <= 0.U64 { x } else { ping(n - 1.U64, x) }
+        \\test = (ping(1.U64, "hi"), pong(1.U64, 42.U8))
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "ping", .expected = "U64, a -> a" },
+            .{ .def = "pong", .expected = "U64, a -> a" },
+            .{ .def = "test", .expected = "(Str, U8)" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - inner let-def lambda inside cycle participant is generalized" {
+    // Inner let-def lambda should generalize normally even while
+    // defer_generalize is active for the outer cycle.
+    const source =
+        \\f = |n| {
+        \\    id = |x| x
+        \\    _unused = id("hello")
+        \\    if n <= 0.U64 { 0.U64 } else { id(g(n - 1.U64)) }
+        \\}
+        \\g = |n| if n <= 0.U64 { 0.U64 } else { f(n - 1.U64) }
+    ;
+    // If id weren't generalized, using it at both Str and U64 would fail.
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "f", .expected = "U64 -> U64" },
+            .{ .def = "g", .expected = "U64 -> U64" },
+        },
+    );
+}
+
 // repros //
 
 test "check type - zulip repro" {
@@ -4125,7 +4913,7 @@ test "check type - zulip repro" {
         \\
         \\But `use_record` needs the first argument to be:
         \\
-        \\    { .., blah: Str }
+        \\    { blah: Str, .. }
         \\
         \\**Hint:** This record is missing the field: `blah`
         \\

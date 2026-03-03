@@ -2754,6 +2754,22 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                         .left = expression,
                         .right = ident_suffixed,
                     } });
+                } else if (first_token_tag == .OpenRound or first_token_tag == .NoSpaceOpenRound) {
+                    // Parenthesized expression after arrow: expr->(|x| body)
+                    self.advance(); // consume (
+                    const inner_expr = try self.parseExpr();
+                    if (self.peek() != .CloseRound) {
+                        return try self.pushMalformed(AST.Expr.Idx, .expected_expr_apply_close_round, self.pos);
+                    }
+                    self.advance(); // consume )
+                    // Allow chained application: expr->(|x| x)(extra_args)
+                    const rhs_suffixed = try self.parseExprApplicationSuffix(s, inner_expr);
+                    expression = try self.store.addExpr(.{ .local_dispatch = .{
+                        .region = .{ .start = start, .end = self.pos },
+                        .operator = s,
+                        .left = expression,
+                        .right = rhs_suffixed,
+                    } });
                 } else {
                     return try self.pushMalformed(AST.Expr.Idx, .expr_arrow_expects_ident, self.pos);
                 }
@@ -2927,6 +2943,13 @@ pub fn parseBranch(self: *Parser) Error!AST.MatchBranch.Idx {
 
     const start = self.pos;
     const p = try self.parsePattern(.alternatives_allowed);
+
+    // Parse optional guard: `if <expr>`
+    const guard: ?AST.Expr.Idx = if (self.peek() == .KwIf) blk: {
+        self.advance(); // consume `if`
+        break :blk try self.parseExpr();
+    } else null;
+
     if (self.peek() == .OpFatArrow) {
         self.advance();
     } else if (self.peek() == .OpArrow) {
@@ -2949,6 +2972,7 @@ pub fn parseBranch(self: *Parser) Error!AST.MatchBranch.Idx {
         .region = .{ .start = start, .end = self.pos },
         .pattern = p,
         .body = b,
+        .guard = guard,
     });
 }
 

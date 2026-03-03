@@ -73,7 +73,7 @@ This **plus** method is being called on a value whose type doesn't have that met
 ```
 	^^^^^^^^^^^^^^^
 
-The value's type, which does not have a method named**plus**, is:
+The value's type, which does not have a method named **plus**, is:
 
     {}
 
@@ -85,7 +85,7 @@ This **from_numeral** method is being called on a value whose type doesn't have 
 ```
 	^
 
-The value's type, which does not have a method named**from_numeral**, is:
+The value's type, which does not have a method named **from_numeral**, is:
 
     Error
 
@@ -420,7 +420,7 @@ NO CHANGE
 		(patt (type "{ count: Dec, data: Dec }"))
 		(patt (type "{ count: Dec, data: Str }"))
 		(patt (type "{ count: Dec, data: List(_a) }"))
-		(patt (type "{ ..a, data: b }, b -> { ..a, data: b }"))
+		(patt (type "{ data: a, ..b }, a -> { data: a, ..b }"))
 		(patt (type "{ count: Dec, data: Dec }"))
 		(patt (type "{ count: Dec, data: Str }"))
 		(patt (type "{ count: Dec, data: Str }"))
@@ -439,7 +439,7 @@ NO CHANGE
 		(expr (type "{ count: Dec, data: Dec }"))
 		(expr (type "{ count: Dec, data: Str }"))
 		(expr (type "{ count: Dec, data: List(_a) }"))
-		(expr (type "{ ..a, data: b }, b -> { ..a, data: b }"))
+		(expr (type "{ data: a, ..b }, a -> { data: a, ..b }"))
 		(expr (type "{ count: Dec, data: Dec }"))
 		(expr (type "{ count: Dec, data: Str }"))
 		(expr (type "{ count: Dec, data: Str }"))

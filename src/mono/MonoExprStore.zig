@@ -26,8 +26,8 @@ const MonoExprSpan = ir.MonoExprSpan;
 const MonoPatternSpan = ir.MonoPatternSpan;
 const MonoCaptureSpan = ir.MonoCaptureSpan;
 const MonoCapture = ir.MonoCapture;
-const MonoWhenBranch = ir.MonoWhenBranch;
-const MonoWhenBranchSpan = ir.MonoWhenBranchSpan;
+const MonoMatchBranch = ir.MonoMatchBranch;
+const MonoMatchBranchSpan = ir.MonoMatchBranchSpan;
 const LambdaSetMember = ir.LambdaSetMember;
 const LambdaSetMemberSpan = ir.LambdaSetMemberSpan;
 const MonoIfBranch = ir.MonoIfBranch;
@@ -41,6 +41,8 @@ const CFStmt = ir.CFStmt;
 const CFStmtId = ir.CFStmtId;
 const CFSwitchBranch = ir.CFSwitchBranch;
 const CFSwitchBranchSpan = ir.CFSwitchBranchSpan;
+const CFMatchBranch = ir.CFMatchBranch;
+const CFMatchBranchSpan = ir.CFMatchBranchSpan;
 const LayoutIdxSpan = ir.LayoutIdxSpan;
 const MonoProc = ir.MonoProc;
 
@@ -59,11 +61,11 @@ patterns: std.ArrayList(MonoPattern),
 pattern_regions: std.ArrayList(Region),
 
 /// Extra data storage for variable-length spans
-/// Stores: MonoExprId[], MonoPatternId[], MonoCapture[], MonoWhenBranch[], etc.
+/// Stores: MonoExprId[], MonoPatternId[], MonoCapture[], MonoMatchBranch[], etc.
 extra_data: std.ArrayList(u32),
 
-/// When branches (stored separately for better alignment)
-when_branches: std.ArrayList(MonoWhenBranch),
+/// Match branches (stored separately for better alignment)
+match_branches: std.ArrayList(MonoMatchBranch),
 
 /// If branches
 if_branches: std.ArrayList(MonoIfBranch),
@@ -82,6 +84,9 @@ cf_stmts: std.ArrayList(CFStmt),
 
 /// Control flow switch branches
 cf_switch_branches: std.ArrayList(CFSwitchBranch),
+
+/// Control flow match branches (pattern matching)
+cf_match_branches: std.ArrayList(CFMatchBranch),
 
 /// Complete procedures (for two-pass compilation)
 procs: std.ArrayList(MonoProc),
@@ -105,13 +110,14 @@ pub fn init(allocator: Allocator) Self {
         .patterns = std.ArrayList(MonoPattern).empty,
         .pattern_regions = std.ArrayList(Region).empty,
         .extra_data = std.ArrayList(u32).empty,
-        .when_branches = std.ArrayList(MonoWhenBranch).empty,
+        .match_branches = std.ArrayList(MonoMatchBranch).empty,
         .if_branches = std.ArrayList(MonoIfBranch).empty,
         .stmts = std.ArrayList(MonoStmt).empty,
         .captures = std.ArrayList(MonoCapture).empty,
         .lambda_set_members = std.ArrayList(LambdaSetMember).empty,
         .cf_stmts = std.ArrayList(CFStmt).empty,
         .cf_switch_branches = std.ArrayList(CFSwitchBranch).empty,
+        .cf_match_branches = std.ArrayList(CFMatchBranch).empty,
         .procs = std.ArrayList(MonoProc).empty,
         .symbol_defs = std.AutoHashMap(u64, MonoExprId).init(allocator),
         .strings = base.StringLiteral.Store{},
@@ -122,6 +128,7 @@ pub fn init(allocator: Allocator) Self {
 /// Initialize with pre-allocated capacity
 pub fn initCapacity(allocator: Allocator, capacity: usize) Allocator.Error!Self {
     var self = init(allocator);
+    errdefer self.deinit();
     try self.exprs.ensureTotalCapacity(allocator, capacity);
     try self.expr_regions.ensureTotalCapacity(allocator, capacity);
     try self.patterns.ensureTotalCapacity(allocator, capacity / 4);
@@ -137,13 +144,14 @@ pub fn deinit(self: *Self) void {
     self.patterns.deinit(self.allocator);
     self.pattern_regions.deinit(self.allocator);
     self.extra_data.deinit(self.allocator);
-    self.when_branches.deinit(self.allocator);
+    self.match_branches.deinit(self.allocator);
     self.if_branches.deinit(self.allocator);
     self.stmts.deinit(self.allocator);
     self.captures.deinit(self.allocator);
     self.lambda_set_members.deinit(self.allocator);
     self.cf_stmts.deinit(self.allocator);
     self.cf_switch_branches.deinit(self.allocator);
+    self.cf_match_branches.deinit(self.allocator);
     self.procs.deinit(self.allocator);
     self.symbol_defs.deinit();
     self.strings.deinit(self.allocator);
@@ -265,14 +273,14 @@ pub fn getFieldNameSpan(self: *const Self, span: ir.MonoFieldNameSpan) []const b
     return @ptrCast(slice);
 }
 
-/// Add when branches and return a span
-pub fn addWhenBranches(self: *Self, branches: []const MonoWhenBranch) Allocator.Error!MonoWhenBranchSpan {
+/// Add match branches and return a span
+pub fn addMatchBranches(self: *Self, branches: []const MonoMatchBranch) Allocator.Error!MonoMatchBranchSpan {
     if (branches.len == 0) {
-        return MonoWhenBranchSpan.empty();
+        return MonoMatchBranchSpan.empty();
     }
 
-    const start = @as(u32, @intCast(self.when_branches.items.len));
-    try self.when_branches.appendSlice(self.allocator, branches);
+    const start = @as(u32, @intCast(self.match_branches.items.len));
+    try self.match_branches.appendSlice(self.allocator, branches);
 
     return .{
         .start = start,
@@ -280,10 +288,10 @@ pub fn addWhenBranches(self: *Self, branches: []const MonoWhenBranch) Allocator.
     };
 }
 
-/// Get when branches from a span
-pub fn getWhenBranches(self: *const Self, span: MonoWhenBranchSpan) []const MonoWhenBranch {
+/// Get match branches from a span
+pub fn getMatchBranches(self: *const Self, span: MonoMatchBranchSpan) []const MonoMatchBranch {
     if (span.len == 0) return &.{};
-    return self.when_branches.items[span.start..][0..span.len];
+    return self.match_branches.items[span.start..][0..span.len];
 }
 
 /// Add if branches and return a span
@@ -426,6 +434,27 @@ pub fn addCFSwitchBranches(self: *Self, branches: []const CFSwitchBranch) Alloca
 pub fn getCFSwitchBranches(self: *const Self, span: CFSwitchBranchSpan) []const CFSwitchBranch {
     if (span.len == 0) return &.{};
     return self.cf_switch_branches.items[span.start..][0..span.len];
+}
+
+/// Add control flow match branches and return a span
+pub fn addCFMatchBranches(self: *Self, branches: []const CFMatchBranch) Allocator.Error!CFMatchBranchSpan {
+    if (branches.len == 0) {
+        return CFMatchBranchSpan.empty();
+    }
+
+    const start = @as(u32, @intCast(self.cf_match_branches.items.len));
+    try self.cf_match_branches.appendSlice(self.allocator, branches);
+
+    return .{
+        .start = start,
+        .len = @intCast(branches.len),
+    };
+}
+
+/// Get control flow match branches from a span
+pub fn getCFMatchBranches(self: *const Self, span: CFMatchBranchSpan) []const CFMatchBranch {
+    if (span.len == 0) return &.{};
+    return self.cf_match_branches.items[span.start..][0..span.len];
 }
 
 /// Add a span of layout indices

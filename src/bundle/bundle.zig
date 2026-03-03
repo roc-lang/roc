@@ -230,7 +230,7 @@ pub fn bundle(
     // Get the blake3 hash and encode as base58
     const hash = compress_writer.getHash();
     var base58_buffer: [base58.base58_hash_bytes]u8 = undefined;
-    const base58_encoded = base58.encode(&hash, &base58_buffer);
+    const base58_encoded = base58.encode(hash, &base58_buffer);
     const base58_hash = try allocator.*.dupe(u8, base58_encoded);
     defer allocator.*.free(base58_hash);
 
@@ -246,9 +246,7 @@ pub fn validateBase58Hash(base58_hash: []const u8) !?[32]u8 {
         return null;
     }
 
-    var hash: [32]u8 = undefined;
-    base58.decode(base58_hash, &hash) catch return null;
-    return hash;
+    return base58.decode(base58_hash) catch return null;
 }
 
 /// Characters that are reserved/illegal in file paths on various operating systems.

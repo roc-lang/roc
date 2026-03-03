@@ -50,6 +50,7 @@ const Symbol = ir.Symbol;
 const JoinPointId = ir.JoinPointId;
 const CFStmtId = ir.CFStmtId;
 const CFSwitchBranch = ir.CFSwitchBranch;
+const CFMatchBranch = ir.CFMatchBranch;
 const LayoutIdxSpan = ir.LayoutIdxSpan;
 
 const Allocator = std.mem.Allocator;
@@ -234,6 +235,37 @@ pub const TailRecursionPass = struct {
                 }
                 return stmt_id;
             },
+
+            .match_stmt => |ms| {
+                // Transform each branch body
+                var changed = false;
+                var new_branches = std.ArrayList(CFMatchBranch).empty;
+                defer new_branches.deinit(self.allocator);
+
+                const branches = self.store.getCFMatchBranches(ms.branches);
+                for (branches) |branch| {
+                    const new_body = try self.transformStmt(branch.body);
+                    if (@intFromEnum(new_body) != @intFromEnum(branch.body)) changed = true;
+                    try new_branches.append(self.allocator, .{
+                        .pattern = branch.pattern,
+                        .guard = branch.guard,
+                        .body = new_body,
+                    });
+                }
+
+                if (changed) {
+                    const branch_span = try self.store.addCFMatchBranches(new_branches.items);
+                    return try self.store.addCFStmt(.{
+                        .match_stmt = .{
+                            .value = ms.value,
+                            .value_layout = ms.value_layout,
+                            .branches = branch_span,
+                            .ret_layout = ms.ret_layout,
+                        },
+                    });
+                }
+                return stmt_id;
+            },
         }
     }
 };
@@ -269,17 +301,31 @@ pub fn makeTailRecursive(
     var initial_args = std.ArrayList(MonoExprId).empty;
     defer initial_args.deinit(allocator);
 
-    for (param_patterns) |pattern_id| {
+    const proc_param_layouts = store.getLayoutIdxSpan(param_layouts);
+    for (param_patterns, 0..) |pattern_id, param_idx| {
         const pattern = store.getPattern(pattern_id);
-        if (pattern == .bind) {
-            // Create lookup expression for this parameter
-            const lookup_id = try store.addExpr(.{
-                .lookup = .{
-                    .symbol = pattern.bind.symbol,
-                    .layout_idx = pattern.bind.layout_idx,
-                },
-            }, @import("base").Region.zero());
-            try initial_args.append(allocator, lookup_id);
+        switch (pattern) {
+            .bind => |bind| {
+                // Create lookup expression for this parameter
+                const lookup_id = try store.addExpr(.{
+                    .lookup = .{
+                        .symbol = bind.symbol,
+                        .layout_idx = bind.layout_idx,
+                    },
+                }, @import("base").Region.zero());
+                try initial_args.append(allocator, lookup_id);
+            },
+            .wildcard => {
+                // Wildcard params need a placeholder to maintain arity.
+                // Use layout-aware zero to avoid type mismatch.
+                const param_layout = proc_param_layouts[param_idx];
+                const placeholder_id = if (param_layout == .i128 or param_layout == .u128 or param_layout == .dec)
+                    try store.addExpr(.{ .i128_literal = 0 }, @import("base").Region.zero())
+                else
+                    try store.addExpr(.{ .i64_literal = 0 }, @import("base").Region.zero());
+                try initial_args.append(allocator, placeholder_id);
+            },
+            else => unreachable,
         }
     }
 

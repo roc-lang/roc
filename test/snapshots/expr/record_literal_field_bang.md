@@ -55,5 +55,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ answer: Dec, launchTheNukes!: {} -> _ret }"))
+(expr (type "{ answer: Dec, launchTheNukes!: { .. } -> _ret }"))
 ~~~

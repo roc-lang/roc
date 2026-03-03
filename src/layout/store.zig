@@ -252,7 +252,7 @@ pub const Store = struct {
     }
 
     /// Get the current module environment
-    fn currentEnv(self: *const Self) *const ModuleEnv {
+    pub fn currentEnv(self: *const Self) *const ModuleEnv {
         return self.all_module_envs[self.current_module_idx];
     }
 
@@ -484,21 +484,78 @@ pub const Store = struct {
         return try self.insertLayout(tuple_layout);
     }
 
+    /// Create a tag union layout from pre-computed variant payload layouts.
+    /// `variant_layouts[i]` is the layout Idx for variant i's payload
+    /// (use ensureZstLayout() for no-payload variants).
+    /// Tags must be sorted alphabetically; variant_layouts[i] corresponds
+    /// to the tag at sorted index i.
+    pub fn putTagUnion(self: *Self, variant_layouts: []const Idx) std.mem.Allocator.Error!Idx {
+        const variants_start: u32 = @intCast(self.tag_union_variants.len());
+
+        var max_payload_size: u32 = 0;
+        var max_payload_alignment: std.mem.Alignment = .@"1";
+
+        for (variant_layouts) |variant_layout_idx| {
+            const variant_layout = self.getLayout(variant_layout_idx);
+            const variant_size = self.layoutSize(variant_layout);
+            const variant_alignment = variant_layout.alignment(self.targetUsize());
+            if (variant_size > max_payload_size) max_payload_size = variant_size;
+            max_payload_alignment = max_payload_alignment.max(variant_alignment);
+
+            _ = try self.tag_union_variants.append(self.allocator, .{
+                .payload_layout = variant_layout_idx,
+            });
+        }
+
+        // Discriminant size from variant count
+        const discriminant_size: u8 = if (variant_layouts.len <= 256) 1 else if (variant_layouts.len <= 65536) 2 else if (variant_layouts.len <= (1 << 32)) 4 else 8;
+        const disc_align = TagUnionData.alignmentForDiscriminantSize(discriminant_size);
+
+        // Canonical layout: payload at offset 0, discriminant after (aligned)
+        const discriminant_offset: u16 = @intCast(
+            std.mem.alignForward(u32, max_payload_size, @intCast(disc_align.toByteUnits())),
+        );
+        const tag_union_alignment = max_payload_alignment.max(disc_align);
+        const total_size = std.mem.alignForward(
+            u32,
+            discriminant_offset + discriminant_size,
+            @intCast(tag_union_alignment.toByteUnits()),
+        );
+
+        const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
+        _ = try self.tag_union_data.append(self.allocator, .{
+            .size = total_size,
+            .discriminant_offset = discriminant_offset,
+            .discriminant_size = discriminant_size,
+            .variants = .{
+                .start = variants_start,
+                .count = @intCast(variant_layouts.len),
+            },
+        });
+
+        const tu_layout = Layout.tagUnion(tag_union_alignment, .{ .int_idx = @intCast(tag_union_data_idx) });
+        return try self.insertLayout(tu_layout);
+    }
+
     /// Create a tuple layout representing the sequential layout of closure captures.
-    /// Captures are stored sequentially with no alignment padding between them.
+    /// Captures are stored with alignment padding between them, like tuple fields.
     pub fn putCaptureStruct(self: *Self, capture_layout_idxs: []const Idx) std.mem.Allocator.Error!Idx {
         var temp_fields = std.ArrayList(TupleField).empty;
         defer temp_fields.deinit(self.allocator);
 
-        var total_size: u32 = 0;
         var max_alignment: usize = 1;
+        var current_offset: u32 = 0;
         for (capture_layout_idxs, 0..) |cap_idx, i| {
             try temp_fields.append(self.allocator, .{ .index = @intCast(i), .layout = cap_idx });
             const cap_layout = self.getLayout(cap_idx);
             const cap_sa = self.layoutSizeAlign(cap_layout);
-            total_size += cap_sa.size;
-            max_alignment = @max(max_alignment, cap_sa.alignment.toByteUnits());
+            const field_alignment = cap_sa.alignment.toByteUnits();
+            max_alignment = @max(max_alignment, field_alignment);
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment))));
+            current_offset += cap_sa.size;
         }
+
+        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment)))));
 
         const fields_start = self.tuple_fields.items.len;
         for (temp_fields.items) |field| {
@@ -519,18 +576,24 @@ pub const Store = struct {
         var max_payload_size: u32 = 0;
         var max_alignment: usize = 8; // At least 8 for the tag
         for (variants) |capture_idxs| {
-            var variant_size: u32 = 0;
+            var current_offset: u32 = 0;
             for (capture_idxs) |cap_idx| {
                 const cap_layout = self.getLayout(cap_idx);
                 const cap_sa = self.layoutSizeAlign(cap_layout);
-                variant_size += cap_sa.size;
-                max_alignment = @max(max_alignment, cap_sa.alignment.toByteUnits());
+                const field_alignment = cap_sa.alignment.toByteUnits();
+                max_alignment = @max(max_alignment, field_alignment);
+                current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment))));
+                current_offset += cap_sa.size;
             }
-            max_payload_size = @max(max_payload_size, variant_size);
+            max_payload_size = @max(max_payload_size, current_offset);
         }
 
-        // Total size = 8 (tag) + max_payload_size
-        const total_size: u32 = 8 + max_payload_size;
+        // Total size = 8 (tag) + max_payload_size, aligned to max_alignment
+        const total_size: u32 = @intCast(std.mem.alignForward(
+            u32,
+            8 + max_payload_size,
+            @as(u32, @intCast(max_alignment)),
+        ));
 
         // Create a tuple layout with a single dummy field (TupleData requires NonEmptyRange)
         const fields_start = self.tuple_fields.items.len;

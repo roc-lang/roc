@@ -43,6 +43,7 @@ const unbundle = @import("unbundle");
 const ipc = @import("ipc");
 const fmt = @import("fmt");
 const eval = @import("eval");
+const echo_platform = @import("echo_platform");
 const lsp = @import("lsp");
 const cli_repl = @import("repl.zig");
 
@@ -88,12 +89,15 @@ const Mode = compile.package.Mode;
 const TimingInfo = compile.package.TimingInfo;
 const CacheManager = compile.CacheManager;
 const CacheConfig = compile.CacheConfig;
+const cache_config_mod = compile.config;
 const serialize_modules = compile.serialize_modules;
 const TestRunner = eval.TestRunner;
 const backend = @import("backend");
 const mono = @import("mono");
 const layout = @import("layout");
+const docs = @import("docs");
 const Allocators = base.Allocators;
+const RocTarget = @import("target.zig").RocTarget;
 
 /// Embedded interpreter shim libraries for different targets.
 /// The native shim is used for roc run and native builds.
@@ -123,7 +127,7 @@ const ShimLibraries = struct {
     const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/roc_interpreter_shim.lib");
 
     /// Get the appropriate shim library bytes for the given target
-    pub fn forTarget(target: roc_target.RocTarget) []const u8 {
+    pub fn forTarget(target: RocTarget) []const u8 {
         return switch (target) {
             .x64musl => x64musl,
             .arm64musl => arm64musl,
@@ -174,7 +178,7 @@ const BuiltinsObjects = struct {
     const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/libroc_builtins.a");
 
     /// Get the appropriate builtins library bytes for the given target
-    pub fn forTarget(target: roc_target.RocTarget) []const u8 {
+    pub fn forTarget(target: RocTarget) []const u8 {
         return switch (target) {
             .x64musl => x64musl,
             .arm64musl => arm64musl,
@@ -191,7 +195,7 @@ const BuiltinsObjects = struct {
     }
 
     /// Get the filename for builtins library on given target
-    pub fn filename(target: roc_target.RocTarget) []const u8 {
+    pub fn filename(target: RocTarget) []const u8 {
         return switch (target.toOsTag()) {
             .windows => "roc_builtins.lib",
             else => "libroc_builtins.a",
@@ -456,7 +460,7 @@ fn generateRandomSuffix(ctx: *CliContext) ![]u8 {
 /// Uses system temp directory to avoid race conditions when cache is cleared.
 pub fn createUniqueTempDir(ctx: *CliContext) ![]const u8 {
     // Get the version-specific temp directory: {temp}/roc/{version}
-    const version_temp_dir = try CacheConfig.getVersionTempDir(ctx.arena);
+    const version_temp_dir = try cache_config_mod.getVersionTempDir(Filesystem.default(), ctx.arena);
 
     // Ensure the roc/{version} directory exists
     // makePath automatically handles PathAlreadyExists internally
@@ -519,7 +523,7 @@ pub fn writeFdCoordinationFile(ctx: *CliContext, temp_exe_path: []const u8, shm_
 /// The exe_display_name is the name that will appear in `ps` output (e.g., "app.roc").
 pub fn createTempDirStructure(allocs: *Allocators, exe_path: []const u8, exe_display_name: []const u8, shm_handle: SharedMemoryHandle, _: ?[]const u8) ![]const u8 {
     // Get the version-specific temp directory: {temp}/roc/{version}
-    const version_temp_dir = try CacheConfig.getVersionTempDir(allocs.arena);
+    const version_temp_dir = try cache_config_mod.getVersionTempDir(Filesystem.default(), allocs.arena);
 
     // Ensure the roc/{version} directory exists
     // makePath automatically handles PathAlreadyExists internally
@@ -664,7 +668,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
     //
     // Uses page_allocator instead of GPA to avoid leak detection false positives
     // (the thread may still be running when the main thread's leak check fires).
-    if (compile.CacheCleanup.startBackgroundCleanup(std.heap.page_allocator)) |_| {
+    if (compile.CacheCleanup.startBackgroundCleanup(std.heap.page_allocator, Filesystem.default())) |_| {
         // Thread started successfully, will run in background
     } else |_| {
         // Non-fatal: cleanup failure shouldn't prevent compilation
@@ -961,6 +965,11 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
     };
 
+    // Check if this is a default_app (headerless file with main!)
+    if (readDefaultAppSource(ctx, args.path)) |source| {
+        return rocRunDefaultApp(ctx, args, source);
+    }
+
     // First, parse the app file to get the platform reference
     const platform_spec = try extractPlatformSpecFromApp(ctx, args.path);
 
@@ -987,7 +996,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
             // Select target: if --target is provided, use that; otherwise try native then fallback
             if (args.target) |target_str| {
                 // User explicitly specified a target
-                const parsed_target = roc_target.RocTarget.fromString(target_str) orelse {
+                const parsed_target = RocTarget.fromString(target_str) orelse {
                     const result = platform_validation.targets_validator.ValidationResult{
                         .invalid_target = .{ .target_str = target_str },
                     };
@@ -1261,6 +1270,173 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
     if (shm_result.warning_count > 0) {
         ctx.io.flush();
         std.process.exit(2);
+    }
+}
+
+/// Check if a file is a default_app (headerless file with a main! function).
+/// On success, returns the file source (caller owns the allocation).
+/// Returns null if the file is not a default_app.
+fn readDefaultAppSource(ctx: *CliContext, file_path: []const u8) ?[]const u8 {
+    const max_source_size = 256 * 1024 * 1024; // 256 MB
+    const source = std.fs.cwd().readFileAlloc(ctx.gpa, file_path, max_source_size) catch return null;
+
+    const module_name = base.module_path.getModuleNameAlloc(ctx.arena, file_path) catch {
+        ctx.gpa.free(source);
+        return null;
+    };
+
+    var env = ModuleEnv.init(ctx.gpa, source) catch {
+        ctx.gpa.free(source);
+        return null;
+    };
+    defer env.deinit();
+    env.common.source = source;
+    env.module_name = module_name;
+
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(ctx.gpa);
+    defer allocators.deinit();
+
+    const ast = parse.parse(&allocators, &env.common) catch {
+        ctx.gpa.free(source);
+        return null;
+    };
+    defer ast.deinit();
+
+    const file = ast.store.getFile();
+    const header = ast.store.getHeader(file.header);
+
+    // Only headerless files (type_module) can be default apps
+    if (header != .type_module) {
+        ctx.gpa.free(source);
+        return null;
+    }
+
+    if (!ast.hasMainBangDecl()) {
+        ctx.gpa.free(source);
+        return null;
+    }
+
+    return source;
+}
+
+/// Virtual file provider for the echo platform.
+/// Intercepts reads for the synthetic app source and embedded platform files,
+/// delegating all other reads to the real filesystem.
+const EchoFileProvider = struct {
+    app_abs_path: []const u8,
+    synthetic_app_source: []const u8,
+    platform_main_path: []const u8,
+    echo_module_path: []const u8,
+
+    const FileProvider = compile.package.FileProvider;
+
+    fn read(ctx_ptr: ?*anyopaque, path: []const u8, gpa: std.mem.Allocator) std.mem.Allocator.Error!?[]u8 {
+        const self: *@This() = @ptrCast(@alignCast(ctx_ptr.?));
+        if (std.mem.eql(u8, path, self.app_abs_path))
+            return try gpa.dupe(u8, self.synthetic_app_source);
+        if (std.mem.eql(u8, path, self.platform_main_path))
+            return try gpa.dupe(u8, echo_platform.platform_main_source);
+        if (std.mem.eql(u8, path, self.echo_module_path))
+            return try gpa.dupe(u8, echo_platform.echo_module_source);
+        return FileProvider.filesystem.read(null, path, gpa);
+    }
+
+    fn provider(self: *@This()) FileProvider {
+        return .{ .ctx = @ptrCast(self), .read = &@This().read };
+    }
+};
+
+/// Run a default_app (headerless file with main! and echo platform).
+/// This compiles the app with real platform .roc files through the standard
+/// multi-module pipeline, JIT-compiles main_for_host!, and executes it.
+fn rocRunDefaultApp(ctx: *CliContext, args: cli_args.RunArgs, original_source: []const u8) !void {
+    const HostedFn = echo_platform.host_abi.HostedFn;
+    const target = RocTarget.detectNative();
+    defer ctx.gpa.free(original_source);
+
+    const cwd_tmp = std.process.getCwdAlloc(ctx.gpa) catch return error.OutOfMemory;
+    defer ctx.gpa.free(cwd_tmp);
+    const app_abs = std.fs.path.resolve(ctx.gpa, &.{ cwd_tmp, args.path }) catch return error.OutOfMemory;
+    defer ctx.gpa.free(app_abs);
+
+    // Virtual paths for the echo platform — intercepted by EchoFileProvider,
+    // never actually read from disk. Derived from the app's directory so they
+    // are valid absolute paths on any OS.
+    const app_dir = std.fs.path.dirname(app_abs) orelse ".";
+    const platform_main_path = std.fs.path.join(ctx.gpa, &.{ app_dir, ".roc_echo_platform", "main.roc" }) catch return error.OutOfMemory;
+    defer ctx.gpa.free(platform_main_path);
+    const echo_module_path = std.fs.path.join(ctx.gpa, &.{ app_dir, ".roc_echo_platform", "Echo.roc" }) catch return error.OutOfMemory;
+    defer ctx.gpa.free(echo_module_path);
+
+    const header = std.fmt.allocPrint(
+        ctx.gpa,
+        "app [main!] {{ pf: platform \"{s}\" }}\n\nimport pf.Echo\n\necho! = |msg| Echo.line!(msg)\n\n",
+        .{platform_main_path},
+    ) catch return error.OutOfMemory;
+    defer ctx.gpa.free(header);
+
+    const synthetic_source = std.mem.concat(ctx.gpa, u8, &.{ header, original_source }) catch return error.OutOfMemory;
+    defer ctx.gpa.free(synthetic_source);
+
+    // Phase 2: Compile through standard pipeline
+    const cwd = try std.process.getCwdAlloc(ctx.gpa);
+    defer ctx.gpa.free(cwd);
+    var build_env = try BuildEnv.init(ctx.gpa, .single_threaded, 1, target, cwd);
+    defer build_env.deinit();
+
+    var echo_fp = EchoFileProvider{
+        .app_abs_path = app_abs,
+        .synthetic_app_source = synthetic_source,
+        .platform_main_path = platform_main_path,
+        .echo_module_path = echo_module_path,
+    };
+    build_env.setFileProvider(echo_fp.provider());
+
+    build_env.discoverDependencies(args.path) catch |err| {
+        _ = build_env.renderDiagnostics(ctx.io.stderr());
+        return err;
+    };
+
+    build_env.compileDiscovered() catch |err| {
+        _ = build_env.renderDiagnostics(ctx.io.stderr());
+        return err;
+    };
+
+    const diag = build_env.renderDiagnostics(ctx.io.stderr());
+    if (diag.errors > 0) return error.CompilationFailed;
+
+    // Phase 3: Prepare for execution
+    var resolved = try build_env.getResolvedModuleEnvs(ctx.arena);
+    try resolved.processHostedFunctions(ctx.gpa, null);
+    const entry = try resolved.findEntrypoint();
+
+    // Phase 4: Execute via interpreter
+    var hosted_fn_array = [_]HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
+    var roc_ops = echo_platform.makeDefaultRocOps(&hosted_fn_array);
+    var cli_args_list = echo_platform.buildCliArgs(args.app_args, &roc_ops);
+    var result_buf: [16]u8 align(16) = undefined;
+
+    compile.runner.runViaInterpreter(
+        ctx.gpa,
+        entry.platform_env,
+        build_env.builtin_modules,
+        resolved.all_module_envs,
+        entry.app_module_env,
+        entry.entrypoint_expr,
+        &roc_ops,
+        @ptrCast(&cli_args_list),
+        @ptrCast(&result_buf),
+        target,
+    ) catch |err| {
+        std.debug.print("Execution error: {}\n", .{err});
+        std.process.exit(1);
+    };
+
+    // Platform returns I8; bit-identical to u8 for std.process.exit
+    const exit_code = result_buf[0];
+    if (exit_code != 0) {
+        std.process.exit(exit_code);
     }
 }
 
@@ -1749,7 +1925,7 @@ pub fn setupSharedMemoryWithCoordinator(ctx: *CliContext, roc_file_path: []const
         ctx.gpa, // Use regular allocator for Coordinator internals
         .single_threaded,
         1,
-        roc_target.RocTarget.detectNative(), // IPC runs on host
+        RocTarget.detectNative(), // IPC runs on host
         &builtin_modules,
         build_options.compiler_version,
         null, // no cache for IPC
@@ -2860,7 +3036,7 @@ fn extractEntrypointsFromPlatform(ctx: *CliContext, roc_file_path: []const u8, e
 /// This library contains the shim code that runs in child processes to read ModuleEnv from shared memory.
 /// For native builds and roc run, use the native shim (pass null or native target).
 /// For cross-compilation, pass the target to get the appropriate shim.
-pub fn extractReadRocFilePathShimLibrary(ctx: *CliContext, output_path: []const u8, target: ?roc_target.RocTarget) !void {
+pub fn extractReadRocFilePathShimLibrary(ctx: *CliContext, output_path: []const u8, target: ?RocTarget) !void {
     _ = ctx; // unused but kept for consistency
 
     if (builtin.is_test) {
@@ -2954,7 +3130,9 @@ fn validateBundleWithCoordinator(
     defer ctx.gpa.free(abs_entry);
 
     // Create a BuildEnv to parse headers and discover modules via the Coordinator
-    var build_env = try BuildEnv.init(ctx.gpa, .single_threaded, 1, roc_target.RocTarget.detectNative());
+    const cwd = try std.process.getCwdAlloc(ctx.gpa);
+    defer ctx.gpa.free(cwd);
+    var build_env = try BuildEnv.init(ctx.gpa, .single_threaded, 1, RocTarget.detectNative(), cwd);
     defer build_env.deinit();
 
     // Run the build — the Coordinator discovers all transitive module dependencies
@@ -3318,6 +3496,15 @@ fn rocBuild(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         return;
     }
 
+    // Headerless apps use a simple builtin platform and cannot be compiled
+    if (readDefaultAppSource(ctx, args.path)) |source| {
+        ctx.gpa.free(source);
+        renderProblem(ctx.gpa, ctx.io.stderr(), .{
+            .build_not_supported_for_headerless = .{ .app_path = args.path },
+        });
+        return error.UnsupportedTarget;
+    }
+
     // Select build path based on backend
     switch (args.backend) {
         .dev => {
@@ -3366,7 +3553,10 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     const thread_count: usize = if (args.max_threads) |t| t else (std.Thread.getCpuCount() catch 1);
     const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, roc_target.RocTarget.detectNative());
+    const cwd = try std.process.getCwdAlloc(ctx.gpa);
+    defer ctx.gpa.free(cwd);
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd);
+
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
 
@@ -3382,16 +3572,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     // Phase 2: Discover dependencies (parses headers once, extracts TargetsConfig)
     build_env.discoverDependencies(args.path) catch |err| {
-        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-        defer build_env.freeDrainedReports(drained);
-
-        for (drained) |mod| {
-            for (mod.reports) |*report| {
-                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-                const config = reporting.ReportingConfig.initColorTerminal();
-                reporting.renderReportToTerminal(report, ctx.io.stderr(), palette, config) catch {};
-            }
-        }
+        _ = build_env.renderDiagnostics(ctx.io.stderr());
         return err;
     };
 
@@ -3488,94 +3669,39 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     build_env.setTarget(target);
 
     build_env.compileDiscovered() catch |err| {
-        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-        defer build_env.freeDrainedReports(drained);
-
-        for (drained) |mod| {
-            for (mod.reports) |*report| {
-                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-                const config = reporting.ReportingConfig.initColorTerminal();
-                reporting.renderReportToTerminal(report, ctx.io.stderr(), palette, config) catch {};
-            }
-        }
+        _ = build_env.renderDiagnostics(ctx.io.stderr());
         return err;
     };
 
-    // Drain reports and count errors/warnings
-    const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-    defer build_env.freeDrainedReports(drained);
-
-    var total_error_count: usize = 0;
-    var total_warning_count: usize = 0;
-
-    for (drained) |mod| {
-        for (mod.reports) |*report| {
-            switch (report.severity) {
-                .info => {},
-                .runtime_error, .fatal => total_error_count += 1,
-                .warning => total_warning_count += 1,
-            }
-            const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-            const config = reporting.ReportingConfig.initColorTerminal();
-            reporting.renderReportToTerminal(report, ctx.io.stderr(), palette, config) catch {};
-        }
-    }
-
-    if (total_error_count > 0 and !args.allow_errors) {
+    const diag = build_env.renderDiagnostics(ctx.io.stderr());
+    if (diag.errors > 0 and !args.allow_errors) {
         return error.CompilationFailed;
     }
 
-    // Get compiled modules - use getCompiledModules (not serialization order) to preserve
-    // the module ordering that matches the CIR's import resolution
-    const modules = build_env.getCompiledModules(ctx.arena) catch |err| {
+    // Get resolved module envs (Builtin at [0], imports re-resolved)
+    var resolved = build_env.getResolvedModuleEnvs(ctx.arena) catch |err| {
         std.log.err("Failed to get compiled modules: {}", .{err});
         return err;
     };
+    const modules = resolved.compiled_modules;
+    const all_module_envs = resolved.all_module_envs;
 
-    if (modules.len == 0) {
-        std.log.err("No modules were compiled", .{});
-        return error.NoModulesCompiled;
-    }
+    std.log.debug("Found {} modules", .{modules.len});
 
-    // Find platform module (primary module is platform main if present)
-    const platform_idx = BuildEnv.findPrimaryModuleIndex(modules) orelse {
-        std.log.err("No platform module found", .{});
-        return error.NoPlatformModule;
-    };
-    const platform_module = modules[platform_idx];
-
-    std.log.debug("Found {} modules, platform module at index {}", .{ modules.len, platform_idx });
-
-    // Get provides entries from the compiled platform module
-    const provides_entries = platform_module.provides_entries;
-    if (provides_entries.len == 0) {
+    // Find platform module and validate provides entries
+    const plat = resolved.getPlatformModule() catch {
         return ctx.fail(.{ .entrypoint_extraction_failed = .{
             .path = platform_source.?,
             .reason = "NoEntrypointFound",
         } });
-    }
+    };
+    const platform_module = plat.module;
+    const platform_idx = plat.platform_idx;
+    const provides_entries = plat.provides_entries;
     std.log.debug("Found {} provides entries", .{provides_entries.len});
 
-    // Build module envs array for layout store and lowering.
-    // Include the Builtin module first, matching the layout used during type-checking
-    // (where resolveImports resolved "Builtin" to index 0). Without this, resolved
-    // import indices for builtins (List, Str, Bool, etc.) point to the wrong module.
-    const builtin_env = build_env.builtin_modules.builtin_module.env;
-    var all_module_envs = try ctx.arena.alloc(*ModuleEnv, modules.len + 1);
-    all_module_envs[0] = builtin_env;
-    for (modules, 0..) |mod, i| {
-        all_module_envs[i + 1] = mod.env;
-    }
-
-    // Re-resolve imports against all_module_envs so resolved indices match this array.
-    // During type-checking, imports were resolved against a per-module imported_envs array
-    // (with Builtin at index 0). Now we re-resolve against the unified all_module_envs.
-    for (all_module_envs) |module| {
-        module.imports.resolveImports(module, all_module_envs);
-    }
-
     // Compiled modules (excluding Builtin at index 0) for pipelines that shouldn't process Builtin
-    const compiled_module_envs = all_module_envs[1..];
+    const compiled_module_envs = resolved.compiledModuleEnvs();
 
     // Run closure pipeline on modules (lambda lifting, inference, transformation)
     std.log.debug("Running closure pipeline...", .{});
@@ -3624,115 +3750,10 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         }
     }
 
-    // Process hosted functions - assign global indices based on alphabetical order
-    // and build a map for fast lookup during lowering.
-    var hosted_functions = mono.Lower.HostedFunctionMap.init(ctx.gpa);
+    // Process hosted functions - assign global indices and build lookup map for lowering
+    var hosted_functions = BuildEnv.ResolvedModules.HostedFunctionMap.init(ctx.gpa);
     defer hosted_functions.deinit();
-
-    {
-        const HostedCompiler = can.HostedCompiler;
-        var all_hosted_fns = std.ArrayList(HostedCompiler.HostedFunctionInfo).empty;
-        defer all_hosted_fns.deinit(ctx.gpa);
-
-        // Collect from platform sibling modules
-        for (modules) |mod| {
-            if (!mod.is_platform_sibling) continue;
-
-            var module_fns = HostedCompiler.collectAndSortHostedFunctions(mod.env) catch continue;
-            defer module_fns.deinit(mod.env.gpa);
-
-            for (module_fns.items) |fn_info| {
-                const name_copy = ctx.gpa.dupe(u8, fn_info.name_text) catch continue;
-                mod.env.gpa.free(fn_info.name_text);
-                all_hosted_fns.append(ctx.gpa, .{
-                    .symbol_name = fn_info.symbol_name,
-                    .expr_idx = fn_info.expr_idx,
-                    .name_text = name_copy,
-                }) catch {
-                    ctx.gpa.free(name_copy);
-                    continue;
-                };
-            }
-        }
-
-        if (all_hosted_fns.items.len > 0) {
-            // Sort globally by qualified name
-            const SortContext = struct {
-                pub fn lessThan(_: void, a: HostedCompiler.HostedFunctionInfo, b: HostedCompiler.HostedFunctionInfo) bool {
-                    return std.mem.order(u8, a.name_text, b.name_text) == .lt;
-                }
-            };
-            std.mem.sort(HostedCompiler.HostedFunctionInfo, all_hosted_fns.items, {}, SortContext.lessThan);
-
-            // Deduplicate
-            var write_idx: usize = 0;
-            for (all_hosted_fns.items, 0..) |fn_info, read_idx| {
-                if (write_idx == 0 or !std.mem.eql(u8, all_hosted_fns.items[write_idx - 1].name_text, fn_info.name_text)) {
-                    if (write_idx != read_idx) {
-                        all_hosted_fns.items[write_idx] = fn_info;
-                    }
-                    write_idx += 1;
-                } else {
-                    ctx.gpa.free(fn_info.name_text);
-                }
-            }
-            all_hosted_fns.shrinkRetainingCapacity(write_idx);
-
-            // Assign global indices and register in the hosted function registry
-            for (modules, 0..) |mod, global_module_idx| {
-                if (!mod.is_platform_sibling) continue;
-                const platform_env = mod.env;
-
-                const mod_all_defs = platform_env.store.sliceDefs(platform_env.all_defs);
-                for (mod_all_defs) |def_idx| {
-                    const def = platform_env.store.getDef(def_idx);
-                    const expr = platform_env.store.getExpr(def.expr);
-
-                    if (expr == .e_hosted_lambda) {
-                        const hosted = expr.e_hosted_lambda;
-                        const local_name = platform_env.getIdent(hosted.symbol_name);
-                        const plat_module_name = base.module_path.getModuleName(platform_env.module_name);
-                        const qualified_name = std.fmt.allocPrint(ctx.gpa, "{s}.{s}", .{ plat_module_name, local_name }) catch continue;
-                        defer ctx.gpa.free(qualified_name);
-
-                        const stripped_name = if (std.mem.endsWith(u8, qualified_name, "!"))
-                            qualified_name[0 .. qualified_name.len - 1]
-                        else
-                            qualified_name;
-
-                        for (all_hosted_fns.items, 0..) |fn_info, idx| {
-                            if (std.mem.eql(u8, fn_info.name_text, stripped_name)) {
-                                const hosted_index: u32 = @intCast(idx);
-
-                                // Update the CIR expression with the global index
-                                const expr_node_idx = @as(@TypeOf(platform_env.store.nodes).Idx, @enumFromInt(@intFromEnum(def.expr)));
-                                var expr_node = platform_env.store.nodes.get(expr_node_idx);
-                                var payload = expr_node.getPayload().expr_hosted_lambda;
-                                payload.index = hosted_index;
-                                expr_node.setPayload(.{ .expr_hosted_lambda = payload });
-                                platform_env.store.nodes.set(expr_node_idx, expr_node);
-
-                                // Register in the hosted function map for fast lookup during lowering
-                                // Store mappings for def_idx, pattern_idx, and expr_idx so lookup
-                                // succeeds regardless of which node target_node_idx points to
-                                const mod_idx: u16 = @intCast(global_module_idx + 1);
-                                hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def_idx)), hosted_index) catch {};
-                                hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def.pattern)), hosted_index) catch {};
-                                hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def.expr)), hosted_index) catch {};
-
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Free name_text strings
-            for (all_hosted_fns.items) |fn_info| {
-                ctx.gpa.free(fn_info.name_text);
-            }
-        }
-    }
+    try resolved.processHostedFunctions(ctx.gpa, &hosted_functions);
 
     // Create layout store
     std.log.debug("Creating layout store...", .{});
@@ -3747,14 +3768,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     };
     defer layout_store.deinit();
 
-    // Find the app module index
-    var app_module_idx: ?u32 = null;
-    for (modules, 0..) |mod, i| {
-        if (mod.is_app) {
-            app_module_idx = @intCast(i + 1);
-            break;
-        }
-    }
+    const app_module_idx = plat.app_module_idx;
     std.log.debug("App module index: {?}", .{app_module_idx});
 
     // Create Mono IR store
@@ -3827,7 +3841,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     }
 
     // Run RC insertion pass
-    var rc_pass = mono.RcInsert.RcInsertPass.init(ctx.gpa, &mono_store, &layout_store);
+    var rc_pass = try mono.RcInsert.RcInsertPass.init(ctx.gpa, &mono_store, &layout_store);
     defer rc_pass.deinit();
 
     for (entrypoints.items) |*ep| {
@@ -3980,8 +3994,8 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         try stdout.print("    Cache Hit: {}%\n", .{cache_percent});
     }
 
-    if (total_warning_count > 0) {
-        try stdout.print("  {} warning(s)\n", .{total_warning_count});
+    if (diag.warnings > 0) {
+        try stdout.print("  {} warning(s)\n", .{diag.warnings});
     }
 }
 
@@ -4019,7 +4033,10 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     const thread_count: usize = if (args.max_threads) |t| t else (std.Thread.getCpuCount() catch 1);
     const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, roc_target.RocTarget.detectNative());
+    const cwd = try std.process.getCwdAlloc(ctx.gpa);
+    defer ctx.gpa.free(cwd);
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd);
+
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
 
@@ -4035,17 +4052,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     // Phase 2: Discover dependencies (parses headers once, extracts TargetsConfig)
     build_env.discoverDependencies(args.path) catch |err| {
-        // Drain and display error reports
-        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-        defer build_env.freeDrainedReports(drained);
-
-        for (drained) |mod| {
-            for (mod.reports) |*report| {
-                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-                const config = reporting.ReportingConfig.initColorTerminal();
-                reporting.renderReportToTerminal(report, ctx.io.stderr(), palette, config) catch {};
-            }
-        }
+        _ = build_env.renderDiagnostics(ctx.io.stderr());
         return err;
     };
 
@@ -4141,43 +4148,12 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     build_env.setTarget(target);
 
     build_env.compileDiscovered() catch |err| {
-        // Drain and display error reports
-        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-        defer build_env.freeDrainedReports(drained);
-
-        for (drained) |mod| {
-            for (mod.reports) |*report| {
-                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-                const config = reporting.ReportingConfig.initColorTerminal();
-                reporting.renderReportToTerminal(report, ctx.io.stderr(), palette, config) catch {};
-            }
-        }
+        _ = build_env.renderDiagnostics(ctx.io.stderr());
         return err;
     };
 
-    // Drain reports and count errors/warnings
-    const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-    defer build_env.freeDrainedReports(drained);
-
-    var total_error_count: usize = 0;
-    var total_warning_count: usize = 0;
-
-    for (drained) |mod| {
-        for (mod.reports) |*report| {
-            switch (report.severity) {
-                .info => {},
-                .runtime_error, .fatal => total_error_count += 1,
-                .warning => total_warning_count += 1,
-            }
-            // Render all reports
-            const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-            const config = reporting.ReportingConfig.initColorTerminal();
-            reporting.renderReportToTerminal(report, ctx.io.stderr(), palette, config) catch {};
-        }
-    }
-
-    // Check if we should stop due to errors
-    if (total_error_count > 0 and !args.allow_errors) {
+    const embedded_diag = build_env.renderDiagnostics(ctx.io.stderr());
+    if (embedded_diag.errors > 0 and !args.allow_errors) {
         return error.CompilationFailed;
     }
 
@@ -4395,7 +4371,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     }
 
     // Exit with code 2 if there were warnings (but no errors)
-    if (total_warning_count > 0) {
+    if (embedded_diag.warnings > 0) {
         ctx.io.flush();
         std.process.exit(2);
     }
@@ -4788,10 +4764,16 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     const mode: Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
     // Initialize BuildEnv for compilation
-    var build_env = BuildEnv.init(ctx.gpa, mode, thread_count, roc_target.RocTarget.detectNative()) catch |err| {
+    const cwd = std.process.getCwdAlloc(ctx.gpa) catch |err| {
+        try stderr.print("Failed to get current working directory: {}\n", .{err});
+        return err;
+    };
+    defer ctx.gpa.free(cwd);
+    var build_env = BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd) catch |err| {
         try stderr.print("Failed to initialize build environment: {}\n", .{err});
         return err;
     };
+
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
 
@@ -4916,7 +4898,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
         builtin_types,
         builtin_module_env,
         &import_mapping,
-        roc_target.RocTarget.detectNative(),
+        RocTarget.detectNative(),
     ) catch |err| {
         try stderr.print("Failed to create compile-time evaluator: {}\n", .{err});
         return err;
@@ -5205,10 +5187,6 @@ const GlueError = error{
     BuildEnvInit,
     CompilationFailed,
     ModuleRetrieval,
-    JsonSerialization,
-    ExePathResolution,
-    ProcessSpawn,
-    ProcessFailed,
     OutOfMemory,
 };
 
@@ -5231,10 +5209,6 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
             error.BuildEnvInit => stderr.print("Error: Failed to initialize build environment\n", .{}),
             error.CompilationFailed => stderr.print("Error: Compilation failed\n", .{}),
             error.ModuleRetrieval => stderr.print("Error: Failed to get compiled modules\n", .{}),
-            error.JsonSerialization => stderr.print("Error: Failed to serialize types to JSON\n", .{}),
-            error.ExePathResolution => stderr.print("Error: Could not determine roc executable path\n", .{}),
-            error.ProcessSpawn => stderr.print("Error: Could not spawn process\n", .{}),
-            error.ProcessFailed => stderr.print("Error: Process failed\n", .{}),
             error.OutOfMemory => stderr.print("Error: Out of memory\n", .{}),
         }) catch {};
         return err;
@@ -5336,9 +5310,14 @@ fn rocGlueInner(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
     const thread_count: usize = 1;
     const mode: Mode = .single_threaded;
 
-    var build_env = BuildEnv.init(ctx.gpa, mode, thread_count, roc_target.RocTarget.detectNative()) catch {
+    const cwd = std.process.getCwdAlloc(ctx.gpa) catch {
         return error.BuildEnvInit;
     };
+    defer ctx.gpa.free(cwd);
+    var build_env = BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd) catch {
+        return error.BuildEnvInit;
+    };
+
     defer build_env.deinit();
 
     // Build the synthetic app (which compiles the platform as a dependency)
@@ -5426,126 +5405,141 @@ fn rocGlueInner(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
         collected_modules.deinit(ctx.gpa);
     }
 
+    var type_table = TypeTable.init(ctx.gpa);
+    defer type_table.deinit();
+
     for (modules) |mod| {
         if (mod.is_platform_sibling or mod.is_platform_main) {
-            if (collectModuleTypeInfo(ctx, &mod, mod.name, &all_hosted_fns)) |mod_info| {
+            type_table.clearVarMap();
+            if (collectModuleTypeInfo(ctx, &mod, mod.name, &all_hosted_fns, &type_table)) |mod_info| {
                 collected_modules.append(ctx.gpa, mod_info) catch {};
             }
         }
     }
 
-    // Serialize collected module type infos to JSON
-    const types_json = serializeModuleTypeInfosToJson(ctx.gpa, collected_modules.items) catch {
-        return error.JsonSerialization;
+    // 5. Compile glue spec in-process and run via interpreter
+    const glue_spec_abs = std.fs.cwd().realpathAlloc(ctx.gpa, args.glue_spec) catch {
+        return error.GlueSpecNotFound;
     };
-    defer ctx.gpa.free(types_json);
+    defer ctx.gpa.free(glue_spec_abs);
 
-    // 5. Build and run the glue spec
-    // Get path to current roc executable
-    const roc_exe_path = std.fs.selfExePathAlloc(ctx.gpa) catch {
-        return error.ExePathResolution;
+    const glue_cwd = std.process.getCwdAlloc(ctx.gpa) catch {
+        return error.BuildEnvInit;
     };
-    defer ctx.gpa.free(roc_exe_path);
-
-    // Use the same temp directory for glue spec executable
-    const glue_exe_path = std.fs.path.join(ctx.gpa, &.{ temp_dir, "glue_spec" }) catch {
-        return error.OutOfMemory;
+    defer ctx.gpa.free(glue_cwd);
+    var glue_build_env = BuildEnv.init(ctx.gpa, .single_threaded, 1, RocTarget.detectNative(), glue_cwd) catch {
+        return error.BuildEnvInit;
     };
-    defer ctx.gpa.free(glue_exe_path);
+    defer glue_build_env.deinit();
 
-    // Build the glue spec using roc build
+    glue_build_env.build(glue_spec_abs) catch {
+        // Drain and display error reports
+        const drained = glue_build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
+        defer glue_build_env.gpa.free(drained);
+        for (drained) |glue_mod| {
+            for (glue_mod.reports) |*report| {
+                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+                const config = reporting.ReportingConfig.initColorTerminal();
+                reporting.renderReportToTerminal(report, stderr, palette, config) catch {};
+            }
+        }
+        return error.CompilationFailed;
+    };
+
+    // Drain any glue spec warnings
     {
-        var build_argv = std.ArrayList([]const u8).empty;
-        defer build_argv.deinit(ctx.gpa);
-
-        try build_argv.append(ctx.gpa, roc_exe_path);
-        try build_argv.append(ctx.gpa, "build");
-        try build_argv.append(ctx.gpa, args.glue_spec);
-        // Use --output=path format (CLI expects = not space)
-        const output_arg = std.fmt.allocPrint(ctx.gpa, "--output={s}", .{glue_exe_path}) catch {
-            return error.OutOfMemory;
-        };
-        defer ctx.gpa.free(output_arg);
-        try build_argv.append(ctx.gpa, output_arg);
-
-        var build_child = std.process.Child.init(build_argv.items, ctx.gpa);
-        build_child.stdout_behavior = .Inherit;
-        build_child.stderr_behavior = .Inherit;
-
-        build_child.spawn() catch {
-            return error.ProcessSpawn;
-        };
-
-        const term = build_child.wait() catch {
-            return error.ProcessFailed;
-        };
-
-        switch (term) {
-            .Exited => |exit_code| {
-                if (exit_code != 0) {
-                    return error.ProcessFailed;
-                }
-            },
-            else => {
-                return error.ProcessFailed;
-            },
+        const drained = glue_build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
+        defer glue_build_env.gpa.free(drained);
+        for (drained) |glue_mod| {
+            for (glue_mod.reports) |*report| {
+                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+                const config = reporting.ReportingConfig.initColorTerminal();
+                reporting.renderReportToTerminal(report, stderr, palette, config) catch {};
+            }
         }
     }
 
-    // Run the glue spec with platform source path as argument
-    // The glue platform will compile the modules and extract types directly
-    {
-        var run_argv = std.ArrayList([]const u8).empty;
-        defer run_argv.deinit(ctx.gpa);
+    // Get resolved module envs and find entrypoint
+    var arena = std.heap.ArenaAllocator.init(ctx.gpa);
+    defer arena.deinit();
 
-        try run_argv.append(ctx.gpa, glue_exe_path);
+    var resolved = glue_build_env.getResolvedModuleEnvs(arena.allocator()) catch {
+        return error.ModuleRetrieval;
+    };
 
-        // Pass platform source file path - the glue platform will do its own compilation
-        try run_argv.append(ctx.gpa, args.platform_path);
+    resolved.processHostedFunctions(ctx.gpa, null) catch {};
 
-        // Pass types JSON as argument
-        const types_json_arg = std.fmt.allocPrint(ctx.gpa, "--types-json={s}", .{types_json}) catch {
+    const entry = resolved.findEntrypoint() catch {
+        stderr.print("Error: Could not find glue spec entrypoint\n", .{}) catch {};
+        return error.CompilationFailed;
+    };
+
+    // 6. Construct List(Types) as C-ABI structs
+    const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{};
+    var roc_ops = echo_platform.makeDefaultRocOps(@constCast(&hosted_function_ptrs));
+
+    var types_list = constructTypesRocList(collected_modules.items, &platform_info, &type_table, &roc_ops);
+
+    // 7. Run glue spec via interpreter
+    var result_buf: ResultListFileStr = undefined;
+
+    compile.runner.runViaInterpreter(
+        ctx.gpa,
+        entry.platform_env,
+        glue_build_env.builtin_modules,
+        resolved.all_module_envs,
+        entry.app_module_env,
+        entry.entrypoint_expr,
+        &roc_ops,
+        @ptrCast(&types_list),
+        @ptrCast(&result_buf),
+        RocTarget.detectNative(),
+    ) catch |err| {
+        stderr.print("Interpreter error running glue spec: {}\n", .{err}) catch {};
+        return error.CompilationFailed;
+    };
+
+    // 8. Extract Try(List(File), Str) and write files
+    const glue_result = extractGlueResult(&result_buf);
+
+    if (glue_result.err_msg) |err_msg| {
+        stderr.print("Glue spec error: {s}\n", .{err_msg}) catch {};
+        return error.CompilationFailed;
+    }
+
+    const files = glue_result.files;
+    if (files.len == 0) {
+        const stdout = ctx.io.stdout();
+        stdout.print("Glue spec returned 0 files.\n", .{}) catch {};
+        return;
+    }
+
+    // Create output directory if needed
+    std.fs.cwd().makePath(args.output_dir) catch {
+        stderr.print("Error: Could not create output directory: {s}\n", .{args.output_dir}) catch {};
+        return error.CompilationFailed;
+    };
+
+    const stdout = ctx.io.stdout();
+    stdout.print("Glue spec returned {d} file(s):\n", .{files.len}) catch {};
+
+    // Write each file
+    for (files) |file| {
+        const file_name = file.name.asSlice();
+        const file_path = std.fs.path.join(ctx.gpa, &.{ args.output_dir, file_name }) catch {
             return error.OutOfMemory;
         };
-        defer ctx.gpa.free(types_json_arg);
-        try run_argv.append(ctx.gpa, types_json_arg);
+        defer ctx.gpa.free(file_path);
 
-        // Pass output directory as argument
-        const output_dir_arg = std.fmt.allocPrint(ctx.gpa, "--output-dir={s}", .{args.output_dir}) catch {
-            return error.OutOfMemory;
-        };
-        defer ctx.gpa.free(output_dir_arg);
-        try run_argv.append(ctx.gpa, output_dir_arg);
-
-        // Pass entry point names as additional arguments
-        for (platform_info.requires_entries) |entry| {
-            try run_argv.append(ctx.gpa, entry.name);
-        }
-
-        var run_child = std.process.Child.init(run_argv.items, ctx.gpa);
-        run_child.stdout_behavior = .Inherit;
-        run_child.stderr_behavior = .Inherit;
-
-        run_child.spawn() catch {
-            return error.ProcessSpawn;
+        std.fs.cwd().writeFile(.{
+            .sub_path = file_path,
+            .data = file.content.asSlice(),
+        }) catch {
+            stderr.print("Error: Could not write file '{s}'\n", .{file_path}) catch {};
+            return error.CompilationFailed;
         };
 
-        const term = run_child.wait() catch {
-            return error.ProcessFailed;
-        };
-
-        switch (term) {
-            .Exited => |exit_code| {
-                if (exit_code != 0) {
-                    stderr.print("Glue spec exited with code {}\n", .{exit_code}) catch {};
-                    return error.ProcessFailed;
-                }
-            },
-            else => {
-                stderr.print("Glue spec terminated abnormally\n", .{}) catch {};
-                return error.ProcessFailed;
-            },
-        }
+        stdout.print("  Wrote: {s}\n", .{file_path}) catch {};
     }
 }
 
@@ -5689,7 +5683,7 @@ fn parsePlatformHeader(ctx: *CliContext, platform_path: []const u8) !PlatformHea
     }
 }
 
-/// Collected module type information for JSON serialization
+/// Collected module type information for glue generation
 const CollectedModuleTypeInfo = struct {
     name: []const u8,
     main_type: []const u8,
@@ -5701,18 +5695,19 @@ const CollectedModuleTypeInfo = struct {
         type_str: []const u8,
     };
 
-    const CollectedHostedFunctionInfo = struct {
-        index: usize,
+    const CollectedRecordFieldInfo = struct {
         name: []const u8,
         type_str: []const u8,
     };
 
-    /// JSON-serializable view of CollectedModuleTypeInfo (uses slices instead of ArrayLists)
-    const JsonView = struct {
+    const CollectedHostedFunctionInfo = struct {
+        index: usize,
         name: []const u8,
-        main_type: []const u8,
-        functions: []const CollectedFunctionInfo,
-        hosted_functions: []const CollectedHostedFunctionInfo,
+        type_str: []const u8,
+        arg_fields: []const CollectedRecordFieldInfo,
+        ret_fields: []const CollectedRecordFieldInfo,
+        arg_type_ids: []const u64,
+        ret_type_id: u64,
     };
 
     fn deinit(self: *CollectedModuleTypeInfo, gpa: std.mem.Allocator) void {
@@ -5726,10 +5721,1128 @@ const CollectedModuleTypeInfo = struct {
         for (self.hosted_functions.items) |h| {
             gpa.free(h.name);
             gpa.free(h.type_str);
+            for (h.arg_fields) |field| {
+                gpa.free(field.name);
+                gpa.free(field.type_str);
+            }
+            gpa.free(h.arg_fields);
+            for (h.ret_fields) |field| {
+                gpa.free(field.name);
+                gpa.free(field.type_str);
+            }
+            gpa.free(h.ret_fields);
+            if (h.arg_type_ids.len > 0) gpa.free(h.arg_type_ids);
         }
         self.hosted_functions.deinit(gpa);
     }
 };
+
+/// Internal representation of a collected type for the type table.
+const CollectedTypeRepr = union(enum) {
+    bool_,
+    dec,
+    f32_,
+    f64_,
+    i8_,
+    i16_,
+    i32_,
+    i64_,
+    i128_,
+    u8_,
+    u16_,
+    u32_,
+    u64_,
+    u128_,
+    str_,
+    unit,
+    list: u64,
+    function: struct { arg_ids: []const u64, ret_id: u64 },
+    record: struct { name: []const u8, fields: []const CollectedRecordField, size: u64, alignment: u64 },
+    tag_union: struct { name: []const u8, tags: []const CollectedTagInfo, size: u64, alignment: u64 },
+    unknown: []const u8,
+};
+
+const CollectedRecordField = struct {
+    name: []const u8,
+    type_id: u64,
+    size: u64,
+    alignment: u64,
+};
+
+const CollectedTagInfo = struct {
+    name: []const u8,
+    payload_ids: []const u64,
+    payload_size: u64,
+    payload_alignment: u64,
+};
+
+/// Builds a type table from compiler type vars, deduplicating entries.
+const TypeTable = struct {
+    entries: std.ArrayList(CollectedTypeRepr),
+    var_map: std.AutoHashMap(@import("types").Var, u64),
+    gpa: std.mem.Allocator,
+
+    const types = @import("types");
+
+    fn init(gpa: std.mem.Allocator) TypeTable {
+        return .{
+            .entries = std.ArrayList(CollectedTypeRepr).empty,
+            .var_map = std.AutoHashMap(types.Var, u64).init(gpa),
+            .gpa = gpa,
+        };
+    }
+
+    fn deinit(self: *TypeTable) void {
+        for (self.entries.items) |entry| {
+            self.freeEntry(entry);
+        }
+        self.entries.deinit(self.gpa);
+        self.var_map.deinit();
+    }
+
+    fn freeEntry(self: *TypeTable, entry: CollectedTypeRepr) void {
+        switch (entry) {
+            .record => |rec| {
+                for (rec.fields) |field| {
+                    self.freeDuped(field.name);
+                }
+                self.gpa.free(rec.fields);
+                self.freeDuped(rec.name);
+            },
+            .tag_union => |tu| {
+                for (tu.tags) |tag| {
+                    self.freeDuped(tag.name);
+                    self.gpa.free(tag.payload_ids);
+                }
+                self.gpa.free(tu.tags);
+                self.freeDuped(tu.name);
+            },
+            .function => |func| {
+                self.gpa.free(func.arg_ids);
+            },
+            .unknown => |text| {
+                self.freeDuped(text);
+            },
+            else => {},
+        }
+    }
+
+    /// Free a slice that was created with gpa.dupe. Skips empty slices and
+    /// slices that point into static memory (from catch fallbacks).
+    fn freeDuped(self: *TypeTable, slice: []const u8) void {
+        if (slice.len == 0) return;
+        self.gpa.free(slice);
+    }
+
+    /// Clear the var map when switching modules (vars are module-local).
+    fn clearVarMap(self: *TypeTable) void {
+        self.var_map.clearRetainingCapacity();
+    }
+
+    /// Get an existing type table index for a var, or insert a new entry.
+    fn getOrInsert(self: *TypeTable, env: *const ModuleEnv, type_var: types.Var) u64 {
+        if (self.var_map.get(type_var)) |idx| {
+            return idx;
+        }
+
+        const resolved = env.types.resolveVar(type_var);
+        const repr = self.convertContent(env, resolved.desc.content);
+
+        const idx: u64 = @intCast(self.entries.items.len);
+        self.entries.append(self.gpa, repr) catch return 0;
+        self.var_map.put(type_var, idx) catch {};
+
+        return idx;
+    }
+
+    /// Insert a Unit type and return its index.
+    fn insertUnit(self: *TypeTable) u64 {
+        const idx: u64 = @intCast(self.entries.items.len);
+        self.entries.append(self.gpa, .unit) catch return 0;
+        return idx;
+    }
+
+    const SizeAlign = struct { size: u64, alignment: u64 };
+
+    /// Get the size and alignment for a type table entry by index.
+    fn getSizeAlign(self: *const TypeTable, type_id: u64) SizeAlign {
+        if (type_id >= self.entries.items.len) return .{ .size = 0, .alignment = 1 };
+        return getSizeAlignForRepr(self.entries.items[@intCast(type_id)]);
+    }
+
+    /// Get the size and alignment for a CollectedTypeRepr.
+    fn getSizeAlignForRepr(repr: CollectedTypeRepr) SizeAlign {
+        return switch (repr) {
+            .bool_ => .{ .size = 1, .alignment = 1 },
+            .u8_, .i8_ => .{ .size = 1, .alignment = 1 },
+            .u16_, .i16_ => .{ .size = 2, .alignment = 2 },
+            .u32_, .i32_, .f32_ => .{ .size = 4, .alignment = 4 },
+            .u64_, .i64_, .f64_, .dec => .{ .size = 8, .alignment = 8 },
+            .u128_, .i128_ => .{ .size = 16, .alignment = 16 },
+            .str_ => .{ .size = 24, .alignment = 8 },
+            .list => .{ .size = 24, .alignment = 8 },
+            .unit => .{ .size = 0, .alignment = 0 },
+            .record => |rec| .{ .size = rec.size, .alignment = rec.alignment },
+            .function => .{ .size = 0, .alignment = 1 },
+            .tag_union => |tu| .{ .size = tu.size, .alignment = tu.alignment },
+            .unknown => .{ .size = 0, .alignment = 1 },
+        };
+    }
+
+    fn convertContent(self: *TypeTable, env: *const ModuleEnv, content: types.Content) CollectedTypeRepr {
+        switch (content) {
+            .structure => |flat_type| return self.convertFlatType(env, flat_type),
+            .alias => |alias| {
+                const backing_var = env.types.getAliasBackingVar(alias);
+                return self.convertContent(env, env.types.resolveVar(backing_var).desc.content);
+            },
+            .flex => return .{ .unknown = "flex" },
+            .rigid => return .{ .unknown = "rigid" },
+            .err => return .{ .unknown = "error" },
+        }
+    }
+
+    fn convertFlatType(self: *TypeTable, env: *const ModuleEnv, flat_type: types.FlatType) CollectedTypeRepr {
+        switch (flat_type) {
+            .nominal_type => |nominal| return self.convertNominal(env, nominal),
+            .record => |record| return self.convertRecord(env, record),
+            .tag_union => |tag_union| return self.convertTagUnion(env, tag_union),
+            .fn_pure, .fn_effectful, .fn_unbound => |func| return self.convertFunc(env, func),
+            .empty_record => return .unit,
+            .empty_tag_union => return .unit,
+            .tuple => return .{ .unknown = "tuple" },
+            .record_unbound => return .{ .unknown = "record_unbound" },
+        }
+    }
+
+    fn convertNominal(self: *TypeTable, env: *const ModuleEnv, nominal: types.NominalType) CollectedTypeRepr {
+        const ident_store = env.getIdentStoreConst();
+        const raw_name = ident_store.getText(nominal.ident.ident_idx);
+        const display_name = getTypeDisplayName(raw_name);
+
+        // Check for known builtin types
+        if (std.mem.eql(u8, display_name, "List")) {
+            const args = env.types.sliceNominalArgs(nominal);
+            if (args.len >= 1) {
+                const elem_id = self.getOrInsert(env, args[0]);
+                return .{ .list = elem_id };
+            }
+            return .{ .unknown = "List" };
+        }
+        if (std.mem.eql(u8, display_name, "Str")) return .str_;
+        if (std.mem.eql(u8, display_name, "Bool")) return .bool_;
+        if (std.mem.eql(u8, display_name, "Dec")) return .dec;
+        if (std.mem.eql(u8, display_name, "U8")) return .u8_;
+        if (std.mem.eql(u8, display_name, "U16")) return .u16_;
+        if (std.mem.eql(u8, display_name, "U32")) return .u32_;
+        if (std.mem.eql(u8, display_name, "U64")) return .u64_;
+        if (std.mem.eql(u8, display_name, "U128")) return .u128_;
+        if (std.mem.eql(u8, display_name, "I8")) return .i8_;
+        if (std.mem.eql(u8, display_name, "I16")) return .i16_;
+        if (std.mem.eql(u8, display_name, "I32")) return .i32_;
+        if (std.mem.eql(u8, display_name, "I64")) return .i64_;
+        if (std.mem.eql(u8, display_name, "I128")) return .i128_;
+        if (std.mem.eql(u8, display_name, "F32")) return .f32_;
+        if (std.mem.eql(u8, display_name, "F64")) return .f64_;
+
+        // Not a known builtin — check if it's an opaque wrapping something
+        if (nominal.vars.nonempty.count > 0) {
+            const backing_var = env.types.getNominalBackingVar(nominal);
+            const backing_resolved = env.types.resolveVar(backing_var);
+
+            // If it wraps a record, convert it but preserve the qualified name
+            if (backing_resolved.desc.content.unwrapRecord()) |record| {
+                const record_repr = self.convertRecord(env, record);
+                switch (record_repr) {
+                    .record => |rec| {
+                        return .{ .record = .{
+                            .name = self.gpa.dupe(u8, display_name) catch "",
+                            .fields = rec.fields,
+                            .size = rec.size,
+                            .alignment = rec.alignment,
+                        } };
+                    },
+                    else => return record_repr,
+                }
+            }
+
+            // If it wraps a tag union, convert it but preserve the qualified name
+            if (backing_resolved.desc.content.unwrapTagUnion()) |tu| {
+                const tu_repr = self.convertTagUnion(env, tu);
+                switch (tu_repr) {
+                    .tag_union => |collected_tu| {
+                        return .{ .tag_union = .{
+                            .name = self.gpa.dupe(u8, display_name) catch "",
+                            .tags = collected_tu.tags,
+                            .size = collected_tu.size,
+                            .alignment = collected_tu.alignment,
+                        } };
+                    },
+                    else => return tu_repr,
+                }
+            }
+
+            // Otherwise, follow the backing var
+            return self.convertContent(env, backing_resolved.desc.content);
+        }
+
+        return .{ .unknown = self.gpa.dupe(u8, display_name) catch "" };
+    }
+
+    fn convertRecord(self: *TypeTable, env: *const ModuleEnv, record: types.Record) CollectedTypeRepr {
+        const ident_store = env.getIdentStoreConst();
+        const fields_slice = env.types.getRecordFieldsSlice(record.fields);
+        const field_names = fields_slice.items(.name);
+        const field_vars = fields_slice.items(.var_);
+
+        if (field_names.len == 0) return .unit;
+
+        // First pass: getOrInsert all field type_ids so nested types are in the table
+        const field_type_ids = self.gpa.alloc(u64, field_names.len) catch return .{ .unknown = "record" };
+        defer self.gpa.free(field_type_ids);
+        for (0..field_names.len) |i| {
+            field_type_ids[i] = self.getOrInsert(env, field_vars[i]);
+        }
+
+        // Get size/alignment for each field
+        const field_sizes = self.gpa.alloc(SizeAlign, field_names.len) catch return .{ .unknown = "record" };
+        defer self.gpa.free(field_sizes);
+        for (0..field_names.len) |i| {
+            field_sizes[i] = self.getSizeAlign(field_type_ids[i]);
+        }
+
+        // Build sortable array of field indices
+        var field_indices = self.gpa.alloc(usize, field_names.len) catch return .{ .unknown = "record" };
+        defer self.gpa.free(field_indices);
+        for (0..field_names.len) |i| {
+            field_indices[i] = i;
+        }
+
+        // Sort by alignment descending, then name ascending (matching store.zig ABI)
+        const SortCtx = struct {
+            names: []const base.Ident.Idx,
+            idents: *const base.Ident.Store,
+            sizes: []const SizeAlign,
+
+            pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
+                const a_align = ctx.sizes[a].alignment;
+                const b_align = ctx.sizes[b].alignment;
+                if (a_align != b_align) {
+                    return a_align > b_align; // descending alignment
+                }
+                const a_text = ctx.idents.getText(ctx.names[a]);
+                const b_text = ctx.idents.getText(ctx.names[b]);
+                return std.mem.order(u8, a_text, b_text) == .lt;
+            }
+        };
+        std.mem.sort(usize, field_indices, SortCtx{ .names = field_names, .idents = ident_store, .sizes = field_sizes }, SortCtx.lessThan);
+
+        // Build collected fields in sorted order and compute record size
+        const collected_fields = self.gpa.alloc(CollectedRecordField, field_names.len) catch return .{ .unknown = "record" };
+        var max_alignment: u64 = 0;
+        var current_offset: u64 = 0;
+        for (field_indices, 0..) |src_idx, dst_idx| {
+            const name_text = ident_store.getText(field_names[src_idx]);
+            const f_size = field_sizes[src_idx].size;
+            const f_align = field_sizes[src_idx].alignment;
+
+            // Track max alignment for the record
+            if (f_align > max_alignment) max_alignment = f_align;
+
+            // Align current offset
+            if (f_align > 0) {
+                const rem = current_offset % f_align;
+                if (rem != 0) current_offset += f_align - rem;
+            }
+            current_offset += f_size;
+
+            collected_fields[dst_idx] = .{
+                .name = self.gpa.dupe(u8, name_text) catch "",
+                .type_id = field_type_ids[src_idx],
+                .size = f_size,
+                .alignment = f_align,
+            };
+        }
+
+        // Round total size up to max alignment
+        var record_size = current_offset;
+        if (max_alignment > 0) {
+            const rem = record_size % max_alignment;
+            if (rem != 0) record_size += max_alignment - rem;
+        }
+
+        return .{ .record = .{
+            .name = "",
+            .fields = collected_fields,
+            .size = record_size,
+            .alignment = max_alignment,
+        } };
+    }
+
+    fn convertTagUnion(self: *TypeTable, env: *const ModuleEnv, tag_union: types.TagUnion) CollectedTypeRepr {
+        const ident_store = env.getIdentStoreConst();
+        const tags_slice = env.types.getTagsSlice(tag_union.tags);
+        const tag_names = tags_slice.items(.name);
+        const tag_args = tags_slice.items(.args);
+
+        if (tag_names.len == 0) return .unit;
+
+        // Build sortable array of tag indices
+        var tag_indices = self.gpa.alloc(usize, tag_names.len) catch return .{ .unknown = "tag_union" };
+        defer self.gpa.free(tag_indices);
+        for (0..tag_names.len) |i| {
+            tag_indices[i] = i;
+        }
+
+        // Sort by name (alphabetical = discriminant order)
+        const SortCtx = struct {
+            names: []const base.Ident.Idx,
+            idents: *const base.Ident.Store,
+
+            pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
+                const a_text = ctx.idents.getText(ctx.names[a]);
+                const b_text = ctx.idents.getText(ctx.names[b]);
+                return std.mem.order(u8, a_text, b_text) == .lt;
+            }
+        };
+        std.mem.sort(usize, tag_indices, SortCtx{ .names = tag_names, .idents = ident_store }, SortCtx.lessThan);
+
+        // Collect tags and compute per-variant payload layout
+        const collected_tags = self.gpa.alloc(CollectedTagInfo, tag_names.len) catch return .{ .unknown = "tag_union" };
+        var max_payload_size: u64 = 0;
+        var max_payload_alignment: u64 = 0;
+
+        // Also build auto-generated name from variant names joined with "Or"
+        var name_len: usize = 0;
+        for (tag_indices) |src_idx| {
+            const nt = ident_store.getText(tag_names[src_idx]);
+            name_len += nt.len;
+        }
+        // Add "Or" separators between names
+        if (tag_names.len > 1) name_len += (tag_names.len - 1) * 2;
+        const auto_name_buf: []u8 = self.gpa.alloc(u8, name_len) catch return .{ .unknown = "tag_union" };
+        var name_pos: usize = 0;
+
+        for (tag_indices, 0..) |src_idx, dst_idx| {
+            const name_text = ident_store.getText(tag_names[src_idx]);
+            const args_range = tag_args[src_idx];
+            const arg_vars = env.types.sliceVars(args_range);
+
+            const payload_ids = self.gpa.alloc(u64, arg_vars.len) catch return .{ .unknown = "tag_union" };
+            for (arg_vars, 0..) |av, i| {
+                payload_ids[i] = self.getOrInsert(env, av);
+            }
+
+            // Compute payload as a tuple: sequential fields with alignment padding
+            var payload_size: u64 = 0;
+            var payload_alignment: u64 = 0;
+            for (payload_ids) |pid| {
+                const sa = self.getSizeAlign(pid);
+                if (sa.alignment > payload_alignment) payload_alignment = sa.alignment;
+                // Align current offset
+                if (sa.alignment > 0) {
+                    const rem = payload_size % sa.alignment;
+                    if (rem != 0) payload_size += sa.alignment - rem;
+                }
+                payload_size += sa.size;
+            }
+            // Round up to payload alignment
+            if (payload_alignment > 0) {
+                const rem = payload_size % payload_alignment;
+                if (rem != 0) payload_size += payload_alignment - rem;
+            }
+
+            if (payload_size > max_payload_size) max_payload_size = payload_size;
+            if (payload_alignment > max_payload_alignment) max_payload_alignment = payload_alignment;
+
+            collected_tags[dst_idx] = .{
+                .name = self.gpa.dupe(u8, name_text) catch "",
+                .payload_ids = payload_ids,
+                .payload_size = payload_size,
+                .payload_alignment = payload_alignment,
+            };
+
+            // Build auto-name
+            if (auto_name_buf.len > 0) {
+                if (dst_idx > 0) {
+                    if (name_pos + 2 <= auto_name_buf.len) {
+                        auto_name_buf[name_pos] = 'O';
+                        auto_name_buf[name_pos + 1] = 'r';
+                        name_pos += 2;
+                    }
+                }
+                if (name_pos + name_text.len <= auto_name_buf.len) {
+                    @memcpy(auto_name_buf[name_pos .. name_pos + name_text.len], name_text);
+                    name_pos += name_text.len;
+                }
+            }
+        }
+
+        // Compute discriminant size/alignment from tag count
+        const disc_size: u64 = if (tag_names.len <= 256) 1 else if (tag_names.len <= 65536) 2 else if (tag_names.len <= 4294967296) 4 else 8;
+        const disc_align: u64 = disc_size;
+
+        // Compute overall tag union layout: payload at offset 0, discriminant at end
+        // disc_offset = alignForward(max_payload_size, disc_align)
+        var disc_offset = max_payload_size;
+        if (disc_align > 0) {
+            const rem = disc_offset % disc_align;
+            if (rem != 0) disc_offset += disc_align - rem;
+        }
+
+        const total_align = @max(max_payload_alignment, disc_align);
+        // total_size = alignForward(disc_offset + disc_size, total_align)
+        var total_size = disc_offset + disc_size;
+        if (total_align > 0) {
+            const rem = total_size % total_align;
+            if (rem != 0) total_size += total_align - rem;
+        }
+
+        const auto_name: []const u8 = auto_name_buf[0..name_pos];
+
+        return .{ .tag_union = .{
+            .name = auto_name,
+            .tags = collected_tags,
+            .size = total_size,
+            .alignment = total_align,
+        } };
+    }
+
+    fn convertFunc(self: *TypeTable, env: *const ModuleEnv, func: types.Func) CollectedTypeRepr {
+        const arg_vars = env.types.sliceVars(func.args);
+        const arg_ids = self.gpa.alloc(u64, arg_vars.len) catch return .{ .unknown = "function" };
+        for (arg_vars, 0..) |av, i| {
+            arg_ids[i] = self.getOrInsert(env, av);
+        }
+        const ret_id = self.getOrInsert(env, func.ret);
+
+        return .{ .function = .{
+            .arg_ids = arg_ids,
+            .ret_id = ret_id,
+        } };
+    }
+
+    /// Strip "Builtin." and "Num." prefixes from type names (mirrors TypeWriter.getDisplayName).
+    fn getTypeDisplayName(raw_name: []const u8) []const u8 {
+        if (std.mem.startsWith(u8, raw_name, "Builtin.")) {
+            const without_builtin = raw_name[8..];
+            if (std.mem.startsWith(u8, without_builtin, "Num.")) {
+                return without_builtin[4..];
+            }
+            return without_builtin;
+        }
+        if (std.mem.startsWith(u8, raw_name, "Num.")) {
+            return raw_name[4..];
+        }
+        return raw_name;
+    }
+};
+
+// Roc C-ABI struct definitions for glue platform types.
+// Fields are ordered alphabetically to match Roc's C ABI layout.
+
+const builtins = @import("builtins");
+const RocStr = builtins.str.RocStr;
+const RocList = builtins.list.RocList;
+
+/// RecordFieldInfo := { name : Str, type_str : Str }
+const RecordFieldInfoRoc = extern struct {
+    name: RocStr, // offset 0
+    type_str: RocStr, // offset 24
+};
+
+/// HostedFunctionInfo := { arg_fields : List(RecordFieldInfo), arg_type_ids : List(U64), index : U64, name : Str, ret_fields : List(RecordFieldInfo), ret_type_id : U64, type_str : Str }
+const HostedFunctionInfoRoc = extern struct {
+    arg_fields: RocList,
+    arg_type_ids: RocList,
+    index: u64,
+    name: RocStr,
+    ret_fields: RocList,
+    ret_type_id: u64,
+    type_str: RocStr,
+};
+
+/// FunctionInfo := { name : Str, type_str : Str }
+const FunctionInfoRoc = extern struct {
+    name: RocStr,
+    type_str: RocStr,
+};
+
+/// ModuleTypeInfo := { functions : List(FunctionInfo), hosted_functions : List(HostedFunctionInfo), main_type : Str, name : Str }
+const ModuleTypeInfoRoc = extern struct {
+    functions: RocList,
+    hosted_functions: RocList,
+    main_type: RocStr,
+    name: RocStr,
+};
+
+/// Types := { entrypoints : List(EntryPoint), modules : List(ModuleTypeInfo), type_table : List(TypeRepr) }
+const TypesInnerRoc = extern struct {
+    entrypoints: RocList,
+    modules: RocList,
+    type_table: RocList,
+};
+
+/// File := { name : Str, content : Str }
+const FileRoc = extern struct {
+    content: RocStr,
+    name: RocStr,
+};
+
+/// Result tag: Err=0, Ok=1 (alphabetical)
+const ResultTag = enum(u8) {
+    Err = 0,
+    Ok = 1,
+};
+
+/// Try(List(File), Str) result layout
+const ResultListFileStr = extern struct {
+    payload: extern union {
+        ok: RocList,
+        err: RocStr,
+    },
+    tag: ResultTag,
+};
+
+// TypeRepr ABI structs for the type table
+
+/// Tag discriminant for TypeRepr tagged union (21 variants, alphabetical with Roc prefix)
+const TypeReprTag = enum(u8) {
+    RocBool = 0,
+    RocDec = 1,
+    RocF32 = 2,
+    RocF64 = 3,
+    RocFunction = 4,
+    RocI128 = 5,
+    RocI16 = 6,
+    RocI32 = 7,
+    RocI64 = 8,
+    RocI8 = 9,
+    RocList = 10,
+    RocRecord = 11,
+    RocStr = 12,
+    RocTagUnion = 13,
+    RocU128 = 14,
+    RocU16 = 15,
+    RocU32 = 16,
+    RocU64 = 17,
+    RocU8 = 18,
+    RocUnit = 19,
+    RocUnknown = 20,
+};
+
+/// FunctionRepr := { args : List(U64), ret : U64 } — fields alphabetical
+const FunctionPayload = extern struct {
+    args: RocList,
+    ret: u64,
+};
+
+/// RecordRepr := { alignment : U64, fields : List(RecordField), name : Str, size : U64 } — fields alphabetical
+const RecordPayload = extern struct {
+    alignment: u64,
+    fields: RocList,
+    name: RocStr,
+    size: u64,
+};
+
+/// TagUnionRepr := { alignment : U64, name : Str, size : U64, tags : List(TagVariant) } — fields alphabetical
+const TagUnionPayload = extern struct {
+    alignment: u64,
+    name: RocStr,
+    size: u64,
+    tags: RocList,
+};
+
+/// Payload union for TypeRepr — max payload is 64 bytes (RecordPayload)
+const TypeReprPayload = extern union {
+    function: FunctionPayload,
+    list_elem: u64,
+    record: RecordPayload,
+    tag_union: TagUnionPayload,
+    unknown: RocStr,
+};
+
+/// TypeRepr Roc ABI layout: payload then discriminant
+const TypeReprRoc = extern struct {
+    payload: TypeReprPayload,
+    tag: TypeReprTag,
+};
+
+/// RecordField := { alignment : U64, name : Str, size : U64, type_id : U64 }
+const RecordFieldTypeReprRoc = extern struct {
+    alignment: u64,
+    name: RocStr,
+    size: u64,
+    type_id: u64,
+};
+
+/// TagVariant := { name : Str, payload : List(U64), payload_alignment : U64, payload_size : U64 }
+const TagVariantRoc = extern struct {
+    name: RocStr,
+    payload: RocList,
+    payload_alignment: u64,
+    payload_size: u64,
+};
+
+const SMALL_STRING_SIZE = @sizeOf(RocStr);
+
+/// Create a big RocStr from a slice (avoids small string encoding issues).
+fn createBigRocStr(str: []const u8, roc_ops: *builtins.host_abi.RocOps) RocStr {
+    if (str.len < SMALL_STRING_SIZE) {
+        const first_element = builtins.utils.allocateWithRefcount(
+            SMALL_STRING_SIZE,
+            @sizeOf(usize),
+            false,
+            roc_ops,
+        );
+        @memcpy(first_element[0..str.len], str);
+        @memset(first_element[str.len..SMALL_STRING_SIZE], 0);
+
+        return RocStr{
+            .bytes = first_element,
+            .length = str.len,
+            .capacity_or_alloc_ptr = SMALL_STRING_SIZE,
+        };
+    } else {
+        return RocStr.fromSlice(str, roc_ops);
+    }
+}
+
+/// Build a RocList of RecordFieldInfoRoc from collected field info.
+fn buildRecordFieldsRocList(
+    fields: []const CollectedModuleTypeInfo.CollectedRecordFieldInfo,
+    roc_ops: *builtins.host_abi.RocOps,
+) RocList {
+    if (fields.len == 0) return RocList.empty();
+
+    const data_size = fields.len * @sizeOf(RecordFieldInfoRoc);
+    const bytes = builtins.utils.allocateWithRefcount(
+        data_size,
+        @alignOf(RecordFieldInfoRoc),
+        true,
+        roc_ops,
+    );
+    const ptr: [*]RecordFieldInfoRoc = @ptrCast(@alignCast(bytes));
+
+    for (fields, 0..) |field, i| {
+        ptr[i] = RecordFieldInfoRoc{
+            .name = createBigRocStr(field.name, roc_ops),
+            .type_str = createBigRocStr(field.type_str, roc_ops),
+        };
+    }
+
+    return RocList{
+        .bytes = bytes,
+        .length = fields.len,
+        .capacity_or_alloc_ptr = fields.len,
+    };
+}
+
+/// Build a RocList of u64 from a slice of u64.
+fn buildU64RocList(
+    ids: []const u64,
+    roc_ops: *builtins.host_abi.RocOps,
+) RocList {
+    if (ids.len == 0) return RocList.empty();
+
+    const data_size = ids.len * @sizeOf(u64);
+    const bytes = builtins.utils.allocateWithRefcount(
+        data_size,
+        @alignOf(u64),
+        true,
+        roc_ops,
+    );
+    const ptr: [*]u64 = @ptrCast(@alignCast(bytes));
+    for (ids, 0..) |id, i| {
+        ptr[i] = id;
+    }
+    return RocList{
+        .bytes = bytes,
+        .length = ids.len,
+        .capacity_or_alloc_ptr = ids.len,
+    };
+}
+
+/// Serialize a CollectedTypeRepr into a TypeReprRoc for the Roc ABI.
+fn serializeTypeRepr(
+    entry: CollectedTypeRepr,
+    roc_ops: *builtins.host_abi.RocOps,
+) TypeReprRoc {
+    var result: TypeReprRoc = undefined;
+    // Zero-initialize the payload to avoid undefined bytes
+    result.payload = std.mem.zeroes(TypeReprPayload);
+
+    switch (entry) {
+        .bool_ => result.tag = .RocBool,
+        .dec => result.tag = .RocDec,
+        .f32_ => result.tag = .RocF32,
+        .f64_ => result.tag = .RocF64,
+        .i8_ => result.tag = .RocI8,
+        .i16_ => result.tag = .RocI16,
+        .i32_ => result.tag = .RocI32,
+        .i64_ => result.tag = .RocI64,
+        .i128_ => result.tag = .RocI128,
+        .u8_ => result.tag = .RocU8,
+        .u16_ => result.tag = .RocU16,
+        .u32_ => result.tag = .RocU32,
+        .u64_ => result.tag = .RocU64,
+        .u128_ => result.tag = .RocU128,
+        .str_ => result.tag = .RocStr,
+        .unit => result.tag = .RocUnit,
+        .list => |elem_id| {
+            result.tag = .RocList;
+            result.payload.list_elem = elem_id;
+        },
+        .function => |func| {
+            result.tag = .RocFunction;
+            result.payload.function = .{
+                .args = buildU64RocList(func.arg_ids, roc_ops),
+                .ret = func.ret_id,
+            };
+        },
+        .record => |rec| {
+            result.tag = .RocRecord;
+            // Build RocList of RecordFieldTypeReprRoc
+            const fields_list = if (rec.fields.len > 0) fblk: {
+                const data_size = rec.fields.len * @sizeOf(RecordFieldTypeReprRoc);
+                const fb = builtins.utils.allocateWithRefcount(
+                    data_size,
+                    @alignOf(RecordFieldTypeReprRoc),
+                    true,
+                    roc_ops,
+                );
+                const fptr: [*]RecordFieldTypeReprRoc = @ptrCast(@alignCast(fb));
+                for (rec.fields, 0..) |field, i| {
+                    fptr[i] = .{
+                        .alignment = field.alignment,
+                        .name = createBigRocStr(field.name, roc_ops),
+                        .size = field.size,
+                        .type_id = field.type_id,
+                    };
+                }
+                break :fblk RocList{
+                    .bytes = fb,
+                    .length = rec.fields.len,
+                    .capacity_or_alloc_ptr = rec.fields.len,
+                };
+            } else RocList.empty();
+
+            result.payload.record = .{
+                .alignment = rec.alignment,
+                .fields = fields_list,
+                .name = createBigRocStr(rec.name, roc_ops),
+                .size = rec.size,
+            };
+        },
+        .tag_union => |tu| {
+            result.tag = .RocTagUnion;
+            // Build RocList of TagVariantRoc
+            const tags_list = if (tu.tags.len > 0) tblk: {
+                const data_size = tu.tags.len * @sizeOf(TagVariantRoc);
+                const tb = builtins.utils.allocateWithRefcount(
+                    data_size,
+                    @alignOf(TagVariantRoc),
+                    true,
+                    roc_ops,
+                );
+                const tptr: [*]TagVariantRoc = @ptrCast(@alignCast(tb));
+                for (tu.tags, 0..) |tag, i| {
+                    tptr[i] = .{
+                        .name = createBigRocStr(tag.name, roc_ops),
+                        .payload = buildU64RocList(tag.payload_ids, roc_ops),
+                        .payload_alignment = tag.payload_alignment,
+                        .payload_size = tag.payload_size,
+                    };
+                }
+                break :tblk RocList{
+                    .bytes = tb,
+                    .length = tu.tags.len,
+                    .capacity_or_alloc_ptr = tu.tags.len,
+                };
+            } else RocList.empty();
+
+            result.payload.tag_union = .{
+                .alignment = tu.alignment,
+                .name = createBigRocStr(tu.name, roc_ops),
+                .size = tu.size,
+                .tags = tags_list,
+            };
+        },
+        .unknown => |text| {
+            result.tag = .RocUnknown;
+            result.payload.unknown = createBigRocStr(text, roc_ops);
+        },
+    }
+    return result;
+}
+
+/// Build a RocList of TypeReprRoc from the type table.
+fn buildTypeTableRocList(
+    type_table: *const TypeTable,
+    roc_ops: *builtins.host_abi.RocOps,
+) RocList {
+    if (type_table.entries.items.len == 0) return RocList.empty();
+
+    const data_size = type_table.entries.items.len * @sizeOf(TypeReprRoc);
+    const bytes = builtins.utils.allocateWithRefcount(
+        data_size,
+        @alignOf(TypeReprRoc),
+        true,
+        roc_ops,
+    );
+    const ptr: [*]TypeReprRoc = @ptrCast(@alignCast(bytes));
+
+    for (type_table.entries.items, 0..) |entry, i| {
+        ptr[i] = serializeTypeRepr(entry, roc_ops);
+    }
+
+    return RocList{
+        .bytes = bytes,
+        .length = type_table.entries.items.len,
+        .capacity_or_alloc_ptr = type_table.entries.items.len,
+    };
+}
+
+/// Construct the List(Types) Roc value from collected module type info.
+fn constructTypesRocList(
+    collected_modules: []const CollectedModuleTypeInfo,
+    platform_info: *const PlatformHeaderInfo,
+    type_table: *const TypeTable,
+    roc_ops: *builtins.host_abi.RocOps,
+) RocList {
+    // Build modules list
+    const modules_list = if (collected_modules.len > 0) blk: {
+        const modules_data_size = collected_modules.len * @sizeOf(ModuleTypeInfoRoc);
+        const modules_bytes = builtins.utils.allocateWithRefcount(
+            modules_data_size,
+            @alignOf(ModuleTypeInfoRoc),
+            true,
+            roc_ops,
+        );
+        const modules_ptr: [*]ModuleTypeInfoRoc = @ptrCast(@alignCast(modules_bytes));
+
+        for (collected_modules, 0..) |mod, mod_idx| {
+            // Build functions list
+            const functions_list = if (mod.functions.items.len > 0) fblk: {
+                const funcs_data_size = mod.functions.items.len * @sizeOf(FunctionInfoRoc);
+                const funcs_bytes = builtins.utils.allocateWithRefcount(
+                    funcs_data_size,
+                    @alignOf(FunctionInfoRoc),
+                    true,
+                    roc_ops,
+                );
+                const funcs_ptr: [*]FunctionInfoRoc = @ptrCast(@alignCast(funcs_bytes));
+
+                for (mod.functions.items, 0..) |func, func_idx| {
+                    funcs_ptr[func_idx] = FunctionInfoRoc{
+                        .name = createBigRocStr(func.name, roc_ops),
+                        .type_str = createBigRocStr(func.type_str, roc_ops),
+                    };
+                }
+
+                break :fblk RocList{
+                    .bytes = funcs_bytes,
+                    .length = mod.functions.items.len,
+                    .capacity_or_alloc_ptr = mod.functions.items.len,
+                };
+            } else RocList.empty();
+
+            // Build hosted_functions list
+            const hosted_functions_list = if (mod.hosted_functions.items.len > 0) hblk: {
+                const hosted_data_size = mod.hosted_functions.items.len * @sizeOf(HostedFunctionInfoRoc);
+                const hosted_bytes = builtins.utils.allocateWithRefcount(
+                    hosted_data_size,
+                    @alignOf(HostedFunctionInfoRoc),
+                    true,
+                    roc_ops,
+                );
+                const hosted_ptr: [*]HostedFunctionInfoRoc = @ptrCast(@alignCast(hosted_bytes));
+
+                for (mod.hosted_functions.items, 0..) |hosted, hosted_idx| {
+                    hosted_ptr[hosted_idx] = HostedFunctionInfoRoc{
+                        .arg_fields = buildRecordFieldsRocList(hosted.arg_fields, roc_ops),
+                        .arg_type_ids = buildU64RocList(hosted.arg_type_ids, roc_ops),
+                        .index = hosted.index,
+                        .name = createBigRocStr(hosted.name, roc_ops),
+                        .ret_fields = buildRecordFieldsRocList(hosted.ret_fields, roc_ops),
+                        .ret_type_id = hosted.ret_type_id,
+                        .type_str = createBigRocStr(hosted.type_str, roc_ops),
+                    };
+                }
+
+                break :hblk RocList{
+                    .bytes = hosted_bytes,
+                    .length = mod.hosted_functions.items.len,
+                    .capacity_or_alloc_ptr = mod.hosted_functions.items.len,
+                };
+            } else RocList.empty();
+
+            modules_ptr[mod_idx] = ModuleTypeInfoRoc{
+                .functions = functions_list,
+                .hosted_functions = hosted_functions_list,
+                .main_type = createBigRocStr(mod.main_type, roc_ops),
+                .name = createBigRocStr(mod.name, roc_ops),
+            };
+        }
+
+        break :blk RocList{
+            .bytes = modules_bytes,
+            .length = collected_modules.len,
+            .capacity_or_alloc_ptr = collected_modules.len,
+        };
+    } else RocList.empty();
+
+    // Build entrypoints list
+    const EntryPointRoc = extern struct {
+        name: RocStr,
+        type_id: u64,
+    };
+
+    const entrypoints_list = if (platform_info.requires_entries.len > 0) eblk: {
+        const ep_data_size = platform_info.requires_entries.len * @sizeOf(EntryPointRoc);
+        const ep_bytes = builtins.utils.allocateWithRefcount(
+            ep_data_size,
+            @alignOf(EntryPointRoc),
+            true,
+            roc_ops,
+        );
+        const ep_ptr: [*]EntryPointRoc = @ptrCast(@alignCast(ep_bytes));
+
+        for (platform_info.requires_entries, 0..) |entry, idx| {
+            ep_ptr[idx] = EntryPointRoc{
+                .name = createBigRocStr(entry.name, roc_ops),
+                .type_id = 0,
+            };
+        }
+
+        break :eblk RocList{
+            .bytes = ep_bytes,
+            .length = platform_info.requires_entries.len,
+            .capacity_or_alloc_ptr = platform_info.requires_entries.len,
+        };
+    } else RocList.empty();
+
+    // Build TypesInner and wrap in a List(Types) with one element
+    const types_inner_bytes = builtins.utils.allocateWithRefcount(
+        @sizeOf(TypesInnerRoc),
+        @alignOf(TypesInnerRoc),
+        true,
+        roc_ops,
+    );
+    const types_inner_ptr: *TypesInnerRoc = @ptrCast(@alignCast(types_inner_bytes));
+    types_inner_ptr.* = TypesInnerRoc{
+        .entrypoints = entrypoints_list,
+        .modules = modules_list,
+        .type_table = buildTypeTableRocList(type_table, roc_ops),
+    };
+
+    return RocList{
+        .bytes = types_inner_bytes,
+        .length = 1,
+        .capacity_or_alloc_ptr = 1,
+    };
+}
+
+/// Extract files from a Try(List(File), Str) result buffer.
+/// Returns the file list on Ok, or an error message on Err.
+const GlueResultFiles = struct {
+    files: []const FileRoc,
+    err_msg: ?[]const u8,
+};
+
+fn extractGlueResult(result: *const ResultListFileStr) GlueResultFiles {
+    switch (result.tag) {
+        .Ok => {
+            const files = result.payload.ok;
+            if (files.bytes) |file_bytes| {
+                const file_slice: [*]const FileRoc = @ptrCast(@alignCast(file_bytes));
+                return .{ .files = file_slice[0..files.length], .err_msg = null };
+            }
+            return .{ .files = &[_]FileRoc{}, .err_msg = null };
+        },
+        .Err => {
+            return .{ .files = &[_]FileRoc{}, .err_msg = result.payload.err.asSlice() };
+        },
+    }
+}
+
+/// Extract record fields from a type variable, returning field names and type strings.
+/// If the type is a nominal wrapping a record, unwraps the nominal first.
+/// Returns an empty slice for non-record types.
+fn extractRecordFields(
+    gpa: std.mem.Allocator,
+    env: *ModuleEnv,
+    type_var: @import("types").Var,
+) []const CollectedModuleTypeInfo.CollectedRecordFieldInfo {
+    const resolved = env.types.resolveVar(type_var);
+
+    // Check for nominal type wrapping a record
+    const content = switch (resolved.desc.content) {
+        .structure => |flat_type| switch (flat_type) {
+            .nominal_type => |nominal| blk: {
+                if (nominal.vars.nonempty.count > 0) {
+                    const backing_var = env.types.getNominalBackingVar(nominal);
+                    const backing_resolved = env.types.resolveVar(backing_var);
+                    break :blk backing_resolved.desc.content;
+                }
+                break :blk resolved.desc.content;
+            },
+            else => resolved.desc.content,
+        },
+        else => resolved.desc.content,
+    };
+
+    // Check if the (possibly unwrapped) content is a record
+    const record = content.unwrapRecord() orelse return &[_]CollectedModuleTypeInfo.CollectedRecordFieldInfo{};
+
+    const fields_slice = env.types.getRecordFieldsSlice(record.fields);
+    const field_names = fields_slice.items(.name);
+    const field_vars = fields_slice.items(.var_);
+
+    var result = std.ArrayList(CollectedModuleTypeInfo.CollectedRecordFieldInfo).empty;
+
+    // Collect fields sorted by name (Roc's C ABI uses alphabetical order)
+    const ident_store = env.getIdentStoreConst();
+
+    // Build sortable array of field indices
+    var field_indices = gpa.alloc(usize, field_names.len) catch return &[_]CollectedModuleTypeInfo.CollectedRecordFieldInfo{};
+    defer gpa.free(field_indices);
+    for (0..field_names.len) |i| {
+        field_indices[i] = i;
+    }
+
+    // Sort by name text
+    const SortCtx = struct {
+        names: []const base.Ident.Idx,
+        idents: *const base.Ident.Store,
+
+        pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
+            const a_text = ctx.idents.getText(ctx.names[a]);
+            const b_text = ctx.idents.getText(ctx.names[b]);
+            return std.mem.order(u8, a_text, b_text) == .lt;
+        }
+    };
+    std.mem.sort(usize, field_indices, SortCtx{ .names = field_names, .idents = ident_store }, SortCtx.lessThan);
+
+    for (field_indices) |idx| {
+        const name_text = ident_store.getText(field_names[idx]);
+        const field_var = field_vars[idx];
+
+        // Write field type to string
+        var type_writer = env.initTypeWriter() catch continue;
+        defer type_writer.deinit();
+
+        type_writer.write(field_var, .one_line) catch continue;
+        const field_type_str = type_writer.get();
+
+        result.append(gpa, .{
+            .name = gpa.dupe(u8, name_text) catch continue,
+            .type_str = gpa.dupe(u8, field_type_str) catch continue,
+        }) catch continue;
+    }
+
+    return result.toOwnedSlice(gpa) catch &[_]CollectedModuleTypeInfo.CollectedRecordFieldInfo{};
+}
 
 /// Collect type information from a compiled module (same logic as printCompiledModuleTypes).
 fn collectModuleTypeInfo(
@@ -5737,6 +6850,7 @@ fn collectModuleTypeInfo(
     compiled_module: *const BuildEnv.CompiledModuleInfo,
     module_name: []const u8,
     all_hosted_fns: *const std.ArrayList(can.HostedCompiler.HostedFunctionInfo),
+    type_table: *TypeTable,
 ) ?CollectedModuleTypeInfo {
     const env = compiled_module.env;
 
@@ -5808,10 +6922,81 @@ fn collectModuleTypeInfo(
                     type_writer.write(type_var, .one_line) catch continue;
                     const type_str = type_writer.get();
 
+                    // Extract record fields from function arg and return types
+                    const resolved = env.types.resolveVar(type_var);
+                    var arg_fields: []const CollectedModuleTypeInfo.CollectedRecordFieldInfo = &.{};
+                    var ret_fields: []const CollectedModuleTypeInfo.CollectedRecordFieldInfo = &.{};
+
+                    if (resolved.desc.content.unwrapFunc()) |func| {
+                        // Extract return type record fields
+                        ret_fields = extractRecordFields(ctx.gpa, env, func.ret);
+
+                        // Extract arg type record fields (from the first arg if it's a record)
+                        const arg_vars = env.types.sliceVars(func.args);
+                        if (arg_vars.len == 1) {
+                            arg_fields = extractRecordFields(ctx.gpa, env, arg_vars[0]);
+                        }
+                    } else {
+                        // May be a nominal wrapping a function
+                        switch (resolved.desc.content) {
+                            .structure => |flat_type| {
+                                switch (flat_type) {
+                                    .nominal_type => |nominal| {
+                                        if (nominal.vars.nonempty.count > 0) {
+                                            const backing_var = env.types.getNominalBackingVar(nominal);
+                                            const backing_resolved = env.types.resolveVar(backing_var);
+                                            if (backing_resolved.desc.content.unwrapFunc()) |func| {
+                                                ret_fields = extractRecordFields(ctx.gpa, env, func.ret);
+                                                const arg_vars = env.types.sliceVars(func.args);
+                                                if (arg_vars.len == 1) {
+                                                    arg_fields = extractRecordFields(ctx.gpa, env, arg_vars[0]);
+                                                }
+                                            }
+                                        }
+                                    },
+                                    else => {},
+                                }
+                            },
+                            else => {},
+                        }
+                    }
+                    // Build type IDs for args and return type
+                    var arg_type_ids: []const u64 = &.{};
+                    var ret_type_id: u64 = type_table.insertUnit();
+
+                    const func_content = blk: {
+                        if (resolved.desc.content.unwrapFunc()) |func| break :blk func;
+                        // Check for nominal wrapping a function
+                        if (resolved.desc.content.unwrapNominalType()) |nom| {
+                            if (nom.vars.nonempty.count > 0) {
+                                const bv = env.types.getNominalBackingVar(nom);
+                                const br = env.types.resolveVar(bv);
+                                if (br.desc.content.unwrapFunc()) |func| break :blk func;
+                            }
+                        }
+                        break :blk null;
+                    };
+
+                    if (func_content) |func| {
+                        ret_type_id = type_table.getOrInsert(env, func.ret);
+                        const arg_vars_for_ids = env.types.sliceVars(func.args);
+                        if (arg_vars_for_ids.len > 0) {
+                            const ids = ctx.gpa.alloc(u64, arg_vars_for_ids.len) catch continue;
+                            for (arg_vars_for_ids, 0..) |av, i| {
+                                ids[i] = type_table.getOrInsert(env, av);
+                            }
+                            arg_type_ids = ids;
+                        }
+                    }
+
                     hosted_functions.append(ctx.gpa, .{
                         .index = global_idx,
                         .name = ctx.gpa.dupe(u8, local_name) catch continue,
                         .type_str = ctx.gpa.dupe(u8, type_str) catch continue,
+                        .arg_fields = arg_fields,
+                        .ret_fields = ret_fields,
+                        .arg_type_ids = arg_type_ids,
+                        .ret_type_id = ret_type_id,
                     }) catch continue;
                     break;
                 }
@@ -5839,31 +7024,6 @@ fn collectModuleTypeInfo(
         .functions = functions,
         .hosted_functions = hosted_functions,
     };
-}
-
-/// Serialize collected module type infos to JSON.
-fn serializeModuleTypeInfosToJson(
-    gpa: std.mem.Allocator,
-    module_infos: []const CollectedModuleTypeInfo,
-) ![]const u8 {
-    // Create JSON-serializable views (slices instead of ArrayLists)
-    var json_views = std.ArrayList(CollectedModuleTypeInfo.JsonView).empty;
-    defer json_views.deinit(gpa);
-
-    for (module_infos) |mod| {
-        json_views.append(gpa, .{
-            .name = mod.name,
-            .main_type = mod.main_type,
-            .functions = mod.functions.items,
-            .hosted_functions = mod.hosted_functions.items,
-        }) catch return error.OutOfMemory;
-    }
-
-    // Serialize using std.json
-    var writer: std.io.Writer.Allocating = .init(gpa);
-    defer writer.deinit();
-    std.json.Stringify.value(json_views.items, .{}, &writer.writer) catch return error.OutOfMemory;
-    return writer.toOwnedSlice();
 }
 
 /// Print a type annotation to a buffer (for requires entries which use AST types)
@@ -6289,7 +7449,10 @@ fn checkFileWithBuildEnvPreserved(
     const thread_count: usize = if (max_threads) |t| t else (std.Thread.getCpuCount() catch 1);
     const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, roc_target.RocTarget.detectNative());
+    const cwd = try std.process.getCwdAlloc(ctx.gpa);
+    defer ctx.gpa.free(cwd);
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd);
+
     build_env.compiler_version = build_options.compiler_version;
     // Note: We do NOT defer build_env.deinit() here because we're returning it
 
@@ -6396,7 +7559,10 @@ fn checkFileWithBuildEnv(
     const thread_count: usize = if (max_threads) |t| t else (std.Thread.getCpuCount() catch 1);
     const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, roc_target.RocTarget.detectNative());
+    const cwd = try std.process.getCwdAlloc(ctx.gpa);
+    defer ctx.gpa.free(cwd);
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd);
+
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
 
@@ -6824,6 +7990,8 @@ fn getContentType(file_path: []const u8) []const u8 {
         return "image/jpeg";
     } else if (std.mem.endsWith(u8, file_path, ".svg")) {
         return "image/svg+xml";
+    } else if (std.mem.endsWith(u8, file_path, ".woff2")) {
+        return "font/woff2";
     } else {
         return "text/plain";
     }
@@ -6945,517 +8113,104 @@ fn rocDocs(ctx: *CliContext, args: cli_args.DocsArgs) !void {
     }
 }
 
-/// Associated item (type or value) within a module or type
-pub const AssociatedItem = struct {
-    name: []const u8,
-    children: []AssociatedItem, // Nested associated items (for types with associated items)
+// Documentation generation uses the docs module's extraction pipeline.
+// See src/docs/ for DocModel, extract, and render_type modules.
 
-    fn deinit(self: AssociatedItem, gpa: Allocator) void {
-        gpa.free(self.name);
-        for (self.children) |child| {
-            child.deinit(gpa);
-        }
-        gpa.free(self.children);
-    }
-};
-
-/// Information about an imported module
-pub const ModuleInfo = struct {
-    name: []const u8, // e.g., "Foo" or "foo.Bar"
-    link_path: []const u8, // e.g., "Foo" or "foo/Bar"
-    associated_items: []AssociatedItem, // Types and values defined in this module
-
-    fn deinit(self: ModuleInfo, gpa: Allocator) void {
-        gpa.free(self.name);
-        gpa.free(self.link_path);
-        for (self.associated_items) |item| {
-            item.deinit(gpa);
-        }
-        gpa.free(self.associated_items);
-    }
-};
-
-/// Recursively write associated items as nested <ul> elements
-fn writeAssociatedItems(writer: anytype, items: []const AssociatedItem, indent_level: usize) !void {
-    // Write opening <ul>
-    try writer.splatByteAll(' ', indent_level * 2);
-    try writer.writeAll("<ul>\n");
-
-    for (items) |item| {
-        // Write <li> with item name
-        try writer.splatByteAll(' ', (indent_level + 1) * 2);
-        try writer.print("<li>{s}\n", .{item.name});
-
-        // Recursively write children if any
-        if (item.children.len > 0) {
-            try writeAssociatedItems(writer, item.children, indent_level + 2);
-        }
-
-        // Close <li>
-        try writer.splatByteAll(' ', (indent_level + 1) * 2);
-        try writer.writeAll("</li>\n");
-    }
-
-    // Write closing </ul>
-    try writer.splatByteAll(' ', indent_level * 2);
-    try writer.writeAll("</ul>\n");
-}
-
-/// Generate HTML index file for a package or app
-pub fn generatePackageIndex(
-    ctx: *CliContext,
-    output_path: []const u8,
-    module_path: []const u8,
-    package_shorthands: []const []const u8,
-    imported_modules: []const ModuleInfo,
-) !void {
-    // Create output directory if it doesn't exist
-    std.fs.cwd().makePath(output_path) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
-
-    // Create index.html file
-    const index_path = try std.fs.path.join(ctx.arena, &[_][]const u8{ output_path, "index.html" });
-
-    const file = try std.fs.cwd().createFile(index_path, .{});
-    defer file.close();
-
-    var file_buffer: [4096]u8 = undefined;
-    var file_writer = file.writer(&file_buffer);
-    const writer = &file_writer.interface;
-
-    // Write HTML header
-    try writer.writeAll("<!DOCTYPE html>\n<html>\n<head>\n");
-    try writer.writeAll("  <meta charset=\"UTF-8\">\n");
-    try writer.writeAll("  <title>Documentation</title>\n");
-    try writer.writeAll("</head>\n<body>\n");
-
-    // Write module path as h1
-    try writer.print("  <h1>{s}</h1>\n", .{module_path});
-
-    // Write sidebar with imported modules if any
-    if (imported_modules.len > 0) {
-        try writer.writeAll("  <ul class='sidebar'>\n");
-        for (imported_modules) |mod_info| {
-            try writer.print("    <li>\n      <a href=\"{s}\">{s}</a>\n", .{ mod_info.link_path, mod_info.name });
-
-            // Write nested associated items if any
-            if (mod_info.associated_items.len > 0) {
-                try writeAssociatedItems(writer, mod_info.associated_items, 3);
-            }
-
-            try writer.writeAll("    </li>\n");
-        }
-        try writer.writeAll("  </ul>\n");
-    }
-
-    // Write links to package dependencies if any exist
-    if (package_shorthands.len > 0) {
-        try writer.writeAll("  <ul>\n");
-        for (package_shorthands) |shorthand| {
-            try writer.print("    <li><a href=\"{s}\">{s}</a></li>\n", .{ shorthand, shorthand });
-        }
-        try writer.writeAll("  </ul>\n");
-    }
-
-    try writer.writeAll("</body>\n</html>\n");
-    try writer.flush();
-}
-
-/// Generate HTML index file for a module
-pub fn generateModuleIndex(
-    ctx: *CliContext,
-    output_path: []const u8,
-    module_name: []const u8,
-) !void {
-    // Create output directory if it doesn't exist
-    std.fs.cwd().makePath(output_path) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
-
-    // Create index.html file
-    const index_path = try std.fs.path.join(ctx.arena, &[_][]const u8{ output_path, "index.html" });
-
-    const file = try std.fs.cwd().createFile(index_path, .{});
-    defer file.close();
-
-    var file_buffer: [4096]u8 = undefined;
-    var file_writer = file.writer(&file_buffer);
-    const writer = &file_writer.interface;
-
-    // Write HTML header
-    try writer.writeAll("<!DOCTYPE html>\n<html>\n<head>\n");
-    try writer.writeAll("  <meta charset=\"UTF-8\">\n");
-    try writer.print("  <title>{s}</title>\n", .{module_name});
-    try writer.writeAll("</head>\n<body>\n");
-
-    // Write module name as h1
-    try writer.print("  <h1>{s}</h1>\n", .{module_name});
-
-    try writer.writeAll("</body>\n</html>\n");
-    try writer.flush();
-}
-
-/// Extract associated items from a record expression (recursively)
-fn extractRecordAssociatedItems(
-    ctx: *CliContext,
-    module_env: *const ModuleEnv,
-    record_fields: can.CIR.RecordField.Span,
-) ![]AssociatedItem {
-    var items = std.array_list.Managed(AssociatedItem).init(ctx.gpa);
-    errdefer {
-        for (items.items) |item| {
-            item.deinit(ctx.gpa);
-        }
-        items.deinit();
-    }
-
-    const fields_slice = module_env.store.sliceRecordFields(record_fields);
-    for (fields_slice) |field_idx| {
-        const field = module_env.store.getRecordField(field_idx);
-        const field_name = try ctx.gpa.dupe(u8, module_env.getIdentText(field.name));
-        errdefer ctx.gpa.free(field_name);
-
-        // Check if the field value is a nominal type (has nested associated items)
-        const field_expr = module_env.store.getExpr(field.value);
-        const children = switch (field_expr) {
-            .e_nominal => |nom| blk: {
-                // Get the nominal type's backing expression
-                const backing_expr = module_env.store.getExpr(nom.backing_expr);
-                break :blk switch (backing_expr) {
-                    .e_record => |rec| try extractRecordAssociatedItems(ctx, module_env, rec.fields),
-                    else => try ctx.gpa.alloc(AssociatedItem, 0),
-                };
-            },
-            else => try ctx.gpa.alloc(AssociatedItem, 0),
-        };
-
-        try items.append(.{
-            .name = field_name,
-            .children = children,
-        });
-    }
-
-    return try items.toOwnedSlice();
-}
-
-/// Extract associated items from a module's exports
-fn extractAssociatedItems(
-    ctx: *CliContext,
-    module_env: *const ModuleEnv,
-) ![]AssociatedItem {
-    var items = std.array_list.Managed(AssociatedItem).init(ctx.gpa);
-    errdefer {
-        for (items.items) |item| {
-            item.deinit(ctx.gpa);
-        }
-        items.deinit();
-    }
-
-    // Get all exported definitions
-    const exports_slice = module_env.store.sliceDefs(module_env.exports);
-
-    // If no exports, try all_defs (for modules that are still being processed)
-    const defs_slice = if (exports_slice.len == 0)
-        module_env.store.sliceDefs(module_env.all_defs)
-    else
-        exports_slice;
-
-    for (defs_slice) |def_idx| {
-        const def = module_env.store.getDef(def_idx);
-
-        // Get the pattern to find the name
-        const pattern = module_env.store.getPattern(def.pattern);
-
-        // Extract name from pattern (could be assign, nominal, etc.)
-        const name_ident_opt = switch (pattern) {
-            .assign => |a| a.ident,
-            .nominal => |n| blk: {
-                // For nominal types, we need to get the statement and extract the header
-                const stmt = module_env.store.getStatement(n.nominal_type_decl);
-                break :blk switch (stmt) {
-                    .s_nominal_decl => |decl| module_env.store.getTypeHeader(decl.header).name,
-                    else => continue,
-                };
-            },
-            else => continue,
-        };
-
-        const name = try ctx.gpa.dupe(u8, module_env.getIdentText(name_ident_opt));
-        errdefer ctx.gpa.free(name);
-
-        // Extract nested associated items if this is a nominal type with a record
-        const children = switch (pattern) {
-            .nominal => blk: {
-                // For nominal types, look at the expression to find associated items
-                const expr = module_env.store.getExpr(def.expr);
-                break :blk switch (expr) {
-                    .e_nominal => |nom_expr| blk2: {
-                        const backing = module_env.store.getExpr(nom_expr.backing_expr);
-                        break :blk2 switch (backing) {
-                            .e_record => |record| try extractRecordAssociatedItems(ctx, module_env, record.fields),
-                            else => try ctx.gpa.alloc(AssociatedItem, 0),
-                        };
-                    },
-                    else => try ctx.gpa.alloc(AssociatedItem, 0),
-                };
-            },
-            else => try ctx.gpa.alloc(AssociatedItem, 0),
-        };
-
-        try items.append(.{
-            .name = name,
-            .children = children,
-        });
-    }
-
-    return try items.toOwnedSlice();
-}
-
-/// Generate documentation for the root and all its dependencies and imported modules
+/// Generate documentation for the root and all its dependencies and imported modules.
+///
+/// Builds a PackageDocs by extracting documentation from all compiled modules,
+/// then generates an HTML documentation site in the output directory.
 fn generateDocs(
     ctx: *CliContext,
     build_env: *compile.BuildEnv,
     module_path: []const u8,
     base_output_dir: []const u8,
 ) !void {
-    // First, determine if this is an app or other kind
-    var pkg_iter = build_env.packages.iterator();
-    const first_pkg = if (pkg_iter.next()) |entry| entry.value_ptr.* else return;
+    const DocModel = docs.DocModel;
+    const extract = docs.extract;
 
-    const is_app = first_pkg.kind == .app;
+    // Determine if we're documenting a platform or something else by checking the module path
+    // If the path contains "platform", we're documenting a platform directly
+    const is_documenting_platform = std.mem.indexOf(u8, module_path, "platform") != null;
 
-    if (is_app) {
-        // For apps, collect all imported modules and generate sidebar
-        try generateAppDocs(ctx, build_env, module_path, base_output_dir);
-    } else {
-        // For packages, just generate package dependency docs
-        try generatePackageDocs(ctx, build_env, module_path, base_output_dir, "");
-    }
-}
-
-/// Generate docs for an app module
-fn generateAppDocs(
-    ctx: *CliContext,
-    build_env: *compile.BuildEnv,
-    module_path: []const u8,
-    base_output_dir: []const u8,
-) !void {
-    // Collect all imported modules (both local and from packages)
-    var modules_map = std.StringHashMap(ModuleInfo).init(ctx.gpa);
-    defer {
-        var it = modules_map.iterator();
-        while (it.next()) |entry| {
-            entry.value_ptr.deinit(ctx.gpa);
-        }
-        modules_map.deinit();
-    }
-
-    // Get the root package
-    var pkg_iter = build_env.packages.iterator();
-    const first_pkg = if (pkg_iter.next()) |entry| entry.value_ptr.* else return;
-
-    // Iterate through schedulers to get modules
-    var sched_iter = build_env.schedulers.iterator();
-    while (sched_iter.next()) |sched_entry| {
-        const package_name = sched_entry.key_ptr.*;
-        const package_env = sched_entry.value_ptr.*;
-
-        // Iterate through modules in this package
-        for (package_env.modules.items) |module_state| {
-            // Process external imports (e.g., "cli.Stdout")
-            for (module_state.external_imports.items) |ext_import| {
-                // Parse the import (e.g., "cli.Stdout" -> { .qualifier = "cli", .module = "Stdout" })
-                if (base.module_path.parseQualifiedImport(ext_import)) |qualified| {
-                    // Create full name and link path
-                    const full_name = try ctx.arena.dupe(u8, ext_import);
-                    const link_path = try std.fmt.allocPrint(ctx.arena, "{s}/{s}", .{ qualified.qualifier, qualified.module });
-
-                    const empty_items = [_]AssociatedItem{};
-                    const mod_info = ModuleInfo{
-                        .name = full_name,
-                        .link_path = link_path,
-                        .associated_items = &empty_items,
-                    };
-
-                    // Add to map (deduplicates automatically)
-                    const gop = try modules_map.getOrPut(full_name);
-                    if (!gop.found_existing) {
-                        gop.value_ptr.* = mod_info;
-                    }
-
-                    // Generate index.html for this module
-                    const module_output_dir = try std.fs.path.join(ctx.arena, &[_][]const u8{ base_output_dir, qualified.qualifier, qualified.module });
-                    generateModuleIndex(ctx, module_output_dir, ext_import) catch |err| {
-                        std.debug.print("Warning: failed to generate module index for {s}: {}\n", .{ ext_import, err });
-                    };
-                }
-            }
-
-            // Process local imports (non-external modules in the same package)
-            for (module_state.imports.items) |import_id| {
-                if (import_id < package_env.modules.items.len) {
-                    const imported_module = package_env.modules.items[import_id];
-                    const module_name = imported_module.name;
-
-                    // Skip if this is the root module itself
-                    if (std.mem.eql(u8, module_name, "main")) continue;
-
-                    // Only include if it's a local module (not from a package)
-                    if (std.mem.eql(u8, package_name, first_pkg.name)) {
-                        const full_name = try ctx.gpa.dupe(u8, module_name);
-                        const link_path = try ctx.gpa.dupe(u8, module_name);
-
-                        // Extract associated items from the module if it has an env
-                        const associated_items = if (imported_module.env) |*mod_env|
-                            try extractAssociatedItems(ctx, mod_env)
-                        else
-                            try ctx.gpa.alloc(AssociatedItem, 0);
-
-                        const mod_info = ModuleInfo{
-                            .name = full_name,
-                            .link_path = link_path,
-                            .associated_items = associated_items,
-                        };
-
-                        const gop = try modules_map.getOrPut(full_name);
-                        if (!gop.found_existing) {
-                            gop.value_ptr.* = mod_info;
-                        } else {
-                            // Free the duplicates
-                            ctx.gpa.free(full_name);
-                            ctx.gpa.free(link_path);
-                            for (associated_items) |item| {
-                                item.deinit(ctx.gpa);
-                            }
-                            ctx.gpa.free(associated_items);
-                        }
-
-                        // Generate index.html for this local module
-                        const module_output_dir = try std.fs.path.join(ctx.arena, &[_][]const u8{ base_output_dir, module_name });
-                        generateModuleIndex(ctx, module_output_dir, module_name) catch |err| {
-                            std.debug.print("Warning: failed to generate module index for {s}: {}\n", .{ module_name, err });
-                        };
-                    }
-                }
-            }
-        }
-    }
-
-    // Convert map to sorted list
-    var modules_list = std.ArrayList(ModuleInfo).empty;
-    defer modules_list.deinit(ctx.gpa);
-    var map_iter = modules_map.iterator();
-    while (map_iter.next()) |entry| {
-        try modules_list.append(ctx.gpa, entry.value_ptr.*);
-    }
-
-    // Collect package shorthands
-    var shorthands_list = std.array_list.Managed([]const u8).init(ctx.gpa);
-    defer {
-        for (shorthands_list.items) |item| ctx.gpa.free(item);
-        shorthands_list.deinit();
-    }
-
-    var shorthand_iter = first_pkg.shorthands.iterator();
-    while (shorthand_iter.next()) |sh_entry| {
-        const shorthand = try ctx.gpa.dupe(u8, sh_entry.key_ptr.*);
-        try shorthands_list.append(shorthand);
-    }
-
-    // Generate root index.html
-    try generatePackageIndex(ctx, base_output_dir, module_path, shorthands_list.items, modules_list.items);
-
-    // Generate package dependency docs recursively
-    shorthand_iter = first_pkg.shorthands.iterator();
-    while (shorthand_iter.next()) |sh_entry| {
-        const shorthand = sh_entry.key_ptr.*;
-        const dep_ref = sh_entry.value_ptr.*;
-
-        generatePackageDocs(ctx, build_env, dep_ref.root_file, base_output_dir, shorthand) catch |err| {
-            std.debug.print("Warning: failed to generate docs for package {s}: {}\n", .{ shorthand, err });
-        };
-    }
-}
-
-/// Recursively generate documentation for a package and its dependencies
-fn generatePackageDocs(
-    ctx: *CliContext,
-    build_env: *compile.BuildEnv,
-    module_path: []const u8,
-    base_output_dir: []const u8,
-    relative_path: []const u8,
-) error{OutOfMemory}!void {
-    const output_dir = if (relative_path.len == 0)
-        try ctx.arena.dupe(u8, base_output_dir)
+    // Determine the root package name from the module path
+    // Extract basename without extension (e.g., "app.roc" -> "app")
+    const basename = std.fs.path.basename(module_path);
+    const pkg_name = if (std.mem.endsWith(u8, basename, ".roc"))
+        try ctx.gpa.dupe(u8, basename[0 .. basename.len - 4])
     else
-        try std.fs.path.join(ctx.arena, &[_][]const u8{ base_output_dir, relative_path });
+        try ctx.gpa.dupe(u8, basename);
 
-    var shorthands_list = std.array_list.Managed([]const u8).init(ctx.gpa);
+    // Collect ModuleDocs from all compiled modules
+    var module_docs_list = std.ArrayList(DocModel.ModuleDocs).empty;
     defer {
-        for (shorthands_list.items) |item| ctx.gpa.free(item);
-        shorthands_list.deinit();
+        for (module_docs_list.items) |*mod| mod.deinit(ctx.gpa);
+        module_docs_list.deinit(ctx.gpa);
     }
 
-    var pkg_iter = build_env.packages.iterator();
-    while (pkg_iter.next()) |entry| {
-        const pkg = entry.value_ptr;
-
-        var shorthand_iter = pkg.shorthands.iterator();
-        while (shorthand_iter.next()) |sh_entry| {
-            const shorthand = try ctx.gpa.dupe(u8, sh_entry.key_ptr.*);
-            try shorthands_list.append(shorthand);
-        }
-
-        shorthand_iter = pkg.shorthands.iterator();
-        while (shorthand_iter.next()) |sh_entry| {
-            const shorthand = sh_entry.key_ptr.*;
-
-            const dep_relative_path = if (relative_path.len == 0)
-                try ctx.arena.dupe(u8, shorthand)
-            else
-                try std.fs.path.join(ctx.arena, &[_][]const u8{ relative_path, shorthand });
-
-            const dep_ref = sh_entry.value_ptr.*;
-            generatePackageDocs(ctx, build_env, dep_ref.root_file, base_output_dir, dep_relative_path) catch |err| {
-                std.debug.print("Warning: failed to generate docs for {s}: {}\n", .{ shorthand, err });
-            };
-        }
-
-        break;
-    }
-
-    // For standalone modules, extract and display their exports
-    var module_infos = std.array_list.Managed(ModuleInfo).init(ctx.gpa);
-    defer {
-        for (module_infos.items) |mod| mod.deinit(ctx.gpa);
-        module_infos.deinit();
-    }
-
-    // Get the module's exports if it's a standalone module
     var sched_iter = build_env.schedulers.iterator();
     while (sched_iter.next()) |sched_entry| {
+        const sched_pkg_name = sched_entry.key_ptr.*;
         const package_env = sched_entry.value_ptr.*;
 
-        // Check ALL modules in this package
         for (package_env.modules.items) |module_state| {
             if (module_state.env) |*mod_env| {
-                const associated_items = try extractAssociatedItems(ctx, mod_env);
-                const mod_name = try ctx.gpa.dupe(u8, module_state.name);
+                // Skip platform main.roc modules when documenting an app
+                // Platform modules are still included when documenting a platform directly
+                if (mod_env.module_kind == .platform and !is_documenting_platform) {
+                    continue;
+                }
 
-                try module_infos.append(.{
-                    .name = mod_name,
-                    .link_path = try ctx.gpa.dupe(u8, ""),
-                    .associated_items = associated_items,
-                });
+                var mod_docs = extract.extractModuleDocs(ctx.gpa, mod_env, sched_pkg_name) catch |err| {
+                    std.debug.print("Warning: failed to extract docs for module {s}: {}\n", .{ module_state.name, err });
+                    continue;
+                };
+                module_docs_list.append(ctx.gpa, mod_docs) catch {
+                    mod_docs.deinit(ctx.gpa);
+                    continue;
+                };
             }
         }
     }
 
-    generatePackageIndex(ctx, output_dir, module_path, shorthands_list.items, module_infos.items) catch |err| {
-        std.debug.print("Warning: failed to generate index for {s}: {}\n", .{ module_path, err });
+    // Extract documentation from the Builtin module.
+    // The Builtin module is special — it's pre-compiled and lives in build_env.builtin_modules.
+    {
+        const builtin_env = build_env.builtin_modules.builtin_module.env;
+
+        const builtin_docs = extract.extractModuleDocs(ctx.gpa, builtin_env, "Builtin") catch |err| blk: {
+            std.debug.print("Warning: failed to extract docs for Builtin module: {}\n", .{err});
+            break :blk null;
+        };
+
+        if (builtin_docs) |b_docs| {
+            module_docs_list.append(ctx.gpa, b_docs) catch {
+                var d = b_docs;
+                d.deinit(ctx.gpa);
+            };
+        }
+    }
+
+    const modules_slice = module_docs_list.toOwnedSlice(ctx.gpa) catch return;
+
+    var package_docs = DocModel.PackageDocs{
+        .name = pkg_name,
+        .modules = modules_slice,
+    };
+    defer package_docs.deinit(ctx.gpa);
+
+    // Create output directory
+    std.fs.cwd().makePath(base_output_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+
+    // Generate HTML documentation site
+    // TODO: support --format md and --format json output formats
+    const render_html = docs.render_html;
+    render_html.renderPackageDocs(ctx.gpa, &package_docs, base_output_dir) catch |err| {
+        std.debug.print("Error: failed to generate HTML docs: {}\n", .{err});
+        return err;
     };
 }
 

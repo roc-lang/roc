@@ -58,4 +58,5 @@ pub const Polarity = types.Polarity;
 
 test {
     std.testing.refAllDecls(@import("test/test_rigid_instantiation.zig"));
+    std.testing.refAllDecls(@import("generalize.zig"));
 }

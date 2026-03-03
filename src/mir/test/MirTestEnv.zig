@@ -221,9 +221,12 @@ pub fn initFull(module_name: []const u8, source: []const u8) !MirTestEnv {
     mir_store.* = try MIR.Store.init(gpa);
     errdefer mir_store.deinit(gpa);
 
-    const all_module_envs_slice = try gpa.alloc(*ModuleEnv, 1);
+    // all_module_envs must include Builtin so the lowerer can resolve methods
+    // on builtin nominal types (Dec, I64, etc.) via cross-module dispatch.
+    const all_module_envs_slice = try gpa.alloc(*ModuleEnv, 2);
     errdefer gpa.free(all_module_envs_slice);
-    all_module_envs_slice[0] = module_env;
+    all_module_envs_slice[0] = @constCast(builtin_module.env);
+    all_module_envs_slice[1] = module_env;
 
     const lower = try gpa.create(Lower);
     errdefer gpa.destroy(lower);
@@ -233,7 +236,8 @@ pub fn initFull(module_name: []const u8, source: []const u8) !MirTestEnv {
         @as([]const *ModuleEnv, all_module_envs_slice),
         &module_env.types,
         builtin_indices,
-        0,
+        1, // current_module_idx = test module (Builtin is at index 0)
+        null,
     );
     errdefer lower.deinit();
 
@@ -430,6 +434,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         &module_env.types,
         builtin_indices,
         2, // current_module_idx = this module
+        null,
     );
     errdefer lower.deinit();
 

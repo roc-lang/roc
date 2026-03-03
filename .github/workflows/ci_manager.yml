@@ -61,6 +61,7 @@ jobs:
               - '!ci/check_test_wiring.zig'
               - '!ci/custom_valgrind.sh'
               - '!ci/valgrind.supp'
+              - '!ci/tidy.zig'
               # Files that ci manager workflows should not run on.
               - '!.gitignore'
               - '!.reuse'
