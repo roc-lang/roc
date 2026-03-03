@@ -657,26 +657,6 @@ const LirProc = lir.LirProc;
 
 const Allocator = std.mem.Allocator;
 
-/// Get the offset of a struct field by its string name.
-/// This is a codegen helper that iterates fields and matches by name string.
-fn getStructFieldOffsetByNameStr(ls: *const layout.Store, struct_idx: layout.StructIdx, field_name_str: []const u8) u32 {
-    const sd = ls.getStructData(struct_idx);
-    const sorted_fields = ls.struct_fields.sliceRange(sd.getFields());
-
-    var current_offset: u32 = 0;
-    for (0..sorted_fields.len) |i| {
-        const field = sorted_fields.get(@intCast(i));
-        const field_layout = ls.getLayout(field.layout);
-        const field_size_align = ls.layoutSizeAlign(field_layout);
-        current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_size_align.alignment.toByteUnits()))));
-        const name = ls.getFieldName(field.name);
-        if (std.mem.eql(u8, name, field_name_str)) {
-            return current_offset;
-        }
-        current_offset += field_size_align.size;
-    }
-    unreachable; // field name not found
-}
 
 /// Code generator for LIR expressions
 /// Parameterized by RocTarget for cross-compilation support
@@ -4127,12 +4107,33 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 };
             };
 
-            // Look up field offsets by name from the record layout
+            // Look up field offsets structurally from the record layout.
+            // The record is { start : U64, len : U64 }. Sorted alphabetically: len=0, start=1.
             const record_layout = ls.getLayout(record_layout_idx orelse unreachable);
             const record_idx = record_layout.data.struct_.idx;
             const record_size = ls.getStructData(record_idx).size;
-            const start_field_off: i32 = @intCast(getStructFieldOffsetByNameStr(ls, record_idx, "start"));
-            const len_field_off: i32 = @intCast(getStructFieldOffsetByNameStr(ls, record_idx, "len"));
+            const len_sorted_idx: u32 = 0;
+            const start_sorted_idx: u32 = 1;
+            if (builtin.mode == .Debug) {
+                const sd = ls.getStructData(record_idx);
+                const sorted_fields = ls.struct_fields.sliceRange(sd.getFields());
+                if (sorted_fields.len != 2) {
+                    std.debug.panic(
+                        "LIR/codegen invariant violated: list_sublist record expected 2 fields, got {d}",
+                        .{sorted_fields.len},
+                    );
+                }
+                const f0_name = ls.getFieldName(sorted_fields.get(0).name);
+                const f1_name = ls.getFieldName(sorted_fields.get(1).name);
+                if (!std.mem.eql(u8, f0_name, "len") or !std.mem.eql(u8, f1_name, "start")) {
+                    std.debug.panic(
+                        "LIR/codegen invariant violated: list_sublist record expected sorted fields [len, start], got [{s}, {s}]",
+                        .{ f0_name, f1_name },
+                    );
+                }
+            }
+            const start_field_off: i32 = @intCast(ls.getStructFieldOffset(record_idx, start_sorted_idx));
+            const len_field_off: i32 = @intCast(ls.getStructFieldOffset(record_idx, len_sorted_idx));
 
             const list_off = try self.ensureOnStack(list_loc, roc_list_size);
             const record_off = try self.ensureOnStack(record_loc, record_size);
@@ -7003,7 +7004,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .i128, .dec => true,
                 .u128 => false,
                 .f32, .f64 => return self.generateFloatAbs(val_loc),
-                else => return val_loc, // unknown layout — pass through
+                else => {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: num_abs unsupported layout {s}",
+                            .{@tagName(ret_layout)},
+                        );
+                    }
+                    unreachable;
+                },
             };
 
             if (!is_signed) {
@@ -8566,7 +8575,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_stack => roc_list_size,
                 .stack_i128, .immediate_i128 => 16,
                 .immediate_i64, .general_reg, .stack, .float_reg, .immediate_f64 => 8,
-                else => 8,
+                else => {
+                    if (builtin.mode == .Debug) std.debug.panic("LIR/codegen invariant violated: valueSizeFromLoc unsupported location {s}", .{@tagName(loc)});
+                    unreachable;
+                },
             };
         }
 
@@ -10787,9 +10799,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .struct_ => |s| {
                     // Struct destructuring: bind each field pattern.
                     // Fields are in layout order, so iterate positionally.
-                    const ls = self.layout_store orelse return;
+                    const ls = self.layout_store orelse {
+                        if (builtin.mode == .Debug) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: bindPattern struct requires layout_store",
+                                .{},
+                            );
+                        }
+                        unreachable;
+                    };
                     const struct_layout = ls.getLayout(s.struct_layout);
-                    if (struct_layout.tag != .struct_) return;
+                    if (struct_layout.tag != .struct_) {
+                        if (builtin.mode == .Debug) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: bindPattern struct expected struct_ layout, got {s}",
+                                .{@tagName(struct_layout.tag)},
+                            );
+                        }
+                        unreachable;
+                    }
 
                     const field_patterns = self.store.getPatternSpan(s.fields);
 
@@ -10797,7 +10825,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const base_offset: i32 = switch (value_loc) {
                         .stack => |sv| sv.offset,
                         .stack_str => |off| off,
-                        else => return, // Can't destructure non-stack values
+                        else => {
+                            if (builtin.mode == .Debug) {
+                                std.debug.panic(
+                                    "LIR/codegen invariant violated: bindPattern struct requires stack value location, got {s}",
+                                    .{@tagName(value_loc)},
+                                );
+                            }
+                            unreachable;
+                        },
                     };
 
                     // Bind each field
@@ -10828,7 +10864,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .stack => |s| s.offset,
                         .stack_str => |off| off,
                         .list_stack => |list_info| list_info.struct_offset,
-                        else => return,
+                        else => {
+                            if (builtin.mode == .Debug) {
+                                std.debug.panic(
+                                    "LIR/codegen invariant violated: bindPattern list requires stack value location, got {s}",
+                                    .{@tagName(value_loc)},
+                                );
+                            }
+                            unreachable;
+                        },
                     };
 
                     const prefix_patterns = self.store.getPatternSpan(lst.prefix);
@@ -10838,7 +10882,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Elements are at ptr[0], ptr[1], etc.
 
                     // Get element size from the pattern layout.
-                    const ls = self.layout_store orelse return;
+                    const ls = self.layout_store orelse {
+                        if (builtin.mode == .Debug) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: bindPattern list requires layout_store",
+                                .{},
+                            );
+                        }
+                        unreachable;
+                    };
                     const elem_layout_idx: layout.Idx = lst.elem_layout;
                     const elem_layout = ls.getLayout(elem_layout_idx);
                     const elem_size_align = ls.layoutSizeAlign(elem_layout);
@@ -11020,9 +11072,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const arg_patterns = self.store.getPatternSpan(tag_pat.args);
                     if (arg_patterns.len == 0) return;
 
-                    const ls = self.layout_store orelse return;
+                    const ls = self.layout_store orelse {
+                        if (builtin.mode == .Debug) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: bindPattern tag requires layout_store",
+                                .{},
+                            );
+                        }
+                        unreachable;
+                    };
                     const union_layout = ls.getLayout(tag_pat.union_layout);
-                    if (union_layout.tag != .tag_union) return;
+                    if (union_layout.tag != .tag_union) {
+                        if (builtin.mode == .Debug) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: bindPattern tag expected tag_union layout, got {s}",
+                                .{@tagName(union_layout.tag)},
+                            );
+                        }
+                        unreachable;
+                    }
 
                     const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
                     // Payload is always at offset 0, discriminant comes after
@@ -11032,7 +11100,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const base_offset: i32 = switch (value_loc) {
                         .stack => |s| s.offset,
                         .stack_str => |off| off,
-                        else => return,
+                        else => {
+                            if (builtin.mode == .Debug) {
+                                std.debug.panic(
+                                    "LIR/codegen invariant violated: bindPattern tag requires stack value location, got {s}",
+                                    .{@tagName(value_loc)},
+                                );
+                            }
+                            unreachable;
+                        },
                     };
 
                     // Get the variant's payload layout to determine element offsets
@@ -11058,12 +11134,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 try self.bindPattern(arg_pattern_id, self.stackLocationForLayout(tuple_elem_layout_idx, arg_offset));
                             }
                         } else {
-                            // Payload is not a tuple but we have multiple patterns - this shouldn't happen
-                            // but handle gracefully by treating each pattern as having the same location
-                            for (arg_patterns) |arg_pattern_id| {
-                                const arg_loc: ValueLocation = .{ .stack = .{ .offset = base_offset + payload_offset } };
-                                try self.bindPattern(arg_pattern_id, arg_loc);
+                            if (builtin.mode == .Debug) {
+                                std.debug.panic(
+                                    "LIR/codegen invariant violated: tag multi-arg pattern requires struct_ payload layout, got {s}",
+                                    .{@tagName(payload_layout.tag)},
+                                );
                             }
+                            unreachable;
                         }
                     }
                 },
@@ -11084,7 +11161,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .stack_i128 => |off| off,
                 .stack_str => |off| off,
                 .list_stack => |ls_info| ls_info.struct_offset,
-                else => return,
+                else => {
+                    if (builtin.mode == .Debug) std.debug.panic("LIR/codegen invariant violated: trackMutableSlotFromSymbolLocation unsupported location {s}", .{@tagName(loc)});
+                    unreachable;
+                },
             };
 
             const size: u32 = switch (loc) {
@@ -11109,7 +11189,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const raw = ls.layoutSizeAlign(ls.getLayout(bind.layout_idx)).size;
                     break :blk if (raw != 0 and raw < 8) 8 else raw;
                 },
-                else => 8,
+                else => {
+                    if (builtin.mode == .Debug) std.debug.panic("LIR/codegen invariant violated: trackMutableSlotFromSymbolLocation unsupported location for size {s}", .{@tagName(loc)});
+                    unreachable;
+                },
             };
 
             try self.mutable_var_slots.put(symbol_key, .{ .slot = slot, .size = size });
@@ -15033,12 +15116,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                     },
                     else => {
-                        // For now, skip complex patterns - assume 1 register
-                        if (reg_idx < max_arg_regs) {
-                            reg_idx += 1;
-                        } else {
-                            stack_arg_offset += 8;
+                        if (builtin.mode == .Debug) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: unsupported complex parameter pattern in bindLambdaParams (compileProc path), got {s}",
+                                .{@tagName(pattern)},
+                            );
                         }
+                        unreachable;
                     },
                 }
 
@@ -15618,13 +15702,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                     },
                     else => {
-                        // Complex parameter patterns not yet supported
-                        // Assume 1 register for now
-                        if (reg_idx < max_arg_regs) {
-                            reg_idx += 1;
-                        } else {
-                            stack_arg_offset += 8;
+                        if (builtin.mode == .Debug) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: unsupported complex parameter pattern in bindLambdaParams (compileLambdaAsProc path), got {s}",
+                                .{@tagName(pattern)},
+                            );
                         }
+                        unreachable;
                     },
                 }
             }
@@ -16919,12 +17003,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Emit incref for a list value
         fn emitListIncref(self: *Self, value_loc: ValueLocation, count: u16) Allocator.Error!void {
-            const roc_ops_reg = self.roc_ops_reg orelse return;
+            const roc_ops_reg = self.roc_ops_reg orelse {
+                if (builtin.mode == .Debug) std.debug.panic("LIR/codegen invariant violated: emitListIncref requires roc_ops_reg", .{});
+                unreachable;
+            };
             const fn_addr: usize = @intFromPtr(&increfDataPtrC);
 
             const ptr_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(ptr_reg);
-            if (!try self.loadListDataPtrForRc(value_loc, ptr_reg)) return;
+            if (!try self.loadListDataPtrForRc(value_loc, ptr_reg)) unreachable;
 
             // Call increfDataPtrC(ptr, count, roc_ops)
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -16935,7 +17022,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn emitListElementDecrefsIfUnique(self: *Self, value_loc: ValueLocation, elem_layout_idx: layout.Idx) Allocator.Error!void {
-            const ls = self.layout_store orelse return;
+            const ls = self.layout_store orelse {
+                if (builtin.mode == .Debug) std.debug.panic("LIR/codegen invariant violated: emitListElementDecrefsIfUnique requires layout_store", .{});
+                unreachable;
+            };
             const elem_layout = ls.getLayout(elem_layout_idx);
             if (!ls.layoutContainsRefcounted(elem_layout)) return;
 
@@ -16944,7 +17034,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const ptr_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(ptr_reg);
-            if (!try self.loadListDataPtrForRc(value_loc, ptr_reg)) return;
+            if (!try self.loadListDataPtrForRc(value_loc, ptr_reg)) unreachable;
 
             // Elements are decref'd only when the list allocation is unique.
             const rc_reg = try self.allocTempGeneral();
@@ -17031,7 +17121,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Emit decref for a list value
         fn emitListDecref(self: *Self, value_loc: ValueLocation, elem_alignment: u32, elements_refcounted: bool, elem_layout_idx: ?layout.Idx) Allocator.Error!void {
-            const roc_ops_reg = self.roc_ops_reg orelse return;
+            const roc_ops_reg = self.roc_ops_reg orelse {
+                if (builtin.mode == .Debug) std.debug.panic("LIR/codegen invariant violated: emitListDecref requires roc_ops_reg", .{});
+                unreachable;
+            };
 
             if (elements_refcounted) {
                 if (elem_layout_idx) |elem_idx| {
@@ -17043,7 +17136,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const ptr_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(ptr_reg);
-            if (!try self.loadListDataPtrForRc(value_loc, ptr_reg)) return;
+            if (!try self.loadListDataPtrForRc(value_loc, ptr_reg)) unreachable;
 
             // Call decrefDataPtrC(ptr, alignment, elements_refcounted, roc_ops)
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -17056,12 +17149,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Emit free for a list value
         fn emitListFree(self: *Self, value_loc: ValueLocation, elem_alignment: u32, elements_refcounted: bool) Allocator.Error!void {
-            const roc_ops_reg = self.roc_ops_reg orelse return;
+            const roc_ops_reg = self.roc_ops_reg orelse {
+                if (builtin.mode == .Debug) std.debug.panic("LIR/codegen invariant violated: emitListFree requires roc_ops_reg", .{});
+                unreachable;
+            };
             const fn_addr: usize = @intFromPtr(&freeDataPtrC);
 
             const ptr_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(ptr_reg);
-            if (!try self.loadListDataPtrForRc(value_loc, ptr_reg)) return;
+            if (!try self.loadListDataPtrForRc(value_loc, ptr_reg)) unreachable;
 
             // Call freeDataPtrC(ptr, alignment, elements_refcounted, roc_ops)
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -17079,7 +17175,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const base_offset: i32 = switch (value_loc) {
                 .stack => |s| s.offset,
                 .list_stack => |info| info.struct_offset,
-                else => return false,
+                else => {
+                    if (builtin.mode == .Debug) std.debug.panic("LIR/codegen invariant violated: loadListDataPtrForRc requires stack value location, got {s}", .{@tagName(value_loc)});
+                    unreachable;
+                },
             };
 
             // bytes
@@ -17114,7 +17213,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Emit incref for a string value
         /// Strings use SSO, so we need to check if it's a large string first
         fn emitStrIncref(self: *Self, value_loc: ValueLocation, count: u16) Allocator.Error!void {
-            const roc_ops_reg = self.roc_ops_reg orelse return;
+            const roc_ops_reg = self.roc_ops_reg orelse {
+                if (builtin.mode == .Debug) std.debug.panic("LIR/codegen invariant violated: emitStrIncref requires roc_ops_reg", .{});
+                unreachable;
+            };
             const fn_addr: usize = @intFromPtr(&increfDataPtrC);
 
             // String struct: bytes (offset 0), length (offset 8), capacity_or_alloc_ptr (offset 16)
@@ -17123,7 +17225,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const base_offset: i32 = switch (value_loc) {
                 .stack => |s| s.offset,
                 .stack_str => |offset| offset,
-                else => return,
+                else => {
+                    if (builtin.mode == .Debug) std.debug.panic("LIR/codegen invariant violated: emitStrIncref requires stack value location, got {s}", .{@tagName(value_loc)});
+                    unreachable;
+                },
             };
 
             // Load capacity_or_alloc_ptr to check for small string
@@ -17167,13 +17272,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Emit decref for a string value
         fn emitStrDecref(self: *Self, value_loc: ValueLocation) Allocator.Error!void {
-            const roc_ops_reg = self.roc_ops_reg orelse return;
+            const roc_ops_reg = self.roc_ops_reg orelse {
+                if (builtin.mode == .Debug) std.debug.panic("LIR/codegen invariant violated: emitStrDecref requires roc_ops_reg", .{});
+                unreachable;
+            };
             const fn_addr: usize = @intFromPtr(&decrefDataPtrC);
 
             const base_offset: i32 = switch (value_loc) {
                 .stack => |s| s.offset,
                 .stack_str => |offset| offset,
-                else => return,
+                else => {
+                    if (builtin.mode == .Debug) std.debug.panic("LIR/codegen invariant violated: emitStrDecref requires stack value location, got {s}", .{@tagName(value_loc)});
+                    unreachable;
+                },
             };
 
             // Load capacity_or_alloc_ptr to check for small string
@@ -17216,13 +17327,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Emit free for a string value
         fn emitStrFree(self: *Self, value_loc: ValueLocation) Allocator.Error!void {
-            const roc_ops_reg = self.roc_ops_reg orelse return;
+            const roc_ops_reg = self.roc_ops_reg orelse {
+                if (builtin.mode == .Debug) std.debug.panic("LIR/codegen invariant violated: emitStrFree requires roc_ops_reg", .{});
+                unreachable;
+            };
             const fn_addr: usize = @intFromPtr(&freeDataPtrC);
 
             const base_offset: i32 = switch (value_loc) {
                 .stack => |s| s.offset,
                 .stack_str => |offset| offset,
-                else => return,
+                else => {
+                    if (builtin.mode == .Debug) std.debug.panic("LIR/codegen invariant violated: emitStrFree requires stack value location, got {s}", .{@tagName(value_loc)});
+                    unreachable;
+                },
             };
 
             // Load capacity_or_alloc_ptr to check for small string
@@ -17264,7 +17381,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Emit incref for a box value
         fn emitBoxIncref(self: *Self, value_loc: ValueLocation, count: u16) Allocator.Error!void {
-            const roc_ops_reg = self.roc_ops_reg orelse return;
+            const roc_ops_reg = self.roc_ops_reg orelse {
+                if (builtin.mode == .Debug) std.debug.panic("LIR/codegen invariant violated: emitBoxIncref requires roc_ops_reg", .{});
+                unreachable;
+            };
             const fn_addr: usize = @intFromPtr(&increfDataPtrC);
 
             // Box is just a pointer
@@ -17279,7 +17399,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .general_reg => |r| {
                     try self.codegen.emit.movRegReg(.w64, ptr_reg, r);
                 },
-                else => return,
+                else => {
+                    if (builtin.mode == .Debug) std.debug.panic("LIR/codegen invariant violated: emitBoxIncref requires stack or register value location, got {s}", .{@tagName(value_loc)});
+                    unreachable;
+                },
             }
 
             // Call increfDataPtrC(ptr, count, roc_ops)
@@ -17292,7 +17415,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Emit decref for a box value
         fn emitBoxDecref(self: *Self, value_loc: ValueLocation, elem_alignment: u32, elements_refcounted: bool) Allocator.Error!void {
-            const roc_ops_reg = self.roc_ops_reg orelse return;
+            const roc_ops_reg = self.roc_ops_reg orelse {
+                if (builtin.mode == .Debug) std.debug.panic("LIR/codegen invariant violated: emitBoxDecref requires roc_ops_reg", .{});
+                unreachable;
+            };
             const fn_addr: usize = @intFromPtr(&decrefDataPtrC);
 
             const ptr_reg = try self.allocTempGeneral();
@@ -17306,7 +17432,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .general_reg => |r| {
                     try self.codegen.emit.movRegReg(.w64, ptr_reg, r);
                 },
-                else => return,
+                else => {
+                    if (builtin.mode == .Debug) std.debug.panic("LIR/codegen invariant violated: emitBoxDecref requires stack or register value location, got {s}", .{@tagName(value_loc)});
+                    unreachable;
+                },
             }
 
             // Call decrefDataPtrC(ptr, alignment, elements_refcounted, roc_ops)
@@ -17320,7 +17449,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Emit free for a box value
         fn emitBoxFree(self: *Self, value_loc: ValueLocation, elem_alignment: u32, elements_refcounted: bool) Allocator.Error!void {
-            const roc_ops_reg = self.roc_ops_reg orelse return;
+            const roc_ops_reg = self.roc_ops_reg orelse {
+                if (builtin.mode == .Debug) std.debug.panic("LIR/codegen invariant violated: emitBoxFree requires roc_ops_reg", .{});
+                unreachable;
+            };
             const fn_addr: usize = @intFromPtr(&freeDataPtrC);
 
             const ptr_reg = try self.allocTempGeneral();
@@ -17334,7 +17466,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .general_reg => |r| {
                     try self.codegen.emit.movRegReg(.w64, ptr_reg, r);
                 },
-                else => return,
+                else => {
+                    if (builtin.mode == .Debug) std.debug.panic("LIR/codegen invariant violated: emitBoxFree requires stack or register value location, got {s}", .{@tagName(value_loc)});
+                    unreachable;
+                },
             }
 
             // Call freeDataPtrC(ptr, alignment, elements_refcounted, roc_ops)
@@ -17712,21 +17847,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Get the size of a layout in bytes for argument unpacking
         fn getLayoutSize(self: *Self, layout_idx: layout.Idx) u32 {
-            if (self.layout_store) |ls| {
-                const layout_val = ls.getLayout(layout_idx);
-                return ls.layoutSizeAlign(layout_val).size;
-            }
-            // Default sizes for well-known layouts
-            return switch (layout_idx) {
-                .zst => 0, // Zero-sized type (empty records, empty tuples, etc.)
-                .i8, .u8, .bool => 1,
-                .i16, .u16 => 2,
-                .i32, .u32, .f32 => 4,
-                .i64, .u64, .f64 => 8,
-                .i128, .u128, .dec => 16,
-                .str => 24,
-                else => 8, // Default to 8 bytes
+            const ls = self.layout_store orelse {
+                if (builtin.mode == .Debug) std.debug.panic("LIR/codegen invariant violated: getLayoutSize requires layout_store", .{});
+                unreachable;
             };
+            const layout_val = ls.getLayout(layout_idx);
+            return ls.layoutSizeAlign(layout_val).size;
         }
 
         /// Get the generated code buffer (for object file generation)

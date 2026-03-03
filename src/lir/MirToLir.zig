@@ -147,6 +147,7 @@ fn layoutFromMonotype(self: *Self, mono_idx: Monotype.Idx) Allocator.Error!layou
 
 fn layoutFromMonotypeInner(self: *Self, monotype: Monotype.Monotype) Allocator.Error!layout.Idx {
     return switch (monotype) {
+        .recursive_placeholder => unreachable,
         .unit => .zst,
         .prim => |p| switch (p) {
             .bool => .bool,
@@ -380,7 +381,7 @@ fn tagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monot
             }
             unreachable;
         },
-        .unit, .record, .tuple, .list, .box, .func => {
+        .unit, .record, .tuple, .list, .box, .func, .recursive_placeholder => {
             if (builtin.mode == .Debug) {
                 std.debug.panic(
                     "tagDiscriminant expected tag_union/Bool; got {s} for tag ident idx {d} mono_idx={d}",
@@ -601,7 +602,7 @@ fn lowerList(self: *Self, list_data: anytype, mono_idx: Monotype.Idx, region: Re
     const monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
     const elem_layout = switch (monotype) {
         .list => |l| try self.layoutFromMonotype(l.elem),
-        .prim, .unit, .record, .tuple, .tag_union, .box, .func => unreachable,
+        .prim, .unit, .record, .tuple, .tag_union, .box, .func, .recursive_placeholder => unreachable,
     };
 
     const mir_elems = self.mir_store.getExprSpan(list_data.elems);
@@ -834,7 +835,7 @@ fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, region: Region
     const monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
     const ret_layout = switch (monotype) {
         .func => |f| try self.layoutFromMonotype(f.ret),
-        .prim, .unit, .record, .tuple, .tag_union, .list, .box => unreachable, // Lambda expressions always have .func monotype
+        .prim, .unit, .record, .tuple, .tag_union, .list, .box, .recursive_placeholder => unreachable, // Lambda expressions always have .func monotype
     };
 
     const lir_params = try self.lowerPatternSpan(self.mir_store.getPatternSpan(lam.params));
@@ -1233,7 +1234,7 @@ fn emitZeroLiteral(self: *Self, mir_expr: MIR.ExprId, region: Region) Allocator.
             .i128, .u128 => LirExpr{ .i128_literal = 0 },
             .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64 => LirExpr{ .i64_literal = 0 },
         },
-        .func, .tag_union, .record, .tuple, .list, .box, .unit => unreachable,
+        .func, .tag_union, .record, .tuple, .list, .box, .unit, .recursive_placeholder => unreachable,
     }, region);
 }
 
@@ -1246,7 +1247,7 @@ fn lowerHosted(self: *Self, h: anytype, mono_idx: Monotype.Idx, region: Region) 
     const monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
     const ret_layout = switch (monotype) {
         .func => |f| try self.layoutFromMonotype(f.ret),
-        .prim, .unit, .record, .tuple, .tag_union, .list, .box => unreachable, // Hosted expressions always have .func monotype
+        .prim, .unit, .record, .tuple, .tag_union, .list, .box, .recursive_placeholder => unreachable, // Hosted expressions always have .func monotype
     };
 
     // Lower parameter patterns
@@ -1256,7 +1257,7 @@ fn lowerHosted(self: *Self, h: anytype, mono_idx: Monotype.Idx, region: Region) 
     // Build lookup args from parameters (one lookup per param)
     const func_args = switch (monotype) {
         .func => |f| self.mir_store.monotype_store.getIdxSpan(f.args),
-        .prim, .unit, .record, .tuple, .tag_union, .list, .box => unreachable,
+        .prim, .unit, .record, .tuple, .tag_union, .list, .box, .recursive_placeholder => unreachable,
     };
 
     const save_len = self.scratch_lir_expr_ids.items.len;
@@ -1331,7 +1332,7 @@ fn lowerForLoop(self: *Self, f: anytype, mono_idx: Monotype.Idx, region: Region)
     const list_monotype = self.mir_store.monotype_store.getMonotype(list_mono);
     const elem_layout = switch (list_monotype) {
         .list => |l| try self.layoutFromMonotype(l.elem),
-        .prim, .unit, .record, .tuple, .tag_union, .box, .func => unreachable,
+        .prim, .unit, .record, .tuple, .tag_union, .box, .func, .recursive_placeholder => unreachable,
     };
     const lir_pat = try self.lowerPattern(f.elem_pattern);
     const lir_body = try self.lowerExpr(f.body);
@@ -1556,7 +1557,7 @@ fn lowerPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Error!LirPatte
             const list_monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
             const elem_layout = switch (list_monotype) {
                 .list => |l| try self.layoutFromMonotype(l.elem),
-                .prim, .unit, .record, .tuple, .tag_union, .box, .func => unreachable,
+                .prim, .unit, .record, .tuple, .tag_union, .box, .func, .recursive_placeholder => unreachable,
             };
             const all_patterns = self.mir_store.getPatternSpan(ld.patterns);
             const has_rest = !ld.rest_index.isNone();

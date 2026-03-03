@@ -447,6 +447,12 @@ fn lowerStrInspektExpr(
             unreachable;
         },
         .func => self.emitMirStrLiteral("<function>", region),
+        .recursive_placeholder => {
+            if (std.debug.runtime_safety) {
+                std.debug.panic("recursive_placeholder survived monotype construction", .{});
+            }
+            unreachable;
+        },
     };
 }
 
@@ -1271,6 +1277,12 @@ fn monotypesStructurallyEqualRec(
     if (std.meta.activeTag(lhs_mono) != std.meta.activeTag(rhs_mono)) return false;
 
     return switch (lhs_mono) {
+        .recursive_placeholder => {
+            if (std.debug.runtime_safety) {
+                std.debug.panic("recursive_placeholder survived monotype construction", .{});
+            }
+            unreachable;
+        },
         .unit => true,
         .prim => |lhs_prim| lhs_prim == rhs_mono.prim,
         .list => |lhs_list| try self.monotypesStructurallyEqualRec(lhs_list.elem, rhs_mono.list.elem, seen),

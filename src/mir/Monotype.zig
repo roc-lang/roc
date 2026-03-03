@@ -97,6 +97,11 @@ pub const Monotype = union(enum) {
 
     /// Unit / empty record
     unit: void,
+
+    /// Temporary placeholder used during recursive type construction.
+    /// Must be overwritten before construction completes; surviving
+    /// placeholders indicate a bug in fromFlatType/fromFuncType/fromNominalType.
+    recursive_placeholder: void,
 };
 
 /// Primitive type kinds.
@@ -369,7 +374,7 @@ pub const Store = struct {
             .empty_tag_union => try self.addMonotype(allocator, .{ .tag_union = .{ .tags = TagSpan.empty() } }),
             .record => |record| {
                 // Reserve a slot for cycle detection before recursing into fields
-                const placeholder_idx = try self.addMonotype(allocator, .unit);
+                const placeholder_idx = try self.addMonotype(allocator, .recursive_placeholder);
                 try seen.put(var_, placeholder_idx);
 
                 const scratch_top = scratches.fields.top();
@@ -488,7 +493,7 @@ pub const Store = struct {
                 const names = fields_slice.items(.name);
                 const vars = fields_slice.items(.var_);
 
-                const placeholder_idx = try self.addMonotype(allocator, .unit);
+                const placeholder_idx = try self.addMonotype(allocator, .recursive_placeholder);
                 try seen.put(var_, placeholder_idx);
 
                 const scratch_top = scratches.fields.top();
@@ -504,7 +509,7 @@ pub const Store = struct {
                 return placeholder_idx;
             },
             .tuple => |tuple| {
-                const placeholder_idx = try self.addMonotype(allocator, .unit);
+                const placeholder_idx = try self.addMonotype(allocator, .recursive_placeholder);
                 try seen.put(var_, placeholder_idx);
 
                 const elem_vars = types_store.sliceVars(tuple.elems);
@@ -521,7 +526,7 @@ pub const Store = struct {
                 return placeholder_idx;
             },
             .tag_union => |tag_union_row| {
-                const placeholder_idx = try self.addMonotype(allocator, .unit);
+                const placeholder_idx = try self.addMonotype(allocator, .recursive_placeholder);
                 try seen.put(var_, placeholder_idx);
 
                 const tags_top = scratches.tags.top();
@@ -633,7 +638,7 @@ pub const Store = struct {
         seen: *std.AutoHashMap(types.Var, Idx),
         scratches: *Scratches,
     ) Allocator.Error!Idx {
-        const placeholder_idx = try self.addMonotype(allocator, .unit);
+        const placeholder_idx = try self.addMonotype(allocator, .recursive_placeholder);
         try seen.put(var_, placeholder_idx);
 
         const arg_vars = types_store.sliceVars(func.args);
@@ -722,7 +727,7 @@ pub const Store = struct {
         // so we must overwrite it in-place with the real value — we can't just
         // return `backing_idx` because earlier callers already captured
         // `placeholder_idx`.
-        const placeholder_idx = try self.addMonotype(allocator, .unit);
+        const placeholder_idx = try self.addMonotype(allocator, .recursive_placeholder);
         try seen.put(nominal_var, placeholder_idx);
 
         const backing_var = types_store.getNominalBackingVar(nominal);
@@ -734,6 +739,9 @@ pub const Store = struct {
         // (Idx, Span, Ident.Idx) — never a pointer. The monotype store is
         // append-only, so all indices remain valid after the copy.
         self.monotypes.items[@intFromEnum(placeholder_idx)] = self.monotypes.items[@intFromEnum(backing_idx)];
+        if (std.debug.runtime_safety) {
+            std.debug.assert(self.monotypes.items[@intFromEnum(placeholder_idx)] != .recursive_placeholder);
+        }
         return placeholder_idx;
     }
 };

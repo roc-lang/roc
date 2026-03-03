@@ -249,7 +249,6 @@ fn compileWithCodeGen(
     ) catch |err| switch (err) {
         error.OutOfMemory => return CompilationError.OutOfMemory,
         error.UnsupportedTarget => return CompilationError.UnsupportedTarget,
-        else => return CompilationError.ObjectGenerationFailed,
     };
 
     return CompilationResult{
