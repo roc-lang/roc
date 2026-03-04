@@ -3319,7 +3319,7 @@ fn rocBuild(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     // Select build path based on backend
     switch (args.backend) {
-        .dev => {
+        .dev, .llvm => {
             // Use native code generation backend
             try rocBuildNative(ctx, args);
         },
@@ -4981,7 +4981,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
 
     // Run tests using the selected backend
     switch (args.backend) {
-        .dev => {
+        .dev, .llvm => {
             // Run tests using dev backend (native code generation)
             var dev_eval = eval.DevEvaluator.init(ctx.gpa) catch |err| {
                 try stderr.print("Failed to create dev evaluator: {}\n", .{err});
@@ -5023,6 +5023,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                     dev: *eval.DevEvaluator,
                     mod_env: *const ModuleEnv,
                     envs: []const *ModuleEnv,
+                    builtin_env: ?*const ModuleEnv,
                     allocator: std.mem.Allocator,
                     results_list: *std.array_list.Managed(TestResultItem),
                 ) struct { passed: u32, failed: u32 } {
@@ -5040,6 +5041,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                             @constCast(mod_env),
                             stmt.s_expect.body,
                             envs,
+                            builtin_env,
                         ) catch {
                             failed += 1;
                             results_list.append(.{
@@ -5119,6 +5121,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                     &dev_eval,
                     root_env,
                     all_envs_const,
+                    builtin_module_env,
                     ctx.gpa,
                     &results_list,
                 );
@@ -5144,6 +5147,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                     &dev_eval,
                     mod_env,
                     all_envs_const,
+                    builtin_module_env,
                     ctx.gpa,
                     &results_list,
                 );

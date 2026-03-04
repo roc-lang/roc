@@ -136,7 +136,6 @@ pub const MonoLlvmCodeGen = struct {
     /// Result layout for the top-level expression (needed by early_return).
     result_layout: ?layout.Idx = null,
 
-
     /// Allocas for mutable variables inside loop bodies.
     /// When a symbol is reassigned inside a for_loop or while_loop body,
     /// its value is stored to an alloca so that post-loop code can load
@@ -375,83 +374,95 @@ pub const MonoLlvmCodeGen = struct {
             // Result already written to out_ptr by the generator.
         } else {
 
-        // For scalar types, extend to the canonical size (i64 for ints, i128 for wide ints).
-        // For composite types (records, tuples), store the struct directly.
-        const is_scalar = switch (result_layout) {
-            .bool, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64,
-            .i128, .u128, .dec, .f32, .f64,
-            => true,
-            else => false,
-        };
-
-        if (is_scalar) {
-            const final_type: LlvmBuilder.Type = switch (result_layout) {
-                .bool, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => .i64,
-                .i128, .u128, .dec => .i128,
-                .f32 => .float,
-                .f64 => .double,
-                else => unreachable,
+            // For scalar types, extend to the canonical size (i64 for ints, i128 for wide ints).
+            // For composite types (records, tuples), store the struct directly.
+            const is_scalar = switch (result_layout) {
+                .bool,
+                .i8,
+                .i16,
+                .i32,
+                .i64,
+                .u8,
+                .u16,
+                .u32,
+                .u64,
+                .i128,
+                .u128,
+                .dec,
+                .f32,
+                .f64,
+                => true,
+                else => false,
             };
 
-            const signedness: LlvmBuilder.Constant.Cast.Signedness = switch (result_layout) {
-                .i8, .i16, .i32, .i64, .i128 => .signed,
-                .bool, .u8, .u16, .u32, .u64, .u128 => .unsigned,
-                .f32, .f64, .dec => .unneeded,
-                else => .unneeded,
-            };
+            if (is_scalar) {
+                const final_type: LlvmBuilder.Type = switch (result_layout) {
+                    .bool, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => .i64,
+                    .i128, .u128, .dec => .i128,
+                    .f32 => .float,
+                    .f64 => .double,
+                    else => unreachable,
+                };
 
-            // Check actual generated value type vs expected store type.
-            // value_type (from layoutToLlvmType) may not match the actual value if
-            // the expression generates a narrower type (e.g., i64 when result is Dec/i128).
-            const actual_value_type = value.typeOfWip(&wip);
-            const store_value = if (actual_value_type == final_type)
-                value
-            else conv: {
-                // For Dec result_layout, integer values need sign extension
-                const conv_sign: LlvmBuilder.Constant.Cast.Signedness = if (signedness == .unneeded and isIntType(actual_value_type))
-                    .signed
-                else
-                    signedness;
-                break :conv wip.conv(conv_sign, value, final_type, "") catch return error.CompilationFailed;
-            };
+                const signedness: LlvmBuilder.Constant.Cast.Signedness = switch (result_layout) {
+                    .i8, .i16, .i32, .i64, .i128 => .signed,
+                    .bool, .u8, .u16, .u32, .u64, .u128 => .unsigned,
+                    .f32, .f64, .dec => .unneeded,
+                    else => .unneeded,
+                };
 
-            const alignment = LlvmBuilder.Alignment.fromByteUnits(switch (final_type) {
-                .i64 => 8,
-                .i128 => 16,
-                .float => 4,
-                .double => 8,
-                else => 0,
-            });
-            _ = wip.store(.normal, store_value, out_ptr, alignment) catch return error.CompilationFailed;
-        } else {
-            // Composite type (record, tuple, tag_union, str, list, etc.)
-            // For 24-byte types (str, list), decompose to individual field stores
-            // to avoid aggregate store issues where only the first field is written.
-            const is_24byte_struct = switch (result_layout) {
-                .str => true,
-                else => blk: {
-                    if (self.layout_store) |ls2| {
-                        const l = ls2.getLayout(result_layout);
-                        break :blk (l.tag == .list or l.tag == .list_of_zst);
-                    }
-                    break :blk false;
-                },
-            };
-            if (is_24byte_struct) {
-                const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
-                for (0..3) |fi| {
-                    const field_val = wip.extractValue(value, &.{@as(u32, @intCast(fi))}, "") catch return error.CompilationFailed;
-                    const field_ptr = if (fi == 0) out_ptr else blk: {
-                        const off = builder.intValue(.i32, @as(u32, @intCast(fi * 8))) catch return error.OutOfMemory;
-                        break :blk wip.gep(.inbounds, .i8, out_ptr, &.{off}, "") catch return error.CompilationFailed;
-                    };
-                    _ = wip.store(.@"volatile", field_val, field_ptr, alignment) catch return error.CompilationFailed;
-                }
+                // Check actual generated value type vs expected store type.
+                // value_type (from layoutToLlvmType) may not match the actual value if
+                // the expression generates a narrower type (e.g., i64 when result is Dec/i128).
+                const actual_value_type = value.typeOfWip(&wip);
+                const store_value = if (actual_value_type == final_type)
+                    value
+                else conv: {
+                    // For Dec result_layout, integer values need sign extension
+                    const conv_sign: LlvmBuilder.Constant.Cast.Signedness = if (signedness == .unneeded and isIntType(actual_value_type))
+                        .signed
+                    else
+                        signedness;
+                    break :conv wip.conv(conv_sign, value, final_type, "") catch return error.CompilationFailed;
+                };
+
+                const alignment = LlvmBuilder.Alignment.fromByteUnits(switch (final_type) {
+                    .i64 => 8,
+                    .i128 => 16,
+                    .float => 4,
+                    .double => 8,
+                    else => 0,
+                });
+                _ = wip.store(.normal, store_value, out_ptr, alignment) catch return error.CompilationFailed;
             } else {
-                const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
-                _ = wip.store(.normal, value, out_ptr, alignment) catch return error.CompilationFailed;
+                // Composite type (record, tuple, tag_union, str, list, etc.)
+                // For 24-byte types (str, list), decompose to individual field stores
+                // to avoid aggregate store issues where only the first field is written.
+                const is_24byte_struct = switch (result_layout) {
+                    .str => true,
+                    else => blk: {
+                        if (self.layout_store) |ls2| {
+                            const l = ls2.getLayout(result_layout);
+                            break :blk (l.tag == .list or l.tag == .list_of_zst);
+                        }
+                        break :blk false;
+                    },
+                };
+                if (is_24byte_struct) {
+                    const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+                    for (0..3) |fi| {
+                        const field_val = wip.extractValue(value, &.{@as(u32, @intCast(fi))}, "") catch return error.CompilationFailed;
+                        const field_ptr = if (fi == 0) out_ptr else blk: {
+                            const off = builder.intValue(.i32, @as(u32, @intCast(fi * 8))) catch return error.OutOfMemory;
+                            break :blk wip.gep(.inbounds, .i8, out_ptr, &.{off}, "") catch return error.CompilationFailed;
+                        };
+                        _ = wip.store(.@"volatile", field_val, field_ptr, alignment) catch return error.CompilationFailed;
+                    }
+                } else {
+                    const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+                    _ = wip.store(.normal, value, out_ptr, alignment) catch return error.CompilationFailed;
+                }
             }
-        }
         } // end of value != .none else
 
         _ = wip.retVoid() catch return error.CompilationFailed;
@@ -604,9 +615,7 @@ pub const MonoLlvmCodeGen = struct {
         };
     }
 
-    // ---------------------------------------------------------------
     // Control Flow Statement generation (mirrors dev backend's generateStmt)
-    // ---------------------------------------------------------------
 
     fn generateStmt(self: *MonoLlvmCodeGen, stmt_id: CFStmtId) Error!void {
         const stmt = self.store.getCFStmt(stmt_id);
@@ -816,9 +825,7 @@ pub const MonoLlvmCodeGen = struct {
         try self.generateStmt(sw.default_branch);
     }
 
-    // ---------------------------------------------------------------
     // Expression generation
-    // ---------------------------------------------------------------
 
     /// Generate LLVM IR for an expression
     fn generateExpr(self: *MonoLlvmCodeGen, expr_id: LirExprId) Error!LlvmBuilder.Value {
@@ -1573,9 +1580,7 @@ pub const MonoLlvmCodeGen = struct {
         };
     }
 
-    // ---------------------------------------------------------------
     // Record and tuple generation
-    // ---------------------------------------------------------------
 
     fn generateEmptyRecord(self: *MonoLlvmCodeGen) Error!LlvmBuilder.Value {
         const builder = self.builder orelse return error.CompilationFailed;
@@ -1733,9 +1738,7 @@ pub const MonoLlvmCodeGen = struct {
         return val;
     }
 
-    // ---------------------------------------------------------------
     // Tag union generation
-    // ---------------------------------------------------------------
 
     /// Get the LLVM integer type for a discriminant size.
     fn discriminantIntType(disc_size: u8) LlvmBuilder.Type {
@@ -1869,7 +1872,6 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Generate a discriminant switch — dispatch on a tag union's discriminant.
     fn generateDiscriminantSwitch(self: *MonoLlvmCodeGen, ds: anytype) Error!LlvmBuilder.Value {
-
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
         const ls = self.layout_store orelse unreachable;
@@ -1964,17 +1966,13 @@ pub const MonoLlvmCodeGen = struct {
         return phi_inst.toValue();
     }
 
-    // ---------------------------------------------------------------
     // When/match expression generation
-    // ---------------------------------------------------------------
 
     /// Generate a when/match expression.
     /// Evaluates the scrutinee, then checks each branch pattern sequentially.
     /// Unconditional patterns (wildcard, bind) go directly to the body.
     /// Conditional patterns (int_literal, tag) compare and branch.
-    // ---------------------------------------------------------------
-    // Loop generation
-    // ---------------------------------------------------------------
+    // Loop generation-------
 
     /// Generate a while loop: header checks condition, body executes, then loops back.
     /// Returns unit (i8 0).
@@ -2178,9 +2176,7 @@ pub const MonoLlvmCodeGen = struct {
         return builder.intValue(.i8, 0) catch return error.OutOfMemory;
     }
 
-    // ---------------------------------------------------------------
     // Pattern matching
-    // ---------------------------------------------------------------
 
     fn generateMatchExpr(self: *MonoLlvmCodeGen, w: anytype) Error!LlvmBuilder.Value {
         const saved_out_ptr = self.out_ptr;
@@ -2484,9 +2480,7 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    // ---------------------------------------------------------------
     // Early return
-    // ---------------------------------------------------------------
 
     /// Generate an early return — stores the result to out_ptr and branches to the
     /// early return block (which contains retVoid). Used for the `?` operator.
@@ -2503,8 +2497,20 @@ pub const MonoLlvmCodeGen = struct {
 
             if (value != .none) {
                 const is_scalar = switch (ret_layout) {
-                    .bool, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64,
-                    .i128, .u128, .dec, .f32, .f64,
+                    .bool,
+                    .i8,
+                    .i16,
+                    .i32,
+                    .i64,
+                    .u8,
+                    .u16,
+                    .u32,
+                    .u64,
+                    .i128,
+                    .u128,
+                    .dec,
+                    .f32,
+                    .f64,
                     => true,
                     else => false,
                 };
@@ -2558,9 +2564,7 @@ pub const MonoLlvmCodeGen = struct {
         return builder.intValue(.i64, 0) catch return error.OutOfMemory;
     }
 
-    // ---------------------------------------------------------------
     // Runtime error / unreachable
-    // ---------------------------------------------------------------
 
     /// Generate an LLVM unreachable instruction for runtime_error and crash expressions.
     /// Returns a poison value so the caller has something to work with
@@ -2736,9 +2740,7 @@ pub const MonoLlvmCodeGen = struct {
         return builder.intValue(.i64, 0) catch return error.OutOfMemory;
     }
 
-    // ---------------------------------------------------------------
     // Low-level builtins
-    // ---------------------------------------------------------------
 
     /// Generate code for low-level builtin operations.
     /// Handles numeric conversions and simple operations directly as LLVM
@@ -2847,13 +2849,26 @@ pub const MonoLlvmCodeGen = struct {
             },
 
             // --- Widening integer conversions (always safe) ---
-            .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128,
-            .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128,
-            .u16_to_i32, .u16_to_i64, .u16_to_i128,
-            .u16_to_u32, .u16_to_u64, .u16_to_u128,
-            .u32_to_i64, .u32_to_i128,
-            .u32_to_u64, .u32_to_u128,
-            .u64_to_i128, .u64_to_u128,
+            .u8_to_i16,
+            .u8_to_i32,
+            .u8_to_i64,
+            .u8_to_i128,
+            .u8_to_u16,
+            .u8_to_u32,
+            .u8_to_u64,
+            .u8_to_u128,
+            .u16_to_i32,
+            .u16_to_i64,
+            .u16_to_i128,
+            .u16_to_u32,
+            .u16_to_u64,
+            .u16_to_u128,
+            .u32_to_i64,
+            .u32_to_i128,
+            .u32_to_u64,
+            .u32_to_u128,
+            .u64_to_i128,
+            .u64_to_u128,
             => {
                 std.debug.assert(args.len >= 1);
                 const operand = try self.generateExpr(args[0]);
@@ -2861,12 +2876,24 @@ pub const MonoLlvmCodeGen = struct {
                 return wip.conv(.unsigned, operand, target_type, "") catch return error.CompilationFailed;
             },
 
-            .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128,
-            .i8_to_u16_wrap, .i8_to_u32_wrap, .i8_to_u64_wrap, .i8_to_u128_wrap,
-            .i16_to_i32, .i16_to_i64, .i16_to_i128,
-            .i16_to_u32_wrap, .i16_to_u64_wrap, .i16_to_u128_wrap,
-            .i32_to_i64, .i32_to_i128,
-            .i32_to_u64_wrap, .i32_to_u128_wrap,
+            .i8_to_i16,
+            .i8_to_i32,
+            .i8_to_i64,
+            .i8_to_i128,
+            .i8_to_u16_wrap,
+            .i8_to_u32_wrap,
+            .i8_to_u64_wrap,
+            .i8_to_u128_wrap,
+            .i16_to_i32,
+            .i16_to_i64,
+            .i16_to_i128,
+            .i16_to_u32_wrap,
+            .i16_to_u64_wrap,
+            .i16_to_u128_wrap,
+            .i32_to_i64,
+            .i32_to_i128,
+            .i32_to_u64_wrap,
+            .i32_to_u128_wrap,
             .i64_to_i128,
             .i64_to_u128_wrap,
             => {
@@ -2877,19 +2904,56 @@ pub const MonoLlvmCodeGen = struct {
             },
 
             // --- Narrowing/wrapping integer conversions ---
-            .u8_to_i8_wrap, .i8_to_u8_wrap,
-            .u16_to_i8_wrap, .u16_to_i16_wrap, .u16_to_u8_wrap,
-            .i16_to_i8_wrap, .i16_to_u8_wrap, .i16_to_u16_wrap,
-            .u32_to_i8_wrap, .u32_to_i16_wrap, .u32_to_i32_wrap, .u32_to_u8_wrap, .u32_to_u16_wrap,
-            .i32_to_i8_wrap, .i32_to_i16_wrap, .i32_to_u8_wrap, .i32_to_u16_wrap, .i32_to_u32_wrap,
-            .u64_to_i8_wrap, .u64_to_i16_wrap, .u64_to_i32_wrap, .u64_to_i64_wrap,
-            .u64_to_u8_wrap, .u64_to_u16_wrap, .u64_to_u32_wrap,
-            .i64_to_i8_wrap, .i64_to_i16_wrap, .i64_to_i32_wrap,
-            .i64_to_u8_wrap, .i64_to_u16_wrap, .i64_to_u32_wrap, .i64_to_u64_wrap,
-            .u128_to_i8_wrap, .u128_to_i16_wrap, .u128_to_i32_wrap, .u128_to_i64_wrap, .u128_to_i128_wrap,
-            .u128_to_u8_wrap, .u128_to_u16_wrap, .u128_to_u32_wrap, .u128_to_u64_wrap,
-            .i128_to_i8_wrap, .i128_to_i16_wrap, .i128_to_i32_wrap, .i128_to_i64_wrap,
-            .i128_to_u8_wrap, .i128_to_u16_wrap, .i128_to_u32_wrap, .i128_to_u64_wrap, .i128_to_u128_wrap,
+            .u8_to_i8_wrap,
+            .i8_to_u8_wrap,
+            .u16_to_i8_wrap,
+            .u16_to_i16_wrap,
+            .u16_to_u8_wrap,
+            .i16_to_i8_wrap,
+            .i16_to_u8_wrap,
+            .i16_to_u16_wrap,
+            .u32_to_i8_wrap,
+            .u32_to_i16_wrap,
+            .u32_to_i32_wrap,
+            .u32_to_u8_wrap,
+            .u32_to_u16_wrap,
+            .i32_to_i8_wrap,
+            .i32_to_i16_wrap,
+            .i32_to_u8_wrap,
+            .i32_to_u16_wrap,
+            .i32_to_u32_wrap,
+            .u64_to_i8_wrap,
+            .u64_to_i16_wrap,
+            .u64_to_i32_wrap,
+            .u64_to_i64_wrap,
+            .u64_to_u8_wrap,
+            .u64_to_u16_wrap,
+            .u64_to_u32_wrap,
+            .i64_to_i8_wrap,
+            .i64_to_i16_wrap,
+            .i64_to_i32_wrap,
+            .i64_to_u8_wrap,
+            .i64_to_u16_wrap,
+            .i64_to_u32_wrap,
+            .i64_to_u64_wrap,
+            .u128_to_i8_wrap,
+            .u128_to_i16_wrap,
+            .u128_to_i32_wrap,
+            .u128_to_i64_wrap,
+            .u128_to_i128_wrap,
+            .u128_to_u8_wrap,
+            .u128_to_u16_wrap,
+            .u128_to_u32_wrap,
+            .u128_to_u64_wrap,
+            .i128_to_i8_wrap,
+            .i128_to_i16_wrap,
+            .i128_to_i32_wrap,
+            .i128_to_i64_wrap,
+            .i128_to_u8_wrap,
+            .i128_to_u16_wrap,
+            .i128_to_u32_wrap,
+            .i128_to_u64_wrap,
+            .i128_to_u128_wrap,
             => {
                 std.debug.assert(args.len >= 1);
                 const operand = try self.generateExpr(args[0]);
@@ -2898,16 +2962,32 @@ pub const MonoLlvmCodeGen = struct {
             },
 
             // --- Integer to float conversions ---
-            .u8_to_f32, .u16_to_f32, .u32_to_f32, .u64_to_f32, .u128_to_f32,
-            .u8_to_f64, .u16_to_f64, .u32_to_f64, .u64_to_f64, .u128_to_f64,
+            .u8_to_f32,
+            .u16_to_f32,
+            .u32_to_f32,
+            .u64_to_f32,
+            .u128_to_f32,
+            .u8_to_f64,
+            .u16_to_f64,
+            .u32_to_f64,
+            .u64_to_f64,
+            .u128_to_f64,
             => {
                 std.debug.assert(args.len >= 1);
                 const operand = try self.generateExpr(args[0]);
                 const target_type = layoutToLlvmType(ll.ret_layout);
                 return wip.cast(.uitofp, operand, target_type, "") catch return error.CompilationFailed;
             },
-            .i8_to_f32, .i16_to_f32, .i32_to_f32, .i64_to_f32, .i128_to_f32,
-            .i8_to_f64, .i16_to_f64, .i32_to_f64, .i64_to_f64, .i128_to_f64,
+            .i8_to_f32,
+            .i16_to_f32,
+            .i32_to_f32,
+            .i64_to_f32,
+            .i128_to_f32,
+            .i8_to_f64,
+            .i16_to_f64,
+            .i32_to_f64,
+            .i64_to_f64,
+            .i128_to_f64,
             => {
                 std.debug.assert(args.len >= 1);
                 const operand = try self.generateExpr(args[0]);
@@ -2916,16 +2996,32 @@ pub const MonoLlvmCodeGen = struct {
             },
 
             // --- Float to integer conversions (truncating) ---
-            .f32_to_i8_trunc, .f32_to_i16_trunc, .f32_to_i32_trunc, .f32_to_i64_trunc, .f32_to_i128_trunc,
-            .f64_to_i8_trunc, .f64_to_i16_trunc, .f64_to_i32_trunc, .f64_to_i64_trunc, .f64_to_i128_trunc,
+            .f32_to_i8_trunc,
+            .f32_to_i16_trunc,
+            .f32_to_i32_trunc,
+            .f32_to_i64_trunc,
+            .f32_to_i128_trunc,
+            .f64_to_i8_trunc,
+            .f64_to_i16_trunc,
+            .f64_to_i32_trunc,
+            .f64_to_i64_trunc,
+            .f64_to_i128_trunc,
             => {
                 std.debug.assert(args.len >= 1);
                 const operand = try self.generateExpr(args[0]);
                 const target_type = layoutToLlvmType(ll.ret_layout);
                 return wip.cast(.fptosi, operand, target_type, "") catch return error.CompilationFailed;
             },
-            .f32_to_u8_trunc, .f32_to_u16_trunc, .f32_to_u32_trunc, .f32_to_u64_trunc, .f32_to_u128_trunc,
-            .f64_to_u8_trunc, .f64_to_u16_trunc, .f64_to_u32_trunc, .f64_to_u64_trunc, .f64_to_u128_trunc,
+            .f32_to_u8_trunc,
+            .f32_to_u16_trunc,
+            .f32_to_u32_trunc,
+            .f32_to_u64_trunc,
+            .f32_to_u128_trunc,
+            .f64_to_u8_trunc,
+            .f64_to_u16_trunc,
+            .f64_to_u32_trunc,
+            .f64_to_u64_trunc,
+            .f64_to_u128_trunc,
             => {
                 std.debug.assert(args.len >= 1);
                 const operand = try self.generateExpr(args[0]);
@@ -2934,16 +3030,32 @@ pub const MonoLlvmCodeGen = struct {
             },
 
             // --- Float to integer "try_unsafe" conversions (same as trunc, assumes no overflow) ---
-            .f32_to_i8_try_unsafe, .f32_to_i16_try_unsafe, .f32_to_i32_try_unsafe, .f32_to_i64_try_unsafe, .f32_to_i128_try_unsafe,
-            .f64_to_i8_try_unsafe, .f64_to_i16_try_unsafe, .f64_to_i32_try_unsafe, .f64_to_i64_try_unsafe, .f64_to_i128_try_unsafe,
+            .f32_to_i8_try_unsafe,
+            .f32_to_i16_try_unsafe,
+            .f32_to_i32_try_unsafe,
+            .f32_to_i64_try_unsafe,
+            .f32_to_i128_try_unsafe,
+            .f64_to_i8_try_unsafe,
+            .f64_to_i16_try_unsafe,
+            .f64_to_i32_try_unsafe,
+            .f64_to_i64_try_unsafe,
+            .f64_to_i128_try_unsafe,
             => {
                 std.debug.assert(args.len >= 1);
                 const operand = try self.generateExpr(args[0]);
                 const target_type = layoutToLlvmType(ll.ret_layout);
                 return wip.cast(.fptosi, operand, target_type, "") catch return error.CompilationFailed;
             },
-            .f32_to_u8_try_unsafe, .f32_to_u16_try_unsafe, .f32_to_u32_try_unsafe, .f32_to_u64_try_unsafe, .f32_to_u128_try_unsafe,
-            .f64_to_u8_try_unsafe, .f64_to_u16_try_unsafe, .f64_to_u32_try_unsafe, .f64_to_u64_try_unsafe, .f64_to_u128_try_unsafe,
+            .f32_to_u8_try_unsafe,
+            .f32_to_u16_try_unsafe,
+            .f32_to_u32_try_unsafe,
+            .f32_to_u64_try_unsafe,
+            .f32_to_u128_try_unsafe,
+            .f64_to_u8_try_unsafe,
+            .f64_to_u16_try_unsafe,
+            .f64_to_u32_try_unsafe,
+            .f64_to_u64_try_unsafe,
+            .f64_to_u128_try_unsafe,
             => {
                 std.debug.assert(args.len >= 1);
                 const operand = try self.generateExpr(args[0]);
@@ -2958,17 +3070,65 @@ pub const MonoLlvmCodeGen = struct {
 
             // --- Integer "try" conversions (return Result tag union via C wrapper) ---
             .u8_to_i8_try,
-            .i8_to_u8_try, .i8_to_u16_try, .i8_to_u32_try, .i8_to_u64_try, .i8_to_u128_try,
-            .u16_to_i8_try, .u16_to_i16_try, .u16_to_u8_try,
-            .i16_to_i8_try, .i16_to_u8_try, .i16_to_u16_try, .i16_to_u32_try, .i16_to_u64_try, .i16_to_u128_try,
-            .u32_to_i8_try, .u32_to_i16_try, .u32_to_i32_try, .u32_to_u8_try, .u32_to_u16_try,
-            .i32_to_i8_try, .i32_to_i16_try, .i32_to_u8_try, .i32_to_u16_try, .i32_to_u32_try, .i32_to_u64_try, .i32_to_u128_try,
-            .u64_to_i8_try, .u64_to_i16_try, .u64_to_i32_try, .u64_to_i64_try, .u64_to_u8_try, .u64_to_u16_try, .u64_to_u32_try,
-            .i64_to_i8_try, .i64_to_i16_try, .i64_to_i32_try, .i64_to_u8_try, .i64_to_u16_try, .i64_to_u32_try, .i64_to_u64_try, .i64_to_u128_try,
-            .u128_to_i8_try, .u128_to_i16_try, .u128_to_i32_try, .u128_to_i64_try, .u128_to_i128_try,
-            .u128_to_u8_try, .u128_to_u16_try, .u128_to_u32_try, .u128_to_u64_try,
-            .i128_to_i8_try, .i128_to_i16_try, .i128_to_i32_try, .i128_to_i64_try,
-            .i128_to_u8_try, .i128_to_u16_try, .i128_to_u32_try, .i128_to_u64_try, .i128_to_u128_try,
+            .i8_to_u8_try,
+            .i8_to_u16_try,
+            .i8_to_u32_try,
+            .i8_to_u64_try,
+            .i8_to_u128_try,
+            .u16_to_i8_try,
+            .u16_to_i16_try,
+            .u16_to_u8_try,
+            .i16_to_i8_try,
+            .i16_to_u8_try,
+            .i16_to_u16_try,
+            .i16_to_u32_try,
+            .i16_to_u64_try,
+            .i16_to_u128_try,
+            .u32_to_i8_try,
+            .u32_to_i16_try,
+            .u32_to_i32_try,
+            .u32_to_u8_try,
+            .u32_to_u16_try,
+            .i32_to_i8_try,
+            .i32_to_i16_try,
+            .i32_to_u8_try,
+            .i32_to_u16_try,
+            .i32_to_u32_try,
+            .i32_to_u64_try,
+            .i32_to_u128_try,
+            .u64_to_i8_try,
+            .u64_to_i16_try,
+            .u64_to_i32_try,
+            .u64_to_i64_try,
+            .u64_to_u8_try,
+            .u64_to_u16_try,
+            .u64_to_u32_try,
+            .i64_to_i8_try,
+            .i64_to_i16_try,
+            .i64_to_i32_try,
+            .i64_to_u8_try,
+            .i64_to_u16_try,
+            .i64_to_u32_try,
+            .i64_to_u64_try,
+            .i64_to_u128_try,
+            .u128_to_i8_try,
+            .u128_to_i16_try,
+            .u128_to_i32_try,
+            .u128_to_i64_try,
+            .u128_to_i128_try,
+            .u128_to_u8_try,
+            .u128_to_u16_try,
+            .u128_to_u32_try,
+            .u128_to_u64_try,
+            .i128_to_i8_try,
+            .i128_to_i16_try,
+            .i128_to_i32_try,
+            .i128_to_i64_try,
+            .i128_to_u8_try,
+            .i128_to_u16_try,
+            .i128_to_u32_try,
+            .i128_to_u64_try,
+            .i128_to_u128_try,
             => {
                 return try self.generateIntTryConversion(ll);
             },
@@ -2977,15 +3137,24 @@ pub const MonoLlvmCodeGen = struct {
             },
 
             // --- Dec truncation conversions: sdiv by 10^18, then trunc ---
-            .dec_to_i8_trunc, .dec_to_i8_try_unsafe,
-            .dec_to_i16_trunc, .dec_to_i16_try_unsafe,
-            .dec_to_i32_trunc, .dec_to_i32_try_unsafe,
-            .dec_to_i128_trunc, .dec_to_i128_try_unsafe,
-            .dec_to_u8_trunc, .dec_to_u8_try_unsafe,
-            .dec_to_u16_trunc, .dec_to_u16_try_unsafe,
-            .dec_to_u32_trunc, .dec_to_u32_try_unsafe,
-            .dec_to_u64_trunc, .dec_to_u64_try_unsafe,
-            .dec_to_u128_trunc, .dec_to_u128_try_unsafe,
+            .dec_to_i8_trunc,
+            .dec_to_i8_try_unsafe,
+            .dec_to_i16_trunc,
+            .dec_to_i16_try_unsafe,
+            .dec_to_i32_trunc,
+            .dec_to_i32_try_unsafe,
+            .dec_to_i128_trunc,
+            .dec_to_i128_try_unsafe,
+            .dec_to_u8_trunc,
+            .dec_to_u8_try_unsafe,
+            .dec_to_u16_trunc,
+            .dec_to_u16_try_unsafe,
+            .dec_to_u32_trunc,
+            .dec_to_u32_try_unsafe,
+            .dec_to_u64_trunc,
+            .dec_to_u64_try_unsafe,
+            .dec_to_u128_trunc,
+            .dec_to_u128_try_unsafe,
             => {
                 std.debug.assert(args.len >= 1);
                 const operand = try self.generateExpr(args[0]);
@@ -3020,8 +3189,14 @@ pub const MonoLlvmCodeGen = struct {
             },
 
             // --- Integer to Dec conversion (multiply by 10^18) ---
-            .u8_to_dec, .u16_to_dec, .u32_to_dec, .u64_to_dec,
-            .i8_to_dec, .i16_to_dec, .i32_to_dec, .i64_to_dec,
+            .u8_to_dec,
+            .u16_to_dec,
+            .u32_to_dec,
+            .u64_to_dec,
+            .i8_to_dec,
+            .i16_to_dec,
+            .i32_to_dec,
+            .i64_to_dec,
             => {
                 std.debug.assert(args.len >= 1);
                 const operand = try self.generateExpr(args[0]);
@@ -4525,9 +4700,7 @@ pub const MonoLlvmCodeGen = struct {
         return .none;
     }
 
-    // ---------------------------------------------------------------
     // String generation
-    // ---------------------------------------------------------------
 
     /// RocStr size in bytes (3 pointer-sized words: ptr/bytes, length, capacity)
     const roc_str_size: u32 = 24; // 3 * 8 on 64-bit
@@ -5088,9 +5261,7 @@ pub const MonoLlvmCodeGen = struct {
         return self.generateExpr(block_data.final_expr);
     }
 
-    // ---------------------------------------------------------------
     // Call generation (mirrors dev backend's dispatch)
-    // ---------------------------------------------------------------
 
     fn generateCall(self: *MonoLlvmCodeGen, call: anytype) Error!LlvmBuilder.Value {
         const saved_out_ptr = self.out_ptr;
@@ -5185,9 +5356,7 @@ pub const MonoLlvmCodeGen = struct {
         return wip.call(.normal, .ccc, .none, fn_type, callee, arg_values.items, "") catch return error.CompilationFailed;
     }
 
-    // ---------------------------------------------------------------
     // Lambda and closure compilation
-    // ---------------------------------------------------------------
 
     /// Compile a lambda expression as a standalone LLVM function.
     /// Optional closure_layout adds a single closure-data parameter between
@@ -6035,9 +6204,7 @@ pub const MonoLlvmCodeGen = struct {
         };
     }
 
-    // ---------------------------------------------------------------
     // Pattern binding helpers
-    // ---------------------------------------------------------------
 
     /// Load a value from a pointer based on layout type.
     /// Handles scalars, composite types (str/list as 24-byte {ptr,i64,i64}), and aggregates.
@@ -6268,5 +6435,4 @@ pub const MonoLlvmCodeGen = struct {
             else => {},
         }
     }
-
 };

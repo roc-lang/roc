@@ -1,7 +1,6 @@
 //! Tests for the REPL
 const std = @import("std");
 const Repl = @import("eval.zig").Repl;
-const Backend = @import("eval.zig").Backend;
 const TestEnv = @import("repl_test_env.zig").TestEnv;
 
 // Tests

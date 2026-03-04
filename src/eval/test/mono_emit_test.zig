@@ -214,43 +214,6 @@ fn evalToInt(allocator: std.mem.Allocator, source: []const u8) !i128 {
     return result_int;
 }
 
-/// Helper to evaluate an expression and get its boolean result
-fn evalToBool(allocator: std.mem.Allocator, source: []const u8) !bool {
-    const resources = try helpers.parseAndCanonicalizeExpr(allocator, source);
-    defer helpers.cleanupParseAndCanonical(allocator, resources);
-
-    var test_env_instance = TestEnv.init(allocator);
-    defer test_env_instance.deinit();
-
-    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
-    var interpreter = try Interpreter.init(allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
-    defer interpreter.deinit();
-
-    const ops = test_env_instance.get_ops();
-    const result = try interpreter.eval(resources.expr_idx, ops);
-    const layout_cache = &interpreter.runtime_layout_store;
-    defer result.decref(layout_cache, ops);
-    defer interpreter.bindings.items.len = 0;
-
-    // Boolean represented as integer (discriminant)
-    const result_bool: bool = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) blk: {
-        const int_val = result.asI128();
-        break :blk int_val != 0;
-    } else if (result.ptr != null) blk: {
-        // Try reading as raw byte (for boolean tag values)
-        const bool_ptr: *const u8 = @ptrCast(@alignCast(result.ptr.?));
-        break :blk bool_ptr.* != 0;
-    } else return error.NotABool;
-
-    // Backend comparison — use integer format ("0"/"1") to match dev evaluator output
-    const bool_str: []const u8 = if (result_bool) "1" else "0";
-    try helpers.compareWithDevEvaluator(allocator, bool_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try helpers.compareWithLlvmEvaluator(allocator, bool_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-
-    return result_bool;
-}
-
 test "roundtrip: integer literal produces same result" {
     const source = "42";
 
