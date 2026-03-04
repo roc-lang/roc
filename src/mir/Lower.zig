@@ -1871,7 +1871,7 @@ fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype:
         }
     }
 
-    var func = try self.lowerExpr(call.func);
+    const func = try self.lowerExpr(call.func);
 
     const resolved_func_monotype_for_args = try self.resolveMonotype(call.func);
     const expected_arg_monos: []const Monotype.Idx = blk: {
@@ -1892,40 +1892,6 @@ fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype:
         try self.scratch_expr_ids.append(arg);
     }
     const args = try self.store.addExprSpan(self.allocator, self.scratch_expr_ids.sliceFromStart(args_top));
-
-    // If call target is an external symbol lookup, route through method lowering
-    // so polymorphic recursive calls can get a distinct specialization symbol.
-    // Local lookups (lambda parameters, block-scoped bindings) don't need this.
-    if (self.store.getExpr(func) == .lookup and func_cir == .e_lookup_external) {
-        const callee_symbol = self.store.getExpr(func).lookup;
-
-        var desired_func_monotype = try self.resolveMonotype(call.func);
-        if (desired_func_monotype.isNone()) {
-            const mono_top = self.mono_scratches.idxs.top();
-            defer self.mono_scratches.idxs.clearFrom(mono_top);
-            const cir_args = module_env.store.sliceExpr(call.args);
-            for (cir_args) |arg_idx| {
-                try self.mono_scratches.idxs.append(try self.resolveMonotype(arg_idx));
-            }
-            desired_func_monotype = try self.buildFuncMonotype(
-                self.mono_scratches.idxs.sliceFromStart(mono_top),
-                monotype,
-                false,
-            );
-        }
-
-        if (!desired_func_monotype.isNone()) {
-            const lowered_symbol = try self.specializeMethod(callee_symbol, desired_func_monotype);
-            if (@as(u64, @bitCast(lowered_symbol)) != @as(u64, @bitCast(callee_symbol))) {
-                func = try self.store.addExpr(
-                    self.allocator,
-                    .{ .lookup = lowered_symbol },
-                    desired_func_monotype,
-                    region,
-                );
-            }
-        }
-    }
 
     return try self.store.addExpr(self.allocator, .{ .call = .{
         .func = func,
@@ -3182,7 +3148,8 @@ fn specializeMethod(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?Mono
                 if (!same_specialization) {
                     const def_expr = self.findDefExprBySymbol(symbol_meta.module_idx, symbol_meta.ident_idx) orelse {
                         if (std.debug.runtime_safety) {
-                            std.debug.panic("specializeMethod: need specialization for in-progress def but definition not found", .{});
+                            const ident_name = self.all_module_envs[symbol_meta.module_idx].common.getIdent(symbol_meta.ident_idx);
+                            std.debug.panic("specializeMethod: definition not found for in-progress '{s}' (module={d})", .{ ident_name, symbol_meta.module_idx });
                         }
                         unreachable;
                     };
@@ -3199,7 +3166,8 @@ fn specializeMethod(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?Mono
                 if (!try self.monotypesStructurallyEqual(cached_monotype, caller_monotype)) {
                     const def_expr = self.findDefExprBySymbol(symbol_meta.module_idx, symbol_meta.ident_idx) orelse {
                         if (std.debug.runtime_safety) {
-                            std.debug.panic("specializeMethod: need specialization for cached symbol but definition not found", .{});
+                            const ident_name = self.all_module_envs[symbol_meta.module_idx].common.getIdent(symbol_meta.ident_idx);
+                            std.debug.panic("specializeMethod: definition not found for cached '{s}' (module={d})", .{ ident_name, symbol_meta.module_idx });
                         }
                         unreachable;
                     };
@@ -3217,7 +3185,8 @@ fn specializeMethod(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?Mono
 
     const def_expr = self.findDefExprBySymbol(symbol_meta.module_idx, symbol_meta.ident_idx) orelse {
         if (std.debug.runtime_safety) {
-            std.debug.panic("specializeMethod: method definition not found for symbol", .{});
+            const ident_name = self.all_module_envs[symbol_meta.module_idx].common.getIdent(symbol_meta.ident_idx);
+            std.debug.panic("specializeMethod: definition not found for '{s}' (module={d})", .{ ident_name, symbol_meta.module_idx });
         }
         unreachable;
     };
