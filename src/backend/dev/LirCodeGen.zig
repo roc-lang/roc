@@ -11441,42 +11441,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Handles different closure representations based on the lambda set.
         fn generateClosure(self: *Self, closure: anytype) Allocator.Error!ValueLocation {
             switch (closure.representation) {
-                .enum_dispatch => |repr| {
-                    // Multiple functions, no captures - just store the tag byte
-                    // Use 8-byte slot for simplicity (tag is only 1 byte but stack alignment matters)
-                    const slot = self.codegen.allocStackSlot(8);
-                    const temp = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(temp, repr.tag);
-                    // Store as 64-bit value (low byte is the tag, rest is padding)
-                    try self.codegen.emitStoreStack(.w64, slot, temp);
-                    self.codegen.freeGeneral(temp);
-                    return .{ .closure_value = .{
-                        .stack_offset = slot,
-                        .representation = closure.representation,
-                        .lambda = closure.lambda,
-                        .captures = closure.captures,
-                    } };
-                },
-                .union_repr => |repr| {
-                    // Multiple functions with captures - store tag + captures as tagged union
-                    const ls = self.layout_store;
-                    const union_layout = ls.getLayout(repr.union_layout);
-                    const union_size = ls.layoutSizeAlign(union_layout).size;
-                    const slot = self.codegen.allocStackSlot(@intCast(union_size));
-                    // Store tag at offset 0 as 64-bit (low 16 bits are the tag)
-                    const temp = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(temp, repr.tag);
-                    try self.codegen.emitStoreStack(.w64, slot, temp);
-                    self.codegen.freeGeneral(temp);
-                    // Materialize captures at payload offset (+8 for tag with padding)
-                    try self.materializeCaptures(closure.captures, slot + 8);
-                    return .{ .closure_value = .{
-                        .stack_offset = slot,
-                        .representation = closure.representation,
-                        .lambda = closure.lambda,
-                        .captures = closure.captures,
-                    } };
-                },
+                .enum_dispatch, .union_repr => unreachable, // MirToLir never creates these representations
                 .unwrapped_capture => {
                     // Single function with one capture - materialize capture to stack
                     // and store as closure_value for dispatch at call sites.
@@ -11666,143 +11631,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Dispatch an enum closure (multiple functions, no captures).
         /// Generates a switch on the tag to dispatch to the correct function.
-        fn dispatchEnumClosure(
-            self: *Self,
-            tag_offset: i32,
-            lambda_set: lir.LambdaSetMemberSpan,
-            args_span: anytype,
-            ret_layout: layout.Idx,
-        ) Allocator.Error!ValueLocation {
-            const members = self.store.getLambdaSetMembers(lambda_set);
-
-            if (members.len == 0) {
-                unreachable;
-            }
-
-            if (members.len == 1) {
-                // Single function - no dispatch needed
-                const member = members[0];
-                return try self.compileLambdaAndCall(member.lambda_body, args_span, ret_layout);
-            }
-
-            // Load tag from stack (stored as 64-bit value, tag is in low byte)
-            const tag_reg = try self.allocTempGeneral();
-            try self.codegen.emitLoadStack(.w64, tag_reg, tag_offset);
-
-            // Allocate result slot sized to the return layout
-            const result_size = self.getLayoutSize(ret_layout);
-            const result_slot = self.codegen.allocStackSlot(result_size);
-
-            // Track end jumps for patching
-            var end_jumps = std.ArrayList(usize).empty;
-            defer end_jumps.deinit(self.allocator);
-
-            for (members, 0..) |member, i| {
-                const is_last = (i == members.len - 1);
-
-                if (!is_last) {
-                    // Compare tag with this member's tag
-                    try self.emitCmpImm(tag_reg, member.tag);
-                    const skip_jump = try self.emitJumpIfNotEqual();
-
-                    // Generate code for this branch
-                    const result = try self.compileLambdaAndCall(member.lambda_body, args_span, ret_layout);
-                    try self.copyToStackSlot(result_slot, result, result_size);
-
-                    // Jump to end
-                    try end_jumps.append(self.allocator, try self.codegen.emitJump());
-
-                    // Patch skip_jump to here
-                    self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
-                } else {
-                    // Last case - no comparison needed (fallthrough)
-                    const result = try self.compileLambdaAndCall(member.lambda_body, args_span, ret_layout);
-                    try self.copyToStackSlot(result_slot, result, result_size);
-                }
-            }
-
-            // Patch all end jumps to current location
-            for (end_jumps.items) |jump| {
-                self.codegen.patchJump(jump, self.codegen.currentOffset());
-            }
-
-            self.codegen.freeGeneral(tag_reg);
-            return .{ .stack = .{ .offset = result_slot } };
-        }
-
-        /// Dispatch a union closure (multiple functions, some with captures).
-        fn dispatchUnionClosure(
-            self: *Self,
-            union_offset: i32,
-            repr: anytype,
-            args_span: anytype,
-            ret_layout: layout.Idx,
-        ) Allocator.Error!ValueLocation {
-            const ls = self.layout_store;
-            const union_layout_val = ls.getLayout(repr.union_layout);
-            std.debug.assert(union_layout_val.tag == .tag_union);
-            const tu_data = ls.getTagUnionData(union_layout_val.data.tag_union.idx);
-            const disc_offset: i32 = @intCast(tu_data.discriminant_offset);
-
-            const members = self.store.getLambdaSetMembers(repr.lambda_set);
-
-            if (members.len == 0) {
-                unreachable;
-            }
-
-            if (members.len == 1) {
-                // Single function - captures are the payload at offset 0
-                const member = members[0];
-                return try self.compileLambdaAndCallWithCaptures(member, union_offset, args_span, ret_layout);
-            }
-
-            // Load discriminant from its correct offset in the tag union
-            // Layout: [payload at offset 0][discriminant at discriminant_offset]
-            const disc_use_w32 = (disc_offset + 8 > @as(i32, @intCast(tu_data.size)));
-            const tag_reg = try self.allocTempGeneral();
-            try self.codegen.emitLoadStack(if (disc_use_w32) .w32 else .w64, tag_reg, union_offset + disc_offset);
-
-            // Allocate result slot sized to the return layout
-            const result_size = self.getLayoutSize(ret_layout);
-            const result_slot = self.codegen.allocStackSlot(result_size);
-
-            // Track end jumps for patching
-            var end_jumps = std.ArrayList(usize).empty;
-            defer end_jumps.deinit(self.allocator);
-
-            for (members, 0..) |member, i| {
-                const is_last = (i == members.len - 1);
-
-                if (!is_last) {
-                    // Compare tag with this member's tag
-                    try self.emitCmpImm(tag_reg, member.tag);
-                    const skip_jump = try self.emitJumpIfNotEqual();
-
-                    // Captures are the payload at offset 0
-                    const result = try self.compileLambdaAndCallWithCaptures(member, union_offset, args_span, ret_layout);
-                    try self.copyToStackSlot(result_slot, result, result_size);
-
-                    // Jump to end
-                    try end_jumps.append(self.allocator, try self.codegen.emitJump());
-
-                    // Patch skip_jump to here
-                    self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
-                } else {
-                    // Last case - no comparison needed (fallthrough)
-                    const result = try self.compileLambdaAndCallWithCaptures(member, union_offset, args_span, ret_layout);
-                    try self.copyToStackSlot(result_slot, result, result_size);
-                }
-            }
-
-            // Patch all end jumps to current location
-            for (end_jumps.items) |jump| {
-                self.codegen.patchJump(jump, self.codegen.currentOffset());
-            }
-
-            self.codegen.freeGeneral(tag_reg);
-            return .{ .stack = .{ .offset = result_slot } };
-        }
-
         /// Compile a lambda body expression as a procedure and call it.
         fn compileLambdaAndCall(
             self: *Self,
@@ -11823,54 +11651,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (inner == .lambda) {
                         try self.populateClosureParamMetadata(closure.lambda, args_span);
                         const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
-                        return try self.callCompiledOffset(code_offset, args_span, ret_layout);
-                    }
-                    unreachable;
-                },
-                else => unreachable,
-            }
-        }
-
-        /// Compile a lambda and call it, binding captures from a stack location.
-        /// Binds captures to symbol_locations, then evaluates the lambda body directly
-        /// (captures need to stay in scope, so we don't compile as a separate procedure).
-        fn compileLambdaAndCallWithCaptures(
-            self: *Self,
-            member: lir.LambdaSetMember,
-            captures_offset: i32,
-            args_span: anytype,
-            ret_layout: layout.Idx,
-        ) Allocator.Error!ValueLocation {
-
-            // Bind captures from the stack to their symbols
-            const captures = self.store.getCaptures(member.captures);
-            var offset: i32 = 0;
-            for (captures) |capture| {
-                const symbol_key: u64 = @bitCast(capture.symbol);
-                const ls = self.layout_store;
-                const capture_layout = ls.getLayout(capture.layout_idx);
-                const cap_sa = ls.layoutSizeAlign(capture_layout);
-                const capture_size = cap_sa.size;
-                // Align offset to match layout store's putCaptureStruct
-                const cap_align = cap_sa.alignment.toByteUnits();
-                offset = @intCast(std.mem.alignForward(usize, @intCast(offset), cap_align));
-                const capture_offset = captures_offset + offset;
-                try self.symbol_locations.put(symbol_key, .{ .stack = .{ .offset = capture_offset } });
-                offset += @intCast(capture_size);
-            }
-
-            // Get the lambda and compile as a proc
-            const lambda_expr = self.store.getExpr(member.lambda_body);
-            switch (lambda_expr) {
-                .lambda => |l| {
-                    const code_offset = try self.compileLambdaAsProc(member.lambda_body, l);
-                    return try self.callCompiledOffset(code_offset, args_span, ret_layout);
-                },
-                .closure => |c_id| {
-                    const c = self.store.getClosureData(c_id);
-                    const inner = self.store.getExpr(c.lambda);
-                    if (inner == .lambda) {
-                        const code_offset = try self.compileLambdaAsProc(c.lambda, inner.lambda);
                         return try self.callCompiledOffset(code_offset, args_span, ret_layout);
                     }
                     unreachable;
@@ -12023,8 +11803,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return try self.compileLambdaAndCall(expr_id, args_span, ret_layout);
                 },
                 .closure_value => |cv| switch (cv.representation) {
-                    .enum_dispatch => |repr| self.dispatchEnumClosure(cv.stack_offset, repr.lambda_set, args_span, ret_layout),
-                    .union_repr => |repr| self.dispatchUnionClosure(cv.stack_offset, repr, args_span, ret_layout),
+                    .enum_dispatch, .union_repr => unreachable, // MirToLir never creates these representations
                     .unwrapped_capture, .struct_captures => {
                         // Bind captures from the stack to their symbols
                         const captures = self.store.getCaptures(cv.captures);
