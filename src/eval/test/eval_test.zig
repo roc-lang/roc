@@ -424,6 +424,23 @@ test "closure with many captures (struct_captures)" {
     , 1005, .no_trace);
 }
 
+test "closure capturing as-bound variable" {
+    // Closures that capture a variable bound via `as` pattern in a match
+    // should canonicalize without panicking.
+    // Regression: canonicalize previously panicked with "unreachable" because
+    // it only expected .assign patterns in closure captures, not .as patterns.
+    const src =
+        \\match 1.I64 {
+        \\    _ as x => {
+        \\        g = |_| x
+        \\        g(0.I64)
+        \\    }
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, src);
+    defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
+}
+
 test "lambdas nested closures" {
     // Nested closures with block locals
     try runExpectI64(

@@ -5589,6 +5589,7 @@ pub fn canonicalizeExpr(
                     const pattern = self.env.store.getPattern(pattern_idx);
                     const name = switch (pattern) {
                         .assign => |a| a.ident,
+                        .as => |a| a.ident,
                         else => unreachable, // Should only capture simple idents
                     };
                     const capture = Expr.Capture{
