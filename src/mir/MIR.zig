@@ -231,6 +231,16 @@ pub const Capture = struct {
     symbol: Symbol,
 };
 
+/// A closure that was lifted to a top-level function during CIR→MIR lowering.
+/// The lifted function takes the original params plus an explicit captures struct param.
+/// At the use site, the closure is replaced with a captures struct value.
+pub const LiftedLambda = struct {
+    /// Symbol of the lifted function (registered in symbol_defs)
+    fn_symbol: Symbol,
+    /// Monotype of the captures struct (tuple of captured variable types)
+    captures_monotype: Monotype.Idx,
+};
+
 // --- Expression ---
 
 /// A monomorphic, desugared expression.
@@ -504,6 +514,10 @@ pub const Store = struct {
     /// `true` means symbol is reassignable (mutable), `false` means immutable.
     symbol_reassignable: std.AutoHashMapUnmanaged(u64, bool),
 
+    /// Closures lifted to top-level functions during CIR→MIR lowering.
+    /// Used by lambda set inference to build lambda sets.
+    lifted_lambdas: std.ArrayListUnmanaged(LiftedLambda),
+
     /// String literals copied from CIR during lowering.
     /// MIR owns its own string data so downstream passes (LIR, codegen)
     /// never need to reach back into CIR module envs.
@@ -522,6 +536,7 @@ pub const Store = struct {
             .stmts = .empty,
             .captures = .empty,
             .monotype_store = try Monotype.Store.init(allocator),
+            .lifted_lambdas = .empty,
             .symbol_defs = .empty,
             .symbol_reassignable = .empty,
             .strings = .{},
@@ -540,6 +555,7 @@ pub const Store = struct {
         self.stmts.deinit(allocator);
         self.captures.deinit(allocator);
         self.monotype_store.deinit(allocator);
+        self.lifted_lambdas.deinit(allocator);
         self.symbol_defs.deinit(allocator);
         self.symbol_reassignable.deinit(allocator);
         self.strings.deinit(allocator);

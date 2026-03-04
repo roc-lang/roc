@@ -8,7 +8,7 @@
 //! - `e_binop` → `call` to resolved method
 //! - `e_type_var_dispatch` → `call` with resolved target
 //! - `e_nominal` → backing expression (strip nominal wrapper)
-//! - `e_closure` → `lambda` with captures
+//! - `e_closure` → lifted top-level lambda + captures tuple at use site
 //! - All lookups unified to opaque global `Symbol`
 
 const std = @import("std");
@@ -1580,32 +1580,167 @@ fn lowerLambda(self: *Self, module_env: *const ModuleEnv, lambda: CIR.Expr.Lambd
     } }, monotype, region);
 }
 
-/// Lower `e_closure` to MIR lambda with captures.
+/// Lower `e_closure` by lifting it to a top-level function with an explicit captures tuple parameter.
+/// At the use site, returns a tuple of the captured values.
+/// The lifted function is registered in symbol_defs and lifted_lambdas.
 fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Closure, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
-    // Lower the inner lambda
     const inner_lambda_expr = module_env.store.getExpr(closure.lambda_idx);
     const lambda = inner_lambda_expr.e_lambda;
-    const params = try self.lowerPatternSpan(module_env, lambda.args);
-    const body = try self.lowerExpr(lambda.body);
-
-    // Lower captures
     const cir_capture_indices = module_env.store.sliceCaptures(closure.captures);
-    const captures_top = self.scratch_captures.top();
-    defer self.scratch_captures.clearFrom(captures_top);
+
+    if (cir_capture_indices.len == 0) {
+        // No captures — just lower as a plain lambda (no lifting needed).
+        return self.lowerLambda(module_env, lambda, monotype, region);
+    }
+
+    // --- Step 1: Collect outer-scope capture symbols and their monotypes ---
+    const idxs_top = self.mono_scratches.idxs.top();
+    defer self.mono_scratches.idxs.clearFrom(idxs_top);
+
+    const expr_top = self.scratch_expr_ids.top();
+    defer self.scratch_expr_ids.clearFrom(expr_top);
 
     for (cir_capture_indices) |cap_idx| {
         const cap = module_env.store.getCapture(cap_idx);
-        const symbol = try self.patternToSymbol(cap.pattern_idx);
-        try self.scratch_captures.append(.{ .symbol = symbol });
+        // Resolve the outer-scope symbol (before we change scopes)
+        const outer_symbol = try self.patternToSymbol(cap.pattern_idx);
+        // Get the monotype of the captured variable
+        const cap_type_var = ModuleEnv.varFrom(cap.pattern_idx);
+        const cap_monotype = try self.store.monotype_store.fromTypeVar(
+            self.allocator,
+            self.types_store,
+            cap_type_var,
+            self.currentCommonIdents(),
+            &self.type_var_seen,
+            &self.mono_scratches,
+        );
+        try self.mono_scratches.idxs.append(cap_monotype);
+
+        // Build the outer-scope lookup expression for this capture
+        const lookup_expr = try self.store.addExpr(self.allocator, .{ .lookup = outer_symbol }, cap_monotype, region);
+        try self.scratch_expr_ids.append(lookup_expr);
     }
 
-    const capture_span = try self.store.addCaptures(self.allocator, self.scratch_captures.sliceFromStart(captures_top));
+    const capture_monotypes = self.mono_scratches.idxs.sliceFromStart(idxs_top);
+    const capture_lookup_exprs = self.scratch_expr_ids.sliceFromStart(expr_top);
 
-    return try self.store.addExpr(self.allocator, .{ .lambda = .{
-        .params = params,
-        .body = body,
-        .captures = capture_span,
-    } }, monotype, region);
+    // --- Step 2: Create captures tuple monotype ---
+    const captures_tuple_elems = try self.store.monotype_store.addIdxSpan(self.allocator, capture_monotypes);
+    const captures_tuple_monotype = try self.store.monotype_store.addMonotype(self.allocator, .{ .tuple = .{
+        .elems = captures_tuple_elems,
+    } });
+
+    // --- Step 3: Create the lifted function symbol ---
+    // Use closure's tag_name as the basis if available, else synthesize
+    const lifted_ident = self.makeSyntheticIdent(closure.tag_name);
+    const lifted_fn_symbol = try self.internSymbol(self.current_module_idx, lifted_ident);
+
+    // --- Step 4: Create captures param symbol and pattern ---
+    const captures_param_ident = self.makeSyntheticIdent(closure.tag_name);
+    const captures_param_symbol = try self.internSymbol(self.current_module_idx, captures_param_ident);
+    const captures_param_pattern = try self.store.addPattern(self.allocator, .{ .bind = captures_param_symbol }, captures_tuple_monotype);
+
+    // --- Step 5: Enter a new scope for the lifted function body ---
+    const saved_pattern_scope = self.current_pattern_scope;
+    self.current_pattern_scope = lifted_fn_symbol.raw();
+    defer self.current_pattern_scope = saved_pattern_scope;
+
+    // Explicitly create fresh local symbols for each captured variable in the new scope.
+    // patternToSymbol would resolve these to the outer scope's symbols (correct for
+    // normal scoping), but here we need distinct symbols that get their values from
+    // destructuring the captures tuple parameter.
+    for (cir_capture_indices) |cap_idx| {
+        const cap = module_env.store.getCapture(cap_idx);
+        const base_key: u64 = (@as(u64, self.current_module_idx) << 32) | @intFromEnum(cap.pattern_idx);
+        const scoped_key: u128 = (@as(u128, self.current_pattern_scope) << 64) | @as(u128, base_key);
+        const local_ident = self.makeSyntheticIdent(cap.name);
+        const local_symbol = try self.internSymbol(self.current_module_idx, local_ident);
+        try self.pattern_symbols.put(scoped_key, local_symbol);
+    }
+
+    // --- Step 6: Lower the lambda params and body in the new scope ---
+    const params = try self.lowerPatternSpan(module_env, lambda.args);
+    const body = try self.lowerExpr(lambda.body);
+
+    // --- Step 7: Build destructuring preamble ---
+    // For each capture: `let local_sym = tuple_access(lookup(captures_param), i)`
+    const stmts_top = self.scratch_stmts.top();
+    defer self.scratch_stmts.clearFrom(stmts_top);
+
+    for (cir_capture_indices, 0..) |cap_idx, i| {
+        const cap = module_env.store.getCapture(cap_idx);
+        const local_symbol = try self.patternToSymbol(cap.pattern_idx);
+        const cap_monotype = capture_monotypes[i];
+
+        // lookup(captures_param)
+        const captures_lookup = try self.store.addExpr(self.allocator, .{ .lookup = captures_param_symbol }, captures_tuple_monotype, region);
+
+        // tuple_access(captures_lookup, i)
+        const tuple_access_expr = try self.store.addExpr(self.allocator, .{ .tuple_access = .{
+            .tuple = captures_lookup,
+            .elem_index = @intCast(i),
+        } }, cap_monotype, region);
+
+        // let local_sym = tuple_access_expr
+        const bind_pat = try self.store.addPattern(self.allocator, .{ .bind = local_symbol }, cap_monotype);
+        try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = bind_pat, .expr = tuple_access_expr } });
+    }
+
+    // --- Step 8: Wrap body in block with destructuring stmts ---
+    const preamble_stmts = try self.store.addStmts(self.allocator, self.scratch_stmts.sliceFromStart(stmts_top));
+    const lifted_body = if (preamble_stmts.isEmpty())
+        body
+    else
+        try self.store.addExpr(self.allocator, .{ .block = .{
+            .stmts = preamble_stmts,
+            .final_expr = body,
+        } }, self.store.typeOf(body), region);
+
+    // --- Step 9: Build the lifted lambda's param list (original params + captures param) ---
+    const orig_param_ids = self.store.getPatternSpan(params);
+    const pat_top = self.scratch_pattern_ids.top();
+    defer self.scratch_pattern_ids.clearFrom(pat_top);
+    for (orig_param_ids) |pid| {
+        try self.scratch_pattern_ids.append(pid);
+    }
+    try self.scratch_pattern_ids.append(captures_param_pattern);
+    const all_params = try self.store.addPatternSpan(self.allocator, self.scratch_pattern_ids.sliceFromStart(pat_top));
+
+    // Build the lifted function's monotype: func(orig_args..., captures_tuple) -> ret
+    const orig_monotype = self.store.monotype_store.getMonotype(monotype);
+    const orig_func = orig_monotype.func;
+    const orig_arg_monos = self.store.monotype_store.getIdxSpan(orig_func.args);
+    const arg_top = self.mono_scratches.idxs.top();
+    defer self.mono_scratches.idxs.clearFrom(arg_top);
+    for (orig_arg_monos) |am| {
+        try self.mono_scratches.idxs.append(am);
+    }
+    try self.mono_scratches.idxs.append(captures_tuple_monotype);
+    const lifted_func_monotype = try self.buildFuncMonotype(
+        self.mono_scratches.idxs.sliceFromStart(arg_top),
+        orig_func.ret,
+        orig_func.effectful,
+    );
+
+    // Create the lifted lambda expression
+    const lifted_lambda_expr = try self.store.addExpr(self.allocator, .{ .lambda = .{
+        .params = all_params,
+        .body = lifted_body,
+        .captures = MIR.CaptureSpan.empty(),
+    } }, lifted_func_monotype, region);
+
+    // --- Step 10: Register the lifted function ---
+    try self.store.registerSymbolDef(self.allocator, lifted_fn_symbol, lifted_lambda_expr);
+    try self.store.lifted_lambdas.append(self.allocator, .{
+        .fn_symbol = lifted_fn_symbol,
+        .captures_monotype = captures_tuple_monotype,
+    });
+
+    // --- Step 11: At the use site, return a tuple of capture values ---
+    const captures_tuple_span = try self.store.addExprSpan(self.allocator, capture_lookup_exprs);
+    return try self.store.addExpr(self.allocator, .{ .tuple = .{
+        .elems = captures_tuple_span,
+    } }, captures_tuple_monotype, region);
 }
 
 fn lowerDeferredBlockLambda(
@@ -1732,9 +1867,10 @@ fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype:
     }
     const args = try self.store.addExprSpan(self.allocator, self.scratch_expr_ids.sliceFromStart(args_top));
 
-    // If call target lowered to a symbol lookup, route through method lowering
+    // If call target is an external symbol lookup, route through method lowering
     // so polymorphic recursive calls can get a distinct specialization symbol.
-    if (self.store.getExpr(func) == .lookup) {
+    // Local lookups (lambda parameters, block-scoped bindings) don't need this.
+    if (self.store.getExpr(func) == .lookup and func_cir == .e_lookup_external) {
         const callee_symbol = self.store.getExpr(func).lookup;
 
         var desired_func_monotype = try self.resolveMonotype(call.func);
@@ -2052,7 +2188,21 @@ fn lowerBinop(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop, monoty
                     },
                     // Unit is always equal.
                     .unit => return try self.emitMirBoolLiteral(module_env, binop.op == .eq, region),
-                    // Nominal primitives — fall through to method call dispatch below.
+                    // Primitives: emit low-level eq op directly.
+                    .prim => |p| {
+                        const op: CIR.Expr.LowLevel = switch (p) {
+                            .bool => .bool_is_eq,
+                            .str => .str_is_eq,
+                            else => .num_is_eq,
+                        };
+                        const args = try self.store.addExprSpan(self.allocator, &.{ lhs, rhs });
+                        const result = try self.store.addExpr(self.allocator, .{ .run_low_level = .{
+                            .op = op,
+                            .args = args,
+                        } }, monotype, region);
+                        if (binop.op == .ne) return try self.negBool(module_env, result, monotype, region);
+                        return result;
+                    },
                     else => {},
                 }
             }
