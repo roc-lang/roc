@@ -231,7 +231,7 @@ fn compileWithCodeGen(
                     };
                 }
             },
-            else => {},
+            .local_data, .jmp_to_return => {},
         }
     }
 

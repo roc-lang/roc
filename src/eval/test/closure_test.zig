@@ -623,6 +623,18 @@ test "closure: monomorphic Str identity with if-else (exact failing scenario but
 //
 // Same test with a short string (SSO) or integer capture passes, confirming
 // the failure is specifically from missing .closure refcount handling.
+test "closure: multi-use closure with captured short string (SSO)" {
+    const code =
+        \\{
+        \\    s = "short"
+        \\    f = |_x| s
+        \\    _a = f(0)
+        \\    f(0)
+        \\}
+    ;
+    try runExpectStr(code, "short", .no_trace);
+}
+
 test "closure: multi-use closure with captured heap string needs incref" {
     const code =
         \\{

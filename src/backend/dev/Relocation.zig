@@ -441,11 +441,13 @@ test "applyRelocations patches x86_64 jmp_to_return" {
         0xC3, // ret
     };
     const relocs = [_]Relocation{
-        .{ .jmp_to_return = .{
-            .inst_loc = 0,
-            .inst_size = 5,
-            .offset = 6, // target ret
-        } },
+        .{
+            .jmp_to_return = .{
+                .inst_loc = 0,
+                .inst_size = 5,
+                .offset = 6, // target ret
+            },
+        },
     };
 
     try applyRelocations(&code, 0, &relocs, testNullResolver);
