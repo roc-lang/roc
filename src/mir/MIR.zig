@@ -518,6 +518,11 @@ pub const Store = struct {
     /// Used by lambda set inference to build lambda sets.
     lifted_lambdas: std.ArrayListUnmanaged(LiftedLambda),
 
+    /// Maps a captures-tuple ExprId (produced by lowerClosure) to its index
+    /// in `lifted_lambdas`. Used by lambda set inference to trace which
+    /// lifted function a closure value corresponds to.
+    closure_origins: std.AutoHashMapUnmanaged(u32, u32),
+
     /// String literals copied from CIR during lowering.
     /// MIR owns its own string data so downstream passes (LIR, codegen)
     /// never need to reach back into CIR module envs.
@@ -537,6 +542,7 @@ pub const Store = struct {
             .captures = .empty,
             .monotype_store = try Monotype.Store.init(allocator),
             .lifted_lambdas = .empty,
+            .closure_origins = .empty,
             .symbol_defs = .empty,
             .symbol_reassignable = .empty,
             .strings = .{},
@@ -556,6 +562,7 @@ pub const Store = struct {
         self.captures.deinit(allocator);
         self.monotype_store.deinit(allocator);
         self.lifted_lambdas.deinit(allocator);
+        self.closure_origins.deinit(allocator);
         self.symbol_defs.deinit(allocator);
         self.symbol_reassignable.deinit(allocator);
         self.strings.deinit(allocator);

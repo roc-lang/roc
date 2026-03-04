@@ -1731,6 +1731,7 @@ fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Clo
 
     // --- Step 10: Register the lifted function ---
     try self.store.registerSymbolDef(self.allocator, lifted_fn_symbol, lifted_lambda_expr);
+    const lifted_idx: u32 = @intCast(self.store.lifted_lambdas.items.len);
     try self.store.lifted_lambdas.append(self.allocator, .{
         .fn_symbol = lifted_fn_symbol,
         .captures_monotype = captures_tuple_monotype,
@@ -1738,9 +1739,14 @@ fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Clo
 
     // --- Step 11: At the use site, return a tuple of capture values ---
     const captures_tuple_span = try self.store.addExprSpan(self.allocator, capture_lookup_exprs);
-    return try self.store.addExpr(self.allocator, .{ .tuple = .{
+    const captures_tuple_expr = try self.store.addExpr(self.allocator, .{ .tuple = .{
         .elems = captures_tuple_span,
     } }, captures_tuple_monotype, region);
+
+    // Record that this expression originated from lifting this closure
+    try self.store.closure_origins.put(self.allocator, @intFromEnum(captures_tuple_expr), lifted_idx);
+
+    return captures_tuple_expr;
 }
 
 fn lowerDeferredBlockLambda(
