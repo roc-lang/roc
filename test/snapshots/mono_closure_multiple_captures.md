@@ -13,12 +13,6 @@ result = func(1, 2)
 ~~~
 # MONO
 ~~~roc
-func : c, Dec -> c where [c.plus : c, Dec -> c]
-func = |a, b| {
-	add_ab = |x| a + b + x
-	add_ab(10)
-}
-
 result : Dec
 result = 13
 ~~~

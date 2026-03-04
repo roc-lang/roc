@@ -14,9 +14,6 @@ result = add_one(5)
 one : Dec
 one = 1
 
-add_one : a -> a where [a.plus : a, Dec -> a]
-add_one = |x| x + one
-
 result : Dec
 result = 6
 ~~~

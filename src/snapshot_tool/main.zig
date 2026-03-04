@@ -3032,6 +3032,39 @@ fn parseAndFormat(gpa: std.mem.Allocator, input: []const u8) ![]const u8 {
     return try result.toOwnedSlice();
 }
 
+/// Check if a type string contains type variables (single lowercase letters like 'a', 'b').
+/// This indicates a polymorphic type that hasn't been fully monomorphized.
+fn typeStringIsPolymorphic(type_str: []const u8) bool {
+    var i: usize = 0;
+    while (i < type_str.len) : (i += 1) {
+        const c = type_str[i];
+        if (c >= 'a' and c <= 'z') {
+            // Check if this is a standalone single letter (not part of a word)
+            const prev_is_ident = i > 0 and (std.ascii.isAlphanumeric(type_str[i - 1]) or type_str[i - 1] == '_');
+            const next_is_ident = i + 1 < type_str.len and (std.ascii.isAlphanumeric(type_str[i + 1]) or type_str[i + 1] == '_');
+            if (!prev_is_ident and !next_is_ident) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/// Check if an identifier name appears as a reference in the given text.
+/// Checks for whole-word matches (not substrings of other identifiers).
+fn isIdentReferencedIn(name: []const u8, text: []const u8) bool {
+    if (name.len == 0) return false;
+    var pos: usize = 0;
+    while (std.mem.indexOfPos(u8, text, pos, name)) |idx| {
+        const before_ok = idx == 0 or (!std.ascii.isAlphanumeric(text[idx - 1]) and text[idx - 1] != '_');
+        const after_idx = idx + name.len;
+        const after_ok = after_idx >= text.len or (!std.ascii.isAlphanumeric(text[after_idx]) and text[after_idx] != '_');
+        if (before_ok and after_ok) return true;
+        pos = idx + 1;
+    }
+    return false;
+}
+
 /// Generate MONO section for mono tests - emits monomorphized type module
 fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx, source_path: []const u8, config: *const Config) !void {
     // First, build the mono source in a buffer for validation
@@ -3043,6 +3076,25 @@ fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx
     defer emitter.deinit();
 
     const defs = can_ir.store.sliceDefs(can_ir.all_defs);
+
+    // Two-pass approach: first emit all defs to collect their text,
+    // then skip unreferenced polymorphic defs (dead code from constant folding).
+    const DefInfo = struct {
+        pattern_output: []const u8,
+        expr_output: []const u8,
+        type_str: []const u8,
+        is_polymorphic: bool,
+    };
+    var def_infos = std.ArrayList(DefInfo).empty;
+    defer {
+        for (def_infos.items) |info| {
+            output.gpa.free(info.pattern_output);
+            output.gpa.free(info.expr_output);
+            output.gpa.free(info.type_str);
+        }
+        def_infos.deinit(output.gpa);
+    }
+
     for (defs) |def_idx| {
         const def = can_ir.store.getDef(def_idx);
 
@@ -3050,25 +3102,53 @@ fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx
         emitter.reset();
         try emitter.emitPattern(def.pattern);
         const pattern_output = try output.gpa.dupe(u8, emitter.getOutput());
-        defer output.gpa.free(pattern_output);
 
         // Emit the expression (right side of =)
         emitter.reset();
         try emitter.emitExpr(def.expr);
+        const expr_output = try output.gpa.dupe(u8, emitter.getOutput());
 
         // Use the pattern's type from type checking (not computed from expression)
         const pattern_type = ModuleEnv.varFrom(def.pattern);
         const type_str = try getDefaultedTypeString(output.gpa, can_ir, pattern_type);
-        defer output.gpa.free(type_str);
+
+        // Check if the type is polymorphic (contains type variables like 'a', 'b', etc.)
+        const is_polymorphic = typeStringIsPolymorphic(type_str);
+
+        try def_infos.append(output.gpa, .{
+            .pattern_output = pattern_output,
+            .expr_output = expr_output,
+            .type_str = type_str,
+            .is_polymorphic = is_polymorphic,
+        });
+    }
+
+    // Build a combined string of all non-polymorphic expressions to check references
+    var all_exprs = std.ArrayList(u8).empty;
+    defer all_exprs.deinit(output.gpa);
+    for (def_infos.items) |info| {
+        if (!info.is_polymorphic) {
+            try all_exprs.appendSlice(output.gpa, info.expr_output);
+            try all_exprs.append(output.gpa, '\n');
+        }
+    }
+
+    for (def_infos.items) |info| {
+        // Skip polymorphic defs that are unreferenced by any other def's expression.
+        // These are dead code from constant folding (e.g., func was called but the
+        // result was folded to a constant, leaving func's polymorphic type unresolvable).
+        if (info.is_polymorphic) {
+            if (!isIdentReferencedIn(info.pattern_output, all_exprs.items)) continue;
+        }
 
         // Build the mono source: name : Type\nname = expr\n
-        try mono_buffer.appendSlice(output.gpa, pattern_output);
+        try mono_buffer.appendSlice(output.gpa, info.pattern_output);
         try mono_buffer.appendSlice(output.gpa, " : ");
-        try mono_buffer.appendSlice(output.gpa, type_str);
+        try mono_buffer.appendSlice(output.gpa, info.type_str);
         try mono_buffer.appendSlice(output.gpa, "\n");
-        try mono_buffer.appendSlice(output.gpa, pattern_output);
+        try mono_buffer.appendSlice(output.gpa, info.pattern_output);
         try mono_buffer.appendSlice(output.gpa, " = ");
-        try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
+        try mono_buffer.appendSlice(output.gpa, info.expr_output);
         try mono_buffer.appendSlice(output.gpa, "\n\n");
     }
 
