@@ -89,9 +89,6 @@ const LirExprId = lir.LirExprId;
 const LirPatternId = lir.LirPatternId;
 const Symbol = lir.Symbol;
 const JoinPointId = lir.JoinPointId;
-const LambdaSetMember = lir.LambdaSetMember;
-const LambdaSetMemberSpan = lir.LambdaSetMemberSpan;
-
 // Layout store for accessing struct/tag field offsets
 const LayoutStore = layout.Store;
 

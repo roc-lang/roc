@@ -6,13 +6,10 @@
 //!
 //! Pipeline position:
 //! ```
-//! CIR -> Monomorphization -> Lambda Lifting -> Lambda Set Inference -> ClosureTransformer
+//! CIR -> MIR (with lambda lifting) -> Lambda Set Inference -> LIR (with dispatch generation)
 //!                                                                           |
 //!                                                                           v
-//!                                                                      LIR Lowering
-//!                                                                           |
-//!                                                                           v
-//!                                                                         LIR
+//!                                                                     Code Generation
 //!                                                                           |
 //!                                                     +---------------------+---------------------+
 //!                                                     |                                           |
