@@ -5949,17 +5949,23 @@ const TypeTable = struct {
     }
 
     /// Get an existing type table index for a var, or insert a new entry.
+    /// Pre-registers a placeholder before conversion to prevent infinite recursion
+    /// on cyclic types (the placeholder is updated in-place after conversion).
     fn getOrInsert(self: *TypeTable, env: *const ModuleEnv, type_var: types.Var) u64 {
         if (self.var_map.get(type_var)) |idx| {
             return idx;
         }
 
+        // Pre-register placeholder to break cycles
+        const idx: u64 = @intCast(self.entries.items.len);
+        self.entries.append(self.gpa, .{ .unknown = "" }) catch return 0;
+        self.var_map.put(type_var, idx) catch {};
+
         const resolved = env.types.resolveVar(type_var);
         const repr = self.convertContent(env, resolved.desc.content);
 
-        const idx: u64 = @intCast(self.entries.items.len);
-        self.entries.append(self.gpa, repr) catch return 0;
-        self.var_map.put(type_var, idx) catch {};
+        // Update placeholder with actual representation
+        self.entries.items[@intCast(idx)] = repr;
 
         return idx;
     }
@@ -6005,9 +6011,9 @@ const TypeTable = struct {
                 const backing_var = env.types.getAliasBackingVar(alias);
                 return self.convertContent(env, env.types.resolveVar(backing_var).desc.content);
             },
-            .flex => return .{ .unknown = "flex" },
-            .rigid => return .{ .unknown = "rigid" },
-            .err => return .{ .unknown = "error" },
+            .flex => return .{ .unknown = self.gpa.dupe(u8, "flex") catch "" },
+            .rigid => return .{ .unknown = self.gpa.dupe(u8, "rigid") catch "" },
+            .err => return .{ .unknown = self.gpa.dupe(u8, "error") catch "" },
         }
     }
 
@@ -6019,8 +6025,8 @@ const TypeTable = struct {
             .fn_pure, .fn_effectful, .fn_unbound => |func| return self.convertFunc(env, func),
             .empty_record => return .unit,
             .empty_tag_union => return .unit,
-            .tuple => return .{ .unknown = "tuple" },
-            .record_unbound => return .{ .unknown = "record_unbound" },
+            .tuple => |tuple| return self.convertTuple(env, tuple),
+            .record_unbound => return .{ .unknown = self.gpa.dupe(u8, "record_unbound") catch "" },
         }
     }
 
@@ -6036,7 +6042,12 @@ const TypeTable = struct {
                 const elem_id = self.getOrInsert(env, args[0]);
                 return .{ .list = elem_id };
             }
-            return .{ .unknown = "List" };
+            return .{ .unknown = self.gpa.dupe(u8, "List") catch "" };
+        }
+        if (std.mem.eql(u8, display_name, "Box")) {
+            // Box(T) is a heap-allocated pointer to T in the C ABI.
+            // Represent as unknown so glue scripts render it as *anyopaque.
+            return .{ .unknown = self.gpa.dupe(u8, "Box") catch "" };
         }
         if (std.mem.eql(u8, display_name, "Str")) return .str_;
         if (std.mem.eql(u8, display_name, "Bool")) return .bool_;
@@ -6110,21 +6121,21 @@ const TypeTable = struct {
         if (field_names.len == 0) return .unit;
 
         // First pass: getOrInsert all field type_ids so nested types are in the table
-        const field_type_ids = self.gpa.alloc(u64, field_names.len) catch return .{ .unknown = "record" };
+        const field_type_ids = self.gpa.alloc(u64, field_names.len) catch return self.oomUnknown("record");
         defer self.gpa.free(field_type_ids);
         for (0..field_names.len) |i| {
             field_type_ids[i] = self.getOrInsert(env, field_vars[i]);
         }
 
         // Get size/alignment for each field
-        const field_sizes = self.gpa.alloc(SizeAlign, field_names.len) catch return .{ .unknown = "record" };
+        const field_sizes = self.gpa.alloc(SizeAlign, field_names.len) catch return self.oomUnknown("record");
         defer self.gpa.free(field_sizes);
         for (0..field_names.len) |i| {
             field_sizes[i] = self.getSizeAlign(field_type_ids[i]);
         }
 
         // Build sortable array of field indices
-        var field_indices = self.gpa.alloc(usize, field_names.len) catch return .{ .unknown = "record" };
+        var field_indices = self.gpa.alloc(usize, field_names.len) catch return self.oomUnknown("record");
         defer self.gpa.free(field_indices);
         for (0..field_names.len) |i| {
             field_indices[i] = i;
@@ -6150,7 +6161,7 @@ const TypeTable = struct {
         std.mem.sort(usize, field_indices, SortCtx{ .names = field_names, .idents = ident_store, .sizes = field_sizes }, SortCtx.lessThan);
 
         // Build collected fields in sorted order and compute record size
-        const collected_fields = self.gpa.alloc(CollectedRecordField, field_names.len) catch return .{ .unknown = "record" };
+        const collected_fields = self.gpa.alloc(CollectedRecordField, field_names.len) catch return self.oomUnknown("record");
         var max_alignment: u64 = 0;
         var current_offset: u64 = 0;
         for (field_indices, 0..) |src_idx, dst_idx| {
@@ -6191,6 +6202,93 @@ const TypeTable = struct {
         } };
     }
 
+    fn oomUnknown(self: *TypeTable, name: []const u8) CollectedTypeRepr {
+        return .{ .unknown = self.gpa.dupe(u8, name) catch "" };
+    }
+
+    fn convertTuple(self: *TypeTable, env: *const ModuleEnv, tuple: types.Tuple) CollectedTypeRepr {
+        const elem_vars = env.types.sliceVars(tuple.elems);
+        if (elem_vars.len == 0) return .unit;
+
+        // Convert tuple elements as record fields with positional names (_0, _1, ...)
+        const field_type_ids = self.gpa.alloc(u64, elem_vars.len) catch return self.oomUnknown("tuple");
+        defer self.gpa.free(field_type_ids);
+        for (elem_vars, 0..) |ev, i| {
+            field_type_ids[i] = self.getOrInsert(env, ev);
+        }
+
+        const field_sizes = self.gpa.alloc(SizeAlign, elem_vars.len) catch return self.oomUnknown("tuple");
+        defer self.gpa.free(field_sizes);
+        for (0..elem_vars.len) |i| {
+            field_sizes[i] = self.getSizeAlign(field_type_ids[i]);
+        }
+
+        // Generate positional field names (_0, _1, ...) before sorting
+        const field_names = self.gpa.alloc([]const u8, elem_vars.len) catch return self.oomUnknown("tuple");
+        defer self.gpa.free(field_names);
+        for (0..elem_vars.len) |i| {
+            field_names[i] = std.fmt.allocPrint(self.gpa, "_{d}", .{i}) catch "";
+        }
+
+        // Sort by alignment descending, then name ascending (matching Roc ABI)
+        var field_indices = self.gpa.alloc(usize, elem_vars.len) catch return self.oomUnknown("tuple");
+        defer self.gpa.free(field_indices);
+        for (0..elem_vars.len) |i| {
+            field_indices[i] = i;
+        }
+
+        const SortCtx = struct {
+            sizes: []const SizeAlign,
+            names: []const []const u8,
+
+            pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
+                const a_align = ctx.sizes[a].alignment;
+                const b_align = ctx.sizes[b].alignment;
+                if (a_align != b_align) {
+                    return a_align > b_align; // descending alignment
+                }
+                return std.mem.order(u8, ctx.names[a], ctx.names[b]) == .lt;
+            }
+        };
+        std.mem.sort(usize, field_indices, SortCtx{ .sizes = field_sizes, .names = field_names }, SortCtx.lessThan);
+
+        const collected_fields = self.gpa.alloc(CollectedRecordField, elem_vars.len) catch return self.oomUnknown("tuple");
+        var max_alignment: u64 = 0;
+        var current_offset: u64 = 0;
+        for (field_indices, 0..) |src_idx, dst_idx| {
+            const f_size = field_sizes[src_idx].size;
+            const f_align = field_sizes[src_idx].alignment;
+
+            if (f_align > max_alignment) max_alignment = f_align;
+
+            if (f_align > 0) {
+                const rem = current_offset % f_align;
+                if (rem != 0) current_offset += f_align - rem;
+            }
+            current_offset += f_size;
+
+            collected_fields[dst_idx] = .{
+                .name = field_names[src_idx],
+                .type_id = field_type_ids[src_idx],
+                .size = f_size,
+                .alignment = f_align,
+            };
+        }
+
+        var record_size = current_offset;
+        if (max_alignment > 0) {
+            const rem = record_size % max_alignment;
+            if (rem != 0) record_size += max_alignment - rem;
+        }
+
+        return .{ .record = .{
+            .name = "",
+            .fields = collected_fields,
+            .size = record_size,
+            .alignment = max_alignment,
+        } };
+    }
+
     fn convertTagUnion(self: *TypeTable, env: *const ModuleEnv, tag_union: types.TagUnion) CollectedTypeRepr {
         const ident_store = env.getIdentStoreConst();
         const tags_slice = env.types.getTagsSlice(tag_union.tags);
@@ -6200,7 +6298,7 @@ const TypeTable = struct {
         if (tag_names.len == 0) return .unit;
 
         // Build sortable array of tag indices
-        var tag_indices = self.gpa.alloc(usize, tag_names.len) catch return .{ .unknown = "tag_union" };
+        var tag_indices = self.gpa.alloc(usize, tag_names.len) catch return self.oomUnknown("tag_union");
         defer self.gpa.free(tag_indices);
         for (0..tag_names.len) |i| {
             tag_indices[i] = i;
@@ -6220,7 +6318,7 @@ const TypeTable = struct {
         std.mem.sort(usize, tag_indices, SortCtx{ .names = tag_names, .idents = ident_store }, SortCtx.lessThan);
 
         // Collect tags and compute per-variant payload layout
-        const collected_tags = self.gpa.alloc(CollectedTagInfo, tag_names.len) catch return .{ .unknown = "tag_union" };
+        const collected_tags = self.gpa.alloc(CollectedTagInfo, tag_names.len) catch return self.oomUnknown("tag_union");
         var max_payload_size: u64 = 0;
         var max_payload_alignment: u64 = 0;
 
@@ -6232,7 +6330,7 @@ const TypeTable = struct {
         }
         // Add "Or" separators between names
         if (tag_names.len > 1) name_len += (tag_names.len - 1) * 2;
-        const auto_name_buf: []u8 = self.gpa.alloc(u8, name_len) catch return .{ .unknown = "tag_union" };
+        const auto_name_buf: []u8 = self.gpa.alloc(u8, name_len) catch return self.oomUnknown("tag_union");
         var name_pos: usize = 0;
 
         for (tag_indices, 0..) |src_idx, dst_idx| {
@@ -6240,7 +6338,7 @@ const TypeTable = struct {
             const args_range = tag_args[src_idx];
             const arg_vars = env.types.sliceVars(args_range);
 
-            const payload_ids = self.gpa.alloc(u64, arg_vars.len) catch return .{ .unknown = "tag_union" };
+            const payload_ids = self.gpa.alloc(u64, arg_vars.len) catch return self.oomUnknown("tag_union");
             for (arg_vars, 0..) |av, i| {
                 payload_ids[i] = self.getOrInsert(env, av);
             }
@@ -6323,7 +6421,7 @@ const TypeTable = struct {
 
     fn convertFunc(self: *TypeTable, env: *const ModuleEnv, func: types.Func) CollectedTypeRepr {
         const arg_vars = env.types.sliceVars(func.args);
-        const arg_ids = self.gpa.alloc(u64, arg_vars.len) catch return .{ .unknown = "function" };
+        const arg_ids = self.gpa.alloc(u64, arg_vars.len) catch return self.oomUnknown("function");
         for (arg_vars, 0..) |av, i| {
             arg_ids[i] = self.getOrInsert(env, av);
         }
