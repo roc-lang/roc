@@ -552,7 +552,6 @@ pub const Interpreter = struct {
             .var_to_layout_slot = slots,
             .empty_scope = scope,
             .translate_cache = std.AutoHashMap(ModuleVarKey, CacheEntry).init(allocator),
-
             .translation_in_progress = std.AutoHashMap(ModuleVarKey, void).init(allocator),
             .rigid_subst = std.AutoHashMap(types.Var, types.Var).init(allocator),
             .rigid_name_subst = std.AutoHashMap(u29, types.Var).init(allocator),
@@ -7855,7 +7854,6 @@ pub const Interpreter = struct {
                 {
                     copied.rt_var = value_rt_var;
                 }
-
                 try out_binds.append(.{ .pattern_idx = pattern_idx, .value = copied, .expr_idx = expr_idx, .source_env = self.env });
                 return true;
             },
@@ -8265,7 +8263,6 @@ pub const Interpreter = struct {
     pub fn deinit(self: *Interpreter) void {
         self.empty_scope.deinit();
         self.translate_cache.deinit();
-
         self.translation_in_progress.deinit();
         self.rigid_subst.deinit();
         self.rigid_name_subst.deinit();
@@ -8315,7 +8312,6 @@ pub const Interpreter = struct {
     pub fn deinitPreserveConstantStrings(self: *Interpreter) std.heap.ArenaAllocator {
         self.empty_scope.deinit();
         self.translate_cache.deinit();
-
         self.translation_in_progress.deinit();
         self.rigid_subst.deinit();
         self.rigid_name_subst.deinit();
