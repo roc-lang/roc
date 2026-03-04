@@ -11565,65 +11565,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     offset += @intCast(capture_size);
                 } else {
-                    // Symbol not found in symbol_locations. Try generateLookup which
-                    // also checks top-level definitions via getSymbolDef.
-                    if (self.generateLookup(capture.symbol, capture.layout_idx)) |resolved_loc| {
-                        // Found via resolveSymbol - copy it to captures
-                        const ls = self.layout_store;
-                        const capture_layout = ls.getLayout(capture.layout_idx);
-                        const cap_sa_r = ls.layoutSizeAlign(capture_layout);
-                        const capture_size = cap_sa_r.size;
-                        const num_words_r: u32 = (capture_size + 7) / 8;
-                        // Align offset to match layout store's putCaptureStruct
-                        const cap_align_r = cap_sa_r.alignment.toByteUnits();
-                        offset = @intCast(std.mem.alignForward(usize, @intCast(offset), cap_align_r));
-
-                        switch (resolved_loc) {
-                            .general_reg => |reg| {
-                                try self.codegen.emitStoreStack(.w64, base_offset + offset, reg);
-                                if (num_words_r > 1) {
-                                    const temp = try self.allocTempGeneral();
-                                    try self.codegen.emitLoadImm(temp, 0);
-                                    var w: u32 = 1;
-                                    while (w < num_words_r) : (w += 1) {
-                                        try self.codegen.emitStoreStack(.w64, base_offset + offset + @as(i32, @intCast(w * 8)), temp);
-                                    }
-                                    self.codegen.freeGeneral(temp);
-                                }
-                            },
-                            .lambda_code => |expr_id| {
-                                const temp = try self.allocTempGeneral();
-                                try self.emitCodePointerToReg(temp, self.getLambdaCodeOffset(expr_id));
-                                try self.codegen.emitStoreStack(.w64, base_offset + offset, temp);
-                                self.codegen.freeGeneral(temp);
-                            },
-                            .closure_value => |resolved_cv| {
-                                const slot = try self.ensureOnStack(.{ .closure_value = resolved_cv }, capture_size);
-                                const temp = try self.allocTempGeneral();
-                                var w: u32 = 0;
-                                while (w < num_words_r) : (w += 1) {
-                                    const word_off: i32 = @intCast(w * 8);
-                                    try self.codegen.emitLoadStack(.w64, temp, slot + word_off);
-                                    try self.codegen.emitStoreStack(.w64, base_offset + offset + word_off, temp);
-                                }
-                                self.codegen.freeGeneral(temp);
-                            },
-                            else => {
-                                const slot = try self.ensureOnStack(resolved_loc, capture_size);
-                                const temp = try self.allocTempGeneral();
-                                var w: u32 = 0;
-                                while (w < num_words_r) : (w += 1) {
-                                    const word_off: i32 = @intCast(w * 8);
-                                    try self.codegen.emitLoadStack(.w64, temp, slot + word_off);
-                                    try self.codegen.emitStoreStack(.w64, base_offset + offset + word_off, temp);
-                                }
-                                self.codegen.freeGeneral(temp);
-                            },
-                        }
-                        offset += @intCast(capture_size);
-                    } else |_| {
-                        unreachable;
+                    // Every capture must be a runtime value from an enclosing scope,
+                    // already registered in symbol_locations. If it's missing, that's
+                    // a bug in lowering or codegen.
+                    if (std.debug.runtime_safety) {
+                        std.debug.panic(
+                            "capture symbol not found in symbol_locations during materializeCaptures",
+                        );
                     }
+                    unreachable;
                 }
             }
         }
