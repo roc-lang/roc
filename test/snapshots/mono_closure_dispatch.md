@@ -14,20 +14,15 @@ result = func(1)
 ~~~
 # MONO
 ~~~roc
-c1_f = |x, captures| x + captures.offset
-
-c2_f = |x| x * 2
-
+func : Dec -> Dec
 func = |offset| {
 	condition = True
-	f = if (condition) C1_f({ offset: offset }) else C2_f({})
-	match f {
-		C1_f(captures) => c1_f(10, captures)
-		C2_f({}) => c2_f(10)
-	}
+	f = if (condition) |x| x + offset else |x| x * 2
+	f(10)
 }
 
-result = func(1)
+result : Dec
+result = 11
 ~~~
 # FORMATTED
 ~~~roc
@@ -106,49 +101,32 @@ EndOfFile,
 							(if-branch
 								(e-lookup-local
 									(p-assign (ident "condition")))
-								(e-tag (name "#1_f")
-									(args
-										(e-record
-											(fields
-												(field (name "offset")
-													(e-lookup-local
-														(p-assign (ident "offset"))))))))))
+								(e-closure
+									(captures
+										(capture (ident "offset")))
+									(e-lambda
+										(args
+											(p-assign (ident "x")))
+										(e-binop (op "add")
+											(e-lookup-local
+												(p-assign (ident "x")))
+											(e-lookup-local
+												(p-assign (ident "offset"))))))))
 						(if-else
-							(e-tag (name "#2_f")
+							(e-lambda
 								(args
-									(e-empty_record))))))
-				(e-match
-					(match
-						(cond
-							(e-lookup-local
-								(p-assign (ident "f"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-call
-										(e-lookup-local
-											(p-assign (ident "c1_f")))
-										(e-num (value "10"))
-										(e-lookup-local
-											(p-assign (ident "captures"))))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-call
-										(e-lookup-local
-											(p-assign (ident "c2_f")))
-										(e-num (value "10")))))))))))
+									(p-assign (ident "x")))
+								(e-binop (op "mul")
+									(e-lookup-local
+										(p-assign (ident "x")))
+									(e-num (value "2")))))))
+				(e-call
+					(e-lookup-local
+						(p-assign (ident "f")))
+					(e-num (value "10"))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call
-			(e-lookup-local
-				(p-assign (ident "func")))
-			(e-num (value "1")))))
+		(e-num (value "11"))))
 ~~~
 # TYPES
 ~~~clojure
@@ -157,6 +135,6 @@ EndOfFile,
 		(patt (type "Dec -> Dec"))
 		(patt (type "Dec")))
 	(expressions
-		(expr (type "Dec -> []"))
-		(expr (type "[]"))))
+		(expr (type "Dec -> Dec"))
+		(expr (type "Dec"))))
 ~~~

@@ -65,14 +65,17 @@ EndOfFile,
 		(e-num (value "1")))
 	(d-let
 		(p-assign (ident "add_one"))
-		(e-lambda
-			(args
-				(p-assign (ident "x")))
-			(e-binop (op "add")
-				(e-lookup-local
+		(e-closure
+			(captures
+				(capture (ident "one")))
+			(e-lambda
+				(args
 					(p-assign (ident "x")))
-				(e-lookup-local
-					(p-assign (ident "one"))))))
+				(e-binop (op "add")
+					(e-lookup-local
+						(p-assign (ident "x")))
+					(e-lookup-local
+						(p-assign (ident "one")))))))
 	(d-let
 		(p-assign (ident "result"))
 		(e-num (value "6"))))
@@ -87,5 +90,5 @@ EndOfFile,
 	(expressions
 		(expr (type "Dec"))
 		(expr (type "a -> a where [a.plus : a, Dec -> a]"))
-		(expr (type "_a where [_b.plus : c, Dec -> c]"))))
+		(expr (type "Dec"))))
 ~~~

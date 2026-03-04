@@ -2969,7 +2969,7 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
     // Check for type-checking problems
     const type_problems = checker.problems.problems.items;
     if (type_problems.len > 0) {
-        std.log.err("MONO TYPE ERROR in {s}: {d} type error(s) in generated MONO output:", .{ source_path, type_problems.len });
+        std.log.err("TYPE ERROR IN GENERATED ROC SOURCE in {s}: {d} type error(s) in generated MONO output:", .{ source_path, type_problems.len });
         for (type_problems) |problem| {
             const tag_name = @tagName(problem);
             std.log.err("  - {s}", .{tag_name});

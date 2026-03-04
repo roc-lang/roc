@@ -12,17 +12,17 @@ result = add_five(3)
 ~~~
 # MONO
 ~~~roc
-c1_make_adder = |z, captures| x + captures.y + z
-
+x : Dec
 x = 10
 
-make_adder = |y| C1_make_adder({ y: y })
+make_adder : Dec -> (Dec -> Dec)
+make_adder = |y| |z| x + y + z
 
+add_five : Dec -> Dec
 add_five = make_adder(5)
 
-result = match add_five {
-	C1_make_adder(captures) => c1_make_adder(3, captures)
-}
+result : Dec
+result = 18
 ~~~
 # FORMATTED
 ~~~roc
@@ -80,16 +80,27 @@ EndOfFile,
 		(e-num (value "10")))
 	(d-let
 		(p-assign (ident "make_adder"))
-		(e-lambda
-			(args
-				(p-assign (ident "y")))
-			(e-tag (name "#1_make_adder")
+		(e-closure
+			(captures
+				(capture (ident "x")))
+			(e-lambda
 				(args
-					(e-record
-						(fields
-							(field (name "y")
+					(p-assign (ident "y")))
+				(e-closure
+					(captures
+						(capture (ident "x"))
+						(capture (ident "y")))
+					(e-lambda
+						(args
+							(p-assign (ident "z")))
+						(e-binop (op "add")
+							(e-binop (op "add")
 								(e-lookup-local
-									(p-assign (ident "y"))))))))))
+									(p-assign (ident "x")))
+								(e-lookup-local
+									(p-assign (ident "y"))))
+							(e-lookup-local
+								(p-assign (ident "z")))))))))
 	(d-let
 		(p-assign (ident "add_five"))
 		(e-call
@@ -98,35 +109,19 @@ EndOfFile,
 			(e-num (value "5"))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-match
-			(match
-				(cond
-					(e-lookup-local
-						(p-assign (ident "add_five"))))
-				(branches
-					(branch
-						(patterns
-							(pattern (degenerate false)
-								(p-applied-tag)))
-						(value
-							(e-call
-								(e-lookup-local
-									(p-assign (ident "c1_make_adder")))
-								(e-num (value "3"))
-								(e-lookup-local
-									(p-assign (ident "captures")))))))))))
+		(e-num (value "18"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Dec -> [#1_make_adder({ .., y: Dec }), ..]"))
-		(patt (type "Dec -> (Dec -> (Dec -> [#1_make_adder({ .., y: Dec }), ..]))"))
-		(patt (type "Dec -> (Dec -> [#1_make_adder({ .., y: Dec }), ..])"))
-		(patt (type "Dec -> [#1_make_adder({ .., y: Dec }), ..]")))
+		(patt (type "Dec"))
+		(patt (type "Dec -> (Dec -> Dec)"))
+		(patt (type "Dec -> Dec"))
+		(patt (type "Dec")))
 	(expressions
-		(expr (type "Dec -> [#1_make_adder({ .., y: Dec }), ..]"))
-		(expr (type "Dec -> [#1_make_adder({ .., y: Dec }), ..]"))
-		(expr (type "[#1_make_adder({ .., y: Dec }), ..]"))
-		(expr (type "Try(Dec -> [#1_make_adder({ ..a, y: Dec }), ..b], [InvalidNumeral([#1_make_adder({ ..a, y: Dec }), ..b])])"))))
+		(expr (type "Dec"))
+		(expr (type "Dec -> (Dec -> Dec)"))
+		(expr (type "Dec -> Dec"))
+		(expr (type "Dec"))))
 ~~~
