@@ -159,10 +159,6 @@ deferred_cycle_envs: std.ArrayListUnmanaged(Env),
 /// After constraint resolution, if the fn_var resolves to .err, the
 /// corresponding expression is marked as erroneous (added to erroneous_exprs).
 binop_dispatch_tracking: std.ArrayListUnmanaged(BinopDispatchEntry),
-/// True when processing dispatch constraints after numeric literal defaulting.
-/// Used to add "defaulted to Dec" context in error messages.
-in_numeric_default_pass: bool = false,
-
 /// A def + processing data
 const DefProcessed = struct {
     def_idx: CIR.Def.Idx,
@@ -1287,9 +1283,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         // After finalizing numeric defaults, resolve any remaining deferred
         // static dispatch constraints (e.g., Dec.plus, Dec.to_str).
         if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
-            self.in_numeric_default_pass = true;
-            defer self.in_numeric_default_pass = false;
-            try self.checkStaticDispatchConstraints(&env);
+            try self.checkStaticDispatchConstraints(&env, true);
         }
     }
 
@@ -1700,7 +1694,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
 
     // Check if the expression's type has incompatible constraints (e.g., !3)
     const expr_var = ModuleEnv.varFrom(expr_idx);
-    try self.checkFlexVarConstraintCompatibility(expr_var, &env);
+    try self.checkFlexVarConstraintCompatibility(expr_var, &env, true);
 
     // Check for infinite types
     try self.checkForInfiniteType(CIR.Expr.Idx, expr_idx);
@@ -1767,9 +1761,7 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
     // return type of methods on defaulted numerics remains an unconstrained
     // flex var, causing incorrect .zst layouts.
     if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
-        self.in_numeric_default_pass = true;
-        defer self.in_numeric_default_pass = false;
-        try self.checkStaticDispatchConstraints(&env);
+        try self.checkStaticDispatchConstraints(&env, true);
         try self.checkAllConstraints(&env);
     }
 
@@ -4603,7 +4595,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     }
 
     // Check any accumulated static dispatch constraints
-    try self.checkStaticDispatchConstraints(env);
+    try self.checkStaticDispatchConstraints(env, false);
 
     // If this type of expr should be generalized, generalize it!
     if (should_generalize) {
@@ -5881,7 +5873,7 @@ fn checkAllConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 
     while (self.constraints.items.items.len > 0) {
         try self.checkConstraints(env);
-        try self.checkStaticDispatchConstraints(env);
+        try self.checkStaticDispatchConstraints(env, false);
     }
 }
 
@@ -6064,7 +6056,7 @@ fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 ///
 /// Initially, we only have to check constraint for `Test.to_str2`. But when we
 /// process that, we then have to check `Test.to_str`.
-fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pass: bool) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -6135,6 +6127,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                         constraint,
                         .{ .missing_method = .nominal },
                         env,
+                        is_numeric_default_pass,
                     );
                     continue;
                 }
@@ -6209,6 +6202,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                         constraint,
                         .{ .missing_method = .nominal },
                         env,
+                        is_numeric_default_pass,
                     );
                     continue;
                 };
@@ -6221,6 +6215,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                         constraint,
                         .{ .missing_method = .nominal },
                         env,
+                        is_numeric_default_pass,
                     );
                     continue;
                 };
@@ -6393,6 +6388,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                         constraint,
                         .not_nominal,
                         env,
+                        is_numeric_default_pass,
                     );
                 }
             }
@@ -6423,6 +6419,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                             constraint,
                             .not_nominal,
                             env,
+                            is_numeric_default_pass,
                         );
                     }
                 }
@@ -6526,7 +6523,7 @@ fn varSupportsIsEq(self: *Self, var_: Var) bool {
 /// has both `from_numeral` (numeric) and `not` (Bool only) constraints.
 /// If the flex var has a from_numeral constraint (meaning it will default to a numeric
 /// type like Dec), we validate that all other constraints can be satisfied by Dec.
-fn checkFlexVarConstraintCompatibility(self: *Self, var_: Var, env: *Env) Allocator.Error!void {
+fn checkFlexVarConstraintCompatibility(self: *Self, var_: Var, env: *Env, is_numeric_default_pass: bool) Allocator.Error!void {
     const resolved = self.types.resolveVar(var_);
     if (resolved.desc.content != .flex) return;
 
@@ -6562,6 +6559,7 @@ fn checkFlexVarConstraintCompatibility(self: *Self, var_: Var, env: *Env) Alloca
                     constraint,
                     .{ .missing_method = .nominal },
                     env,
+                    is_numeric_default_pass,
                 );
             }
         }
@@ -6700,6 +6698,7 @@ fn reportConstraintError(
         not_nominal,
     },
     env: *Env,
+    is_numeric_default_pass: bool,
 ) !void {
     const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
     const constraint_problem = switch (kind) {
@@ -6712,7 +6711,7 @@ fn reportConstraintError(
                 .method_name = constraint.fn_name,
                 .origin = constraint.origin,
                 .num_literal = constraint.num_literal,
-                .defaulted_from_numeric_literal = self.in_numeric_default_pass,
+                .defaulted_from_numeric_literal = is_numeric_default_pass,
             },
         } },
         .not_nominal => problem.Problem{ .static_dispatch = .{
