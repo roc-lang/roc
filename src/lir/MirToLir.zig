@@ -17,6 +17,7 @@ const mir_mod = @import("mir");
 
 const MIR = mir_mod.MIR;
 const Monotype = mir_mod.Monotype;
+const LambdaSet = mir_mod.LambdaSet;
 
 const LIR = @import("LIR.zig");
 const LirExprStore = @import("LirExprStore.zig");
@@ -43,6 +44,7 @@ allocator: Allocator,
 mir_store: *const MIR.Store,
 lir_store: *LirExprStore,
 layout_store: *layout.Store,
+lambda_set_store: *const LambdaSet.Store,
 
 /// Ident index for the `True` tag — needed to resolve Bool discriminants
 /// (Bool is `prim.bool`, not a `tag_union`, so we can't look up tags in the monotype).
@@ -80,6 +82,7 @@ pub fn init(
     mir_store: *const MIR.Store,
     lir_store: *LirExprStore,
     layout_store: *layout.Store,
+    lambda_set_store: *const LambdaSet.Store,
     true_tag: Ident.Idx,
 ) Self {
     return .{
@@ -87,6 +90,7 @@ pub fn init(
         .mir_store = mir_store,
         .lir_store = lir_store,
         .layout_store = layout_store,
+        .lambda_set_store = lambda_set_store,
         .true_tag = true_tag,
         .layout_cache = std.AutoHashMap(u32, layout.Idx).init(allocator),
         .propagating_defs = std.AutoHashMap(u64, void).init(allocator),
@@ -842,95 +846,11 @@ fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, region: Region
     const lir_params = try self.lowerPatternSpan(self.mir_store.getPatternSpan(lam.params));
     const lir_body = try self.lowerExpr(lam.body);
 
-    // Check if this lambda has captures → closure
-    const mir_captures = self.mir_store.getCaptures(lam.captures);
-    if (mir_captures.len > 0) {
-        // Build capture list with layouts
-        const save_captures_len = self.scratch_lir_captures.items.len;
-        defer self.scratch_lir_captures.shrinkRetainingCapacity(save_captures_len);
-        for (mir_captures) |cap| {
-            // Look up the captured symbol's layout. Try symbol_defs first (for
-            // let-bindings), then symbol_layouts (for lambda parameters from
-            // enclosing scopes that were registered during pattern lowering).
-            const cap_key: u64 = @bitCast(cap.symbol);
-            const cap_layout = if (self.mir_store.getSymbolDef(cap.symbol)) |def_id| blk: {
-                // Propagate the captured symbol's definition to the LIR store
-                // so codegen can find it when materializing captures.
-                if (self.lir_store.getSymbolDef(cap.symbol) == null and
-                    !self.propagating_defs.contains(cap_key))
-                {
-                    try self.propagating_defs.put(cap_key, {});
-                    defer _ = self.propagating_defs.remove(cap_key);
-                    const lir_def_id = try self.lowerExpr(def_id);
-                    try self.lir_store.registerSymbolDef(cap.symbol, lir_def_id);
-                }
-                break :blk try self.layoutFromMonotype(self.mir_store.typeOf(def_id));
-            } else if (self.symbol_layouts.get(cap_key)) |cached_layout|
-                cached_layout
-            else
-                unreachable;
-
-            try self.scratch_lir_captures.append(self.allocator, .{
-                .symbol = cap.symbol,
-                .layout_idx = cap_layout,
-            });
-        }
-
-        const lir_captures = try self.lir_store.addCaptures(self.scratch_lir_captures.items[save_captures_len..]);
-
-        // Create the lambda expression first
-        const lambda_expr = try self.lir_store.addExpr(.{ .lambda = .{
-            .fn_layout = fn_layout,
-            .params = lir_params,
-            .body = lir_body,
-            .ret_layout = ret_layout,
-        } }, region);
-
-        // Compute closure layout and representation based on capture count
-        const capture_items = self.scratch_lir_captures.items[save_captures_len..];
-        if (capture_items.len == 1) {
-            // Single capture: unwrapped_capture (zero overhead)
-            const cap_layout = capture_items[0].layout_idx;
-            const closure_data_id = try self.lir_store.addClosureData(.{
-                .closure_layout = cap_layout,
-                .lambda = lambda_expr,
-                .captures = lir_captures,
-                .representation = .{ .unwrapped_capture = .{
-                    .capture_layout = cap_layout,
-                } },
-                // Recursion flags default to not_recursive here. The TailRecursion pass
-                // (run after lowering, before RC insertion) analyzes the call graph and
-                // updates these flags for self-recursive closures.
-                .recursion = .not_recursive,
-                .self_recursive = .not_self_recursive,
-                .is_bound_to_variable = false,
-            });
-            return self.lir_store.addExpr(.{ .closure = closure_data_id }, region);
-        } else {
-            // Multiple captures: struct_captures with a tuple layout (positional, no names needed)
-            var cap_layout_idxs = std.ArrayList(layout.Idx).empty;
-            defer cap_layout_idxs.deinit(self.allocator);
-            for (capture_items) |cap| {
-                try cap_layout_idxs.append(self.allocator, cap.layout_idx);
-            }
-            const closure_layout = try self.layout_store.putCaptureStruct(cap_layout_idxs.items);
-            const closure_data_id = try self.lir_store.addClosureData(.{
-                .closure_layout = closure_layout,
-                .lambda = lambda_expr,
-                .captures = lir_captures,
-                .representation = .{ .struct_captures = .{
-                    .captures = lir_captures,
-                    .struct_layout = closure_layout,
-                } },
-                // Recursion flags default to not_recursive here. The TailRecursion pass
-                // (run after lowering, before RC insertion) analyzes the call graph and
-                // updates these flags for self-recursive closures.
-                .recursion = .not_recursive,
-                .self_recursive = .not_self_recursive,
-                .is_bound_to_variable = false,
-            });
-            return self.lir_store.addExpr(.{ .closure = closure_data_id }, region);
-        }
+    // After lambda lifting (Phase 2a), all lambdas reaching MirToLir have empty captures.
+    // Closures are lifted to top-level functions with explicit captures tuple params;
+    // dispatch is generated separately using lambda set info.
+    if (std.debug.runtime_safety and !lam.captures.isEmpty()) {
+        std.debug.panic("MirToLir invariant: lambda with non-empty captures (should have been lifted)", .{});
     }
 
     return self.lir_store.addExpr(.{ .lambda = .{
@@ -948,7 +868,7 @@ fn lowerCall(self: *Self, call_data: anytype, mono_idx: Monotype.Idx, region: Re
         const sym = func_mir_expr.lookup;
         if (self.mir_store.getSymbolDef(sym)) |def_expr_id| {
             if (self.mir_store.getExpr(def_expr_id) == .runtime_err_anno_only) {
-                if (builtin.mode == .Debug) {
+                if (std.debug.runtime_safety) {
                     std.debug.panic(
                         "MirToLir unsupported: call to annotation-only symbol key={d}",
                         .{sym.raw()},
@@ -957,8 +877,14 @@ fn lowerCall(self: *Self, call_data: anytype, mono_idx: Monotype.Idx, region: Re
                 unreachable;
             }
         }
+
+        // Check if the callee has a lambda set (i.e., it's a closure value)
+        if (self.lambda_set_store.getSymbolLambdaSet(sym)) |ls_idx| {
+            return self.lowerClosureCall(call_data, ls_idx, sym, mono_idx, region);
+        }
     }
 
+    // Direct function call (non-closure)
     var acc = self.startLetAccumulator();
     const fn_expr_raw = try self.lowerExpr(call_data.func);
     const fn_mono = self.mir_store.typeOf(call_data.func);
@@ -977,6 +903,154 @@ fn lowerCall(self: *Self, call_data: anytype, mono_idx: Monotype.Idx, region: Re
         .called_via = .apply,
     } }, region);
     return acc.finish(call_expr, ret_layout, region);
+}
+
+/// Generate dispatch for a call to a closure value using lambda set information.
+/// For single-member lambda sets: direct call with captures as extra arg.
+/// For multi-member lambda sets: discriminant_switch dispatching to each member.
+fn lowerClosureCall(
+    self: *Self,
+    call_data: anytype,
+    ls_idx: LambdaSet.Idx,
+    callee_symbol: Symbol,
+    mono_idx: Monotype.Idx,
+    region: Region,
+) Allocator.Error!LirExprId {
+    const ls = self.lambda_set_store.getLambdaSet(ls_idx);
+    const members = self.lambda_set_store.getMembers(ls.members);
+    const ret_layout = try self.layoutFromMonotype(mono_idx);
+
+    if (members.len == 0) {
+        if (std.debug.runtime_safety) {
+            std.debug.panic("MirToLir: empty lambda set for symbol key={d}", .{callee_symbol.raw()});
+        }
+        unreachable;
+    }
+
+    // Lower user arguments (shared across all dispatch branches)
+    var acc = self.startLetAccumulator();
+    const mir_args = self.mir_store.getExprSpan(call_data.args);
+    const lir_user_args = try self.lowerAnfSpan(&acc, mir_args, region);
+    const user_arg_ids = self.lir_store.getExprSpan(lir_user_args);
+
+    // Lower the closure value (captures tuple/tag union)
+    const closure_val_raw = try self.lowerExpr(call_data.func);
+    const closure_mono = self.mir_store.typeOf(call_data.func);
+    const closure_layout = try self.layoutFromMonotype(closure_mono);
+    const closure_val = try acc.ensureSymbol(closure_val_raw, closure_layout, region);
+
+    if (members.len == 1) {
+        // Single-member lambda set: direct call with captures as extra arg
+        const member = members[0];
+        const lifted_def = self.mir_store.getSymbolDef(member.fn_symbol) orelse {
+            if (std.debug.runtime_safety) {
+                std.debug.panic("MirToLir: missing def for lifted fn symbol key={d}", .{member.fn_symbol.raw()});
+            }
+            unreachable;
+        };
+        const lifted_mono = self.mir_store.typeOf(lifted_def);
+        const lifted_layout = try self.layoutFromMonotype(lifted_mono);
+
+        // Propagate the lifted function def to LIR
+        if (self.lir_store.getSymbolDef(member.fn_symbol) == null) {
+            const key: u64 = member.fn_symbol.raw();
+            if (!self.propagating_defs.contains(key)) {
+                try self.propagating_defs.put(key, {});
+                defer _ = self.propagating_defs.remove(key);
+                const lir_def = try self.lowerExpr(lifted_def);
+                try self.lir_store.registerSymbolDef(member.fn_symbol, lir_def);
+            }
+        }
+
+        const fn_expr = try self.lir_store.addExpr(.{ .lookup = .{
+            .symbol = member.fn_symbol,
+            .layout_idx = lifted_layout,
+        } }, region);
+
+        // Build args: [user_args..., closure_val]
+        const save_exprs = self.scratch_lir_expr_ids.items.len;
+        defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
+        for (user_arg_ids) |arg_id| {
+            try self.scratch_lir_expr_ids.append(self.allocator, arg_id);
+        }
+        try self.scratch_lir_expr_ids.append(self.allocator, closure_val);
+        const all_args = try self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_exprs..]);
+
+        const call_expr = try self.lir_store.addExpr(.{ .call = .{
+            .fn_expr = fn_expr,
+            .fn_layout = lifted_layout,
+            .args = all_args,
+            .ret_layout = ret_layout,
+            .called_via = .apply,
+        } }, region);
+        return acc.finish(call_expr, ret_layout, region);
+    }
+
+    // Multi-member lambda set: discriminant_switch on the tag union closure value
+    const save_exprs = self.scratch_lir_expr_ids.items.len;
+    defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
+
+    for (members) |member| {
+        const lifted_def = self.mir_store.getSymbolDef(member.fn_symbol) orelse {
+            if (std.debug.runtime_safety) {
+                std.debug.panic("MirToLir: missing def for lifted fn symbol key={d}", .{member.fn_symbol.raw()});
+            }
+            unreachable;
+        };
+        const lifted_mono = self.mir_store.typeOf(lifted_def);
+        const lifted_layout = try self.layoutFromMonotype(lifted_mono);
+
+        // Propagate the lifted function def to LIR
+        if (self.lir_store.getSymbolDef(member.fn_symbol) == null) {
+            const key: u64 = member.fn_symbol.raw();
+            if (!self.propagating_defs.contains(key)) {
+                try self.propagating_defs.put(key, {});
+                defer _ = self.propagating_defs.remove(key);
+                const lir_def = try self.lowerExpr(lifted_def);
+                try self.lir_store.registerSymbolDef(member.fn_symbol, lir_def);
+            }
+        }
+
+        const fn_lookup = try self.lir_store.addExpr(.{ .lookup = .{
+            .symbol = member.fn_symbol,
+            .layout_idx = lifted_layout,
+        } }, region);
+
+        // Extract payload (captures) from the tag union
+        const captures_layout = try self.layoutFromMonotype(member.captures_monotype);
+        const payload_expr = try self.lir_store.addExpr(.{ .tag_payload_access = .{
+            .value = closure_val,
+            .union_layout = closure_layout,
+            .payload_layout = captures_layout,
+        } }, region);
+
+        // Build args: [user_args..., payload]
+        const inner_save = self.scratch_lir_expr_ids.items.len;
+        for (user_arg_ids) |arg_id| {
+            try self.scratch_lir_expr_ids.append(self.allocator, arg_id);
+        }
+        try self.scratch_lir_expr_ids.append(self.allocator, payload_expr);
+        const branch_args = try self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[inner_save..]);
+        self.scratch_lir_expr_ids.shrinkRetainingCapacity(inner_save);
+
+        const branch_call = try self.lir_store.addExpr(.{ .call = .{
+            .fn_expr = fn_lookup,
+            .fn_layout = lifted_layout,
+            .args = branch_args,
+            .ret_layout = ret_layout,
+            .called_via = .apply,
+        } }, region);
+
+        try self.scratch_lir_expr_ids.append(self.allocator, branch_call);
+    }
+
+    const branch_exprs = try self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_exprs..]);
+    const switch_expr = try self.lir_store.addExpr(.{ .discriminant_switch = .{
+        .value = closure_val,
+        .union_layout = closure_layout,
+        .branches = branch_exprs,
+    } }, region);
+    return acc.finish(switch_expr, ret_layout, region);
 }
 
 fn lowerBlock(self: *Self, block_data: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {

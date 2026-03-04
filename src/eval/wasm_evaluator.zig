@@ -197,11 +197,16 @@ pub const WasmEvaluator = struct {
             return error.RuntimeError;
         };
 
+        // Run lambda set inference
+        const mir_mod = @import("mir");
+        var lambda_set_store = mir_mod.LambdaSet.infer(self.allocator, &mir_store) catch return error.OutOfMemory;
+        defer lambda_set_store.deinit(self.allocator);
+
         // Lower MIR -> LIR
         var lir_store = LirExprStore.init(self.allocator);
         defer lir_store.deinit();
 
-        var mir_to_lir = lir.MirToLir.init(self.allocator, &mir_store, &lir_store, layout_store_ptr, module_env.idents.true_tag);
+        var mir_to_lir = lir.MirToLir.init(self.allocator, &mir_store, &lir_store, layout_store_ptr, &lambda_set_store, module_env.idents.true_tag);
         defer mir_to_lir.deinit();
 
         const lir_expr_id = mir_to_lir.lower(mir_expr_id) catch {

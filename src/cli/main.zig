@@ -3719,10 +3719,14 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     };
     defer mir_lower.deinit();
 
+    // Run lambda set inference
+    var lambda_set_store = mir.LambdaSet.infer(ctx.gpa, &mir_store) catch return error.OutOfMemory;
+    defer lambda_set_store.deinit(ctx.gpa);
+
     var lir_store = lir.LirExprStore.init(ctx.gpa);
     defer lir_store.deinit();
 
-    var mir_to_lir = lir.MirToLir.init(ctx.gpa, &mir_store, &lir_store, &layout_store, all_module_envs[0].idents.true_tag);
+    var mir_to_lir = lir.MirToLir.init(ctx.gpa, &mir_store, &lir_store, &layout_store, &lambda_set_store, all_module_envs[0].idents.true_tag);
     defer mir_to_lir.deinit();
 
     // Find and lower entrypoint expressions from platform module
