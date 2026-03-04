@@ -911,7 +911,7 @@ test "cross-module: dot-access method call ensures method is lowered" {
     defer env_a.deinit();
 
     // Module B imports A and calls a method via dot-access syntax
-    // This exercises lowerDotAccess (not lowerBinop) which was missing ensureMethodLowered
+    // This exercises lowerDotAccess (not lowerBinop) which was missing specializeMethod
     var env_b = try MirTestEnv.initWithImport("B",
         \\import A
         \\

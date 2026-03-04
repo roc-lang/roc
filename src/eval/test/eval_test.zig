@@ -3957,7 +3957,7 @@ test "polymorphic function single call Str" {
 }
 
 test "polymorphic function with List.contains called with two types" {
-    // Test that re-specialization produces correct code for both calls
+    // Test that specialization produces correct code for both calls
     const code =
         \\{
         \\    contains = |list, item| list.contains(item)

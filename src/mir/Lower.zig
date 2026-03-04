@@ -854,7 +854,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                 }
             } else if (self.lowered_symbols.get(symbol_key)) |cached_expr| {
                 // Symbol is already lowered. Check if this is a polymorphic
-                // re-specialization: the same function called with a different type.
+                // specialization: the same function called with a different type.
                 const cached_monotype = self.store.typeOf(cached_expr);
                 const monotype_matches_cached = try self.monotypesStructurallyEqual(cached_monotype, monotype);
                 if (!monotype.isNone() and !monotype_matches_cached) {
@@ -961,7 +961,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                 return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, monotype, region);
             }
 
-            // Symbol already lowered. Check for polymorphic re-specialization.
+            // Symbol already lowered. Check for polymorphic specialization.
             if (self.lowered_symbols.get(symbol_key)) |cached_expr| {
                 const cached_monotype = self.store.typeOf(cached_expr);
                 const monotype_matches_cached = try self.monotypesStructurallyEqual(cached_monotype, monotype);
@@ -1915,7 +1915,7 @@ fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype:
         }
 
         if (!desired_func_monotype.isNone()) {
-            const lowered_symbol = try self.ensureMethodLowered(callee_symbol, desired_func_monotype);
+            const lowered_symbol = try self.specializeMethod(callee_symbol, desired_func_monotype);
             if (@as(u64, @bitCast(lowered_symbol)) != @as(u64, @bitCast(callee_symbol))) {
                 func = try self.store.addExpr(
                     self.allocator,
@@ -2263,7 +2263,7 @@ fn lowerBinop(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop, monoty
             const func_monotype = try self.buildFuncMonotype(&.{ lhs_monotype, lhs_monotype }, monotype, false);
 
             // Ensure the method body is lowered so codegen can find it.
-            const lowered_method_symbol = try self.ensureMethodLowered(method_symbol, func_monotype);
+            const lowered_method_symbol = try self.specializeMethod(method_symbol, func_monotype);
 
             const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = lowered_method_symbol }, func_monotype, region);
 
@@ -2300,7 +2300,7 @@ fn lowerUnaryMinus(self: *Self, expr_idx: CIR.Expr.Idx, um: CIR.Expr.UnaryMinus,
     const func_monotype = try self.buildFuncMonotype(&.{inner_monotype}, monotype, false);
 
     // Ensure the method body is lowered so codegen can find it.
-    const lowered_method_symbol = try self.ensureMethodLowered(method_symbol, func_monotype);
+    const lowered_method_symbol = try self.specializeMethod(method_symbol, func_monotype);
 
     const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = lowered_method_symbol }, func_monotype, region);
     const args = try self.store.addExprSpan(self.allocator, &.{inner});
@@ -2927,7 +2927,7 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
         const func_monotype = try self.buildFuncMonotype(self.mono_scratches.idxs.sliceFromStart(mono_top), monotype, false);
 
         // Ensure the method body is lowered so codegen can find it.
-        const lowered_method_symbol = try self.ensureMethodLowered(method_symbol, func_monotype);
+        const lowered_method_symbol = try self.specializeMethod(method_symbol, func_monotype);
         const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = lowered_method_symbol }, func_monotype, region);
 
         return try self.store.addExpr(self.allocator, .{ .call = .{
@@ -3073,7 +3073,7 @@ fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR
     const func_monotype = try self.buildFuncMonotype(self.mono_scratches.idxs.sliceFromStart(mono_top), monotype, false);
 
     const args = try self.lowerExprSpan(module_env, tvd.args);
-    const lowered_method_symbol = try self.ensureMethodLowered(method_symbol, func_monotype);
+    const lowered_method_symbol = try self.specializeMethod(method_symbol, func_monotype);
     const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = lowered_method_symbol }, func_monotype, region);
 
     return try self.store.addExpr(self.allocator, .{ .call = .{
@@ -3155,9 +3155,9 @@ fn findDefExprBySymbol(self: *Self, module_idx: u32, ident_idx: Ident.Idx) ?CIR.
 }
 
 /// Ensure a method definition is lowered (for cross-module dispatch),
-/// returning the symbol to call. For polymorphic re-specialization this may
+/// returning the symbol to call. For polymorphic specialization this may
 /// be a synthetic symbol unique to (method symbol, caller monotype).
-fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?Monotype.Idx) Allocator.Error!MIR.Symbol {
+fn specializeMethod(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?Monotype.Idx) Allocator.Error!MIR.Symbol {
     const symbol_key: u64 = @bitCast(symbol);
     const symbol_meta = self.getSymbolMetadata(symbol);
 
@@ -3182,7 +3182,7 @@ fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?M
                 if (!same_specialization) {
                     const def_expr = self.findDefExprBySymbol(symbol_meta.module_idx, symbol_meta.ident_idx) orelse {
                         if (std.debug.runtime_safety) {
-                            std.debug.panic("ensureMethodLowered: need re-specialization for in-progress def but definition not found", .{});
+                            std.debug.panic("specializeMethod: need specialization for in-progress def but definition not found", .{});
                         }
                         unreachable;
                     };
@@ -3199,7 +3199,7 @@ fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?M
                 if (!try self.monotypesStructurallyEqual(cached_monotype, caller_monotype)) {
                     const def_expr = self.findDefExprBySymbol(symbol_meta.module_idx, symbol_meta.ident_idx) orelse {
                         if (std.debug.runtime_safety) {
-                            std.debug.panic("ensureMethodLowered: need re-specialization for cached symbol but definition not found", .{});
+                            std.debug.panic("specializeMethod: need specialization for cached symbol but definition not found", .{});
                         }
                         unreachable;
                     };
@@ -3217,7 +3217,7 @@ fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?M
 
     const def_expr = self.findDefExprBySymbol(symbol_meta.module_idx, symbol_meta.ident_idx) orelse {
         if (std.debug.runtime_safety) {
-            std.debug.panic("ensureMethodLowered: method definition not found for symbol", .{});
+            std.debug.panic("specializeMethod: method definition not found for symbol", .{});
         }
         unreachable;
     };
