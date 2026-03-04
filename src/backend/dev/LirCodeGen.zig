@@ -11249,22 +11249,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        /// Check if a lambda has any function-typed parameters.
-        /// Used to decide whether to inline HOF calls (preserving dispatch metadata).
-        fn lambdaHasFunctionParams(self: *Self, lambda: anytype) bool {
-            const params = self.store.getPatternSpan(lambda.params);
-            for (params) |pid| {
-                const pat = self.store.getPattern(pid);
-                const param_layout = switch (pat) {
-                    .bind => |b| b.layout_idx,
-                    .wildcard => |w| w.layout_idx,
-                    else => continue,
-                };
-                if (self.isFunctionLayout(param_layout)) return true;
-            }
-            return false;
-        }
-
         fn isFunctionLayout(self: *Self, layout_idx: layout.Idx) bool {
             if (layout_idx == layout.Idx.none) return false;
             if (layout_idx == layout.Idx.named_fn) return true;
@@ -11299,10 +11283,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const fn_expr = self.store.getExpr(call.fn_expr);
 
             return switch (fn_expr) {
-                // Direct anonymous lambda call: evaluate body inline so that closures
-                // returned from the body keep their captures on the caller's stack.
-                .lambda => |lambda| {
-                    return try self.callLambdaBodyInline(lambda, call.args);
+                .lambda => {
+                    return try self.compileLambdaAndCall(call.fn_expr, call.args, call.ret_layout);
                 },
 
                 // Direct closure call: inline the inner lambda's body.
@@ -11785,50 +11767,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .stack = .{ .offset = result_slot } };
         }
 
-        /// Evaluate a lambda body inline (in the caller's stack frame).
-        /// Used for direct anonymous lambda calls like `(|a| |b| a * b)(5)(10)`
-        /// where the lambda may return a closure whose captures must remain on
-        /// the caller's stack.
-        fn callLambdaBodyInline(self: *Self, lambda: anytype, args_span: anytype) Allocator.Error!ValueLocation {
-            const args = self.store.getExprSpan(args_span);
-            const params = self.store.getPatternSpan(lambda.params);
-
-            // Generate each argument and bind to the corresponding parameter symbol.
-            // Preserves .closure_value and .lambda_code metadata so HOF dispatch works.
-            for (args, 0..) |arg_id, i| {
-                const arg_loc = try self.generateExpr(arg_id);
-                if (i < params.len) {
-                    const pat = self.store.getPattern(params[i]);
-                    switch (pat) {
-                        .bind => |b| {
-                            const symbol_key: u64 = @bitCast(b.symbol);
-                            switch (arg_loc) {
-                                .closure_value, .lambda_code => {
-                                    // Preserve lambda/closure dispatch metadata
-                                    try self.symbol_locations.put(symbol_key, arg_loc);
-                                },
-                                else => {
-                                    const arg_size = self.getLayoutSize(b.layout_idx);
-                                    const offset = try self.ensureOnStack(arg_loc, arg_size);
-                                    try self.symbol_locations.put(symbol_key, .{ .stack = .{ .offset = offset } });
-                                },
-                            }
-                        },
-                        .wildcard => |w| {
-                            const arg_size = self.getLayoutSize(w.layout_idx);
-                            _ = try self.ensureOnStack(arg_loc, arg_size);
-                        },
-                        else => {
-                            _ = try self.ensureOnStack(arg_loc, 8);
-                        },
-                    }
-                }
-            }
-
-            // Evaluate the lambda body directly in the current scope
-            return try self.generateExpr(lambda.body);
-        }
-
         /// Compile a lambda body expression as a procedure and call it.
         fn compileLambdaAndCall(
             self: *Self,
@@ -12046,30 +11984,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!ValueLocation {
             return switch (callee_loc) {
                 .lambda_code => |expr_id| {
-                    // If this lambda has function-typed parameters, inline the call
-                    // so that closure/lambda metadata is preserved (the compiled body
-                    // would lose dispatch info and fall back to indirect calls).
-                    const expr = self.store.getExpr(expr_id);
-                    const lambda = switch (expr) {
-                        .lambda => |l| l,
-                        .closure => |c| blk: {
-                            const cd = self.store.getClosureData(c);
-                            const inner = self.store.getExpr(cd.lambda);
-                            break :blk inner.lambda;
-                        },
-                        else => unreachable,
-                    };
-                    if (self.lambdaHasFunctionParams(lambda)) {
-                        return try self.callLambdaBodyInline(lambda, args_span);
-                    }
-                    return try self.callCompiledOffset(self.getLambdaCodeOffset(expr_id), args_span, ret_layout);
+                    return try self.compileLambdaAndCall(expr_id, args_span, ret_layout);
                 },
                 .closure_value => |cv| switch (cv.representation) {
                     .enum_dispatch => |repr| self.dispatchEnumClosure(cv.stack_offset, repr.lambda_set, args_span, ret_layout),
                     .union_repr => |repr| self.dispatchUnionClosure(cv.stack_offset, repr, args_span, ret_layout),
                     .unwrapped_capture, .struct_captures => {
-                        // Single function with captures — bind captures to symbol_locations,
-                        // then evaluate the lambda body inline (captures must stay visible).
+                        // Bind captures from the stack to their symbols
                         const captures = self.store.getCaptures(cv.captures);
                         var cap_offset: i32 = 0;
                         for (captures) |capture| {
@@ -12083,21 +12004,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try self.symbol_locations.put(symbol_key, .{ .stack = .{ .offset = capture_offset } });
                             cap_offset += @intCast(cap_sa.size);
                         }
-
-                        // Get the inner lambda (may be wrapped in a .closure expr)
-                        const expr = self.store.getExpr(cv.lambda);
-                        const lambda = switch (expr) {
-                            .lambda => |l| l,
-                            .closure => |closure_id| blk: {
-                                const closure = self.store.getClosureData(closure_id);
-                                const inner = self.store.getExpr(closure.lambda);
-                                break :blk inner.lambda;
-                            },
-                            else => unreachable,
-                        };
-
-                        // Evaluate inline: bind args to params, then evaluate body
-                        return try self.callLambdaBodyInline(lambda, args_span);
+                        return try self.compileLambdaAndCall(cv.lambda, args_span, ret_layout);
                     },
                     .direct_call => {
                         const expr = self.store.getExpr(cv.lambda);
