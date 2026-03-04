@@ -455,9 +455,7 @@ fn isAtomicExpr(expr: LirExpr) bool {
         .empty_list,
         .runtime_error,
         // Lambdas and closures are treated as atomic because generateCall
-        // handles them specially (inline body or closure dispatch). Let-binding
-        // them to symbols changes the codegen path from direct inlining to
-        // compileLambdaAsProc, which can't return closures.
+        // handles them specially (closure dispatch with capture binding).
         .lambda,
         .closure,
         => true,

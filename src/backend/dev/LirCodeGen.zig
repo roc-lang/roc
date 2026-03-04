@@ -11287,7 +11287,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return try self.compileLambdaAndCall(call.fn_expr, call.args, call.ret_layout);
                 },
 
-                // Direct closure call: inline the inner lambda's body.
+                // Direct closure call: generate closure, then dispatch.
                 .closure => |closure_id| {
                     const closure = self.store.getClosureData(closure_id);
                     const closure_loc = try self.generateClosure(closure);
