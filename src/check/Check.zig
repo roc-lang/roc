@@ -1283,6 +1283,14 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // constrain numeric literals first)
     if (!skip_numeric_defaults) {
         try self.finalizeNumericDefaultsInternal(&env);
+
+        // After finalizing numeric defaults, resolve any remaining deferred
+        // static dispatch constraints (e.g., Dec.plus, Dec.to_str).
+        if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
+            self.in_numeric_default_pass = true;
+            defer self.in_numeric_default_pass = false;
+            try self.checkStaticDispatchConstraints(&env);
+        }
     }
 
     // Mark binop expressions whose dispatch constraints failed as erroneous
@@ -1759,6 +1767,8 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
     // return type of methods on defaulted numerics remains an unconstrained
     // flex var, causing incorrect .zst layouts.
     if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
+        self.in_numeric_default_pass = true;
+        defer self.in_numeric_default_pass = false;
         try self.checkStaticDispatchConstraints(&env);
         try self.checkAllConstraints(&env);
     }
@@ -5994,20 +6004,6 @@ fn finalizeNumericDefaultsInternal(self: *Self, env: *Env) std.mem.Allocator.Err
 
         const dec_var = try self.freshFromContent(try self.mkDecContent(env), env, Region.zero());
         _ = try self.unify(resolved.var_, dec_var, env);
-    }
-
-    // Process the newly created constraints from the unification
-    try self.checkAllConstraints(env);
-
-    // After defaulting numeric literals to Dec, any method_call constraints
-    // that were deferred (because the dispatcher was a flex var) can now be
-    // resolved since the dispatcher is now Dec (a nominal type).
-    // checkAllConstraints only runs checkStaticDispatchConstraints when there
-    // are regular constraints, so we need an explicit extra pass.
-    if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
-        self.in_numeric_default_pass = true;
-        defer self.in_numeric_default_pass = false;
-        try self.checkStaticDispatchConstraints(env);
     }
 }
 
