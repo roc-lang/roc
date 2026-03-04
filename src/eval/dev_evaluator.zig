@@ -209,7 +209,6 @@ fn lirExprResultLayout(store: *const LirExprStore, expr_id: lir.LirExprId) ?layo
         .i64_literal => .i64,
         .i128_literal => .i128,
         .unary_not => .bool,
-        .bytes_literal,
         .list,
         .empty_list,
         .empty_record,

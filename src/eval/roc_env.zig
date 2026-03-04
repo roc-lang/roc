@@ -127,7 +127,7 @@ pub const RocEnv = struct {
 /// Uses a static dummy array for hosted_fns since count=0 means no hosted functions.
 pub fn createRocOps(roc_env: *RocEnv) RocOps {
     const empty_hosted_fns = struct {
-        fn dummyHostedFn(_: *RocOps, _: *anyopaque, _: *anyopaque) callconv(.c) void {}
+        fn dummyHostedFn(_: *anyopaque, _: *anyopaque, _: *anyopaque) callconv(.c) void {}
         var empty: [1]builtins.host_abi.HostedFn = .{&dummyHostedFn};
     };
     return RocOps{

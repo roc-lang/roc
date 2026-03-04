@@ -2499,6 +2499,10 @@ pub fn build(b: *std.Build) void {
             .single_threaded = true,
         }),
     });
+    // Provide a no-op tracy stub so host_abi.zig can do @import("tracy")
+    builtins_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub_bc", .{
+        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
+    }));
     builtins_bc_obj.root_module.omit_frame_pointer = true;
     builtins_bc_obj.root_module.stack_check = false;
     builtins_bc_obj.use_llvm = true;
