@@ -9,7 +9,6 @@
 //! This is the foundation for the monomorphization pipeline testing.
 
 const std = @import("std");
-const base = @import("base");
 const can = @import("can");
 const builtins = @import("builtins");
 const i128h = builtins.compiler_rt_128;

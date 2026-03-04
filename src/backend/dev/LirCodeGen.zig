@@ -1338,22 +1338,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
         }
 
-        /// Best-effort extraction of a parameter layout from a lambda pattern.
-        fn getPatternLayout(self: *Self, pattern_id: LirPatternId) ?layout.Idx {
-            const pattern = self.store.getPattern(pattern_id);
-            return switch (pattern) {
-                .bind => |b| b.layout_idx,
-                .wildcard => |w| w.layout_idx,
-                .int_literal => |i| i.layout_idx,
-                .float_literal => |f| f.layout_idx,
-                .as_pattern => |a| a.layout_idx,
-                .tag => |t| t.union_layout,
-                .struct_ => |s| s.struct_layout,
-                .str_literal => .str,
-                .list => null,
-            };
-        }
-
         /// Generate code for an expression. The result is ALWAYS in a stable location
         /// (stack, immediate, lambda_code, closure_value) — never a bare register.
         fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!ValueLocation {
@@ -10229,11 +10213,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        /// Emit an unconditional jump
-        fn emitJumpUnconditional(self: *Self) Allocator.Error!usize {
-            return try self.codegen.emitJump();
-        }
-
         /// Emit a backward jump to a known location
         fn emitJumpBackward(self: *Self, jump_target: usize) Allocator.Error!void {
             const current = self.codegen.currentOffset();
@@ -11016,29 +10995,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        /// Look up the compiled code offset for a lambda_code expression ID.
-        fn getLambdaCodeOffset(self: *Self, expr_id: LirExprId) usize {
-            return self.compiled_lambdas.get(@intFromEnum(expr_id)).?;
-        }
-
-        /// Get the return layout of a lambda expression.
-        fn getLambdaRetLayout(self: *Self, expr_id: LirExprId) layout.Idx {
-            const expr = self.store.getExpr(expr_id);
-            return switch (expr) {
-                .lambda => |l| l.ret_layout,
-                else => unreachable,
-            };
-        }
-
-        fn isFunctionLayout(self: *Self, layout_idx: layout.Idx) bool {
-            if (layout_idx == layout.Idx.none) return false;
-            if (layout_idx == layout.Idx.named_fn) return true;
-            const ls = self.layout_store;
-            const idx_int = @intFromEnum(layout_idx);
-            if (idx_int >= ls.layouts.len()) return false;
-            return ls.getLayout(layout_idx).tag == .closure;
-        }
-
         /// Resolve a LIR expression to a compiled lambda's code offset.
         /// Peels through nominal wrappers and lookups to find the lambda.
         fn resolveLambdaCodeOffset(self: *Self, expr_id: LirExprId) Allocator.Error!?usize {
@@ -11225,7 +11181,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return patch_loc;
             }
         }
-
 
         /// Generate code for calling a looked-up function definition.
         /// In the new pipeline, MIR→LIR has already generated closure dispatch as generic
@@ -13022,7 +12977,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-
         fn bindLambdaParams(self: *Self, params: lir.LirPatternSpan, initial_reg_idx: u8) Allocator.Error!void {
             const pattern_ids = self.store.getPatternSpan(params);
 
@@ -13540,53 +13494,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 else => unreachable,
             }
-        }
-
-        /// Store the value currently in the return register(s) to a stack slot.
-        /// This is the inverse of moveToReturnRegisterWithLayout: it reads from
-        /// the return registers (X0/X1/X2 on aarch64, RAX/RDX/RCX on x86_64)
-        /// and writes to the given stack offset.
-        fn storeReturnRegisterToStack(self: *Self, ret_layout: layout.Idx, stack_offset: i32) Allocator.Error!void {
-            {
-                const ls = self.layout_store;
-                const layout_val = ls.getLayout(ret_layout);
-
-                // Lists and strings: 24 bytes in 3 registers
-                if (layout_val.tag == .list or layout_val.tag == .list_of_zst) {
-                    try self.codegen.emitStoreStack(.w64, stack_offset, ret_reg_0);
-                    try self.codegen.emitStoreStack(.w64, stack_offset + 8, ret_reg_1);
-                    try self.codegen.emitStoreStack(.w64, stack_offset + 16, ret_reg_2);
-                    return;
-                }
-
-                if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
-                    const size_align = ls.layoutSizeAlign(layout_val);
-                    if (size_align.size > 8) {
-                        const num_regs = (size_align.size + 7) / 8;
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            const regs = [_]@TypeOf(GeneralReg.X0){ .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7, .XR, .X9, .X10, .X11, .X12, .X13, .X14, .X15 };
-                            for (0..@min(num_regs, regs.len)) |i| {
-                                try self.codegen.emitStoreStack(.w64, stack_offset + @as(i32, @intCast(i * 8)), regs[i]);
-                            }
-                        } else {
-                            const regs = [_]@TypeOf(GeneralReg.RAX){ .RAX, .RDX, .RCX, .R8, .R9, .R10, .R11, .RDI, .RSI };
-                            for (0..@min(num_regs, regs.len)) |i| {
-                                try self.codegen.emitStoreStack(.w64, stack_offset + @as(i32, @intCast(i * 8)), regs[i]);
-                            }
-                        }
-                        return;
-                    }
-                }
-            }
-            // i128/u128/Dec: 2 registers
-            if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec) {
-                try self.codegen.emitStoreStack(.w64, stack_offset, ret_reg_0);
-                try self.codegen.emitStoreStack(.w64, stack_offset + 8, ret_reg_1);
-                return;
-            }
-
-            // Default: single register (≤ 8 bytes)
-            try self.codegen.emitStoreStack(.w64, stack_offset, ret_reg_0);
         }
 
         /// Copy a result value to the hidden return pointer buffer.

@@ -22,7 +22,6 @@ const Op = WasmModule.Op;
 const ValType = WasmModule.ValType;
 const BlockType = WasmModule.BlockType;
 
-const Symbol = LIR.Symbol;
 const LirProc = LIR.LirProc;
 const CFStmtId = LIR.CFStmtId;
 const RcOpKind = enum { incref, decref, free };
@@ -4710,66 +4709,7 @@ fn emitI64Store(self: *Self, offset: u32) Allocator.Error!void {
     WasmModule.leb128WriteU32(self.allocator, &self.body, offset) catch return error.OutOfMemory;
 }
 
-/// Copy `size` bytes from a source pointer (in a local) to a stack slot (fp + dst_slot).
-/// Uses aligned loads/stores for efficiency.  For a 16-byte Dec value this emits
-/// just two i64 load/store pairs.
-fn emitCopyToStack(self: *Self, src_local: u32, dst_slot: u32, size: u32) Allocator.Error!void {
-    var offset: u32 = 0;
-    // Copy 8 bytes at a time
-    while (offset + 8 <= size) : (offset += 8) {
-        try self.emitFpOffset(dst_slot);
-        try self.emitLocalGet(src_local);
-        self.body.append(self.allocator, Op.i64_load) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &self.body, 3) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &self.body, offset) catch return error.OutOfMemory;
-        try self.emitI64Store(offset);
-    }
-    // Copy remaining 4 bytes
-    if (offset + 4 <= size) {
-        try self.emitFpOffset(dst_slot);
-        try self.emitLocalGet(src_local);
-        self.body.append(self.allocator, Op.i32_load) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &self.body, 2) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &self.body, offset) catch return error.OutOfMemory;
-        try self.emitStoreOp(.i32, offset);
-        offset += 4;
-    }
-    // Copy remaining bytes one at a time
-    while (offset < size) : (offset += 1) {
-        try self.emitFpOffset(dst_slot);
-        try self.emitLocalGet(src_local);
-        self.body.append(self.allocator, Op.i32_load8_u) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &self.body, offset) catch return error.OutOfMemory;
-        self.body.append(self.allocator, Op.i32_store8) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, &self.body, offset) catch return error.OutOfMemory;
-    }
-}
-
 /// Copy a stack_memory value from a (potentially dangling) source pointer to
-/// freshly allocated space in the current stack frame.  The NEW pointer (to
-/// the caller's copy) is left on the wasm operand stack.  If the capture is
-/// not a stack_memory type the original value is left untouched on the stack.
-fn emitDeepCopyIfStackMemory(self: *Self, layout_idx: layout.Idx, cap_vt: ValType) Allocator.Error!void {
-    if (cap_vt != .i32 or !self.isCompositeLayout(layout_idx)) {
-        return;
-    }
-
-    const data_size = self.layoutByteSize(layout_idx);
-    if (data_size == 0) return;
-
-    // Save the source pointer from the stack
-    const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalSet(src_local);
-    // Allocate room in the current frame
-    const new_slot = try self.allocStackMemory(data_size, 8);
-    // Copy bytes
-    try self.emitCopyToStack(src_local, new_slot, data_size);
-    // Push the new, safe pointer
-    try self.emitFpOffset(new_slot);
-}
-
 /// Emit a wasm conversion instruction if source and target types differ.
 fn emitConversion(self: *Self, source: ValType, target: ValType) Allocator.Error!void {
     if (source == target) return;
@@ -4980,7 +4920,6 @@ fn compileLambda(self: *Self, expr_id: LirExprId, lambda: anytype) Allocator.Err
 
     return func_idx;
 }
-
 
 /// Compile all LirProcs as separate wasm functions.
 /// Must be called before generateExpr so that call sites can find compiled procs.
@@ -5637,77 +5576,6 @@ fn bindCFLetPattern(self: *Self, pat: LirPattern, value_expr: LirExprId) Allocat
     }
 }
 
-/// Generate a function call expression.
-fn generateCallFromFnExpr(self: *Self, fn_expr_id: LirExprId, args: LIR.LirExprSpan, ret_layout: layout.Idx) Allocator.Error!void {
-    const synthetic_call = struct {
-        fn_expr: LirExprId,
-        args: LIR.LirExprSpan,
-        ret_layout: layout.Idx,
-    }{
-        .fn_expr = fn_expr_id,
-        .args = args,
-        .ret_layout = ret_layout,
-    };
-    try self.generateCall(synthetic_call);
-}
-
-fn tryGenerateDirectCallFromSimpleTagElseMatch(
-    self: *Self,
-    match_expr: anytype,
-    args: LIR.LirExprSpan,
-    ret_layout: layout.Idx,
-) Allocator.Error!bool {
-    const branches = self.store.getMatchBranches(match_expr.branches);
-    if (branches.len != 2) return false;
-    if (!branches[0].guard.isNone() or !branches[1].guard.isNone()) return false;
-
-    const first_pat = self.store.getPattern(branches[0].pattern);
-    const second_pat = self.store.getPattern(branches[1].pattern);
-    if (first_pat != .tag or second_pat != .wildcard) return false;
-
-    const tag_pat = first_pat.tag;
-    const tag_args = self.store.getPatternSpan(tag_pat.args);
-    if (tag_args.len != 0) return false;
-
-    // Evaluate match value once.
-    const value_vt = self.resolveValType(match_expr.value_layout);
-    try self.generateExpr(match_expr.value);
-    const value_local = self.storage.allocAnonymousLocal(value_vt) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
-
-    // Compare discriminant.
-    const ls = self.getLayoutStore();
-    const is_pointer = switch (WasmLayout.wasmReprWithStore(tag_pat.union_layout, ls)) {
-        .stack_memory => true,
-        .primitive => false,
-    };
-
-    if (is_pointer) {
-        const l = ls.getLayout(tag_pat.union_layout);
-        std.debug.assert(l.tag == .tag_union);
-        const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
-        try self.emitLocalGet(value_local);
-        try self.emitLoadOpSized(.i32, tu_data.discriminant_size, tu_data.discriminant_offset);
-    } else {
-        if (value_vt != .i32) return false;
-        try self.emitLocalGet(value_local);
-    }
-
-    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(tag_pat.discriminant)) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
-
-    const bt = valTypeToBlockType(self.resolveValType(ret_layout));
-    self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
-    self.body.append(self.allocator, @intFromEnum(bt)) catch return error.OutOfMemory;
-    try self.generateCallFromFnExpr(branches[0].body, args, ret_layout);
-    self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
-    try self.generateCallFromFnExpr(branches[1].body, args, ret_layout);
-    self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
-    return true;
-}
-
 /// Generate code for a function call.
 /// In the new pipeline, MIR→LIR generates all closure dispatch as generic LIR
 /// constructs (discriminant_switch, tag_payload_access, direct calls). The backend
@@ -5823,7 +5691,6 @@ fn generateCallArgs(self: *Self, args: LIR.LirExprSpan) Allocator.Error!void {
         }
     }
 }
-
 
 // ---- Lambda set / Closure value generation ----
 // These functions handle runtime dispatch for lambda sets with multiple members.
@@ -11763,28 +11630,6 @@ fn generateStrEscapeAndQuote(self: *Self, quote_expr: anytype) Allocator.Error!v
 fn emitLocalGet(self: *Self, local: u32) Allocator.Error!void {
     self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, &self.body, local) catch return error.OutOfMemory;
-}
-
-/// Helper: emit a type-correct zero/dummy value.
-fn emitDummyValue(self: *Self, vt: ValType) Allocator.Error!void {
-    switch (vt) {
-        .i32 => {
-            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-        },
-        .i64 => {
-            self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI64(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-        },
-        .f32 => {
-            self.body.append(self.allocator, Op.f32_const) catch return error.OutOfMemory;
-            self.body.appendSlice(self.allocator, &[4]u8{ 0, 0, 0, 0 }) catch return error.OutOfMemory;
-        },
-        .f64 => {
-            self.body.append(self.allocator, Op.f64_const) catch return error.OutOfMemory;
-            self.body.appendSlice(self.allocator, &[8]u8{ 0, 0, 0, 0, 0, 0, 0, 0 }) catch return error.OutOfMemory;
-        },
-    }
 }
 
 /// Helper: emit local.set instruction

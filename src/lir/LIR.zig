@@ -30,7 +30,6 @@ const layout = @import("layout");
 const types = @import("types");
 const mir = @import("mir");
 
-const Ident = base.Ident;
 const StringLiteral = base.StringLiteral;
 const CalledVia = base.CalledVia;
 
