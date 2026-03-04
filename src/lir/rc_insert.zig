@@ -275,31 +275,6 @@ pub const RcInsertPass = struct {
                     }
                 }
             },
-            .closure => |clo_id| {
-                const clo = self.store.getClosureData(clo_id);
-                // The closure body runs in its own scope and references captures via the
-                // capture payload, not directly from the outer binding. Count only explicit
-                // capture edges into the outer scope to avoid double-counting captured symbols.
-                self.scratch_uses.clearRetainingCapacity();
-                defer self.scratch_uses.clearRetainingCapacity();
-                try self.countUsesInto(clo.lambda, &self.scratch_uses);
-                // Each capture consumes a reference to the captured symbol.
-                const captures = self.store.getCaptures(clo.captures);
-                for (captures) |cap| {
-                    if (!cap.symbol.isNone()) {
-                        const key = @as(u64, @bitCast(cap.symbol));
-                        const gop = try target.getOrPut(key);
-                        if (gop.found_existing) {
-                            gop.value_ptr.* += 1;
-                        } else {
-                            gop.value_ptr.* = 1;
-                        }
-                        if (!self.symbol_layouts.contains(key)) {
-                            try self.symbol_layouts.put(key, cap.layout_idx);
-                        }
-                    }
-                }
-            },
             .list => |list| {
                 const elems = self.store.getExprSpan(list.elems);
                 for (elems) |elem_id| {
@@ -482,7 +457,6 @@ pub const RcInsertPass = struct {
             .if_then_else => |ite| self.processIfThenElse(ite.branches, ite.final_else, ite.result_layout, region),
             .match_expr => |w| self.processMatch(w.value, w.value_layout, w.branches, w.result_layout, region),
             .lambda => |lam| self.processLambda(lam, region, expr_id),
-            .closure => |clo_id| self.processClosure(self.store.getClosureData(clo_id), region, expr_id),
             .for_loop => |fl| self.processForLoop(fl, region, expr_id),
             .while_loop => |wl| self.processWhileLoop(wl, region, expr_id),
             .discriminant_switch => |ds| self.processDiscriminantSwitch(ds, region),
@@ -1213,25 +1187,6 @@ pub const RcInsertPass = struct {
         return expr_id;
     }
 
-    /// Process a closure expression.
-    /// A closure wraps a lambda — just recurse into the inner lambda.
-    fn processClosure(self: *RcInsertPass, clo: anytype, region: Region, expr_id: LirExprId) Allocator.Error!LirExprId {
-        const new_lambda = try self.processExpr(clo.lambda);
-        if (new_lambda != clo.lambda) {
-            const new_clo_id = try self.store.addClosureData(.{
-                .closure_layout = clo.closure_layout,
-                .lambda = new_lambda,
-                .captures = clo.captures,
-                .representation = clo.representation,
-                .recursion = clo.recursion,
-                .self_recursive = clo.self_recursive,
-                .is_bound_to_variable = clo.is_bound_to_variable,
-            });
-            return self.store.addExpr(.{ .closure = new_clo_id }, region);
-        }
-        return expr_id;
-    }
-
     /// Process a for loop expression.
     /// For loops bind an element via elem_pattern each iteration.
     /// The loop provides 1 reference per element. We emit body-local RC ops
@@ -1491,8 +1446,8 @@ pub const RcInsertPass = struct {
             .dec_to_str => |d| try self.collectExprBoundSymbols(d, set),
             .str_escape_and_quote => |s| try self.collectExprBoundSymbols(s, set),
             .tag_payload_access => |tpa| try self.collectExprBoundSymbols(tpa.value, set),
-            // Lambda/closure are separate scopes in LIR — don't recurse.
-            .lambda, .closure => {},
+            // Lambda is a separate scope in LIR — don't recurse.
+            .lambda => {},
             // Terminals and RC ops — no sub-expressions, no bindings
             .lookup,
             .i64_literal,
@@ -2184,12 +2139,6 @@ fn countRcOps(store: *const LirExprStore, expr_id: LirExprId) RcOpCounts {
             increfs += sub.increfs;
             decrefs += sub.decrefs;
         },
-        .closure => |clo_id| {
-            const clo = store.getClosureData(clo_id);
-            const sub = countRcOps(store, clo.lambda);
-            increfs += sub.increfs;
-            decrefs += sub.decrefs;
-        },
         .for_loop => |fl| {
             const sub_list = countRcOps(store, fl.list_expr);
             increfs += sub_list.increfs;
@@ -2772,53 +2721,6 @@ test "RC for_loop: elem used twice gets incref" {
     try std.testing.expectEqual(@as(u32, 0), rc.decrefs);
 }
 
-test "RC closure: wrapping lambda gets RC ops" {
-    // closure around |s| 42  where s is str-layout
-    // The inner lambda has unused str param => decref
-    const allocator = std.testing.allocator;
-
-    var env = try testInit();
-    try testInitLayoutStore(&env);
-    defer testDeinit(&env);
-
-    const str_layout: LayoutIdx = .str;
-    const i64_layout: LayoutIdx = .i64;
-    const sym_s = makeSymbol(1);
-
-    // Build inner lambda: |s| 42
-    const int_lit = try env.lir_store.addExpr(.{ .i64_literal = 42 }, Region.zero());
-    const pat_s = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
-    const params = try env.lir_store.addPatternSpan(&.{pat_s});
-    const lambda_expr = try env.lir_store.addExpr(.{ .lambda = .{
-        .fn_layout = i64_layout,
-        .params = params,
-        .body = int_lit,
-        .ret_layout = i64_layout,
-    } }, Region.zero());
-
-    // Wrap in closure
-    const closure_data_id = try env.lir_store.addClosureData(.{
-        .closure_layout = i64_layout,
-        .lambda = lambda_expr,
-        .captures = LIR.LirCaptureSpan.empty(),
-        .representation = .{ .unwrapped_capture = .{ .capture_layout = i64_layout } },
-        .recursion = .not_recursive,
-        .self_recursive = .not_self_recursive,
-        .is_bound_to_variable = false,
-    });
-    const closure_expr = try env.lir_store.addExpr(.{ .closure = closure_data_id }, Region.zero());
-
-    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
-    defer pass.deinit();
-
-    const result = try pass.insertRcOps(closure_expr);
-
-    // decref for unused str param in the inner lambda
-    const rc = countRcOps(&env.lir_store, result);
-    try std.testing.expectEqual(@as(u32, 0), rc.increfs);
-    try std.testing.expectEqual(@as(u32, 1), rc.decrefs);
-}
-
 test "RC block: lambda in stmt.expr gets processed" {
     // { f = |s| 42; 0 }  where s is str-layout
     // The lambda bound by f should have its body processed (decref for unused s)
@@ -3158,81 +3060,6 @@ test "RC if_then_else: symbol used in both branches — no extra incref" {
     const rc = countRcOps(&env.lir_store, result);
     try std.testing.expectEqual(@as(u32, 0), rc.increfs);
     try std.testing.expectEqual(@as(u32, 0), rc.decrefs);
-}
-
-test "RC closure: capturing refcounted string gets RC tracking" {
-    // { s = "hello"; closure(lambda(body: s), captures: [s]) }
-    // The closure captures a refcounted string. The lambda body uses s once.
-    // The capture itself constitutes a use of s in the outer scope.
-    const allocator = std.testing.allocator;
-
-    var env = try testInit();
-    try testInitLayoutStore(&env);
-    defer testDeinit(&env);
-
-    const str_layout: LayoutIdx = .str;
-    const i64_layout: LayoutIdx = .i64;
-    const sym_s = makeSymbol(1);
-    const sym_x = makeSymbol(2);
-
-    // Build lambda body: just return s (the captured value)
-    const lookup_s_body = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
-
-    // Build lambda: |x| s  (x is a dummy param; body uses the captured s)
-    const pat_x = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_x, .layout_idx = i64_layout } }, Region.zero());
-    const params = try env.lir_store.addPatternSpan(&.{pat_x});
-    const lambda_expr = try env.lir_store.addExpr(.{ .lambda = .{
-        .fn_layout = i64_layout,
-        .params = params,
-        .body = lookup_s_body,
-        .ret_layout = str_layout,
-    } }, Region.zero());
-
-    // Build captures list: [s]
-    const captures = try env.lir_store.addCaptures(&.{.{
-        .symbol = sym_s,
-        .layout_idx = str_layout,
-    }});
-
-    // Build closure wrapping the lambda with capture of s
-    const closure_data_id = try env.lir_store.addClosureData(.{
-        .closure_layout = str_layout,
-        .lambda = lambda_expr,
-        .captures = captures,
-        .representation = .{ .unwrapped_capture = .{ .capture_layout = str_layout } },
-        .recursion = .not_recursive,
-        .self_recursive = .not_self_recursive,
-        .is_bound_to_variable = false,
-    });
-    const closure_expr = try env.lir_store.addExpr(.{ .closure = closure_data_id }, Region.zero());
-
-    // Build block: { s = "hello"; <closure> }
-    const str_hello = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
-    const pat_s = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
-    const stmts = try env.lir_store.addStmts(&.{.{ .decl = .{ .pattern = pat_s, .expr = str_hello } }});
-    const block_expr = try env.lir_store.addExpr(.{ .block = .{
-        .stmts = stmts,
-        .final_expr = closure_expr,
-        .result_layout = str_layout,
-    } }, Region.zero());
-
-    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
-    defer pass.deinit();
-
-    const result = try pass.insertRcOps(block_expr);
-
-    // The RC pass should process the closure and its lambda body.
-    // s is used in the lambda body (counted into outer scope for now per known issue #1).
-    // At minimum, the pass should not crash and should produce a valid result.
-    const result_expr = env.lir_store.getExpr(result);
-    try std.testing.expect(result_expr == .block);
-
-    // The closure should still be present in the result tree
-    const rc = countRcOps(&env.lir_store, result);
-    // With current behavior (issue #1: lambda body uses counted into outer scope),
-    // s has 1 use from the lambda body, so global count = 1, no extra incref.
-    // No unused-symbol decref either since s is "used".
-    try std.testing.expect(rc.increfs == 0 or rc.increfs >= 1);
 }
 
 test "RC nested match: symbol used in inner and outer match branches" {

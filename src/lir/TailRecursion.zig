@@ -152,18 +152,6 @@ pub const TailRecursionPass = struct {
                             return call.args;
                         }
                     },
-                    .closure => |closure_id| {
-                        const closure = self.store.getClosureData(closure_id);
-                        // Check if this closure is the recursive one
-                        switch (closure.self_recursive) {
-                            .self_recursive => |jp_id| {
-                                if (jp_id == self.join_point_id) {
-                                    return call.args;
-                                }
-                            },
-                            .not_self_recursive => {},
-                        }
-                    },
                     else => {},
                 }
             },

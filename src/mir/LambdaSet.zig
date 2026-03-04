@@ -152,8 +152,8 @@ fn resolveExprLambdaSet(
         // Match: merge lambda sets from all branches
         .match_expr => |match| {
             const branches = mir_store.getBranches(match.branches);
-            var all_members = std.ArrayList(Member).init(allocator);
-            defer all_members.deinit();
+            var all_members: std.ArrayListUnmanaged(Member) = .empty;
+            defer all_members.deinit(allocator);
 
             for (branches) |branch| {
                 const branch_ls = try resolveExprLambdaSet(allocator, mir_store, ls_store, branch.body);
@@ -169,7 +169,7 @@ fn resolveExprLambdaSet(
                             }
                         }
                         if (!found) {
-                            try all_members.append(m);
+                            try all_members.append(allocator, m);
                         }
                     }
                 }

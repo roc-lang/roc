@@ -3573,9 +3573,6 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         module.imports.resolveImports(module, all_module_envs);
     }
 
-    // Compiled modules (excluding Builtin at index 0) for pipelines that shouldn't process Builtin
-    const compiled_module_envs = all_module_envs[1..];
-
     // Lambda lifting and lambda set inference are now handled during CIR→MIR and MIR→LIR lowering
 
     // Process hosted functions - write hosted_index into CIR node payloads

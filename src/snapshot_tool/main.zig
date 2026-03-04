@@ -3610,8 +3610,6 @@ fn processDevObjectSnapshot(
         module.imports.resolveImports(module, all_module_envs);
     }
 
-    const compiled_module_envs = all_module_envs[1..];
-
     // Lambda lifting and lambda set inference are now handled during CIR→MIR and MIR→LIR lowering
 
     // 6. Process hosted functions (write hosted_index into CIR node payloads)

@@ -51,7 +51,7 @@ fn lirExprResultLayout(store: *const LirExprStore, expr_id: LirExprId) ?layout.I
         .tag => |t| t.union_layout,
         .zero_arg_tag => |z| z.union_layout,
         .struct_access => |sa| sa.field_layout,
-        .closure => |c| store.getClosureData(c).closure_layout,
+        // .closure removed — closures are now generic LIR constructs (struct, tag, discriminant_switch)
         .nominal => |n| lirExprResultLayout(store, n.backing_expr) orelse n.nominal_layout,
         .discriminant_switch => |ds| ds.result_layout,
         .f64_literal => .f64,

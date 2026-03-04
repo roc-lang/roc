@@ -45,6 +45,8 @@ uses_stack_memory: bool = false,
 fp_local: u32 = 0,
 /// Map from lambda expression ID → compiled wasm function index.
 compiled_lambdas: std.AutoHashMap(u32, u32),
+/// Map from proc symbol key → compiled wasm function index (for LirProc compilation).
+registered_procs: std.AutoHashMap(u64, u32),
 /// Type index for the RocOps function signature: (i32, i32) -> void.
 roc_ops_type_idx: u32 = 0,
 /// Table indices for RocOps functions (used with call_indirect).
@@ -136,6 +138,7 @@ pub fn init(allocator: Allocator, store: *const LirExprStore, layout_store: *con
         .uses_stack_memory = false,
         .fp_local = 0,
         .compiled_lambdas = std.AutoHashMap(u32, u32).init(allocator),
+        .registered_procs = std.AutoHashMap(u64, u32).init(allocator),
         .join_point_depths = std.AutoHashMap(u32, u32).init(allocator),
         .join_point_param_locals = std.AutoHashMap(u32, []u32).init(allocator),
     };
@@ -146,6 +149,7 @@ pub fn deinit(self: *Self) void {
     self.body.deinit(self.allocator);
     self.storage.deinit();
     self.compiled_lambdas.deinit();
+    self.registered_procs.deinit();
     self.join_point_depths.deinit();
     // Free allocated param local arrays
     var jp_it = self.join_point_param_locals.iterator();
@@ -553,11 +557,15 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
                     .bind => |bind| {
                         // Check if the bound expression is a lambda — if so, compile
                         // as a wasm function and record symbol→func_idx mapping.
-                        const stmt_expr = self.store.getExpr(stmt.expr);
-                        if (try self.tryBindFunction(stmt.expr, stmt_expr, bind.symbol)) {
+                        if (self.peelToLambda(stmt.expr)) |lambda_expr_id| {
+                            const lambda = self.store.getExpr(lambda_expr_id).lambda;
+                            const func_idx = try self.compileLambda(lambda_expr_id, lambda);
+                            // Record symbol→func_idx so lookups to this symbol find the function
+                            const sym_key: u64 = @bitCast(bind.symbol);
+                            self.registered_procs.put(sym_key, func_idx) catch return error.OutOfMemory;
                             continue;
                         }
-                        // Non-lambda, non-closure, non-function-alias — fall through to value binding
+                        // Non-lambda — fall through to value binding
                         {
                             // Check for type representation mismatch: composite expr bound
                             // to scalar local (e.g., dec_literal bound to U64 local).
@@ -757,34 +765,9 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
                 if (local_info.val_type != expected_vt) {
                     try self.emitConversion(local_info.val_type, expected_vt);
                 }
-            } else if (self.closure_values.get(key)) |cv| {
-                // Symbol is already bound as a callable in closure_values.
-                // Generate its runtime closure value (used when passing callables
-                // as arguments to higher-order functions).
-                try self.generateClosureValue(cv);
             } else if (self.store.getSymbolDef(l.symbol)) |def_id| {
-                // Symbol not in locals or closure_values — resolve via getSymbolDef.
-                // This handles callables whose block binding was dropped by RC insertion
-                // but are still referenced (e.g., callback `f` passed to List.fold).
-                const def_expr = self.store.getExpr(def_id);
-                switch (def_expr) {
-                    .lambda, .closure, .nominal => {
-                        if (try self.tryBindFunction(def_id, def_expr, l.symbol)) {
-                            // Now bound — generate closure value through closure_values.
-                            if (self.closure_values.get(key)) |bound_cv| {
-                                try self.generateClosureValue(bound_cv);
-                            } else {
-                                if (std.debug.runtime_safety) {
-                                    std.debug.panic("WasmCodeGen invariant: callable lookup bound without closure_values entry", .{});
-                                }
-                                unreachable;
-                            }
-                        } else {
-                            unreachable;
-                        }
-                    },
-                    else => unreachable,
-                }
+                // Symbol not in locals — resolve via getSymbolDef and generate the expression.
+                try self.generateExpr(def_id);
             } else {
                 unreachable;
             }
@@ -881,10 +864,12 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
         },
         .lambda => |lambda| {
             // Compile lambda as a separate wasm function.
-            // The result is a function index we can reference later.
-            const func_idx = try self.compileLambda(expr_id, lambda);
-            // Runtime value for direct-call closures is the compiled wasm function index.
-            try self.emitDirectCallableValue(func_idx);
+            // In the new pipeline, lambdas as first-class values produce their function index.
+            _ = try self.compileLambda(expr_id, lambda);
+            // Push a placeholder value — in the new pipeline, lambda values are dispatched
+            // at call sites via MIR→LIR generated code, not stored as runtime values.
+            try self.body.append(self.allocator, Op.i32_const);
+            try WasmModule.leb128WriteI32(self.allocator, &self.body, 0);
         },
         .call => |c| {
             try self.generateCall(c);
@@ -894,21 +879,6 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
         },
         .tag => |t| {
             try self.generateTag(t);
-        },
-        .closure => |closure_id| {
-            const closure = self.store.getClosureData(closure_id);
-            // Handle closure based on its representation
-            switch (closure.representation) {
-                .enum_dispatch, .union_repr => unreachable, // MirToLir never creates these representations
-                .direct_call, .unwrapped_capture, .struct_captures => {
-                    // Single function - compile and produce the closure value.
-                    // For direct_call: pushes the compiled function index.
-                    // For unwrapped_capture: pushes the single capture value.
-                    // For struct_captures: materializes captures struct, pushes pointer.
-                    _ = try self.compileClosure(expr_id, closure);
-                    try self.generateClosureValue(closure);
-                },
-            }
         },
         .str_literal => |str_idx| {
             try self.generateStrLiteral(str_idx);
@@ -2119,7 +2089,6 @@ fn exprLayoutIdx(self: *Self, expr_id: LirExprId) ?layout.Idx {
         .struct_access => |sa| sa.field_layout,
         .zero_arg_tag => |z| z.union_layout,
         .tag => |t| t.union_layout,
-        .closure => |c| self.store.getClosureData(c).closure_layout,
         .low_level => |ll| ll.ret_layout,
         .dbg => |d| d.result_layout,
         .expect => |e| e.result_layout,
@@ -2165,7 +2134,6 @@ fn exprValType(self: *Self, expr_id: LirExprId) ValType {
         .empty_list => .i32, // pointer to 12-byte RocList
         .call => |c| self.resolveValType(c.ret_layout),
         .lambda => .i32, // function reference (index)
-        .closure => .i32, // closure value (function reference)
         .struct_ => .i32, // pointer to stack memory
         .struct_access => |sa| self.resolveValType(sa.field_layout),
         .zero_arg_tag => .i32, // discriminant or pointer
@@ -2251,7 +2219,6 @@ fn isCompositeExpr(self: *const Self, expr_id: LirExprId) bool {
         .discriminant_switch => |ds| self.isCompositeLayout(ds.result_layout),
         .hosted_call => |hc| self.isCompositeLayout(hc.ret_layout),
         .early_return => |er| self.isCompositeLayout(er.ret_layout),
-        .closure => |c| self.isCompositeLayout(self.store.getClosureData(c).closure_layout),
         .i64_literal, .f64_literal, .f32_literal, .bool_literal => false, // scalars
         .lambda => false, // function value, not composite data
         .for_loop, .while_loop, .break_expr, .crash, .runtime_error => false, // unit/noreturn
@@ -4604,17 +4571,12 @@ fn emitI128TryToI128(self: *Self) Allocator.Error!void {
 /// (not one of the well-known sentinel values like .bool, .i32, etc.).
 /// If a lambda's body returns an unwrapped_capture closure, get the capture's layout.
 /// The runtime return value is the capture itself, not a closure pointer.
+/// In the new pipeline, closures are lambda-lifted and represented as generic LIR
+/// constructs. There are no unwrapped capture closures in LIR anymore.
 fn getUnwrappedCaptureLayout(self: *const Self, body_id: LirExprId) ?layout.Idx {
-    const body = self.store.getExpr(body_id);
-    return switch (body) {
-        .closure => |c| switch (self.store.getClosureData(c).representation) {
-            .unwrapped_capture => |uc| uc.capture_layout,
-            else => null,
-        },
-        .nominal => |n| self.getUnwrappedCaptureLayout(n.backing_expr),
-        .block => |b| self.getUnwrappedCaptureLayout(b.final_expr),
-        else => null,
-    };
+    _ = self;
+    _ = body_id;
+    return null;
 }
 
 fn resolveValType(self: *const Self, layout_idx: layout.Idx) ValType {
@@ -4870,17 +4832,7 @@ fn compileLambda(self: *Self, expr_id: LirExprId, lambda: anytype) Allocator.Err
         const pat = self.store.getPattern(param_id);
         switch (pat) {
             .bind => |bind| {
-                // For pre-bound callable params with unwrapped_capture, use the
-                // capture's type instead of the closure layout type, since the
-                // actual runtime value passed is the capture itself (not a pointer).
-                const param_key: u64 = @bitCast(bind.symbol);
-                const vt = if (self.closure_values.get(param_key)) |cv| blk: {
-                    break :blk switch (cv.representation) {
-                        .unwrapped_capture => |repr| self.resolveValType(repr.capture_layout),
-                        else => self.resolveValType(bind.layout_idx),
-                    };
-                } else self.resolveValType(bind.layout_idx);
-                param_types.append(self.allocator, vt) catch return error.OutOfMemory;
+                param_types.append(self.allocator, self.resolveValType(bind.layout_idx)) catch return error.OutOfMemory;
             },
             .wildcard => |wc| {
                 param_types.append(self.allocator, self.resolveValType(wc.layout_idx)) catch return error.OutOfMemory;
@@ -4890,39 +4842,6 @@ fn compileLambda(self: *Self, expr_id: LirExprId, lambda: anytype) Allocator.Err
                 param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
             },
             else => unreachable,
-        }
-    }
-
-    // Scan pre-bound closures for captures that need to be forwarded as extra params.
-    // When a higher-order function has a pre-bound callback closure with struct_captures,
-    // those captures must be forwarded as extra leading parameters so the function body
-    // can access them when dispatching the callback.
-    var forwarded_captures: std.ArrayList(ForwardedCapture) = .empty;
-    defer forwarded_captures.deinit(self.allocator);
-
-    for (params) |param_id| {
-        const pat = self.store.getPattern(param_id);
-        switch (pat) {
-            .bind => |bind| {
-                const param_key: u64 = @bitCast(bind.symbol);
-                if (self.closure_values.get(param_key)) |cv| {
-                    switch (cv.representation) {
-                        .struct_captures => {
-                            const caps = self.store.getCaptures(cv.captures);
-                            for (caps) |cap| {
-                                const vt = self.resolveValType(cap.layout_idx);
-                                param_types.append(self.allocator, vt) catch return error.OutOfMemory;
-                                forwarded_captures.append(self.allocator, .{
-                                    .symbol = cap.symbol,
-                                    .layout_idx = cap.layout_idx,
-                                }) catch return error.OutOfMemory;
-                            }
-                        },
-                        else => {}, // unwrapped_capture handled by alias, direct_call has no captures
-                    }
-                }
-            },
-            else => {},
         }
     }
 
@@ -4942,13 +4861,6 @@ fn compileLambda(self: *Self, expr_id: LirExprId, lambda: anytype) Allocator.Err
     // back to this one, the recursive lookup will find this func_idx.
     self.compiled_lambdas.put(expr_key, func_idx) catch return error.OutOfMemory;
 
-    // Store forwarded captures in map for call sites to use
-    if (forwarded_captures.items.len > 0) {
-        const caps = self.allocator.alloc(ForwardedCapture, forwarded_captures.items.len) catch return error.OutOfMemory;
-        @memcpy(caps, forwarded_captures.items);
-        self.forwarded_func_captures.put(func_idx, caps) catch return error.OutOfMemory;
-    }
-
     // Save current codegen state
     const saved = self.saveState() catch return error.OutOfMemory;
 
@@ -4957,8 +4869,6 @@ fn compileLambda(self: *Self, expr_id: LirExprId, lambda: anytype) Allocator.Err
     self.storage.locals = std.AutoHashMap(u64, Storage.LocalInfo).init(self.allocator);
     self.storage.next_local_idx = 0;
     self.storage.local_types = .empty;
-    // Note: closure_values is NOT reset for compileLambda — the lambda body
-    // may reference closures bound in the outer scope.
     self.stack_frame_size = 0;
     self.uses_stack_memory = false;
     self.fp_local = 0;
@@ -4967,25 +4877,12 @@ fn compileLambda(self: *Self, expr_id: LirExprId, lambda: anytype) Allocator.Err
     // Local 0 = roc_ops_ptr parameter
     self.roc_ops_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
 
-    // Bind forwarded captures as locals 1..F (before regular params)
-    for (forwarded_captures.items) |fc| {
-        const vt = self.resolveValType(fc.layout_idx);
-        _ = self.storage.allocLocal(fc.symbol, vt) catch return error.OutOfMemory;
-    }
-
-    // Bind parameters — they occupy locals F+1..F+N
+    // Bind parameters
     for (params) |param_id| {
         const pat = self.store.getPattern(param_id);
         switch (pat) {
             .bind => |bind| {
-                // Match the param type override for unwrapped_capture callables
-                const param_key: u64 = @bitCast(bind.symbol);
-                const vt = if (self.closure_values.get(param_key)) |cv| blk: {
-                    break :blk switch (cv.representation) {
-                        .unwrapped_capture => |repr| self.resolveValType(repr.capture_layout),
-                        else => self.resolveValType(bind.layout_idx),
-                    };
-                } else self.resolveValType(bind.layout_idx);
+                const vt = self.resolveValType(bind.layout_idx);
                 _ = self.storage.allocLocal(bind.symbol, vt) catch return error.OutOfMemory;
             },
             .wildcard => |wc| {
@@ -5000,38 +4897,6 @@ fn compileLambda(self: *Self, expr_id: LirExprId, lambda: anytype) Allocator.Err
                 try self.bindListPattern(ptr, list_pat);
             },
             else => unreachable,
-        }
-    }
-
-    // Bind capture symbols for pre-bound callable parameters.
-    // When a higher-order function's callable parameter was pre-bound via
-    // preBindCallableArgs, the capture symbols need to be accessible as locals
-    // so dispatchClosureCall can push them. For unwrapped_capture, the parameter
-    // local holds the capture value — alias the capture symbol to that local.
-    for (params) |param_id| {
-        const pat = self.store.getPattern(param_id);
-        switch (pat) {
-            .bind => |bind| {
-                const param_key: u64 = @bitCast(bind.symbol);
-                if (self.closure_values.get(param_key)) |cv| {
-                    switch (cv.representation) {
-                        .unwrapped_capture => {
-                            const captures = self.store.getCaptures(cv.captures);
-                            if (captures.len > 0) {
-                                if (self.storage.getLocal(bind.symbol)) |param_local| {
-                                    const cap_key: u64 = @bitCast(captures[0].symbol);
-                                    if (!self.storage.locals.contains(cap_key)) {
-                                        const cap_vt = self.resolveValType(captures[0].layout_idx);
-                                        try self.storage.locals.put(cap_key, .{ .idx = param_local, .val_type = cap_vt });
-                                    }
-                                }
-                            }
-                        },
-                        else => {},
-                    }
-                }
-            },
-            else => {},
         }
     }
 
@@ -5055,7 +4920,7 @@ fn compileLambda(self: *Self, expr_id: LirExprId, lambda: anytype) Allocator.Err
         0;
 
     // Locals declaration — only for locals beyond the parameters (1 roc_ops_ptr + forwarded captures + params)
-    try self.encodeLocalsDecl(&func_body, @intCast(1 + forwarded_captures.items.len + params.len));
+    try self.encodeLocalsDecl(&func_body, @intCast(1 + params.len));
 
     if (self.uses_stack_memory) {
         // Prologue: allocate stack frame
@@ -5125,8 +4990,6 @@ pub fn compileAllProcs(self: *Self, procs: []const LirProc) Allocator.Error!void
     // This ensures that when compiling any proc body, all sibling procs
     // are already known and can be called without triggering recursive compilation.
     for (procs) |proc| {
-        const key: u64 = @bitCast(proc.name);
-        if (self.closure_values.contains(key)) continue;
         try self.registerProc(proc);
     }
     // Pass 2: Compile proc bodies.
@@ -5135,42 +4998,15 @@ pub fn compileAllProcs(self: *Self, procs: []const LirProc) Allocator.Error!void
     }
 }
 
-/// Peel through nominal/block wrappers to find the underlying lambda or closure.
-/// For closures, asserts the invariant that `ClosureData.lambda` is a `.lambda` expr.
+/// Peel through nominal/block wrappers to find the underlying lambda.
 /// Returns null for non-callable expressions.
-fn peelToCallable(self: *const Self, expr_id: LirExprId) ?CallableExpr {
+fn peelToLambda(self: *const Self, expr_id: LirExprId) ?LirExprId {
     const expr = self.store.getExpr(expr_id);
     return switch (expr) {
-        .lambda => .{ .lambda = expr_id },
-        .closure => |c| {
-            const data = self.store.getClosureData(c);
-            if (std.debug.runtime_safety) {
-                const inner = self.store.getExpr(data.lambda);
-                if (inner != .lambda) {
-                    std.debug.panic("WasmCodeGen invariant: closure's inner expr must be .lambda, got {s}", .{@tagName(inner)});
-                }
-            }
-            return .{ .closure = .{ .expr_id = expr_id, .closure_data = data } };
-        },
-        .nominal => |n| self.peelToCallable(n.backing_expr),
-        .block => |b| self.peelToCallable(b.final_expr),
+        .lambda => expr_id,
+        .nominal => |n| self.peelToLambda(n.backing_expr),
+        .block => |b| self.peelToLambda(b.final_expr),
         else => null,
-    };
-}
-
-/// Get the lambda params from a CallableExpr.
-fn callableParams(self: *const Self, callable: CallableExpr) LIR.LirPatternSpan {
-    return switch (callable) {
-        .lambda => |expr_id| self.store.getExpr(expr_id).lambda.params,
-        .closure => |c| self.store.getExpr(c.closure_data.lambda).lambda.params,
-    };
-}
-
-/// Get the lambda body from a CallableExpr.
-fn callableBody(self: *const Self, callable: CallableExpr) LirExprId {
-    return switch (callable) {
-        .lambda => |expr_id| self.store.getExpr(expr_id).lambda.body,
-        .closure => |c| self.store.getExpr(c.closure_data.lambda).lambda.body,
     };
 }
 
@@ -5194,13 +5030,7 @@ fn registerProc(self: *Self, proc: LirProc) Allocator.Error!void {
     const type_idx = self.module.addFuncType(param_types.items, &.{ret_vt}) catch return error.OutOfMemory;
     const func_idx = self.module.addFunction(type_idx) catch return error.OutOfMemory;
 
-    self.closure_values.put(key, .{
-        .representation = .{ .direct_call = {} },
-        .stack_offset = 0,
-        .lambda_expr = undefined,
-        .captures = .{ .start = 0, .len = 0 },
-        .func_idx = func_idx,
-    }) catch return error.OutOfMemory;
+    self.registered_procs.put(key, func_idx) catch return error.OutOfMemory;
 }
 
 /// Compile a proc body. The proc must already be registered via registerProc.
@@ -5208,8 +5038,7 @@ fn compileProcBody(self: *Self, proc: LirProc) Allocator.Error!void {
     const key: u64 = @bitCast(proc.name);
 
     // Get the pre-registered func_idx (must exist — registerProc runs in pass 1)
-    const self_cv = self.closure_values.get(key) orelse unreachable;
-    const func_idx = self_cv.func_idx orelse unreachable;
+    const func_idx = self.registered_procs.get(key) orelse unreachable;
 
     const arg_layouts = self.store.getLayoutIdxSpan(proc.arg_layouts);
     const ret_vt = self.resolveValType(proc.ret_layout);
@@ -5222,7 +5051,7 @@ fn compileProcBody(self: *Self, proc: LirProc) Allocator.Error!void {
     self.storage.locals = std.AutoHashMap(u64, Storage.LocalInfo).init(self.allocator);
     self.storage.next_local_idx = 0;
     self.storage.local_types = .empty;
-    // Note: closure_values is NOT cleared — all pre-registered procs remain
+    // Note: registered_procs is NOT cleared — all pre-registered procs remain
     // visible. This is critical for mutual recursion: when compiling is_even's
     // body, calls to is_odd must find its func_idx without re-compilation.
     self.stack_frame_size = 0;
@@ -5349,7 +5178,7 @@ const SavedState = struct {
     next_local_idx: u32,
     local_types_items: []ValType,
     local_types_capacity: usize,
-    // Note: closure_values is NOT saved/restored — once a closure is compiled,
+    // Note: registered_procs is NOT saved/restored — once a proc is registered,
     // its entry persists globally since the wasm function code is already emitted.
     stack_frame_size: u32,
     uses_stack_memory: bool,
@@ -5388,7 +5217,7 @@ fn restoreState(self: *Self, saved: SavedState) void {
     self.storage.local_types.deinit(self.allocator);
     self.storage.local_types.items = saved.local_types_items;
     self.storage.local_types.capacity = saved.local_types_capacity;
-    // Note: closure_values is NOT restored — entries added during nested
+    // Note: registered_procs is NOT restored — entries added during nested
     // compilation must persist since the wasm function code is already emitted.
     self.stack_frame_size = saved.stack_frame_size;
     self.uses_stack_memory = saved.uses_stack_memory;
@@ -5879,6 +5708,10 @@ fn tryGenerateDirectCallFromSimpleTagElseMatch(
     return true;
 }
 
+/// Generate code for a function call.
+/// In the new pipeline, MIR→LIR generates all closure dispatch as generic LIR
+/// constructs (discriminant_switch, tag_payload_access, direct calls). The backend
+/// just handles: direct lambda calls and lookup calls. No closure-specific dispatch.
 fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
     const fn_expr = self.store.getExpr(c.fn_expr);
 
@@ -5886,275 +5719,79 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
         .lambda => |lambda| {
             const func_idx = try self.compileLambda(c.fn_expr, lambda);
             try self.emitLocalGet(self.roc_ops_local);
-            try self.emitForwardedCaptures(func_idx);
-            try self.generateCallArgs(c.args);
-            try self.emitCall(func_idx);
-        },
-        .closure => |closure_id| {
-            const closure = self.store.getClosureData(closure_id);
-            const func_idx = try self.compileClosure(c.fn_expr, closure);
-            // Push roc_ops_ptr first, then captures, then forwarded captures, then args
-            try self.emitLocalGet(self.roc_ops_local);
-            const captures = self.store.getCaptures(closure.captures);
-            for (captures) |cap| {
-                const local_idx = self.storage.getLocal(cap.symbol) orelse unreachable;
-                try self.emitLocalGet(local_idx);
-            }
-            try self.emitForwardedCaptures(func_idx);
             try self.generateCallArgs(c.args);
             try self.emitCall(func_idx);
         },
         .lookup => |lookup| {
-            const key: u64 = @bitCast(lookup.symbol);
-            if (self.closure_values.get(key)) |cv| {
-                // Pre-bind callable arguments before dispatching. This is needed
-                // for HOF lambdas that were deferred (func_idx=null) — the call
-                // args must be bound to parameter symbols so the function body
-                // can resolve calls through those parameters.
-                if (cv.func_idx == null) {
-                    try self.preBindCallableArgs(cv.lambda_expr, c.args);
-                }
-                try self.dispatchClosureCall(cv, c.args, c.ret_layout);
+            const sym_key: u64 = @bitCast(lookup.symbol);
+            // Check registered procs first (for inter-proc calls within compileAllProcs)
+            if (self.registered_procs.get(sym_key)) |func_idx| {
+                try self.emitLocalGet(self.roc_ops_local);
+                try self.generateCallArgs(c.args);
+                try self.emitCall(func_idx);
             } else if (self.store.getSymbolDef(lookup.symbol)) |def_expr_id| {
                 const def_expr = self.store.getExpr(def_expr_id);
-
-                // Pre-bind callable arguments under parameter symbols so the function
-                // body can resolve parameter calls (e.g., `f(x)` in `apply = |f, x| f(x)`).
-                try self.preBindCallableArgs(def_expr_id, c.args);
-
-                // Compile the function as a separate wasm function.
-                const bound = try self.tryBindFunction(def_expr_id, def_expr, lookup.symbol);
-                if (bound) {
-                    const cv = self.closure_values.get(key) orelse unreachable;
-                    try self.dispatchClosureCall(cv, c.args, c.ret_layout);
-                } else {
-                    if (def_expr == .match_expr) {
-                        if (try self.tryGenerateDirectCallFromSimpleTagElseMatch(def_expr.match_expr, c.args, c.ret_layout)) {
-                            return;
+                switch (def_expr) {
+                    .lambda => |lambda| {
+                        const func_idx = try self.compileLambda(def_expr_id, lambda);
+                        try self.emitLocalGet(self.roc_ops_local);
+                        try self.generateCallArgs(c.args);
+                        try self.emitCall(func_idx);
+                    },
+                    .nominal => |nom| {
+                        const inner = self.store.getExpr(nom.backing_expr);
+                        if (inner == .lambda) {
+                            const func_idx = try self.compileLambda(nom.backing_expr, inner.lambda);
+                            try self.emitLocalGet(self.roc_ops_local);
+                            try self.generateCallArgs(c.args);
+                            try self.emitCall(func_idx);
+                        } else {
+                            if (std.debug.runtime_safety) std.debug.panic(
+                                "generateCall: nominal wrapping unexpected expr '{s}'",
+                                .{@tagName(inner)},
+                            );
+                            unreachable;
                         }
-                    }
-                    if (def_expr == .call) {
-                        // Evaluate the definition call to produce a callable, then invoke it.
-                        try self.generateCallFromFnExpr(def_expr_id, c.args, c.ret_layout);
-                        return;
-                    }
-                    if (def_expr == .block or def_expr == .struct_access) {
-                        // Definition computes a callable via an expression chain.
-                        try self.generateCallFromFnExpr(def_expr_id, c.args, c.ret_layout);
-                        return;
-                    }
-                    if (std.debug.runtime_safety) {
-                        std.debug.panic("WasmCodeGen invariant: expected callable definition for lookup call target", .{});
-                    }
-                    unreachable;
+                    },
+                    else => {
+                        if (std.debug.runtime_safety) std.debug.panic(
+                            "generateCall: unexpected def expr type '{s}' for lookup call. " ++
+                                "In the new pipeline, MIR→LIR resolves all closure dispatch to direct calls.",
+                            .{@tagName(def_expr)},
+                        );
+                        unreachable;
+                    },
                 }
-            } else if (!self.in_proc) {
-                // Top-level: symbol with no definition — should have been lazy-loaded
-                return error.OutOfMemory;
             } else {
-                // Inside a compiled function: unresolved lookup (e.g., callback parameter).
-                return error.OutOfMemory;
+                if (std.debug.runtime_safety) {
+                    std.debug.panic("generateCall: unresolved lookup symbol", .{});
+                }
+                unreachable;
             }
         },
         .nominal => |nom| {
             const inner = self.store.getExpr(nom.backing_expr);
-            switch (inner) {
-                .lambda => |lambda| {
-                    const func_idx = try self.compileLambda(nom.backing_expr, lambda);
-                    try self.emitLocalGet(self.roc_ops_local);
-                    try self.emitForwardedCaptures(func_idx);
-                    try self.generateCallArgs(c.args);
-                    try self.emitCall(func_idx);
-                },
-                .closure => |closure_id| {
-                    const closure = self.store.getClosureData(closure_id);
-                    const func_idx = try self.compileClosure(nom.backing_expr, closure);
-                    try self.emitLocalGet(self.roc_ops_local);
-                    const captures = self.store.getCaptures(closure.captures);
-                    for (captures) |cap| {
-                        const local_idx = self.storage.getLocal(cap.symbol) orelse unreachable;
-                        try self.emitLocalGet(local_idx);
-                    }
-                    try self.emitForwardedCaptures(func_idx);
-                    try self.generateCallArgs(c.args);
-                    try self.emitCall(func_idx);
-                },
-                else => unreachable, // Nominal should only wrap lambda or closure
-            }
-        },
-        .call => |inner_call| {
-            // Chained call: inner call returns a closure, outer call invokes it.
-            const fn_expr_val = self.store.getExpr(inner_call.fn_expr);
-            const inner_closure_info = if (fn_expr_val == .call) blk: {
-                // When fn_expr is itself a .call, generateCall(inner_call) recursively
-                // enters this .call handler, which dispatches. So the stack value is
-                // the RETURN VALUE of the dispatched closure, not the closure itself.
-                const fn_result = self.getReturnedClosureInfo(inner_call.fn_expr) orelse {
-                    // debug removed
-                    unreachable;
-                };
-                const result = self.getReturnedClosureInfo(fn_result.lambda_expr) orelse {
-                    // debug removed
-                    unreachable;
-                };
-                // debug removed
-                break :blk result;
-            } else blk: {
-                if (self.getReturnedClosureInfo(inner_call.fn_expr)) |info| {
-                    break :blk info;
-                }
-
-                if (fn_expr_val == .lookup) {
-                    const key: u64 = @bitCast(fn_expr_val.lookup.symbol);
-                    if (self.closure_values.get(key)) |cv| {
-                        if (self.returnedClosureOfCallableExpr(cv.lambda_expr)) |info| {
-                            break :blk info;
-                        }
-                    }
-                }
-
-                unreachable;
-            };
-
-            // Generate the inner call — result (closure value) is on the wasm stack
-            try self.generateCall(inner_call);
-
-            // Compile the inner closure function
-            const inner_fn_expr = self.store.getExpr(inner_closure_info.lambda_expr);
-            const func_idx = switch (inner_fn_expr) {
-                .closure => |closure_id| try self.compileClosure(inner_closure_info.lambda_expr, self.store.getClosureData(closure_id)),
-                .lambda => |lambda| try self.compileLambda(inner_closure_info.lambda_expr, lambda),
-                else => unreachable,
-            };
-
-            switch (inner_closure_info.representation) {
-                .direct_call => {
-                    // No captures — drop the direct-call closure value, then call.
-                    try self.body.append(self.allocator, Op.drop);
-                    try self.emitLocalGet(self.roc_ops_local);
-                    try self.emitForwardedCaptures(func_idx);
-                    try self.generateCallArgs(c.args);
-                    try self.emitCall(func_idx);
-                },
-                .unwrapped_capture => |repr| {
-                    // The return value IS the single capture — save it, push roc_ops first,
-                    // then the capture, then args, then call.
-                    const cap_vt = self.resolveValType(repr.capture_layout);
-                    const cap_tmp = self.storage.allocAnonymousLocal(cap_vt) catch return error.OutOfMemory;
-                    try self.emitLocalSet(cap_tmp);
-                    try self.emitLocalGet(self.roc_ops_local);
-                    try self.emitLocalGet(cap_tmp);
-                    try self.emitForwardedCaptures(func_idx);
-                    try self.generateCallArgs(c.args);
-                    try self.emitCall(func_idx);
-                },
-                .struct_captures => |repr| {
-                    // The return value is a pointer to the captures struct on the stack.
-                    // Save the pointer, push roc_ops_ptr, load each capture field, push args, call.
-                    const ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-                    try self.emitLocalSet(ptr_local);
-                    try self.emitLocalGet(self.roc_ops_local);
-                    const captures = self.store.getCaptures(inner_closure_info.captures);
-                    const info = self.captureStructInfo(repr.struct_layout);
-                    const field_count: usize = @intCast(info.field_count);
-                    if (std.debug.runtime_safety and captures.len != field_count) {
-                        std.debug.panic("WasmCodeGen invariant: chained-call struct_captures arity mismatch", .{});
-                    }
-                    for (captures, 0..) |cap, i| {
-                        const field_offset = self.captureStructFieldOffset(info, cap.layout_idx, i);
-                        try self.emitLocalGet(ptr_local);
-                        const vt = self.resolveValType(cap.layout_idx);
-                        try self.emitLoadOp(vt, field_offset);
-                    }
-                    try self.emitForwardedCaptures(func_idx);
-                    try self.generateCallArgs(c.args);
-                    try self.emitCall(func_idx);
-                },
-                .enum_dispatch, .union_repr => unreachable, // MirToLir never creates these representations
-            }
-        },
-        .block => {
-            // Block returning a closure: captures are in the current scope.
-            // Evaluate the block first so statement bindings are established.
-            try self.generateExpr(c.fn_expr);
-
-            if (self.getClosureInfoFromExpr(c.fn_expr)) |closure_info| {
-                switch (closure_info.representation) {
-                    .direct_call, .unwrapped_capture, .struct_captures => {
-                        // Drop the closure value — dispatchClosureCall pushes captures from locals
-                        try self.body.append(self.allocator, Op.drop);
-                        const cv: ClosureValue = .{
-                            .representation = closure_info.representation,
-                            .stack_offset = 0,
-                            .lambda_expr = closure_info.lambda_expr,
-                            .captures = closure_info.captures,
-                        };
-                        try self.dispatchClosureCall(cv, c.args, c.ret_layout);
-                    },
-                    .enum_dispatch, .union_repr => unreachable, // MirToLir never creates these representations
-                }
+            if (inner == .lambda) {
+                const func_idx = try self.compileLambda(nom.backing_expr, inner.lambda);
+                try self.emitLocalGet(self.roc_ops_local);
+                try self.generateCallArgs(c.args);
+                try self.emitCall(func_idx);
             } else {
-                // Fallback: we could not statically classify the produced closure.
-                // Reuse the block's final callable expression with the now-bound locals.
-                try self.body.append(self.allocator, Op.drop);
-                const blk_expr = self.store.getExpr(c.fn_expr).block;
-                try self.generateCallFromFnExpr(blk_expr.final_expr, c.args, c.ret_layout);
+                if (std.debug.runtime_safety) std.debug.panic(
+                    "generateCall: nominal wrapping unexpected expr '{s}'",
+                    .{@tagName(inner)},
+                );
+                unreachable;
             }
         },
-        .struct_access => |sa| {
-            // Struct field call: rec.field(args) where field is a closure or lambda.
-            // Resolve the field expression from the struct definition and dispatch.
-            const field_expr_id = blk: {
-                const struct_expr = self.store.getExpr(sa.struct_expr);
-                if (struct_expr == .struct_) {
-                    const field_exprs = self.store.getExprSpan(struct_expr.struct_.fields);
-                    if (sa.field_idx < field_exprs.len) break :blk field_exprs[sa.field_idx];
-                }
-                if (struct_expr == .lookup) {
-                    if (self.store.getSymbolDef(struct_expr.lookup.symbol)) |def_id| {
-                        const def_expr = self.store.getExpr(def_id);
-                        if (def_expr == .struct_) {
-                            const field_exprs = self.store.getExprSpan(def_expr.struct_.fields);
-                            if (sa.field_idx < field_exprs.len) break :blk field_exprs[sa.field_idx];
-                        }
-                    }
-                }
-                unreachable; // struct field call target must be resolvable
-            };
-            const field_val = self.store.getExpr(field_expr_id);
-            switch (field_val) {
-                .lambda => |lambda| {
-                    const func_idx = try self.compileLambda(field_expr_id, lambda);
-                    try self.emitLocalGet(self.roc_ops_local);
-                    try self.emitForwardedCaptures(func_idx);
-                    try self.generateCallArgs(c.args);
-                    try self.emitCall(func_idx);
-                },
-                .closure => |closure_id| {
-                    const closure = self.store.getClosureData(closure_id);
-                    const func_idx = try self.compileClosure(field_expr_id, closure);
-                    try self.emitLocalGet(self.roc_ops_local);
-                    const captures = self.store.getCaptures(closure.captures);
-                    for (captures) |cap| {
-                        if (self.storage.getLocal(cap.symbol)) |local_idx| {
-                            try self.emitLocalGet(local_idx);
-                        } else if (self.resolveCaptureThroughClosure(cap.symbol)) |local_idx| {
-                            try self.emitLocalGet(local_idx);
-                        } else {
-                            if (std.debug.runtime_safety) {
-                                std.debug.panic("WasmCodeGen invariant: closure capture local missing in struct field call", .{});
-                            }
-                            unreachable;
-                        }
-                    }
-                    try self.emitForwardedCaptures(func_idx);
-                    try self.generateCallArgs(c.args);
-                    try self.emitCall(func_idx);
-                },
-                else => unreachable, // struct field value must be lambda or closure
-            }
+        else => {
+            if (std.debug.runtime_safety) std.debug.panic(
+                "generateCall: unexpected fn_expr type '{s}'. " ++
+                    "In the new pipeline, MIR→LIR resolves all closure dispatch to direct calls.",
+                .{@tagName(fn_expr)},
+            );
+            unreachable;
         },
-        else => unreachable, // Call target should be lambda, closure, lookup, nominal, call, struct_access, or block
     }
 }
 
