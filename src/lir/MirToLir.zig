@@ -1085,21 +1085,34 @@ fn lowerBlock(self: *Self, block_data: anytype, mono_idx: Monotype.Idx, region: 
                 .lambda => true,
                 else => false,
             };
-            const pat_layout_idx = try self.layoutFromMonotype(self.mir_store.patternTypeOf(binding.pattern));
-            const should_register_def = is_callable_def or self.isFunctionLayout(pat_layout_idx);
-            const mir_pat = self.mir_store.getPattern(binding.pattern);
-            switch (mir_pat) {
-                .bind => |sym| {
-                    if (should_register_def and self.lir_store.getSymbolDef(sym) == null) {
-                        try self.lir_store.registerSymbolDef(sym, lir_expr);
-                    }
-                },
-                .as_pattern => |as_pat| {
-                    if (should_register_def and self.lir_store.getSymbolDef(as_pat.symbol) == null) {
-                        try self.lir_store.registerSymbolDef(as_pat.symbol, lir_expr);
-                    }
-                },
-                else => {},
+            if (is_callable_def) {
+                const mir_pat = self.mir_store.getPattern(binding.pattern);
+                switch (mir_pat) {
+                    .bind => |sym| {
+                        if (self.lir_store.getSymbolDef(sym) == null) {
+                            try self.lir_store.registerSymbolDef(sym, lir_expr);
+                        }
+                    },
+                    .as_pattern => |as_pat| {
+                        if (self.lir_store.getSymbolDef(as_pat.symbol) == null) {
+                            try self.lir_store.registerSymbolDef(as_pat.symbol, lir_expr);
+                        }
+                    },
+                    // Lambda defs bound to destructuring patterns, wildcards, or literals
+                    // don't need symbol registration — there's no named symbol to look up.
+                    .wildcard,
+                    .tag,
+                    .int_literal,
+                    .str_literal,
+                    .dec_literal,
+                    .frac_f32_literal,
+                    .frac_f64_literal,
+                    .record_destructure,
+                    .tuple_destructure,
+                    .list_destructure,
+                    .runtime_error,
+                    => {},
+                }
             }
         }
         const lir_binding: LirStmt.Binding = .{
