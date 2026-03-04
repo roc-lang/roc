@@ -5435,6 +5435,52 @@ fn rocGlueInner(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
         }
     }
 
+    // Register provides function types from the platform main module's definitions.
+    // We look up the provides function's type (not the requires entry type) because
+    // the provides function may have a different signature than the requires type
+    // (e.g. main! : List(Str) => Try(...) vs main_for_host! : List(Str) => I32).
+    var provides_type_ids = std.StringHashMap(u64).init(ctx.gpa);
+    defer provides_type_ids.deinit();
+
+    for (modules) |mod| {
+        if (mod.is_platform_main) {
+            type_table.clearVarMap();
+            const env = mod.env;
+
+            // Build module prefix for stripping qualified names
+            const module_prefix = std.fmt.allocPrint(ctx.gpa, "{s}.", .{mod.name}) catch break;
+            defer ctx.gpa.free(module_prefix);
+
+            const all_defs = env.store.sliceDefs(env.all_defs);
+            for (all_defs) |def_idx| {
+                const def = env.store.getDef(def_idx);
+                const pattern = env.store.getPattern(def.pattern);
+                if (pattern != .assign) continue;
+
+                const def_name = env.getIdent(pattern.assign.ident);
+
+                // Strip module prefix if present; provides functions may or may not be qualified
+                const local_name = if (std.mem.startsWith(u8, def_name, module_prefix))
+                    def_name[module_prefix.len..]
+                else
+                    def_name;
+
+                // Check if this def matches any provides entry
+                for (platform_info.provides_entries) |prov| {
+                    if (std.mem.eql(u8, local_name, prov.name)) {
+                        const def_node_idx: @TypeOf(env.store.nodes).Idx =
+                            @enumFromInt(@intFromEnum(def_idx));
+                        const type_var = ModuleEnv.varFrom(def_node_idx);
+                        const type_id = type_table.getOrInsert(env, type_var);
+                        provides_type_ids.put(prov.ffi_symbol, type_id) catch {};
+                        break;
+                    }
+                }
+            }
+            break;
+        }
+    }
+
     // 5. Compile glue spec in-process and run via interpreter
     const glue_spec_abs = std.fs.cwd().realpathAlloc(ctx.gpa, args.glue_spec) catch {
         return error.GlueSpecNotFound;
@@ -5496,7 +5542,7 @@ fn rocGlueInner(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
     const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{};
     var roc_ops = echo_platform.makeDefaultRocOps(@constCast(&hosted_function_ptrs));
 
-    var types_list = constructTypesRocList(collected_modules.items, &platform_info, &type_table, &entrypoint_type_ids, &roc_ops);
+    var types_list = constructTypesRocList(collected_modules.items, &platform_info, &type_table, &entrypoint_type_ids, &provides_type_ids, &roc_ops);
 
     // 7. Run glue spec via interpreter
     var result_buf: ResultListFileStr = undefined;
@@ -6352,11 +6398,12 @@ const ModuleTypeInfoRoc = extern struct {
     name: RocStr,
 };
 
-/// ProvidesEntry := { ffi_symbol : Str, name : Str }
+/// ProvidesEntry := { ffi_symbol : Str, name : Str, type_id : U64 }
 /// Fields ordered by alignment descending, then alphabetically
 const ProvidesEntryRoc = extern struct {
     ffi_symbol: RocStr,
     name: RocStr,
+    type_id: u64,
 };
 
 /// Types := { entrypoints : List(EntryPoint), modules : List(ModuleTypeInfo), provides_entries : List(ProvidesEntry), type_table : List(TypeRepr) }
@@ -6694,6 +6741,7 @@ fn constructTypesRocList(
     platform_info: *const PlatformHeaderInfo,
     type_table: *const TypeTable,
     entrypoint_type_ids: *const std.StringHashMap(u64),
+    provides_type_ids: *const std.StringHashMap(u64),
     roc_ops: *builtins.host_abi.RocOps,
 ) RocList {
     // Build modules list
@@ -6824,6 +6872,7 @@ fn constructTypesRocList(
             prov_ptr[idx] = ProvidesEntryRoc{
                 .ffi_symbol = createBigRocStr(entry.ffi_symbol, roc_ops),
                 .name = createBigRocStr(entry.name, roc_ops),
+                .type_id = provides_type_ids.get(entry.ffi_symbol) orelse 0,
             };
         }
 

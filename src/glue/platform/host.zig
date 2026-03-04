@@ -374,11 +374,12 @@ const ModuleTypeInfoRoc = extern struct {
     name: RocStr,
 };
 
-/// ProvidesEntry := { ffi_symbol : Str, name : Str }
+/// ProvidesEntry := { ffi_symbol : Str, name : Str, type_id : U64 }
 /// Fields ordered by alignment descending, then alphabetically
 const ProvidesEntry = extern struct {
     ffi_symbol: RocStr,
     name: RocStr,
+    type_id: u64,
 };
 
 /// Types opaque type internals (matches Types.roc)
@@ -800,6 +801,7 @@ fn platform_main(args: [][*:0]u8) !c_int {
             prov_ptr[idx] = ProvidesEntry{
                 .ffi_symbol = createBigRocStr(name, &roc_ops),
                 .name = createBigRocStr(name, &roc_ops),
+                .type_id = 0,
             };
         }
 

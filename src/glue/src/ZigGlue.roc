@@ -11,7 +11,6 @@ import pf.TagUnionRepr exposing [TagUnionRepr]
 import pf.RecordField exposing [RecordField]
 import pf.TagVariant exposing [TagVariant]
 import pf.ProvidesEntry exposing [ProvidesEntry]
-import pf.EntryPoint exposing [EntryPoint]
 
 make_glue : List(Types) -> Try(List(File), Str)
 make_glue = |types_list| {
@@ -19,12 +18,10 @@ make_glue = |types_list| {
 	var $hosted_functions = []
 	var $type_table = []
 	var $provides_entries = []
-	var $entrypoints = []
 
 	for types in types_list {
 		$type_table = types.type_table
 		$provides_entries = types.provides_entries
-		$entrypoints = types.entrypoints
 
 		for mod in types.modules {
 			for func in mod.hosted_functions {
@@ -48,7 +45,7 @@ make_glue = |types_list| {
 	# Sort by index so array entries are in the correct order
 	sorted = List.sort_with($hosted_functions, compare_by_index)
 
-	zig_content = generate_zig_file(sorted, $type_table, $provides_entries, $entrypoints)
+	zig_content = generate_zig_file(sorted, $type_table, $provides_entries)
 
 
 	Ok([{ name: "roc_platform_abi.zig", content: zig_content }])
@@ -627,7 +624,7 @@ lookup_record_in_type_table = |type_table, type_id| {
 # =============================================================================
 
 ## Generate the complete Zig source file
-generate_zig_file = |hosted_functions, type_table, provides_list, entrypoints| {
+generate_zig_file = |hosted_functions, type_table, provides_list| {
 	file_header
 		.concat(generate_imports)
 		.concat("\n")
@@ -647,7 +644,7 @@ generate_zig_file = |hosted_functions, type_table, provides_list, entrypoints| {
 		.concat("\n")
 		.concat(generate_host_helpers)
 		.concat("\n")
-		.concat(generate_entrypoint_externs(provides_list, entrypoints, type_table))
+		.concat(generate_entrypoint_externs(provides_list, type_table))
 }
 
 ## File header comment
@@ -1214,19 +1211,6 @@ has_meaningful_args = |func, type_table| {
 # Entrypoint Declarations
 # =============================================================================
 
-## Find the type_id for a provides entry by matching its ffi_symbol against entrypoint names.
-## Entrypoint names like "main!" match ffi_symbol "main" (strip trailing "!").
-find_type_id_for_provides = |entrypoints, ffi_symbol| {
-	var $type_id = 0
-	for ep in entrypoints {
-		ep_base = str_replace_all(ep.name, "!", "")
-		if ep_base == ffi_symbol {
-			$type_id = ep.type_id
-		}
-	}
-	$type_id
-}
-
 ## Get the return pointer type from a function TypeRepr
 ret_type_from_repr = |type_table, type_repr| {
 	match type_repr {
@@ -1283,7 +1267,7 @@ arg_type_from_id = |type_table, type_id, ffi_symbol| {
 }
 
 ## Generate arg structs for multi-arg entrypoint functions
-generate_entrypoint_arg_structs = |provides_list, entrypoints, type_table| {
+generate_entrypoint_arg_structs = |provides_list, type_table| {
 	if List.is_empty(provides_list) {
 		return ""
 	}
@@ -1291,8 +1275,7 @@ generate_entrypoint_arg_structs = |provides_list, entrypoints, type_table| {
 	var $result = ""
 
 	for entry in provides_list {
-		tid = find_type_id_for_provides(entrypoints, entry.ffi_symbol)
-		meaningful = meaningful_args_from_id(type_table, tid)
+		meaningful = meaningful_args_from_id(type_table, entry.type_id)
 		if List.len(meaningful) > 1 {
 			struct_name = name_to_struct_name(entry.ffi_symbol)
 			var $fields = ""
@@ -1311,19 +1294,18 @@ generate_entrypoint_arg_structs = |provides_list, entrypoints, type_table| {
 }
 
 ## Generate extern declarations for entrypoints from the provides clause.
-generate_entrypoint_externs = |provides_list, entrypoints, type_table| {
+generate_entrypoint_externs = |provides_list, type_table| {
 	if List.is_empty(provides_list) {
 		return ""
 	}
 
 	var $result = "// =============================================================================\n// Entrypoint Declarations\n//\n// Extern declarations for Roc entrypoints. Call these from your platform host\n// to invoke Roc application functions.\n// =============================================================================\n\n"
 
-	$result = Str.concat($result, generate_entrypoint_arg_structs(provides_list, entrypoints, type_table))
+	$result = Str.concat($result, generate_entrypoint_arg_structs(provides_list, type_table))
 
 	for entry in provides_list {
-		tid = find_type_id_for_provides(entrypoints, entry.ffi_symbol)
-		ret_type = ret_type_from_id(type_table, tid)
-		arg_type = arg_type_from_id(type_table, tid, entry.ffi_symbol)
+		ret_type = ret_type_from_id(type_table, entry.type_id)
+		arg_type = arg_type_from_id(type_table, entry.type_id, entry.ffi_symbol)
 
 		$result = Str.concat(
 			$result,
