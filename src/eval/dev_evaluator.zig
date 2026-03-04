@@ -608,102 +608,16 @@ pub const DevEvaluator = struct {
         self.builtin_module.deinit();
     }
 
-    /// Prepare modules for code generation by running the closure pipeline.
+    /// Prepare modules for code generation.
     ///
-    /// This runs:
-    /// 1. LambdaLifter on each module (extracts closure bodies)
-    /// 2. LambdaSetInference across ALL modules (assigns global names)
-    /// 3. ClosureTransformer on each module (uses inference results)
-    ///
-    /// Returns the LambdaSetInference, which should be kept alive during codegen.
+    /// Lambda lifting and lambda set inference will be handled during
+    /// CIR→MIR and MIR→LIR lowering respectively.
     pub fn prepareModulesForCodegen(
         self: *DevEvaluator,
         modules: []*ModuleEnv,
-    ) Error!*can.LambdaSetInference {
-        // 1. Run LambdaLifter on each module (extracts closure bodies)
-        for (modules) |module| {
-            if (!module.is_lambda_lifted) {
-                var top_level_patterns = std.AutoHashMap(can.CIR.Pattern.Idx, void).init(self.allocator);
-                defer top_level_patterns.deinit();
-
-                // Mark top-level patterns from all_statements
-                const stmts = module.store.sliceStatements(module.all_statements);
-                for (stmts) |stmt_idx| {
-                    const stmt = module.store.getStatement(stmt_idx);
-                    switch (stmt) {
-                        .s_decl => |decl| {
-                            top_level_patterns.put(decl.pattern, {}) catch {};
-                        },
-                        else => {},
-                    }
-                }
-
-                var lifter = can.LambdaLifter.init(self.allocator, module, &top_level_patterns);
-                defer lifter.deinit();
-                module.is_lambda_lifted = true;
-            }
-        }
-
-        // 2. Run Lambda Set Inference across ALL modules (assigns global names)
-        const inference = self.allocator.create(can.LambdaSetInference) catch return error.OutOfMemory;
-        inference.* = can.LambdaSetInference.init(self.allocator);
-        inference.inferAll(modules) catch return error.OutOfMemory;
-
-        // 3. Run ClosureTransformer on each module (uses inference results)
-        for (modules) |module| {
-            if (!module.is_defunctionalized) {
-                var transformer = can.ClosureTransformer.initWithInference(self.allocator, module, inference);
-                defer transformer.deinit();
-
-                const defs = module.store.sliceDefs(module.all_defs);
-
-                // Track top-level patterns so closure analysis doesn't treat them as captures.
-                for (defs) |def_idx| {
-                    const def = module.store.getDef(def_idx);
-                    transformer.markTopLevel(def.pattern) catch return error.OutOfMemory;
-                }
-
-                // Analyze all top-level defs with lambda-set tracking. We intentionally do
-                // not mutate def expressions in this landing pass; this stage enforces
-                // resolved lambda-set invariants before MIR/LIR lowering.
-                for (defs) |def_idx| {
-                    const def = module.store.getDef(def_idx);
-                    const pattern = module.store.getPattern(def.pattern);
-                    const name_hint: ?base.Ident.Idx = switch (pattern) {
-                        .assign => |a| a.ident,
-                        else => null,
-                    };
-                    const result = transformer.transformExprWithLambdaSet(def.expr, name_hint) catch return error.OutOfMemory;
-                    if (result.lambda_set) |lambda_set| {
-                        transformer.pattern_lambda_sets.put(def.pattern, lambda_set) catch return error.OutOfMemory;
-                    }
-                    if (transformer.lambda_return_sets.get(result.expr)) |return_set| {
-                        const cloned = return_set.clone(self.allocator) catch return error.OutOfMemory;
-                        transformer.pattern_lambda_return_sets.put(def.pattern, cloned) catch return error.OutOfMemory;
-                    }
-                }
-
-                const validation_result = transformer.validateAllResolved();
-                if (!validation_result.is_valid) {
-                    if (validation_result.first_error) |err| {
-                        std.log.err(
-                            "Lambda-set validation failed for module '{s}': unresolved={d}, first={s}",
-                            .{ module.module_name, validation_result.unresolved_count, @tagName(err.kind) },
-                        );
-                    } else {
-                        std.log.err(
-                            "Lambda-set validation failed for module '{s}': unresolved={d}",
-                            .{ module.module_name, validation_result.unresolved_count },
-                        );
-                    }
-                    return error.RuntimeError;
-                }
-
-                module.is_defunctionalized = true;
-            }
-        }
-
-        return inference;
+    ) Error!void {
+        _ = self;
+        _ = modules;
     }
 
     /// Result of code generation

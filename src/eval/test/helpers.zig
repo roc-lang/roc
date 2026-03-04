@@ -13,7 +13,6 @@ const layout = @import("layout");
 const roc_target = @import("roc_target");
 const eval_mod = @import("../mod.zig");
 const builtin_loading_mod = eval_mod.builtin_loading;
-const render_helpers = eval_mod.render_helpers;
 const TestEnv = @import("TestEnv.zig");
 const Interpreter = eval_mod.Interpreter;
 const DevEvaluator = eval_mod.DevEvaluator;
@@ -26,7 +25,6 @@ const backend = @import("backend");
 const bytebox = @import("bytebox");
 const WasmEvaluator = eval_mod.WasmEvaluator;
 const values = @import("values");
-const i128h = builtins.compiler_rt_128;
 
 const posix = std.posix;
 
@@ -54,6 +52,18 @@ fn interpreterFormatCtx(layout_cache: *const layout.Store) values.RocValue.Forma
         .layout_store = layout_cache,
         .ident_store = null, // match dev evaluator (no ident store)
     };
+}
+
+/// Wrap a CIR expression in `Str.inspect(expr)` by creating an `e_run_low_level(.str_inspekt, [expr])` node.
+fn wrapInStrInspect(module_env: *ModuleEnv, inner_expr: CIR.Expr.Idx) !CIR.Expr.Idx {
+    const top = module_env.store.scratchExprTop();
+    try module_env.store.addScratchExpr(inner_expr);
+    const args_span = try module_env.store.exprSpanFrom(top);
+    const region = module_env.store.getExprRegion(inner_expr);
+    return module_env.addExpr(.{ .e_run_low_level = .{
+        .op = .str_inspekt,
+        .args = args_span,
+    } }, region);
 }
 
 // Use std.testing.allocator for dev backend tests (tracks leaks)
@@ -168,23 +178,20 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     defer executable.deinit();
 
     if (has_fork) {
-        return forkAndExecute(allocator, &dev_eval, &executable, &code_result, module_env, expr_idx);
+        return forkAndExecute(allocator, &dev_eval, &executable);
     } else {
-        return executeAndFormat(allocator, &dev_eval, &executable, &code_result, module_env, expr_idx);
+        return executeAndFormat(allocator, &dev_eval, &executable);
     }
 }
 
 /// Execute compiled code and format the result as a string.
-/// This is the core execution + formatting logic extracted from devEvaluatorStr.
+/// The expression has already been wrapped in Str.inspect, so the result is always a RocStr.
 /// Marked noinline to prevent optimizer from inlining across fork() boundary,
 /// which can cause register state issues in the child process.
 noinline fn executeAndFormat(
     alloc: std.mem.Allocator,
     dev_eval: *DevEvaluator,
     executable: *backend.ExecutableMemory,
-    code_result: *DevEvaluator.CodeResult,
-    module_env: *ModuleEnv,
-    expr_idx: CIR.Expr.Idx,
 ) DevEvalError![]const u8 {
     // Compiler barrier: std.debug.print with empty string acts as a full
     // memory barrier, ensuring all struct fields are properly materialized
@@ -199,77 +206,27 @@ noinline fn executeAndFormat(
         builtins.utils.DebugRefcountTracker.disable();
     };
 
-    // Execute with result pointer (512 bytes to accommodate large tuples/records)
+    // Execute with result pointer
     var result_buf: [512]u8 align(16) = undefined;
     try dev_eval.callWithCrashProtection(executable, @ptrCast(&result_buf));
 
-    const ls = code_result.layout_store orelse {
-        // Scalar-only fallback: construct layout from Idx
-        return switch (code_result.result_layout) {
-            layout.Idx.i64,
-            layout.Idx.i8,
-            layout.Idx.i16,
-            layout.Idx.i32,
-            layout.Idx.u64,
-            layout.Idx.u8,
-            layout.Idx.u16,
-            layout.Idx.u32,
-            layout.Idx.bool,
-            layout.Idx.f64,
-            layout.Idx.f32,
-            layout.Idx.i128,
-            layout.Idx.u128,
-            layout.Idx.dec,
-            layout.Idx.str,
-            => error.UnsupportedLayout,
-            else => error.UnsupportedLayout,
-        };
-    };
-    const result_layout = ls.getLayout(code_result.result_layout);
-    var result_value = StackValue{
-        .layout = result_layout,
-        .ptr = @ptrCast(&result_buf),
-        .is_initialized = true,
-        .rt_var = ModuleEnv.varFrom(expr_idx),
-    };
-    var needs_result_decref = true;
-    defer if (needs_result_decref) {
-        result_value.decref(ls, &dev_eval.roc_ops);
-    };
+    // Result is always a Str (expression was wrapped in Str.inspect)
+    const roc_str: *const builtins.str.RocStr = @ptrCast(@alignCast(&result_buf));
+    const result = alloc.dupe(u8, roc_str.asSlice()) catch return error.OutOfMemory;
 
-    const formatted = if (result_layout.tag == .tag_union) blk: {
-        var empty_scope = types.TypeScope.init(alloc);
-        defer empty_scope.deinit();
-        var render_ctx = render_helpers.RenderCtx{
-            .allocator = alloc,
-            .env = module_env,
-            .runtime_types = &module_env.types,
-            .layout_store = ls,
-            .type_scope = &empty_scope,
-        };
-        break :blk render_helpers.renderValueRocWithType(&render_ctx, result_value, result_value.rt_var) catch error.UnsupportedLayout;
-    } else blk: {
-        const roc_val = values.RocValue{
-            .ptr = &result_buf,
-            .lay = result_layout,
-            .layout_idx = code_result.result_layout,
-        };
-        const fmt_ctx = values.RocValue.FormatContext{
-            .layout_store = ls,
-        };
-        break :blk roc_val.format(alloc, fmt_ctx) catch error.UnsupportedLayout;
-    };
-
-    result_value.decref(ls, &dev_eval.roc_ops);
-    needs_result_decref = false;
+    // Decref the RocStr
+    if (!roc_str.isSmallStr()) {
+        @constCast(roc_str).decref(&dev_eval.roc_ops);
+    }
 
     if (comptime builtin.mode == .Debug and enable_dev_eval_leak_checks) {
         if (builtins.utils.DebugRefcountTracker.reportLeaks() != 0) {
+            alloc.free(result);
             return error.ChildExecFailed;
         }
     }
 
-    return formatted;
+    return result;
 }
 
 /// Fork a child process to execute compiled code, isolating segfaults from the test process.
@@ -279,9 +236,6 @@ fn forkAndExecute(
     allocator: std.mem.Allocator,
     dev_eval: *DevEvaluator,
     executable: *backend.ExecutableMemory,
-    code_result: *DevEvaluator.CodeResult,
-    module_env: *ModuleEnv,
-    expr_idx: CIR.Expr.Idx,
 ) DevEvalError![]const u8 {
     const pipe_fds = posix.pipe() catch {
         return error.PipeCreationFailed;
@@ -303,7 +257,7 @@ fn forkAndExecute(
         // meaningless since we exit via _exit and no defers run.
         const child_alloc = std.heap.page_allocator;
 
-        const result_str = executeAndFormat(child_alloc, dev_eval, executable, code_result, module_env, expr_idx) catch {
+        const result_str = executeAndFormat(child_alloc, dev_eval, executable) catch {
             posix.close(pipe_write);
             posix.exit(1);
         };
@@ -375,10 +329,12 @@ fn forkAndExecute(
 }
 
 fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !void {
-    const dev_str = try devEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env);
+    const inspect_expr = wrapInStrInspect(module_env, expr_idx) catch return error.EvaluatorMismatch;
+
+    const dev_str = try devEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env);
     defer allocator.free(dev_str);
 
-    const wasm_str = try wasmEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env);
+    const wasm_str = try wasmEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env);
     defer allocator.free(wasm_str);
 
     if (!std.mem.eql(u8, interpreter_str, dev_str) or
@@ -759,162 +715,30 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
         return error.WasmExecFailed;
     };
 
-    // Format the result based on layout
-    // Note: wasm has only i32, i64, f32, f64 value types. Sub-32-bit integers
-    // (u8, i8, u16, i16) are represented as i32 in wasm.
-    const layout_mod = @import("layout");
-    return switch (wasm_result.result_layout) {
-        layout_mod.Idx.i64 => blk: {
-            const val = returns[0].I64;
-            break :blk std.fmt.allocPrint(allocator, "{}", .{val});
-        },
-        layout_mod.Idx.i8, layout_mod.Idx.i16, layout_mod.Idx.i32 => blk: {
-            // These are i32 in wasm — sign-extend to i64 for display
-            const val: i32 = returns[0].I32;
-            const val64: i64 = val;
-            break :blk std.fmt.allocPrint(allocator, "{}", .{val64});
-        },
-        layout_mod.Idx.u64 => blk: {
-            const val: u64 = @bitCast(returns[0].I64);
-            break :blk std.fmt.allocPrint(allocator, "{}", .{val});
-        },
-        layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32 => blk: {
-            // These are i32 in wasm — zero-extend to u64 for display
-            const val: u32 = @bitCast(returns[0].I32);
-            const val64: u64 = val;
-            break :blk std.fmt.allocPrint(allocator, "{}", .{val64});
-        },
-        layout_mod.Idx.bool => blk: {
-            const val = returns[0].I32;
-            break :blk allocator.dupe(u8, if (val != 0) "True" else "False");
-        },
-        layout_mod.Idx.f64 => blk: {
-            const val: f64 = @bitCast(returns[0].I64);
-            var fbuf: [400]u8 = undefined;
-            break :blk allocator.dupe(u8, i128h.f64_to_str(&fbuf, val));
-        },
-        layout_mod.Idx.f32 => blk: {
-            const val: f32 = @bitCast(returns[0].I32);
-            var fbuf: [400]u8 = undefined;
-            break :blk allocator.dupe(u8, i128h.f64_to_str(&fbuf, @as(f64, val)));
-        },
-        layout_mod.Idx.dec => blk: {
-            // Dec is i128 stored in linear memory. The function returned an i32 pointer.
-            const ptr: u32 = @bitCast(returns[0].I32);
-            const mem_slice = module_instance.memoryAll();
-            if (ptr > mem_slice.len or mem_slice.len - ptr < 16) {
-                return error.WasmExecFailed;
-            }
-            const low: i64 = @bitCast(mem_slice[ptr..][0..8].*);
-            const high: i64 = @bitCast(mem_slice[ptr + 8 ..][0..8].*);
-            const val: i128 = @as(i128, high) << 64 | @as(i128, @as(u64, @bitCast(low)));
-            const dec = builtins.dec.RocDec{ .num = val };
-            var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
-            const slice = dec.format_to_buf(&buf);
-            break :blk allocator.dupe(u8, slice);
-        },
-        layout_mod.Idx.i128 => blk: {
-            const ptr: u32 = @bitCast(returns[0].I32);
-            const mem_slice = module_instance.memoryAll();
-            if (ptr > mem_slice.len or mem_slice.len - ptr < 16) return error.WasmExecFailed;
-            const low: i64 = @bitCast(mem_slice[ptr..][0..8].*);
-            const high: i64 = @bitCast(mem_slice[ptr + 8 ..][0..8].*);
-            const val: i128 = @as(i128, high) << 64 | @as(i128, @as(u64, @bitCast(low)));
-            break :blk std.fmt.allocPrint(allocator, "{}", .{val});
-        },
-        layout_mod.Idx.u128 => blk: {
-            const ptr: u32 = @bitCast(returns[0].I32);
-            const mem_slice = module_instance.memoryAll();
-            if (ptr > mem_slice.len or mem_slice.len - ptr < 16) return error.WasmExecFailed;
-            const low: u64 = @bitCast(mem_slice[ptr..][0..8].*);
-            const high: u64 = @bitCast(mem_slice[ptr + 8 ..][0..8].*);
-            const val: u128 = @as(u128, high) << 64 | @as(u128, low);
-            break :blk std.fmt.allocPrint(allocator, "{}", .{val});
-        },
-        layout_mod.Idx.str => blk: {
-            // RocStr is 12 bytes on wasm32: { ptr/bytes[0..3], len/bytes[4..7], cap/bytes[8..11] }
-            const str_ptr: u32 = @bitCast(returns[0].I32);
-            const mem_slice = module_instance.memoryAll();
-            if (str_ptr + 12 > mem_slice.len) {
-                return error.WasmExecFailed;
-            }
+    // Result is always a Str (expression was wrapped in Str.inspect).
+    // RocStr is 12 bytes on wasm32: { ptr/bytes[0..3], len/bytes[4..7], cap/bytes[8..11] }
+    const str_ptr: u32 = @bitCast(returns[0].I32);
+    const mem_slice = module_instance.memoryAll();
+    if (str_ptr + 12 > mem_slice.len) {
+        return error.WasmExecFailed;
+    }
 
-            // Check SSO: high bit of byte 11
-            const byte11 = mem_slice[str_ptr + 11];
-            const str_data: []const u8 = if (byte11 & 0x80 != 0) sd: {
-                // Small string: bytes stored inline, length in byte 11 (masked)
-                const sso_len: u32 = byte11 & 0x7F;
-                if (sso_len > 11) return error.WasmExecFailed;
-                break :sd mem_slice[str_ptr..][0..sso_len];
-            } else sd: {
-                // Large string: ptr at offset 0, len at offset 4
-                const data_ptr: u32 = @bitCast(mem_slice[str_ptr..][0..4].*);
-                const data_len: u32 = @bitCast(mem_slice[str_ptr + 4 ..][0..4].*);
-                if (data_ptr + data_len > mem_slice.len) return error.WasmExecFailed;
-                break :sd mem_slice[data_ptr..][0..data_len];
-            };
-
-            // Wrap in quotes with escape handling, matching interpreter (RocValue.zig)
-            var buf = std.array_list.AlignedManaged(u8, null).init(allocator);
-            errdefer buf.deinit();
-            try buf.append('"');
-            for (str_data) |ch| {
-                switch (ch) {
-                    '\\' => try buf.appendSlice("\\\\"),
-                    '"' => try buf.appendSlice("\\\""),
-                    else => try buf.append(ch),
-                }
-            }
-            try buf.append('"');
-            break :blk buf.toOwnedSlice();
-        },
-        else => blk: {
-            // Non-sentinel layout — use layout store to determine type
-            const ls = wasm_eval.global_layout_store orelse break :blk error.UnsupportedLayout;
-            const l = ls.getLayout(wasm_result.result_layout);
-            const mem_slice = module_instance.memoryAll();
-
-            switch (l.tag) {
-                .tag_union => {
-                    // Small tag union that fits in i32 — return discriminant as integer
-                    const tu_size = ls.layoutSize(l);
-                    if (tu_size <= 4) {
-                        const val = returns[0].I32;
-                        break :blk std.fmt.allocPrint(allocator, "{}", .{val});
-                    }
-                    // Larger tag union — discriminant from memory
-                    const ptr: u32 = @bitCast(returns[0].I32);
-                    if (ptr + tu_size > mem_slice.len) break :blk error.WasmExecFailed;
-                    const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
-                    const disc_offset = tu_data.discriminant_offset;
-                    const disc: u32 = switch (tu_data.discriminant_size) {
-                        1 => mem_slice[ptr + disc_offset],
-                        2 => @as(u32, @as(u16, @bitCast(mem_slice[ptr + disc_offset ..][0..2].*))),
-                        4 => @bitCast(mem_slice[ptr + disc_offset ..][0..4].*),
-                        else => break :blk error.UnsupportedLayout,
-                    };
-                    break :blk std.fmt.allocPrint(allocator, "{}", .{disc});
-                },
-                .scalar => {
-                    // Non-sentinel scalar — determine from scalar data
-                    const sa = ls.layoutSizeAlign(l);
-                    if (sa.size <= 4) {
-                        const val = returns[0].I32;
-                        break :blk std.fmt.allocPrint(allocator, "{}", .{val});
-                    } else if (sa.size <= 8) {
-                        const val = returns[0].I64;
-                        break :blk std.fmt.allocPrint(allocator, "{}", .{val});
-                    }
-                    break :blk error.UnsupportedLayout;
-                },
-                .zst => {
-                    // Zero-sized type — return 0
-                    break :blk std.fmt.allocPrint(allocator, "0", .{});
-                },
-                else => break :blk error.UnsupportedLayout,
-            }
-        },
+    // Check SSO: high bit of byte 11
+    const byte11 = mem_slice[str_ptr + 11];
+    const str_data: []const u8 = if (byte11 & 0x80 != 0) sd: {
+        // Small string: bytes stored inline, length in byte 11 (masked)
+        const sso_len: u32 = byte11 & 0x7F;
+        if (sso_len > 11) return error.WasmExecFailed;
+        break :sd mem_slice[str_ptr..][0..sso_len];
+    } else sd: {
+        // Large string: ptr at offset 0, len at offset 4
+        const data_ptr: u32 = @bitCast(mem_slice[str_ptr..][0..4].*);
+        const data_len: u32 = @bitCast(mem_slice[str_ptr + 4 ..][0..4].*);
+        if (data_ptr + data_len > mem_slice.len) return error.WasmExecFailed;
+        break :sd mem_slice[data_ptr..][0..data_len];
     };
+
+    return allocator.dupe(u8, str_data);
 }
 
 /// Host function: Dec multiply — called by wasm module for Dec * Dec.
@@ -2997,11 +2821,10 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     // Rewrite deferred numeric literals to match their inferred types
     try rewriteDeferredNumericLiterals(module_env, &module_env.types, &checker.import_mapping);
 
-    // Note: We do NOT run ClosureTransformer, LambdaLifter, or RC insertion here.
+    // Note: We do NOT run RC insertion here.
     // The interpreter handles closures natively (e_lambda, e_closure) and does
-    // its own runtime reference counting. The transformations are designed for
-    // code generation backends (dev backend, LLVM) where closures need to be
-    // lowered to tagged unions with capture records.
+    // its own runtime reference counting. Lambda lifting and lambda set inference
+    // happen during CIR→MIR and MIR→LIR lowering for code generation backends.
 
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
     return .{

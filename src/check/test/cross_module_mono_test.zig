@@ -14,8 +14,6 @@ const Allocators = base.Allocators;
 const Can = can.Can;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
-const ClosureTransformer = can.ClosureTransformer;
-
 const Check = @import("../Check.zig");
 
 const testing = std.testing;
@@ -415,11 +413,6 @@ const MonoTestEnv = struct {
         };
     }
 
-    /// Create a ClosureTransformer for this module
-    pub fn createClosureTransformer(self: *Self) ClosureTransformer {
-        return ClosureTransformer.init(self.gpa, self.module_env);
-    }
-
     pub fn deinit(self: *Self) void {
         self.imported_envs_list.deinit(self.gpa);
         self.checker.deinit();
@@ -487,37 +480,6 @@ test "cross-module mono: importing module can reference methods from imported ty
     try testing.expect(a_ident_in_b != null);
 }
 
-test "cross-module mono: closure transformer tracks unspecialized closures" {
-    // Module A defines a type with a method
-    const source_a =
-        \\A := [A(U64)].{
-        \\  get_value : A -> U64
-        \\  get_value = |A.A(val)| val
-        \\}
-    ;
-    var env_a = try MonoTestEnv.init("A", source_a);
-    defer env_a.deinit();
-
-    // Module B imports A and uses polymorphic dispatch
-    const source_b =
-        \\import A
-        \\
-        \\# Polymorphic function that uses static dispatch
-        \\call_get : a -> U64 where [a.get_value : a -> U64]
-        \\call_get = |x|
-        \\    T : x
-        \\    T.get_value()
-    ;
-    var env_b = try MonoTestEnv.initWithImport("B", source_b, "A", &env_a);
-    defer env_b.deinit();
-
-    // Create closure transformer for module B
-    var transformer = env_b.createClosureTransformer();
-    defer transformer.deinit();
-
-    // The transformer should be initialized and ready
-    _ = &transformer;
-}
 
 test "cross-module mono: static dispatch method registration in type module" {
     // This tests that when a type module defines methods, they are properly

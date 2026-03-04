@@ -51,8 +51,6 @@ pub const LirPatternId = LIR.LirPatternId;
 pub const LirExprSpan = LIR.LirExprSpan;
 /// Re-export pattern span type
 pub const LirPatternSpan = LIR.LirPatternSpan;
-/// Re-export closure representation type
-pub const ClosureRepresentation = LIR.ClosureRepresentation;
 /// Re-export capture type
 pub const LirCapture = LIR.LirCapture;
 /// Re-export recursive flag type
@@ -61,11 +59,6 @@ pub const Recursive = LIR.Recursive;
 pub const SelfRecursive = LIR.SelfRecursive;
 /// Re-export join point ID type
 pub const JoinPointId = LIR.JoinPointId;
-/// Re-export lambda set member type
-pub const LambdaSetMember = LIR.LambdaSetMember;
-/// Re-export lambda set member span type
-pub const LambdaSetMemberSpan = LIR.LambdaSetMemberSpan;
-
 /// Control flow statement type for tail recursion
 pub const CFStmt = LIR.CFStmt;
 /// Control flow statement ID type

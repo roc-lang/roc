@@ -3576,103 +3576,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     // Compiled modules (excluding Builtin at index 0) for pipelines that shouldn't process Builtin
     const compiled_module_envs = all_module_envs[1..];
 
-    // Run closure pipeline on modules (lambda lifting, inference, transformation)
-    std.log.debug("Running closure pipeline...", .{});
-    for (compiled_module_envs) |module| {
-        if (!module.is_lambda_lifted) {
-            var top_level_patterns = std.AutoHashMap(can.CIR.Pattern.Idx, void).init(ctx.gpa);
-            defer top_level_patterns.deinit();
-
-            const stmts = module.store.sliceStatements(module.all_statements);
-            for (stmts) |stmt_idx| {
-                const stmt = module.store.getStatement(stmt_idx);
-                switch (stmt) {
-                    .s_decl => |decl| {
-                        top_level_patterns.put(decl.pattern, {}) catch {};
-                    },
-                    else => {},
-                }
-            }
-
-            var lifter = can.LambdaLifter.init(ctx.gpa, module, &top_level_patterns);
-            defer lifter.deinit();
-            module.is_lambda_lifted = true;
-        }
-    }
-
-    // Run lambda set inference
-    var lambda_inference = can.LambdaSetInference.init(ctx.gpa);
-    defer lambda_inference.deinit();
-
-    // Convert to mutable slice for inferAll (compiled modules only)
-    var mutable_envs = try ctx.arena.alloc(*ModuleEnv, compiled_module_envs.len);
-    for (compiled_module_envs, 0..) |env, i| {
-        mutable_envs[i] = env;
-    }
-    lambda_inference.inferAll(mutable_envs) catch {
-        std.log.err("Lambda set inference failed", .{});
-        return error.LambdaInferenceFailed;
-    };
-
-    // Run closure transformer (defunctionalization)
-    for (mutable_envs) |module| {
-        if (!module.is_defunctionalized) {
-            var transformer = can.ClosureTransformer.initWithInference(ctx.gpa, module, &lambda_inference);
-            defer transformer.deinit();
-
-            const defs = module.store.sliceDefs(module.all_defs);
-
-            // Track top-level patterns so closure analysis doesn't treat them as captures.
-            for (defs) |def_idx| {
-                const def = module.store.getDef(def_idx);
-                transformer.markTopLevel(def.pattern) catch {
-                    std.log.err("Failed to mark top-level pattern for lambda-set validation", .{});
-                    return error.LambdaInferenceFailed;
-                };
-            }
-
-            // Analyze all top-level defs with lambda-set tracking. We intentionally do
-            // not mutate def expressions in this landing pass; this stage enforces
-            // resolved lambda-set invariants before MIR/LIR lowering.
-            for (defs) |def_idx| {
-                const def = module.store.getDef(def_idx);
-                const pattern = module.store.getPattern(def.pattern);
-                const name_hint: ?base.Ident.Idx = switch (pattern) {
-                    .assign => |a| a.ident,
-                    else => null,
-                };
-                const result = transformer.transformExprWithLambdaSet(def.expr, name_hint) catch {
-                    std.log.err("ClosureTransformer analysis failed during lambda-set validation", .{});
-                    return error.LambdaInferenceFailed;
-                };
-                if (result.lambda_set) |lambda_set| {
-                    transformer.pattern_lambda_sets.put(def.pattern, lambda_set) catch return error.LambdaInferenceFailed;
-                }
-                if (transformer.lambda_return_sets.get(result.expr)) |return_set| {
-                    const cloned = return_set.clone(ctx.gpa) catch return error.LambdaInferenceFailed;
-                    transformer.pattern_lambda_return_sets.put(def.pattern, cloned) catch return error.LambdaInferenceFailed;
-                }
-            }
-
-            const validation_result = transformer.validateAllResolved();
-            if (!validation_result.is_valid) {
-                if (validation_result.first_error) |err| {
-                    std.log.err(
-                        "Lambda-set validation failed for module '{s}': unresolved={d}, first={s}",
-                        .{ module.module_name, validation_result.unresolved_count, @tagName(err.kind) },
-                    );
-                } else {
-                    std.log.err(
-                        "Lambda-set validation failed for module '{s}': unresolved={d}",
-                        .{ module.module_name, validation_result.unresolved_count },
-                    );
-                }
-                return error.LambdaInferenceFailed;
-            }
-
-            module.is_defunctionalized = true;
-        }
-    }
+    // Lambda lifting and lambda set inference are now handled during CIR→MIR and MIR→LIR lowering
 
     // Process hosted functions - write hosted_index into CIR node payloads
     {
@@ -5054,16 +4958,12 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
             }
             const all_envs_mut = all_envs_list.items;
 
-            // Run closure pipeline (lambda lifting, set inference, defunctionalization)
-            const inference = dev_eval.prepareModulesForCodegen(all_envs_mut) catch |err| {
+            // Prepare modules for codegen (lambda lifting/set inference handled in lowering)
+            dev_eval.prepareModulesForCodegen(all_envs_mut) catch |err| {
                 try stderr.print("Failed to prepare modules for codegen: {}\n", .{err});
                 comptime_evaluator.deinit();
                 return err;
             };
-            defer {
-                inference.deinit();
-                ctx.gpa.destroy(inference);
-            }
 
             // Cast to const slice for generateCode
             const all_envs_const: []const *ModuleEnv = all_envs_mut;

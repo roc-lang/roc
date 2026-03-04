@@ -112,7 +112,6 @@ const RocAlloc = builtins.host_abi.RocAlloc;
 const RocOps = builtins.host_abi.RocOps;
 const RocDbg = builtins.host_abi.RocDbg;
 const ModuleEnv = can.ModuleEnv;
-const LambdaLifter = can.LambdaLifter;
 const Allocator = std.mem.Allocator;
 const SExprTree = base.SExprTree;
 const LineColMode = base.SExprTree.LineColMode;
@@ -1295,141 +1294,10 @@ fn processSnapshotContent(
         }
     }
 
-    // Run closure transformation for mono tests
-    // This transforms closures to tags and generates dispatch match expressions
-    var has_closure_transforms = false;
+    // Lambda lifting and lambda set inference are now handled during CIR→MIR and MIR→LIR lowering
 
-    // Lambda lifting storage - will be populated if we have closures
-    var lifter: ?LambdaLifter = null;
-    defer {
-        if (lifter) |*l| l.deinit();
-    }
-
+    // Run constant folding for mono tests
     if (content.meta.node_type == .mono) {
-        const ClosureTransformer = can.ClosureTransformer;
-        var transformer = ClosureTransformer.init(allocator, can_ir);
-        defer transformer.deinit();
-
-        // First pass: mark all top-level patterns
-        // Top-level constants don't need to be captured since they're always in scope
-        const defs = can_ir.store.sliceDefs(can_ir.all_defs);
-        for (defs) |def_idx| {
-            const def = can_ir.store.getDef(def_idx);
-            try transformer.markTopLevel(def.pattern);
-        }
-
-        // Second pass: transform all top-level definitions
-        for (defs) |def_idx| {
-            const def = can_ir.store.getDef(def_idx);
-
-            // Get name hint from pattern
-            const pattern = can_ir.store.getPattern(def.pattern);
-            const name_hint: ?base.Ident.Idx = switch (pattern) {
-                .assign => |a| a.ident,
-                else => null,
-            };
-
-            // Transform the definition expression
-            const old_expr = def.expr;
-            const result = try transformer.transformExprWithLambdaSet(def.expr, name_hint);
-
-            // If the expression changed, compute the correct type for the new expression
-            // based on its structure (e.g., tag union for closure transforms)
-            // Note: We don't modify the pattern's type here to avoid breaking type unification.
-            // Instead, the type will be computed from the expression in generateMonoSection.
-            if (old_expr != result.expr) {
-                _ = try computeTransformedExprType(can_ir, result.expr);
-            }
-
-            // Track the lambda set for this pattern
-            if (result.lambda_set) |lambda_set| {
-                try transformer.pattern_lambda_sets.put(def.pattern, lambda_set);
-                has_closure_transforms = true;
-            }
-
-            // If the expression is a lambda with a return set, track what it returns when called
-            // This allows propagating closure information through calls to this lambda
-            if (transformer.lambda_return_sets.get(result.expr)) |return_set| {
-                // Clone the return set to avoid double-free issues
-                const cloned = try return_set.clone(allocator);
-                try transformer.pattern_lambda_return_sets.put(def.pattern, cloned);
-            }
-
-            // Update the definition to use the transformed expression
-            can_ir.store.setDefExpr(def_idx, result.expr);
-        }
-
-        // Also check if any closures were transformed (even nested inside pure lambdas)
-        // This is important because nested closures may not produce a lambda_set at the top level
-        has_closure_transforms = has_closure_transforms or transformer.closures.count() > 0;
-
-        // Validate that all lambda sets have been fully resolved.
-        // Any remaining unspecialized closures indicate a failure to resolve static dispatch implementations.
-        const validation_result = transformer.validateAllResolved();
-        if (!validation_result.is_valid) {
-            // Log the validation failure
-            if (validation_result.first_error) |err| {
-                std.log.err("Lambda set validation failed: {d} unresolved closures. First error: {s}", .{
-                    validation_result.unresolved_count,
-                    @tagName(err.kind),
-                });
-            } else {
-                std.log.err("Lambda set validation failed: {d} unresolved closures", .{
-                    validation_result.unresolved_count,
-                });
-            }
-            return error.UnresolvedLambdaSets;
-        }
-
-        // Phase 4 & 5: Lambda lifting - extract closures to top-level function definitions
-        // After the ClosureTransformer has identified all closures, use LambdaLifter
-        // to create lifted function definitions for each one.
-        const has_any_closures = transformer.closures.count() > 0 or
-            transformer.pattern_lambda_sets.count() > 0;
-
-        if (has_any_closures) {
-            lifter = LambdaLifter.init(allocator, can_ir, &transformer.top_level_patterns);
-
-            // Iterate over all transformed closures (closures with captures)
-            var closure_iter = transformer.closures.iterator();
-            while (closure_iter.next()) |entry| {
-                const closure_idx = entry.key_ptr.*;
-                const closure_info = entry.value_ptr.*;
-
-                // Lift this closure to a top-level function
-                try lifter.?.liftClosure(closure_idx, closure_info.tag_name);
-            }
-
-            // Also lift closures from pattern_lambda_sets (pure lambdas converted to tags)
-            var lambda_set_iter = transformer.pattern_lambda_sets.iterator();
-            while (lambda_set_iter.next()) |entry| {
-                const lambda_set = entry.value_ptr;
-                for (lambda_set.closures.items) |closure_info| {
-                    // Check if this closure was already lifted via transformer.closures
-                    // (closures with captures are in both places)
-                    var already_lifted = false;
-                    var check_iter = transformer.closures.iterator();
-                    while (check_iter.next()) |check_entry| {
-                        if (check_entry.value_ptr.tag_name == closure_info.tag_name) {
-                            already_lifted = true;
-                            break;
-                        }
-                    }
-
-                    if (!already_lifted) {
-                        // Lift this pure lambda using the info-based method
-                        try lifter.?.liftFromInfo(closure_info);
-                    }
-                }
-            }
-        }
-    }
-
-    // Run constant folding for mono tests (skip if we have closure transformations)
-    // This evaluates expressions at compile time and folds results back into the CIR.
-    // We skip this when closures have been transformed because the comptime evaluator
-    // doesn't yet know how to handle the closure tag format.
-    if (content.meta.node_type == .mono and !has_closure_transforms) {
         if (config.builtin_module) |builtin_env| {
             const BuiltinTypes = eval_mod.BuiltinTypes;
             const ComptimeEvaluator = eval_mod.ComptimeEvaluator;
@@ -1481,8 +1349,7 @@ fn processSnapshotContent(
 
     if (content.meta.node_type == .mono) {
         // Mono tests: MONO and FORMATTED come right after SOURCE
-        const lifted_funcs = if (lifter) |l| l.getLiftedFunctions() else &[_]LambdaLifter.LiftedFunction{};
-        try generateMonoSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), output_path, config, lifted_funcs);
+        try generateMonoSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), output_path, config);
         try generateFormattedSection(&output, &content, parse_ast);
         success = try generateExpectedSection(&output, output_path, &content, &generated_reports, config) and success;
         try generateProblemsSection(&output, &generated_reports);
@@ -3166,7 +3033,7 @@ fn parseAndFormat(gpa: std.mem.Allocator, input: []const u8) ![]const u8 {
 }
 
 /// Generate MONO section for mono tests - emits monomorphized type module
-fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx, source_path: []const u8, config: *const Config, lifted_functions: []const LambdaLifter.LiftedFunction) !void {
+fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx, source_path: []const u8, config: *const Config) !void {
     // First, build the mono source in a buffer for validation
     var mono_buffer = std.ArrayList(u8).empty;
     defer mono_buffer.deinit(output.gpa);
@@ -3175,60 +3042,7 @@ fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx
     var emitter = can.RocEmitter.init(output.gpa, can_ir);
     defer emitter.deinit();
 
-    // Phase 5: Output lifted function definitions first (before regular definitions)
-    // These are the closures that have been lifted to top-level functions.
-    // Dispatch now calls these functions instead of inlining the lambda bodies.
-    for (lifted_functions) |lifted_fn| {
-        // Get the function name and convert to a valid Roc identifier
-        const fn_name = can_ir.getIdent(lifted_fn.name);
-
-        // Convert # prefix to 'c' (for compiler-generated closures like #1_foo -> c1_foo)
-        // or uppercase first char to lowercase for backwards compatibility
-        var fn_name_lower = try output.gpa.alloc(u8, fn_name.len);
-        defer output.gpa.free(fn_name_lower);
-        @memcpy(fn_name_lower, fn_name);
-        if (fn_name_lower.len > 0 and fn_name_lower[0] == '#') {
-            fn_name_lower[0] = 'c';
-        } else if (fn_name_lower.len > 0 and fn_name_lower[0] >= 'A' and fn_name_lower[0] <= 'Z') {
-            fn_name_lower[0] = fn_name_lower[0] + ('a' - 'A');
-        }
-
-        // Output as a proper definition
-        try mono_buffer.appendSlice(output.gpa, fn_name_lower);
-        try mono_buffer.appendSlice(output.gpa, " = |");
-
-        // Emit the original lambda arguments
-        const args = can_ir.store.slicePatterns(lifted_fn.args);
-        for (args, 0..) |arg_pattern, i| {
-            if (i > 0) {
-                try mono_buffer.appendSlice(output.gpa, ", ");
-            }
-            emitter.reset();
-            try emitter.emitPattern(arg_pattern);
-            try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
-        }
-
-        // Add the captures parameter if there are captures
-        if (lifted_fn.captures_pattern) |captures_pat| {
-            if (args.len > 0) {
-                try mono_buffer.appendSlice(output.gpa, ", ");
-            }
-            emitter.reset();
-            try emitter.emitPattern(captures_pat);
-            try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
-        }
-
-        try mono_buffer.appendSlice(output.gpa, "| ");
-
-        // Emit the transformed body
-        emitter.reset();
-        try emitter.emitExpr(lifted_fn.body);
-        try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
-        try mono_buffer.appendSlice(output.gpa, "\n\n");
-    }
-
     const defs = can_ir.store.sliceDefs(can_ir.all_defs);
-    const has_lifted_functions = lifted_functions.len > 0;
     for (defs) |def_idx| {
         const def = can_ir.store.getDef(def_idx);
 
@@ -3242,31 +3056,20 @@ fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx
         emitter.reset();
         try emitter.emitExpr(def.expr);
 
-        // For closure transforms, skip type annotations since computing them correctly
-        // is complex (transformed expressions have new indices without proper type vars).
-        // For non-closure transforms, emit type annotations using the pattern's type.
-        if (has_lifted_functions) {
-            // Skip type annotations - just emit: name = expr
-            try mono_buffer.appendSlice(output.gpa, pattern_output);
-            try mono_buffer.appendSlice(output.gpa, " = ");
-            try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
-            try mono_buffer.appendSlice(output.gpa, "\n\n");
-        } else {
-            // Use the pattern's type from type checking (not computed from expression)
-            const pattern_type = ModuleEnv.varFrom(def.pattern);
-            const type_str = try getDefaultedTypeString(output.gpa, can_ir, pattern_type);
-            defer output.gpa.free(type_str);
+        // Use the pattern's type from type checking (not computed from expression)
+        const pattern_type = ModuleEnv.varFrom(def.pattern);
+        const type_str = try getDefaultedTypeString(output.gpa, can_ir, pattern_type);
+        defer output.gpa.free(type_str);
 
-            // Build the mono source: name : Type\nname = expr\n
-            try mono_buffer.appendSlice(output.gpa, pattern_output);
-            try mono_buffer.appendSlice(output.gpa, " : ");
-            try mono_buffer.appendSlice(output.gpa, type_str);
-            try mono_buffer.appendSlice(output.gpa, "\n");
-            try mono_buffer.appendSlice(output.gpa, pattern_output);
-            try mono_buffer.appendSlice(output.gpa, " = ");
-            try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
-            try mono_buffer.appendSlice(output.gpa, "\n\n");
-        }
+        // Build the mono source: name : Type\nname = expr\n
+        try mono_buffer.appendSlice(output.gpa, pattern_output);
+        try mono_buffer.appendSlice(output.gpa, " : ");
+        try mono_buffer.appendSlice(output.gpa, type_str);
+        try mono_buffer.appendSlice(output.gpa, "\n");
+        try mono_buffer.appendSlice(output.gpa, pattern_output);
+        try mono_buffer.appendSlice(output.gpa, " = ");
+        try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
+        try mono_buffer.appendSlice(output.gpa, "\n\n");
     }
 
     // Trim trailing newline (we added one too many at the end)
@@ -3809,51 +3612,7 @@ fn processDevObjectSnapshot(
 
     const compiled_module_envs = all_module_envs[1..];
 
-    // 5. Closure pipeline
-    for (compiled_module_envs) |module| {
-        if (!module.is_lambda_lifted) {
-            var top_level_patterns = std.AutoHashMap(can.CIR.Pattern.Idx, void).init(allocator);
-            defer top_level_patterns.deinit();
-
-            const stmts = module.store.sliceStatements(module.all_statements);
-            for (stmts) |stmt_idx| {
-                const stmt = module.store.getStatement(stmt_idx);
-                switch (stmt) {
-                    .s_decl => |decl| {
-                        top_level_patterns.put(decl.pattern, {}) catch {};
-                    },
-                    else => {},
-                }
-            }
-
-            var lifter = can.LambdaLifter.init(allocator, module, &top_level_patterns);
-            defer lifter.deinit();
-            module.is_lambda_lifted = true;
-        }
-    }
-
-    // Lambda set inference
-    var lambda_inference = can.LambdaSetInference.init(allocator);
-    defer lambda_inference.deinit();
-
-    var mutable_envs = try allocator.alloc(*ModuleEnv, compiled_module_envs.len);
-    defer allocator.free(mutable_envs);
-    for (compiled_module_envs, 0..) |env, i| {
-        mutable_envs[i] = env;
-    }
-    lambda_inference.inferAll(mutable_envs) catch {
-        std.log.err("Lambda set inference failed", .{});
-        return false;
-    };
-
-    // Closure transformer
-    for (mutable_envs) |module| {
-        if (!module.is_defunctionalized) {
-            var transformer = can.ClosureTransformer.initWithInference(allocator, module, &lambda_inference);
-            defer transformer.deinit();
-            module.is_defunctionalized = true;
-        }
-    }
+    // Lambda lifting and lambda set inference are now handled during CIR→MIR and MIR→LIR lowering
 
     // 6. Process hosted functions (write hosted_index into CIR node payloads)
     {
@@ -4628,9 +4387,6 @@ test "TODO: cross-module function calls - string_multiline_comparison" {}
 
 test "TODO: cross-module function calls - string_ordering_unsupported" {}
 
-test "LambdaLifter" {
-    std.testing.refAllDecls(LambdaLifter);
-}
 
 /// An implementation of RocOps for snapshot testing.
 pub const SnapshotOps = struct {

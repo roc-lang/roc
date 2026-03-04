@@ -26,12 +26,8 @@ const LirExprSpan = ir.LirExprSpan;
 const LirPatternSpan = ir.LirPatternSpan;
 const LirCaptureSpan = ir.LirCaptureSpan;
 const LirCapture = ir.LirCapture;
-const ClosureData = ir.ClosureData;
-const ClosureDataId = ir.ClosureDataId;
 const LirMatchBranch = ir.LirMatchBranch;
 const LirMatchBranchSpan = ir.LirMatchBranchSpan;
-const LambdaSetMember = ir.LambdaSetMember;
-const LambdaSetMemberSpan = ir.LambdaSetMemberSpan;
 const LirIfBranch = ir.LirIfBranch;
 const LirIfBranchSpan = ir.LirIfBranchSpan;
 const LirStmt = ir.LirStmt;
@@ -78,12 +74,6 @@ stmts: std.ArrayList(LirStmt),
 /// Captures (symbols captured by closures)
 captures: std.ArrayList(LirCapture),
 
-/// Closure data (side table to reduce LirExpr union size)
-closure_data: std.ArrayList(ClosureData),
-
-/// Lambda set members (for closure dispatch)
-lambda_set_members: std.ArrayList(LambdaSetMember),
-
 /// Control flow statements (for tail recursion optimization)
 cf_stmts: std.ArrayList(CFStmt),
 
@@ -119,8 +109,6 @@ pub fn init(allocator: Allocator) Self {
         .if_branches = std.ArrayList(LirIfBranch).empty,
         .stmts = std.ArrayList(LirStmt).empty,
         .captures = std.ArrayList(LirCapture).empty,
-        .closure_data = std.ArrayList(ClosureData).empty,
-        .lambda_set_members = std.ArrayList(LambdaSetMember).empty,
         .cf_stmts = std.ArrayList(CFStmt).empty,
         .cf_switch_branches = std.ArrayList(CFSwitchBranch).empty,
         .cf_match_branches = std.ArrayList(CFMatchBranch).empty,
@@ -154,8 +142,6 @@ pub fn deinit(self: *Self) void {
     self.if_branches.deinit(self.allocator);
     self.stmts.deinit(self.allocator);
     self.captures.deinit(self.allocator);
-    self.closure_data.deinit(self.allocator);
-    self.lambda_set_members.deinit(self.allocator);
     self.cf_stmts.deinit(self.allocator);
     self.cf_switch_branches.deinit(self.allocator);
     self.cf_match_branches.deinit(self.allocator);
@@ -348,40 +334,6 @@ pub fn addCaptures(self: *Self, capture_list: []const LirCapture) Allocator.Erro
 pub fn getCaptures(self: *const Self, span: LirCaptureSpan) []const LirCapture {
     if (span.len == 0) return &.{};
     return self.captures.items[span.start..][0..span.len];
-}
-
-/// Add closure data to the side table and return its ID
-pub fn addClosureData(self: *Self, data: ClosureData) Allocator.Error!ClosureDataId {
-    const idx = self.closure_data.items.len;
-    try self.closure_data.append(self.allocator, data);
-    return @enumFromInt(@as(u32, @intCast(idx)));
-}
-
-/// Get closure data by ID
-pub fn getClosureData(self: *const Self, id: ClosureDataId) ClosureData {
-    std.debug.assert(!id.isNone());
-    return self.closure_data.items[@intFromEnum(id)];
-}
-
-/// Add lambda set members and return a span
-pub fn addLambdaSetMembers(self: *Self, members: []const LambdaSetMember) Allocator.Error!LambdaSetMemberSpan {
-    if (members.len == 0) {
-        return LambdaSetMemberSpan.empty();
-    }
-
-    const start = @as(u32, @intCast(self.lambda_set_members.items.len));
-    try self.lambda_set_members.appendSlice(self.allocator, members);
-
-    return .{
-        .start = start,
-        .len = @intCast(members.len),
-    };
-}
-
-/// Get lambda set members from a span
-pub fn getLambdaSetMembers(self: *const Self, span: LambdaSetMemberSpan) []const LambdaSetMember {
-    if (span.len == 0) return &.{};
-    return self.lambda_set_members.items[span.start..][0..span.len];
 }
 
 /// Register a top-level symbol definition

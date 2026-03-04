@@ -50,17 +50,6 @@ pub const LirExprId = enum(u32) {
     }
 };
 
-/// Index into LirExprStore.closure_data
-pub const ClosureDataId = enum(u32) {
-    _,
-
-    pub const none: ClosureDataId = @enumFromInt(std.math.maxInt(u32));
-
-    pub fn isNone(self: ClosureDataId) bool {
-        return self == none;
-    }
-};
-
 /// Index into LirExprStore.patterns
 pub const LirPatternId = enum(u32) {
     _,
@@ -120,100 +109,6 @@ pub const LirCaptureSpan = extern struct {
 pub const LirCapture = struct {
     symbol: Symbol,
     layout_idx: layout.Idx,
-};
-
-/// How a closure is represented at runtime (like Roc's ClosureRepresentation).
-/// The representation is chosen based on the lambda set shape:
-/// - Number of functions that share the same call site
-/// - Whether they have captures and how many
-pub const ClosureRepresentation = union(enum) {
-    /// 1 function, 1 capture → no wrapper, capture passed directly.
-    /// Zero overhead - the closure IS the captured value.
-    unwrapped_capture: struct {
-        capture_layout: layout.Idx,
-    },
-
-    /// 1 function, N captures → struct with captures sorted by alignment.
-    /// Captures stored largest-alignment-first for memory efficiency.
-    struct_captures: struct {
-        /// Captures in alignment order (largest first)
-        captures: LirCaptureSpan,
-        /// Total layout of the capture struct
-        struct_layout: layout.Idx,
-    },
-
-    /// N functions, 0 captures → small tag (Bool for 2 fns, U8 for 3+).
-    /// No payload needed, just Bool (2 fns) or U8 (3+ fns).
-    enum_dispatch: struct {
-        /// Number of functions in the set
-        num_functions: u16,
-        /// This function's tag value (position in lambda set)
-        tag: u16,
-        /// All members of the lambda set (for dispatch at call sites)
-        lambda_set: LambdaSetMemberSpan,
-    },
-
-    /// N functions, some with captures → tagged union.
-    /// Tag identifies which function, payload contains captures.
-    union_repr: struct {
-        /// This function's tag value
-        tag: u16,
-        /// Captures for this variant (may be empty)
-        captures: LirCaptureSpan,
-        /// Layout of the full union (tag + max payload)
-        union_layout: layout.Idx,
-        /// All members of the lambda set (for dispatch at call sites)
-        lambda_set: LambdaSetMemberSpan,
-    },
-
-    /// No representation needed - function is called directly.
-    /// Used when a lambda is immediately called and never stored.
-    direct_call: void,
-};
-
-/// Closure data stored in a side table (LirExprStore.closure_data) to reduce
-/// LirExpr union size. Referenced by ClosureDataId.
-pub const ClosureData = struct {
-    /// Layout of the closure type (includes captures)
-    closure_layout: layout.Idx,
-    /// The underlying lambda expression
-    lambda: LirExprId,
-    /// Captured symbols and their layouts
-    captures: LirCaptureSpan,
-    /// How this closure is represented at runtime
-    representation: ClosureRepresentation,
-    /// Whether this closure is recursive (calls itself)
-    recursion: Recursive,
-    /// Whether this closure captures itself (for recursive closures)
-    self_recursive: SelfRecursive,
-    /// Whether this closure is bound to a variable (vs. used directly as an argument).
-    is_bound_to_variable: bool,
-};
-
-/// A member of a lambda set
-pub const LambdaSetMember = struct {
-    /// Global symbol for this lambda (from LambdaSetInference)
-    lambda_symbol: Symbol,
-    /// Captures for this member
-    captures: LirCaptureSpan,
-    /// The lambda body expression
-    lambda_body: LirExprId,
-    /// This member's tag in the lambda set (for dispatch)
-    tag: u16,
-};
-
-/// Span of lambda set members
-pub const LambdaSetMemberSpan = extern struct {
-    start: u32,
-    len: u16,
-
-    pub fn empty() LambdaSetMemberSpan {
-        return .{ .start = 0, .len = 0 };
-    }
-
-    pub fn isEmpty(self: LambdaSetMemberSpan) bool {
-        return self.len == 0;
-    }
 };
 
 /// Whether a closure is recursive (like Roc's Recursive enum in expr.rs).
@@ -376,10 +271,6 @@ pub const LirExpr = union(enum) {
         /// Return type layout
         ret_layout: layout.Idx,
     },
-
-    /// Closure (function with captured environment).
-    /// Data stored in LirExprStore.closure_data side table to reduce LirExpr size.
-    closure: ClosureDataId,
 
     /// Empty list `[]`
     empty_list: struct {
