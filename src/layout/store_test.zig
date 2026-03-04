@@ -926,3 +926,104 @@ test "fromTypeVar - recursive nominal with Box has no double-boxing (issue #8916
     const box_elem_layout = lt.layout_store.getLayout(box_elem_idx);
     try testing.expect(box_elem_layout.tag == .tag_union);
 }
+
+test "fromTypeVar - no-payload nominal tag union gets scalar layout, not box" {
+    // Regression test: nominal types backed by no-payload tag unions (enums) should
+    // get scalar discriminant layouts, not stale Box(opaque_ptr) placeholders.
+    //
+    // The bug was in the nominal update check (~line 2634): it checked the type content
+    // (.tag_union) to decide whether to skip the nominal placeholder update (deferring
+    // to the container finish path). But no-payload tag unions resolve to scalar layouts
+    // without pushing a container, so the container finish path never handled them.
+    // The stale Box placeholder remained cached.
+    //
+    // Example Roc code that triggered the bug:
+    //   Utf8ByteProblem := [InvalidStartByte, UnexpectedEndOfSequence, ...]
+    //   result = Str.from_utf8(bytes)  # Returns Try({ byte_problem: Utf8ByteProblem, index: U64 }, ...)
+
+    var lt: LayoutTest = undefined;
+    lt.gpa = testing.allocator;
+    lt.module_env = try ModuleEnv.init(lt.gpa, "");
+    lt.type_store = try types_store.Store.init(lt.gpa);
+
+    // Setup identifiers
+    const my_enum_ident_idx = try lt.module_env.insertIdent(Ident.for_text("MyEnum"));
+    _ = try lt.module_env.insertIdent(Ident.for_text("Box"));
+    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
+    lt.module_env.idents.builtin_module = builtin_module_idx;
+
+    lt.module_env_ptr[0] = &lt.module_env;
+    lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
+    lt.layout_store.setOverrideTypesStore(&lt.type_store);
+    lt.type_scope = TypeScope.init(lt.gpa);
+    defer lt.deinit();
+
+    // Step 1: Create MyEnum := [A, B, C] (no-payload nominal tag union / enum)
+    const a_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("A")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{}),
+    };
+    const b_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("B")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{}),
+    };
+    const c_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("C")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{}),
+    };
+    const enum_tags = try lt.type_store.appendTags(&[_]types.Tag{ a_tag, b_tag, c_tag });
+    const enum_tag_union = types.TagUnion{
+        .tags = enum_tags,
+        .ext = try lt.type_store.freshFromContent(.{ .structure = .empty_tag_union }),
+    };
+    const enum_backing_var = try lt.type_store.freshFromContent(.{ .structure = .{ .tag_union = enum_tag_union } });
+
+    const my_enum_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = my_enum_ident_idx },
+        enum_backing_var,
+        &[_]types.Var{},
+        builtin_module_idx,
+        false,
+    );
+    const my_enum_var = try lt.type_store.freshFromContent(my_enum_content);
+
+    // Step 2: Create a record { index: {} (simplified U64), value: MyEnum }
+    const index_var = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
+    const record_fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &[_]types.RecordField{
+        .{ .name = try lt.module_env.insertIdent(Ident.for_text("index")), .var_ = index_var },
+        .{ .name = try lt.module_env.insertIdent(Ident.for_text("value")), .var_ = my_enum_var },
+    });
+    const record_var = try lt.type_store.freshFromContent(.{
+        .structure = .{ .record = .{
+            .fields = record_fields,
+            .ext = try lt.type_store.freshFromContent(.{ .structure = .empty_record }),
+        } },
+    });
+
+    // Step 3: Create a tag union [Foo(record), Bar] to nest the record in a variant
+    const foo_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("Foo")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{record_var}),
+    };
+    const bar_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("Bar")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{}),
+    };
+    const outer_tags = try lt.type_store.appendTags(&[_]types.Tag{ foo_tag, bar_tag });
+    const outer_tag_union = types.TagUnion{
+        .tags = outer_tags,
+        .ext = try lt.type_store.freshFromContent(.{ .structure = .empty_tag_union }),
+    };
+    const outer_tag_union_var = try lt.type_store.freshFromContent(.{ .structure = .{ .tag_union = outer_tag_union } });
+
+    // Compute the outer tag union layout (this triggers the nested nominal computation)
+    const result_idx = try lt.layout_store.fromTypeVar(0, outer_tag_union_var, &lt.type_scope, null);
+    const result_layout = lt.layout_store.getLayout(result_idx);
+    try testing.expect(result_layout.tag == .tag_union);
+
+    // Step 4: Verify MyEnum's cached layout is scalar, not box.
+    // Before the fix, fromTypeVar would return the stale Box(opaque_ptr) placeholder.
+    const enum_layout_idx = try lt.layout_store.fromTypeVar(0, my_enum_var, &lt.type_scope, null);
+    const enum_layout = lt.layout_store.getLayout(enum_layout_idx);
+    try testing.expect(enum_layout.tag == .scalar);
+}

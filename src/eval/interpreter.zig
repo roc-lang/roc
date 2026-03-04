@@ -16150,6 +16150,61 @@ pub const Interpreter = struct {
                                     .rt_var = values[0].rt_var,
                                 };
                                 try inner_value.copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                            } else if (values[0].layout.tag == .tag_union and expected_payload_layout.tag == .tag_union) {
+                                // Tag union widening: the actual value is a narrower tag union
+                                // (e.g., [StdoutContainsInvalidUtf8({...})]) being placed into a wider
+                                // tag union (e.g., [FailedToGetExitCode, NonZeroExitCode, StdoutContainsInvalidUtf8]).
+                                // Copy the narrow value's raw bytes first (preserving refcounts),
+                                // then translate the discriminant in-place.
+                                const narrow_size = self.runtime_layout_store.layoutSize(values[0].layout);
+                                const wide_size = self.runtime_layout_store.layoutSize(expected_payload_layout);
+                                if (narrow_size < wide_size) {
+                                    // Tag union widening: determine the correct discriminant mapping
+                                    const narrow_tu_data = self.runtime_layout_store.getTagUnionData(values[0].layout.data.tag_union.idx);
+                                    const narrow_disc = narrow_tu_data.readDiscriminant(@as([*]const u8, @ptrCast(values[0].ptr.?)));
+
+                                    // Get tag names from the narrow type
+                                    var narrow_tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+                                    defer narrow_tag_list.deinit();
+                                    try self.appendUnionTags(values[0].rt_var, &narrow_tag_list);
+
+                                    // Get tag names from the wide type
+                                    const wide_rt_var = if (tc.arg_rt_vars.len > 0) tc.arg_rt_vars[0] else values[0].rt_var;
+                                    var wide_tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+                                    defer wide_tag_list.deinit();
+                                    try self.appendUnionTags(wide_rt_var, &wide_tag_list);
+
+                                    // Find the wide discriminant by matching tag names
+                                    var wide_disc: ?u32 = null;
+                                    if (narrow_disc < narrow_tag_list.items.len and wide_tag_list.items.len > narrow_tag_list.items.len) {
+                                        const narrow_tag_name = narrow_tag_list.items[narrow_disc].name;
+                                        for (wide_tag_list.items, 0..) |wide_tag, wi| {
+                                            if (wide_tag.name == narrow_tag_name) {
+                                                wide_disc = @intCast(wi);
+                                                break;
+                                            }
+                                        }
+                                    }
+
+                                    if (wide_disc) |wd| {
+                                        // Zero-fill the wide area, then copy narrow payload data
+                                        @memset(base_ptr[0..wide_size], 0);
+                                        try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+
+                                        // Clear the narrow discriminant and write the wide one
+                                        const narrow_disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(values[0].layout.data.tag_union.idx);
+                                        base_ptr[narrow_disc_offset] = 0;
+
+                                        const wide_tu_data = self.runtime_layout_store.getTagUnionData(expected_payload_layout.data.tag_union.idx);
+                                        const wide_disc_offset_val = self.runtime_layout_store.getTagUnionDiscriminantOffset(expected_payload_layout.data.tag_union.idx);
+                                        wide_tu_data.writeDiscriminantToPtr(base_ptr + wide_disc_offset_val, wd);
+                                    } else {
+                                        // No widening needed (same disc mapping or unknown tag)
+                                        try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                                    }
+                                } else {
+                                    try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                                }
                             } else {
                                 try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
                             }
