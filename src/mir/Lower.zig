@@ -76,8 +76,14 @@ app_module_idx: ?u32,
 /// Used to resolve CIR local lookups to global symbols.
 pattern_symbols: std.AutoHashMap(u128, MIR.Symbol),
 
-/// Cache for type var → monotype conversion (shared across all fromTypeVar calls)
+/// Specialization bindings: maps polymorphic type vars to concrete monotypes.
+/// Written by `bindTypeVarMonotypes`, read by `fromTypeVar`.
 type_var_seen: std.AutoHashMap(types.Var, Monotype.Idx),
+
+/// Cycle breakers for recursive nominal types (e.g. Tree := [Leaf, Node(Tree)]).
+/// Used only by `fromNominalType` during monotype construction; separate from
+/// specialization bindings so monotype construction never pollutes them.
+nominal_cycle_breakers: std.AutoHashMap(types.Var, Monotype.Idx),
 
 /// Cache for already-lowered symbol definitions (avoids re-lowering).
 /// Key is @bitCast(MIR.Symbol) → u64.
@@ -178,6 +184,7 @@ pub fn init(
         .app_module_idx = app_module_idx,
         .pattern_symbols = std.AutoHashMap(u128, MIR.Symbol).init(allocator),
         .type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
+        .nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
         .lowered_symbols = std.AutoHashMap(u64, MIR.ExprId).init(allocator),
         .poly_specializations = std.AutoHashMap(u128, MIR.Symbol).init(allocator),
         .symbol_metadata = std.AutoHashMap(u64, SymbolMetadata).init(allocator),
@@ -205,6 +212,7 @@ pub fn init(
 pub fn deinit(self: *Self) void {
     self.pattern_symbols.deinit();
     self.type_var_seen.deinit();
+    self.nominal_cycle_breakers.deinit();
     self.lowered_symbols.deinit();
     self.poly_specializations.deinit();
     self.symbol_metadata.deinit();
@@ -882,9 +890,13 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
 
                         const saved_type_var_seen = self.type_var_seen;
                         self.type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+                        const saved_nominal_cycle_breakers = self.nominal_cycle_breakers;
+                        self.nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
                         defer {
                             self.type_var_seen.deinit();
                             self.type_var_seen = saved_type_var_seen;
+                            self.nominal_cycle_breakers.deinit();
+                            self.nominal_cycle_breakers = saved_nominal_cycle_breakers;
                         }
                         try self.bindTypeVarMonotypes(ModuleEnv.varFrom(cir_def_expr), monotype);
                         const saved_pattern_scope = self.current_pattern_scope;
@@ -913,6 +925,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                 ModuleEnv.varFrom(lookup.pattern_idx),
                 self.currentCommonIdents(),
                 &self.type_var_seen,
+                &self.nominal_cycle_breakers,
                 &self.mono_scratches,
             );
             if (try self.monotypesStructurallyEqual(pattern_monotype, monotype)) {
@@ -1352,6 +1365,7 @@ fn resolveMonotype(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!Monotype
         type_var,
         self.currentCommonIdents(),
         &self.type_var_seen,
+        &self.nominal_cycle_breakers,
         &self.mono_scratches,
     );
 }
@@ -1412,6 +1426,7 @@ fn lowerPattern(self: *Self, module_env: *const ModuleEnv, pattern_idx: CIR.Patt
         type_var,
         self.currentCommonIdents(),
         &self.type_var_seen,
+        &self.nominal_cycle_breakers,
         &self.mono_scratches,
     );
 
@@ -1612,6 +1627,7 @@ fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Clo
             cap_type_var,
             self.currentCommonIdents(),
             &self.type_var_seen,
+            &self.nominal_cycle_breakers,
             &self.mono_scratches,
         );
         try self.mono_scratches.idxs.append(cap_monotype);
@@ -1779,9 +1795,13 @@ fn lowerDeferredBlockLambda(
     // contaminated by earlier entries from this block/module.
     const saved_type_var_seen = self.type_var_seen;
     self.type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+    const saved_nominal_cycle_breakers = self.nominal_cycle_breakers;
+    self.nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
     defer {
         self.type_var_seen.deinit();
         self.type_var_seen = saved_type_var_seen;
+        self.nominal_cycle_breakers.deinit();
+        self.nominal_cycle_breakers = saved_nominal_cycle_breakers;
     }
 
     if (!caller_monotype.isNone()) {
@@ -2862,8 +2882,7 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
                 },
             };
             if (fn_args.len > 0 and !receiver_monotype.isNone()) {
-                const arg0_root = self.types_store.resolveVar(fn_args[0]).var_;
-                try self.type_var_seen.put(arg0_root, receiver_monotype);
+                try self.bindTypeVarMonotypes(fn_args[0], receiver_monotype);
             }
         }
 
@@ -2873,6 +2892,7 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
             resolved_target.fn_var,
             self.currentCommonIdents(),
             &self.type_var_seen,
+            &self.nominal_cycle_breakers,
             &self.mono_scratches,
         );
         if (!dispatch_func_monotype.isNone()) {
@@ -3240,6 +3260,7 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
                 ModuleEnv.varFrom(cir_expr_idx),
                 self.currentCommonIdents(),
                 &self.type_var_seen,
+                &self.nominal_cycle_breakers,
                 &self.mono_scratches,
             );
             if (!derived.isNone()) break :blk derived;
@@ -3266,6 +3287,7 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
     const saved_pattern_scope = self.current_pattern_scope;
     const saved_types_store = self.types_store;
     const saved_type_var_seen = self.type_var_seen;
+    const saved_nominal_cycle_breakers = self.nominal_cycle_breakers;
     const saved_ident_store = self.mono_scratches.ident_store;
     self.current_pattern_scope = symbol_key;
     if (switching_module) {
@@ -3278,6 +3300,7 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
     // Reusing a shared cache across polymorphic specializations can pin flex
     // and rigid vars to an earlier specialization.
     self.type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+    self.nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
 
     // Pre-bind type_var_seen with the caller's concrete types so that
     // flex/rigid vars in the definition resolve to concrete monotypes instead
@@ -3296,6 +3319,8 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
     defer {
         self.type_var_seen.deinit();
         self.type_var_seen = saved_type_var_seen;
+        self.nominal_cycle_breakers.deinit();
+        self.nominal_cycle_breakers = saved_nominal_cycle_breakers;
         self.current_pattern_scope = saved_pattern_scope;
         if (switching_module) {
             self.types_store = saved_types_store;

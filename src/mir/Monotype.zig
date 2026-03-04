@@ -316,20 +316,31 @@ pub const Store = struct {
     }
 
     /// Convert a CIR type variable to a Monotype, recursively resolving all
-    /// type structure. Uses `seen` for cycle detection on recursive types.
+    /// type structure.
+    ///
+    /// `specializations` is a read-only map of type vars already bound to
+    /// concrete monotypes by `bindTypeVarMonotypes` (polymorphic specialization).
+    ///
+    /// Cycle detection for recursive nominal types (the only legitimate source
+    /// of cycles after type checking) is handled internally by `fromNominalType`
+    /// using `nominal_cycle_breakers`.
     pub fn fromTypeVar(
         self: *Store,
         allocator: Allocator,
         types_store: *const types.Store,
         type_var: types.Var,
         common_idents: CommonIdents,
-        seen: *std.AutoHashMap(types.Var, Idx),
+        specializations: *const std.AutoHashMap(types.Var, Idx),
+        nominal_cycle_breakers: *std.AutoHashMap(types.Var, Idx),
         scratches: *Scratches,
     ) Allocator.Error!Idx {
         const resolved = types_store.resolveVar(type_var);
 
-        // Cycle detection: if we've already seen this var, return the cached idx
-        if (seen.get(resolved.var_)) |cached| return cached;
+        // Check specialization bindings first (from bindTypeVarMonotypes).
+        if (specializations.get(resolved.var_)) |cached| return cached;
+
+        // Check nominal cycle breakers (for recursive nominal types like Tree := [Leaf, Node(Tree)]).
+        if (nominal_cycle_breakers.get(resolved.var_)) |cached| return cached;
 
         return switch (resolved.desc.content) {
             .flex => |flex| {
@@ -345,10 +356,10 @@ pub const Store = struct {
             .alias => |alias| {
                 // Aliases are transparent — follow the backing var
                 const backing_var = types_store.getAliasBackingVar(alias);
-                return try self.fromTypeVar(allocator, types_store, backing_var, common_idents, seen, scratches);
+                return try self.fromTypeVar(allocator, types_store, backing_var, common_idents, specializations, nominal_cycle_breakers, scratches);
             },
             .structure => |flat_type| {
-                return try self.fromFlatType(allocator, types_store, resolved.var_, flat_type, common_idents, seen, scratches);
+                return try self.fromFlatType(allocator, types_store, resolved.var_, flat_type, common_idents, specializations, nominal_cycle_breakers, scratches);
             },
             // Error types are caught in lowerExpr before resolveMonotype;
             // reaching here means a compiler bug in an earlier phase.
@@ -363,20 +374,17 @@ pub const Store = struct {
         var_: types.Var,
         flat_type: types.FlatType,
         common_idents: CommonIdents,
-        seen: *std.AutoHashMap(types.Var, Idx),
+        specializations: *const std.AutoHashMap(types.Var, Idx),
+        nominal_cycle_breakers: *std.AutoHashMap(types.Var, Idx),
         scratches: *Scratches,
     ) Allocator.Error!Idx {
         return switch (flat_type) {
             .nominal_type => |nominal| {
-                return try self.fromNominalType(allocator, types_store, var_, nominal, common_idents, seen, scratches);
+                return try self.fromNominalType(allocator, types_store, var_, nominal, common_idents, specializations, nominal_cycle_breakers, scratches);
             },
             .empty_record => self.unit_idx,
             .empty_tag_union => try self.addMonotype(allocator, .{ .tag_union = .{ .tags = TagSpan.empty() } }),
             .record => |record| {
-                // Reserve a slot for cycle detection before recursing into fields
-                const placeholder_idx = try self.addMonotype(allocator, .recursive_placeholder);
-                try seen.put(var_, placeholder_idx);
-
                 const scratch_top = scratches.fields.top();
                 defer scratches.fields.clearFrom(scratch_top);
 
@@ -399,7 +407,7 @@ pub const Store = struct {
                         }
                         if (seen_name) continue;
 
-                        const field_type = try self.fromTypeVar(allocator, types_store, field_var, common_idents, seen, scratches);
+                        const field_type = try self.fromTypeVar(allocator, types_store, field_var, common_idents, specializations, nominal_cycle_breakers, scratches);
                         try scratches.fields.append(.{ .name = name, .type_idx = field_type });
                     }
 
@@ -431,7 +439,7 @@ pub const Store = struct {
                                         }
                                         if (seen_name) continue;
 
-                                        const field_type = try self.fromTypeVar(allocator, types_store, field_var, common_idents, seen, scratches);
+                                        const field_type = try self.fromTypeVar(allocator, types_store, field_var, common_idents, specializations, nominal_cycle_breakers, scratches);
                                         try scratches.fields.append(.{ .name = name, .type_idx = field_type });
                                     }
                                     break :rows;
@@ -484,8 +492,7 @@ pub const Store = struct {
                     std.mem.sort(Field, collected_fields, ident_store, Field.sortByNameAsc);
                 }
                 const field_span = try self.addFields(allocator, collected_fields);
-                self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .record = .{ .fields = field_span } };
-                return placeholder_idx;
+                return try self.addMonotype(allocator, .{ .record = .{ .fields = field_span } });
             },
             .record_unbound => |fields_range| {
                 // Extensible record — treat like a closed record with the known fields
@@ -493,42 +500,31 @@ pub const Store = struct {
                 const names = fields_slice.items(.name);
                 const vars = fields_slice.items(.var_);
 
-                const placeholder_idx = try self.addMonotype(allocator, .recursive_placeholder);
-                try seen.put(var_, placeholder_idx);
-
                 const scratch_top = scratches.fields.top();
                 defer scratches.fields.clearFrom(scratch_top);
 
                 for (names, vars) |name, field_var| {
-                    const field_type = try self.fromTypeVar(allocator, types_store, field_var, common_idents, seen, scratches);
+                    const field_type = try self.fromTypeVar(allocator, types_store, field_var, common_idents, specializations, nominal_cycle_breakers, scratches);
                     try scratches.fields.append(.{ .name = name, .type_idx = field_type });
                 }
 
                 const field_span = try self.addFields(allocator, scratches.fields.sliceFromStart(scratch_top));
-                self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .record = .{ .fields = field_span } };
-                return placeholder_idx;
+                return try self.addMonotype(allocator, .{ .record = .{ .fields = field_span } });
             },
             .tuple => |tuple| {
-                const placeholder_idx = try self.addMonotype(allocator, .recursive_placeholder);
-                try seen.put(var_, placeholder_idx);
-
                 const elem_vars = types_store.sliceVars(tuple.elems);
                 const scratch_top = scratches.idxs.top();
                 defer scratches.idxs.clearFrom(scratch_top);
 
                 for (elem_vars) |elem_var| {
-                    const elem_type = try self.fromTypeVar(allocator, types_store, elem_var, common_idents, seen, scratches);
+                    const elem_type = try self.fromTypeVar(allocator, types_store, elem_var, common_idents, specializations, nominal_cycle_breakers, scratches);
                     try scratches.idxs.append(elem_type);
                 }
 
                 const elem_span = try self.addIdxSpan(allocator, scratches.idxs.sliceFromStart(scratch_top));
-                self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .tuple = .{ .elems = elem_span } };
-                return placeholder_idx;
+                return try self.addMonotype(allocator, .{ .tuple = .{ .elems = elem_span } });
             },
             .tag_union => |tag_union_row| {
-                const placeholder_idx = try self.addMonotype(allocator, .recursive_placeholder);
-                try seen.put(var_, placeholder_idx);
-
                 const tags_top = scratches.tags.top();
                 defer scratches.tags.clearFrom(tags_top);
 
@@ -547,7 +543,7 @@ pub const Store = struct {
                         defer scratches.idxs.clearFrom(idxs_top);
 
                         for (arg_vars) |arg_var| {
-                            const payload_type = try self.fromTypeVar(allocator, types_store, arg_var, common_idents, seen, scratches);
+                            const payload_type = try self.fromTypeVar(allocator, types_store, arg_var, common_idents, specializations, nominal_cycle_breakers, scratches);
                             try scratches.idxs.append(payload_type);
                         }
 
@@ -602,12 +598,11 @@ pub const Store = struct {
                     std.mem.sort(Tag, collected_tags, ident_store, Tag.sortByNameAsc);
                 }
                 const tag_span = try self.addTags(allocator, collected_tags);
-                self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .tag_union = .{ .tags = tag_span } };
-                return placeholder_idx;
+                return try self.addMonotype(allocator, .{ .tag_union = .{ .tags = tag_span } });
             },
-            .fn_pure => |func| try self.fromFuncType(allocator, types_store, var_, func, false, common_idents, seen, scratches),
-            .fn_effectful => |func| try self.fromFuncType(allocator, types_store, var_, func, true, common_idents, seen, scratches),
-            .fn_unbound => |func| try self.fromFuncType(allocator, types_store, var_, func, false, common_idents, seen, scratches),
+            .fn_pure => |func| try self.fromFuncType(allocator, types_store, func, false, common_idents, specializations, nominal_cycle_breakers, scratches),
+            .fn_effectful => |func| try self.fromFuncType(allocator, types_store, func, true, common_idents, specializations, nominal_cycle_breakers, scratches),
+            .fn_unbound => |func| try self.fromFuncType(allocator, types_store, func, false, common_idents, specializations, nominal_cycle_breakers, scratches),
         };
     }
 
@@ -615,34 +610,30 @@ pub const Store = struct {
         self: *Store,
         allocator: Allocator,
         types_store: *const types.Store,
-        var_: types.Var,
         func: types.Func,
         effectful: bool,
         common_idents: CommonIdents,
-        seen: *std.AutoHashMap(types.Var, Idx),
+        specializations: *const std.AutoHashMap(types.Var, Idx),
+        nominal_cycle_breakers: *std.AutoHashMap(types.Var, Idx),
         scratches: *Scratches,
     ) Allocator.Error!Idx {
-        const placeholder_idx = try self.addMonotype(allocator, .recursive_placeholder);
-        try seen.put(var_, placeholder_idx);
-
         const arg_vars = types_store.sliceVars(func.args);
         const scratch_top = scratches.idxs.top();
         defer scratches.idxs.clearFrom(scratch_top);
 
         for (arg_vars) |arg_var| {
-            const arg_type = try self.fromTypeVar(allocator, types_store, arg_var, common_idents, seen, scratches);
+            const arg_type = try self.fromTypeVar(allocator, types_store, arg_var, common_idents, specializations, nominal_cycle_breakers, scratches);
             try scratches.idxs.append(arg_type);
         }
 
         const args_span = try self.addIdxSpan(allocator, scratches.idxs.sliceFromStart(scratch_top));
-        const ret = try self.fromTypeVar(allocator, types_store, func.ret, common_idents, seen, scratches);
+        const ret = try self.fromTypeVar(allocator, types_store, func.ret, common_idents, specializations, nominal_cycle_breakers, scratches);
 
-        self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .func = .{
+        return try self.addMonotype(allocator, .{ .func = .{
             .args = args_span,
             .ret = ret,
             .effectful = effectful,
-        } };
-        return placeholder_idx;
+        } });
     }
 
     fn fromNominalType(
@@ -652,7 +643,8 @@ pub const Store = struct {
         nominal_var: types.Var,
         nominal: types.NominalType,
         common_idents: CommonIdents,
-        seen: *std.AutoHashMap(types.Var, Idx),
+        specializations: *const std.AutoHashMap(types.Var, Idx),
+        nominal_cycle_breakers: *std.AutoHashMap(types.Var, Idx),
         scratches: *Scratches,
     ) Allocator.Error!Idx {
         const ident = nominal.ident.ident_idx;
@@ -670,7 +662,7 @@ pub const Store = struct {
             if (ident.eql(common_idents.list)) {
                 const type_args = types_store.sliceNominalArgs(nominal);
                 if (type_args.len > 0) {
-                    const elem_type = try self.fromTypeVar(allocator, types_store, type_args[0], common_idents, seen, scratches);
+                    const elem_type = try self.fromTypeVar(allocator, types_store, type_args[0], common_idents, specializations, nominal_cycle_breakers, scratches);
                     return try self.addMonotype(allocator, .{ .list = .{ .elem = elem_type } });
                 }
                 return self.unit_idx;
@@ -680,7 +672,7 @@ pub const Store = struct {
             if (ident.eql(common_idents.box)) {
                 const type_args = types_store.sliceNominalArgs(nominal);
                 if (type_args.len > 0) {
-                    const inner_type = try self.fromTypeVar(allocator, types_store, type_args[0], common_idents, seen, scratches);
+                    const inner_type = try self.fromTypeVar(allocator, types_store, type_args[0], common_idents, specializations, nominal_cycle_breakers, scratches);
                     return try self.addMonotype(allocator, .{ .box = .{ .inner = inner_type } });
                 }
                 return self.unit_idx;
@@ -705,23 +697,22 @@ pub const Store = struct {
         // For all other nominal types, strip the wrapper and follow the backing var.
         // In MIR there is no nominal/opaque/structural distinction.
         //
-        // We must register a placeholder in `seen` before recursing so that
-        // mutually-recursive nominal types (e.g. A → B → {field: A}) don't
-        // loop forever. Cycle detection returns `placeholder_idx` to callers,
-        // so we must overwrite it in-place with the real value — we can't just
-        // return `backing_idx` because earlier callers already captured
-        // `placeholder_idx`.
+        // Recursive nominal types (e.g. Tree := [Leaf, Node(Tree)]) are the
+        // only legitimate source of type cycles — the type checker has already
+        // converted infinite/anonymous recursive types to errors. We use
+        // `nominal_cycle_breakers` (separate from the specialization map) to
+        // break these cycles: register a placeholder before recursing, then
+        // overwrite it in-place with the real value.
         const placeholder_idx = try self.addMonotype(allocator, .recursive_placeholder);
-        try seen.put(nominal_var, placeholder_idx);
+        try nominal_cycle_breakers.put(nominal_var, placeholder_idx);
 
         const backing_var = types_store.getNominalBackingVar(nominal);
-        const backing_idx = try self.fromTypeVar(allocator, types_store, backing_var, common_idents, seen, scratches);
+        const backing_idx = try self.fromTypeVar(allocator, types_store, backing_var, common_idents, specializations, nominal_cycle_breakers, scratches);
 
         // Copy the resolved backing type's value into our placeholder slot.
-        // This value-copy is safe (unlike the other handlers which build fresh
-        // values from indices) because every field inside a Monotype is an index
-        // (Idx, Span, Ident.Idx) — never a pointer. The monotype store is
-        // append-only, so all indices remain valid after the copy.
+        // This value-copy is safe because every field inside a Monotype is an
+        // index (Idx, Span, Ident.Idx) — never a pointer. The monotype store
+        // is append-only, so all indices remain valid after the copy.
         self.monotypes.items[@intFromEnum(placeholder_idx)] = self.monotypes.items[@intFromEnum(backing_idx)];
         if (std.debug.runtime_safety) {
             std.debug.assert(self.monotypes.items[@intFromEnum(placeholder_idx)] != .recursive_placeholder);
