@@ -72,6 +72,7 @@ pub const Relocation = union(enum) {
 /// Function that resolves a symbol name to its address.
 pub const SymbolResolver = *const fn (name: []const u8) ?usize;
 
+/// Errors that can occur when applying relocations to generated machine code.
 pub const ApplyRelocationsError = error{
     UnresolvedSymbol,
     InvalidOffset,
