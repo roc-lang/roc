@@ -47,15 +47,15 @@ Parser(input, val) := { run : input -> [Ok(val, input), Err(Str)] }.{
 
     ## Run first parser, keep its result, then run second parser and discard its result.
     ## TODO: blocked by #9129
-    # skip : Parser(input, a), Parser(input, b) -> Parser(input, a)
-    # skip = |first, second|
-    #     map2(first, second, |a, _b| a)
+    skip : Parser(input, a), Parser(input, b) -> Parser(input, a)
+    skip = |first, second|
+        map2(first, second, |a, _b| a)
 
     ## Run first parser, discard its result, then run second parser and keep its result.
     ## TODO: blocked by #9129
-    # keep : Parser(input, a), Parser(input, b) -> Parser(input, b)
-    # keep = |first, second|
-    #     map2(first, second, |_a, b| b)
+    keep : Parser(input, a), Parser(input, b) -> Parser(input, b)
+    keep = |first, second|
+        map2(first, second, |_a, b| b)
 }
 
 ## Tests for the Parser type module
@@ -67,5 +67,5 @@ expect Parser.parse(Parser.succeed("hi"), "hello") == Ok("hi", "hello")
 expect Parser.parse(Parser.fail("oops"), "hello") == Err("oops")
 
 # Test map2 directly - currently has TypeMismatch error, investigating
-# combined = Parser.map2(Parser.succeed("a"), Parser.succeed("b"), |x, y| Str.concat(x, y))
-# expect Parser.parse(combined, "input") == Ok("ab", "input")
+combined = Parser.map2(Parser.succeed("a"), Parser.succeed("b"), |x, y| Str.concat(x, y))
+expect Parser.parse(combined, "input") == Ok("ab", "input")

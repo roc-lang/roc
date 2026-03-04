@@ -9,6 +9,7 @@ platform ""
         FunctionRepr,
         HostedFunctionInfo,
         ModuleTypeInfo,
+        ProvidesEntry,
         RecordField,
         RecordFieldInfo,
         RecordRepr,
@@ -46,6 +47,7 @@ import RecordRepr exposing [RecordRepr]
 import TagUnionRepr exposing [TagUnionRepr]
 import TagVariant exposing [TagVariant]
 import TypeRepr exposing [TypeRepr]
+import ProvidesEntry exposing [ProvidesEntry]
 
 make_glue_for_host : List(Types) -> Try(List(File), Str)
 make_glue_for_host = make_glue

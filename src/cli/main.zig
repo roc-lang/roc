@@ -5417,6 +5417,24 @@ fn rocGlueInner(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
         }
     }
 
+    // Register entrypoint types from the platform main module's requires_types
+    var entrypoint_type_ids = std.StringHashMap(u64).init(ctx.gpa);
+    defer entrypoint_type_ids.deinit();
+
+    for (modules) |mod| {
+        if (mod.is_platform_main) {
+            type_table.clearVarMap();
+            const env = mod.env;
+            for (env.requires_types.items.items) |required_type| {
+                const name = env.getIdent(required_type.ident);
+                const type_var = ModuleEnv.varFrom(required_type.type_anno);
+                const type_id = type_table.getOrInsert(env, type_var);
+                entrypoint_type_ids.put(name, type_id) catch {};
+            }
+            break;
+        }
+    }
+
     // 5. Compile glue spec in-process and run via interpreter
     const glue_spec_abs = std.fs.cwd().realpathAlloc(ctx.gpa, args.glue_spec) catch {
         return error.GlueSpecNotFound;
@@ -5478,7 +5496,7 @@ fn rocGlueInner(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
     const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{};
     var roc_ops = echo_platform.makeDefaultRocOps(@constCast(&hosted_function_ptrs));
 
-    var types_list = constructTypesRocList(collected_modules.items, &platform_info, &type_table, &roc_ops);
+    var types_list = constructTypesRocList(collected_modules.items, &platform_info, &type_table, &entrypoint_type_ids, &roc_ops);
 
     // 7. Run glue spec via interpreter
     var result_buf: ResultListFileStr = undefined;
@@ -5547,11 +5565,17 @@ fn rocGlueInner(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
 const PlatformHeaderInfo = struct {
     requires_entries: []RequiresEntry,
     type_aliases: [][]const u8,
+    provides_entries: []ProvidesEntry,
 
     const RequiresEntry = struct {
         name: []const u8,
         type_str: []const u8,
         stub_expr: []const u8,
+    };
+
+    const ProvidesEntry = struct {
+        name: []const u8,
+        ffi_symbol: []const u8,
     };
 
     fn deinit(self: *const PlatformHeaderInfo, gpa: std.mem.Allocator) void {
@@ -5565,6 +5589,11 @@ const PlatformHeaderInfo = struct {
             gpa.free(alias);
         }
         gpa.free(self.type_aliases);
+        for (self.provides_entries) |entry| {
+            gpa.free(entry.name);
+            gpa.free(entry.ffi_symbol);
+        }
+        gpa.free(self.provides_entries);
     }
 };
 
@@ -5674,9 +5703,53 @@ fn parsePlatformHeader(ctx: *CliContext, platform_path: []const u8) !PlatformHea
                 try type_aliases.append(ctx.gpa, key.*);
             }
 
+            // Parse provides clause to extract entrypoint names and FFI symbols
+            var provides_entries = std.ArrayList(PlatformHeaderInfo.ProvidesEntry).empty;
+            errdefer {
+                for (provides_entries.items) |entry| {
+                    ctx.gpa.free(entry.name);
+                    ctx.gpa.free(entry.ffi_symbol);
+                }
+                provides_entries.deinit(ctx.gpa);
+            }
+
+            const provides_coll = parse_ast.store.getCollection(platform_header.provides);
+            const provides_fields = parse_ast.store.recordFieldSlice(.{ .span = provides_coll.span });
+
+            for (provides_fields) |field_idx| {
+                const field = parse_ast.store.getRecordField(field_idx);
+                const field_name = parse_ast.resolve(field.name);
+
+                // Extract FFI symbol from string value
+                const ffi_symbol = if (field.value) |value_idx| blk: {
+                    const value_expr = parse_ast.store.getExpr(value_idx);
+                    switch (value_expr) {
+                        .string => |str_like| {
+                            const parts = parse_ast.store.exprSlice(str_like.parts);
+                            if (parts.len > 0) {
+                                const first_part = parse_ast.store.getExpr(parts[0]);
+                                switch (first_part) {
+                                    .string_part => |sp| break :blk parse_ast.resolve(sp.token),
+                                    else => {},
+                                }
+                            }
+                            continue; // Skip malformed provides entries
+                        },
+                        .string_part => |str_part| break :blk parse_ast.resolve(str_part.token),
+                        else => continue, // Skip non-string provides entries
+                    }
+                } else continue; // Skip provides entries without a value
+
+                try provides_entries.append(ctx.gpa, .{
+                    .name = try ctx.gpa.dupe(u8, field_name),
+                    .ffi_symbol = try ctx.gpa.dupe(u8, ffi_symbol),
+                });
+            }
+
             return PlatformHeaderInfo{
                 .requires_entries = try requires_entries.toOwnedSlice(ctx.gpa),
                 .type_aliases = try type_aliases.toOwnedSlice(ctx.gpa),
+                .provides_entries = try provides_entries.toOwnedSlice(ctx.gpa),
             };
         },
         else => return error.NotPlatformFile,
@@ -5971,6 +6044,9 @@ const TypeTable = struct {
                 const tu_repr = self.convertTagUnion(env, tu);
                 switch (tu_repr) {
                     .tag_union => |collected_tu| {
+                        // Free the auto-generated name from convertTagUnion
+                        // before replacing it with the nominal's display name.
+                        self.freeDuped(collected_tu.name);
                         return .{ .tag_union = .{
                             .name = self.gpa.dupe(u8, display_name) catch "",
                             .tags = collected_tu.tags,
@@ -6276,10 +6352,19 @@ const ModuleTypeInfoRoc = extern struct {
     name: RocStr,
 };
 
-/// Types := { entrypoints : List(EntryPoint), modules : List(ModuleTypeInfo), type_table : List(TypeRepr) }
+/// ProvidesEntry := { ffi_symbol : Str, name : Str }
+/// Fields ordered by alignment descending, then alphabetically
+const ProvidesEntryRoc = extern struct {
+    ffi_symbol: RocStr,
+    name: RocStr,
+};
+
+/// Types := { entrypoints : List(EntryPoint), modules : List(ModuleTypeInfo), provides_entries : List(ProvidesEntry), type_table : List(TypeRepr) }
+/// Fields ordered by alignment descending, then alphabetically
 const TypesInnerRoc = extern struct {
     entrypoints: RocList,
     modules: RocList,
+    provides_entries: RocList,
     type_table: RocList,
 };
 
@@ -6449,7 +6534,7 @@ fn buildU64RocList(
     const bytes = builtins.utils.allocateWithRefcount(
         data_size,
         @alignOf(u64),
-        true,
+        false, // u64 elements are not refcounted
         roc_ops,
     );
     const ptr: [*]u64 = @ptrCast(@alignCast(bytes));
@@ -6608,6 +6693,7 @@ fn constructTypesRocList(
     collected_modules: []const CollectedModuleTypeInfo,
     platform_info: *const PlatformHeaderInfo,
     type_table: *const TypeTable,
+    entrypoint_type_ids: *const std.StringHashMap(u64),
     roc_ops: *builtins.host_abi.RocOps,
 ) RocList {
     // Build modules list
@@ -6709,9 +6795,10 @@ fn constructTypesRocList(
         const ep_ptr: [*]EntryPointRoc = @ptrCast(@alignCast(ep_bytes));
 
         for (platform_info.requires_entries, 0..) |entry, idx| {
+            const tid = entrypoint_type_ids.get(entry.name) orelse 0;
             ep_ptr[idx] = EntryPointRoc{
                 .name = createBigRocStr(entry.name, roc_ops),
-                .type_id = 0,
+                .type_id = tid,
             };
         }
 
@@ -6719,6 +6806,31 @@ fn constructTypesRocList(
             .bytes = ep_bytes,
             .length = platform_info.requires_entries.len,
             .capacity_or_alloc_ptr = platform_info.requires_entries.len,
+        };
+    } else RocList.empty();
+
+    // Build provides list
+    const provides_list = if (platform_info.provides_entries.len > 0) pblk: {
+        const prov_data_size = platform_info.provides_entries.len * @sizeOf(ProvidesEntryRoc);
+        const prov_bytes = builtins.utils.allocateWithRefcount(
+            prov_data_size,
+            @alignOf(ProvidesEntryRoc),
+            true,
+            roc_ops,
+        );
+        const prov_ptr: [*]ProvidesEntryRoc = @ptrCast(@alignCast(prov_bytes));
+
+        for (platform_info.provides_entries, 0..) |entry, idx| {
+            prov_ptr[idx] = ProvidesEntryRoc{
+                .ffi_symbol = createBigRocStr(entry.ffi_symbol, roc_ops),
+                .name = createBigRocStr(entry.name, roc_ops),
+            };
+        }
+
+        break :pblk RocList{
+            .bytes = prov_bytes,
+            .length = platform_info.provides_entries.len,
+            .capacity_or_alloc_ptr = platform_info.provides_entries.len,
         };
     } else RocList.empty();
 
@@ -6733,6 +6845,7 @@ fn constructTypesRocList(
     types_inner_ptr.* = TypesInnerRoc{
         .entrypoints = entrypoints_list,
         .modules = modules_list,
+        .provides_entries = provides_list,
         .type_table = buildTypeTableRocList(type_table, roc_ops),
     };
 
