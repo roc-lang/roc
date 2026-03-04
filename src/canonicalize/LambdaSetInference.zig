@@ -286,6 +286,7 @@ fn collectClosuresFromExpr(self: *Self, module: *ModuleEnv, expr_idx: Expr.Idx) 
         .e_typed_int,
         .e_typed_frac,
         .e_str_segment,
+        .e_bytes_literal,
         .e_lookup_local,
         .e_lookup_external,
         .e_lookup_required,

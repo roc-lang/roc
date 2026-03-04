@@ -231,6 +231,10 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             const text = self.module_env.common.getString(seg.literal);
             try self.writer().print("\"{s}\"", .{text});
         },
+        .e_bytes_literal => |bytes| {
+            const data = self.module_env.common.getString(bytes.literal);
+            try self.writer().print("<bytes:{d}>", .{data.len});
+        },
         .e_str => |str| {
             // Multi-segment string
             const segments = self.module_env.store.sliceExpr(str.span);
@@ -622,6 +626,10 @@ fn emitPatternValue(self: *Self, pattern: Pattern) EmitError!void {
                         },
                         .SubPattern => |pat_idx| {
                             try self.write(": ");
+                            try self.emitPattern(pat_idx);
+                        },
+                        .Rest => |pat_idx| {
+                            try self.write("..");
                             try self.emitPattern(pat_idx);
                         },
                     }

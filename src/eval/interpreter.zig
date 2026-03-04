@@ -7624,13 +7624,14 @@ pub const Interpreter = struct {
         var copied_value = self.pushCopy(value, roc_ops) catch return null;
         copied_value.rt_var = rt_var;
 
-        // Bind the parameter
-        self.bindings.append(.{
-            .pattern_idx = params[0],
-            .value = copied_value,
-            .expr_idx = null, // expr_idx not used for inspect method parameter bindings
-            .source_env = self.env,
-        }) catch return null;
+        // Bind the parameter using patternMatchesBind to handle destructuring patterns
+        // (e.g., |{idx}| in to_inspect closures). A simple bindings.append only works for
+        // assign patterns; record_destructure patterns need recursive field extraction.
+        const matched = self.patternMatchesBind(params[0], copied_value, rt_var, roc_ops, &self.bindings, null) catch return null;
+        if (!matched) return null;
+
+        // patternMatchesBind made copies (which incref), so decref the original
+        copied_value.decref(&self.runtime_layout_store, roc_ops);
 
         // Evaluate the method body
         const result = self.eval(closure_header.body_idx, roc_ops) catch return null;
@@ -8129,6 +8130,7 @@ pub const Interpreter = struct {
                     const inner_pattern_idx = switch (destruct.kind) {
                         .Required => |p_idx| p_idx,
                         .SubPattern => |p_idx| p_idx,
+                        .Rest => |p_idx| p_idx,
                     };
 
                     const before = out_binds.items.len;
@@ -9781,6 +9783,22 @@ pub const Interpreter = struct {
                                 for (0..num_mappings) |i| {
                                     try self.translate_rigid_subst.put(rigids.items[i], ct_args[i]);
                                 }
+
+                                // Remove translate_cache entries for the backing var and its
+                                // rigid vars. The backing var is shared across all instantiations
+                                // of this nominal type, and the rigid vars are cached with their
+                                // substituted types from a previous instantiation. We must clear
+                                // them so the backing is re-translated with the current
+                                // translate_rigid_subst mappings. We only clear the backing and
+                                // rigids (not all sub-types) because concrete types like Str
+                                // don't depend on substitutions and should keep their cached
+                                // runtime vars for consistency.
+                                const backing_resolved = module.types.resolveVar(ct_backing);
+                                _ = self.translate_cache.remove(.{ .module = module, .var_ = backing_resolved.var_ });
+                                for (rigids.items) |rigid_var| {
+                                    const rigid_resolved = module.types.resolveVar(rigid_var);
+                                    _ = self.translate_cache.remove(.{ .module = module, .var_ = rigid_resolved.var_ });
+                                }
                             }
 
                             // Translate backing (rigids will be substituted via translate_rigid_subst)
@@ -11321,6 +11339,11 @@ pub const Interpreter = struct {
                 try value_stack.push(value);
             },
 
+            .e_bytes_literal => |bytes| {
+                const value = try self.evalBytesLiteral(expected_rt_var, bytes, roc_ops);
+                try value_stack.push(value);
+            },
+
             .e_str => |str_expr| {
                 traceDbg(roc_ops, "e_str: entering", .{});
                 const segments = self.env.store.sliceExpr(str_expr.span);
@@ -12394,6 +12417,41 @@ pub const Interpreter = struct {
                         if (expected_resolved.desc.content == .structure or
                             expected_resolved.desc.content == .alias)
                         {
+                            // Verify the expected type actually contains the tag we're constructing.
+                            // When a polymorphic function's param and return types share the same
+                            // type variable (e.g. map_err where the type checker unified the error
+                            // type variables), prepareCallWithFuncVar's unification can corrupt the
+                            // expected_rt_var to reflect the INPUT type rather than the OUTPUT type.
+                            // In that case, the expected type won't contain our tag, and we should
+                            // fall through to CT translation for the correct type.
+                            var check_resolved = expected_resolved;
+                            // Unwrap nominal types to get to the tag union
+                            if (check_resolved.desc.content == .structure and check_resolved.desc.content.structure == .nominal_type) {
+                                const nom_backing = self.runtime_types.getNominalBackingVar(check_resolved.desc.content.structure.nominal_type);
+                                check_resolved = self.runtime_types.resolveVar(nom_backing);
+                            }
+                            if (check_resolved.desc.content == .alias) {
+                                const alias_backing = self.runtime_types.getAliasBackingVar(check_resolved.desc.content.alias);
+                                check_resolved = self.runtime_types.resolveVar(alias_backing);
+                            }
+                            if (check_resolved.desc.content == .structure and check_resolved.desc.content.structure == .tag_union) {
+                                const tag_name_str = self.env.getIdent(tag.name);
+                                const rt_tag_ident = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(tag_name_str));
+                                const check_tu = check_resolved.desc.content.structure.tag_union;
+                                const check_tags = self.runtime_types.getTagsSlice(check_tu.tags);
+                                var tag_found = false;
+                                for (check_tags.items(.name)) |tn| {
+                                    if (tn == rt_tag_ident) {
+                                        tag_found = true;
+                                        break;
+                                    }
+                                }
+                                if (!tag_found) {
+                                    // Tag not found in expected type - fall through to CT translation
+                                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                                    break :blk try self.translateTypeVar(self.env, ct_var);
+                                }
+                            }
                             break :blk expected;
                         }
                     }
@@ -12611,8 +12669,22 @@ pub const Interpreter = struct {
                 // Get type info for scrutinee and result
                 const scrutinee_ct_var = can.ModuleEnv.varFrom(m.cond);
                 const scrutinee_rt_var = try self.translateTypeVar(self.env, scrutinee_ct_var);
-                const match_result_ct_var = can.ModuleEnv.varFrom(expr_idx);
-                const match_result_rt_var = try self.translateTypeVar(self.env, match_result_ct_var);
+
+                // Use expected_rt_var when available to preserve the caller's wider type.
+                // When a match expression is inside a polymorphic callee (e.g., Cmd.exec_exit_code!),
+                // the callee's compile-time type may have unresolved flex extension variables
+                // (the `..` in open tag unions). The caller's expected type has the full set of
+                // tags after unification, so using it ensures correct discriminant assignment
+                // for tag values created in match branches.
+                const match_result_rt_var = if (expected_rt_var) |expected| blk: {
+                    const expected_resolved = self.runtime_types.resolveVar(expected);
+                    if (expected_resolved.desc.content == .structure or
+                        expected_resolved.desc.content == .alias)
+                    {
+                        break :blk expected;
+                    }
+                    break :blk try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(expr_idx));
+                } else try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(expr_idx));
 
                 const branches = self.env.store.matchBranchSlice(m.branches);
 
@@ -13021,6 +13093,7 @@ pub const Interpreter = struct {
                         entry.return_var,
                         .none,
                     );
+
                     // Use the function's return type - it has properly instantiated type args
                     break :blk entry.return_var;
                 } else call_ret_rt_var;
@@ -13599,6 +13672,32 @@ pub const Interpreter = struct {
         // Use arena allocator for string literals - freed wholesale at interpreter deinit
         roc_str.* = try self.createConstantStr(content);
         return value;
+    }
+
+    /// Evaluate a bytes literal (e_bytes_literal) - produces a RocList of U8
+    fn evalBytesLiteral(
+        self: *Interpreter,
+        expected_rt_var: ?types.Var,
+        bytes: @TypeOf(@as(can.CIR.Expr, undefined).e_bytes_literal),
+        roc_ops: *RocOps,
+    ) Error!StackValue {
+        const content = self.env.getString(bytes.literal);
+
+        // Create List(U8) type
+        const list_rt_var = expected_rt_var orelse try self.createListU8Type();
+
+        // Create layout for List(U8)
+        const u8_layout_idx = try self.runtime_layout_store.insertLayout(Layout.int(.u8));
+        const result_layout = Layout.list(u8_layout_idx);
+
+        // Create the RocList from the bytes content
+        const roc_list = RocList.fromSlice(u8, content, false, roc_ops);
+
+        var out = try self.pushRaw(result_layout, 0, list_rt_var);
+        out.is_initialized = false;
+        out.setRocList(roc_list);
+        out.is_initialized = true;
+        return out;
     }
 
     /// Evaluate an empty record literal (e_empty_record)
@@ -17037,18 +17136,26 @@ pub const Interpreter = struct {
                     const cleanup_saved_rigid_subst = saved_rigid_subst;
                     saved_rigid_subst = null;
 
-                    try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
-                        .saved_env = saved_env,
-                        .saved_bindings_len = saved_bindings_len,
-                        .param_count = params.len,
-                        .has_active_closure = true,
-                        .did_instantiate = ci.did_instantiate,
-                        .call_ret_rt_var = ci.call_ret_rt_var,
-                        .saved_rigid_subst = cleanup_saved_rigid_subst,
-                        .saved_flex_type_context = saved_flex_type_context,
-                        .arg_rt_vars_to_free = ci.arg_rt_vars_to_free,
-                        .saved_stack_ptr = self.stack_memory.next(),
-                    } } });
+                    try work_stack.push(.{
+                        .apply_continuation = .{
+                            .call_cleanup = .{
+                                .saved_env = saved_env,
+                                .saved_bindings_len = saved_bindings_len,
+                                .param_count = params.len,
+                                .has_active_closure = true,
+                                .did_instantiate = ci.did_instantiate,
+                                // Don't pass call_ret_rt_var for regular (non-method) calls.
+                                // The rt_var override is only needed for dot_access method calls
+                                // where the method body's module may have unified type variables
+                                // that don't reflect the call site's concrete types.
+                                .call_ret_rt_var = null,
+                                .saved_rigid_subst = cleanup_saved_rigid_subst,
+                                .saved_flex_type_context = saved_flex_type_context,
+                                .arg_rt_vars_to_free = ci.arg_rt_vars_to_free,
+                                .saved_stack_ptr = self.stack_memory.next(),
+                            },
+                        },
+                    });
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = header.body_idx,
                         .expected_rt_var = ci.call_ret_rt_var,
@@ -17243,7 +17350,19 @@ pub const Interpreter = struct {
                     self.stack_memory.restore(cleanup.saved_stack_ptr);
                 }
 
-                // rt_var is already set by the function's return value creation
+                // Override rt_var with call_ret_rt_var if available and concrete.
+                // This corrects the return type for polymorphic method calls where the
+                // function body's type (from the method's module, e.g. Builtin) may have
+                // unified type variables that don't reflect the actual concrete types from
+                // the call site (the user module). For example, map_err's body produces a
+                // value typed as Try(ok, a) where a=b in the Builtin module's type store,
+                // but the user module knows the correct type is Try(ok, [Wrapped(...)]).
+                if (cleanup.call_ret_rt_var) |ret_var| {
+                    const ret_resolved = self.runtime_types.resolveVar(ret_var);
+                    if (ret_resolved.desc.content == .structure or ret_resolved.desc.content == .alias) {
+                        result.rt_var = ret_var;
+                    }
+                }
                 try value_stack.push(result);
                 return true;
             },
@@ -18893,9 +19012,12 @@ pub const Interpreter = struct {
                         all_args[1 + idx] = arg;
                     }
 
-                    // Get the return type from the call site
-                    const return_ct_var = can.ModuleEnv.varFrom(dac.expr_idx);
-                    const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
+                    // For hosted functions, translate the return type from the CALLEE's module
+                    // (self.env), not the caller's module (saved_env). The caller's type store
+                    // may have .err content for cross-module opaque types because the union-find
+                    // chain was lost during serialization.
+                    const return_ct_var = can.ModuleEnv.varFrom(closure_header.lambda_expr_idx);
+                    const return_rt_var = try self.translateTypeVar(self.env, return_ct_var);
 
                     const result = try self.callHostedFunction(hosted.index, all_args, roc_ops, return_rt_var);
 
@@ -19058,13 +19180,29 @@ pub const Interpreter = struct {
                     arg.decref(&self.runtime_layout_store, roc_ops);
                 }
 
+                // Translate the call expression's return type from the CALLER'S module
+                // (saved_env, which is the user module) to get the correct concrete type
+                // for the method call result. This is critical for polymorphic methods like
+                // map_err where the method body's module (Builtin) has unified type variables
+                // that don't distinguish between input and output types.
+                const dot_access_ret_rt_var: ?types.Var = blk: {
+                    const ret_ct_var = can.ModuleEnv.varFrom(dac.expr_idx);
+                    const ret_rt_var = try self.translateTypeVar(@constCast(saved_env), ret_ct_var);
+                    const ret_resolved = self.runtime_types.resolveVar(ret_rt_var);
+                    // Only use if it's a concrete type (not flex/rigid/err)
+                    break :blk if (ret_resolved.desc.content == .structure or ret_resolved.desc.content == .alias)
+                        ret_rt_var
+                    else
+                        null;
+                };
+
                 try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
                     .saved_env = saved_env,
                     .saved_bindings_len = saved_bindings_len,
                     .param_count = expected_params,
                     .has_active_closure = true,
                     .did_instantiate = did_instantiate,
-                    .call_ret_rt_var = null,
+                    .call_ret_rt_var = dot_access_ret_rt_var,
                     .saved_rigid_subst = saved_rigid_subst,
                     .saved_flex_type_context = saved_flex_type_context,
                     .arg_rt_vars_to_free = null,
@@ -19183,13 +19321,19 @@ pub const Interpreter = struct {
                         arg_values[idx].decref(&self.runtime_layout_store, roc_ops);
                     }
 
-                    const return_ct_var = can.ModuleEnv.varFrom(tvdi.expr_idx);
-                    const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
-
                     // Check if the body is a hosted lambda
                     const tvd_body_expr = self.env.store.getExpr(lambda_expr.e_lambda.body);
                     if (tvd_body_expr == .e_hosted_lambda) {
                         const hosted = tvd_body_expr.e_hosted_lambda;
+
+                        // For hosted functions, translate the return type from the CALLEE's module
+                        // (self.env), not the caller's module (saved_env). The caller's type store
+                        // may have .err content for cross-module opaque types (e.g., List(TestItem.Idx))
+                        // because the union-find chain was lost during serialization. The callee's
+                        // module has the concrete types since it directly references them.
+                        const return_ct_var = can.ModuleEnv.varFrom(lambda_expr.e_lambda.body);
+                        const return_rt_var = try self.translateTypeVar(self.env, return_ct_var);
+
                         // Collect bound arguments
                         var hosted_args = try self.allocator.alloc(StackValue, params_slice.len);
                         defer self.allocator.free(hosted_args);
@@ -19221,6 +19365,10 @@ pub const Interpreter = struct {
                         return true;
                     }
 
+                    // For non-hosted lambdas, translate the return type from the caller's module
+                    const non_hosted_return_ct_var = can.ModuleEnv.varFrom(tvdi.expr_idx);
+                    const non_hosted_return_rt_var = try self.translateTypeVar(saved_env, non_hosted_return_ct_var);
+
                     // Push cleanup continuation
                     try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
                         .saved_bindings_len = saved_bindings_len,
@@ -19228,7 +19376,7 @@ pub const Interpreter = struct {
                         .param_count = @intCast(params_slice.len),
                         .has_active_closure = false,
                         .did_instantiate = false,
-                        .call_ret_rt_var = return_rt_var,
+                        .call_ret_rt_var = non_hosted_return_rt_var,
                         .saved_rigid_subst = null,
                         .saved_flex_type_context = null,
                         .arg_rt_vars_to_free = null,
@@ -19238,7 +19386,7 @@ pub const Interpreter = struct {
                     // Push body evaluation
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = lambda_expr.e_lambda.body,
-                        .expected_rt_var = return_rt_var,
+                        .expected_rt_var = non_hosted_return_rt_var,
                     } });
 
                     method_func.decref(&self.runtime_layout_store, roc_ops);
@@ -19270,13 +19418,15 @@ pub const Interpreter = struct {
                         arg_values[idx].decref(&self.runtime_layout_store, roc_ops);
                     }
 
-                    const return_ct_var = can.ModuleEnv.varFrom(tvdi.expr_idx);
-                    const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
-
                     // Check if the body is a hosted lambda
                     const tvd_closure_body_expr = self.env.store.getExpr(underlying_lambda.e_lambda.body);
                     if (tvd_closure_body_expr == .e_hosted_lambda) {
                         const hosted = tvd_closure_body_expr.e_hosted_lambda;
+
+                        // For hosted functions, translate the return type from the CALLEE's module
+                        const return_ct_var = can.ModuleEnv.varFrom(underlying_lambda.e_lambda.body);
+                        const return_rt_var = try self.translateTypeVar(self.env, return_ct_var);
+
                         // Collect bound arguments
                         var hosted_args = try self.allocator.alloc(StackValue, params_slice.len);
                         defer self.allocator.free(hosted_args);
@@ -19308,6 +19458,10 @@ pub const Interpreter = struct {
                         return true;
                     }
 
+                    // For non-hosted lambdas, translate the return type from the caller's module
+                    const closure_return_ct_var = can.ModuleEnv.varFrom(tvdi.expr_idx);
+                    const closure_return_rt_var = try self.translateTypeVar(saved_env, closure_return_ct_var);
+
                     // Push cleanup continuation
                     try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
                         .saved_bindings_len = saved_bindings_len,
@@ -19315,7 +19469,7 @@ pub const Interpreter = struct {
                         .param_count = @intCast(params_slice.len),
                         .has_active_closure = false,
                         .did_instantiate = false,
-                        .call_ret_rt_var = return_rt_var,
+                        .call_ret_rt_var = closure_return_rt_var,
                         .saved_rigid_subst = null,
                         .saved_flex_type_context = null,
                         .arg_rt_vars_to_free = null,
@@ -19325,18 +19479,30 @@ pub const Interpreter = struct {
                     // Push body evaluation
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = underlying_lambda.e_lambda.body,
-                        .expected_rt_var = return_rt_var,
+                        .expected_rt_var = closure_return_rt_var,
                     } });
 
                     method_func.decref(&self.runtime_layout_store, roc_ops);
                     return true;
                 }
 
-                // Check if this is a hosted lambda and invoke it
-                const return_ct_var = can.ModuleEnv.varFrom(tvdi.expr_idx);
-                const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
+                // Check if this is a hosted lambda and invoke it.
+                // For hosted functions, translate the return type from the callee's module
+                // (self.env / closure_header.source_env), not the caller's (saved_env).
+                const hosted_return_rt_var = blk: {
+                    var hosted_lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
+                    if (hosted_lambda_expr == .e_closure) {
+                        hosted_lambda_expr = self.env.store.getExpr(hosted_lambda_expr.e_closure.lambda_idx);
+                    }
+                    if (hosted_lambda_expr == .e_hosted_lambda) {
+                        const body_ct_var = can.ModuleEnv.varFrom(closure_header.lambda_expr_idx);
+                        break :blk try self.translateTypeVar(self.env, body_ct_var);
+                    }
+                    const caller_ct_var = can.ModuleEnv.varFrom(tvdi.expr_idx);
+                    break :blk try self.translateTypeVar(saved_env, caller_ct_var);
+                };
 
-                if (try self.tryInvokeHostedClosure(closure_header, arg_values, return_rt_var, roc_ops)) |result| {
+                if (try self.tryInvokeHostedClosure(closure_header, arg_values, hosted_return_rt_var, roc_ops)) |result| {
                     // Decref arguments
                     for (arg_values) |arg| {
                         arg.decref(&self.runtime_layout_store, roc_ops);
@@ -19441,8 +19607,13 @@ pub const Interpreter = struct {
                 const elem_size: usize = @intCast(@max(stored_elem_size, type_based_size));
 
                 // Override elem_layout if physical is tuple but type-based is tag_union
-                // This ensures proper discriminant extraction during pattern matching
+                // This ensures proper discriminant extraction during pattern matching.
+                // Also override if the stored layout is ZST but type-based has real size,
+                // which happens when a list_of_zst actually contains non-ZST elements
+                // (e.g. List(Package.Idx) where Idx := { idx : U32 }).
                 if (effective_elem_layout.tag == .tag_union and elem_layout.tag == .tuple) {
+                    elem_layout = effective_elem_layout;
+                } else if (type_based_size > stored_elem_size) {
                     elem_layout = effective_elem_layout;
                 }
 

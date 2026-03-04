@@ -68,6 +68,7 @@ fn lirExprResultLayout(store: *const LirExprStore, expr_id: LirExprId) ?layout.I
         .unary_not => .bool,
         .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote => .str,
         .tag_payload_access => |tpa| tpa.payload_layout,
+        .bytes_literal,
         .for_loop, .while_loop => null, // loops don't have a result layout
         .list,
         .empty_list,

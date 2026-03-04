@@ -550,7 +550,7 @@ transform = |result|
 		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "Error"))
-		(patt (type "{  } -> Error"))
+		(patt (type "{} -> Error"))
 		(patt (type "Error -> Str"))
 		(patt (type "Error -> Error")))
 	(expressions
@@ -558,7 +558,7 @@ transform = |result|
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "Error"))
-		(expr (type "{  } -> Error"))
+		(expr (type "{} -> Error"))
 		(expr (type "Error -> Str"))
 		(expr (type "Error -> Error"))))
 ~~~

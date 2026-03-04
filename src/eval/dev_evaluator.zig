@@ -209,6 +209,7 @@ fn lirExprResultLayout(store: *const LirExprStore, expr_id: lir.LirExprId) ?layo
         .i64_literal => .i64,
         .i128_literal => .i128,
         .unary_not => .bool,
+        .bytes_literal,
         .list,
         .empty_list,
         .empty_record,
@@ -503,7 +504,7 @@ pub const DevEvaluator = struct {
         // This avoids undefined behavior from using `undefined` for the pointer
         const empty_hosted_fns = struct {
             fn dummyHostedFn(_: *RocOps, _: *anyopaque, _: *anyopaque) callconv(.c) void {}
-            var empty: [1]builtins.host_abi.HostedFn = .{&dummyHostedFn};
+            var empty: [1]builtins.host_abi.HostedFn = .{builtins.host_abi.hostedFn(&dummyHostedFn)};
         };
         const roc_ops = RocOps{
             .env = @ptrCast(roc_env),

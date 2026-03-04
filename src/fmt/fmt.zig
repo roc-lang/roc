@@ -505,6 +505,20 @@ const Formatter = struct {
                     }
                 }
             },
+            .file_import => |fi| {
+                try fmt.pushAll("import ");
+                try fmt.push('"');
+                try fmt.pushTokenText(fi.path_tok);
+                try fmt.push('"');
+                try fmt.pushAll(" as ");
+                try fmt.pushTokenText(fi.name_tok);
+                try fmt.pushAll(" : ");
+                if (fi.is_bytes) {
+                    try fmt.pushAll("List(U8)");
+                } else {
+                    try fmt.pushAll("Str");
+                }
+            },
             .type_decl => |d| {
                 const header_region = fmt.nodeRegion(@intFromEnum(d.header));
                 try fmt.formatTypeHeader(d.header);
@@ -1135,9 +1149,14 @@ const Formatter = struct {
                     // Plain identifier: add () after it
                     _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
                     try fmt.pushAll("()");
-                } else {
-                    // Already has parens (apply) or other expr: format normally
+                } else if (right_expr == .apply or right_expr == .tag) {
+                    // Already has parens (apply) or tag: format normally
                     _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
+                } else {
+                    // Lambda or other expression: wrap in parens for round-trip safety
+                    try fmt.push('(');
+                    _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
+                    try fmt.push(')');
                 }
             },
             .int => |i| {

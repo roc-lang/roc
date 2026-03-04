@@ -123,6 +123,10 @@ pub const Expr = union(enum) {
     e_str: struct {
         span: Expr.Span,
     },
+    /// A bytes literal (List(U8)) from a file import
+    e_bytes_literal: struct {
+        literal: StringLiteral.Idx,
+    },
     /// Lookup defined in this module
     /// ```roc
     /// foo = 42
@@ -1434,6 +1438,20 @@ pub const Expr = union(enum) {
 
                 const value = ir.getString(e.literal);
                 try tree.pushStringPair("string", value);
+
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .e_bytes_literal => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-bytes-literal");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+
+                const value = ir.getString(e.literal);
+                const len_str = try std.fmt.allocPrint(ir.gpa, "{d}", .{value.len});
+                defer ir.gpa.free(len_str);
+                try tree.pushStringPair("len", len_str);
 
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);

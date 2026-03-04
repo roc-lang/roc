@@ -109,6 +109,18 @@ pub const Diagnostic = union(enum) {
     tuple_elem_not_canonicalized: struct {
         region: Region,
     },
+    file_import_not_found: struct {
+        path: StringLiteral.Idx,
+        region: Region,
+    },
+    file_import_io_error: struct {
+        path: StringLiteral.Idx,
+        region: Region,
+    },
+    file_import_not_utf8: struct {
+        path: StringLiteral.Idx,
+        region: Region,
+    },
     module_not_found: struct {
         module_name: Ident.Idx,
         region: Region,
@@ -326,6 +338,9 @@ pub const Diagnostic = union(enum) {
             .shadowing_warning => |d| d.region,
             .type_redeclared => |d| d.redeclared_region,
             .tuple_elem_not_canonicalized => |d| d.region,
+            .file_import_not_found => |d| d.region,
+            .file_import_io_error => |d| d.region,
+            .file_import_not_utf8 => |d| d.region,
             .module_not_found => |d| d.region,
             .value_not_exposed => |d| d.region,
             .type_not_exposed => |d| d.region,
@@ -1444,6 +1459,101 @@ pub const Diagnostic = union(enum) {
 
         return report;
     }
+    /// Build a report for "file import not found" diagnostic
+    pub fn buildFileImportNotFoundReport(
+        allocator: Allocator,
+        path: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
+    ) !Report {
+        var report = Report.init(allocator, "FILE NOT FOUND", .runtime_error);
+
+        const owned_path = try report.addOwnedString(path);
+        try report.document.addReflowingText("The file ");
+        try report.document.addModuleName(owned_path);
+        try report.document.addReflowingText(" was not found.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Make sure the file exists relative to your source file:");
+        try report.document.addLineBreak();
+
+        const owned_filename = try report.addOwnedString(filename);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            owned_filename,
+            source,
+            line_starts,
+        );
+
+        return report;
+    }
+
+    /// Build a report for "file import IO error" diagnostic
+    pub fn buildFileImportIOErrorReport(
+        allocator: Allocator,
+        path: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
+    ) !Report {
+        var report = Report.init(allocator, "FILE IMPORT ERROR", .runtime_error);
+
+        const owned_path = try report.addOwnedString(path);
+        try report.document.addReflowingText("Could not read the file ");
+        try report.document.addModuleName(owned_path);
+        try report.document.addReflowingText(".");
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("An IO error occurred while trying to read this file:");
+        try report.document.addLineBreak();
+
+        const owned_filename = try report.addOwnedString(filename);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            owned_filename,
+            source,
+            line_starts,
+        );
+
+        return report;
+    }
+
+    /// Build a report for "file import not UTF-8" diagnostic
+    pub fn buildFileImportNotUtf8Report(
+        allocator: Allocator,
+        path: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
+    ) !Report {
+        var report = Report.init(allocator, "FILE NOT UTF-8", .runtime_error);
+
+        const owned_path = try report.addOwnedString(path);
+        try report.document.addReflowingText("The file ");
+        try report.document.addModuleName(owned_path);
+        try report.document.addReflowingText(" is not valid UTF-8.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("To import binary files, use `List(U8)` instead of `Str`:");
+        try report.document.addLineBreak();
+
+        const owned_filename = try report.addOwnedString(filename);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            owned_filename,
+            source,
+            line_starts,
+        );
+
+        return report;
+    }
+
     /// Build a report for "module not found" diagnostic
     pub fn buildModuleNotFoundReport(
         allocator: Allocator,

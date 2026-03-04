@@ -271,7 +271,7 @@ pub const ModuleTest = struct {
 /// unnamed wrappers) so callers can correct the reported totals.
 pub const ModuleTestsResult = struct {
     /// Compile/run steps for each module's tests, in creation order.
-    tests: [25]ModuleTest,
+    tests: [27]ModuleTest,
     /// Number of synthetic passes the summary must subtract when filters were injected.
     /// Includes aggregator ensures and unconditional wrapper tests.
     forced_passes: usize,
@@ -308,6 +308,8 @@ pub const ModuleType = enum {
     lir,
     roc_target,
     sljmp,
+    echo_platform,
+    docs,
 
     /// Returns the dependencies for this module type
     pub fn getDependencies(self: ModuleType) []const ModuleType {
@@ -341,6 +343,8 @@ pub const ModuleType = enum {
             .lir => &.{ .base, .layout, .types, .mir, .can },
             .roc_target => &.{.base},
             .sljmp => &.{},
+            .echo_platform => &.{.builtins},
+            .docs => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .check, .reporting },
         };
     }
 };
@@ -376,6 +380,8 @@ pub const RocModules = struct {
     lir: *Module,
     roc_target: *Module,
     sljmp: *Module,
+    echo_platform: *Module,
+    docs: *Module,
 
     pub fn create(b: *Build, build_options_step: *Step.Options, zstd: ?*Dependency) RocModules {
         const self = RocModules{
@@ -414,6 +420,8 @@ pub const RocModules = struct {
             .lir = b.addModule("lir", .{ .root_source_file = b.path("src/lir/mod.zig") }),
             .roc_target = b.addModule("roc_target", .{ .root_source_file = b.path("src/target/mod.zig") }),
             .sljmp = b.addModule("sljmp", .{ .root_source_file = b.path("src/sljmp/mod.zig") }),
+            .echo_platform = b.addModule("echo_platform", .{ .root_source_file = b.path("src/echo_platform/mod.zig") }),
+            .docs = b.addModule("docs", .{ .root_source_file = b.path("src/docs/mod.zig") }),
         };
 
         // Link zstd to bundle module if available (it's unsupported on wasm32, so don't link it)
@@ -458,6 +466,8 @@ pub const RocModules = struct {
             .lir,
             .roc_target,
             .sljmp,
+            .echo_platform,
+            .docs,
         };
 
         // Setup dependencies for each module
@@ -498,10 +508,12 @@ pub const RocModules = struct {
         step.root_module.addImport("mir", self.mir);
         step.root_module.addImport("lir", self.lir);
         step.root_module.addImport("sljmp", self.sljmp);
+        step.root_module.addImport("echo_platform", self.echo_platform);
+        step.root_module.addImport("docs", self.docs);
+        step.root_module.addImport("compile", self.compile);
 
-        // Don't add thread-dependent modules for WASM targets (threads not supported)
+        // Don't add thread-dependent or native-only modules for WASM targets
         if (!is_wasm) {
-            step.root_module.addImport("compile", self.compile);
             step.root_module.addImport("ipc", self.ipc);
             step.root_module.addImport("watch", self.watch);
             step.root_module.addImport("lsp", self.lsp);
@@ -546,6 +558,8 @@ pub const RocModules = struct {
             .lir => self.lir,
             .roc_target => self.roc_target,
             .sljmp => self.sljmp,
+            .echo_platform => self.echo_platform,
+            .docs => self.docs,
         };
     }
 
@@ -592,6 +606,8 @@ pub const RocModules = struct {
             .mir,
             .lir,
             .sljmp,
+            .echo_platform,
+            .docs,
         };
 
         var tests: [test_configs.len]ModuleTest = undefined;
