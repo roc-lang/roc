@@ -657,7 +657,6 @@ const LirProc = lir.LirProc;
 
 const Allocator = std.mem.Allocator;
 
-
 /// Code generator for LIR expressions
 /// Parameterized by RocTarget for cross-compilation support
 pub fn LirCodeGen(comptime target: RocTarget) type {
@@ -746,7 +745,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Map from Symbol to value location (register or stack slot)
         symbol_locations: std.AutoHashMap(u64, ValueLocation),
-
 
         /// Map from mutable variable symbol to fixed stack slot info
         /// Mutable variables need fixed slots so re-bindings can update the value at runtime
@@ -10123,14 +10121,101 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrEscapeAndQuote), .str_escape_and_quote, .str);
         }
 
-        /// Generate code for discriminant switch
+        /// Generate code for discriminant switch.
+        /// Switches on the discriminant of a tag union value and generates the
+        /// corresponding branch expression for the matching variant.
         fn generateDiscriminantSwitch(self: *Self, ds: anytype) Allocator.Error!ValueLocation {
-            _ = self;
-            _ = ds;
-            // TODO: Implement discriminant_switch codegen fully.
-            // DO NOT replace this with anything fallback-based. either implement it
-            // fully or LEAVE IT AS A PANIC.
-            @panic("TODO: discriminant_switch codegen is not implemented");
+            const ls = self.layout_store;
+            const branches = self.store.getExprSpan(ds.branches);
+
+            if (branches.len == 0) {
+                unreachable;
+            }
+
+            // Single branch — generate it directly, no dispatch needed
+            if (branches.len == 1) {
+                return try self.generateExpr(branches[0]);
+            }
+
+            // Generate the tag union value
+            const value_loc = try self.generateExpr(ds.value);
+            const union_layout = ls.getLayout(ds.union_layout);
+
+            // Load the discriminant into a register
+            const tag_reg = try self.allocTempGeneral();
+
+            if (union_layout.tag == .tag_union) {
+                // Tag union in memory — load discriminant from its offset
+                const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
+                const disc_offset: i32 = @intCast(tu_data.discriminant_offset);
+                const disc_size = ValueSize.fromByteCount(tu_data.discriminant_size);
+
+                const base_offset: i32 = switch (value_loc) {
+                    .stack => |s| s.offset,
+                    .stack_str => |off| off,
+                    else => unreachable,
+                };
+
+                try self.emitSizedLoadStack(tag_reg, base_offset + disc_offset, disc_size);
+            } else if (union_layout.tag == .scalar or union_layout.tag == .zst) {
+                // Scalar/ZST — the value itself IS the discriminant
+                switch (value_loc) {
+                    .general_reg => |reg| {
+                        if (reg != tag_reg) {
+                            try self.codegen.emit.movRegReg(.w64, tag_reg, reg);
+                        }
+                    },
+                    .immediate_i64 => |val| {
+                        try self.codegen.emitLoadImm(tag_reg, @bitCast(val));
+                    },
+                    .stack => |s| {
+                        try self.emitSizedLoadStack(tag_reg, s.offset, s.size);
+                    },
+                    else => unreachable,
+                }
+            } else {
+                unreachable;
+            }
+
+            // Allocate result slot sized to the result layout
+            const result_size = self.getLayoutSize(ds.result_layout);
+            const result_slot = self.codegen.allocStackSlot(result_size);
+
+            // Track end jumps for patching
+            var end_jumps = std.ArrayList(usize).empty;
+            defer end_jumps.deinit(self.allocator);
+
+            for (branches, 0..) |branch_expr, i| {
+                const is_last = (i == branches.len - 1);
+
+                if (!is_last) {
+                    // Compare discriminant with this branch index
+                    try self.emitCmpImm(tag_reg, @intCast(i));
+                    const skip_jump = try self.emitJumpIfNotEqual();
+
+                    // Generate code for this branch
+                    const result = try self.generateExpr(branch_expr);
+                    try self.copyToStackSlot(result_slot, result, result_size);
+
+                    // Jump to end
+                    try end_jumps.append(self.allocator, try self.codegen.emitJump());
+
+                    // Patch skip_jump to here
+                    self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
+                } else {
+                    // Last case — no comparison needed (fallthrough)
+                    const result = try self.generateExpr(branch_expr);
+                    try self.copyToStackSlot(result_slot, result, result_size);
+                }
+            }
+
+            // Patch all end jumps to current location
+            for (end_jumps.items) |jump| {
+                self.codegen.patchJump(jump, self.codegen.currentOffset());
+            }
+
+            self.codegen.freeGeneral(tag_reg);
+            return self.fieldLocationFromLayout(result_slot, result_size, ds.result_layout);
         }
 
         /// Extract the payload from a tag union value.
@@ -11571,6 +11656,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (std.debug.runtime_safety) {
                         std.debug.panic(
                             "capture symbol not found in symbol_locations during materializeCaptures",
+                            .{},
                         );
                     }
                     unreachable;
@@ -12289,7 +12375,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             return self.saveCallReturnValue(ret_layout, false, 0);
         }
-
 
         /// Move a value to a specific register
         fn moveToReg(self: *Self, loc: ValueLocation, target_reg: GeneralReg) Allocator.Error!void {
@@ -13738,11 +13823,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 } };
             }
 
-            // Check if return type is a multi-register struct (record, tag_union, tuple > 8 bytes)
+            // Check if return type is a multi-register value (record, tag_union, closure, tuple > 8 bytes)
             {
                 const ls = self.layout_store;
                 const layout_val = ls.getLayout(ret_layout);
-                if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
+                if (layout_val.tag == .struct_ or layout_val.tag == .tag_union or layout_val.tag == .closure) {
                     const size_align = ls.layoutSizeAlign(layout_val);
                     if (size_align.size > 8) {
                         const stack_offset = self.codegen.allocStackSlot(size_align.size);
@@ -14587,6 +14672,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const stack_offset: i32 = switch (loc) {
                             .stack => |s| s.offset,
                             .stack_i128 => |off| off,
+                            .closure_value => |cv| cv.stack_offset,
+                            .stack_str => |off| off,
                             else => unreachable,
                         };
                         const num_regs = (size_align.size + 7) / 8;
@@ -14725,8 +14812,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// registers (X2-X7) that were already loaded with arg[0]'s data.
         ///
         /// When registers are exhausted, spills remaining arguments to the stack.
-
-
         /// Bind procedure parameters to argument registers.
         /// Handles stack spilling when arguments exceed available registers.
         fn bindProcParams(self: *Self, params: lir.LirPatternSpan, param_layouts: LayoutIdxSpan) Allocator.Error!void {
