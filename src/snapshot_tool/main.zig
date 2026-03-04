@@ -7,6 +7,7 @@
 //! the given Roc code snippet.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const parse = @import("parse");
 const can = @import("can");
@@ -49,21 +50,24 @@ fn panicHandler(msg: []const u8, ret_addr: ?usize) noreturn {
 
 /// Unix signal handler for catching segfaults and illegal instructions from
 /// generated code. Uses the same panic_jmp mechanism as the panic handler.
+/// Not available on Windows (no POSIX signals).
 fn crashSignalHandler(_: i32) callconv(.c) void {
     if (panic_jmp) |jmp| {
         panic_msg = "signal: segfault or illegal instruction in generated code";
         panic_jmp = null;
         sljmp.longjmp(jmp, 2);
     }
-    // No protection active — reset to default handler and re-raise.
-    const dfl = std.posix.Sigaction{
-        .handler = .{ .handler = std.posix.SIG.DFL },
-        .mask = std.posix.sigemptyset(),
-        .flags = 0,
-    };
-    std.posix.sigaction(std.posix.SIG.SEGV, &dfl, null);
-    std.posix.sigaction(std.posix.SIG.BUS, &dfl, null);
-    std.posix.sigaction(std.posix.SIG.ILL, &dfl, null);
+    if (comptime builtin.os.tag != .windows) {
+        // No protection active — reset to default handler and re-raise.
+        const dfl = std.posix.Sigaction{
+            .handler = .{ .handler = std.posix.SIG.DFL },
+            .mask = std.posix.sigemptyset(),
+            .flags = 0,
+        };
+        std.posix.sigaction(std.posix.SIG.SEGV, &dfl, null);
+        std.posix.sigaction(std.posix.SIG.BUS, &dfl, null);
+        std.posix.sigaction(std.posix.SIG.ILL, &dfl, null);
+    }
 }
 
 /// SIGALRM handler for catching infinite loops in generated code.
@@ -76,6 +80,7 @@ fn alarmSignalHandler(_: i32) callconv(.c) void {
 }
 
 fn installCrashSignalHandlers() void {
+    if (comptime builtin.os.tag == .windows) return;
     const sa = std.posix.Sigaction{
         .handler = .{ .handler = &crashSignalHandler },
         .mask = std.posix.sigemptyset(),
