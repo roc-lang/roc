@@ -341,16 +341,6 @@ pub const Interpreter = struct {
         var_: types.Var,
         generation: u64,
     };
-    /// Key for nominal identity cache - identifies a nominal type by its definition,
-    /// not by the specific type variable instance.
-    const NominalIdentKey = struct {
-        /// Pointer to the module (to distinguish same-named types in different modules)
-        module_ptr: usize,
-        /// The nominal type's identifier index
-        ident_idx: u29,
-        /// The nominal type's origin module
-        origin_module: u29,
-    };
     allocator: std.mem.Allocator,
     runtime_types: *types.store.Store,
     runtime_layout_store: layout.Store,
@@ -364,11 +354,6 @@ pub const Interpreter = struct {
     // The generation tracks when the entry was created relative to flex_type_context changes.
     // Entries from a different polymorphic context (different generation) are stale.
     translate_cache: std.AutoHashMap(ModuleVarKey, CacheEntry),
-    // Cache keyed by nominal identity (ident + origin_module) to reuse translations
-    // of the same nominal type when encountered through different (potentially unresolved) vars.
-    // This prevents bugs where a partially-resolved instance of a nominal type
-    // (e.g., from a type annotation) produces incorrect layouts.
-    nominal_translate_cache: std.AutoHashMap(NominalIdentKey, types.Var),
     // Types currently being translated (for cycle detection)
     translation_in_progress: std.AutoHashMap(ModuleVarKey, void),
     // Rigid variable substitution context for generic function instantiation
@@ -567,7 +552,7 @@ pub const Interpreter = struct {
             .var_to_layout_slot = slots,
             .empty_scope = scope,
             .translate_cache = std.AutoHashMap(ModuleVarKey, CacheEntry).init(allocator),
-            .nominal_translate_cache = std.AutoHashMap(NominalIdentKey, types.Var).init(allocator),
+
             .translation_in_progress = std.AutoHashMap(ModuleVarKey, void).init(allocator),
             .rigid_subst = std.AutoHashMap(types.Var, types.Var).init(allocator),
             .rigid_name_subst = std.AutoHashMap(u29, types.Var).init(allocator),
@@ -2600,8 +2585,7 @@ pub const Interpreter = struct {
                         const dec_val = index_arg.asDec(roc_ops);
                         break :blk @divTrunc(dec_val.num, RocDec.one_point_zero.num);
                     } else {
-                        // F32/F64 index - read as float and truncate
-                        break :blk 0; // Should not happen in practice
+                        unreachable; // F32/F64 should never be used as a list index
                     }
                 } else index_arg.asI128(); // Normal integer path
 
@@ -7872,43 +7856,6 @@ pub const Interpreter = struct {
                     copied.rt_var = value_rt_var;
                 }
 
-                // Handle numeric type mismatch: when the value has a concrete scalar numeric
-                // type that differs from the expected type, convert the value to match.
-                // This handles cases like `var $x = 0` (Dec default) flowing where U64 is expected,
-                // which occurs when untyped numeric literals aren't constrained by their usage context.
-                if (copied.layout.tag == .scalar and param_resolved.desc.content == .structure) {
-                    const expected_layout = self.getRuntimeLayout(value_rt_var) catch null;
-                    if (expected_layout) |el| {
-                        if (el.tag == .scalar and !copied.layout.eql(el)) {
-                            // Convert between numeric scalar types (e.g., Dec → U64, U64 → Dec)
-                            if (copied.layout.data.scalar.tag == .frac and el.data.scalar.tag == .int) {
-                                // Frac → Int: extract the whole number part
-                                if (copied.layout.data.scalar.data.frac == .dec) {
-                                    const dec_val = copied.asDec(roc_ops);
-                                    const int_val: i128 = @divTrunc(dec_val.num, RocDec.one_point_zero.num);
-                                    copied.layout = el;
-                                    copied.rt_var = value_rt_var;
-                                    copied.is_initialized = false;
-                                    try copied.setInt(@intCast(int_val));
-                                    copied.is_initialized = true;
-                                }
-                            } else if (copied.layout.data.scalar.tag == .int and el.data.scalar.tag == .frac) {
-                                // Int → Frac: convert integer to fractional
-                                if (el.data.scalar.data.frac == .dec) {
-                                    const int_val = copied.asI128();
-                                    if (RocDec.fromWholeInt(int_val)) |dec_val| {
-                                        copied.layout = el;
-                                        copied.rt_var = value_rt_var;
-                                        copied.is_initialized = false;
-                                        copied.setDec(dec_val, roc_ops);
-                                        copied.is_initialized = true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
                 try out_binds.append(.{ .pattern_idx = pattern_idx, .value = copied, .expr_idx = expr_idx, .source_env = self.env });
                 return true;
             },
@@ -8318,7 +8265,7 @@ pub const Interpreter = struct {
     pub fn deinit(self: *Interpreter) void {
         self.empty_scope.deinit();
         self.translate_cache.deinit();
-        self.nominal_translate_cache.deinit();
+
         self.translation_in_progress.deinit();
         self.rigid_subst.deinit();
         self.rigid_name_subst.deinit();
@@ -8368,7 +8315,7 @@ pub const Interpreter = struct {
     pub fn deinitPreserveConstantStrings(self: *Interpreter) std.heap.ArenaAllocator {
         self.empty_scope.deinit();
         self.translate_cache.deinit();
-        self.nominal_translate_cache.deinit();
+
         self.translation_in_progress.deinit();
         self.rigid_subst.deinit();
         self.rigid_name_subst.deinit();
@@ -9817,22 +9764,6 @@ pub const Interpreter = struct {
                             const ct_backing = module.types.getNominalBackingVar(nom);
                             const ct_args = module.types.sliceNominalArgs(nom);
 
-                            // For non-generic nominal types (no type args), check if we've
-                            // already translated the same nominal identity. This prevents
-                            // bugs where a partially-resolved instance of a nominal type
-                            // (e.g., from a type annotation where field types haven't been
-                            // fully unified) produces incorrect layouts.
-                            if (ct_args.len == 0) {
-                                const nom_ident_key = NominalIdentKey{
-                                    .module_ptr = @intFromPtr(module),
-                                    .ident_idx = nom.ident.ident_idx.idx,
-                                    .origin_module = nom.origin_module.idx,
-                                };
-                                if (self.nominal_translate_cache.get(nom_ident_key)) |cached_rt_var| {
-                                    break :blk cached_rt_var;
-                                }
-                            }
-
                             // Build rigid → type arg substitution map before translating backing
                             if (ct_args.len > 0) {
                                 // Collect rigids from backing type
@@ -9902,17 +9833,7 @@ pub const Interpreter = struct {
                                 break :origin_blk try layout_env.insertIdent(base_pkg.Ident.for_text(origin_str));
                             } else nom.origin_module;
                             const content = try self.runtime_types.mkNominal(translated_ident, rt_backing, buf, translated_origin, nom.is_opaque);
-                            const final_nom_var = try self.runtime_types.freshFromContent(content);
-                            // Cache non-generic nominals by identity for future lookups
-                            if (ct_args.len == 0) {
-                                const nom_ident_key = NominalIdentKey{
-                                    .module_ptr = @intFromPtr(module),
-                                    .ident_idx = nom.ident.ident_idx.idx,
-                                    .origin_module = nom.origin_module.idx,
-                                };
-                                try self.nominal_translate_cache.put(nom_ident_key, final_nom_var);
-                            }
-                            break :blk final_nom_var;
+                            break :blk try self.runtime_types.freshFromContent(content);
                         },
                     }
                 },

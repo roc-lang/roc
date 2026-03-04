@@ -1153,7 +1153,7 @@ test "roc test runs expects in Parser type module" {
     const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
     try testing.expect(has_passed);
 
-    // 3. Should have run at least 2 tests
-    const has_tests = std.mem.indexOf(u8, result.stdout, "(2)") != null;
+    // 3. Should have run at least 3 tests
+    const has_tests = std.mem.indexOf(u8, result.stdout, "(3)") != null;
     try testing.expect(has_tests);
 }

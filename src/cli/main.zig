@@ -5417,28 +5417,9 @@ fn rocGlueInner(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
         }
     }
 
-    // Register entrypoint types from the platform main module's requires_types
+    // Register entrypoint types and provides function types from the platform main module.
     var entrypoint_type_ids = std.StringHashMap(u64).init(ctx.gpa);
     defer entrypoint_type_ids.deinit();
-
-    for (modules) |mod| {
-        if (mod.is_platform_main) {
-            type_table.clearVarMap();
-            const env = mod.env;
-            for (env.requires_types.items.items) |required_type| {
-                const name = env.getIdent(required_type.ident);
-                const type_var = ModuleEnv.varFrom(required_type.type_anno);
-                const type_id = type_table.getOrInsert(env, type_var);
-                entrypoint_type_ids.put(name, type_id) catch {};
-            }
-            break;
-        }
-    }
-
-    // Register provides function types from the platform main module's definitions.
-    // We look up the provides function's type (not the requires entry type) because
-    // the provides function may have a different signature than the requires type
-    // (e.g. main! : List(Str) => Try(...) vs main_for_host! : List(Str) => I32).
     var provides_type_ids = std.StringHashMap(u64).init(ctx.gpa);
     defer provides_type_ids.deinit();
 
@@ -5447,8 +5428,19 @@ fn rocGlueInner(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
             type_table.clearVarMap();
             const env = mod.env;
 
-            // Build module prefix for stripping qualified names
-            const module_prefix = std.fmt.allocPrint(ctx.gpa, "{s}.", .{mod.name}) catch break;
+            // Register entrypoint types from requires_types
+            for (env.requires_types.items.items) |required_type| {
+                const name = env.getIdent(required_type.ident);
+                const type_var = ModuleEnv.varFrom(required_type.type_anno);
+                const type_id = type_table.getOrInsert(env, type_var);
+                try entrypoint_type_ids.put(name, type_id);
+            }
+
+            // Register provides function types from definitions.
+            // We look up the provides function's type (not the requires entry type) because
+            // the provides function may have a different signature than the requires type
+            // (e.g. main! : List(Str) => Try(...) vs main_for_host! : List(Str) => I32).
+            const module_prefix = try std.fmt.allocPrint(ctx.gpa, "{s}.", .{mod.name});
             defer ctx.gpa.free(module_prefix);
 
             const all_defs = env.store.sliceDefs(env.all_defs);
@@ -5468,11 +5460,9 @@ fn rocGlueInner(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
                 // Check if this def matches any provides entry
                 for (platform_info.provides_entries) |prov| {
                     if (std.mem.eql(u8, local_name, prov.name)) {
-                        const def_node_idx: @TypeOf(env.store.nodes).Idx =
-                            @enumFromInt(@intFromEnum(def_idx));
-                        const type_var = ModuleEnv.varFrom(def_node_idx);
+                        const type_var = ModuleEnv.varFrom(def_idx);
                         const type_id = type_table.getOrInsert(env, type_var);
-                        provides_type_ids.put(prov.ffi_symbol, type_id) catch {};
+                        try provides_type_ids.put(prov.ffi_symbol, type_id);
                         break;
                     }
                 }
@@ -6300,8 +6290,9 @@ const TypeTable = struct {
             }
         }
 
-        // Compute discriminant size/alignment from tag count
-        const disc_size: u64 = if (tag_names.len <= 256) 1 else if (tag_names.len <= 65536) 2 else if (tag_names.len <= 4294967296) 4 else 8;
+        // Compute discriminant size/alignment from tag count.
+        // Single-variant tag unions have no discriminant (ZigGlue unwraps them to payload).
+        const disc_size: u64 = if (tag_names.len <= 1) 0 else if (tag_names.len <= 256) 1 else if (tag_names.len <= 65536) 2 else if (tag_names.len <= 4294967296) 4 else 8;
         const disc_align: u64 = disc_size;
 
         // Compute overall tag union layout: payload at offset 0, discriminant at end

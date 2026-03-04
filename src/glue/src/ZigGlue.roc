@@ -47,7 +47,6 @@ make_glue = |types_list| {
 
 	zig_content = generate_zig_file(sorted, $type_table, $provides_entries)
 
-
 	Ok([{ name: "roc_platform_abi.zig", content: zig_content }])
 }
 
