@@ -481,6 +481,13 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
             const is_var_bit: u32 = if (a.is_var) TYPE_ANNO_IS_VAR_BIT else 0;
             node.main_token = where_val | is_var_bit;
         },
+        .file_import => |fi| {
+            node.tag = .file_import;
+            node.region = fi.region;
+            node.main_token = fi.path_tok;
+            node.data.lhs = fi.name_tok;
+            node.data.rhs = fi.type_tok | (if (fi.is_bytes) @as(u32, 1) << 31 else 0);
+        },
         .malformed => {
             @panic("Use addMalformed instead");
         },
@@ -1447,6 +1454,17 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
                 .anno = @enumFromInt(node.data.rhs),
                 .where = if (where_val != 0) @enumFromInt(where_val - OPTIONAL_VALUE_OFFSET) else null,
                 .is_var = is_var,
+            } };
+        },
+        .file_import => {
+            const is_bytes = (node.data.rhs & (@as(u32, 1) << 31)) != 0;
+            const type_tok = node.data.rhs & ~(@as(u32, 1) << 31);
+            return .{ .file_import = .{
+                .path_tok = node.main_token,
+                .name_tok = node.data.lhs,
+                .type_tok = type_tok,
+                .is_bytes = is_bytes,
+                .region = node.region,
             } };
         },
         .malformed => {

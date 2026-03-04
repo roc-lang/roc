@@ -505,6 +505,20 @@ const Formatter = struct {
                     }
                 }
             },
+            .file_import => |fi| {
+                try fmt.pushAll("import ");
+                try fmt.push('"');
+                try fmt.pushTokenText(fi.path_tok);
+                try fmt.push('"');
+                try fmt.pushAll(" as ");
+                try fmt.pushTokenText(fi.name_tok);
+                try fmt.pushAll(" : ");
+                if (fi.is_bytes) {
+                    try fmt.pushAll("List(U8)");
+                } else {
+                    try fmt.pushAll("Str");
+                }
+            },
             .type_decl => |d| {
                 const header_region = fmt.nodeRegion(@intFromEnum(d.header));
                 try fmt.formatTypeHeader(d.header);

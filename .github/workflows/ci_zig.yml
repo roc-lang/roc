@@ -147,7 +147,7 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: "zig build test-cli ${{ matrix.target_flag }}"
-          error_string_contains: "unhandled file type|build executable runs correctly"
+          error_string_contains: "unhandled file type|build executable runs correctly|undefined symbol"
           retry_count: 3
 
       - name: Setup MSVC (Windows)

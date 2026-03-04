@@ -1089,6 +1089,7 @@ pub const PackageEnv = struct {
         builtin_indices: can.CIR.BuiltinIndices,
         imported_envs: []const *ModuleEnv,
         module_envs_out: *std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
+        source_dir: ?[]const u8,
     ) !Check {
         // Populate module_envs with Bool, Try, Dict, Set using shared function
         try Can.populateModuleEnvs(
@@ -1100,6 +1101,7 @@ pub const PackageEnv = struct {
 
         // Canonicalize
         var czer = try Can.init(allocators, env, parse_ast, module_envs_out);
+        czer.source_dir = source_dir;
         try czer.canonicalizeFile();
         try czer.validateForChecking();
         czer.deinit();
@@ -1282,6 +1284,7 @@ pub const PackageEnv = struct {
         }
 
         var czer = try Can.init(allocators, env, parse_ast, &module_envs_map);
+        czer.source_dir = root_dir;
         try czer.canonicalizeFile();
         try czer.validateForChecking();
         czer.deinit();
