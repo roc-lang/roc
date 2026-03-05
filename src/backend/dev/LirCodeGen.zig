@@ -11264,6 +11264,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             var reg_count: u8 = initial_reg_idx;
             for (param_num_regs, 0..) |nr, i| {
+                const is_i128_arg = self.argNeedsI128Abi(arg_infos[i].loc, arg_infos[i].layout_idx);
+                if (comptime target.toCpuArch() == .aarch64) {
+                    if (!pass_by_ptr[i] and is_i128_arg and reg_count < max_arg_regs and reg_count % 2 != 0) {
+                        reg_count += 1;
+                    }
+                }
                 if (reg_count + nr <= max_arg_regs) {
                     reg_count += nr;
                 } else if (nr > 1) {
@@ -11292,7 +11298,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     if (!found) break;
                     pass_by_ptr[best_idx] = true;
-                    reg_count -= (best_regs - 1);
+                    // Recompute register pressure after changing pass-by-pointer plan,
+                    // including aarch64 i128 alignment effects.
+                    reg_count = initial_reg_idx;
+                    for (param_num_regs, 0..) |nr, i| {
+                        const pbp = pass_by_ptr[i];
+                        const is_i128_arg = self.argNeedsI128Abi(arg_infos[i].loc, arg_infos[i].layout_idx);
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            if (!pbp and is_i128_arg and reg_count < max_arg_regs and reg_count % 2 != 0) {
+                                reg_count += 1;
+                            }
+                        }
+                        const eff_nr: u8 = if (pbp) 1 else nr;
+                        if (reg_count + eff_nr <= max_arg_regs) {
+                            reg_count += eff_nr;
+                        } else {
+                            reg_count = max_arg_regs;
+                        }
+                    }
                 }
             }
 
@@ -12828,6 +12851,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 var reg_count: u8 = if (config.needs_ret_ptr) 1 else 0;
                 for (arg_infos, 0..) |ai, i| {
                     const pbp = if (config.pass_by_ptr) |p| p[i] else false;
+                    const is_i128_arg = self.argNeedsI128Abi(ai.loc, ai.layout_idx);
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        if (!pbp and is_i128_arg and reg_count < max_arg_regs and reg_count % 2 != 0) {
+                            reg_count += 1;
+                        }
+                    }
                     const nr: u8 = if (pbp) 1 else ai.num_regs;
                     if (reg_count + nr <= max_arg_regs) {
                         reg_count += nr;
@@ -13069,6 +13098,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         else => 1,
                     };
                     param_num_regs[pi] = nr;
+                    const is_i128_param = switch (pat) {
+                        .bind => |b| b.layout_idx == .i128 or b.layout_idx == .u128 or b.layout_idx == .dec,
+                        .wildcard => |w| w.layout_idx == .i128 or w.layout_idx == .u128 or w.layout_idx == .dec,
+                        else => false,
+                    };
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        if (is_i128_param and pre_reg_count < max_arg_regs and pre_reg_count % 2 != 0) {
+                            pre_reg_count += 1;
+                        }
+                    }
                     if (pre_reg_count + nr <= max_arg_regs) {
                         pre_reg_count += nr;
                     } else if (nr > 1) {
@@ -13096,7 +13135,30 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     if (!found) break;
                     param_pass_by_ptr[best_idx] = true;
-                    pre_reg_count -= (best_regs - 1);
+                    // Recompute register pressure after changing pass-by-pointer flags,
+                    // including aarch64 i128 alignment behavior.
+                    pre_reg_count = initial_reg_idx;
+                    for (pattern_ids, 0..) |pid2, pi2| {
+                        const pat2 = self.store.getPattern(pid2);
+                        const pnr = param_num_regs[pi2];
+                        const pbp = param_pass_by_ptr[pi2];
+                        const is_i128_param = switch (pat2) {
+                            .bind => |b| b.layout_idx == .i128 or b.layout_idx == .u128 or b.layout_idx == .dec,
+                            .wildcard => |w| w.layout_idx == .i128 or w.layout_idx == .u128 or w.layout_idx == .dec,
+                            else => false,
+                        };
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            if (!pbp and is_i128_param and pre_reg_count < max_arg_regs and pre_reg_count % 2 != 0) {
+                                pre_reg_count += 1;
+                            }
+                        }
+                        const eff_regs: u8 = if (pbp) 1 else pnr;
+                        if (pre_reg_count + eff_regs <= max_arg_regs) {
+                            pre_reg_count += eff_regs;
+                        } else {
+                            pre_reg_count = max_arg_regs;
+                        }
+                    }
                 }
             }
 
