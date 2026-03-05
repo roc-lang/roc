@@ -2592,13 +2592,12 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
     for (deferred_decl_slots.items) |slot| {
         const symbol_key: u64 = @bitCast(slot.symbol);
         if (!self.lowered_symbols.contains(symbol_key)) {
-            const decl_monotype = self.store.patternTypeOf(slot.pattern);
             _ = try self.lowerDeferredBlockLambda(.{
                 .pattern_idx = slot.pattern_idx,
                 .cir_expr = slot.cir_expr,
                 .module_idx = self.current_module_idx,
                 .symbol = slot.symbol,
-            }, decl_monotype);
+            }, Monotype.Idx.none);
         }
     }
 
@@ -2623,9 +2622,16 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
             unreachable;
         };
 
+        const lowered_monotype = self.store.typeOf(lowered);
+        const pattern_monotype = self.store.patternTypeOf(slot.pattern);
+        const stmt_pattern = if (try self.monotypesStructurallyEqual(pattern_monotype, lowered_monotype))
+            slot.pattern
+        else
+            try self.store.addPattern(self.allocator, .{ .bind = slot.symbol }, lowered_monotype);
+
         try self.scratch_stmts.items.insert(
             @intCast(slot.insert_idx),
-            .{ .decl_const = .{ .pattern = slot.pattern, .expr = lowered } },
+            .{ .decl_const = .{ .pattern = stmt_pattern, .expr = lowered } },
         );
     }
 
@@ -3582,11 +3588,25 @@ fn lookupDispatchConstraintForExpr(
         if (constraint.source_expr_idx != @intFromEnum(expr_idx)) continue;
         if (!constraint.fn_name.eql(method_name)) continue;
         if (found) |existing| {
-            if (std.debug.runtime_safety and existing.fn_var != constraint.fn_var) {
-                std.debug.panic(
-                    "lookupDispatchConstraintForExpr: multiple distinct constraints for expr={d} method={d}",
-                    .{ @intFromEnum(expr_idx), method_name.idx },
-                );
+            const existing_resolved = !existing.resolved_target.isNone();
+            const candidate_resolved = !constraint.resolved_target.isNone();
+
+            // Constraint solving can emit multiple constraints for the same
+            // expression+method pair (different fn_vars), especially for
+            // desugared binops and merged constraint sets. Prefer a resolved
+            // target when available; otherwise keep the first unresolved one.
+            if (existing_resolved and candidate_resolved) {
+                if (std.debug.runtime_safety and
+                    (!existing.resolved_target.origin_module.eql(constraint.resolved_target.origin_module) or
+                        !existing.resolved_target.method_ident.eql(constraint.resolved_target.method_ident)))
+                {
+                    std.debug.panic(
+                        "lookupDispatchConstraintForExpr: conflicting resolved targets for expr={d} method={d}",
+                        .{ @intFromEnum(expr_idx), method_name.idx },
+                    );
+                }
+            } else if (!existing_resolved and candidate_resolved) {
+                found = constraint;
             }
             continue;
         }
