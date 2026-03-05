@@ -8176,104 +8176,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const elem_loc = try self.generateExpr(elem_id);
                 const elem_heap_offset: i32 = @intCast(@as(usize, i) * @as(usize, elem_size));
 
+                if (elem_size == 0) {
+                    continue;
+                }
+
+                // Materialize element to stack for a uniform copy path.
+                const elem_stack_offset = try self.ensureOnStack(elem_loc, elem_size);
+
                 // Load heap pointer from stack slot
                 const heap_ptr = try self.allocTempGeneral();
                 try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
 
-                if (elem_size == 0) {
-                    self.codegen.freeGeneral(heap_ptr);
-                    continue;
-                }
+                // Copy elem_size bytes from stack to heap in 8-byte chunks
+                const temp_reg = try self.allocTempGeneral();
+                try self.copyChunked(temp_reg, frame_ptr, elem_stack_offset, heap_ptr, elem_heap_offset, elem_size);
+                self.codegen.freeGeneral(temp_reg);
 
-                // Store element to heap based on its actual location type
-                // We must handle different location types differently because the actual
-                // size of the value may differ from elem_size (due to type variable resolution)
-                switch (elem_loc) {
-                    .stack_str => |src_offset| {
-                        // Copy elem_size bytes from stack to heap in 8-byte chunks
-                        const temp_reg = try self.allocTempGeneral();
-                        try self.copyChunked(temp_reg, frame_ptr, src_offset, heap_ptr, elem_heap_offset, elem_size);
-                        self.codegen.freeGeneral(temp_reg);
-                    },
-                    .stack => |s| {
-                        const src_offset = s.offset;
-                        // Copy elem_size bytes from stack to heap in 8-byte chunks
-                        const temp_reg = try self.allocTempGeneral();
-                        try self.copyChunked(temp_reg, frame_ptr, src_offset, heap_ptr, elem_heap_offset, elem_size);
-                        self.codegen.freeGeneral(temp_reg);
-                    },
-                    .list_stack => |list_info| {
-                        // For lists, copy the full RocList struct
-                        std.debug.assert(elem_size == roc_list_size);
-                        const temp_reg = try self.allocTempGeneral();
-                        var copied: u32 = 0;
-                        while (copied < roc_list_size) : (copied += target_ptr_size) {
-                            const chunk_src = list_info.struct_offset + @as(i32, @intCast(copied));
-                            const chunk_dst = elem_heap_offset + @as(i32, @intCast(copied));
-                            try self.emitLoad(.w64, temp_reg, frame_ptr, chunk_src);
-                            try self.emitStore(.w64, heap_ptr, chunk_dst, temp_reg);
-                        }
-                        self.codegen.freeGeneral(temp_reg);
-                    },
-                    .immediate_i128 => |val| {
-                        // For i128/Dec immediates, store the full 16 bytes
-                        const low: u64 = @truncate(@as(u128, @bitCast(val)));
-                        const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
-                        const temp_reg = try self.allocTempGeneral();
-
-                        // Store low 8 bytes
-                        try self.codegen.emitLoadImm(temp_reg, @bitCast(low));
-                        try self.emitStore(.w64, heap_ptr, elem_heap_offset, temp_reg);
-
-                        // Store high 8 bytes
-                        try self.codegen.emitLoadImm(temp_reg, @bitCast(high));
-                        try self.emitStore(.w64, heap_ptr, elem_heap_offset + 8, temp_reg);
-
-                        self.codegen.freeGeneral(temp_reg);
-                    },
-                    .stack_i128 => |src_offset| {
-                        // For i128/Dec stack values, copy the full 16 bytes
-                        const temp_reg = try self.allocTempGeneral();
-
-                        // Copy low 8 bytes
-                        try self.emitLoad(.w64, temp_reg, frame_ptr, src_offset);
-                        try self.emitStore(.w64, heap_ptr, elem_heap_offset, temp_reg);
-
-                        // Copy high 8 bytes
-                        try self.emitLoad(.w64, temp_reg, frame_ptr, src_offset + 8);
-                        try self.emitStore(.w64, heap_ptr, elem_heap_offset + 8, temp_reg);
-
-                        self.codegen.freeGeneral(temp_reg);
-                    },
-                    else => {
-                        // For other immediates and register values:
-                        // For sub-8-byte elements, copy exact bytes; otherwise store
-                        // one word and zero-pad the tail.
-                        const elem_reg = try self.ensureInGeneralReg(elem_loc);
-                        if (elem_size < 8) {
-                            const spill = self.codegen.allocStackSlot(8);
-                            try self.emitStore(.w64, frame_ptr, spill, elem_reg);
-                            self.codegen.freeGeneral(elem_reg);
-
-                            const temp_reg = try self.allocTempGeneral();
-                            try self.copyChunked(temp_reg, frame_ptr, spill, heap_ptr, elem_heap_offset, elem_size);
-                            self.codegen.freeGeneral(temp_reg);
-                        } else {
-                            try self.emitStore(.w64, heap_ptr, elem_heap_offset, elem_reg);
-                            self.codegen.freeGeneral(elem_reg);
-
-                            if (elem_size > 8) {
-                                const zero_reg = try self.allocTempGeneral();
-                                try self.codegen.emitLoadImm(zero_reg, 0);
-                                var padded: u32 = 8;
-                                while (padded < elem_size) : (padded += 8) {
-                                    const pad_offset = elem_heap_offset + @as(i32, @intCast(padded));
-                                    try self.emitStore(.w64, heap_ptr, pad_offset, zero_reg);
-                                }
-                                self.codegen.freeGeneral(zero_reg);
-                            }
-                        }
-                    },
+                // List elements are conceptually borrowed; retain refcounted payloads
+                // so the new list owns one reference per stored element.
+                if (elements_refcounted) {
+                    try self.emitIncrefAtStackOffset(elem_stack_offset, list.elem_layout);
                 }
 
                 self.codegen.freeGeneral(heap_ptr);
@@ -15371,6 +15293,38 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return true;
         }
 
+        /// Load the string allocation data pointer for RC operations.
+        /// For seamless slices, `length` has the high bit set and
+        /// `capacity_or_alloc_ptr` stores `(alloc_ptr >> 1)`.
+        fn loadStrDataPtrForRc(self: *Self, base_offset: i32, out_reg: GeneralReg) Allocator.Error!void {
+            // bytes (big string fast path)
+            try self.emitLoad(.w64, out_reg, frame_ptr, base_offset);
+
+            // length
+            const len_reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(len_reg);
+            try self.emitLoad(.w64, len_reg, frame_ptr, base_offset + 8);
+
+            // If seamless slice (length sign bit set), decode allocation ptr from cap.
+            const slice_patch = blk: {
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.cmpRegImm12(.w64, len_reg, 0);
+                    const patch_loc = self.codegen.currentOffset();
+                    try self.codegen.emit.bcond(.mi, 0);
+                    break :blk patch_loc;
+                } else {
+                    try self.codegen.emit.testRegReg(.w64, len_reg, len_reg);
+                    break :blk try self.codegen.emitCondJump(.sign);
+                }
+            };
+
+            const done_patch = try self.codegen.emitJump();
+            self.codegen.patchJump(slice_patch, self.codegen.currentOffset());
+            try self.emitLoad(.w64, out_reg, frame_ptr, base_offset + 16);
+            try self.emitShlImm(.w64, out_reg, out_reg, 1);
+            self.codegen.patchJump(done_patch, self.codegen.currentOffset());
+        }
+
         /// Emit incref for a string value
         /// Strings use SSO, so we need to check if it's a large string first
         fn emitStrIncref(self: *Self, value_loc: ValueLocation, count: u16) Allocator.Error!void {
@@ -15417,8 +15371,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Not a small string - load the bytes pointer and call incref
             const ptr_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(ptr_reg);
-
-            try self.emitLoad(.w64, ptr_reg, frame_ptr, base_offset);
+            try self.loadStrDataPtrForRc(base_offset, ptr_reg);
 
             // Call increfDataPtrC(ptr, count, roc_ops)
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -15470,8 +15423,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Not a small string - load the bytes pointer and call decref
             const ptr_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(ptr_reg);
-
-            try self.emitLoad(.w64, ptr_reg, frame_ptr, base_offset);
+            try self.loadStrDataPtrForRc(base_offset, ptr_reg);
 
             // Call decrefDataPtrC(ptr, alignment, elements_refcounted, roc_ops)
             // Strings have 1-byte alignment for the data
@@ -15525,8 +15477,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Not a small string - load the bytes pointer and call free
             const ptr_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(ptr_reg);
-
-            try self.emitLoad(.w64, ptr_reg, frame_ptr, base_offset);
+            try self.loadStrDataPtrForRc(base_offset, ptr_reg);
 
             // Call freeDataPtrC(ptr, alignment, elements_refcounted, roc_ops)
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
