@@ -889,7 +889,7 @@ fn lowerStrInspektExpr(
                 .origin = common.builtin_module,
                 .method_ident = common.builtin_box_unbox,
                 // resolvedDispatchTargetToSymbol only uses origin/method_ident.
-                .fn_var = @enumFromInt(0),
+                .fn_var = undefined,
             };
 
             const method_symbol = try self.resolvedDispatchTargetToSymbol(module_env, unbox_target);
