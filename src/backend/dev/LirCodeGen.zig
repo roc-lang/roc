@@ -15119,6 +15119,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.codegen.freeGeneral(ptr_reg);
             if (!try self.loadListDataPtrForRc(value_loc, ptr_reg)) unreachable;
 
+            // Empty lists can have a null data pointer. Skip element decrefs
+            // before touching the refcount header in that case.
+            const zero_reg = try self.allocTempGeneral();
+            try self.codegen.emitLoadImm(zero_reg, 0);
+            try self.emitCmpReg(ptr_reg, zero_reg);
+            self.codegen.freeGeneral(zero_reg);
+            const null_ptr_patch = try self.emitJumpIfEqual();
+
             // Elements are decref'd only when the list allocation is unique.
             const rc_reg = try self.allocTempGeneral();
             try self.emitLoad(.w64, rc_reg, ptr_reg, -@as(i32, @intCast(@sizeOf(usize))));
@@ -15200,6 +15208,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const loop_end = self.codegen.currentOffset();
             self.codegen.patchJump(exit_patch, loop_end);
             self.codegen.patchJump(skip_patch, loop_end);
+            self.codegen.patchJump(null_ptr_patch, loop_end);
         }
 
         /// Emit decref for a list value
