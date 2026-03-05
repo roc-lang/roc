@@ -3549,31 +3549,16 @@ fn lowerRecord(self: *Self, module_env: *const ModuleEnv, record: anytype, monot
 /// Lower `e_type_var_dispatch` using checker-resolved dispatch target.
 fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.Idx, tvd: anytype, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
     const cir_args = module_env.store.sliceExpr(tvd.args);
-    const method_name_text = module_env.getIdent(tvd.method_name);
     const mono_top = self.mono_scratches.idxs.top();
     defer self.mono_scratches.idxs.clearFrom(mono_top);
     for (cir_args) |arg_idx| {
         try self.mono_scratches.idxs.append(try self.resolveMonotype(arg_idx));
     }
     const func_monotype = try self.buildFuncMonotype(self.mono_scratches.idxs.sliceFromStart(mono_top), monotype, false);
-    const cross_module_target: ?ResolvedDispatchTarget = if (std.mem.eql(u8, method_name_text, "join_with"))
-        try self.findResolvedDispatchTargetByMethodAcrossModules(
-            module_env,
-            tvd.method_name,
-            cir_args.len,
-        )
-    else
-        null;
-
-    const resolved_target = self.lookupResolvedDispatchTarget(expr_idx) orelse
-        (try self.findResolvedDispatchTargetByMethod(
-            module_env,
-            tvd.method_name,
-            cir_args.len,
-        )) orelse
-        cross_module_target orelse {
+    const resolved_target = self.lookupResolvedDispatchTarget(expr_idx) orelse {
         if (std.debug.runtime_safety) {
-            std.debug.panic("lowerTypeVarDispatch: missing resolved dispatch target for method '{s}'", .{method_name_text});
+            const method_name = module_env.getIdent(tvd.method_name);
+            std.debug.panic("lowerTypeVarDispatch: missing resolved dispatch target for method '{s}'", .{method_name});
         }
         unreachable;
     };
@@ -3609,82 +3594,6 @@ fn findModuleForOrigin(self: *Self, source_env: *const ModuleEnv, origin_module:
 fn lookupResolvedDispatchTarget(self: *const Self, expr_idx: CIR.Expr.Idx) ?ResolvedDispatchTarget {
     const key = (@as(u64, self.current_module_idx) << 32) | @as(u64, @intFromEnum(expr_idx));
     return self.resolved_dispatch_targets.get(key);
-}
-
-fn constraintFnArity(types_store: *const types.Store, fn_var: types.Var) ?usize {
-    var resolved_fn = types_store.resolveVar(fn_var);
-    while (resolved_fn.desc.content == .alias) {
-        const alias = resolved_fn.desc.content.alias;
-        resolved_fn = types_store.resolveVar(types_store.getAliasBackingVar(alias));
-    }
-
-    return switch (resolved_fn.desc.content) {
-        .structure => |flat_type| switch (flat_type) {
-            .fn_pure => |func| types_store.sliceVars(func.args).len,
-            .fn_effectful => |func| types_store.sliceVars(func.args).len,
-            .fn_unbound => |func| types_store.sliceVars(func.args).len,
-            else => null,
-        },
-        else => null,
-    };
-}
-
-fn findResolvedDispatchTargetByMethod(
-    self: *Self,
-    module_env: *const ModuleEnv,
-    method_ident: Ident.Idx,
-    expected_arity: usize,
-) Allocator.Error!?ResolvedDispatchTarget {
-    _ = self;
-    const constraints = module_env.types.sliceAllStaticDispatchConstraints();
-    for (constraints) |constraint| {
-        if (!constraint.fn_name.eql(method_ident)) continue;
-        if (constraint.resolved_target.isNone()) continue;
-        const fn_arity = constraintFnArity(&module_env.types, constraint.fn_var) orelse continue;
-        if (fn_arity != expected_arity) continue;
-
-        return .{
-            .origin = constraint.resolved_target.origin_module,
-            .method_ident = constraint.resolved_target.method_ident,
-            .fn_var = constraint.fn_var,
-        };
-    }
-
-    return null;
-}
-
-fn findResolvedDispatchTargetByMethodAcrossModules(
-    self: *Self,
-    source_env: *const ModuleEnv,
-    method_ident: Ident.Idx,
-    expected_arity: usize,
-) Allocator.Error!?ResolvedDispatchTarget {
-    const method_name = source_env.getIdent(method_ident);
-    var fallback_candidate: ?ResolvedDispatchTarget = null;
-
-    for (self.all_module_envs, 0..) |module_env, mod_idx| {
-        const constraints = module_env.types.sliceAllStaticDispatchConstraints();
-        for (constraints) |constraint| {
-            if (constraint.resolved_target.isNone()) continue;
-            if (!module_env.getIdentStoreConst().containsIdx(constraint.fn_name)) continue;
-            if (!std.mem.eql(u8, module_env.getIdent(constraint.fn_name), method_name)) continue;
-
-            const fn_arity = constraintFnArity(&module_env.types, constraint.fn_var) orelse continue;
-            if (fn_arity != expected_arity) continue;
-
-            const resolved_target: ResolvedDispatchTarget = .{
-                .origin = constraint.resolved_target.origin_module,
-                .method_ident = constraint.resolved_target.method_ident,
-                .fn_var = constraint.fn_var,
-            };
-
-            if (fallback_candidate == null or mod_idx == self.current_module_idx) {
-                fallback_candidate = resolved_target;
-            }
-        }
-    }
-
-    return fallback_candidate;
 }
 
 fn resolvedDispatchTargetToSymbol(self: *Self, source_env: *const ModuleEnv, target: ResolvedDispatchTarget) Allocator.Error!MIR.Symbol {
