@@ -5292,6 +5292,20 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     // Clean up comptime evaluator
     comptime_evaluator.deinit();
 
+    // Populate cache entries from module results
+    for (module_results.items) |mr| {
+        for (mr.results) |result| {
+            const error_text: []const u8 = if (result.error_msg) |msg| (ctx.gpa.dupe(u8, msg) catch "") else "";
+            cache_failure_reports.append(ctx.gpa, error_text) catch {};
+            cache_entries.append(ctx.gpa, .{
+                .passed = if (result.result == .passed) 1 else 0,
+                .region_start = result.region.start.offset,
+                .region_end = result.region.end.offset,
+                .report_len = @intCast(error_text.len),
+            }) catch {};
+        }
+    }
+
     // Calculate elapsed time
     const end_time = std.time.nanoTimestamp();
     const elapsed_ns = @as(u64, @intCast(end_time - start_time));
