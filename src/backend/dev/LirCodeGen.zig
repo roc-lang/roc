@@ -10927,12 +10927,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Update the patch's recorded position (it shifted)
                     patch.call_offset += prologue_size;
 
-                    // If the target is outside the shifted range (at or before body_start),
-                    // we need to re-patch the instruction because the relative offset changed.
-                    // Targets within the body shifted by the same amount, so they're fine.
-                    // Note: target_offset == body_start covers self-recursive calls within
-                    // compileLambdaAsProc, where the call targets the function's own entry point.
-                    if (patch.target_offset <= body_start) {
+                    // Targets strictly inside (body_start, body_end) shift by the same amount
+                    // as the call site, so the encoded relative offset remains valid.
+                    // Keep metadata in final coordinates for any future shifts.
+                    if (patch.target_offset > body_start and patch.target_offset < body_end) {
+                        patch.target_offset += prologue_size;
+                        continue;
+                    }
+
+                    // For targets outside the shifted body (including == body_start),
+                    // re-patch because only the call site moved.
+                    {
                         const new_rel: i32 = @intCast(@as(i64, @intCast(patch.target_offset)) - @as(i64, @intCast(patch.call_offset)));
                         if (comptime target.toCpuArch() == .aarch64) {
                             // Patch BL instruction (4 bytes at call_offset)
@@ -10963,9 +10968,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Update the patch's recorded position (it shifted)
                     patch.instr_offset += prologue_size;
 
-                    // If the target is outside the shifted range (at or before body_start), re-patch.
-                    // target_offset == body_start covers self-recursive calls.
-                    if (patch.target_offset <= body_start) {
+                    // Targets strictly inside (body_start, body_end) shift with the body.
+                    if (patch.target_offset > body_start and patch.target_offset < body_end) {
+                        patch.target_offset += prologue_size;
+                        continue;
+                    }
+
+                    // Targets outside the shifted body (including == body_start) need re-patching.
+                    {
                         const new_rel: i64 = @as(i64, @intCast(patch.target_offset)) - @as(i64, @intCast(patch.instr_offset));
                         if (comptime target.toCpuArch() == .aarch64) {
                             // ADR instruction: rd | immhi(19) << 5 | 10000 << 24 | immlo(2) << 29 | 0 << 31
@@ -10992,6 +11002,55 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                     }
                 }
+            }
+        }
+
+        /// When a lambda body is shifted forward by prepending a prologue, nested lambdas
+        /// compiled inside that body also move. Keep the lambda caches in final coordinates.
+        fn shiftNestedCompiledLambdaOffsets(
+            self: *Self,
+            body_start: usize,
+            body_end: usize,
+            prologue_size: usize,
+            current_lambda_key: u32,
+        ) Allocator.Error!void {
+            if (prologue_size == 0) return;
+
+            var lambda_iter = self.compiled_lambdas.iterator();
+            while (lambda_iter.next()) |entry| {
+                if (entry.key_ptr.* == current_lambda_key) continue;
+                const offset = entry.value_ptr.*;
+                if (offset > body_start and offset < body_end) {
+                    entry.value_ptr.* = offset + prologue_size;
+                }
+            }
+
+            const Moved = struct {
+                old_offset: usize,
+                new_offset: usize,
+                params: lir.LirPatternSpan,
+            };
+
+            var moved_params = std.ArrayList(Moved).empty;
+            defer moved_params.deinit(self.allocator);
+
+            var params_iter = self.compiled_lambda_params.iterator();
+            while (params_iter.next()) |entry| {
+                const offset = entry.key_ptr.*;
+                if (offset > body_start and offset < body_end) {
+                    try moved_params.append(self.allocator, .{
+                        .old_offset = offset,
+                        .new_offset = offset + prologue_size,
+                        .params = entry.value_ptr.*,
+                    });
+                }
+            }
+
+            for (moved_params.items) |moved| {
+                _ = self.compiled_lambda_params.remove(moved.old_offset);
+            }
+            for (moved_params.items) |moved| {
+                try self.compiled_lambda_params.put(moved.new_offset, moved.params);
             }
         }
 
@@ -12260,7 +12319,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // PHASE 2: Extract body and prepend prologue (x86_64 only - uses deferred pattern)
             if (comptime target.toCpuArch() == .x86_64) {
                 // Save body bytes
-                var body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return error.OutOfMemory;
+                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return error.OutOfMemory;
                 defer self.allocator.free(body_bytes);
 
                 // Truncate buffer back to body_start
@@ -12273,37 +12332,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.codegen.emitPrologueWithAlloc(actual_locals_x86);
                 const prologue_size = self.codegen.currentOffset() - prologue_start;
 
-                // PHASE 2.5: Patch self-calls in body_bytes
-                // Self-calls target body_start (0) but after prepending prologue,
-                // they need to target prologue_start (0) which means adjusting
-                // the relative offset by -prologue_size.
-                // x86_64 CALL rel32: E8 [4-byte signed offset]
-                var i: usize = 0;
-                while (i + 5 <= body_bytes.len) : (i += 1) {
-                    if (body_bytes[i] == 0xE8) { // CALL opcode
-                        // Read the 4-byte relative offset (little-endian)
-                        const rel_bytes = body_bytes[i + 1 ..][0..4];
-                        const rel_offset: i32 = @bitCast(rel_bytes.*);
-                        // The call lands at: (body_offset + 5) + rel_offset
-                        // where body_offset = i (offset within body)
-                        // For self-calls, this should equal body_start (0)
-                        const call_end_offset: i64 = @intCast(i + 5);
-                        const call_target: i64 = call_end_offset + rel_offset;
-                        if (call_target == @as(i64, @intCast(body_start))) {
-                            // This is a self-call targeting body_start
-                            // After prepending prologue, the call is at (prologue_size + i)
-                            // and should still target prologue_start (0)
-                            // New relative offset = 0 - (prologue_size + i + 5)
-                            //                     = -(prologue_size + i + 5)
-                            // Old relative offset = -(i + 5)
-                            // Adjustment = new - old = -prologue_size
-                            const new_rel: i32 = rel_offset - @as(i32, @intCast(prologue_size));
-                            const new_bytes: [4]u8 = @bitCast(new_rel);
-                            @memcpy(body_bytes[i + 1 ..][0..4], &new_bytes);
-                        }
-                    }
-                }
-
                 // Re-append body
                 self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
 
@@ -12311,6 +12339,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
                     reloc.adjustOffset(prologue_size);
                 }
+
+                // Re-patch internal calls/addr whose targets are outside the shifted body
+                self.repatchInternalCalls(body_start, body_end, prologue_size);
+                self.repatchInternalAddrPatches(body_start, body_end, prologue_size);
 
                 // Patch return-stmt jumps to the shared epilogue
                 for (self.early_return_patches.items[saved_early_return_patches_len..]) |*patch| {
@@ -12345,41 +12377,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 _ = try frame_builder.emitPrologue(&self.codegen.emit);
                 const prologue_size = self.codegen.currentOffset() - prologue_start;
 
-                // PHASE 2.5: Patch self-calls in body_bytes
-                // Self-calls target body_start but after prepending prologue,
-                // they need to target prologue_start which means adjusting
-                // the relative offset by -prologue_size.
-                // aarch64 BL: 1 00101 imm26 (4-byte instruction, imm26 is signed offset in words)
-                var i: usize = 0;
-                while (i + 4 <= body_bytes.len) : (i += 4) {
-                    const inst: u32 = @bitCast(body_bytes[i..][0..4].*);
-                    // Check for BL opcode (bits 31-26 = 100101 = 37)
-                    if ((inst >> 26) == 0b100101) {
-                        // Extract 26-bit signed offset (in words)
-                        const imm26: u26 = @truncate(inst);
-                        const offset_words: i26 = @bitCast(imm26);
-                        const offset_bytes: i32 = @as(i32, offset_words) * 4;
-                        // For aarch64, offset is relative to instruction address (not end like x86_64)
-                        const inst_offset: i64 = @intCast(i);
-                        const call_target: i64 = inst_offset + offset_bytes;
-                        if (call_target == @as(i64, @intCast(body_start))) {
-                            // This is a self-call targeting body_start
-                            // After prepending prologue, the instruction is at (prologue_size + i)
-                            // and should still target prologue_start (body_start)
-                            // New relative offset = body_start - (body_start + prologue_size + i)
-                            //                     = -(prologue_size + i)
-                            // Old relative offset = -(i)
-                            // Adjustment = new - old = -prologue_size
-                            const new_offset_bytes: i32 = offset_bytes - @as(i32, @intCast(prologue_size));
-                            const new_offset_words: i26 = @intCast(@divExact(new_offset_bytes, 4));
-                            const new_imm26: u26 = @bitCast(new_offset_words);
-                            const new_inst: u32 = (@as(u32, 0b100101) << 26) | new_imm26;
-                            const new_bytes: [4]u8 = @bitCast(new_inst);
-                            @memcpy(body_bytes[i..][0..4], &new_bytes);
-                        }
-                    }
-                }
-
                 // Re-append body
                 self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
 
@@ -12387,6 +12384,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
                     reloc.adjustOffset(prologue_size);
                 }
+
+                // Re-patch internal calls/addr whose targets are outside the shifted body
+                self.repatchInternalCalls(body_start, body_end, prologue_size);
+                self.repatchInternalAddrPatches(body_start, body_end, prologue_size);
 
                 // Patch return-stmt jumps to the shared epilogue
                 for (self.early_return_patches.items[saved_early_return_patches_len..]) |*patch| {
@@ -12613,6 +12614,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     reloc.adjustOffset(prologue_size);
                 }
 
+                try self.shiftNestedCompiledLambdaOffsets(body_start, body_end, prologue_size, key);
                 // Re-patch internal calls/addr whose targets are outside the shifted body
                 self.repatchInternalCalls(body_start, body_end, prologue_size);
                 self.repatchInternalAddrPatches(body_start, body_end, prologue_size);
@@ -12682,6 +12684,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     reloc.adjustOffset(prologue_size);
                 }
 
+                try self.shiftNestedCompiledLambdaOffsets(body_start, body_end, prologue_size, key);
                 // Re-patch internal calls/addr whose targets are outside the shifted body
                 self.repatchInternalCalls(body_start, body_end, prologue_size);
                 self.repatchInternalAddrPatches(body_start, body_end, prologue_size);
@@ -12757,6 +12760,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // to our pre-allocated buffer. No register saving needed.
             if (needs_ret_ptr) {
                 return .{ .stack = .{ .offset = ret_buffer_offset } };
+            }
+
+            // Float returns come back in the float return register (V0/XMM0),
+            // not in the integer return register (X0/RAX).
+            if (ret_layout == .f32 or ret_layout == .f64) {
+                const stack_offset = self.codegen.allocStackSlot(8);
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emitStoreStackF64(stack_offset, .V0);
+                } else {
+                    try self.codegen.emitStoreStackF64(stack_offset, .XMM0);
+                }
+                return .{ .stack = .{ .offset = stack_offset } };
             }
 
             // Handle i128/Dec return values (returned in two registers)

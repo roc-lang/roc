@@ -2050,7 +2050,19 @@ fn lowerLambda(self: *Self, module_env: *const ModuleEnv, lambda: CIR.Expr.Lambd
 fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Closure, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
     const inner_lambda_expr = module_env.store.getExpr(closure.lambda_idx);
     const lambda = inner_lambda_expr.e_lambda;
-    const cir_capture_indices = module_env.store.sliceCaptures(closure.captures);
+    const cir_capture_indices_all = module_env.store.sliceCaptures(closure.captures);
+    const CaptureIdx = @TypeOf(cir_capture_indices_all[0]);
+    var cir_capture_indices_filtered = std.ArrayList(CaptureIdx).empty;
+    defer cir_capture_indices_filtered.deinit(self.allocator);
+
+    // Captures that point at deferred block lambdas are function references, not
+    // tuple captures for closure lifting. Keep those as symbol lookups.
+    for (cir_capture_indices_all) |cap_idx| {
+        const cap = module_env.store.getCapture(cap_idx);
+        if (self.deferred_block_lambdas.contains(@intFromEnum(cap.pattern_idx))) continue;
+        try cir_capture_indices_filtered.append(self.allocator, cap_idx);
+    }
+    const cir_capture_indices = cir_capture_indices_filtered.items;
 
     if (cir_capture_indices.len == 0) {
         // No captures — just lower as a plain lambda (no lifting needed).
