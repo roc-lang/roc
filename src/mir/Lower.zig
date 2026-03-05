@@ -842,13 +842,29 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                 for (defs) |def_idx| {
                     const def = module_env.store.getDef(def_idx);
                     if (def.pattern == lookup.pattern_idx) {
-                        // Bind the definition's type vars from the call-site
-                        // monotype. The definition has its own type scheme
-                        // (e.g. range_to's `b`) separate from the caller's
-                        // instantiated copy (e.g. `a` in `to`), so we bind
-                        // before lowering to connect them.
-                        try self.bindTypeVarMonotypes(ModuleEnv.varFrom(def.expr), monotype);
-                        _ = try self.lowerExternalDef(symbol, def.expr);
+                        // Resolve the canonical (unscoped) symbol for this
+                        // top-level def, not the potentially-scoped capture
+                        // alias from lowerClosure. Inside a closure body,
+                        // patternToSymbol returns a capture-local symbol due
+                        // to lowerClosure Step 5's override, but the function
+                        // def must be lowered under its canonical identity so
+                        // it can be shared across all call sites.
+                        const saved_scope = self.current_pattern_scope;
+                        self.current_pattern_scope = 0;
+                        const def_symbol = try self.patternToSymbol(lookup.pattern_idx);
+                        self.current_pattern_scope = saved_scope;
+                        const def_key: u64 = @bitCast(def_symbol);
+
+                        if (!self.lowered_symbols.contains(def_key) and !self.in_progress_defs.contains(def_key)) {
+                            // Bind the definition's type vars from the call-site
+                            // monotype. The definition has its own type scheme
+                            // (e.g. range_to's `b`) separate from the caller's
+                            // instantiated copy (e.g. `a` in `to`), so we bind
+                            // before lowering to connect them.
+                            try self.bindTypeVarMonotypes(ModuleEnv.varFrom(def.expr), monotype);
+                            _ = try self.lowerExternalDef(def_symbol, def.expr);
+                        }
+
                         break;
                     }
                 }
@@ -1232,6 +1248,52 @@ fn makeSyntheticSymbol(self: *Self, original: MIR.Symbol) Allocator.Error!MIR.Sy
     const original_meta = self.getSymbolMetadata(original);
     const synthetic_ident = self.makeSyntheticIdent(original_meta.ident_idx);
     return self.internSymbol(original_meta.module_idx, synthetic_ident);
+}
+
+/// If `arg` is a `.lambda` expression, hoist it into a synthetic symbol def
+/// and return a `.lookup` to that symbol. This ensures every lambda passed as
+/// a call argument has a symbol, which lambda set inference needs.
+fn hoistLambdaArg(self: *Self, arg: MIR.ExprId) Allocator.Error!MIR.ExprId {
+    if (self.store.getExpr(arg) != .lambda) return arg;
+    const ident = self.makeSyntheticIdent(.{ .idx = 0, .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } });
+    const sym = try self.internSymbol(self.current_module_idx, ident);
+    try self.store.registerSymbolDef(self.allocator, sym, arg);
+    return self.store.addExpr(self.allocator, .{ .lookup = sym }, self.store.typeOf(arg), self.store.getRegion(arg));
+}
+
+/// Record HOF call-arg edges for any function-typed args in a call.
+/// Handles both hoisted plain lambdas (lookups) and closure expressions (tuples).
+fn recordHofCallArgs(self: *Self, func_expr: MIR.ExprId, args: []const MIR.ExprId) Allocator.Error!void {
+    for (args, 0..) |arg, i| {
+        const is_fn_arg = blk: {
+            const arg_expr = self.store.getExpr(arg);
+            if (arg_expr == .lookup) {
+                // Check if the looked-up symbol was defined as a lambda
+                if (self.store.getSymbolDef(arg_expr.lookup)) |def_expr| {
+                    if (isLambdaExpr(self.store, def_expr)) break :blk true;
+                }
+            }
+            // Check if this is a closure captures tuple
+            if (self.store.closure_origins.contains(@intFromEnum(arg))) break :blk true;
+            break :blk false;
+        };
+        if (is_fn_arg) {
+            try self.store.hof_call_args.append(self.allocator, .{
+                .call_func = func_expr,
+                .arg_index = @intCast(i),
+                .arg_expr = arg,
+            });
+        }
+    }
+}
+
+fn isLambdaExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId) bool {
+    const expr = mir_store.getExpr(expr_id);
+    return switch (expr) {
+        .block => |block| isLambdaExpr(mir_store, block.final_expr),
+        .lambda => true,
+        else => false,
+    };
 }
 
 /// Compute the composite cache key for polymorphic specializations.
@@ -1688,6 +1750,18 @@ fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Clo
         const local_symbol = try self.patternToSymbol(cap.pattern_idx);
         const cap_monotype = capture_monotypes[i];
 
+        // Register capture-local → outer-scope symbol alias for lambda set inference.
+        // The outer symbol was resolved in Step 1 (before the scope change); recompute
+        // it by temporarily restoring the outer scope.
+        {
+            self.current_pattern_scope = saved_pattern_scope;
+            const outer_symbol = try self.patternToSymbol(cap.pattern_idx);
+            self.current_pattern_scope = lifted_fn_symbol.raw();
+            if (!local_symbol.eql(outer_symbol)) {
+                try self.store.capture_symbol_aliases.put(self.allocator, local_symbol.raw(), outer_symbol.raw());
+            }
+        }
+
         // lookup(captures_param)
         const captures_lookup = try self.store.addExpr(self.allocator, .{ .lookup = captures_param_symbol }, captures_tuple_monotype, region);
 
@@ -1888,10 +1962,12 @@ fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype:
         if (i < expected_arg_monos.len and !expected_arg_monos[i].isNone()) {
             try self.bindTypeVarMonotypes(ModuleEnv.varFrom(arg_idx), expected_arg_monos[i]);
         }
-        const arg = try self.lowerExpr(arg_idx);
+        const arg = try self.hoistLambdaArg(try self.lowerExpr(arg_idx));
         try self.scratch_expr_ids.append(arg);
     }
-    const args = try self.store.addExprSpan(self.allocator, self.scratch_expr_ids.sliceFromStart(args_top));
+    const lowered_call_args = self.scratch_expr_ids.sliceFromStart(args_top);
+    try self.recordHofCallArgs(func, lowered_call_args);
+    const args = try self.store.addExprSpan(self.allocator, lowered_call_args);
 
     return try self.store.addExpr(self.allocator, .{ .call = .{
         .func = func,
@@ -2878,11 +2954,10 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
             if (i + 1 < expected_param_monos.len and !expected_param_monos[i + 1].isNone()) {
                 try self.bindTypeVarMonotypes(ModuleEnv.varFrom(arg_idx), expected_param_monos[i + 1]);
             }
-            const arg = try self.lowerExpr(arg_idx);
+            const arg = try self.hoistLambdaArg(try self.lowerExpr(arg_idx));
             try self.scratch_expr_ids.append(arg);
         }
         const lowered_call_args = self.scratch_expr_ids.sliceFromStart(args_top);
-        const args = try self.store.addExprSpan(self.allocator, lowered_call_args);
 
         const mono_top = self.mono_scratches.idxs.top();
         defer self.mono_scratches.idxs.clearFrom(mono_top);
@@ -2895,6 +2970,9 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
         // Ensure the method body is lowered so codegen can find it.
         const lowered_method_symbol = try self.specializeMethod(method_symbol, func_monotype);
         const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = lowered_method_symbol }, func_monotype, region);
+
+        try self.recordHofCallArgs(func_expr, lowered_call_args);
+        const args = try self.store.addExprSpan(self.allocator, lowered_call_args);
 
         return try self.store.addExpr(self.allocator, .{ .call = .{
             .func = func_expr,

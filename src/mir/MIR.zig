@@ -473,6 +473,18 @@ pub const Pattern = union(enum) {
     runtime_error: void,
 };
 
+/// Record of a function-typed argument at a call site.
+/// Populated during lowering so lambda set inference can propagate
+/// lambda sets to HOF parameters without scanning all expressions.
+pub const HofCallArg = struct {
+    /// The callee expression (resolve to lambda to get params)
+    call_func: ExprId,
+    /// Which argument position in the call
+    arg_index: u16,
+    /// The argument expression (lookup for hoisted lambdas, or direct closure tuple)
+    arg_expr: ExprId,
+};
+
 // --- Store ---
 
 /// Flat storage for all MIR expressions, patterns, and their types.
@@ -523,6 +535,16 @@ pub const Store = struct {
     /// lifted function a closure value corresponds to.
     closure_origins: std.AutoHashMapUnmanaged(u32, u32),
 
+    /// Maps a capture-local symbol to the canonical (outer-scope) symbol it
+    /// aliases. Populated by lowerClosure for captures that reference
+    /// function-typed symbols. Used by lambda set inference to propagate
+    /// lambda sets from canonical symbols to their capture-local aliases.
+    capture_symbol_aliases: std.AutoHashMapUnmanaged(u64, u64),
+
+    /// Lambda arguments hoisted at call sites. Populated during lowering
+    /// so lambda set inference can propagate to HOF params efficiently.
+    hof_call_args: std.ArrayListUnmanaged(HofCallArg),
+
     /// String literals copied from CIR during lowering.
     /// MIR owns its own string data so downstream passes (LIR, codegen)
     /// never need to reach back into CIR module envs.
@@ -543,6 +565,8 @@ pub const Store = struct {
             .monotype_store = try Monotype.Store.init(allocator),
             .lifted_lambdas = .empty,
             .closure_origins = .empty,
+            .capture_symbol_aliases = .empty,
+            .hof_call_args = .empty,
             .symbol_defs = .empty,
             .symbol_reassignable = .empty,
             .strings = .{},
@@ -563,6 +587,8 @@ pub const Store = struct {
         self.monotype_store.deinit(allocator);
         self.lifted_lambdas.deinit(allocator);
         self.closure_origins.deinit(allocator);
+        self.capture_symbol_aliases.deinit(allocator);
+        self.hof_call_args.deinit(allocator);
         self.symbol_defs.deinit(allocator);
         self.symbol_reassignable.deinit(allocator);
         self.strings.deinit(allocator);

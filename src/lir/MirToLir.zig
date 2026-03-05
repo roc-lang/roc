@@ -883,7 +883,18 @@ fn lowerCall(self: *Self, call_data: anytype, mono_idx: Monotype.Idx, region: Re
         }
     }
 
-    // Direct function call (non-closure)
+    // Direct function call — only for inline lambda calls or HOF parameters (which
+    // have no symbol_defs entry). After lambda set unification, all lookup callees
+    // with lambda defs should have lambda sets and go through lowerClosureCall.
+    if (func_mir_expr == .lookup and std.debug.runtime_safety) {
+        const sym = func_mir_expr.lookup;
+        if (self.mir_store.getSymbolDef(sym)) |def_id| {
+            if (LambdaSet.isLambdaExpr(self.mir_store, def_id)) {
+                std.debug.panic("MirToLir: lookup callee with lambda def reached direct call fallback, symbol key={d}", .{sym.raw()});
+            }
+        }
+    }
+
     var acc = self.startLetAccumulator();
     const fn_expr_raw = try self.lowerExpr(call_data.func);
     const fn_mono = self.mir_store.typeOf(call_data.func);
@@ -932,14 +943,7 @@ fn lowerClosureCall(
     const lir_user_args = try self.lowerAnfSpan(&acc, mir_args, region);
     const user_arg_ids = self.lir_store.getExprSpan(lir_user_args);
 
-    // Lower the closure value (captures tuple/tag union)
-    const closure_val_raw = try self.lowerExpr(call_data.func);
-    const closure_mono = self.mir_store.typeOf(call_data.func);
-    const closure_layout = try self.layoutFromMonotype(closure_mono);
-    const closure_val = try acc.ensureSymbol(closure_val_raw, closure_layout, region);
-
     if (members.len == 1) {
-        // Single-member lambda set: direct call with captures as extra arg
         const member = members[0];
         const lifted_def = self.mir_store.getSymbolDef(member.fn_symbol) orelse {
             if (std.debug.runtime_safety) {
@@ -966,6 +970,24 @@ fn lowerClosureCall(
             .layout_idx = lifted_layout,
         } }, region);
 
+        if (member.captures_monotype.isNone()) {
+            // Zero-capture lambda: call with just user args, no extra captures param
+            const call_expr = try self.lir_store.addExpr(.{ .call = .{
+                .fn_expr = fn_expr,
+                .fn_layout = lifted_layout,
+                .args = lir_user_args,
+                .ret_layout = ret_layout,
+                .called_via = .apply,
+            } }, region);
+            return acc.finish(call_expr, ret_layout, region);
+        }
+
+        // Has captures: lower closure val and append as extra arg
+        const closure_val_raw = try self.lowerExpr(call_data.func);
+        const closure_mono = self.mir_store.typeOf(call_data.func);
+        const closure_layout = try self.layoutFromMonotype(closure_mono);
+        const closure_val = try acc.ensureSymbol(closure_val_raw, closure_layout, region);
+
         // Build args: [user_args..., closure_val]
         const save_exprs = self.scratch_lir_expr_ids.items.len;
         defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
@@ -986,6 +1008,11 @@ fn lowerClosureCall(
     }
 
     // Multi-member lambda set: discriminant_switch on the tag union closure value
+    const closure_val_raw = try self.lowerExpr(call_data.func);
+    const closure_mono = self.mir_store.typeOf(call_data.func);
+    const closure_layout = try self.layoutFromMonotype(closure_mono);
+    const closure_val = try acc.ensureSymbol(closure_val_raw, closure_layout, region);
+
     const save_exprs = self.scratch_lir_expr_ids.items.len;
     defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
 
@@ -1015,20 +1042,22 @@ fn lowerClosureCall(
             .layout_idx = lifted_layout,
         } }, region);
 
-        // Extract payload (captures) from the tag union
-        const captures_layout = try self.layoutFromMonotype(member.captures_monotype);
-        const payload_expr = try self.lir_store.addExpr(.{ .tag_payload_access = .{
-            .value = closure_val,
-            .union_layout = closure_layout,
-            .payload_layout = captures_layout,
-        } }, region);
-
-        // Build args: [user_args..., payload]
         const inner_save = self.scratch_lir_expr_ids.items.len;
         for (user_arg_ids) |arg_id| {
             try self.scratch_lir_expr_ids.append(self.allocator, arg_id);
         }
-        try self.scratch_lir_expr_ids.append(self.allocator, payload_expr);
+
+        if (!member.captures_monotype.isNone()) {
+            // Extract payload (captures) from the tag union
+            const captures_layout = try self.layoutFromMonotype(member.captures_monotype);
+            const payload_expr = try self.lir_store.addExpr(.{ .tag_payload_access = .{
+                .value = closure_val,
+                .union_layout = closure_layout,
+                .payload_layout = captures_layout,
+            } }, region);
+            try self.scratch_lir_expr_ids.append(self.allocator, payload_expr);
+        }
+
         const branch_args = try self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[inner_save..]);
         self.scratch_lir_expr_ids.shrinkRetainingCapacity(inner_save);
 
