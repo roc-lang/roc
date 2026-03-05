@@ -228,9 +228,42 @@ pub fn init(
     builtin_ctx: BuiltinContext,
 ) std.mem.Allocator.Error!Self {
     const mutable_cir = @constCast(cir);
+    preflightForTypeChecking(mutable_cir, imported_modules);
+    return initAssumePrepared(
+        gpa,
+        types,
+        mutable_cir,
+        imported_modules,
+        auto_imported_types,
+        regions,
+        builtin_ctx,
+    );
+}
+
+/// Preflight module state required by type-checking.
+/// This is intentionally private so `Check.init` is the only public entry point.
+fn preflightForTypeChecking(
+    cir: *ModuleEnv,
+    imported_modules: []const *const ModuleEnv,
+) void {
+    // Resolve import indices to entries in imported_modules.
+    cir.imports.resolveImports(cir, imported_modules);
+    // Resolve deferred expr/type pending lookups now that imported modules are known.
+    cir.store.resolvePendingLookups(cir, imported_modules);
+}
+
+fn initAssumePrepared(
+    gpa: std.mem.Allocator,
+    types: *types_mod.Store,
+    cir: *ModuleEnv,
+    imported_modules: []const *const ModuleEnv,
+    auto_imported_types: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
+    regions: *const Region.List,
+    builtin_ctx: BuiltinContext,
+) std.mem.Allocator.Error!Self {
     var import_mapping = try createImportMapping(
         gpa,
-        mutable_cir.getIdentStore(),
+        cir.getIdentStore(),
         cir,
         builtin_ctx.builtin_module,
         builtin_ctx.builtin_indices,
@@ -241,7 +274,7 @@ pub fn init(
     return .{
         .gpa = gpa,
         .types = types,
-        .cir = mutable_cir,
+        .cir = cir,
         .imported_modules = imported_modules,
         .auto_imported_types = auto_imported_types,
         .regions = blk: {
@@ -275,7 +308,7 @@ pub fn init(
         .top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(gpa),
         .enclosing_func_name = null,
         // Initialize with null import_mapping - caller should call fixupTypeWriter() after storing Check
-        .type_writer = try types_mod.TypeWriter.initFromParts(gpa, types, mutable_cir.getIdentStore(), null),
+        .type_writer = try types_mod.TypeWriter.initFromParts(gpa, types, cir.getIdentStore(), null),
         .deferred_def_unifications = .{},
         .deferred_cycle_envs = .{},
         .binop_dispatch_tracking = .{},

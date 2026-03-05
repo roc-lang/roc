@@ -1327,13 +1327,6 @@ pub const PackageEnv = struct {
         return checker;
     }
 
-    /// Resolve all pending lookups in a module's CIR.
-    /// Called before type-checking, when all dependencies are canonicalized.
-    /// This converts e_lookup_pending to e_lookup_external (or error).
-    fn resolvePendingLookups(env: *ModuleEnv, imported_envs: []const *ModuleEnv) void {
-        env.store.resolvePendingLookups(env, imported_envs);
-    }
-
     fn doTypeCheck(self: *PackageEnv, module_id: ModuleId) !void {
         var st = &self.modules.items[module_id];
         var env = &st.env.?;
@@ -1374,14 +1367,6 @@ pub const PackageEnv = struct {
                 try imported_envs.append(self.gpa, child_env_ptr);
             }
         }
-
-        // Resolve all imports using the shared function
-        // This matches import names to module names in imported_envs
-        env.imports.resolveImports(env, imported_envs.items);
-
-        // Resolve pending lookups that were deferred during canonicalization
-        // This converts e_lookup_pending to e_lookup_external now that all dependencies are available
-        resolvePendingLookups(env, imported_envs.items);
 
         const check_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         var checker = try typeCheckModule(self.gpa, env, self.builtin_modules.builtin_module.env, imported_envs.items, self.target);

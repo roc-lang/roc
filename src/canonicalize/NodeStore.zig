@@ -4143,7 +4143,7 @@ pub const Serialized = extern struct {
 /// Resolve all pending lookups in this store.
 /// Called before type-checking, when all dependencies are canonicalized.
 /// This converts expr_pending_lookup to expr_external_lookup (or leaves as-is for error).
-pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []const *@TypeOf(env.*)) void {
+pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []const *const @TypeOf(env.*)) void {
     const trace_pending = @import("build_options").trace_build;
 
     const nodes_len = store.nodes.len();
@@ -4194,7 +4194,7 @@ pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []c
                 }
 
                 // Find the target module env
-                var target_env: ?*@TypeOf(env.*) = null;
+                var target_env: ?*const @TypeOf(env.*) = null;
                 for (imported_envs) |imported_env| {
                     if (std.mem.eql(u8, imported_env.module_name, base_import_name)) {
                         target_env = imported_env;
@@ -4298,7 +4298,7 @@ pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []c
                         import_name;
 
                     // Find the target module env
-                    var target_env: ?*@TypeOf(env.*) = null;
+                    var target_env: ?*const @TypeOf(env.*) = null;
                     for (imported_envs) |imported_env| {
                         if (std.mem.eql(u8, imported_env.module_name, base_import_name)) {
                             target_env = imported_env;
@@ -4369,7 +4369,7 @@ pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []c
                         import_name;
 
                     // Find the target module env
-                    var target_env: ?*@TypeOf(env.*) = null;
+                    var target_env: ?*const @TypeOf(env.*) = null;
                     for (imported_envs) |imported_env| {
                         if (std.mem.eql(u8, imported_env.module_name, base_import_name)) {
                             target_env = imported_env;
