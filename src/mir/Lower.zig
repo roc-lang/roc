@@ -2441,6 +2441,7 @@ fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype:
                 .args = args,
             } }, monotype, region);
         }
+
     }
 
     const func = try self.lowerExpr(call.func);
@@ -3593,12 +3594,30 @@ fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR
         try self.mono_scratches.idxs.append(try self.resolveMonotype(arg_idx));
     }
     const func_monotype = try self.buildFuncMonotype(self.mono_scratches.idxs.sliceFromStart(mono_top), monotype, false);
-    const resolved_target = self.lookupResolvedDispatchTarget(expr_idx) orelse {
-        if (std.debug.runtime_safety) {
-            const method_name = module_env.getIdent(tvd.method_name);
-            std.debug.panic("lowerTypeVarDispatch: missing resolved dispatch target for method '{s}'", .{method_name});
+    const resolved_target = blk: {
+        if (self.lookupResolvedDispatchTarget(expr_idx)) |cached| break :blk cached;
+
+        const constraint = self.lookupDispatchConstraintForExpr(expr_idx, tvd.method_name) orelse {
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "lowerTypeVarDispatch: no static dispatch constraint for expr={d} method='{s}'",
+                    .{ @intFromEnum(expr_idx), module_env.getIdent(tvd.method_name) },
+                );
+            }
+            unreachable;
+        };
+
+        if (!constraint.resolved_target.isNone()) {
+            const resolved = ResolvedDispatchTarget{
+                .origin = constraint.resolved_target.origin_module,
+                .method_ident = constraint.resolved_target.method_ident,
+                .fn_var = constraint.fn_var,
+            };
+            try self.resolved_dispatch_targets.put(self.staticDispatchKey(expr_idx), resolved);
+            break :blk resolved;
         }
-        unreachable;
+
+        break :blk try self.resolveUnresolvedTypeVarDispatchTarget(module_env, tvd.method_name, constraint);
     };
     const method_symbol = try self.resolvedDispatchTargetToSymbol(module_env, resolved_target);
 
@@ -3634,23 +3653,167 @@ fn lookupResolvedDispatchTarget(self: *const Self, expr_idx: CIR.Expr.Idx) ?Reso
     return self.resolved_dispatch_targets.get(key);
 }
 
-fn resolvedDispatchTargetToSymbol(self: *Self, source_env: *const ModuleEnv, target: ResolvedDispatchTarget) Allocator.Error!MIR.Symbol {
-    const target_module_idx = self.findModuleForOrigin(source_env, target.origin);
-    const target_env = self.all_module_envs[target_module_idx];
+fn staticDispatchKey(self: *const Self, expr_idx: CIR.Expr.Idx) u64 {
+    return (@as(u64, self.current_module_idx) << 32) | @as(u64, @intFromEnum(expr_idx));
+}
 
-    const method_name = if (target_env.getIdentStoreConst().containsIdx(target.method_ident))
-        target_env.getIdent(target.method_ident)
-    else if (source_env.getIdentStoreConst().containsIdx(target.method_ident))
-        source_env.getIdent(target.method_ident)
-    else {
-        if (builtin.mode == .Debug) {
+fn lookupDispatchConstraintForExpr(
+    self: *const Self,
+    expr_idx: CIR.Expr.Idx,
+    method_name: Ident.Idx,
+) ?types.StaticDispatchConstraint {
+    var found: ?types.StaticDispatchConstraint = null;
+    for (self.types_store.sliceAllStaticDispatchConstraints()) |constraint| {
+        if (constraint.source_expr_idx != @intFromEnum(expr_idx)) continue;
+        if (!constraint.fn_name.eql(method_name)) continue;
+        if (found) |existing| {
+            if (std.debug.runtime_safety and existing.fn_var != constraint.fn_var) {
+                std.debug.panic(
+                    "lookupDispatchConstraintForExpr: multiple distinct constraints for expr={d} method={d}",
+                    .{ @intFromEnum(expr_idx), method_name.idx },
+                );
+            }
+            continue;
+        }
+        found = constraint;
+    }
+    return found;
+}
+
+fn identMatchesMethodName(full_name: []const u8, method_name: []const u8) bool {
+    if (std.mem.eql(u8, full_name, method_name)) return true;
+    if (full_name.len <= method_name.len + 1) return false;
+    const suffix_start = full_name.len - method_name.len;
+    return full_name[suffix_start - 1] == '.' and std.mem.eql(u8, full_name[suffix_start..], method_name);
+}
+
+fn resolveUnresolvedTypeVarDispatchTarget(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    method_name: Ident.Idx,
+    constraint: types.StaticDispatchConstraint,
+) Allocator.Error!ResolvedDispatchTarget {
+    const desired_func_monotype = try self.store.monotype_store.fromTypeVar(
+        self.allocator,
+        self.types_store,
+        constraint.fn_var,
+        self.currentCommonIdents(),
+        &self.type_var_seen,
+        &self.nominal_cycle_breakers,
+        &self.mono_scratches,
+    );
+    if (desired_func_monotype.isNone()) {
+        if (std.debug.runtime_safety) {
             std.debug.panic(
-                "resolvedDispatchTargetToSymbol: method ident {d} not found in source or target ident stores (target_module_idx={d})",
-                .{ target.method_ident.idx, target_module_idx },
+                "resolveUnresolvedTypeVarDispatchTarget: unresolved fn_var monotype for method '{s}'",
+                .{module_env.getIdent(method_name)},
+            );
+        }
+        unreachable;
+    }
+
+    const method_name_text = module_env.getIdent(method_name);
+    var found_target: ?ResolvedDispatchTarget = null;
+
+    for (self.all_module_envs, 0..) |candidate_env, candidate_module_idx_usize| {
+        const candidate_module_idx: u32 = @intCast(candidate_module_idx_usize);
+        const defs = candidate_env.store.sliceDefs(candidate_env.all_defs);
+        for (defs) |def_idx| {
+            const def = candidate_env.store.getDef(def_idx);
+            const pattern = candidate_env.store.getPattern(def.pattern);
+            if (pattern != .assign) continue;
+
+            const method_ident = pattern.assign.ident;
+            const full_name = candidate_env.getIdent(method_ident);
+            if (!identMatchesMethodName(full_name, method_name_text)) continue;
+            if (candidate_env.getExposedNodeIndexById(method_ident) == null) continue;
+
+            const candidate_expr_var: types.Var = ModuleEnv.varFrom(def.expr);
+            var candidate_mono = try self.monotypeFromTypeVarInStore(
+                candidate_module_idx,
+                &candidate_env.types,
+                candidate_expr_var,
+            );
+            if (candidate_mono.isNone()) continue;
+            if (candidate_module_idx != self.current_module_idx) {
+                candidate_mono = try self.remapMonotypeBetweenModules(
+                    candidate_mono,
+                    candidate_module_idx,
+                    self.current_module_idx,
+                );
+            }
+            if (!try self.monotypesStructurallyEqual(candidate_mono, desired_func_monotype)) continue;
+
+            const candidate_target = ResolvedDispatchTarget{
+                .origin = candidate_env.qualified_module_ident,
+                .method_ident = method_ident,
+                .fn_var = constraint.fn_var,
+            };
+            if (found_target) |existing| {
+                if (std.debug.runtime_safety and (!existing.origin.eql(candidate_target.origin) or !existing.method_ident.eql(candidate_target.method_ident))) {
+                    std.debug.panic(
+                        "resolveUnresolvedTypeVarDispatchTarget: ambiguous dispatch for method '{s}'",
+                        .{method_name_text},
+                    );
+                }
+                continue;
+            }
+            found_target = candidate_target;
+        }
+    }
+
+    return found_target orelse {
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "resolveUnresolvedTypeVarDispatchTarget: no candidate for method '{s}'",
+                .{method_name_text},
             );
         }
         unreachable;
     };
+}
+
+fn monotypeFromTypeVarInStore(
+    self: *Self,
+    module_idx: u32,
+    store_types: *const types.Store,
+    var_: types.Var,
+) Allocator.Error!Monotype.Idx {
+    var local_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+    defer local_seen.deinit();
+    var local_cycles = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+    defer local_cycles.deinit();
+
+    const saved_ident_store = self.mono_scratches.ident_store;
+    self.mono_scratches.ident_store = self.all_module_envs[module_idx].getIdentStoreConst();
+    defer self.mono_scratches.ident_store = saved_ident_store;
+
+    return self.store.monotype_store.fromTypeVar(
+        self.allocator,
+        store_types,
+        var_,
+        ModuleEnv.CommonIdents.find(&self.all_module_envs[module_idx].common),
+        &local_seen,
+        &local_cycles,
+        &self.mono_scratches,
+    );
+}
+
+fn resolvedDispatchTargetToSymbol(self: *Self, source_env: *const ModuleEnv, target: ResolvedDispatchTarget) Allocator.Error!MIR.Symbol {
+    const target_module_idx = self.findModuleForOrigin(source_env, target.origin);
+    const target_env = self.all_module_envs[target_module_idx];
+
+    if (!target_env.getIdentStoreConst().containsIdx(target.method_ident)) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "resolvedDispatchTargetToSymbol: method ident {d} not found in target module ident store (target_module_idx={d})",
+                .{ target.method_ident.idx, target_module_idx },
+            );
+        }
+        unreachable;
+    }
+
+    const method_name = target_env.getIdent(target.method_ident);
 
     const target_ident = target_env.common.findIdent(method_name) orelse {
         if (builtin.mode == .Debug) {
@@ -4067,6 +4230,7 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
             try self.bindTypeVarMonotypes(target_type_var, cmt);
         }
     }
+
     defer {
         self.type_var_seen.deinit();
         self.type_var_seen = saved_type_var_seen;
