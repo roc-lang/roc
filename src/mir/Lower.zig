@@ -286,6 +286,31 @@ fn identTextIfOwnedBy(env: *const ModuleEnv, ident: Ident.Idx) ?[]const u8 {
     return text;
 }
 
+fn identTextForCompare(self: *const Self, ident: Ident.Idx) ?[]const u8 {
+    if (identTextIfOwnedBy(self.all_module_envs[self.current_module_idx], ident)) |text| return text;
+    return null;
+}
+
+fn identsStructurallyEqual(self: *const Self, lhs: Ident.Idx, rhs: Ident.Idx) bool {
+    if (lhs.eql(rhs)) return true;
+    const lhs_text = self.identTextForCompare(lhs) orelse return false;
+    const rhs_text = self.identTextForCompare(rhs) orelse return false;
+    return std.mem.eql(u8, lhs_text, rhs_text);
+}
+
+fn identLastSegment(text: []const u8) []const u8 {
+    const dot = std.mem.lastIndexOfScalar(u8, text, '.') orelse return text;
+    return text[dot + 1 ..];
+}
+
+fn identsTagNameEquivalent(self: *const Self, lhs: Ident.Idx, rhs: Ident.Idx) bool {
+    if (self.identsStructurallyEqual(lhs, rhs)) return true;
+
+    const lhs_text = self.identTextForCompare(lhs) orelse return false;
+    const rhs_text = self.identTextForCompare(rhs) orelse return false;
+    return std.mem.eql(u8, identLastSegment(lhs_text), identLastSegment(rhs_text));
+}
+
 fn remapIdentBetweenModules(
     self: *const Self,
     ident: Ident.Idx,
@@ -294,14 +319,34 @@ fn remapIdentBetweenModules(
 ) Ident.Idx {
     if (from_module_idx == to_module_idx) return ident;
 
+    const from_env = self.all_module_envs[from_module_idx];
     const to_env = self.all_module_envs[to_module_idx];
 
-    // Already target-local: no remap needed.
-    if (identTextIfOwnedBy(to_env, ident) != null) return ident;
+    if (identTextIfOwnedBy(from_env, ident)) |ident_text| {
+        if (to_env.common.findIdent(ident_text)) |mapped| return mapped;
 
-    const ident_text = identTextIfOwnedBy(self.all_module_envs[from_module_idx], ident) orelse return ident;
+        // If the source monotype uses the source module's self type name,
+        // map that self-name directly to the target module's self-name.
+        if (std.mem.eql(u8, ident_text, from_env.module_name)) {
+            if (to_env.common.findIdent(to_env.module_name)) |target_self| return target_self;
+        }
 
-    return to_env.common.findIdent(ident_text) orelse ident;
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "remapIdentBetweenModules: ident '{s}' from module {d} not found in target module {d}",
+                .{ ident_text, from_module_idx, to_module_idx },
+            );
+        }
+        unreachable;
+    }
+
+    if (std.debug.runtime_safety) {
+        std.debug.panic(
+            "remapIdentBetweenModules: source ident {d} not owned by source module {d}",
+            .{ ident.idx, from_module_idx },
+        );
+    }
+    unreachable;
 }
 
 fn remapMonotypeBetweenModules(
@@ -1314,7 +1359,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
             if (!self.lowered_symbols.contains(symbol_key) and !self.in_progress_defs.contains(symbol_key)) {
                 const def_idx: CIR.Def.Idx = @enumFromInt(ext.target_node_idx);
                 const def = target_env.store.getDef(def_idx);
-                _ = try self.lowerExternalDefWithType(symbol, def.expr, normalized_lookup_monotype);
+                _ = try self.lowerExternalDefWithType(symbol, def.expr, monotype);
                 return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, monotype, region);
             }
 
@@ -1335,7 +1380,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
 
                     // Lower with lowerExternalDefWithType using the spec_symbol
                     // so it gets its own cache entry and symbol_def registration.
-                    _ = try self.lowerExternalDefWithType(spec_symbol, def.expr, normalized_lookup_monotype);
+                    _ = try self.lowerExternalDefWithType(spec_symbol, def.expr, monotype);
                     try self.poly_specializations.put(spec_key, spec_symbol);
 
                     return try self.store.addExpr(self.allocator, .{ .lookup = spec_symbol }, monotype, region);
@@ -1758,7 +1803,7 @@ fn monotypeCompatibleRec(
             const actual_fields = self.store.monotype_store.getFields(actual_mono.record.fields);
             if (expected_fields.len != actual_fields.len) break :blk false;
             for (expected_fields, actual_fields) |expected_field, actual_field| {
-                if (!expected_field.name.eql(actual_field.name)) break :blk false;
+                if (!self.identsStructurallyEqual(expected_field.name, actual_field.name)) break :blk false;
                 if (!try self.monotypeCompatibleRec(expected_field.type_idx, actual_field.type_idx, seen)) break :blk false;
             }
             break :blk true;
@@ -1768,9 +1813,11 @@ fn monotypeCompatibleRec(
             const actual_tags = self.store.monotype_store.getTags(actual_mono.tag_union.tags);
             if (expected_tags.len != actual_tags.len) break :blk false;
             for (expected_tags, actual_tags) |expected_tag, actual_tag| {
-                if (!expected_tag.name.eql(actual_tag.name)) break :blk false;
                 const expected_payloads = self.store.monotype_store.getIdxSpan(expected_tag.payloads);
                 const actual_payloads = self.store.monotype_store.getIdxSpan(actual_tag.payloads);
+
+                if (!self.identsTagNameEquivalent(expected_tag.name, actual_tag.name)) break :blk false;
+
                 if (expected_payloads.len != actual_payloads.len) break :blk false;
                 for (expected_payloads, actual_payloads) |expected_payload, actual_payload| {
                     if (!try self.monotypeCompatibleRec(expected_payload, actual_payload, seen)) break :blk false;
@@ -1840,7 +1887,7 @@ fn monotypesStructurallyEqualRec(
             const rhs_fields = self.store.monotype_store.getFields(rhs_mono.record.fields);
             if (lhs_fields.len != rhs_fields.len) break :blk false;
             for (lhs_fields, rhs_fields) |lhs_field, rhs_field| {
-                if (!lhs_field.name.eql(rhs_field.name)) break :blk false;
+                if (!self.identsStructurallyEqual(lhs_field.name, rhs_field.name)) break :blk false;
                 if (!try self.monotypesStructurallyEqualRec(lhs_field.type_idx, rhs_field.type_idx, seen)) {
                     break :blk false;
                 }
@@ -1852,9 +1899,11 @@ fn monotypesStructurallyEqualRec(
             const rhs_tags = self.store.monotype_store.getTags(rhs_mono.tag_union.tags);
             if (lhs_tags.len != rhs_tags.len) break :blk false;
             for (lhs_tags, rhs_tags) |lhs_tag, rhs_tag| {
-                if (!lhs_tag.name.eql(rhs_tag.name)) break :blk false;
                 const lhs_payloads = self.store.monotype_store.getIdxSpan(lhs_tag.payloads);
                 const rhs_payloads = self.store.monotype_store.getIdxSpan(rhs_tag.payloads);
+
+                if (!self.identsTagNameEquivalent(lhs_tag.name, rhs_tag.name)) break :blk false;
+
                 if (lhs_payloads.len != rhs_payloads.len) break :blk false;
                 for (lhs_payloads, rhs_payloads) |lhs_payload, rhs_payload| {
                     if (!try self.monotypesStructurallyEqualRec(lhs_payload, rhs_payload, seen)) {
@@ -2396,21 +2445,10 @@ fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype:
 
     const func = try self.lowerExpr(call.func);
 
-    const resolved_func_monotype_for_args = try self.resolveMonotype(call.func);
-    const expected_arg_monos: []const Monotype.Idx = blk: {
-        if (resolved_func_monotype_for_args.isNone()) break :blk &.{};
-        const fn_mono = self.store.monotype_store.getMonotype(resolved_func_monotype_for_args);
-        if (fn_mono != .func) break :blk &.{};
-        break :blk self.store.monotype_store.getIdxSpan(fn_mono.func.args);
-    };
-
     const call_arg_exprs = module_env.store.sliceExpr(call.args);
     const args_top = self.scratch_expr_ids.top();
     defer self.scratch_expr_ids.clearFrom(args_top);
-    for (call_arg_exprs, 0..) |arg_idx, i| {
-        if (i < expected_arg_monos.len and !expected_arg_monos[i].isNone()) {
-            try self.bindTypeVarMonotypes(ModuleEnv.varFrom(arg_idx), expected_arg_monos[i]);
-        }
+    for (call_arg_exprs) |arg_idx| {
         const arg = try self.hoistLambdaArg(try self.lowerExpr(arg_idx));
         try self.scratch_expr_ids.append(arg);
     }
@@ -3745,7 +3783,7 @@ fn specializeMethod(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?Mono
                     const spec_symbol = try self.makeSyntheticSymbol(symbol);
                     try self.poly_specializations.put(spec_key, spec_symbol);
                     errdefer _ = self.poly_specializations.remove(spec_key);
-                    _ = try self.lowerExternalDefWithType(spec_symbol, def_expr, normalized_caller_monotype);
+                    _ = try self.lowerExternalDefWithType(spec_symbol, def_expr, caller_monotype);
                     return spec_symbol;
                 }
             }
@@ -3765,7 +3803,7 @@ fn specializeMethod(self: *Self, symbol: MIR.Symbol, caller_func_monotype: ?Mono
                     const spec_symbol = try self.makeSyntheticSymbol(symbol);
                     try self.poly_specializations.put(spec_key, spec_symbol);
                     errdefer _ = self.poly_specializations.remove(spec_key);
-                    _ = try self.lowerExternalDefWithType(spec_symbol, def_expr, normalized_caller_monotype);
+                    _ = try self.lowerExternalDefWithType(spec_symbol, def_expr, caller_monotype);
                     return spec_symbol;
                 }
             }
@@ -3821,6 +3859,10 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
             .local_ident => {},
         }
     }
+    const target_type_var: types.Var = switch (symbol_meta) {
+        .external_def => |ext| @enumFromInt(ext.def_node_idx),
+        .local_ident => ModuleEnv.varFrom(cir_expr_idx),
+    };
 
     // Check cache
     if (self.lowered_symbols.get(symbol_key)) |cached| {
@@ -3841,7 +3883,7 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
             const derived = try self.store.monotype_store.fromTypeVar(
                 self.allocator,
                 self.types_store,
-                ModuleEnv.varFrom(cir_expr_idx),
+                target_type_var,
                 self.currentCommonIdents(),
                 &self.type_var_seen,
                 &self.nominal_cycle_breakers,
@@ -3896,11 +3938,133 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
     // from type annotations that are not unified with the caller's vars.
     if (normalized_caller_monotype) |cmt| {
         if (!cmt.isNone()) {
-            const target_type_var = ModuleEnv.varFrom(cir_expr_idx);
-            const compatible = try self.callerMonotypeCompatibleWithTargetTypeVar(target_type_var, cmt);
-            if (compatible) {
-                try self.bindTypeVarMonotypes(target_type_var, cmt);
+            if (std.debug.runtime_safety) {
+                const compatible = try self.callerMonotypeCompatibleWithTargetTypeVar(target_type_var, cmt);
+                if (!compatible) {
+                    var dbg_expected_bindings = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+                    defer dbg_expected_bindings.deinit();
+                    var dbg_expected_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+                    defer dbg_expected_cycle_breakers.deinit();
+                    const expected_monotype = try self.store.monotype_store.fromTypeVar(
+                        self.allocator,
+                        self.types_store,
+                        target_type_var,
+                        self.currentCommonIdents(),
+                        &dbg_expected_bindings,
+                        &dbg_expected_cycle_breakers,
+                        &self.mono_scratches,
+                    );
+                    const caller_tag = if (cmt.isNone()) "none" else @tagName(self.store.monotype_store.getMonotype(cmt));
+                    const expected_tag = if (expected_monotype.isNone()) "none" else @tagName(self.store.monotype_store.getMonotype(expected_monotype));
+                    const target_var_content_tag = @tagName(self.types_store.resolveVar(target_type_var).desc.content);
+                    const target_expr_tag = @tagName(self.all_module_envs[self.current_module_idx].store.getExpr(cir_expr_idx));
+                    var caller_func_arity: usize = 0;
+                    var expected_func_arity: usize = 0;
+                    var caller_func_ret: u32 = std.math.maxInt(u32);
+                    var expected_func_ret: u32 = std.math.maxInt(u32);
+                    var caller_func_effectful = false;
+                    var expected_func_effectful = false;
+                    var caller_first_arg: u32 = std.math.maxInt(u32);
+                    var expected_first_arg: u32 = std.math.maxInt(u32);
+                    var caller_first_arg_tag: []const u8 = "none";
+                    var expected_first_arg_tag: []const u8 = "none";
+                    var caller_first_tag_payload0: u32 = std.math.maxInt(u32);
+                    var expected_first_tag_payload0: u32 = std.math.maxInt(u32);
+                    var caller_first_tag_payload0_tag: []const u8 = "none";
+                    var expected_first_tag_payload0_tag: []const u8 = "none";
+                    var caller_first_tag_count: usize = 0;
+                    var expected_first_tag_count: usize = 0;
+                    var caller_first_tag_name: []const u8 = "none";
+                    var expected_first_tag_name: []const u8 = "none";
+                    if (!cmt.isNone()) {
+                        const caller_mono = self.store.monotype_store.getMonotype(cmt);
+                        if (caller_mono == .func) {
+                            const cfunc = caller_mono.func;
+                            const cargs = self.store.monotype_store.getIdxSpan(cfunc.args);
+                            caller_func_arity = cargs.len;
+                            caller_func_ret = @intFromEnum(cfunc.ret);
+                            caller_func_effectful = cfunc.effectful;
+                            if (cargs.len > 0) {
+                                caller_first_arg = @intFromEnum(cargs[0]);
+                                const carg0_mono = self.store.monotype_store.getMonotype(cargs[0]);
+                                caller_first_arg_tag = @tagName(carg0_mono);
+                                if (carg0_mono == .tag_union) {
+                                    const ctags = self.store.monotype_store.getTags(carg0_mono.tag_union.tags);
+                                    caller_first_tag_count = ctags.len;
+                                    if (ctags.len > 0) {
+                                        caller_first_tag_name = self.identTextForCompare(ctags[0].name) orelse "<?>";
+                                        const cpayloads = self.store.monotype_store.getIdxSpan(ctags[0].payloads);
+                                        if (cpayloads.len > 0) {
+                                            caller_first_tag_payload0 = @intFromEnum(cpayloads[0]);
+                                            caller_first_tag_payload0_tag = @tagName(self.store.monotype_store.getMonotype(cpayloads[0]));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (!expected_monotype.isNone()) {
+                        const expected_mono = self.store.monotype_store.getMonotype(expected_monotype);
+                        if (expected_mono == .func) {
+                            const efunc = expected_mono.func;
+                            const eargs = self.store.monotype_store.getIdxSpan(efunc.args);
+                            expected_func_arity = eargs.len;
+                            expected_func_ret = @intFromEnum(efunc.ret);
+                            expected_func_effectful = efunc.effectful;
+                            if (eargs.len > 0) {
+                                expected_first_arg = @intFromEnum(eargs[0]);
+                                const earg0_mono = self.store.monotype_store.getMonotype(eargs[0]);
+                                expected_first_arg_tag = @tagName(earg0_mono);
+                                if (earg0_mono == .tag_union) {
+                                    const etags = self.store.monotype_store.getTags(earg0_mono.tag_union.tags);
+                                    expected_first_tag_count = etags.len;
+                                    if (etags.len > 0) {
+                                        expected_first_tag_name = self.identTextForCompare(etags[0].name) orelse "<?>";
+                                        const epayloads = self.store.monotype_store.getIdxSpan(etags[0].payloads);
+                                        if (epayloads.len > 0) {
+                                            expected_first_tag_payload0 = @intFromEnum(epayloads[0]);
+                                            expected_first_tag_payload0_tag = @tagName(self.store.monotype_store.getMonotype(epayloads[0]));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    std.debug.panic(
+                        "MIR Lower invariant: caller monotype incompatible with target type var (caller={d}:{s} fn[arity={d},ret={d},fx={},arg0={d}:{s},arg0.tags={d},arg0.tag0={s},arg0.tag0.payload0={d}:{s}] target_var={d}:{s}, expected={d}:{s} fn[arity={d},ret={d},fx={},arg0={d}:{s},arg0.tags={d},arg0.tag0={s},arg0.tag0.payload0={d}:{s}] expr={d}:{s}, symbol={d})",
+                        .{
+                            @intFromEnum(cmt),
+                            caller_tag,
+                            caller_func_arity,
+                            caller_func_ret,
+                            caller_func_effectful,
+                            caller_first_arg,
+                            caller_first_arg_tag,
+                            caller_first_tag_count,
+                            caller_first_tag_name,
+                            caller_first_tag_payload0,
+                            caller_first_tag_payload0_tag,
+                            @intFromEnum(target_type_var),
+                            target_var_content_tag,
+                            @intFromEnum(expected_monotype),
+                            expected_tag,
+                            expected_func_arity,
+                            expected_func_ret,
+                            expected_func_effectful,
+                            expected_first_arg,
+                            expected_first_arg_tag,
+                            expected_first_tag_count,
+                            expected_first_tag_name,
+                            expected_first_tag_payload0,
+                            expected_first_tag_payload0_tag,
+                            @intFromEnum(cir_expr_idx),
+                            target_expr_tag,
+                            symbol.raw(),
+                        },
+                    );
+                }
             }
+            try self.bindTypeVarMonotypes(target_type_var, cmt);
         }
     }
     defer {
@@ -3961,7 +4125,7 @@ fn bindRecordFieldByName(
     mono_fields: []const Monotype.Field,
 ) Allocator.Error!void {
     for (mono_fields) |mono_field| {
-        if (mono_field.name.eql(field_name)) {
+        if (self.identsStructurallyEqual(mono_field.name, field_name)) {
             try self.bindTypeVarMonotypes(field_var, mono_field.type_idx);
             return;
         }
@@ -3981,7 +4145,7 @@ fn bindTagPayloadsByName(
     mono_tags: []const Monotype.Tag,
 ) Allocator.Error!void {
     for (mono_tags) |mono_tag| {
-        if (!mono_tag.name.eql(tag_name)) continue;
+        if (!self.identsTagNameEquivalent(mono_tag.name, tag_name)) continue;
 
         const mono_payloads = self.store.monotype_store.getIdxSpan(mono_tag.payloads);
         if (payload_vars.len != mono_payloads.len) {
@@ -4361,7 +4525,7 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
                 for (type_tag_names, type_tag_args) |tag_name, tag_args| {
                     var seen_tag = false;
                     for (self.scratch_ident_idxs.sliceFromStart(seen_top)) |existing_name| {
-                        if (existing_name.eql(tag_name)) {
+                        if (self.identsTagNameEquivalent(existing_name, tag_name)) {
                             seen_tag = true;
                             break;
                         }
@@ -4404,7 +4568,7 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
             for (mono_tags) |mono_tag| {
                 var found = false;
                 for (self.scratch_ident_idxs.sliceFromStart(seen_top)) |seen_name| {
-                    if (seen_name.eql(mono_tag.name)) {
+                    if (self.identsTagNameEquivalent(seen_name, mono_tag.name)) {
                         found = true;
                         break;
                     }

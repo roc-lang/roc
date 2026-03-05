@@ -351,7 +351,7 @@ inline fn ensureTypeStoreIsFilled(self: *Self) Allocator.Error!void {
 
 /// Key for the import cache: module index + expression index in that module
 const ImportCacheKey = struct {
-    module_idx: CIR.Import.Idx,
+    resolved_module_idx: u32,
     node_idx: CIR.Node.Idx,
 };
 
@@ -374,13 +374,13 @@ const ImportCacheKey = struct {
 const ImportCache = std.HashMapUnmanaged(ImportCacheKey, Var, struct {
     pub fn hash(_: @This(), key: ImportCacheKey) u64 {
         var hasher = std.hash.Wyhash.init(0);
-        hasher.update(std.mem.asBytes(&key.module_idx));
+        hasher.update(std.mem.asBytes(&key.resolved_module_idx));
         hasher.update(std.mem.asBytes(&key.node_idx));
         return hasher.final();
     }
 
     pub fn eql(_: @This(), a: ImportCacheKey, b: ImportCacheKey) bool {
-        return a.module_idx == b.module_idx and a.node_idx == b.node_idx;
+        return a.resolved_module_idx == b.resolved_module_idx and a.node_idx == b.node_idx;
     }
 }, 80);
 
@@ -5688,23 +5688,24 @@ fn resolveVarFromExternal(
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // First try to use the resolved module index from the imports store
-    // This is the proper way to map import indices to module positions
-    const module_idx = self.cir.imports.getResolvedModule(import_idx) orelse blk: {
-        // Fallback: if not resolved, use the import index directly
-        // This maintains backwards compatibility with tests that don't call resolveImports
-        break :blk @intFromEnum(import_idx);
+    const module_idx = self.cir.imports.getResolvedModule(import_idx) orelse {
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "Check invariant: unresolved import index {d} in resolveVarFromExternal",
+                .{@intFromEnum(import_idx)},
+            );
+        }
+        unreachable;
     };
     if (module_idx < self.imported_modules.len) {
-        const other_module_cir = self.imported_modules[module_idx];
-        const other_module_env = other_module_cir;
+        const other_module_env = self.imported_modules[module_idx];
 
         // The idx of the expression in the other module
         const target_node_idx = @as(CIR.Node.Idx, @enumFromInt(node_idx));
 
         // Check if we've already copied this import
         const cache_key = ImportCacheKey{
-            .module_idx = import_idx,
+            .resolved_module_idx = module_idx,
             .node_idx = target_node_idx,
         };
 
@@ -5713,34 +5714,7 @@ fn resolveVarFromExternal(
             cached_var
         else blk: {
             // First time importing this type - copy it and cache the result
-            const imported_var: Var = blk_var: {
-                if (other_module_env.store.isDefNode(node_idx)) {
-                    const def_idx: CIR.Def.Idx = @enumFromInt(node_idx);
-                    const def = other_module_env.store.getDef(def_idx);
-                    const pat = other_module_env.store.getPattern(def.pattern);
-                    const def_ident = switch (pat) {
-                        .assign => |assign| assign.ident,
-                        .as => |as_pat| as_pat.ident,
-                        else => Ident.Idx.NONE,
-                    };
-
-                    // Associated methods in type modules are emitted as qualified
-                    // top-level names (e.g. "A.get_value"). For these defs, the
-                    // def-node var is the canonical function type; the raw expr var
-                    // can point at an internal helper type entry.
-                    if (!def_ident.isNone()) {
-                        const ident_text = other_module_env.getIdent(def_ident);
-                        if (std.mem.indexOfScalar(u8, ident_text, '.')) |_| {
-                            break :blk_var @as(Var, @enumFromInt(@intFromEnum(target_node_idx)));
-                        }
-                    }
-
-                    break :blk_var ModuleEnv.varFrom(def.expr);
-                }
-
-                // Non-def nodes continue to use node-index-as-var mapping.
-                break :blk_var @as(Var, @enumFromInt(@intFromEnum(target_node_idx)));
-            };
+            const imported_var: Var = @as(Var, @enumFromInt(@intFromEnum(target_node_idx)));
 
             // Every node should have a corresponding type entry
             std.debug.assert(@intFromEnum(imported_var) < other_module_env.types.len());
@@ -5756,7 +5730,13 @@ fn resolveVarFromExternal(
             .other_cir = other_module_env,
         };
     } else {
-        return null;
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "Check invariant: resolved import module index {d} out of bounds (imported_modules.len={d})",
+                .{ module_idx, self.imported_modules.len },
+            );
+        }
+        unreachable;
     }
 }
 

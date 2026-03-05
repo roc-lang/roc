@@ -681,9 +681,9 @@ test "lowerExternalDef: recursion guard returns lookup placeholder" {
     const expr = env.mir_store.getExpr(result);
     // The recursion guard should return a lookup placeholder
     try testing.expect(expr == .lookup);
-    // Initially unit_idx; in real usage, lowerExternalDef patches this to the
-    // resolved monotype after lowerExpr completes.
-    try testing.expectEqual(env.mir_store.monotype_store.unit_idx, env.mir_store.typeOf(result));
+    // The recursion placeholder should preserve a concrete monotype, not unit,
+    // so downstream lowering/codegen never sees a fake unit function type.
+    try testing.expect(env.mir_store.typeOf(result) != env.mir_store.monotype_store.unit_idx);
 }
 
 test "lowerExternalDef: caching returns same ExprId on second call" {
@@ -747,6 +747,88 @@ test "cross-module: type module method call lowers successfully" {
     // The expression should lower successfully (not be a runtime error)
     const result = env_b.mir_store.getExpr(expr);
     try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: imported value call uses target def identity" {
+    var env_color = try MirTestEnv.initModule("Color",
+        \\Color := [Red, Green, Blue].{
+        \\    red : Color
+        \\    red = Red
+        \\
+        \\    green : Color
+        \\    green = Green
+        \\
+        \\    blue : Color
+        \\    blue = Blue
+        \\
+        \\    to_str : Color -> Str
+        \\    to_str = |color|
+        \\        match color {
+        \\            Red => "red"
+        \\            Green => "green"
+        \\            Blue => "blue"
+        \\        }
+        \\}
+    );
+    defer env_color.deinit();
+
+    var env_app = try MirTestEnv.initWithImport("App",
+        \\import Color
+        \\
+        \\main = Color.to_str(Color.red)
+    , "Color", &env_color);
+    defer env_app.deinit();
+
+    const expr = try env_app.lowerFirstDef();
+    const result = env_app.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+
+    try testing.expect(result == .call);
+    const func = env_app.mir_store.getExpr(result.call.func);
+    try testing.expect(func == .lookup);
+    try testing.expect(env_app.mir_store.getSymbolDef(func.lookup) != null);
+}
+
+test "cross-module: imported top-level value call uses target def identity" {
+    var env_color = try MirTestEnv.initModule("Color",
+        \\module [Color, red, green, blue, to_str]
+        \\
+        \\Color : [Red, Green, Blue]
+        \\
+        \\red : Color
+        \\red = Red
+        \\
+        \\green : Color
+        \\green = Green
+        \\
+        \\blue : Color
+        \\blue = Blue
+        \\
+        \\to_str : Color -> Str
+        \\to_str = |color|
+        \\    match color {
+        \\        Red => "red"
+        \\        Green => "green"
+        \\        Blue => "blue"
+        \\    }
+    );
+    defer env_color.deinit();
+
+    var env_app = try MirTestEnv.initWithImport("App",
+        \\import Color
+        \\
+        \\main = Color.to_str(Color.red)
+    , "Color", &env_color);
+    defer env_app.deinit();
+
+    const expr = try env_app.lowerFirstDef();
+    const result = env_app.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+
+    try testing.expect(result == .call);
+    const func = env_app.mir_store.getExpr(result.call.func);
+    try testing.expect(func == .lookup);
+    try testing.expect(env_app.mir_store.getSymbolDef(func.lookup) != null);
 }
 
 // --- Additional Lower code path tests ---

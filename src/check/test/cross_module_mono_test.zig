@@ -480,7 +480,6 @@ test "cross-module mono: importing module can reference methods from imported ty
     try testing.expect(a_ident_in_b != null);
 }
 
-
 test "cross-module mono: static dispatch method registration in type module" {
     // This tests that when a type module defines methods, they are properly
     // registered so that other modules can look them up for static dispatch
