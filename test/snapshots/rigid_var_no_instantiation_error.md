@@ -234,48 +234,45 @@ main! = |_| {
 					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-closure
-			(captures
-				(capture (ident "swap")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-block
-					(s-let
-						(p-assign (ident "result1"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "swap")))
-							(e-tuple
-								(elems
-									(e-num (value "42"))
-									(e-string
-										(e-literal (string "hello")))))))
-					(s-let
-						(p-assign (ident "result2"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "swap")))
-							(e-tuple
-								(elems
-									(e-runtime-error (tag "nested_value_not_found"))
-									(e-list
-										(elems
-											(e-num (value "1"))
-											(e-num (value "2"))
-											(e-num (value "3"))))))))
-					(s-let
-						(p-assign (ident "result3"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "swap")))
-							(e-tuple
-								(elems
-									(e-string
-										(e-literal (string "foo")))
-									(e-string
-										(e-literal (string "bar")))))))
-					(e-empty_record))))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-block
+				(s-let
+					(p-assign (ident "result1"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "swap")))
+						(e-tuple
+							(elems
+								(e-num (value "42"))
+								(e-string
+									(e-literal (string "hello")))))))
+				(s-let
+					(p-assign (ident "result2"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "swap")))
+						(e-tuple
+							(elems
+								(e-runtime-error (tag "nested_value_not_found"))
+								(e-list
+									(elems
+										(e-num (value "1"))
+										(e-num (value "2"))
+										(e-num (value "3"))))))))
+				(s-let
+					(p-assign (ident "result3"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "swap")))
+						(e-tuple
+							(elems
+								(e-string
+									(e-literal (string "foo")))
+								(e-string
+									(e-literal (string "bar")))))))
+				(e-empty_record)))))
 ~~~
 # TYPES
 ~~~clojure

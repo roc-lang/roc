@@ -1717,117 +1717,6 @@ fn monotypesStructurallyEqual(self: *Self, lhs: Monotype.Idx, rhs: Monotype.Idx)
     return try self.monotypesStructurallyEqualRec(lhs, rhs, &seen);
 }
 
-fn callerMonotypeCompatibleWithTargetTypeVar(
-    self: *Self,
-    target_type_var: types.Var,
-    caller_monotype: Monotype.Idx,
-) Allocator.Error!bool {
-    if (caller_monotype.isNone()) return false;
-
-    var expected_bindings = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
-    defer expected_bindings.deinit();
-    var expected_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
-    defer expected_cycle_breakers.deinit();
-
-    const expected_monotype = try self.store.monotype_store.fromTypeVar(
-        self.allocator,
-        self.types_store,
-        target_type_var,
-        self.currentCommonIdents(),
-        &expected_bindings,
-        &expected_cycle_breakers,
-        &self.mono_scratches,
-    );
-    if (expected_monotype.isNone()) return false;
-
-    var seen = std.AutoHashMap(u64, void).init(self.allocator);
-    defer seen.deinit();
-    return try self.monotypeCompatibleRec(expected_monotype, caller_monotype, &seen);
-}
-
-fn monotypeCompatibleRec(
-    self: *Self,
-    expected: Monotype.Idx,
-    actual: Monotype.Idx,
-    seen: *std.AutoHashMap(u64, void),
-) Allocator.Error!bool {
-    if (expected == actual) return true;
-    if (expected.isNone() or actual.isNone()) return false;
-
-    const expected_u32: u32 = @intFromEnum(expected);
-    const actual_u32: u32 = @intFromEnum(actual);
-    const key: u64 = (@as(u64, expected_u32) << 32) | @as(u64, actual_u32);
-    if (seen.contains(key)) return true;
-    try seen.put(key, {});
-
-    const expected_mono = self.store.monotype_store.getMonotype(expected);
-    if (expected_mono == .unit) return true;
-
-    const actual_mono = self.store.monotype_store.getMonotype(actual);
-    if (std.meta.activeTag(expected_mono) != std.meta.activeTag(actual_mono)) return false;
-
-    return switch (expected_mono) {
-        .recursive_placeholder => {
-            if (std.debug.runtime_safety) {
-                std.debug.panic("recursive_placeholder survived monotype construction", .{});
-            }
-            unreachable;
-        },
-        .unit => true,
-        .prim => |expected_prim| expected_prim == actual_mono.prim,
-        .list => |expected_list| try self.monotypeCompatibleRec(expected_list.elem, actual_mono.list.elem, seen),
-        .box => |expected_box| try self.monotypeCompatibleRec(expected_box.inner, actual_mono.box.inner, seen),
-        .tuple => |expected_tuple| blk: {
-            const expected_elems = self.store.monotype_store.getIdxSpan(expected_tuple.elems);
-            const actual_elems = self.store.monotype_store.getIdxSpan(actual_mono.tuple.elems);
-            if (expected_elems.len != actual_elems.len) break :blk false;
-            for (expected_elems, actual_elems) |expected_elem, actual_elem| {
-                if (!try self.monotypeCompatibleRec(expected_elem, actual_elem, seen)) break :blk false;
-            }
-            break :blk true;
-        },
-        .func => |expected_func| blk: {
-            const actual_func = actual_mono.func;
-            if (expected_func.effectful != actual_func.effectful) break :blk false;
-
-            const expected_args = self.store.monotype_store.getIdxSpan(expected_func.args);
-            const actual_args = self.store.monotype_store.getIdxSpan(actual_func.args);
-            if (expected_args.len != actual_args.len) break :blk false;
-            for (expected_args, actual_args) |expected_arg, actual_arg| {
-                if (!try self.monotypeCompatibleRec(expected_arg, actual_arg, seen)) break :blk false;
-            }
-            break :blk try self.monotypeCompatibleRec(expected_func.ret, actual_func.ret, seen);
-        },
-        .record => |expected_record| blk: {
-            const expected_fields = self.store.monotype_store.getFields(expected_record.fields);
-            const actual_fields = self.store.monotype_store.getFields(actual_mono.record.fields);
-            if (expected_fields.len != actual_fields.len) break :blk false;
-            for (expected_fields, actual_fields) |expected_field, actual_field| {
-                if (!self.identsStructurallyEqual(expected_field.name, actual_field.name)) break :blk false;
-                if (!try self.monotypeCompatibleRec(expected_field.type_idx, actual_field.type_idx, seen)) break :blk false;
-            }
-            break :blk true;
-        },
-        .tag_union => |expected_union| blk: {
-            const expected_tags = self.store.monotype_store.getTags(expected_union.tags);
-            const actual_tags = self.store.monotype_store.getTags(actual_mono.tag_union.tags);
-            if (expected_tags.len != actual_tags.len) break :blk false;
-            for (expected_tags, actual_tags) |expected_tag, actual_tag| {
-                const expected_payloads = self.store.monotype_store.getIdxSpan(expected_tag.payloads);
-                const actual_payloads = self.store.monotype_store.getIdxSpan(actual_tag.payloads);
-
-                if (!self.identsTagNameEquivalent(expected_tag.name, actual_tag.name)) break :blk false;
-
-                if (expected_payloads.len != actual_payloads.len) break :blk false;
-                for (expected_payloads, actual_payloads) |expected_payload, actual_payload| {
-                    if (!try self.monotypeCompatibleRec(expected_payload, actual_payload, seen)) break :blk false;
-                }
-            }
-            break :blk true;
-        },
-    };
-}
-
 fn monotypesStructurallyEqualRec(
     self: *Self,
     lhs: Monotype.Idx,
@@ -4101,132 +3990,6 @@ fn lowerExternalDefWithType(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.E
     // from type annotations that are not unified with the caller's vars.
     if (normalized_caller_monotype) |cmt| {
         if (!cmt.isNone()) {
-            if (std.debug.runtime_safety) {
-                const compatible = try self.callerMonotypeCompatibleWithTargetTypeVar(target_type_var, cmt);
-                if (!compatible) {
-                    var dbg_expected_bindings = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
-                    defer dbg_expected_bindings.deinit();
-                    var dbg_expected_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
-                    defer dbg_expected_cycle_breakers.deinit();
-                    const expected_monotype = try self.store.monotype_store.fromTypeVar(
-                        self.allocator,
-                        self.types_store,
-                        target_type_var,
-                        self.currentCommonIdents(),
-                        &dbg_expected_bindings,
-                        &dbg_expected_cycle_breakers,
-                        &self.mono_scratches,
-                    );
-                    const caller_tag = if (cmt.isNone()) "none" else @tagName(self.store.monotype_store.getMonotype(cmt));
-                    const expected_tag = if (expected_monotype.isNone()) "none" else @tagName(self.store.monotype_store.getMonotype(expected_monotype));
-                    const target_var_content_tag = @tagName(self.types_store.resolveVar(target_type_var).desc.content);
-                    const target_expr_tag = @tagName(self.all_module_envs[self.current_module_idx].store.getExpr(cir_expr_idx));
-                    var caller_func_arity: usize = 0;
-                    var expected_func_arity: usize = 0;
-                    var caller_func_ret: u32 = std.math.maxInt(u32);
-                    var expected_func_ret: u32 = std.math.maxInt(u32);
-                    var caller_func_effectful = false;
-                    var expected_func_effectful = false;
-                    var caller_first_arg: u32 = std.math.maxInt(u32);
-                    var expected_first_arg: u32 = std.math.maxInt(u32);
-                    var caller_first_arg_tag: []const u8 = "none";
-                    var expected_first_arg_tag: []const u8 = "none";
-                    var caller_first_tag_payload0: u32 = std.math.maxInt(u32);
-                    var expected_first_tag_payload0: u32 = std.math.maxInt(u32);
-                    var caller_first_tag_payload0_tag: []const u8 = "none";
-                    var expected_first_tag_payload0_tag: []const u8 = "none";
-                    var caller_first_tag_count: usize = 0;
-                    var expected_first_tag_count: usize = 0;
-                    var caller_first_tag_name: []const u8 = "none";
-                    var expected_first_tag_name: []const u8 = "none";
-                    if (!cmt.isNone()) {
-                        const caller_mono = self.store.monotype_store.getMonotype(cmt);
-                        if (caller_mono == .func) {
-                            const cfunc = caller_mono.func;
-                            const cargs = self.store.monotype_store.getIdxSpan(cfunc.args);
-                            caller_func_arity = cargs.len;
-                            caller_func_ret = @intFromEnum(cfunc.ret);
-                            caller_func_effectful = cfunc.effectful;
-                            if (cargs.len > 0) {
-                                caller_first_arg = @intFromEnum(cargs[0]);
-                                const carg0_mono = self.store.monotype_store.getMonotype(cargs[0]);
-                                caller_first_arg_tag = @tagName(carg0_mono);
-                                if (carg0_mono == .tag_union) {
-                                    const ctags = self.store.monotype_store.getTags(carg0_mono.tag_union.tags);
-                                    caller_first_tag_count = ctags.len;
-                                    if (ctags.len > 0) {
-                                        caller_first_tag_name = self.identTextForCompare(ctags[0].name) orelse "<?>";
-                                        const cpayloads = self.store.monotype_store.getIdxSpan(ctags[0].payloads);
-                                        if (cpayloads.len > 0) {
-                                            caller_first_tag_payload0 = @intFromEnum(cpayloads[0]);
-                                            caller_first_tag_payload0_tag = @tagName(self.store.monotype_store.getMonotype(cpayloads[0]));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if (!expected_monotype.isNone()) {
-                        const expected_mono = self.store.monotype_store.getMonotype(expected_monotype);
-                        if (expected_mono == .func) {
-                            const efunc = expected_mono.func;
-                            const eargs = self.store.monotype_store.getIdxSpan(efunc.args);
-                            expected_func_arity = eargs.len;
-                            expected_func_ret = @intFromEnum(efunc.ret);
-                            expected_func_effectful = efunc.effectful;
-                            if (eargs.len > 0) {
-                                expected_first_arg = @intFromEnum(eargs[0]);
-                                const earg0_mono = self.store.monotype_store.getMonotype(eargs[0]);
-                                expected_first_arg_tag = @tagName(earg0_mono);
-                                if (earg0_mono == .tag_union) {
-                                    const etags = self.store.monotype_store.getTags(earg0_mono.tag_union.tags);
-                                    expected_first_tag_count = etags.len;
-                                    if (etags.len > 0) {
-                                        expected_first_tag_name = self.identTextForCompare(etags[0].name) orelse "<?>";
-                                        const epayloads = self.store.monotype_store.getIdxSpan(etags[0].payloads);
-                                        if (epayloads.len > 0) {
-                                            expected_first_tag_payload0 = @intFromEnum(epayloads[0]);
-                                            expected_first_tag_payload0_tag = @tagName(self.store.monotype_store.getMonotype(epayloads[0]));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    std.debug.panic(
-                        "MIR Lower invariant: caller monotype incompatible with target type var (caller={d}:{s} fn[arity={d},ret={d},fx={},arg0={d}:{s},arg0.tags={d},arg0.tag0={s},arg0.tag0.payload0={d}:{s}] target_var={d}:{s}, expected={d}:{s} fn[arity={d},ret={d},fx={},arg0={d}:{s},arg0.tags={d},arg0.tag0={s},arg0.tag0.payload0={d}:{s}] expr={d}:{s}, symbol={d})",
-                        .{
-                            @intFromEnum(cmt),
-                            caller_tag,
-                            caller_func_arity,
-                            caller_func_ret,
-                            caller_func_effectful,
-                            caller_first_arg,
-                            caller_first_arg_tag,
-                            caller_first_tag_count,
-                            caller_first_tag_name,
-                            caller_first_tag_payload0,
-                            caller_first_tag_payload0_tag,
-                            @intFromEnum(target_type_var),
-                            target_var_content_tag,
-                            @intFromEnum(expected_monotype),
-                            expected_tag,
-                            expected_func_arity,
-                            expected_func_ret,
-                            expected_func_effectful,
-                            expected_first_arg,
-                            expected_first_arg_tag,
-                            expected_first_tag_count,
-                            expected_first_tag_name,
-                            expected_first_tag_payload0,
-                            expected_first_tag_payload0_tag,
-                            @intFromEnum(cir_expr_idx),
-                            target_expr_tag,
-                            symbol.raw(),
-                        },
-                    );
-                }
-            }
             try self.bindTypeVarMonotypes(target_type_var, cmt);
         }
     }
@@ -4435,24 +4198,15 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
                 return;
             }
 
-            if (origin.eql(common.builtin_module)) {
-                if (builtinPrimForNominal(ident, common)) |expected_prim| {
-                    switch (mono) {
-                        .prim => |actual_prim| {
-                            if (actual_prim != expected_prim) {
-                                typeBindingInvariant(
-                                    "bindFlatTypeMonotypes(nominal prim): expected '{s}', found '{s}'",
-                                    .{ @tagName(expected_prim), @tagName(actual_prim) },
-                                );
-                            }
-                        },
-                        else => typeBindingInvariant(
-                            "bindFlatTypeMonotypes(nominal prim): expected prim monotype, found '{s}'",
-                            .{@tagName(mono)},
-                        ),
-                    }
-                    return;
+            if (origin.eql(common.builtin_module) and builtinPrimForNominal(ident, common) != null) {
+                switch (mono) {
+                    .prim => {},
+                    else => typeBindingInvariant(
+                        "bindFlatTypeMonotypes(nominal prim): expected prim monotype, found '{s}'",
+                        .{@tagName(mono)},
+                    ),
                 }
+                return;
             }
 
             // Non-builtin nominals (and non-primitive builtin nominals) resolve by backing var.

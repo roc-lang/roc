@@ -202,48 +202,40 @@ main! = |_| {
 						(p-assign (ident "second")))))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-closure
-			(captures
-				(capture (ident "identity"))
-				(capture (ident "identity2"))
-				(capture (ident "pair"))
-				(capture (ident "a"))
-				(capture (ident "b"))
-				(capture (ident "c")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-block
-					(s-let
-						(p-assign (ident "result1"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "identity")))
-							(e-num (value "42"))))
-					(s-let
-						(p-assign (ident "result2"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "identity2")))
-							(e-string
-								(e-literal (string "hello")))))
-					(s-let
-						(p-assign (ident "result3"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "pair")))
-							(e-lookup-local
-								(p-assign (ident "result1")))
-							(e-lookup-local
-								(p-assign (ident "result2")))))
-					(e-binop (op "add")
-						(e-binop (op "add")
-							(e-lookup-local
-								(p-assign (ident "a")))
-							(e-lookup-local
-								(p-assign (ident "b"))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-block
+				(s-let
+					(p-assign (ident "result1"))
+					(e-call
 						(e-lookup-local
-							(p-assign (ident "c")))))))))
+							(p-assign (ident "identity")))
+						(e-num (value "42"))))
+				(s-let
+					(p-assign (ident "result2"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "identity2")))
+						(e-string
+							(e-literal (string "hello")))))
+				(s-let
+					(p-assign (ident "result3"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "pair")))
+						(e-lookup-local
+							(p-assign (ident "result1")))
+						(e-lookup-local
+							(p-assign (ident "result2")))))
+				(e-binop (op "add")
+					(e-binop (op "add")
+						(e-lookup-local
+							(p-assign (ident "a")))
+						(e-lookup-local
+							(p-assign (ident "b"))))
+					(e-lookup-local
+						(p-assign (ident "c"))))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -62,17 +62,14 @@ EndOfFile,
 		(e-num (value "1")))
 	(d-let
 		(p-assign (ident "add_one"))
-		(e-closure
-			(captures
-				(capture (ident "one")))
-			(e-lambda
-				(args
+		(e-lambda
+			(args
+				(p-assign (ident "x")))
+			(e-binop (op "add")
+				(e-lookup-local
 					(p-assign (ident "x")))
-				(e-binop (op "add")
-					(e-lookup-local
-						(p-assign (ident "x")))
-					(e-lookup-local
-						(p-assign (ident "one")))))))
+				(e-lookup-local
+					(p-assign (ident "one"))))))
 	(d-let
 		(p-assign (ident "result"))
 		(e-num (value "6"))))

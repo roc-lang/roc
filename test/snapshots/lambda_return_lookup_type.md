@@ -68,14 +68,11 @@ EndOfFile,
 					(e-literal (string "hello"))))))
 	(d-let
 		(p-assign (ident "f"))
-		(e-closure
-			(captures
-				(capture (ident "x")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-lookup-local
-					(p-assign (ident "x"))))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-lookup-local
+				(p-assign (ident "x")))))
 	(d-let
 		(p-assign (ident "y"))
 		(e-call

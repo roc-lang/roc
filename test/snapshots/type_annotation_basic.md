@@ -228,45 +228,40 @@ main! = |_| {
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-closure
-			(captures
-				(capture (ident "identity"))
-				(capture (ident "combine"))
-				(capture (ident "addOne")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-block
-					(s-let
-						(p-assign (ident "num"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "identity")))
-							(e-num (value "42"))))
-					(s-let
-						(p-assign (ident "text"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "identity")))
-							(e-string
-								(e-literal (string "hello")))))
-					(s-let
-						(p-assign (ident "pair"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "combine")))
-							(e-lookup-local
-								(p-assign (ident "num")))
-							(e-lookup-local
-								(p-assign (ident "text")))))
-					(s-let
-						(p-assign (ident "result"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "addOne")))
-							(e-num (value "5"))))
-					(e-lookup-local
-						(p-assign (ident "result"))))))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-block
+				(s-let
+					(p-assign (ident "num"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "identity")))
+						(e-num (value "42"))))
+				(s-let
+					(p-assign (ident "text"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "identity")))
+						(e-string
+							(e-literal (string "hello")))))
+				(s-let
+					(p-assign (ident "pair"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "combine")))
+						(e-lookup-local
+							(p-assign (ident "num")))
+						(e-lookup-local
+							(p-assign (ident "text")))))
+				(s-let
+					(p-assign (ident "result"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "addOne")))
+						(e-num (value "5"))))
+				(e-lookup-local
+					(p-assign (ident "result")))))))
 ~~~
 # TYPES
 ~~~clojure

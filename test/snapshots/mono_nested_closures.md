@@ -80,27 +80,23 @@ EndOfFile,
 		(e-num (value "10")))
 	(d-let
 		(p-assign (ident "make_adder"))
-		(e-closure
-			(captures
-				(capture (ident "x")))
-			(e-lambda
-				(args
-					(p-assign (ident "y")))
-				(e-closure
-					(captures
-						(capture (ident "x"))
-						(capture (ident "y")))
-					(e-lambda
-						(args
-							(p-assign (ident "z")))
+		(e-lambda
+			(args
+				(p-assign (ident "y")))
+			(e-closure
+				(captures
+					(capture (ident "y")))
+				(e-lambda
+					(args
+						(p-assign (ident "z")))
+					(e-binop (op "add")
 						(e-binop (op "add")
-							(e-binop (op "add")
-								(e-lookup-local
-									(p-assign (ident "x")))
-								(e-lookup-local
-									(p-assign (ident "y"))))
 							(e-lookup-local
-								(p-assign (ident "z")))))))))
+								(p-assign (ident "x")))
+							(e-lookup-local
+								(p-assign (ident "y"))))
+						(e-lookup-local
+							(p-assign (ident "z"))))))))
 	(d-let
 		(p-assign (ident "add_five"))
 		(e-call

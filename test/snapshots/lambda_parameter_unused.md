@@ -252,51 +252,45 @@ main! = |_| {
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-closure
-			(captures
-				(capture (ident "add"))
-				(capture (ident "multiply"))
-				(capture (ident "process"))
-				(capture (ident "double")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-block
-					(s-let
-						(p-assign (ident "result1"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "add")))
-							(e-num (value "5"))))
-					(s-let
-						(p-assign (ident "result2"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "multiply")))
-							(e-num (value "3"))))
-					(s-let
-						(p-assign (ident "result3"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "process")))
-							(e-num (value "7"))))
-					(s-let
-						(p-assign (ident "result4"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "double")))
-							(e-num (value "4"))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-block
+				(s-let
+					(p-assign (ident "result1"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "add")))
+						(e-num (value "5"))))
+				(s-let
+					(p-assign (ident "result2"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "multiply")))
+						(e-num (value "3"))))
+				(s-let
+					(p-assign (ident "result3"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "process")))
+						(e-num (value "7"))))
+				(s-let
+					(p-assign (ident "result4"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "double")))
+						(e-num (value "4"))))
+				(e-binop (op "add")
 					(e-binop (op "add")
 						(e-binop (op "add")
-							(e-binop (op "add")
-								(e-lookup-local
-									(p-assign (ident "result1")))
-								(e-lookup-local
-									(p-assign (ident "result2"))))
 							(e-lookup-local
-								(p-assign (ident "result3"))))
+								(p-assign (ident "result1")))
+							(e-lookup-local
+								(p-assign (ident "result2"))))
 						(e-lookup-local
-							(p-assign (ident "result4")))))))))
+							(p-assign (ident "result3"))))
+					(e-lookup-local
+						(p-assign (ident "result4"))))))))
 ~~~
 # TYPES
 ~~~clojure

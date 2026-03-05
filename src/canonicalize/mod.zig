@@ -109,5 +109,4 @@ test "compile tests" {
     // Backend tests (Roc emitter)
     std.testing.refAllDecls(@import("RocEmitter.zig"));
     std.testing.refAllDecls(@import("test/roc_emitter_test.zig"));
-
 }

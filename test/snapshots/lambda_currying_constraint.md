@@ -183,24 +183,21 @@ NO CHANGE
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 	(d-let
 		(p-assign (ident "addThreeTwice"))
-		(e-closure
-			(captures
-				(capture (ident "applyTwice")))
-			(e-lambda
-				(args
-					(p-assign (ident "n")))
-				(e-call
-					(e-lookup-local
-						(p-assign (ident "applyTwice")))
-					(e-lambda
-						(args
+		(e-lambda
+			(args
+				(p-assign (ident "n")))
+			(e-call
+				(e-lookup-local
+					(p-assign (ident "applyTwice")))
+				(e-lambda
+					(args
+						(p-assign (ident "x")))
+					(e-binop (op "add")
+						(e-lookup-local
 							(p-assign (ident "x")))
-						(e-binop (op "add")
-							(e-lookup-local
-								(p-assign (ident "x")))
-							(e-num (value "3"))))
-					(e-lookup-local
-						(p-assign (ident "n"))))))
+						(e-num (value "3"))))
+				(e-lookup-local
+					(p-assign (ident "n")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "I64") (builtin))

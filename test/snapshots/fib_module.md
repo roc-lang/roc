@@ -52,37 +52,34 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "fib"))
-		(e-closure
-			(captures
-				(capture (ident "fib")))
-			(e-lambda
-				(args
-					(p-assign (ident "n")))
-				(e-if
-					(if-branches
-						(if-branch
-							(e-binop (op "le")
+		(e-lambda
+			(args
+				(p-assign (ident "n")))
+			(e-if
+				(if-branches
+					(if-branch
+						(e-binop (op "le")
+							(e-lookup-local
+								(p-assign (ident "n")))
+							(e-num (value "1")))
+						(e-lookup-local
+							(p-assign (ident "n")))))
+				(if-else
+					(e-binop (op "add")
+						(e-call
+							(e-lookup-local
+								(p-assign (ident "fib")))
+							(e-binop (op "sub")
 								(e-lookup-local
 									(p-assign (ident "n")))
-								(e-num (value "1")))
+								(e-num (value "1"))))
+						(e-call
 							(e-lookup-local
-								(p-assign (ident "n")))))
-					(if-else
-						(e-binop (op "add")
-							(e-call
+								(p-assign (ident "fib")))
+							(e-binop (op "sub")
 								(e-lookup-local
-									(p-assign (ident "fib")))
-								(e-binop (op "sub")
-									(e-lookup-local
-										(p-assign (ident "n")))
-									(e-num (value "1"))))
-							(e-call
-								(e-lookup-local
-									(p-assign (ident "fib")))
-								(e-binop (op "sub")
-									(e-lookup-local
-										(p-assign (ident "n")))
-									(e-num (value "2")))))))))))
+									(p-assign (ident "n")))
+								(e-num (value "2"))))))))))
 ~~~
 # TYPES
 ~~~clojure
