@@ -168,21 +168,79 @@ pub fn infer(allocator: Allocator, mir_store: *const MIR.Store) Allocator.Error!
 /// Propagate lambda sets from call arguments to callee parameters.
 /// Uses pre-recorded HofCallArg entries from lowering — no expression scanning needed.
 fn propagateCallArgs(allocator: Allocator, mir_store: *const MIR.Store, ls_store: *Store) Allocator.Error!void {
-    for (mir_store.hof_call_args.items) |hof| {
-        // Resolve callee to a lambda to get its param list
-        const params = resolveToLambdaParams(mir_store, hof.call_func) orelse continue;
-        const param_ids = mir_store.getPatternSpan(params);
+    // Iterate to a fixpoint so newly learned lambda sets can unlock additional
+    // propagation through other HOF edges in the same MIR graph.
+    var changed = true;
+    while (changed) {
+        changed = false;
 
-        if (hof.arg_index >= param_ids.len) continue;
-        const param_pat = mir_store.getPattern(param_ids[hof.arg_index]);
-        if (param_pat != .bind) continue;
-        const param_sym = param_pat.bind;
+        for (mir_store.hof_call_args.items) |hof| {
+            // Resolve the arg's lambda set — works for both lookups (hoisted lambdas)
+            // and direct closure expressions (captures tuples with closure_origins).
+            const arg_ls = getArgLambdaSet(allocator, mir_store, ls_store, hof.arg_expr) orelse continue;
+            const arg_index: usize = @intCast(hof.arg_index);
 
-        // Resolve the arg's lambda set — works for both lookups (hoisted lambdas)
-        // and direct closure expressions (captures tuples with closure_origins)
-        const arg_ls = getArgLambdaSet(allocator, mir_store, ls_store, hof.arg_expr) orelse continue;
-        _ = try mergeIntoSymbol(allocator, ls_store, param_sym, arg_ls);
+            // Fast path: callee resolves directly to a lambda/lookup-with-def.
+            if (resolveToLambdaParams(mir_store, hof.call_func)) |params| {
+                changed = (try propagateArgIntoParams(allocator, mir_store, ls_store, params, arg_index, arg_ls)) or changed;
+                continue;
+            }
+
+            // Fallback: callee may be a lookup to a symbol that has a lambda set
+            // but no direct symbol_def (e.g. higher-order parameter). In that case,
+            // propagate into each member function's corresponding parameter.
+            const call_expr = mir_store.getExpr(hof.call_func);
+            if (call_expr == .lookup) {
+                changed = (try propagateArgIntoCalleeMembers(
+                    allocator,
+                    mir_store,
+                    ls_store,
+                    call_expr.lookup,
+                    arg_index,
+                    arg_ls,
+                )) or changed;
+            }
+        }
     }
+}
+
+fn propagateArgIntoParams(
+    allocator: Allocator,
+    mir_store: *const MIR.Store,
+    ls_store: *Store,
+    params: MIR.PatternSpan,
+    arg_index: usize,
+    arg_ls: Idx,
+) Allocator.Error!bool {
+    const param_ids = mir_store.getPatternSpan(params);
+    if (arg_index >= param_ids.len) return false;
+
+    const param_pat = mir_store.getPattern(param_ids[arg_index]);
+    if (param_pat != .bind) return false;
+
+    return mergeIntoSymbol(allocator, ls_store, param_pat.bind, arg_ls);
+}
+
+fn propagateArgIntoCalleeMembers(
+    allocator: Allocator,
+    mir_store: *const MIR.Store,
+    ls_store: *Store,
+    callee_symbol: MIR.Symbol,
+    arg_index: usize,
+    arg_ls: Idx,
+) Allocator.Error!bool {
+    const callee_ls_idx = ls_store.getSymbolLambdaSet(callee_symbol) orelse return false;
+    const callee_ls = ls_store.getLambdaSet(callee_ls_idx);
+    const members = ls_store.getMembers(callee_ls.members);
+
+    var changed = false;
+    for (members) |member| {
+        const def_expr_id = mir_store.getSymbolDef(member.fn_symbol) orelse continue;
+        const params = resolveToLambdaParams(mir_store, def_expr_id) orelse continue;
+        const did_change = try propagateArgIntoParams(allocator, mir_store, ls_store, params, arg_index, arg_ls);
+        changed = did_change or changed;
+    }
+    return changed;
 }
 
 /// Get the lambda set for a call argument expression.
