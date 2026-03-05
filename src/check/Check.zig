@@ -5722,13 +5722,9 @@ fn resolveVarFromExternal(
     defer trace.end();
 
     const module_idx = self.cir.imports.getResolvedModule(import_idx) orelse {
-        if (std.debug.runtime_safety) {
-            std.debug.panic(
-                "Check invariant: unresolved import index {d} in resolveVarFromExternal",
-                .{@intFromEnum(import_idx)},
-            );
-        }
-        unreachable;
+        // Canonicalization should already have reported an import error.
+        // Keep checking by treating this type reference as unresolved.
+        return null;
     };
     if (module_idx < self.imported_modules.len) {
         const other_module_env = self.imported_modules[module_idx];
@@ -5763,13 +5759,9 @@ fn resolveVarFromExternal(
             .other_cir = other_module_env,
         };
     } else {
-        if (std.debug.runtime_safety) {
-            std.debug.panic(
-                "Check invariant: resolved import module index {d} out of bounds (imported_modules.len={d})",
-                .{ module_idx, self.imported_modules.len },
-            );
-        }
-        unreachable;
+        // Stale/invalid import mapping; surface as unresolved and continue
+        // producing type errors instead of crashing.
+        return null;
     }
 }
 
