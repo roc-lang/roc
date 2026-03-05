@@ -413,8 +413,18 @@ fn remapMonotypeBetweenModulesRec(
             const idx_top = self.mono_scratches.idxs.top();
             defer self.mono_scratches.idxs.clearFrom(idx_top);
 
-            const elems = self.store.monotype_store.getIdxSpan(tuple_mono.elems);
-            for (elems) |elem_mono| {
+            const elem_span = tuple_mono.elems;
+            var elem_i: u32 = 0;
+            while (elem_i < @as(u32, elem_span.len)) : (elem_i += 1) {
+                const elem_pos_u64 = @as(u64, elem_span.start) + elem_i;
+                if (builtin.mode == .Debug and elem_pos_u64 >= self.store.monotype_store.extra_idx.items.len) {
+                    std.debug.panic(
+                        "remapMonotypeBetweenModulesRec: tuple elem span out of bounds (start={d}, len={d}, i={d}, extra_len={d})",
+                        .{ elem_span.start, elem_span.len, elem_i, self.store.monotype_store.extra_idx.items.len },
+                    );
+                }
+                const elem_pos: usize = @intCast(elem_pos_u64);
+                const elem_mono: Monotype.Idx = @enumFromInt(self.store.monotype_store.extra_idx.items[elem_pos]);
                 try self.mono_scratches.idxs.append(try self.remapMonotypeBetweenModulesRec(
                     elem_mono,
                     from_module_idx,
@@ -433,8 +443,18 @@ fn remapMonotypeBetweenModulesRec(
             const idx_top = self.mono_scratches.idxs.top();
             defer self.mono_scratches.idxs.clearFrom(idx_top);
 
-            const args = self.store.monotype_store.getIdxSpan(func_mono.args);
-            for (args) |arg_mono| {
+            const arg_span = func_mono.args;
+            var arg_i: u32 = 0;
+            while (arg_i < @as(u32, arg_span.len)) : (arg_i += 1) {
+                const arg_pos_u64 = @as(u64, arg_span.start) + arg_i;
+                if (builtin.mode == .Debug and arg_pos_u64 >= self.store.monotype_store.extra_idx.items.len) {
+                    std.debug.panic(
+                        "remapMonotypeBetweenModulesRec: func arg span out of bounds (start={d}, len={d}, i={d}, extra_len={d})",
+                        .{ arg_span.start, arg_span.len, arg_i, self.store.monotype_store.extra_idx.items.len },
+                    );
+                }
+                const arg_pos: usize = @intCast(arg_pos_u64);
+                const arg_mono: Monotype.Idx = @enumFromInt(self.store.monotype_store.extra_idx.items[arg_pos]);
                 try self.mono_scratches.idxs.append(try self.remapMonotypeBetweenModulesRec(
                     arg_mono,
                     from_module_idx,
@@ -464,8 +484,18 @@ fn remapMonotypeBetweenModulesRec(
             const fields_top = self.mono_scratches.fields.top();
             defer self.mono_scratches.fields.clearFrom(fields_top);
 
-            const fields = self.store.monotype_store.getFields(record_mono.fields);
-            for (fields) |field| {
+            const field_span = record_mono.fields;
+            var field_i: u32 = 0;
+            while (field_i < @as(u32, field_span.len)) : (field_i += 1) {
+                const field_pos_u64 = @as(u64, field_span.start) + field_i;
+                if (builtin.mode == .Debug and field_pos_u64 >= self.store.monotype_store.fields.items.len) {
+                    std.debug.panic(
+                        "remapMonotypeBetweenModulesRec: record field span out of bounds (start={d}, len={d}, i={d}, fields_len={d})",
+                        .{ field_span.start, field_span.len, field_i, self.store.monotype_store.fields.items.len },
+                    );
+                }
+                const field_pos: usize = @intCast(field_pos_u64);
+                const field = self.store.monotype_store.fields.items[field_pos];
                 try self.mono_scratches.fields.append(.{
                     .name = try self.remapIdentBetweenModules(field.name, from_module_idx, to_module_idx),
                     .type_idx = try self.remapMonotypeBetweenModulesRec(
@@ -487,13 +517,40 @@ fn remapMonotypeBetweenModulesRec(
             const tags_top = self.mono_scratches.tags.top();
             defer self.mono_scratches.tags.clearFrom(tags_top);
 
-            const tags = self.store.monotype_store.getTags(tag_union_mono.tags);
-            for (tags) |tag| {
+            const tag_span = tag_union_mono.tags;
+            var tag_i: u32 = 0;
+            while (tag_i < @as(u32, tag_span.len)) : (tag_i += 1) {
+                const tag_pos_u64 = @as(u64, tag_span.start) + tag_i;
+                if (builtin.mode == .Debug and tag_pos_u64 >= self.store.monotype_store.tags.items.len) {
+                    std.debug.panic(
+                        "remapMonotypeBetweenModulesRec: tag span out of bounds (start={d}, len={d}, i={d}, tags_len={d})",
+                        .{ tag_span.start, tag_span.len, tag_i, self.store.monotype_store.tags.items.len },
+                    );
+                }
+                const tag_pos: usize = @intCast(tag_pos_u64);
+                const tag = self.store.monotype_store.tags.items[tag_pos];
+
                 const payload_top = self.mono_scratches.idxs.top();
                 defer self.mono_scratches.idxs.clearFrom(payload_top);
 
-                const payloads = self.store.monotype_store.getIdxSpan(tag.payloads);
-                for (payloads) |payload_mono| {
+                const payload_span = tag.payloads;
+                var payload_i: u32 = 0;
+                while (payload_i < @as(u32, payload_span.len)) : (payload_i += 1) {
+                    const payload_pos_u64 = @as(u64, payload_span.start) + payload_i;
+                    if (builtin.mode == .Debug and payload_pos_u64 >= self.store.monotype_store.extra_idx.items.len) {
+                        std.debug.panic(
+                            "remapMonotypeBetweenModulesRec: tag payload span out of bounds (start={d}, len={d}, i={d}, extra_len={d}, tag={d})",
+                            .{
+                                payload_span.start,
+                                payload_span.len,
+                                payload_i,
+                                self.store.monotype_store.extra_idx.items.len,
+                                tag.name.idx,
+                            },
+                        );
+                    }
+                    const payload_pos: usize = @intCast(payload_pos_u64);
+                    const payload_mono: Monotype.Idx = @enumFromInt(self.store.monotype_store.extra_idx.items[payload_pos]);
                     try self.mono_scratches.idxs.append(try self.remapMonotypeBetweenModulesRec(
                         payload_mono,
                         from_module_idx,
@@ -2340,7 +2397,6 @@ fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype:
                 .args = args,
             } }, monotype, region);
         }
-
     }
 
     const func = try self.lowerExpr(call.func);
