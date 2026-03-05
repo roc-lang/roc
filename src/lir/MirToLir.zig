@@ -44,7 +44,7 @@ allocator: Allocator,
 mir_store: *const MIR.Store,
 lir_store: *LirExprStore,
 layout_store: *layout.Store,
-lambda_set_store: *const LambdaSet.Store,
+lambda_set_store: *LambdaSet.Store,
 
 /// Ident index for the `True` tag — needed to resolve Bool discriminants
 /// (Bool is `prim.bool`, not a `tag_union`, so we can't look up tags in the monotype).
@@ -82,7 +82,7 @@ pub fn init(
     mir_store: *const MIR.Store,
     lir_store: *LirExprStore,
     layout_store: *layout.Store,
-    lambda_set_store: *const LambdaSet.Store,
+    lambda_set_store: *LambdaSet.Store,
     true_tag: Ident.Idx,
 ) Self {
     return .{
@@ -916,11 +916,20 @@ fn lowerCall(self: *Self, call_data: anytype, mono_idx: Monotype.Idx, region: Re
                 unreachable;
             }
         }
+    }
 
-        // Check if the callee has a lambda set (i.e., it's a closure value)
-        if (self.lambda_set_store.getSymbolLambdaSet(sym)) |ls_idx| {
-            return self.lowerClosureCall(call_data, ls_idx, sym, mono_idx, region);
-        }
+    // Closure dispatch is driven by lambda sets for arbitrary callee expressions,
+    // not just direct symbol lookups. This is required for nested calls where
+    // intermediate call results are themselves closures.
+    const callee_ls_idx = try LambdaSet.resolveExprLambdaSet(
+        self.allocator,
+        self.mir_store,
+        self.lambda_set_store,
+        call_data.func,
+    );
+    if (!callee_ls_idx.isNone()) {
+        const callee_symbol = if (func_mir_expr == .lookup) func_mir_expr.lookup else Symbol.none;
+        return self.lowerClosureCall(call_data, callee_ls_idx, callee_symbol, mono_idx, region);
     }
 
     // Direct function call — only for inline lambda calls or HOF parameters (which

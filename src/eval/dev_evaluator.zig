@@ -653,6 +653,14 @@ pub const DevEvaluator = struct {
         // Reset the static bump allocator so each evaluation starts fresh
         DevRocEnv.StaticAlloc.reset();
 
+        // MIR lowering may need to translate structural identifiers between
+        // modules (e.g. record fields in cross-module specializations). Cached
+        // modules deserialize with read-only interners, so enable runtime
+        // inserts up front for all participating modules.
+        for (all_module_envs) |env| {
+            env.common.idents.interner.enableRuntimeInserts(env.gpa) catch return error.OutOfMemory;
+        }
+
         // Find the module index for this module
         var module_idx: u32 = 0;
         for (all_module_envs, 0..) |env, i| {
@@ -690,7 +698,7 @@ pub const DevEvaluator = struct {
 
         // Run lambda set inference
         const mir_mod = @import("mir");
-        var lambda_set_store = mir_mod.LambdaSet.infer(self.allocator, &mir_store) catch return error.OutOfMemory;
+        var lambda_set_store = mir_mod.LambdaSet.infer(self.allocator, &mir_store, all_module_envs) catch return error.OutOfMemory;
         defer lambda_set_store.deinit(self.allocator);
 
         // Lower MIR to LIR

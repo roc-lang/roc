@@ -312,11 +312,11 @@ fn identsTagNameEquivalent(self: *const Self, lhs: Ident.Idx, rhs: Ident.Idx) bo
 }
 
 fn remapIdentBetweenModules(
-    self: *const Self,
+    self: *Self,
     ident: Ident.Idx,
     from_module_idx: u32,
     to_module_idx: u32,
-) Ident.Idx {
+) Allocator.Error!Ident.Idx {
     if (from_module_idx == to_module_idx) return ident;
 
     const from_env = self.all_module_envs[from_module_idx];
@@ -329,15 +329,13 @@ fn remapIdentBetweenModules(
         // map that self-name directly to the target module's self-name.
         if (std.mem.eql(u8, ident_text, from_env.module_name)) {
             if (to_env.common.findIdent(to_env.module_name)) |target_self| return target_self;
+            return try to_env.insertIdent(Ident.for_text(to_env.module_name));
         }
 
-        if (std.debug.runtime_safety) {
-            std.debug.panic(
-                "remapIdentBetweenModules: ident '{s}' from module {d} not found in target module {d}",
-                .{ ident_text, from_module_idx, to_module_idx },
-            );
-        }
-        unreachable;
+        // Structural names (record fields, tag names) can be introduced by the
+        // caller module and legitimately absent in the callee module's ident store.
+        // Canonicalize them by interning into the target module.
+        return try to_env.insertIdent(Ident.for_text(ident_text));
     }
 
     if (std.debug.runtime_safety) {
@@ -469,7 +467,7 @@ fn remapMonotypeBetweenModulesRec(
             const fields = self.store.monotype_store.getFields(record_mono.fields);
             for (fields) |field| {
                 try self.mono_scratches.fields.append(.{
-                    .name = self.remapIdentBetweenModules(field.name, from_module_idx, to_module_idx),
+                    .name = try self.remapIdentBetweenModules(field.name, from_module_idx, to_module_idx),
                     .type_idx = try self.remapMonotypeBetweenModulesRec(
                         field.type_idx,
                         from_module_idx,
@@ -509,7 +507,7 @@ fn remapMonotypeBetweenModulesRec(
                     self.mono_scratches.idxs.sliceFromStart(payload_top),
                 );
                 try self.mono_scratches.tags.append(.{
-                    .name = self.remapIdentBetweenModules(tag.name, from_module_idx, to_module_idx),
+                    .name = try self.remapIdentBetweenModules(tag.name, from_module_idx, to_module_idx),
                     .payloads = mapped_payloads,
                 });
             }

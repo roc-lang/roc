@@ -199,7 +199,7 @@ pub const WasmEvaluator = struct {
 
         // Run lambda set inference
         const mir_mod = @import("mir");
-        var lambda_set_store = mir_mod.LambdaSet.infer(self.allocator, &mir_store) catch return error.OutOfMemory;
+        var lambda_set_store = mir_mod.LambdaSet.infer(self.allocator, &mir_store, all_module_envs) catch return error.OutOfMemory;
         defer lambda_set_store.deinit(self.allocator);
 
         // Lower MIR -> LIR

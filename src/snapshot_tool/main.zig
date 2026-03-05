@@ -3884,7 +3884,7 @@ fn processDevObjectSnapshot(
 
     // Run lambda set inference after MIR lowering so all symbol defs are visible.
     const mir_module = @import("mir");
-    var lambda_set_store = mir_module.LambdaSet.infer(allocator, &mir_store) catch {
+    var lambda_set_store = mir_module.LambdaSet.infer(allocator, &mir_store, all_module_envs) catch {
         std.log.err("Failed to run lambda set inference", .{});
         return false;
     };
