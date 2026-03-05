@@ -98,33 +98,6 @@ pub fn emitPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) !void {
     try self.emitPatternValue(pattern);
 }
 
-/// Emit a pattern, checking for shadowing and generating unique names
-fn emitPatternWithShadowCheck(self: *Self, pattern_idx: CIR.Pattern.Idx) !void {
-    const pattern = self.module_env.store.getPattern(pattern_idx);
-
-    // Only handle assign patterns for shadowing (other patterns don't introduce names)
-    if (pattern == .assign) {
-        const name = self.module_env.getIdent(pattern.assign.ident);
-
-        if (self.names_in_scope.contains(name)) {
-            // Generate a unique name
-            const unique_name = try std.fmt.allocPrint(self.allocator, "{s}{d}", .{ name, self.rename_counter });
-            self.rename_counter += 1;
-
-            // Store the rename mapping
-            try self.capture_renames.put(pattern_idx, unique_name);
-            try self.names_in_scope.put(unique_name, {});
-            try self.emitIdent(unique_name);
-        } else {
-            try self.names_in_scope.put(name, {});
-            try self.emitIdent(name);
-        }
-    } else {
-        // For other pattern types, just emit normally
-        try self.emitPatternValue(pattern);
-    }
-}
-
 /// Emit a binop operand, wrapping in parens only if needed for precedence
 fn emitBinopOperand(self: *Self, expr_idx: Expr.Idx, outer_op: Expr.Binop.Op) !void {
     const expr = self.module_env.store.getExpr(expr_idx);
@@ -700,18 +673,6 @@ fn addPatternToScope(self: *Self, pattern_idx: CIR.Pattern.Idx) !void {
     }
     // For other pattern types (destructuring, etc.), we could recursively add names
     // but for now just handling simple assigns
-}
-
-/// Check if a pattern belongs to a top-level definition
-fn isTopLevelPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) bool {
-    const defs = self.module_env.store.sliceDefs(self.module_env.all_defs);
-    for (defs) |def_idx| {
-        const def = self.module_env.store.getDef(def_idx);
-        if (def.pattern == pattern_idx) {
-            return true;
-        }
-    }
-    return false;
 }
 
 fn emitIntValue(self: *Self, value: CIR.IntValue) !void {
