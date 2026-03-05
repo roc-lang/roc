@@ -874,6 +874,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             code_end: usize,
             /// The symbol this procedure is bound to
             name: Symbol,
+            /// Declared argument layouts for ABI-correct call lowering.
+            arg_layouts: LayoutIdxSpan,
         };
 
         /// A pending call that needs to be patched after all procedures are compiled.
@@ -11381,16 +11383,38 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .start = pbp_start, .slice = pass_by_ptr };
         }
 
+        fn patternArgLayout(self: *Self, params: lir.LirPatternSpan, arg_index: usize) ?layout.Idx {
+            const pattern_ids = self.store.getPatternSpan(params);
+            if (arg_index >= pattern_ids.len) return null;
+
+            const pattern = self.store.getPattern(pattern_ids[arg_index]);
+            return switch (pattern) {
+                .bind => |b| b.layout_idx,
+                .wildcard => |w| w.layout_idx,
+                .int_literal => |i| i.layout_idx,
+                .float_literal => |f| f.layout_idx,
+                .str_literal => .str,
+                .tag => |t| t.union_layout,
+                .struct_ => |s| s.struct_layout,
+                .as_pattern => |a| a.layout_idx,
+                .list => null,
+            };
+        }
+
         fn generateCallToCompiledProc(self: *Self, proc: CompiledProc, args_span: anytype, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
             const args = self.store.getExprSpan(args_span);
+            const proc_arg_layouts = self.store.getLayoutIdxSpan(proc.arg_layouts);
 
             // Pass 1: Generate all argument expressions and calculate register needs
             const arg_infos_start = self.scratch_arg_infos.top();
             defer self.scratch_arg_infos.clearFrom(arg_infos_start);
 
-            for (args) |arg_id| {
+            for (args, 0..) |arg_id, arg_index| {
                 const arg_loc = try self.generateExpr(arg_id);
-                const arg_layout = self.getExprLayout(arg_id);
+                const arg_layout: ?layout.Idx = if (arg_index < proc_arg_layouts.len)
+                    proc_arg_layouts[arg_index]
+                else
+                    self.getExprLayout(arg_id);
                 const num_regs: u8 = self.calcArgRegCount(arg_loc, arg_layout);
                 try self.scratch_arg_infos.append(.{ .loc = arg_loc, .layout_idx = arg_layout, .num_regs = num_regs });
             }
@@ -11415,13 +11439,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Like generateCallToCompiledProc but takes a raw offset instead of CompiledProc.
         fn callCompiledOffset(self: *Self, code_offset: usize, args_span: anytype, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
             const args = self.store.getExprSpan(args_span);
+            const lambda_params = self.compiled_lambda_params.get(code_offset);
 
             const arg_infos_start = self.scratch_arg_infos.top();
             defer self.scratch_arg_infos.clearFrom(arg_infos_start);
 
-            for (args) |arg_id| {
+            for (args, 0..) |arg_id, arg_index| {
                 const arg_loc = try self.generateExpr(arg_id);
-                const arg_layout = self.getExprLayout(arg_id);
+                const expected_layout = if (lambda_params) |params|
+                    self.patternArgLayout(params, arg_index)
+                else
+                    null;
+                const arg_layout = expected_layout orelse self.getExprLayout(arg_id);
                 const num_regs: u8 = self.calcArgRegCount(arg_loc, arg_layout);
                 try self.scratch_arg_infos.append(.{ .loc = arg_loc, .layout_idx = arg_layout, .num_regs = num_regs });
             }
@@ -12273,6 +12302,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .code_start = body_start,
                 .code_end = 0, // Placeholder, updated below
                 .name = proc.name,
+                .arg_layouts = proc.arg_layouts,
             });
 
             // Set up recursive context
