@@ -941,7 +941,6 @@ fn lowerClosureCall(
     var acc = self.startLetAccumulator();
     const mir_args = self.mir_store.getExprSpan(call_data.args);
     const lir_user_args = try self.lowerAnfSpan(&acc, mir_args, region);
-    const user_arg_ids = self.lir_store.getExprSpan(lir_user_args);
 
     if (members.len == 1) {
         const member = members[0];
@@ -989,6 +988,9 @@ fn lowerClosureCall(
         const closure_val = try acc.ensureSymbol(closure_val_raw, closure_layout, region);
 
         // Build args: [user_args..., closure_val]
+        // Re-read the span after lowering closure_val; lowerExpr may append to
+        // extra_data and invalidate previously borrowed slices.
+        const user_arg_ids = self.lir_store.getExprSpan(lir_user_args);
         const save_exprs = self.scratch_lir_expr_ids.items.len;
         defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
         for (user_arg_ids) |arg_id| {
@@ -1042,6 +1044,9 @@ fn lowerClosureCall(
             .layout_idx = lifted_layout,
         } }, region);
 
+        // Re-read on each iteration: lowering lifted defs can append to
+        // extra_data and invalidate previously borrowed slices.
+        const user_arg_ids = self.lir_store.getExprSpan(lir_user_args);
         const inner_save = self.scratch_lir_expr_ids.items.len;
         for (user_arg_ids) |arg_id| {
             try self.scratch_lir_expr_ids.append(self.allocator, arg_id);
