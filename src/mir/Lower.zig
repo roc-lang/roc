@@ -882,11 +882,36 @@ fn lowerStrInspektExpr(
         .tag_union => |tu| self.lowerStrInspektTagUnion(module_env, value_expr, tu, mono_idx, region),
         .list => |list_data| self.lowerStrInspektList(module_env, value_expr, list_data, region),
         .unit => self.emitMirStrLiteral("{}", region),
-        .box => {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("str_inspekt on Box monotype is unsupported in CIR->MIR lowering", .{});
-            }
-            unreachable;
+        .box => |box_data| blk: {
+            const common = self.currentCommonIdents();
+            const unbox_fn_mono = try self.buildFuncMonotype(&.{mono_idx}, box_data.inner, false);
+            const unbox_target: ResolvedDispatchTarget = .{
+                .origin = common.builtin_module,
+                .method_ident = common.builtin_box_unbox,
+                // resolvedDispatchTargetToSymbol only uses origin/method_ident.
+                .fn_var = @enumFromInt(0),
+            };
+
+            const method_symbol = try self.resolvedDispatchTargetToSymbol(module_env, unbox_target);
+            const lowered_method_symbol = try self.specializeMethod(method_symbol, unbox_fn_mono);
+            const func_expr = try self.store.addExpr(
+                self.allocator,
+                .{ .lookup = lowered_method_symbol },
+                unbox_fn_mono,
+                region,
+            );
+            const unbox_args = try self.store.addExprSpan(self.allocator, &.{value_expr});
+            const unboxed = try self.store.addExpr(
+                self.allocator,
+                .{ .call = .{ .func = func_expr, .args = unbox_args } },
+                box_data.inner,
+                region,
+            );
+
+            const inner_str = try self.lowerStrInspektExpr(module_env, unboxed, box_data.inner, region);
+            const open = try self.emitMirStrLiteral("Box(", region);
+            const close = try self.emitMirStrLiteral(")", region);
+            break :blk self.foldMirStrConcat(&.{ open, inner_str, close }, region);
         },
         .func => self.emitMirStrLiteral("<function>", region),
         .recursive_placeholder => {
