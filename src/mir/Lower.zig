@@ -2624,7 +2624,11 @@ fn lowerBinop(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop, monoty
                     },
                     // Tag unions may be nominal (with dispatch target) or anonymous structural.
                     .tag_union => {
-                        if (self.lookupResolvedDispatchTarget(expr_idx) == null) {
+                        const cached_dispatch = self.lookupResolvedDispatchTarget(expr_idx);
+                        const eq_constraint = self.lookupDispatchConstraintForExpr(expr_idx, module_env.idents.is_eq);
+                        const constraint_resolved = if (eq_constraint) |constraint| !constraint.resolved_target.isNone() else false;
+                        const has_nominal_dispatch = cached_dispatch != null or constraint_resolved;
+                        if (!has_nominal_dispatch) {
                             const result = try self.lowerStructuralEquality(lhs, rhs, lhs_monotype, monotype, region);
                             if (binop.op == .ne) return try self.negBool(module_env, result, monotype, region);
                             return result;
@@ -2653,30 +2657,21 @@ fn lowerBinop(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop, monoty
             }
 
             // Use checker-resolved target for static dispatch.
-            const resolved_target = self.lookupResolvedDispatchTarget(expr_idx) orelse {
-                if (std.debug.runtime_safety) {
-                    const method_ident: Ident.Idx = switch (binop.op) {
-                        .add => module_env.idents.plus,
-                        .sub => module_env.idents.minus,
-                        .mul => module_env.idents.times,
-                        .div => module_env.idents.div_by,
-                        .div_trunc => module_env.idents.div_trunc_by,
-                        .rem => module_env.idents.rem_by,
-                        .lt => module_env.idents.is_lt,
-                        .le => module_env.idents.is_lte,
-                        .gt => module_env.idents.is_gt,
-                        .ge => module_env.idents.is_gte,
-                        .eq, .ne => module_env.idents.is_eq,
-                        .@"and", .@"or" => unreachable,
-                    };
-                    const method_name = module_env.getIdent(method_ident);
-                    std.debug.panic(
-                        "lowerBinop: missing resolved dispatch target for method '{s}' op {s}",
-                        .{ method_name, @tagName(binop.op) },
-                    );
-                }
-                unreachable;
+            const method_ident: Ident.Idx = switch (binop.op) {
+                .add => module_env.idents.plus,
+                .sub => module_env.idents.minus,
+                .mul => module_env.idents.times,
+                .div => module_env.idents.div_by,
+                .div_trunc => module_env.idents.div_trunc_by,
+                .rem => module_env.idents.rem_by,
+                .lt => module_env.idents.is_lt,
+                .le => module_env.idents.is_lte,
+                .gt => module_env.idents.is_gt,
+                .ge => module_env.idents.is_gte,
+                .eq, .ne => module_env.idents.is_eq,
+                .@"and", .@"or" => unreachable,
             };
+            const resolved_target = try self.resolveDispatchTargetForExpr(module_env, expr_idx, method_ident);
             const method_symbol = try self.resolvedDispatchTargetToSymbol(module_env, resolved_target);
 
             const func_monotype = try self.buildFuncMonotype(&.{ lhs_monotype, lhs_monotype }, monotype, false);
@@ -2707,12 +2702,7 @@ fn lowerUnaryMinus(self: *Self, expr_idx: CIR.Expr.Idx, um: CIR.Expr.UnaryMinus,
     const module_env = self.all_module_envs[self.current_module_idx];
     const inner = try self.lowerExpr(um.expr);
 
-    const resolved_target = self.lookupResolvedDispatchTarget(expr_idx) orelse {
-        if (std.debug.runtime_safety) {
-            std.debug.panic("lowerUnaryMinus: missing resolved dispatch target for negate", .{});
-        }
-        unreachable;
-    };
+    const resolved_target = try self.resolveDispatchTargetForExpr(module_env, expr_idx, module_env.idents.negate);
     const method_symbol = try self.resolvedDispatchTargetToSymbol(module_env, resolved_target);
 
     const inner_monotype = try self.resolveMonotype(um.expr);
@@ -3254,8 +3244,8 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
             if (rcv_mono_idx.isNone()) break :structural_eq;
             const rcv_mono = self.store.monotype_store.getMonotype(rcv_mono_idx);
             switch (rcv_mono) {
-                // Records, tuples, and lists are always structural.
-                .record, .tuple, .list => {},
+                // Records, tuples, lists, and unit are always structural.
+                .record, .tuple, .list, .unit => {},
                 // Tag unions may be nominal or anonymous structural.
                 .tag_union => if (self.lookupResolvedDispatchTarget(expr_idx) != null) break :structural_eq,
                 else => break :structural_eq,
@@ -3268,13 +3258,7 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
             return try self.lowerStructuralEquality(receiver, rhs, rcv_mono_idx, monotype, region);
         }
 
-        const resolved_target = self.lookupResolvedDispatchTarget(expr_idx) orelse {
-            if (std.debug.runtime_safety) {
-                const method_name = module_env.getIdent(da.field_name);
-                std.debug.panic("lowerDotAccess: missing resolved dispatch target for method '{s}'", .{method_name});
-            }
-            unreachable;
-        };
+        const resolved_target = try self.resolveDispatchTargetForExpr(module_env, expr_idx, da.field_name);
         const method_symbol = try self.resolvedDispatchTargetToSymbol(module_env, resolved_target);
 
         // Build args as [receiver] ++ explicit_args
@@ -3483,31 +3467,7 @@ fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR
         try self.mono_scratches.idxs.append(try self.resolveMonotype(arg_idx));
     }
     const func_monotype = try self.buildFuncMonotype(self.mono_scratches.idxs.sliceFromStart(mono_top), monotype, false);
-    const resolved_target = blk: {
-        if (self.lookupResolvedDispatchTarget(expr_idx)) |cached| break :blk cached;
-
-        const constraint = self.lookupDispatchConstraintForExpr(expr_idx, tvd.method_name) orelse {
-            if (std.debug.runtime_safety) {
-                std.debug.panic(
-                    "lowerTypeVarDispatch: no static dispatch constraint for expr={d} method='{s}'",
-                    .{ @intFromEnum(expr_idx), module_env.getIdent(tvd.method_name) },
-                );
-            }
-            unreachable;
-        };
-
-        if (!constraint.resolved_target.isNone()) {
-            const resolved = ResolvedDispatchTarget{
-                .origin = constraint.resolved_target.origin_module,
-                .method_ident = constraint.resolved_target.method_ident,
-                .fn_var = constraint.fn_var,
-            };
-            try self.resolved_dispatch_targets.put(self.staticDispatchKey(expr_idx), resolved);
-            break :blk resolved;
-        }
-
-        break :blk try self.resolveUnresolvedTypeVarDispatchTarget(module_env, tvd.method_name, constraint);
-    };
+    const resolved_target = try self.resolveDispatchTargetForExpr(module_env, expr_idx, tvd.method_name);
     const method_symbol = try self.resolvedDispatchTargetToSymbol(module_env, resolved_target);
 
     const args = try self.lowerExprSpan(module_env, tvd.args);
@@ -3567,6 +3527,37 @@ fn lookupDispatchConstraintForExpr(
         found = constraint;
     }
     return found;
+}
+
+fn resolveDispatchTargetForExpr(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
+    method_name: Ident.Idx,
+) Allocator.Error!ResolvedDispatchTarget {
+    if (self.lookupResolvedDispatchTarget(expr_idx)) |cached| return cached;
+
+    const constraint = self.lookupDispatchConstraintForExpr(expr_idx, method_name) orelse {
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "resolveDispatchTargetForExpr: no static dispatch constraint for expr={d} method='{s}'",
+                .{ @intFromEnum(expr_idx), module_env.getIdent(method_name) },
+            );
+        }
+        unreachable;
+    };
+
+    const resolved = if (!constraint.resolved_target.isNone())
+        ResolvedDispatchTarget{
+            .origin = constraint.resolved_target.origin_module,
+            .method_ident = constraint.resolved_target.method_ident,
+            .fn_var = constraint.fn_var,
+        }
+    else
+        try self.resolveUnresolvedTypeVarDispatchTarget(module_env, method_name, constraint);
+
+    try self.resolved_dispatch_targets.put(self.staticDispatchKey(expr_idx), resolved);
+    return resolved;
 }
 
 fn identMatchesMethodName(full_name: []const u8, method_name: []const u8) bool {

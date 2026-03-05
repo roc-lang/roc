@@ -2028,11 +2028,8 @@ test "structural equality: tuple == produces match_expr" {
 }
 
 test "structural equality: tag union == produces nested match_expr" {
-    // Use a nominal tag union type with is_eq defined, to avoid type checker errors
-    // on anonymous tag unions. The structural path is still tested because the
-    // anonymous [Ok U64, Err U64] doesn't have a resolved dispatch target.
-    // Instead, test with Bool which is a nominal tag union that DOES have dispatch.
-    // For the structural path, use a simpler expression where tags are inferred.
+    // Bare tags (`True`/`False`) infer an anonymous tag union in this context,
+    // so equality lowers through structural tag-union decomposition.
     var env = try MirTestEnv.initFull("Test",
         \\main : Bool
         \\main = True == False
@@ -2040,9 +2037,7 @@ test "structural equality: tag union == produces nested match_expr" {
     defer env.deinit();
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
-    // Bool == dispatches to Bool.is_eq (nominal), which produces a call.
-    // This verifies that the nominal tag union path works correctly.
-    try testing.expect(result == .call);
+    try testing.expect(result == .match_expr);
     const mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
     try testing.expect(mono == .prim);
     try testing.expectEqual(Monotype.Prim.bool, mono.prim);
