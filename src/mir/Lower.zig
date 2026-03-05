@@ -1705,7 +1705,11 @@ fn hoistLambdaArg(self: *Self, arg: MIR.ExprId) Allocator.Error!MIR.ExprId {
 /// Handles both hoisted plain lambdas (lookups) and closure expressions (tuples).
 fn recordHofCallArgs(self: *Self, func_expr: MIR.ExprId, args: []const MIR.ExprId) Allocator.Error!void {
     for (args, 0..) |arg, i| {
+        const arg_type_idx = self.store.typeOf(arg);
+        const arg_mono = self.store.monotype_store.getMonotype(arg_type_idx);
         const is_fn_arg = blk: {
+            if (arg_mono == .func) break :blk true;
+
             const arg_expr = self.store.getExpr(arg);
             if (arg_expr == .lookup) {
                 // Check if the looked-up symbol was defined as a lambda

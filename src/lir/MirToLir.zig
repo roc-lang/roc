@@ -964,6 +964,157 @@ fn lowerCall(self: *Self, call_data: anytype, mono_idx: Monotype.Idx, region: Re
     return acc.finish(call_expr, ret_layout, region);
 }
 
+/// Follow lookups/blocks/closure origins to recover the lambda parameter span.
+fn resolveToLambdaParams(self: *Self, expr_id: MIR.ExprId) ?MIR.PatternSpan {
+    if (self.mir_store.closure_origins.get(@intFromEnum(expr_id))) |lifted_idx| {
+        const lifted = self.mir_store.lifted_lambdas.items[lifted_idx];
+        const lifted_def = self.mir_store.getSymbolDef(lifted.fn_symbol) orelse return null;
+        return self.resolveToLambdaParams(lifted_def);
+    }
+
+    const expr = self.mir_store.getExpr(expr_id);
+    return switch (expr) {
+        .lambda => |lam| lam.params,
+        .block => |block| self.resolveToLambdaParams(block.final_expr),
+        .lookup => |sym| blk: {
+            const def_expr_id = self.mir_store.getSymbolDef(sym) orelse break :blk null;
+            break :blk self.resolveToLambdaParams(def_expr_id);
+        },
+        else => null,
+    };
+}
+
+fn functionParamSymbol(self: *Self, param_pat_id: MIR.PatternId) ?MIR.Symbol {
+    const param_pat = self.mir_store.getPattern(param_pat_id);
+    return switch (param_pat) {
+        .bind => |sym| sym,
+        .as_pattern => |as_pat| as_pat.symbol,
+        .wildcard,
+        .tag,
+        .int_literal,
+        .str_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .record_destructure,
+        .tuple_destructure,
+        .list_destructure,
+        .runtime_error,
+        => null,
+    };
+}
+
+/// Adapt a function-typed call argument to the callee parameter's lambda-set layout.
+/// This handles singleton closure values flowing into multi-member lambda-set params.
+fn adaptFunctionArgToParamLambdaSet(
+    self: *Self,
+    arg_lir_expr: LirExprId,
+    arg_mir_expr: MIR.ExprId,
+    param_pat_id: MIR.PatternId,
+    region: Region,
+) Allocator.Error!LirExprId {
+    const param_symbol = self.functionParamSymbol(param_pat_id) orelse return arg_lir_expr;
+    const param_mono = self.mir_store.patternTypeOf(param_pat_id);
+    if (self.mir_store.monotype_store.getMonotype(param_mono) != .func) return arg_lir_expr;
+
+    const param_ls_idx = self.lambda_set_store.getSymbolLambdaSet(param_symbol) orelse return arg_lir_expr;
+    const param_members = self.lambda_set_store.getMembers(self.lambda_set_store.getLambdaSet(param_ls_idx).members);
+    if (param_members.len <= 1) return arg_lir_expr;
+
+    const arg_ls_idx = try LambdaSet.resolveExprLambdaSet(
+        self.allocator,
+        self.mir_store,
+        self.lambda_set_store,
+        arg_mir_expr,
+    );
+    if (arg_ls_idx.isNone()) return arg_lir_expr;
+
+    const arg_members = self.lambda_set_store.getMembers(self.lambda_set_store.getLambdaSet(arg_ls_idx).members);
+    if (arg_members.len != 1) {
+        if (std.debug.runtime_safety and arg_ls_idx != param_ls_idx) {
+            std.debug.panic(
+                "MirToLir invariant violated: unhandled closure arg coercion from lambda-set {d} to {d}",
+                .{ @intFromEnum(arg_ls_idx), @intFromEnum(param_ls_idx) },
+            );
+        }
+        return arg_lir_expr;
+    }
+
+    const arg_member = arg_members[0];
+    var target_discriminant: ?u16 = null;
+    for (param_members, 0..) |param_member, i| {
+        if (param_member.fn_symbol.eql(arg_member.fn_symbol)) {
+            target_discriminant = @intCast(i);
+            break;
+        }
+    }
+
+    const discr = target_discriminant orelse {
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "MirToLir invariant violated: closure arg member fn={d} not present in param symbol={d} lambda set",
+                .{ arg_member.fn_symbol.raw(), param_symbol.raw() },
+            );
+        }
+        unreachable;
+    };
+
+    const target_layout = try self.closureValueLayoutFromLambdaSet(param_ls_idx);
+    if (arg_member.captures_monotype.isNone()) {
+        return self.lir_store.addExpr(.{ .zero_arg_tag = .{
+            .discriminant = discr,
+            .union_layout = target_layout,
+        } }, region);
+    }
+
+    const payload_args = try self.lir_store.addExprSpan(&.{arg_lir_expr});
+    return self.lir_store.addExpr(.{ .tag = .{
+        .discriminant = discr,
+        .union_layout = target_layout,
+        .args = payload_args,
+    } }, region);
+}
+
+/// Rewrite call arguments to match callee parameter lambda-set layouts when needed.
+fn adaptClosureCallArgsToParams(
+    self: *Self,
+    callee_def_expr: MIR.ExprId,
+    mir_args: []const MIR.ExprId,
+    lir_user_args: LirExprSpan,
+    region: Region,
+) Allocator.Error!LirExprSpan {
+    const params = self.resolveToLambdaParams(callee_def_expr) orelse return lir_user_args;
+    const param_ids = self.mir_store.getPatternSpan(params);
+    if (param_ids.len == 0 or mir_args.len == 0) return lir_user_args;
+
+    const user_arg_ids = self.lir_store.getExprSpan(lir_user_args);
+    if (user_arg_ids.len == 0) return lir_user_args;
+
+    const save_exprs = self.scratch_lir_expr_ids.items.len;
+    defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
+
+    // Copy existing args by index to avoid borrowing a slice that can be invalidated.
+    for (user_arg_ids) |arg_id| {
+        try self.scratch_lir_expr_ids.append(self.allocator, arg_id);
+    }
+    const input_len = user_arg_ids.len;
+    const output_start = self.scratch_lir_expr_ids.items.len;
+
+    var changed = false;
+    for (0..input_len) |i| {
+        const arg_id = self.scratch_lir_expr_ids.items[save_exprs + i];
+        const adapted = if (i < mir_args.len and i < param_ids.len)
+            try self.adaptFunctionArgToParamLambdaSet(arg_id, mir_args[i], param_ids[i], region)
+        else
+            arg_id;
+        if (adapted != arg_id) changed = true;
+        try self.scratch_lir_expr_ids.append(self.allocator, adapted);
+    }
+
+    if (!changed) return lir_user_args;
+    return self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[output_start..]);
+}
+
 /// Generate dispatch for a call to a closure value using lambda set information.
 /// For single-member lambda sets: direct call with captures as extra arg.
 /// For multi-member lambda sets: discriminant_switch dispatching to each member.
@@ -1017,13 +1168,14 @@ fn lowerClosureCall(
             .symbol = member.fn_symbol,
             .layout_idx = lifted_layout,
         } }, region);
+        const call_user_args = try self.adaptClosureCallArgsToParams(lifted_def, mir_args, lir_user_args, region);
 
         if (member.captures_monotype.isNone()) {
             // Zero-capture lambda: call with just user args, no extra captures param
             const call_expr = try self.lir_store.addExpr(.{ .call = .{
                 .fn_expr = fn_expr,
                 .fn_layout = lifted_layout,
-                .args = lir_user_args,
+                .args = call_user_args,
                 .ret_layout = ret_layout,
                 .called_via = .apply,
             } }, region);
@@ -1038,7 +1190,7 @@ fn lowerClosureCall(
         // Build args: [user_args..., closure_val]
         // Re-read the span after lowering closure_val; lowerExpr may append to
         // extra_data and invalidate previously borrowed slices.
-        const user_arg_ids = self.lir_store.getExprSpan(lir_user_args);
+        const user_arg_ids = self.lir_store.getExprSpan(call_user_args);
         const save_exprs = self.scratch_lir_expr_ids.items.len;
         defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
         for (user_arg_ids) |arg_id| {
@@ -1090,10 +1242,11 @@ fn lowerClosureCall(
             .symbol = member.fn_symbol,
             .layout_idx = lifted_layout,
         } }, region);
+        const branch_user_args = try self.adaptClosureCallArgsToParams(lifted_def, mir_args, lir_user_args, region);
 
         // Re-read on each iteration: lowering lifted defs can append to
         // extra_data and invalidate previously borrowed slices.
-        const user_arg_ids = self.lir_store.getExprSpan(lir_user_args);
+        const user_arg_ids = self.lir_store.getExprSpan(branch_user_args);
         const inner_save = self.scratch_lir_expr_ids.items.len;
         for (user_arg_ids) |arg_id| {
             try self.scratch_lir_expr_ids.append(self.allocator, arg_id);
