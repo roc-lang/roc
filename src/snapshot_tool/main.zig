@@ -3822,20 +3822,6 @@ fn processDevObjectSnapshot(
     };
     defer mir_lower.deinit();
 
-    // Run lambda set inference
-    const mir_module = @import("mir");
-    var lambda_set_store = mir_module.LambdaSet.infer(allocator, &mir_store) catch {
-        std.log.err("Failed to run lambda set inference", .{});
-        return false;
-    };
-    defer lambda_set_store.deinit(allocator);
-
-    var lir_store = lir_mod.LirExprStore.init(allocator);
-    defer lir_store.deinit();
-
-    var mir_to_lir = lir_mod.MirToLir.init(allocator, &mir_store, &lir_store, &layout_store, &lambda_set_store, all_module_envs[0].idents.true_tag);
-    defer mir_to_lir.deinit();
-
     // Use provides entries from build pipeline (centralized in CompiledModuleInfo)
     const backend_mod = @import("backend");
     var entrypoints = std.ArrayList(backend_mod.Entrypoint).empty;
@@ -3852,6 +3838,14 @@ fn processDevObjectSnapshot(
         return false;
     }
 
+    const PendingEntrypoint = struct {
+        ffi_symbol: []const u8,
+        mir_expr_id: MIR.ExprId,
+        ret_layout: layout_mod.Idx,
+    };
+    var pending_entrypoints = std.ArrayList(PendingEntrypoint).empty;
+    defer pending_entrypoints.deinit(allocator);
+
     // Match provides entries to platform defs and lower them
     const platform_defs = platform_module.env.store.sliceDefs(platform_module.env.all_defs);
     for (provides_entries) |entry| {
@@ -3862,21 +3856,17 @@ fn processDevObjectSnapshot(
                 .assign => |assign| {
                     const ident_name = platform_module.env.getIdent(assign.ident);
                     if (std.mem.eql(u8, ident_name, entry.roc_ident)) {
-                        // Lower CIR → MIR
+                        // Lower CIR → MIR.
                         const mir_expr_id = mir_lower.lowerExpr(def.expr) catch continue;
-                        // Lower MIR → LIR
-                        const lir_expr_id = mir_to_lir.lower(mir_expr_id) catch continue;
 
                         const type_var = can.ModuleEnv.varFrom(def.expr);
                         var scope = types.TypeScope.init(allocator);
                         defer scope.deinit();
                         const ret_layout = layout_store.fromTypeVar(platform_module_idx, type_var, &scope, null) catch continue;
 
-                        const symbol_name = std.fmt.allocPrint(allocator, "roc__{s}", .{entry.ffi_symbol}) catch continue;
-                        entrypoints.append(allocator, .{
-                            .symbol_name = symbol_name,
-                            .body_expr = lir_expr_id,
-                            .arg_layouts = &[_]layout_mod.Idx{},
+                        pending_entrypoints.append(allocator, .{
+                            .ffi_symbol = entry.ffi_symbol,
+                            .mir_expr_id = mir_expr_id,
                             .ret_layout = ret_layout,
                         }) catch continue;
                         break;
@@ -3887,8 +3877,45 @@ fn processDevObjectSnapshot(
         }
     }
 
-    if (entrypoints.items.len == 0) {
+    if (pending_entrypoints.items.len == 0) {
         std.log.err("No entrypoints found in platform module", .{});
+        return false;
+    }
+
+    // Run lambda set inference after MIR lowering so all symbol defs are visible.
+    const mir_module = @import("mir");
+    var lambda_set_store = mir_module.LambdaSet.infer(allocator, &mir_store) catch {
+        std.log.err("Failed to run lambda set inference", .{});
+        return false;
+    };
+    defer lambda_set_store.deinit(allocator);
+
+    var lir_store = lir_mod.LirExprStore.init(allocator);
+    defer lir_store.deinit();
+
+    var mir_to_lir = lir_mod.MirToLir.init(
+        allocator,
+        &mir_store,
+        &lir_store,
+        &layout_store,
+        &lambda_set_store,
+        all_module_envs[0].idents.true_tag,
+    );
+    defer mir_to_lir.deinit();
+
+    for (pending_entrypoints.items) |pending| {
+        const lir_expr_id = mir_to_lir.lower(pending.mir_expr_id) catch continue;
+        const symbol_name = std.fmt.allocPrint(allocator, "roc__{s}", .{pending.ffi_symbol}) catch continue;
+        entrypoints.append(allocator, .{
+            .symbol_name = symbol_name,
+            .body_expr = lir_expr_id,
+            .arg_layouts = &[_]layout_mod.Idx{},
+            .ret_layout = pending.ret_layout,
+        }) catch continue;
+    }
+
+    if (entrypoints.items.len == 0) {
+        std.log.err("Failed to lower any entrypoints to LIR", .{});
         return false;
     }
 
@@ -4472,7 +4499,6 @@ test "TODO: cross-module function calls - string_interpolation_comparison" {}
 test "TODO: cross-module function calls - string_multiline_comparison" {}
 
 test "TODO: cross-module function calls - string_ordering_unsupported" {}
-
 
 /// An implementation of RocOps for snapshot testing.
 pub const SnapshotOps = struct {

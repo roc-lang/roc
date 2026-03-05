@@ -5713,7 +5713,34 @@ fn resolveVarFromExternal(
             cached_var
         else blk: {
             // First time importing this type - copy it and cache the result
-            const imported_var = @as(Var, @enumFromInt(@intFromEnum(target_node_idx)));
+            const imported_var: Var = blk_var: {
+                if (other_module_env.store.isDefNode(node_idx)) {
+                    const def_idx: CIR.Def.Idx = @enumFromInt(node_idx);
+                    const def = other_module_env.store.getDef(def_idx);
+                    const pat = other_module_env.store.getPattern(def.pattern);
+                    const def_ident = switch (pat) {
+                        .assign => |assign| assign.ident,
+                        .as => |as_pat| as_pat.ident,
+                        else => Ident.Idx.NONE,
+                    };
+
+                    // Associated methods in type modules are emitted as qualified
+                    // top-level names (e.g. "A.get_value"). For these defs, the
+                    // def-node var is the canonical function type; the raw expr var
+                    // can point at an internal helper type entry.
+                    if (!def_ident.isNone()) {
+                        const ident_text = other_module_env.getIdent(def_ident);
+                        if (std.mem.indexOfScalar(u8, ident_text, '.')) |_| {
+                            break :blk_var @as(Var, @enumFromInt(@intFromEnum(target_node_idx)));
+                        }
+                    }
+
+                    break :blk_var ModuleEnv.varFrom(def.expr);
+                }
+
+                // Non-def nodes continue to use node-index-as-var mapping.
+                break :blk_var @as(Var, @enumFromInt(@intFromEnum(target_node_idx)));
+            };
 
             // Every node should have a corresponding type entry
             std.debug.assert(@intFromEnum(imported_var) < other_module_env.types.len());
