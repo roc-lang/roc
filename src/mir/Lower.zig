@@ -856,13 +856,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                         const def_key: u64 = @bitCast(def_symbol);
 
                         if (!self.lowered_symbols.contains(def_key) and !self.in_progress_defs.contains(def_key)) {
-                            // Bind the definition's type vars from the call-site
-                            // monotype. The definition has its own type scheme
-                            // (e.g. range_to's `b`) separate from the caller's
-                            // instantiated copy (e.g. `a` in `to`), so we bind
-                            // before lowering to connect them.
-                            try self.bindTypeVarMonotypes(ModuleEnv.varFrom(def.expr), monotype);
-                            _ = try self.lowerExternalDef(def_symbol, def.expr);
+                            _ = try self.lowerExternalDefWithType(def_symbol, def.expr, monotype);
                         }
 
                         break;
@@ -1177,6 +1171,14 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
 
 // --- Helpers ---
 
+fn isTopLevelPattern(module_env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) bool {
+    const defs = module_env.store.sliceDefs(module_env.all_defs);
+    for (defs) |def_idx| {
+        if (module_env.store.getDef(def_idx).pattern == pattern_idx) return true;
+    }
+    return false;
+}
+
 /// Resolve a CIR pattern to a global MIR symbol.
 fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!MIR.Symbol {
     const base_key: u64 = (@as(u64, self.current_module_idx) << 32) | @intFromEnum(pattern_idx);
@@ -1198,13 +1200,7 @@ fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!MI
 
     const module_env = self.all_module_envs[self.current_module_idx];
     const pattern = module_env.store.getPattern(pattern_idx);
-    const is_top_level_pattern = blk: {
-        const defs = module_env.store.sliceDefs(module_env.all_defs);
-        for (defs) |def_idx| {
-            if (module_env.store.getDef(def_idx).pattern == pattern_idx) break :blk true;
-        }
-        break :blk false;
-    };
+    const is_top_level_pattern = isTopLevelPattern(module_env, pattern_idx);
     const use_scoped_local_ident = self.current_pattern_scope != 0 and !is_top_level_pattern;
 
     const ident_idx: Ident.Idx = switch (pattern) {
@@ -3473,8 +3469,8 @@ fn bindTypeVarMonotypes(self: *Self, type_var: types.Var, monotype: Monotype.Idx
     if (self.type_var_seen.get(resolved.var_)) |existing| {
         if (!(try self.monotypesStructurallyEqual(existing, monotype))) {
             typeBindingInvariant(
-                "bindTypeVarMonotypes: conflicting monotype binding for type var root {d}",
-                .{@intFromEnum(resolved.var_)},
+                "bindTypeVarMonotypes: conflicting monotype binding for type var root {d} (existing={d}, new={d})",
+                .{ @intFromEnum(resolved.var_), @intFromEnum(existing), @intFromEnum(monotype) },
             );
         }
         return;

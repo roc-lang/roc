@@ -144,22 +144,14 @@ pub fn infer(allocator: Allocator, mir_store: *const MIR.Store) Allocator.Error!
         }
     }
 
-    // Propagate lambda sets from call-site arguments to callee parameters.
-    // When `f(g)` is called and `g` has a lambda set, propagate it to f's
-    // corresponding parameter so that calls to that parameter inside f can
-    // dispatch through the lambda set.
-    try propagateCallArgs(allocator, mir_store, &store);
-
-    // Propagate lambda sets through capture aliases. A capture-local inside
-    // a lifted function body aliases an outer-scope symbol; it should have
-    // the same lambda set so closure call dispatch works.
-    var alias_it = mir_store.capture_symbol_aliases.iterator();
-    while (alias_it.next()) |entry| {
-        const capture_local_key = entry.key_ptr.*;
-        const canonical_key = entry.value_ptr.*;
-        if (store.symbol_lambda_sets.get(canonical_key)) |ls_idx| {
-            try store.symbol_lambda_sets.put(allocator, capture_local_key, ls_idx);
-        }
+    // Propagate lambda sets across both HOF call edges and capture aliases until
+    // stable. These relations depend on each other (a callee lambda set may come
+    // from aliasing, and that can unlock additional call-arg propagation).
+    var changed = true;
+    while (changed) {
+        changed = false;
+        changed = (try propagateCallArgs(allocator, mir_store, &store)) or changed;
+        changed = (try propagateCaptureAliases(allocator, mir_store, &store)) or changed;
     }
 
     return store;
@@ -167,41 +159,69 @@ pub fn infer(allocator: Allocator, mir_store: *const MIR.Store) Allocator.Error!
 
 /// Propagate lambda sets from call arguments to callee parameters.
 /// Uses pre-recorded HofCallArg entries from lowering — no expression scanning needed.
-fn propagateCallArgs(allocator: Allocator, mir_store: *const MIR.Store, ls_store: *Store) Allocator.Error!void {
-    // Iterate to a fixpoint so newly learned lambda sets can unlock additional
-    // propagation through other HOF edges in the same MIR graph.
-    var changed = true;
-    while (changed) {
-        changed = false;
+fn propagateCallArgs(allocator: Allocator, mir_store: *const MIR.Store, ls_store: *Store) Allocator.Error!bool {
+    var changed = false;
 
-        for (mir_store.hof_call_args.items) |hof| {
-            // Resolve the arg's lambda set — works for both lookups (hoisted lambdas)
-            // and direct closure expressions (captures tuples with closure_origins).
-            const arg_ls = getArgLambdaSet(allocator, mir_store, ls_store, hof.arg_expr) orelse continue;
-            const arg_index: usize = @intCast(hof.arg_index);
+    for (mir_store.hof_call_args.items) |hof| {
+        // Resolve the arg's lambda set — works for both lookups (hoisted lambdas)
+        // and direct closure expressions (captures tuples with closure_origins).
+        const arg_ls = getArgLambdaSet(allocator, mir_store, ls_store, hof.arg_expr) orelse continue;
+        const arg_index: usize = @intCast(hof.arg_index);
+        const call_expr = mir_store.getExpr(hof.call_func);
+        const owner_fn_symbol = if (call_expr == .lookup) call_expr.lookup else MIR.Symbol.none;
 
-            // Fast path: callee resolves directly to a lambda/lookup-with-def.
-            if (resolveToLambdaParams(mir_store, hof.call_func)) |params| {
-                changed = (try propagateArgIntoParams(allocator, mir_store, ls_store, params, arg_index, arg_ls)) or changed;
-                continue;
-            }
+        // Fast path: callee resolves directly to a lambda/lookup-with-def.
+        if (resolveToLambdaParams(mir_store, hof.call_func)) |params| {
+            changed = (try propagateArgIntoParams(
+                allocator,
+                mir_store,
+                ls_store,
+                params,
+                arg_index,
+                arg_ls,
+                owner_fn_symbol,
+            )) or changed;
+            continue;
+        }
 
-            // Fallback: callee may be a lookup to a symbol that has a lambda set
-            // but no direct symbol_def (e.g. higher-order parameter). In that case,
-            // propagate into each member function's corresponding parameter.
-            const call_expr = mir_store.getExpr(hof.call_func);
-            if (call_expr == .lookup) {
-                changed = (try propagateArgIntoCalleeMembers(
-                    allocator,
-                    mir_store,
-                    ls_store,
-                    call_expr.lookup,
-                    arg_index,
-                    arg_ls,
-                )) or changed;
-            }
+        // Fallback: callee may be a lookup to a symbol that has a lambda set
+        // but no direct symbol_def (e.g. higher-order parameter). In that case,
+        // propagate into each member function's corresponding parameter.
+        if (call_expr == .lookup) {
+            changed = (try propagateArgIntoCalleeMembers(
+                allocator,
+                mir_store,
+                ls_store,
+                call_expr.lookup,
+                arg_index,
+                arg_ls,
+            )) or changed;
         }
     }
+
+    return changed;
+}
+
+/// Propagate lambda sets through capture aliases. A capture-local inside
+/// a lifted function body aliases an outer-scope symbol; it should have
+/// the same lambda set so closure call dispatch works.
+fn propagateCaptureAliases(allocator: Allocator, mir_store: *const MIR.Store, ls_store: *Store) Allocator.Error!bool {
+    var changed = false;
+    var alias_it = mir_store.capture_symbol_aliases.iterator();
+    while (alias_it.next()) |entry| {
+        const capture_local_key = entry.key_ptr.*;
+        const canonical_key = entry.value_ptr.*;
+        if (ls_store.symbol_lambda_sets.get(canonical_key)) |ls_idx| {
+            const did_change = try mergeIntoSymbol(
+                allocator,
+                ls_store,
+                MIR.Symbol.fromRaw(capture_local_key),
+                ls_idx,
+            );
+            changed = did_change or changed;
+        }
+    }
+    return changed;
 }
 
 fn propagateArgIntoParams(
@@ -211,12 +231,27 @@ fn propagateArgIntoParams(
     params: MIR.PatternSpan,
     arg_index: usize,
     arg_ls: Idx,
+    owner_fn_symbol: MIR.Symbol,
 ) Allocator.Error!bool {
     const param_ids = mir_store.getPatternSpan(params);
     if (arg_index >= param_ids.len) return false;
 
-    const param_pat = mir_store.getPattern(param_ids[arg_index]);
+    const param_id = param_ids[arg_index];
+    const param_pat = mir_store.getPattern(param_id);
     if (param_pat != .bind) return false;
+
+    const param_mono = mir_store.patternTypeOf(param_id);
+    if (std.debug.runtime_safety) {
+        assertLambdaSetCompatibleForParamType(
+            mir_store,
+            ls_store,
+            arg_ls,
+            param_mono,
+            param_pat.bind,
+            owner_fn_symbol,
+            arg_index,
+        );
+    }
 
     return mergeIntoSymbol(allocator, ls_store, param_pat.bind, arg_ls);
 }
@@ -237,10 +272,135 @@ fn propagateArgIntoCalleeMembers(
     for (members) |member| {
         const def_expr_id = mir_store.getSymbolDef(member.fn_symbol) orelse continue;
         const params = resolveToLambdaParams(mir_store, def_expr_id) orelse continue;
-        const did_change = try propagateArgIntoParams(allocator, mir_store, ls_store, params, arg_index, arg_ls);
+        const did_change = try propagateArgIntoParams(
+            allocator,
+            mir_store,
+            ls_store,
+            params,
+            arg_index,
+            arg_ls,
+            member.fn_symbol,
+        );
         changed = did_change or changed;
     }
     return changed;
+}
+
+/// Debug-only assertion: every lambda-set member propagated into a function-typed
+/// parameter must be signature-compatible with that parameter type.
+fn assertLambdaSetCompatibleForParamType(
+    mir_store: *const MIR.Store,
+    ls_store: *Store,
+    arg_ls_idx: Idx,
+    param_mono: Monotype.Idx,
+    param_symbol: MIR.Symbol,
+    owner_fn_symbol: MIR.Symbol,
+    arg_index: usize,
+) void {
+    const param_mono_val = mir_store.monotype_store.getMonotype(param_mono);
+    if (param_mono_val != .func) return;
+    const param_func = param_mono_val.func;
+    const param_args = mir_store.monotype_store.getIdxSpan(param_func.args);
+
+    const arg_ls = ls_store.getLambdaSet(arg_ls_idx);
+    const members = ls_store.getMembers(arg_ls.members);
+    for (members) |member| {
+        const def_expr_id = mir_store.getSymbolDef(member.fn_symbol) orelse {
+            std.debug.panic(
+                "LambdaSet compatibility failure: missing def for member fn_symbol={d}",
+                .{member.fn_symbol.raw()},
+            );
+        };
+        const member_mono = mir_store.typeOf(def_expr_id);
+        const member_mono_val = mir_store.monotype_store.getMonotype(member_mono);
+        if (member_mono_val != .func) {
+            std.debug.panic(
+                "LambdaSet compatibility failure: member fn_symbol={d} has non-func monotype={d}",
+                .{ member.fn_symbol.raw(), @intFromEnum(member_mono) },
+            );
+        }
+
+        const member_func = member_mono_val.func;
+        const member_args = mir_store.monotype_store.getIdxSpan(member_func.args);
+        const expected_args = param_args.len + @as(usize, if (member.captures_monotype.isNone()) 0 else 1);
+        if (member_args.len != expected_args or member_func.ret != param_func.ret) {
+            std.debug.print(
+                "LambdaSet compatibility mismatch: owner fn={d} arg_index={d} param_mono={d} param_symbol={d}\n",
+                .{
+                    owner_fn_symbol.raw(),
+                    arg_index,
+                    @intFromEnum(param_mono),
+                    param_symbol.raw(),
+                },
+            );
+            if (!owner_fn_symbol.isNone()) {
+                if (mir_store.getSymbolDef(owner_fn_symbol)) |owner_def_expr_id| {
+                    const owner_mono = mir_store.typeOf(owner_def_expr_id);
+                    const owner_mono_val = mir_store.monotype_store.getMonotype(owner_mono);
+                    if (owner_mono_val == .func) {
+                        const owner_args = mir_store.monotype_store.getIdxSpan(owner_mono_val.func.args);
+                        std.debug.print("  owner type args:", .{});
+                        for (owner_args) |a| {
+                            std.debug.print(" {d}", .{@intFromEnum(a)});
+                        }
+                        std.debug.print(" -> {d}\n", .{@intFromEnum(owner_mono_val.func.ret)});
+                    } else {
+                        std.debug.print("  owner type mono={d} (non-func)\n", .{@intFromEnum(owner_mono)});
+                    }
+                } else {
+                    std.debug.print("  owner has no symbol def\n", .{});
+                }
+            }
+            std.debug.print(
+                "  incoming member fn={d} captures={d}\n",
+                .{
+                    member.fn_symbol.raw(),
+                    if (member.captures_monotype.isNone()) @as(u32, std.math.maxInt(u32)) else @intFromEnum(member.captures_monotype),
+                },
+            );
+            std.debug.print("  param args:", .{});
+            for (param_args) |a| {
+                std.debug.print(" {d}", .{@intFromEnum(a)});
+            }
+            std.debug.print(" -> {d}\n", .{@intFromEnum(param_func.ret)});
+
+            std.debug.print("  member args:", .{});
+            for (member_args) |a| {
+                std.debug.print(" {d}", .{@intFromEnum(a)});
+            }
+            std.debug.print(" -> {d}\n", .{@intFromEnum(member_func.ret)});
+
+            std.debug.panic(
+                "LambdaSet propagation type mismatch for fn-typed parameter symbol={d}",
+                .{param_symbol.raw()},
+            );
+        }
+
+        for (param_args, 0..) |param_arg_mono, i| {
+            if (member_args[i] != param_arg_mono) {
+                std.debug.print(
+                    "LambdaSet compatibility mismatch: owner fn={d} arg_index={d} param_symbol={d} param_arg #{d} expected mono={d}, got mono={d}\n",
+                    .{ owner_fn_symbol.raw(), arg_index, param_symbol.raw(), i, @intFromEnum(param_arg_mono), @intFromEnum(member_args[i]) },
+                );
+                std.debug.print("  param args:", .{});
+                for (param_args) |a| {
+                    std.debug.print(" {d}", .{@intFromEnum(a)});
+                }
+                std.debug.print(" -> {d}\n", .{@intFromEnum(param_func.ret)});
+
+                std.debug.print("  member fn={d} args:", .{member.fn_symbol.raw()});
+                for (member_args) |a| {
+                    std.debug.print(" {d}", .{@intFromEnum(a)});
+                }
+                std.debug.print(" -> {d}\n", .{@intFromEnum(member_func.ret)});
+
+                std.debug.panic(
+                    "LambdaSet propagation type mismatch for fn-typed parameter symbol={d}",
+                    .{param_symbol.raw()},
+                );
+            }
+        }
+    }
 }
 
 /// Get the lambda set for a call argument expression.

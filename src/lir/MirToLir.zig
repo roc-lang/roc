@@ -336,6 +336,34 @@ fn layoutFromTagUnion(self: *Self, tu: anytype) Allocator.Error!layout.Idx {
     return self.layout_store.putTagUnion(self.scratch_layout_idxs.items[save_idxs..]);
 }
 
+/// Compute the runtime value layout for a lambda set.
+/// Single-member sets use the captures payload layout directly.
+/// Multi-member sets use a tag union over per-member captures payload layouts.
+fn closureValueLayoutFromLambdaSet(self: *Self, ls_idx: LambdaSet.Idx) Allocator.Error!layout.Idx {
+    const ls = self.lambda_set_store.getLambdaSet(ls_idx);
+    const members = self.lambda_set_store.getMembers(ls.members);
+    if (members.len == 0) unreachable;
+
+    if (members.len == 1) {
+        const member = members[0];
+        return if (member.captures_monotype.isNone())
+            .zst
+        else
+            try self.layoutFromMonotype(member.captures_monotype);
+    }
+
+    const save = self.scratch_layout_idxs.items.len;
+    defer self.scratch_layout_idxs.shrinkRetainingCapacity(save);
+    for (members) |member| {
+        const payload_layout = if (member.captures_monotype.isNone())
+            .zst
+        else
+            try self.layoutFromMonotype(member.captures_monotype);
+        try self.scratch_layout_idxs.append(self.allocator, payload_layout);
+    }
+    return self.layout_store.putTagUnion(self.scratch_layout_idxs.items[save..]);
+}
+
 /// Check if a monotype is a single-tag union (exactly one variant).
 fn isSingleTagUnion(self: *const Self, mono_idx: Monotype.Idx) bool {
     const monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
@@ -768,7 +796,19 @@ fn lowerTag(self: *Self, tag_data: anytype, mono_idx: Monotype.Idx, region: Regi
 }
 
 fn lowerLookup(self: *Self, sym: Symbol, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
-    const layout_idx = try self.layoutFromMonotype(mono_idx);
+    var layout_idx = try self.layoutFromMonotype(mono_idx);
+    const mono = self.mir_store.monotype_store.getMonotype(mono_idx);
+    const has_callable_def = if (self.mir_store.getSymbolDef(sym)) |def_id|
+        LambdaSet.isLambdaExpr(self.mir_store, def_id)
+    else
+        false;
+    if (mono == .func and !has_callable_def) {
+        if (self.lambda_set_store.getSymbolLambdaSet(sym)) |ls_idx| {
+            // Function-valued lookups carry closure payloads; refine beyond
+            // generic function monotype layout so captured closures are sized correctly.
+            layout_idx = try self.closureValueLayoutFromLambdaSet(ls_idx);
+        }
+    }
 
     // Propagate MIR symbol definition to LIR store (if exists and not already done)
     if (self.lir_store.getSymbolDef(sym) == null) {
@@ -983,8 +1023,7 @@ fn lowerClosureCall(
 
         // Has captures: lower closure val and append as extra arg
         const closure_val_raw = try self.lowerExpr(call_data.func);
-        const closure_mono = self.mir_store.typeOf(call_data.func);
-        const closure_layout = try self.layoutFromMonotype(closure_mono);
+        const closure_layout = try self.closureValueLayoutFromLambdaSet(ls_idx);
         const closure_val = try acc.ensureSymbol(closure_val_raw, closure_layout, region);
 
         // Build args: [user_args..., closure_val]
@@ -1011,8 +1050,7 @@ fn lowerClosureCall(
 
     // Multi-member lambda set: discriminant_switch on the tag union closure value
     const closure_val_raw = try self.lowerExpr(call_data.func);
-    const closure_mono = self.mir_store.typeOf(call_data.func);
-    const closure_layout = try self.layoutFromMonotype(closure_mono);
+    const closure_layout = try self.closureValueLayoutFromLambdaSet(ls_idx);
     const closure_val = try acc.ensureSymbol(closure_val_raw, closure_layout, region);
 
     const save_exprs = self.scratch_lir_expr_ids.items.len;
@@ -1494,7 +1532,17 @@ fn lowerPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Error!LirPatte
 
     return switch (pat) {
         .bind => |sym| blk: {
-            const layout_idx = try self.layoutFromMonotype(mono_idx);
+            var layout_idx = try self.layoutFromMonotype(mono_idx);
+            const mono = self.mir_store.monotype_store.getMonotype(mono_idx);
+            const has_callable_def = if (self.mir_store.getSymbolDef(sym)) |def_id|
+                LambdaSet.isLambdaExpr(self.mir_store, def_id)
+            else
+                false;
+            if (mono == .func and !has_callable_def) {
+                if (self.lambda_set_store.getSymbolLambdaSet(sym)) |ls_idx| {
+                    layout_idx = try self.closureValueLayoutFromLambdaSet(ls_idx);
+                }
+            }
             const reassignable = self.mir_store.isSymbolReassignable(sym);
             // Register symbol → layout so captured variables can find their layout
             const sym_key: u64 = @bitCast(sym);

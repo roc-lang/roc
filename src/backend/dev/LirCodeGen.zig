@@ -11247,6 +11247,58 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Generate a call to an already-compiled procedure.
         /// This is used for recursive functions that were compiled via compileAllProcs.
+        const PassByPtrPlan = struct {
+            start: u32,
+            slice: []bool,
+        };
+
+        fn computePassByPtrPlan(self: *Self, arg_infos: []const ArgInfo, initial_reg_idx: u8, emit_roc_ops: bool) Allocator.Error!PassByPtrPlan {
+            const pbp_start: u32 = self.scratch_pass_by_ptr.top();
+            for (0..arg_infos.len) |_| try self.scratch_pass_by_ptr.append(false);
+            const pass_by_ptr = self.scratch_pass_by_ptr.sliceFromStart(pbp_start);
+
+            const pnr_start = self.scratch_param_num_regs.top();
+            defer self.scratch_param_num_regs.clearFrom(pnr_start);
+            for (arg_infos) |info| try self.scratch_param_num_regs.append(info.num_regs);
+            const param_num_regs = self.scratch_param_num_regs.sliceFromStart(pnr_start);
+
+            var reg_count: u8 = initial_reg_idx;
+            for (param_num_regs, 0..) |nr, i| {
+                if (reg_count + nr <= max_arg_regs) {
+                    reg_count += nr;
+                } else if (nr > 1) {
+                    pass_by_ptr[i] = true;
+                    if (reg_count + 1 <= max_arg_regs) {
+                        reg_count += 1;
+                    } else {
+                        reg_count = max_arg_regs;
+                    }
+                } else {
+                    reg_count = max_arg_regs;
+                }
+            }
+
+            if (emit_roc_ops) {
+                while (reg_count + 1 > max_arg_regs) {
+                    var found = false;
+                    var best_idx: usize = 0;
+                    var best_regs: u8 = 0;
+                    for (param_num_regs, 0..) |nr, i| {
+                        if (!pass_by_ptr[i] and nr > 1 and nr > best_regs) {
+                            best_idx = i;
+                            best_regs = nr;
+                            found = true;
+                        }
+                    }
+                    if (!found) break;
+                    pass_by_ptr[best_idx] = true;
+                    reg_count -= (best_regs - 1);
+                }
+            }
+
+            return .{ .start = pbp_start, .slice = pass_by_ptr };
+        }
+
         fn generateCallToCompiledProc(self: *Self, proc: CompiledProc, args_span: anytype, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
             const args = self.store.getExprSpan(args_span);
 
@@ -11261,9 +11313,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.scratch_arg_infos.append(.{ .loc = arg_loc, .layout_idx = arg_layout, .num_regs = num_regs });
             }
             const arg_infos = self.scratch_arg_infos.sliceFromStart(arg_infos_start);
-
             // Pass 2: Place arguments and emit call
-            const stack_spill_size = try self.placeCallArguments(arg_infos, .{});
+            const pbp_plan = try self.computePassByPtrPlan(arg_infos, 0, true);
+            defer self.scratch_pass_by_ptr.clearFrom(pbp_plan.start);
+            const stack_spill_size = try self.placeCallArguments(arg_infos, .{
+                .pass_by_ptr = pbp_plan.slice,
+                .emit_roc_ops = true,
+            });
             try self.emitCallToOffset(proc.code_start);
 
             if (stack_spill_size > 0) {
@@ -11288,8 +11344,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.scratch_arg_infos.append(.{ .loc = arg_loc, .layout_idx = arg_layout, .num_regs = num_regs });
             }
             const arg_infos = self.scratch_arg_infos.sliceFromStart(arg_infos_start);
-
-            const stack_spill_size = try self.placeCallArguments(arg_infos, .{});
+            const pbp_plan = try self.computePassByPtrPlan(arg_infos, 0, true);
+            defer self.scratch_pass_by_ptr.clearFrom(pbp_plan.start);
+            const stack_spill_size = try self.placeCallArguments(arg_infos, .{
+                .pass_by_ptr = pbp_plan.slice,
+                .emit_roc_ops = true,
+            });
             try self.emitCallToOffset(code_offset);
 
             if (stack_spill_size > 0) {

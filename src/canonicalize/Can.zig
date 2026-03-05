@@ -5454,7 +5454,9 @@ pub fn canonicalizeExpr(
                     return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
                 };
 
-                // Determine captures: free variables in body minus variables bound by args
+                // Determine captures: free variables in body minus variables bound by args.
+                // Exclude globally resolvable defs (top-level and associated items), which
+                // should be looked up directly rather than closure-captured.
                 const bound_vars_top = self.scratch_bound_vars.top();
                 defer self.scratch_bound_vars.clearFrom(bound_vars_top);
 
@@ -5466,7 +5468,7 @@ pub fn canonicalizeExpr(
                 var bound_vars_view = self.scratch_bound_vars.setViewFrom(bound_vars_top);
                 defer bound_vars_view.deinit();
                 for (body_free_vars_slice) |fv| {
-                    if (!self.scratch_captures.contains(fv) and !bound_vars_view.contains(fv)) {
+                    if (!self.scratch_captures.contains(fv) and !bound_vars_view.contains(fv) and !self.isGloballyResolvablePattern(fv)) {
                         try self.scratch_captures.append(fv);
                     }
                 }
@@ -11591,6 +11593,21 @@ pub fn scopeLookup(
         return Scope.LookupResult{ .found = found };
     }
     return Scope.LookupResult{ .not_found = {} };
+}
+
+/// Returns true when a pattern is globally resolvable via the module's
+/// top-level scope (including associated-item placeholders registered there).
+/// Such patterns are not closure captures.
+fn isGloballyResolvablePattern(self: *Self, pattern_idx: Pattern.Idx) bool {
+    if (self.scopes.items.len == 0) return false;
+
+    const top_scope = &self.scopes.items[0];
+    var values = top_scope.idents.valueIterator();
+    while (values.next()) |top_pattern| {
+        if (top_pattern.* == pattern_idx) return true;
+    }
+
+    return false;
 }
 
 fn introduceTypeParametersFromHeader(self: *Self, header_idx: CIR.TypeHeader.Idx) std.mem.Allocator.Error!void {
