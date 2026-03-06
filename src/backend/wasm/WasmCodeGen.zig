@@ -478,7 +478,7 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
     switch (expr) {
         .i64_literal => |val| {
             self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI64(self.allocator, &self.body, val) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI64(self.allocator, &self.body, val.value) catch return error.OutOfMemory;
         },
         .f64_literal => |val| {
             self.body.append(self.allocator, Op.f64_const) catch return error.OutOfMemory;
@@ -525,7 +525,7 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
             const base_offset = try self.allocStackMemory(16, 8);
             const base_local = self.fp_local;
 
-            const unsigned: u128 = @bitCast(val);
+            const unsigned: u128 = @bitCast(val.value);
             const low: i64 = @bitCast(@as(u64, @truncate(unsigned)));
             const high: i64 = @bitCast(@as(u64, @truncate(unsigned >> 64)));
 
@@ -614,7 +614,7 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
 
                                     // For signed types, sign-extend the upper bytes
                                     const expr_data = self.store.getExpr(stmt.expr);
-                                    if (expr_data == .i64_literal and expr_data.i64_literal < 0 and
+                                    if (expr_data == .i64_literal and expr_data.i64_literal.value < 0 and
                                         (bind.layout_idx == .i128 or bind.layout_idx == .dec))
                                     {
                                         // Store -1 (all ones) in upper 8 bytes for sign extension
@@ -2094,11 +2094,11 @@ fn exprLayoutIdx(self: *Self, expr_id: LirExprId) ?layout.Idx {
         .incref => |inc| self.exprLayoutIdx(inc.value),
         .decref => |dec| self.exprLayoutIdx(dec.value),
         .free => |f| self.exprLayoutIdx(f.value),
-        .i64_literal => layout.Idx.i64,
+        .i64_literal => |i| i.layout_idx,
         .f64_literal => layout.Idx.f64,
         .f32_literal => layout.Idx.f32,
         .bool_literal => layout.Idx.bool,
-        .i128_literal => layout.Idx.i128,
+        .i128_literal => |i| i.layout_idx,
         .dec_literal => layout.Idx.dec,
         .str_literal => layout.Idx.str,
         .str_concat => layout.Idx.str,
@@ -2112,7 +2112,8 @@ fn exprLayoutIdx(self: *Self, expr_id: LirExprId) ?layout.Idx {
         .early_return => |er| er.ret_layout,
         .lambda => |l| l.fn_layout,
         .for_loop, .while_loop, .break_expr, .crash, .runtime_error => layout.Idx.zst,
-        .empty_list, .list => null, // element layout only, not list layout
+        .empty_list => |l| l.list_layout,
+        .list => |l| l.list_layout,
     };
 }
 
@@ -7167,7 +7168,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 },
                 .i64_literal => |v| {
                     self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(v)) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(v.value)) catch return error.OutOfMemory;
                 },
                 else => {
                     try self.generateExpr(args[1]);

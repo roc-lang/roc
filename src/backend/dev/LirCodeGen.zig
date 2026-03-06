@@ -1297,8 +1297,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        /// Get the layout of an expression (if available and valid for our layout store)
-        fn getExprLayout(self: *Self, expr_id: LirExprId) ?layout.Idx {
+        /// Get the concrete layout of a value-producing expression.
+        /// This is total for all value expressions; non-value expressions panic in debug.
+        fn exprLayout(self: *Self, expr_id: LirExprId) layout.Idx {
             const expr = self.store.getExpr(expr_id);
             return switch (expr) {
                 // Expressions that store their layout
@@ -1326,17 +1327,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .f32_literal => .f32,
                 .bool_literal => .bool,
                 .dec_literal => .dec,
+                .i64_literal => |i| i.layout_idx,
+                .i128_literal => |i| i.layout_idx,
                 .str_literal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote => .str,
-                // Polymorphic integer literals — layout depends on call-site specialization
-                .i64_literal, .i128_literal => null,
-                // List layout is the list itself, not elem_layout; handled by ValueLocation
-                .empty_list, .list => null,
+                .empty_list => |l| l.list_layout,
+                .list => |l| l.list_layout,
                 // Loops return unit (ZST)
-                .for_loop, .while_loop => null,
+                .for_loop, .while_loop => .zst,
                 // Statements, not value-producing expressions
-                .incref, .decref, .free => null,
+                .incref, .decref, .free => .zst,
                 // Noreturn
-                .crash, .runtime_error, .break_expr => null,
+                .crash, .runtime_error, .break_expr => {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: exprLayout called on non-value expression {s}",
+                            .{@tagName(expr)},
+                        );
+                    }
+                    unreachable;
+                },
             };
         }
 
@@ -1372,8 +1381,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             return switch (expr) {
                 // Literals
-                .i64_literal => |val| .{ .immediate_i64 = val },
-                .i128_literal => |val| try self.generateI128Literal(val),
+                .i64_literal => |val| .{ .immediate_i64 = val.value },
+                .i128_literal => |val| try self.generateI128Literal(val.value),
                 .f64_literal => |val| .{ .immediate_f64 = val },
                 .f32_literal => |val| .{ .immediate_f64 = @floatCast(val) },
                 .bool_literal => |val| .{ .immediate_i64 = if (val) 1 else 0 },
@@ -1632,12 +1641,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         );
                     }
                     if (builtin.mode == .Debug) {
-                        const list_layout_idx = self.getExprLayout(args[0]) orelse {
-                            std.debug.panic(
-                                "LIR/codegen invariant violated: list_append missing list argument layout",
-                                .{},
-                            );
-                        };
+                        const list_layout_idx = self.exprLayout(args[0]);
                         const list_layout_val = ls.getLayout(list_layout_idx);
                         switch (list_layout_val.tag) {
                             .list => {
@@ -1777,15 +1781,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const ls = self.layout_store;
                     const ret_layout_val = ls.getLayout(ll.ret_layout);
 
-                    const list_layout_idx = self.getExprLayout(args[0]) orelse {
-                        if (builtin.mode == .Debug) {
-                            std.debug.panic(
-                                "LIR/codegen invariant violated: list_get missing list argument layout",
-                                .{},
-                            );
-                        }
-                        unreachable;
-                    };
+                    const list_layout_idx = self.exprLayout(args[0]);
                     const list_layout_val = ls.getLayout(list_layout_idx);
                     const list_elem_layout: layout.Idx = switch (list_layout_val.tag) {
                         .list => list_layout_val.data.list,
@@ -1805,11 +1801,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Only treat this as safe List.get when return type differs
                     // from the list's element layout (i.e. Try(elem, err)).
                     const is_safe_get = ret_layout_val.tag == .tag_union and ll.ret_layout != list_elem_layout;
-                    if (builtin.mode == .Debug and !is_safe_get and ll.ret_layout != list_elem_layout) {
-                        std.debug.panic(
-                            "LIR/codegen invariant violated: unsafe list_get ret_layout must equal list element layout",
-                            .{},
-                        );
+                    if (builtin.mode == .Debug and !is_safe_get) {
+                        // Layout indices are not globally canonicalized yet, so identical
+                        // logical layouts can have different indices. For unsafe list_get,
+                        // require ABI compatibility (size/alignment), not index identity.
+                        const ret_sa = ls.layoutSizeAlign(ls.getLayout(ll.ret_layout));
+                        const elem_sa = ls.layoutSizeAlign(ls.getLayout(list_elem_layout));
+                        if (ret_sa.size != elem_sa.size or ret_sa.alignment != elem_sa.alignment) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: unsafe list_get ret/elem ABI mismatch (ret_size={d}, ret_align={d}, elem_size={d}, elem_align={d})",
+                                .{
+                                    ret_sa.size,
+                                    ret_sa.alignment.toByteUnits(),
+                                    elem_sa.size,
+                                    elem_sa.alignment.toByteUnits(),
+                                },
+                            );
+                        }
                     }
 
                     const elem_layout_idx: layout.Idx = if (is_safe_get) blk: {
@@ -3252,7 +3260,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Linear scan: iterate through list, compare each element
                     if (args.len != 2) unreachable;
                     const ls = self.layout_store;
-                    const list_layout_idx = self.getExprLayout(args[0]) orelse unreachable;
+                    const list_layout_idx = self.exprLayout(args[0]);
                     const list_layout = ls.getLayout(list_layout_idx);
                     switch (list_layout.tag) {
                         .list => {
@@ -3420,7 +3428,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_sublist => {
                     // list_sublist(list, {start, len}) -> List
                     if (args.len != 2) unreachable;
-                    const record_layout_idx = self.getExprLayout(args[1]);
+                    const record_layout_idx = self.exprLayout(args[1]);
                     const list_loc = try self.generateExpr(args[0]);
                     const record_loc = try self.generateExpr(args[1]);
                     return try self.callListSublistFromRecord(ll, list_loc, record_loc, record_layout_idx);
@@ -3432,7 +3440,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .num_abs_diff => {
                     // |a - b|: compare and subtract in the correct order to avoid wrap/overflow
-                    const arg_layout = self.getExprLayout(args[0]);
+                    const arg_layout = self.exprLayout(args[0]);
                     const a_loc = try self.generateExpr(args[0]);
                     const b_loc = try self.generateExpr(args[1]);
                     return try self.generateAbsDiff(a_loc, b_loc, ll.ret_layout, arg_layout);
@@ -3462,25 +3470,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Return layout can be Bool for comparisons, so don't key operand
                     // behavior off `ll.ret_layout`.
                     const operand_layout =
-                        self.getExprLayout(args[0]) orelse
-                        self.getExprLayout(args[1]) orelse
-                        ll.ret_layout;
+                        self.exprLayout(args[0]);
 
                     // With ANF, operands are always lookups or literals, so we
                     // dispatch structural equality purely by layout.
                     if (ll.op == .num_is_eq) {
                         {
                             const ls = self.layout_store;
-                            const ol = self.getExprLayout(args[0]) orelse self.getExprLayout(args[1]);
-                            if (ol) |layout_idx| {
-                                const stored_layout = ls.getLayout(layout_idx);
-                                if (stored_layout.tag == .struct_)
-                                    return self.generateStructComparisonByLayout(lhs_loc, rhs_loc, layout_idx, .num_is_eq, true);
-                                if (stored_layout.tag == .list)
-                                    return self.generateListComparisonByLayout(lhs_loc, rhs_loc, layout_idx, .num_is_eq, true);
-                                if (stored_layout.tag == .tag_union)
-                                    return self.generateTagUnionComparisonByLayout(lhs_loc, rhs_loc, layout_idx, .num_is_eq, true);
-                            }
+                            const layout_idx = self.exprLayout(args[0]);
+                            const stored_layout = ls.getLayout(layout_idx);
+                            if (stored_layout.tag == .struct_)
+                                return self.generateStructComparisonByLayout(lhs_loc, rhs_loc, layout_idx, .num_is_eq, true);
+                            if (stored_layout.tag == .list or stored_layout.tag == .list_of_zst)
+                                return self.generateListComparisonByLayout(lhs_loc, rhs_loc, layout_idx, .num_is_eq, true);
+                            if (stored_layout.tag == .tag_union)
+                                return self.generateTagUnionComparisonByLayout(lhs_loc, rhs_loc, layout_idx, .num_is_eq, true);
                         }
                     }
 
@@ -3724,7 +3728,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Box.unbox(box) -> value: dereference the box pointer
                     const ls = self.layout_store;
                     // The argument is the Box — get its layout to find element info
-                    const box_arg_layout = self.getExprLayout(args[0]) orelse unreachable;
+                    const box_arg_layout = self.exprLayout(args[0]);
                     const box_layout_data = ls.getLayout(box_arg_layout);
 
                     if (box_layout_data.tag == .box_of_zst) {
@@ -4316,16 +4320,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             var total_args_size: usize = 0;
             var max_alignment: usize = 1;
             for (args) |arg_id| {
-                const maybe_layout = self.getExprLayout(arg_id);
-                if (maybe_layout) |arg_layout_idx| {
-                    const arg_layout = ls.getLayout(arg_layout_idx);
-                    const arg_size = ls.layoutSize(arg_layout);
-                    const arg_align = arg_layout.alignment(ls.targetUsize());
-                    max_alignment = @max(max_alignment, arg_align.toByteUnits());
-                    // Align to the argument's alignment
-                    total_args_size = std.mem.alignForward(usize, total_args_size, arg_align.toByteUnits());
-                    total_args_size += arg_size;
-                }
+                const arg_layout_idx = self.exprLayout(arg_id);
+                const arg_layout = ls.getLayout(arg_layout_idx);
+                const arg_size = ls.layoutSize(arg_layout);
+                const arg_align = arg_layout.alignment(ls.targetUsize());
+                max_alignment = @max(max_alignment, arg_align.toByteUnits());
+                // Align to the argument's alignment
+                total_args_size = std.mem.alignForward(usize, total_args_size, arg_align.toByteUnits());
+                total_args_size += arg_size;
             }
 
             // Allocate args buffer (at least 8 bytes for empty args case)
@@ -4335,20 +4337,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             var offset: usize = 0;
             for (args) |arg_id| {
                 const arg_loc = try self.generateExpr(arg_id);
-                if (self.getExprLayout(arg_id)) |arg_layout_idx| {
-                    const arg_layout = ls.getLayout(arg_layout_idx);
-                    const arg_size = ls.layoutSize(arg_layout);
-                    const arg_align = arg_layout.alignment(ls.targetUsize());
-                    // Align offset
-                    offset = std.mem.alignForward(usize, offset, arg_align.toByteUnits());
+                const arg_layout_idx = self.exprLayout(arg_id);
+                const arg_layout = ls.getLayout(arg_layout_idx);
+                const arg_size = ls.layoutSize(arg_layout);
+                const arg_align = arg_layout.alignment(ls.targetUsize());
+                // Align offset
+                offset = std.mem.alignForward(usize, offset, arg_align.toByteUnits());
 
-                    if (arg_size > 0) {
-                        // Copy argument to args buffer at current offset
-                        const dest_offset: i32 = args_slot + @as(i32, @intCast(offset));
-                        try self.copyValueToStack(arg_loc, dest_offset, arg_size);
-                    }
-                    offset += arg_size;
+                if (arg_size > 0) {
+                    // Copy argument to args buffer at current offset
+                    const dest_offset: i32 = args_slot + @as(i32, @intCast(offset));
+                    try self.copyValueToStack(arg_loc, dest_offset, arg_size);
                 }
+                offset += arg_size;
             }
 
             // RocOps.hosted_fns is at offset 56 (7 pointers * 8 bytes)
@@ -9299,12 +9300,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     );
                 }
 
-                const list_layout_idx = self.getExprLayout(for_loop.list_expr) orelse {
-                    std.debug.panic(
-                        "LIR/codegen invariant violated: missing list_expr layout for for_loop",
-                        .{},
-                    );
-                };
+                const list_layout_idx = self.exprLayout(for_loop.list_expr);
                 const list_layout = ls.getLayout(list_layout_idx);
                 switch (list_layout.tag) {
                     .list => {
@@ -11319,7 +11315,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .tag => |t| t.union_layout,
                 .struct_ => |s| s.struct_layout,
                 .as_pattern => |a| a.layout_idx,
-                .list => null,
+                .list => |l| l.list_layout,
             };
         }
 
@@ -11336,7 +11332,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const arg_layout: ?layout.Idx = if (arg_index < proc_arg_layouts.len)
                     proc_arg_layouts[arg_index]
                 else
-                    self.getExprLayout(arg_id);
+                    self.exprLayout(arg_id);
                 const num_regs: u8 = self.calcArgRegCount(arg_loc, arg_layout);
                 try self.scratch_arg_infos.append(.{ .loc = arg_loc, .layout_idx = arg_layout, .num_regs = num_regs });
             }
@@ -11372,7 +11368,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.patternArgLayout(params, arg_index)
                 else
                     null;
-                const arg_layout = expected_layout orelse self.getExprLayout(arg_id);
+                const arg_layout = expected_layout orelse self.exprLayout(arg_id);
                 const num_regs: u8 = self.calcArgRegCount(arg_loc, arg_layout);
                 try self.scratch_arg_infos.append(.{ .loc = arg_loc, .layout_idx = arg_layout, .num_regs = num_regs });
             }
@@ -13880,11 +13876,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         var is_i128 = false;
                         var is_large_record = false;
                         var record_size: u32 = 0;
-                        const expr_layout_opt = self.getExprLayout(r.value);
-                        if (expr_layout_opt) |ret_layout| {
-                            is_str = ret_layout == .str;
-                        }
-                        if (expr_layout_opt) |ret_layout| {
+                        const ret_layout = self.exprLayout(r.value);
+                        is_str = ret_layout == .str;
+                        {
                             const ls = self.layout_store;
                             const layout_val = ls.getLayout(ret_layout);
                             is_list = layout_val.tag == .list or layout_val.tag == .list_of_zst;
@@ -16010,7 +16004,7 @@ test "generate i64 literal" {
     defer store.deinit();
 
     // Add an i64 literal
-    const expr_id = try store.addExpr(.{ .i64_literal = 42 }, base.Region.zero());
+    const expr_id = try store.addExpr(.{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, base.Region.zero());
 
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
@@ -16056,8 +16050,8 @@ test "generate addition" {
     defer store.deinit();
 
     // Create: 1 + 2
-    const lhs_id = try store.addExpr(.{ .i64_literal = 1 }, base.Region.zero());
-    const rhs_id = try store.addExpr(.{ .i64_literal = 2 }, base.Region.zero());
+    const lhs_id = try store.addExpr(.{ .i64_literal = .{ .value = 1, .layout_idx = .i64 } }, base.Region.zero());
+    const rhs_id = try store.addExpr(.{ .i64_literal = .{ .value = 2, .layout_idx = .i64 } }, base.Region.zero());
     const ll_args = try store.addExprSpan(&.{ lhs_id, rhs_id });
     const add_id = try store.addExpr(.{ .low_level = .{
         .op = .num_add,
@@ -16117,10 +16111,10 @@ test "record equality uses layout-aware comparison" {
 
     // Field values (string literals represented as i64 placeholders — the codegen
     // only inspects the layout, not the actual field values for comparison dispatch)
-    const str1 = try store.addExpr(.{ .i64_literal = 0 }, base.Region.zero());
-    const str2 = try store.addExpr(.{ .i64_literal = 0 }, base.Region.zero());
-    const str3 = try store.addExpr(.{ .i64_literal = 0 }, base.Region.zero());
-    const str4 = try store.addExpr(.{ .i64_literal = 0 }, base.Region.zero());
+    const str1 = try store.addExpr(.{ .i64_literal = .{ .value = 0, .layout_idx = .i64 } }, base.Region.zero());
+    const str2 = try store.addExpr(.{ .i64_literal = .{ .value = 0, .layout_idx = .i64 } }, base.Region.zero());
+    const str3 = try store.addExpr(.{ .i64_literal = .{ .value = 0, .layout_idx = .i64 } }, base.Region.zero());
+    const str4 = try store.addExpr(.{ .i64_literal = .{ .value = 0, .layout_idx = .i64 } }, base.Region.zero());
 
     const fields1 = try store.addExprSpan(&[_]LirExprId{ str1, str2 });
 
@@ -16164,8 +16158,8 @@ test "generate modulo" {
     defer store.deinit();
 
     // Create: 10 % 3
-    const lhs = try store.addExpr(.{ .i64_literal = 10 }, base.Region.zero());
-    const rhs = try store.addExpr(.{ .i64_literal = 3 }, base.Region.zero());
+    const lhs = try store.addExpr(.{ .i64_literal = .{ .value = 10, .layout_idx = .i64 } }, base.Region.zero());
+    const rhs = try store.addExpr(.{ .i64_literal = .{ .value = 3, .layout_idx = .i64 } }, base.Region.zero());
     const ll_args = try store.addExprSpan(&.{ lhs, rhs });
     const expr_id = try store.addExpr(.{ .low_level = .{
         .op = .num_mod,
@@ -16194,8 +16188,8 @@ test "generate shift left" {
     defer store.deinit();
 
     // Create: 1 << 4
-    const lhs = try store.addExpr(.{ .i64_literal = 1 }, base.Region.zero());
-    const rhs = try store.addExpr(.{ .i64_literal = 4 }, base.Region.zero());
+    const lhs = try store.addExpr(.{ .i64_literal = .{ .value = 1, .layout_idx = .i64 } }, base.Region.zero());
+    const rhs = try store.addExpr(.{ .i64_literal = .{ .value = 4, .layout_idx = .i64 } }, base.Region.zero());
     const ll_args = try store.addExprSpan(&.{ lhs, rhs });
     const expr_id = try store.addExpr(.{ .low_level = .{
         .op = .num_shift_left_by,
@@ -16224,8 +16218,8 @@ test "generate shift right" {
     defer store.deinit();
 
     // Create: 64 >> 2 (arithmetic shift right, sign-extending)
-    const lhs = try store.addExpr(.{ .i64_literal = 64 }, base.Region.zero());
-    const rhs = try store.addExpr(.{ .i64_literal = 2 }, base.Region.zero());
+    const lhs = try store.addExpr(.{ .i64_literal = .{ .value = 64, .layout_idx = .i64 } }, base.Region.zero());
+    const rhs = try store.addExpr(.{ .i64_literal = .{ .value = 2, .layout_idx = .i64 } }, base.Region.zero());
     const ll_args = try store.addExprSpan(&.{ lhs, rhs });
     const expr_id = try store.addExpr(.{ .low_level = .{
         .op = .num_shift_right_by,
@@ -16254,8 +16248,8 @@ test "generate shift right zero-fill" {
     defer store.deinit();
 
     // Create: 64 >>> 2 (logical shift right, zero-filling)
-    const lhs = try store.addExpr(.{ .i64_literal = 64 }, base.Region.zero());
-    const rhs = try store.addExpr(.{ .i64_literal = 2 }, base.Region.zero());
+    const lhs = try store.addExpr(.{ .i64_literal = .{ .value = 64, .layout_idx = .i64 } }, base.Region.zero());
+    const rhs = try store.addExpr(.{ .i64_literal = .{ .value = 2, .layout_idx = .i64 } }, base.Region.zero());
     const ll_args = try store.addExprSpan(&.{ lhs, rhs });
     const expr_id = try store.addExpr(.{ .low_level = .{
         .op = .num_shift_right_zf_by,
@@ -16284,7 +16278,7 @@ test "generate unary minus" {
     defer store.deinit();
 
     // Create: -42
-    const inner = try store.addExpr(.{ .i64_literal = 42 }, base.Region.zero());
+    const inner = try store.addExpr(.{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, base.Region.zero());
     const neg_args = try store.addExprSpan(&.{inner});
     const neg = try store.addExpr(.{ .low_level = .{
         .op = .num_neg,

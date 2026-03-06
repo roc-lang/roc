@@ -714,7 +714,7 @@ test "TailRecursionPass: tail call inside switch_stmt branch is transformed" {
     } });
 
     // Build default branch body: ret 42
-    const lit_42 = try store.addExpr(.{ .i64_literal = 42 }, Region.zero());
+    const lit_42 = try store.addExpr(.{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, Region.zero());
     const default_body = try store.addCFStmt(.{ .ret = .{ .value = lit_42 } });
 
     // Build switch statement

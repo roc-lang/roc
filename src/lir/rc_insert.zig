@@ -477,6 +477,7 @@ pub const RcInsertPass = struct {
                 const elems_res = try self.processExprSpan(list.elems);
                 if (!elems_res.changed) return expr_id;
                 return self.store.addExpr(.{ .list = .{
+                    .list_layout = list.list_layout,
                     .elem_layout = list.elem_layout,
                     .elems = elems_res.span,
                 } }, region);
@@ -1963,7 +1964,7 @@ test "RC pass-through: non-refcounted i64 block unchanged" {
     const ident_x = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
     const sym_x = LIR.Symbol.fromRaw(@as(u64, @as(u32, @bitCast(ident_x))));
 
-    const int_lit = try env.lir_store.addExpr(.{ .i64_literal = 42 }, Region.zero());
+    const int_lit = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, Region.zero());
     const pat_x = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_x, .layout_idx = i64_layout } }, Region.zero());
     const stmts = try env.lir_store.addStmts(&.{.{ .decl = .{ .pattern = pat_x, .expr = int_lit } }});
     const lookup_x = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_x, .layout_idx = i64_layout } }, Region.zero());
@@ -2061,7 +2062,7 @@ test "RC: unused string binding gets decref" {
     const stmts = try env.lir_store.addStmts(&.{.{ .decl = .{ .pattern = pat_s, .expr = str_lit } }});
 
     // Final expression is an i64 literal (s is unused)
-    const int_lit = try env.lir_store.addExpr(.{ .i64_literal = 42 }, Region.zero());
+    const int_lit = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, Region.zero());
 
     const block_expr = try env.lir_store.addExpr(.{ .block = .{
         .stmts = stmts,
@@ -2378,7 +2379,7 @@ test "RC branch-aware: symbol used in one match branch only — decref in unused
 
     const cond_expr = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_cond, .layout_idx = i64_layout } }, Region.zero());
     const lookup_s = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
-    const int_42 = try env.lir_store.addExpr(.{ .i64_literal = 42 }, Region.zero());
+    const int_42 = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, Region.zero());
 
     const wild_pat1 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = i64_layout } }, Region.zero());
     const wild_pat2 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = i64_layout } }, Region.zero());
@@ -2434,7 +2435,7 @@ test "RC branch-aware: symbol used twice in one branch — incref in that branch
     const cond_expr = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_cond, .layout_idx = i64_layout } }, Region.zero());
     const lookup_s1 = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
     const lookup_s2 = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
-    const int_42 = try env.lir_store.addExpr(.{ .i64_literal = 42 }, Region.zero());
+    const int_42 = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, Region.zero());
 
     // True branch body: low_level num_add(s, s) — uses s twice
     const ll_args = try env.lir_store.addExprSpan(&.{ lookup_s1, lookup_s2 });
@@ -2498,7 +2499,7 @@ test "RC branch-aware: symbol used outside and inside branches" {
     // Build match
     const cond_expr = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_cond, .layout_idx = i64_layout } }, Region.zero());
     const lookup_s_branch = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
-    const int_42 = try env.lir_store.addExpr(.{ .i64_literal = 42 }, Region.zero());
+    const int_42 = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, Region.zero());
 
     const wild_pat1 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = i64_layout } }, Region.zero());
     const wild_pat2 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = i64_layout } }, Region.zero());
@@ -2651,7 +2652,7 @@ test "RC lambda: unused refcounted param gets decref" {
     const sym_s = makeSymbol(1);
 
     // Build lambda body: 42
-    const int_lit = try env.lir_store.addExpr(.{ .i64_literal = 42 }, Region.zero());
+    const int_lit = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, Region.zero());
 
     // Build lambda: |s| 42
     const pat_s = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
@@ -2736,7 +2737,7 @@ test "RC block: lambda in stmt.expr gets processed" {
     const sym_s = makeSymbol(2);
 
     // Build lambda: |s| 42
-    const int_42 = try env.lir_store.addExpr(.{ .i64_literal = 42 }, Region.zero());
+    const int_42 = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, Region.zero());
     const pat_s = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
     const params = try env.lir_store.addPatternSpan(&.{pat_s});
     const lambda_expr = try env.lir_store.addExpr(.{ .lambda = .{
@@ -2749,7 +2750,7 @@ test "RC block: lambda in stmt.expr gets processed" {
     // Build block: { f = <lambda>; 0 }
     const pat_f = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_f, .layout_idx = i64_layout } }, Region.zero());
     const stmts = try env.lir_store.addStmts(&.{.{ .decl = .{ .pattern = pat_f, .expr = lambda_expr } }});
-    const int_0 = try env.lir_store.addExpr(.{ .i64_literal = 0 }, Region.zero());
+    const int_0 = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 0, .layout_idx = .i64 } }, Region.zero());
     const block_expr = try env.lir_store.addExpr(.{ .block = .{
         .stmts = stmts,
         .final_expr = int_0,
@@ -2835,7 +2836,7 @@ test "RC for_loop: unused refcounted elem gets decref" {
     const sym_list = makeSymbol(2);
 
     // Build for loop body: 42 (ignores elem entirely)
-    const int_lit = try env.lir_store.addExpr(.{ .i64_literal = 42 }, Region.zero());
+    const int_lit = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, Region.zero());
 
     // Build for loop
     const list_expr = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_list, .layout_idx = str_layout } }, Region.zero());
@@ -2877,8 +2878,8 @@ test "RC match guard: symbol used only in guard gets proper RC ops" {
 
     const cond_expr = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_cond, .layout_idx = i64_layout } }, Region.zero());
     const guard_lookup_s = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
-    const int_1 = try env.lir_store.addExpr(.{ .i64_literal = 1 }, Region.zero());
-    const int_2 = try env.lir_store.addExpr(.{ .i64_literal = 2 }, Region.zero());
+    const int_1 = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 1, .layout_idx = .i64 } }, Region.zero());
+    const int_2 = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 2, .layout_idx = .i64 } }, Region.zero());
 
     const wild_pat1 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = i64_layout } }, Region.zero());
     const wild_pat2 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = i64_layout } }, Region.zero());
@@ -2987,7 +2988,7 @@ test "RC for_loop: wrapper block has unit result layout, not elem layout" {
     const sym_elem = makeSymbol(1);
     const sym_list = makeSymbol(2);
 
-    const int_lit = try env.lir_store.addExpr(.{ .i64_literal = 42 }, Region.zero());
+    const int_lit = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, Region.zero());
 
     const list_expr = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_list, .layout_idx = str_layout } }, Region.zero());
     const pat_elem = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_elem, .layout_idx = str_layout } }, Region.zero());
@@ -3271,7 +3272,7 @@ test "RC early_return emits correct number of decrefs for multi-use symbol" {
     const lookup_s1 = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
     const lookup_s2 = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
     const lookup_s3 = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
-    const int_42 = try env.lir_store.addExpr(.{ .i64_literal = 42 }, Region.zero());
+    const int_42 = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, Region.zero());
     const early_ret = try env.lir_store.addExpr(.{ .early_return = .{
         .expr = int_42,
         .ret_layout = i64_layout,
@@ -3331,7 +3332,7 @@ test "RC early_return inside branch accounts for branch-level increfs" {
     const lookup_s1 = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
     const lookup_s2 = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
     const lookup_s3 = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
-    const int_42 = try env.lir_store.addExpr(.{ .i64_literal = 42 }, Region.zero());
+    const int_42 = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, Region.zero());
     const cond = try env.lir_store.addExpr(.{ .bool_literal = true }, Region.zero());
 
     // Build if-body: { _ = s; _ = s; early_return(42) }

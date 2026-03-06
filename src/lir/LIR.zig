@@ -215,11 +215,19 @@ pub const LirStmt = union(enum) {
 pub const LirExpr = union(enum) {
     // Layout is implied by the value type
 
-    /// Integer literal that fits in i64
-    i64_literal: i64,
+    /// Integer literal that fits in i64.
+    /// Carries the concrete integer layout (u8/i8/u16/i16/u32/i32/u64/i64).
+    i64_literal: struct {
+        value: i64,
+        layout_idx: layout.Idx,
+    },
 
-    /// Integer literal that requires i128
-    i128_literal: i128,
+    /// Integer literal that requires i128.
+    /// Carries the concrete integer layout (u128/i128).
+    i128_literal: struct {
+        value: i128,
+        layout_idx: layout.Idx,
+    },
 
     /// Float literal (f64)
     f64_literal: f64,
@@ -270,11 +278,13 @@ pub const LirExpr = union(enum) {
 
     /// Empty list `[]`
     empty_list: struct {
+        list_layout: layout.Idx,
         elem_layout: layout.Idx,
     },
 
     /// List with elements
     list: struct {
+        list_layout: layout.Idx,
         elem_layout: layout.Idx,
         elems: LirExprSpan,
     },
@@ -913,6 +923,7 @@ pub const LirPattern = union(enum) {
 
     /// Destructure a list with known prefix, optional rest, and suffix
     list: struct {
+        list_layout: layout.Idx,
         elem_layout: layout.Idx,
         /// Patterns for known prefix elements (before ..)
         prefix: LirPatternSpan,

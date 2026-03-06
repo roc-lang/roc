@@ -502,12 +502,12 @@ test "basic expr storage" {
     const region = Region.zero();
 
     // Add a simple literal
-    const id1 = try store.addExpr(.{ .i64_literal = 42 }, region);
+    const id1 = try store.addExpr(.{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, region);
     try std.testing.expectEqual(@as(u32, 0), @intFromEnum(id1));
 
     // Retrieve it
     const expr1 = store.getExpr(id1);
-    try std.testing.expectEqual(@as(i64, 42), expr1.i64_literal);
+    try std.testing.expectEqual(@as(i64, 42), expr1.i64_literal.value);
 
     // Add another
     const id2 = try store.addExpr(.{ .bool_literal = true }, region);
@@ -522,9 +522,9 @@ test "expr span storage" {
     const region = Region.zero();
 
     // Add some expressions
-    const id1 = try store.addExpr(.{ .i64_literal = 1 }, region);
-    const id2 = try store.addExpr(.{ .i64_literal = 2 }, region);
-    const id3 = try store.addExpr(.{ .i64_literal = 3 }, region);
+    const id1 = try store.addExpr(.{ .i64_literal = .{ .value = 1, .layout_idx = .i64 } }, region);
+    const id2 = try store.addExpr(.{ .i64_literal = .{ .value = 2, .layout_idx = .i64 } }, region);
+    const id3 = try store.addExpr(.{ .i64_literal = .{ .value = 3, .layout_idx = .i64 } }, region);
 
     // Create a span
     const span = try store.addExprSpan(&.{ id1, id2, id3 });
@@ -565,7 +565,7 @@ test "symbol def lookup" {
     const ident = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 42 };
     const symbol = Symbol.fromRaw(@as(u64, @as(u32, @bitCast(ident))));
 
-    const expr_id = try store.addExpr(.{ .i64_literal = 100 }, region);
+    const expr_id = try store.addExpr(.{ .i64_literal = .{ .value = 100, .layout_idx = .i64 } }, region);
     try store.registerSymbolDef(symbol, expr_id);
 
     const found = store.getSymbolDef(symbol);
