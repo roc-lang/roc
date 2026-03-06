@@ -1,14 +1,14 @@
 //! Modern cache manager that uses BLAKE3-based keys and subdirectory splitting.
 
 const std = @import("std");
-const fs_mod = @import("fs");
+const io_mod = @import("io");
 const can = @import("can");
 
 const CacheReporting = @import("cache_reporting.zig").CacheReporting;
 const CacheModule = @import("cache_module.zig").CacheModule;
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
-const Filesystem = fs_mod.Filesystem;
+const Io = io_mod.Io;
 const CacheStats = @import("cache_config.zig").CacheStats;
 const CacheConfig = @import("cache_config.zig").CacheConfig;
 
@@ -78,14 +78,14 @@ pub const CacheMetadata = struct {
 /// then uses subdirectory splitting to organize cache files efficiently.
 pub const CacheManager = struct {
     config: CacheConfig,
-    io: Filesystem,
+    io: Io,
     allocator: Allocator,
     stats: CacheStats,
 
     const Self = @This();
 
     /// Initialize a new cache manager.
-    pub fn init(allocator: Allocator, config: CacheConfig, io: Filesystem) Self {
+    pub fn init(allocator: Allocator, config: CacheConfig, io: Io) Self {
         return Self{
             .config = config,
             .io = io,

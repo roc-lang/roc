@@ -3,8 +3,8 @@
 //! can be provided from JavaScript and most other operations return errors.
 
 const std = @import("std");
-const fs_mod = @import("fs");
-const Filesystem = fs_mod.Filesystem;
+const io_mod = @import("io");
+const Io = io_mod.Io;
 
 const Allocator = std.mem.Allocator;
 
@@ -50,11 +50,11 @@ pub const WasmContext = struct {
 };
 
 /// Get a WASM filesystem implementation backed by the given context.
-pub fn wasm(wasm_ctx: *WasmContext) Filesystem {
+pub fn wasm(wasm_ctx: *WasmContext) Io {
     return .{ .ctx = @ptrCast(wasm_ctx), .vtable = wasm_vtable };
 }
 
-const wasm_vtable = Filesystem.VTable{
+const wasm_vtable = Io.VTable{
     .readFile = &readFileWasm,
     .readFileInto = &readFileIntoWasm,
     .writeFile = &writeFileWasm,
@@ -101,7 +101,7 @@ fn fileExistsWasm(ctx_ptr: ?*anyopaque, path: []const u8) bool {
     return matchesSourceFile(self, path);
 }
 
-fn readFileWasm(ctx_ptr: ?*anyopaque, path: []const u8, alloc: Allocator) Filesystem.ReadError![]const u8 {
+fn readFileWasm(ctx_ptr: ?*anyopaque, path: []const u8, alloc: Allocator) Io.ReadError![]const u8 {
     const self = getCtx(ctx_ptr);
     if (matchesSourceFile(self, path)) {
         if (self.source) |source| {
@@ -113,7 +113,7 @@ fn readFileWasm(ctx_ptr: ?*anyopaque, path: []const u8, alloc: Allocator) Filesy
     return error.FileNotFound;
 }
 
-fn readFileIntoWasm(ctx_ptr: ?*anyopaque, path: []const u8, buffer: []u8) Filesystem.ReadError!usize {
+fn readFileIntoWasm(ctx_ptr: ?*anyopaque, path: []const u8, buffer: []u8) Io.ReadError!usize {
     const self = getCtx(ctx_ptr);
     if (matchesSourceFile(self, path)) {
         if (self.source) |source| {
@@ -129,15 +129,15 @@ fn readFileIntoWasm(ctx_ptr: ?*anyopaque, path: []const u8, buffer: []u8) Filesy
     return error.FileNotFound;
 }
 
-fn writeFileWasm(_: ?*anyopaque, _: []const u8, _: []const u8) Filesystem.WriteError!void {
+fn writeFileWasm(_: ?*anyopaque, _: []const u8, _: []const u8) Io.WriteError!void {
     return error.AccessDenied;
 }
 
-fn statWasm(ctx_ptr: ?*anyopaque, path: []const u8) Filesystem.StatError!Filesystem.FileInfo {
+fn statWasm(ctx_ptr: ?*anyopaque, path: []const u8) Io.StatError!Io.FileInfo {
     const self = getCtx(ctx_ptr);
     if (matchesSourceFile(self, path)) {
         if (self.source) |source| {
-            return Filesystem.FileInfo{
+            return Io.FileInfo{
                 .kind = .file,
                 .size = source.len,
                 .mtime_ns = 0,
@@ -149,7 +149,7 @@ fn statWasm(ctx_ptr: ?*anyopaque, path: []const u8) Filesystem.StatError!Filesys
     return error.FileNotFound;
 }
 
-fn listDirWasm(_: ?*anyopaque, _: []const u8, _: Allocator) Filesystem.ListError![]Filesystem.FileEntry {
+fn listDirWasm(_: ?*anyopaque, _: []const u8, _: Allocator) Io.ListError![]Io.FileEntry {
     return error.FileNotFound;
 }
 
@@ -189,35 +189,35 @@ fn joinPathWasm(_: ?*anyopaque, parts: []const []const u8, allocator: Allocator)
     return buf;
 }
 
-fn canonicalizeWasm(_: ?*anyopaque, root_relative_path: []const u8, alloc: Allocator) Filesystem.CanonicalizeError![]const u8 {
+fn canonicalizeWasm(_: ?*anyopaque, root_relative_path: []const u8, alloc: Allocator) Io.CanonicalizeError![]const u8 {
     return alloc.dupe(u8, root_relative_path) catch handleOom();
 }
 
-fn makePathWasm(_: ?*anyopaque, _: []const u8) Filesystem.MakePathError!void {
+fn makePathWasm(_: ?*anyopaque, _: []const u8) Io.MakePathError!void {
     return error.AccessDenied;
 }
 
-fn renameWasm(_: ?*anyopaque, _: []const u8, _: []const u8) Filesystem.RenameError!void {
+fn renameWasm(_: ?*anyopaque, _: []const u8, _: []const u8) Io.RenameError!void {
     return error.AccessDenied;
 }
 
-fn getEnvVarWasm(_: ?*anyopaque, _: []const u8, _: Allocator) Filesystem.GetEnvVarError![]u8 {
+fn getEnvVarWasm(_: ?*anyopaque, _: []const u8, _: Allocator) Io.GetEnvVarError![]u8 {
     return error.EnvironmentVariableNotFound;
 }
 
-fn fetchUrlWasm(_: ?*anyopaque, _: Allocator, _: []const u8, _: []const u8) Filesystem.FetchUrlError!void {
+fn fetchUrlWasm(_: ?*anyopaque, _: Allocator, _: []const u8, _: []const u8) Io.FetchUrlError!void {
     return error.Unsupported;
 }
 
-fn writeStdoutWasm(_: ?*anyopaque, _: []const u8) Filesystem.StdioError!void {
+fn writeStdoutWasm(_: ?*anyopaque, _: []const u8) Io.StdioError!void {
     // WASM: stdout silently dropped (JS host can intercept via import override if desired)
 }
 
-fn writeStderrWasm(_: ?*anyopaque, _: []const u8) Filesystem.StdioError!void {
+fn writeStderrWasm(_: ?*anyopaque, _: []const u8) Io.StdioError!void {
     // WASM: stderr silently dropped
 }
 
-fn readStdinWasm(_: ?*anyopaque, _: []u8) Filesystem.StdioError!usize {
+fn readStdinWasm(_: ?*anyopaque, _: []u8) Io.StdioError!usize {
     return 0;
 }
 

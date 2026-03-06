@@ -5,8 +5,8 @@
 //! Consumers (CLI, WASM playground, tests) inject a concrete implementation.
 //!
 //! Pre-built implementations:
-//!   - `Filesystem.default()` — delegates to the real OS (or stubs on wasm32)
-//!   - `Filesystem.testing()` — panics on every call (override fields for mocks)
+//!   - `Io.default()` — delegates to the real OS (or stubs on wasm32)
+//!   - `Io.testing()` — panics on every call (override fields for mocks)
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -245,6 +245,44 @@ pub const FileEntry = struct {
 
 /// Maximum valid file size for readToEndAlloc calls.
 pub const max_file_size = std.math.maxInt(u32);
+
+/// Wraps an OS-backed `Io` and intercepts `readFile` for a single path,
+/// returning `override_content` instead of reading from disk.
+///
+/// All other vtable functions (writeFile, fileExists, stat, …) are unchanged.
+/// This works because OS vtable functions do not use the `ctx` pointer.
+///
+/// Usage:
+/// ```zig
+/// var override = Io.ReadFileOverride{ .path = path, .content = text };
+/// const orig = env.filesystem;
+/// env.filesystem = override.io();
+/// env.build(path) catch {};
+/// env.filesystem = orig;
+/// ```
+pub const ReadFileOverride = struct {
+    path: []const u8,
+    content: []const u8,
+
+    pub fn io(self: *@This()) Self {
+        return .{ .ctx = @ptrCast(self), .vtable = read_file_override_vtable };
+    }
+};
+
+fn readFileOverrideFn(ctx: ?*anyopaque, path: []const u8, allocator: Allocator) ReadError![]const u8 {
+    const self: *ReadFileOverride = @ptrCast(@alignCast(ctx.?));
+    if (std.mem.eql(u8, path, self.path))
+        return allocator.dupe(u8, self.content) catch return error.OutOfMemory;
+    return osReadFile(null, path, allocator);
+}
+
+/// VTable for ReadFileOverride: only readFile is custom; all others are OS-backed.
+/// Since all OS functions ignore ctx, it's safe to pass a non-null ctx here.
+const read_file_override_vtable: VTable = blk: {
+    var v = os_vtable;
+    v.readFile = &readFileOverrideFn;
+    break :blk v;
+};
 
 const is_freestanding = builtin.os.tag == .freestanding;
 

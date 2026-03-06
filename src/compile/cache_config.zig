@@ -6,8 +6,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
-const Filesystem = @import("fs").Filesystem;
-const Io = Filesystem;
+const Io = @import("io").Io;
 
 const Allocator = std.mem.Allocator;
 

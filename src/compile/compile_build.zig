@@ -18,8 +18,7 @@ const reporting = @import("reporting");
 const eval = @import("eval");
 const check = @import("check");
 const unbundle = @import("unbundle");
-const Filesystem = @import("fs").Filesystem;
-const Io = Filesystem;
+const Io = @import("io").Io;
 
 const Report = reporting.Report;
 const ReportBuilder = check.ReportBuilder;
@@ -36,7 +35,6 @@ const ModuleTimingInfo = compile_package.TimingInfo;
 const ImportResolver = compile_package.ImportResolver;
 const ScheduleHook = compile_package.ScheduleHook;
 const CacheManager = @import("cache_manager.zig").CacheManager;
-const FileProvider = compile_package.FileProvider;
 
 // Actor model components
 const coordinator_mod = @import("coordinator.zig");
@@ -58,12 +56,12 @@ const ThreadCondition = threading.Condition;
 /// Native fetchUrl implementation that downloads a tar.zst bundle via HTTP
 /// and extracts it into the destination directory. Used by the CLI to wire up
 /// real download support through the Filesystem vtable.
-pub const nativeFetchUrl: ?*const fn (?*anyopaque, Allocator, []const u8, []const u8) Filesystem.FetchUrlError!void = if (!is_freestanding)
+pub const nativeFetchUrl: ?*const fn (?*anyopaque, Allocator, []const u8, []const u8) Io.FetchUrlError!void = if (!is_freestanding)
     &nativeFetchUrlImpl
 else
     null;
 
-fn nativeFetchUrlImpl(_: ?*anyopaque, allocator: Allocator, url: []const u8, dest_path: []const u8) Filesystem.FetchUrlError!void {
+fn nativeFetchUrlImpl(_: ?*anyopaque, allocator: Allocator, url: []const u8, dest_path: []const u8) Io.FetchUrlError!void {
     var alloc = allocator;
     unbundle.download.downloadAndExtract(&alloc, url, dest_path) catch {
         return error.DownloadFailed;
@@ -140,9 +138,7 @@ pub const BuildEnv = struct {
 
     // Cache manager for compiled modules
     cache_manager: ?*CacheManager = null,
-    // File provider for reading sources (defaults to filesystem)
-    file_provider: FileProvider = FileProvider.filesystem,
-    // I/O abstraction for OS operations (getEnvVar, readFile, stdio, etc.)
+    // I/O abstraction for all OS operations (filesystem, stdio, env vars, etc.)
     filesystem: Io = Io.default(),
     // Explicit working directory for resolving relative paths
     cwd: []const u8,
@@ -309,9 +305,9 @@ pub const BuildEnv = struct {
         self.cache_manager = cache_manager;
     }
 
-    /// Set a file provider (or reset to default filesystem provider).
-    pub fn setFileProvider(self: *BuildEnv, provider: ?FileProvider) void {
-        self.file_provider = provider orelse FileProvider.filesystem;
+    /// Set the I/O implementation (or reset to OS default).
+    pub fn setIo(self: *BuildEnv, io: ?Io) void {
+        self.filesystem = io orelse Io.default();
     }
 
     /// Get the TargetsConfig from the platform package, if any.
@@ -384,7 +380,7 @@ pub const BuildEnv = struct {
             self.compiler_version,
             self.cache_manager,
         );
-        coord.setFileProvider(self.file_provider);
+        coord.setIo(self.filesystem);
         // Enable hosted transform for platform modules - converts e_anno_only to e_hosted_lambda
         // This is required for roc build so that hosted functions can be called at runtime
         coord.enable_hosted_transform = true;
@@ -1256,7 +1252,7 @@ pub const BuildEnv = struct {
         // Read source
         const file_abs = try std.fs.path.resolve(self.gpa, &.{file_path});
         defer self.gpa.free(file_abs);
-        const src = self.readFile(file_abs, std.math.maxInt(usize)) catch |err| {
+        const src = self.readFile(file_abs) catch |err| {
             const report = blk: switch (err) {
                 error.FileNotFound => {
                     var report = Report.init(self.gpa, "FILE NOT FOUND", .fatal);
@@ -1585,15 +1581,15 @@ pub const BuildEnv = struct {
         return try std.fs.path.resolve(self.gpa, &.{ self.cwd, path });
     }
 
-    fn readFile(self: *BuildEnv, path: []const u8, max_bytes: usize) ![]u8 {
-        _ = max_bytes; // FileProvider doesn't support max_bytes limit
-        const data = try self.file_provider.read(self.file_provider.ctx, path, self.gpa) orelse
-            return error.FileNotFound;
+    fn readFile(self: *BuildEnv, path: []const u8) ![]u8 {
+        const data = self.filesystem.readFile(path, self.gpa) catch |err| switch (err) {
+            error.FileNotFound => return error.FileNotFound,
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.FileNotFound,
+        };
 
         // Normalize line endings (CRLF -> LF) for consistent cross-platform behavior.
-        // This reallocates to the correct size if normalization occurs, ensuring
-        // proper memory management when the buffer is freed later.
-        return base.source_utils.normalizeLineEndingsRealloc(self.gpa, data);
+        return base.source_utils.normalizeLineEndingsRealloc(self.gpa, @constCast(data));
     }
 
     /// Cross-platform environment variable lookup.
@@ -1812,7 +1808,7 @@ pub const BuildEnv = struct {
                 schedule_hook,
                 self.compiler_version,
                 self.builtin_modules,
-                self.file_provider,
+                self.filesystem,
             );
 
             const key = try self.gpa.dupe(u8, name);

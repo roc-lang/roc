@@ -50,6 +50,7 @@ pub const TimingInfo = struct {
 const Allocator = std.mem.Allocator;
 
 const threading = @import("threading.zig");
+const Io = @import("io").Io;
 
 const parallel = base.parallel;
 const AtomicUsize = std.atomic.Value(usize);
@@ -57,40 +58,8 @@ const AtomicUsize = std.atomic.Value(usize);
 const Mutex = threading.Mutex;
 const Condition = threading.Condition;
 
-/// File provider for reading module sources.
-/// Implementations must be thread-safe (stateless reads) as they may be called
-/// concurrently from multiple worker threads.
-pub const FileProvider = struct {
-    ctx: ?*anyopaque,
-    read: *const fn (ctx: ?*anyopaque, path: []const u8, gpa: Allocator) Allocator.Error!?[]u8,
-
-    /// Default filesystem provider - reads files directly from the filesystem.
-    /// Thread-safe as std.fs operations are independent per call.
-    pub const filesystem = FileProvider{
-        .ctx = null,
-        .read = filesystemRead,
-    };
-
-    /// Check if a file exists by attempting to read it through the provider.
-    /// This ensures virtual/in-memory files are found the same way as disk files.
-    pub fn fileExists(self: FileProvider, path: []const u8, gpa: Allocator) bool {
-        const data = self.read(self.ctx, path, gpa) catch return false;
-        if (data) |d| {
-            gpa.free(d);
-            return true;
-        }
-        return false;
-    }
-
-    fn filesystemRead(_: ?*anyopaque, path: []const u8, gpa: Allocator) Allocator.Error!?[]u8 {
-        if (comptime threading.is_freestanding)
-            return null;
-        return std.fs.cwd().readFileAlloc(gpa, path, std.math.maxInt(usize)) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => return null, // File not found or other IO error
-        };
-    }
-};
+// FileProvider was removed in favour of the unified Io abstraction (src/io/Io.zig).
+// Callers that previously used FileProvider now use Io.readFile / Io.fileExists directly.
 
 /// Build execution mode
 pub const Mode = enum { single_threaded, multi_threaded };
@@ -293,8 +262,8 @@ pub const PackageEnv = struct {
     compiler_version: []const u8,
     /// Builtin modules (Bool, Try, Str) for auto-importing in canonicalization (not owned)
     builtin_modules: *const BuiltinModules,
-    /// File provider for reading sources (defaults to filesystem)
-    file_provider: FileProvider = FileProvider.filesystem,
+    /// I/O abstraction for reading sources and other filesystem/stdio operations.
+    io: Io = Io.default(),
 
     lock: Mutex = .{},
     cond: Condition = .{},
@@ -335,7 +304,7 @@ pub const PackageEnv = struct {
         import_name: []const u8,
     };
 
-    pub fn init(gpa: Allocator, package_name: []const u8, root_dir: []const u8, mode: Mode, max_threads: usize, target: roc_target.RocTarget, sink: ReportSink, schedule_hook: ScheduleHook, compiler_version: []const u8, builtin_modules: *const BuiltinModules, file_provider: ?FileProvider) PackageEnv {
+    pub fn init(gpa: Allocator, package_name: []const u8, root_dir: []const u8, mode: Mode, max_threads: usize, target: roc_target.RocTarget, sink: ReportSink, schedule_hook: ScheduleHook, compiler_version: []const u8, builtin_modules: *const BuiltinModules, io: ?Io) PackageEnv {
         // Pre-allocate module storage to avoid reallocation during multi-threaded processing
         var modules = std.ArrayList(ModuleState).empty;
         if (mode == .multi_threaded) {
@@ -352,7 +321,7 @@ pub const PackageEnv = struct {
             .schedule_hook = schedule_hook,
             .compiler_version = compiler_version,
             .builtin_modules = builtin_modules,
-            .file_provider = file_provider orelse FileProvider.filesystem,
+            .io = io orelse Io.default(),
             .injector = std.ArrayList(Task).empty,
             .modules = modules,
             .discovered = std.ArrayList(ModuleId).empty,
@@ -372,7 +341,7 @@ pub const PackageEnv = struct {
         schedule_hook: ScheduleHook,
         compiler_version: []const u8,
         builtin_modules: *const BuiltinModules,
-        file_provider: ?FileProvider,
+        io: ?Io,
     ) PackageEnv {
         // Pre-allocate module storage to avoid reallocation during multi-threaded processing
         var modules = std.ArrayList(ModuleState).empty;
@@ -391,7 +360,7 @@ pub const PackageEnv = struct {
             .schedule_hook = schedule_hook,
             .compiler_version = compiler_version,
             .builtin_modules = builtin_modules,
-            .file_provider = file_provider orelse FileProvider.filesystem,
+            .io = io orelse Io.default(),
             .injector = std.ArrayList(Task).empty,
             .modules = modules,
             .discovered = std.ArrayList(ModuleId).empty,
@@ -833,13 +802,16 @@ pub const PackageEnv = struct {
     }
 
     fn readModuleSource(self: *PackageEnv, path: []const u8) ![]u8 {
-        const data = try self.file_provider.read(self.file_provider.ctx, path, self.gpa) orelse
-            return error.FileNotFound;
+        const data = self.io.readFile(path, self.gpa) catch |err| switch (err) {
+            error.FileNotFound => return error.FileNotFound,
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.FileNotFound,
+        };
 
         // Normalize line endings (CRLF -> LF) for consistent cross-platform behavior.
         // This reallocates to the correct size if normalization occurs, ensuring
         // proper memory management when the buffer is freed later.
-        return base.source_utils.normalizeLineEndingsRealloc(self.gpa, data);
+        return base.source_utils.normalizeLineEndingsRealloc(self.gpa, @constCast(data));
     }
 
     fn doCanonicalize(self: *PackageEnv, module_id: ModuleId) !void {
@@ -1152,7 +1124,7 @@ pub const PackageEnv = struct {
         package_name: []const u8,
         resolver: ?ImportResolver,
         additional_known_modules: []const KnownModule,
-        file_provider: ?FileProvider,
+        io: ?Io,
     ) !void {
         const gpa = allocators.gpa;
 
@@ -1187,13 +1159,13 @@ pub const PackageEnv = struct {
             const sibling_ident = try env.insertIdent(base.Ident.for_text(sibling_name));
             const qualified_ident = try env.insertIdent(base.Ident.for_text(sibling_name));
 
-            // Check if sibling file exists (via FileProvider if available, else filesystem)
+            // Check if sibling file exists (via Io abstraction)
             const file_name = try std.fmt.allocPrint(gpa, "{s}.roc", .{sibling_name});
             defer gpa.free(file_name);
             const file_path = try std.fs.path.join(gpa, &.{ root_dir, file_name });
             defer gpa.free(file_path);
-            const exists = if (file_provider) |fp|
-                fp.fileExists(file_path, gpa)
+            const exists = if (io) |io_val|
+                io_val.fileExists(file_path)
             else if (comptime threading.is_freestanding)
                 false
             else blk: {
@@ -1298,6 +1270,7 @@ pub const PackageEnv = struct {
         builtin_module_env: *const ModuleEnv,
         imported_envs: []const *ModuleEnv,
         target: roc_target.RocTarget,
+        io: ?Io,
     ) !Check {
         // Load builtin indices from the binary data generated at build time
         const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
@@ -1345,7 +1318,7 @@ pub const PackageEnv = struct {
 
         // After type checking, evaluate top-level declarations at compile time
         const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module_env, builtin_module_env, builtin_module_env);
-        var comptime_evaluator = try eval.ComptimeEvaluator.init(gpa, env, imported_envs, &checker.problems, builtin_types_for_eval, builtin_module_env, &checker.import_mapping, target);
+        var comptime_evaluator = try eval.ComptimeEvaluator.init(gpa, env, imported_envs, &checker.problems, builtin_types_for_eval, builtin_module_env, &checker.import_mapping, target, io);
         defer comptime_evaluator.deinit();
         _ = try comptime_evaluator.evalAll();
 
@@ -1411,7 +1384,7 @@ pub const PackageEnv = struct {
         resolvePendingLookups(env, imported_envs.items);
 
         const check_start = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
-        var checker = try typeCheckModule(self.gpa, env, self.builtin_modules.builtin_module.env, imported_envs.items, self.target);
+        var checker = try typeCheckModule(self.gpa, env, self.builtin_modules.builtin_module.env, imported_envs.items, self.target, self.io);
         defer checker.deinit();
         const check_end = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
         if (!threading.is_freestanding) {

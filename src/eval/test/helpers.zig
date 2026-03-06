@@ -184,7 +184,7 @@ fn resolveListElemZstName(module_env: *ModuleEnv, expr_type_var: types.Var) []co
 /// Evaluate an expression using the DevEvaluator and return the result as a string.
 fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) DevEvalError![]const u8 {
     // Initialize DevEvaluator
-    var dev_eval = DevEvaluator.init(allocator) catch {
+    var dev_eval = DevEvaluator.init(allocator, null) catch {
         return error.DevEvaluatorInitFailed;
     };
     defer dev_eval.deinit();

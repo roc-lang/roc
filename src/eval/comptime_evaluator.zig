@@ -4,9 +4,9 @@
 //! converting any crashes into diagnostics that are reported normally.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const base = @import("base");
 const builtins = @import("builtins");
+const Io = @import("io").Io;
 const i128h = builtins.compiler_rt_128;
 const can = @import("can");
 const check_mod = @import("check");
@@ -94,16 +94,12 @@ fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) v
     realloc_args.answer = new_ptr;
 }
 
-fn comptimeRocDbg(dbg_args: *const RocDbg, _: *anyopaque) callconv(.c) void {
-    // stderr not available on freestanding targets
-    if (comptime builtin.os.tag != .freestanding) {
-        var stderr_buffer: [256]u8 = undefined;
-        var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
-        const stderr = &stderr_writer.interface;
-        const msg_slice = dbg_args.utf8_bytes[0..dbg_args.len];
-        stderr.print("[dbg] {s}\n", .{msg_slice}) catch {};
-        stderr.flush() catch {};
-    }
+fn comptimeRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
+    const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
+    const msg_slice = dbg_args.utf8_bytes[0..dbg_args.len];
+    var buf: [256]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "[dbg] {s}\n", .{msg_slice}) catch "[dbg] (message too long)\n";
+    evaluator.io.writeStderr(msg) catch {};
 }
 
 fn comptimeRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
@@ -171,6 +167,8 @@ pub const ComptimeEvaluator = struct {
     roc_arena: std.heap.ArenaAllocator,
     /// Track allocation sizes for realloc (maps ptr -> size)
     roc_alloc_sizes: std.AutoHashMap(usize, usize),
+    /// Io context for routing [dbg] output
+    io: Io,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -181,6 +179,7 @@ pub const ComptimeEvaluator = struct {
         builtin_module_env: ?*const ModuleEnv,
         import_mapping: *const import_mapping_mod.ImportMapping,
         target: roc_target.RocTarget,
+        io: ?Io,
     ) !ComptimeEvaluator {
         const interp = try Interpreter.init(allocator, cir, builtin_types, builtin_module_env, other_envs, import_mapping, null, null, target);
 
@@ -197,6 +196,7 @@ pub const ComptimeEvaluator = struct {
             .current_expr_region = null,
             .roc_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
             .roc_alloc_sizes = std.AutoHashMap(usize, usize).init(allocator),
+            .io = io orelse Io.default(),
         };
     }
 
