@@ -1648,6 +1648,26 @@ fn isTopLevelPattern(module_env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx)
     return false;
 }
 
+fn patternBoundSymbol(self: *Self, pattern_id: MIR.PatternId) ?MIR.Symbol {
+    const pattern = self.store.getPattern(pattern_id);
+    return switch (pattern) {
+        .bind => |sym| sym,
+        .as_pattern => |as_pat| as_pat.symbol,
+        .wildcard,
+        .tag,
+        .int_literal,
+        .str_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .record_destructure,
+        .tuple_destructure,
+        .list_destructure,
+        .runtime_error,
+        => null,
+    };
+}
+
 /// Resolve a CIR pattern to a global MIR symbol.
 fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!MIR.Symbol {
     const base_key: u64 = (@as(u64, self.current_module_idx) << 32) | @intFromEnum(pattern_idx);
@@ -2522,6 +2542,11 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                     });
                 } else {
                     const expr = try self.lowerExpr(decl.expr);
+                    if (self.patternBoundSymbol(pat)) |symbol| {
+                        if (self.store.getSymbolDef(symbol) == null) {
+                            try self.store.registerSymbolDef(self.allocator, symbol, expr);
+                        }
+                    }
                     try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = pat, .expr = expr } });
                 }
             },

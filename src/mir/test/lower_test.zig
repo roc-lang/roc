@@ -8,6 +8,7 @@ const can = @import("can");
 const types = @import("types");
 
 const MIR = @import("../MIR.zig");
+const LambdaSet = @import("../LambdaSet.zig");
 const Monotype = @import("../Monotype.zig");
 const Lower = @import("../Lower.zig");
 const MirTestEnv = @import("MirTestEnv.zig");
@@ -521,6 +522,43 @@ test "lowerExpr: block with decl_const" {
     try testing.expect(stmts[0] == .decl_const);
     // The final expression should be a lookup
     try testing.expect(env.mir_store.getExpr(result.block.final_expr) == .lookup);
+}
+
+test "lowerExpr: block local closure call has resolvable symbol def and lambda set" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    x = 10.I64
+        \\    f = |y| x + y
+        \\    f(5.I64)
+        \\}
+    );
+    defer env.deinit();
+
+    const expr = try env.lowerFirstDef();
+    const block = env.mir_store.getExpr(expr);
+    try testing.expect(block == .block);
+
+    const final_expr = env.mir_store.getExpr(block.block.final_expr);
+    try testing.expect(final_expr == .call);
+
+    const callee = env.mir_store.getExpr(final_expr.call.func);
+    try testing.expect(callee == .lookup);
+    const closure_sym = callee.lookup;
+
+    const closure_def = env.mir_store.getSymbolDef(closure_sym) orelse return error.TestUnexpectedResult;
+    try testing.expect(env.mir_store.closure_origins.contains(@intFromEnum(closure_def)));
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(env.builtin_module.env),
+        env.module_env,
+    };
+    var ls_store = try LambdaSet.infer(test_allocator, env.mir_store, all_module_envs[0..]);
+    defer ls_store.deinit(test_allocator);
+
+    const closure_ls = ls_store.getSymbolLambdaSet(closure_sym) orelse return error.TestUnexpectedResult;
+    const members = ls_store.getMembers(ls_store.getLambdaSet(closure_ls).members);
+    try testing.expectEqual(@as(usize, 1), members.len);
+    try testing.expect(!members[0].captures_monotype.isNone());
 }
 
 test "lowerExpr: lambda" {
