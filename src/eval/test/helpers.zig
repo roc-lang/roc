@@ -2568,10 +2568,26 @@ pub fn runExpectUnit(src: []const u8, should_trace: enum { trace, no_trace }) !v
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
-/// Legacy helper name kept for existing tests.
-/// Now delegates to strict three-backend parity checks.
+/// Run an expression through the dev evaluator only and assert on the formatted string output.
+/// The dev evaluator currently expects expressions to be wrapped in Str.inspect before execution.
 pub fn runDevOnlyExpectStr(src: []const u8, expected_str: []const u8) !void {
-    return runExpectStr(src, expected_str, .no_trace);
+    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    const inspect_expr = wrapInStrInspect(resources.module_env, resources.expr_idx) catch return error.EvaluatorMismatch;
+    const dev_str = devEvaluatorStr(test_allocator, resources.module_env, inspect_expr, resources.builtin_module.env) catch |err| {
+        std.debug.print("\nDev evaluator failed for '{s}': {}\n", .{ src, err });
+        return err;
+    };
+    defer test_allocator.free(dev_str);
+
+    std.testing.expectEqualStrings(expected_str, dev_str) catch |err| {
+        std.debug.print(
+            "\nDev evaluator output mismatch for '{s}':\n  expected: {s}\n  got:      {s}\n",
+            .{ src, expected_str, dev_str },
+        );
+        return err;
+    };
 }
 
 /// Parse and canonicalize an expression.
