@@ -5933,7 +5933,25 @@ const TypeTable = struct {
             .unknown => |text| {
                 self.freeDuped(text);
             },
-            else => {},
+            .box,
+            .list,
+            .bool_,
+            .dec,
+            .f32_,
+            .f64_,
+            .i8_,
+            .i16_,
+            .i32_,
+            .i64_,
+            .i128_,
+            .u8_,
+            .u16_,
+            .u32_,
+            .u64_,
+            .u128_,
+            .str_,
+            .unit,
+            => {},
         }
     }
 
@@ -5973,7 +5991,7 @@ const TypeTable = struct {
             .record => |rec| {
                 if (rec.name.len == 0) {
                     self.entries.items[@intCast(idx)] = .{ .record = .{
-                        .name = std.fmt.allocPrint(self.gpa, "AnonStruct{d}", .{idx}) catch "",
+                        .name = std.fmt.allocPrint(self.gpa, "__AnonStruct{d}", .{idx}) catch "",
                         .fields = rec.fields,
                         .size = rec.size,
                         .alignment = rec.alignment,

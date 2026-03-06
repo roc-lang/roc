@@ -2582,6 +2582,7 @@ pub const Interpreter = struct {
                 const index: i128 = if (index_arg.layout.tag == .scalar and index_arg.layout.data.scalar.tag == .frac) blk: {
                     if (index_arg.layout.data.scalar.data.frac == .dec) {
                         const dec_val = index_arg.asDec(roc_ops);
+                        std.debug.assert(@rem(dec_val.num, RocDec.one_point_zero.num) == 0); // Dec index must be a whole number
                         break :blk @divTrunc(dec_val.num, RocDec.one_point_zero.num);
                     } else {
                         unreachable; // F32/F64 should never be used as a list index
