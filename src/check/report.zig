@@ -1705,7 +1705,7 @@ pub const ReportBuilder = struct {
         }
 
         try D.renderSlice(&.{
-            D.bytes("The value's type, which does not have a method named"),
+            D.bytes("The value's type, which does not have a method named "),
             D.ident(data.method_name).withAnnotation(.emphasized).withNoPrecedingSpace(),
             D.bytes(",").withNoPrecedingSpace(),
             D.bytes("is:"),
@@ -1776,7 +1776,7 @@ pub const ReportBuilder = struct {
         }
 
         try D.renderSlice(&.{
-            D.bytes("The value's type, which does not have a method named"),
+            D.bytes("The value's type, which does not have a method named "),
             D.ident(data.method_name).withAnnotation(.emphasized).withNoPrecedingSpace(),
             D.bytes(",").withNoPrecedingSpace(),
             D.bytes("is:"),
@@ -1807,14 +1807,14 @@ pub const ReportBuilder = struct {
                             D.bytes("Hint:").withAnnotation(.emphasized),
                             D.bytes("The"),
                             D.bytes(operator).withAnnotation(.emphasized),
-                            D.bytes("operator calls a method named"),
+                            D.bytes("operator calls a method named "),
                             D.ident(data.method_name).withAnnotation(.emphasized),
                             D.bytes("on the value preceding it, passing the value after the operator as the one argument."),
                         }, self, &report);
                     } else {
                         try D.renderSlice(&.{
                             D.bytes("Hint:").withAnnotation(.emphasized),
-                            D.bytes("For this to work, the type would need to have a method named"),
+                            D.bytes("For this to work, the type would need to have a method named "),
                             D.ident(data.method_name).withAnnotation(.emphasized),
                             D.bytes("associated with it in the type's declaration."),
                         }, self, &report);
@@ -1822,7 +1822,7 @@ pub const ReportBuilder = struct {
                 } else {
                     try D.renderSlice(&.{
                         D.bytes("Hint:").withAnnotation(.emphasized),
-                        D.bytes("For this to work, the type would need to have a method named"),
+                        D.bytes("For this to work, the type would need to have a method named "),
                         D.ident(data.method_name).withAnnotation(.emphasized),
                         D.bytes("associated with it in the type's declaration."),
                     }, self, &report);
