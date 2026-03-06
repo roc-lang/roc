@@ -68,11 +68,11 @@ This **update_strr** method is being called on a value whose type doesn't have t
 ```
 	               ^^^^^^^^^^^
 
-The value's type, which does not have a method named**update_strr**, is:
+The value's type, which does not have a method named **update_strr**, is:
 
     Adv
 
-**Hint:** For this to work, the type would need to have a method named **update_strr** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named  **update_strr** associated with it in the type's declaration.
 
 **MISSING METHOD**
 This **update** method is being called on a value whose type doesn't have that method:
@@ -82,11 +82,11 @@ This **update** method is being called on a value whose type doesn't have that m
 ```
 	                   ^^^^^^
 
-The value's type, which does not have a method named**update**, is:
+The value's type, which does not have a method named **update**, is:
 
     Str
 
-**Hint:** For this to work, the type would need to have a method named **update** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named  **update** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
