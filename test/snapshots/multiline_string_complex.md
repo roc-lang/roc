@@ -68,7 +68,7 @@ The value's type, which does not have a method named **not**, is:
 
     Str
 
-**Hint:** For this to work, the type would need to have a method named  **not** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named **not** associated with it in the type's declaration.
 
 **MISSING METHOD**
 The value before this **-** operator has a type that doesn't have a **minus** method:
