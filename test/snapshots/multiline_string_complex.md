@@ -55,6 +55,8 @@ x = {
 ~~~
 # EXPECTED
 MISSING METHOD - multiline_string_complex.md:40:5:40:8
+MISSING METHOD - multiline_string_complex.md:37:3:37:9
+TYPE MISMATCH - multiline_string_complex.md:37:3:37:4
 # PROBLEMS
 **MISSING METHOD**
 This **not** method is being called on a value whose type doesn't have that method:
