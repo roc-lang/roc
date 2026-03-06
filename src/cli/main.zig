@@ -7213,7 +7213,7 @@ fn collectModuleTypeInfo(
                     }
                     // Build type IDs for args and return type
                     var arg_type_ids: []const u64 = &.{};
-                    var ret_type_id: u64 = type_table.insertUnit();
+                    var ret_type_id: u64 = 0;
 
                     const func_content = blk: {
                         if (resolved.desc.content.unwrapFunc()) |func| break :blk func;
@@ -7238,6 +7238,8 @@ fn collectModuleTypeInfo(
                             }
                             arg_type_ids = ids;
                         }
+                    } else {
+                        ret_type_id = type_table.insertUnit();
                     }
 
                     hosted_functions.append(ctx.gpa, .{

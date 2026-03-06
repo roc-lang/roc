@@ -129,7 +129,22 @@ is_repr_refcounted = |type_table, type_repr| {
 		RocFunction(_) => Bool.True
 		RocRecord(rec) => List.any(rec.fields, |field| is_type_refcounted(type_table, field.type_id))
 		RocTagUnion(tu) => List.any(tu.tags, |tag| List.any(tag.payload, |pid| is_type_refcounted(type_table, pid)))
-		_ => Bool.False
+		RocBool => Bool.False
+		RocDec => Bool.False
+		RocF32 => Bool.False
+		RocF64 => Bool.False
+		RocI128 => Bool.False
+		RocI16 => Bool.False
+		RocI32 => Bool.False
+		RocI64 => Bool.False
+		RocI8 => Bool.False
+		RocU128 => Bool.False
+		RocU16 => Bool.False
+		RocU32 => Bool.False
+		RocU64 => Bool.False
+		RocU8 => Bool.False
+		RocUnit => Bool.False
+		RocUnknown(_) => Bool.False
 	}
 }
 
@@ -301,7 +316,26 @@ generate_element_type_structs = |type_table| {
 						"/// Element type for ${rec.name}\npub const ${struct_name} = extern struct {\n${$field_strs}};\n\n${assertions}",
 					)
 				}
-			_ => {}
+			RocTagUnion(_) => {}
+			RocBool => {}
+			RocDec => {}
+			RocF32 => {}
+			RocF64 => {}
+			RocFunction(_) => {}
+			RocI128 => {}
+			RocI16 => {}
+			RocI32 => {}
+			RocI64 => {}
+			RocI8 => {}
+			RocList(_) => {}
+			RocStr => {}
+			RocU128 => {}
+			RocU16 => {}
+			RocU32 => {}
+			RocU64 => {}
+			RocU8 => {}
+			RocUnit => {}
+			RocUnknown(_) => {}
 		}
 	}
 
@@ -323,7 +357,26 @@ generate_tag_union_structs = |type_table| {
 					$seen_names = $seen_names.append(tu.name)
 					$structs = Str.concat($structs, generate_single_tag_union(type_table, tu))
 				}
-			_ => {}
+			RocRecord(_) => {}
+			RocBool => {}
+			RocDec => {}
+			RocF32 => {}
+			RocF64 => {}
+			RocFunction(_) => {}
+			RocI128 => {}
+			RocI16 => {}
+			RocI32 => {}
+			RocI64 => {}
+			RocI8 => {}
+			RocList(_) => {}
+			RocStr => {}
+			RocU128 => {}
+			RocU16 => {}
+			RocU32 => {}
+			RocU64 => {}
+			RocU8 => {}
+			RocUnit => {}
+			RocUnknown(_) => {}
 		}
 	}
 
@@ -588,33 +641,59 @@ expect lowercase_first("") == ""
 
 ## Look up a type_id in the type table and return record fields if it's a record.
 ## Follows single-variant tag unions (unwrapping to their payload).
+## Type annotation ensures the interpreter uses the full TypeRepr layout.
+lookup_record_in_type_table : List(TypeRepr), U64 -> { found: Bool, fields: List(RecordField), size: U64, alignment: U64 }
 lookup_record_in_type_table = |type_table, type_id| {
 	match List.get(type_table, type_id) {
-		Ok(type_repr) =>
-			match type_repr {
-				RocRecord(rec) =>
-					if List.len(rec.fields) > 0 {
-						{ found: Bool.True, fields: rec.fields, size: rec.size, alignment: rec.alignment }
-					} else {
-						{ found: Bool.False, fields: [], size: 0, alignment: 0 }
-					}
-				RocTagUnion(tu) =>
-					# Follow single-variant tag unions to their payload
-					if List.len(tu.tags) == 1 {
-						match List.first(tu.tags) {
-							Ok(tag) =>
-								match List.first(tag.payload) {
-									Ok(payload_id) => lookup_record_in_type_table(type_table, payload_id)
-									_ => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-								}
+		Ok(type_repr) => lookup_record_from_repr(type_table, type_repr)
+		Err(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+	}
+}
+
+## Match a TypeRepr and return record fields if it's a record.
+## Type annotation ensures the interpreter uses the full 21-variant TypeRepr layout.
+lookup_record_from_repr : List(TypeRepr), TypeRepr -> { found: Bool, fields: List(RecordField), size: U64, alignment: U64 }
+lookup_record_from_repr = |type_table, type_repr| {
+	match type_repr {
+		RocRecord(rec) =>
+			if List.len(rec.fields) > 0 {
+				{ found: Bool.True, fields: rec.fields, size: rec.size, alignment: rec.alignment }
+			} else {
+				{ found: Bool.False, fields: [], size: 0, alignment: 0 }
+			}
+		RocTagUnion(tu) =>
+			# Follow single-variant tag unions to their payload
+			if List.len(tu.tags) == 1 {
+				match List.first(tu.tags) {
+					Ok(tag) =>
+						match List.first(tag.payload) {
+							Ok(payload_id) => lookup_record_in_type_table(type_table, payload_id)
 							_ => { found: Bool.False, fields: [], size: 0, alignment: 0 }
 						}
-					} else {
-						{ found: Bool.False, fields: [], size: 0, alignment: 0 }
-					}
-				_ => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+					_ => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+				}
+			} else {
+				{ found: Bool.False, fields: [], size: 0, alignment: 0 }
 			}
-		Err(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocBool => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocDec => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocF32 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocF64 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocFunction(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocI128 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocI16 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocI32 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocI64 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocI8 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocList(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocStr => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocU128 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocU16 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocU32 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocU64 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocU8 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocUnit => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocUnknown(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
 	}
 }
 

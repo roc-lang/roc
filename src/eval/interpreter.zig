@@ -8144,7 +8144,9 @@ pub const Interpreter = struct {
             },
             .applied_tag => |tag_pat| {
                 const union_resolved = self.resolveBaseVar(value_rt_var);
-                if (union_resolved.desc.content != .structure or union_resolved.desc.content.structure != .tag_union) return false;
+                if (union_resolved.desc.content != .structure or union_resolved.desc.content.structure != .tag_union) {
+                    return false;
+                }
 
                 var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
                 defer tag_list.deinit();
@@ -16218,32 +16220,37 @@ pub const Interpreter = struct {
                                     defer wide_tag_list.deinit();
                                     try self.appendUnionTags(wide_rt_var, &wide_tag_list);
 
-                                    // Find the wide discriminant by matching tag names
-                                    var wide_disc: ?u32 = null;
+                                    // Find the dest discriminant by matching tag names.
+                                    // This handles both directions:
+                                    // - narrow→wide: source has fewer tags, disc needs mapping to wider ordering
+                                    // - wide→narrow: source has more tags (e.g., full nominal type with 21 variants
+                                    //   placed into an open tag union with only 2 explicit variants due to type
+                                    //   inference not fully resolving flex extensions through nominal types)
+                                    var dest_disc: ?u32 = null;
                                     if (narrow_disc < narrow_tag_list.items.len and wide_tag_list.items.len > narrow_tag_list.items.len) {
-                                        const narrow_tag_name = narrow_tag_list.items[narrow_disc].name;
+                                        const source_tag_name = narrow_tag_list.items[narrow_disc].name;
                                         for (wide_tag_list.items, 0..) |wide_tag, wi| {
-                                            if (wide_tag.name == narrow_tag_name) {
-                                                wide_disc = @intCast(wi);
+                                            if (wide_tag.name == source_tag_name) {
+                                                dest_disc = @intCast(wi);
                                                 break;
                                             }
                                         }
                                     }
 
-                                    if (wide_disc) |wd| {
-                                        // Zero-fill the wide area, then copy narrow payload data
+                                    if (dest_disc) |dd| {
+                                        // Zero-fill the dest area, then copy source payload data
                                         @memset(base_ptr[0..wide_size], 0);
                                         try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
 
-                                        // Clear the narrow discriminant and write the wide one
+                                        // Clear the source discriminant and write the translated one
                                         const narrow_disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(values[0].layout.data.tag_union.idx);
                                         base_ptr[narrow_disc_offset] = 0;
 
                                         const wide_tu_data = self.runtime_layout_store.getTagUnionData(expected_payload_layout.data.tag_union.idx);
                                         const wide_disc_offset_val = self.runtime_layout_store.getTagUnionDiscriminantOffset(expected_payload_layout.data.tag_union.idx);
-                                        wide_tu_data.writeDiscriminantToPtr(base_ptr + wide_disc_offset_val, wd);
+                                        wide_tu_data.writeDiscriminantToPtr(base_ptr + wide_disc_offset_val, dd);
                                     } else {
-                                        // No widening needed (same disc mapping or unknown tag)
+                                        // Same tag ordering or unable to translate - just copy
                                         try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
                                     }
                                 } else {
