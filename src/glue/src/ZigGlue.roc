@@ -282,6 +282,94 @@ generate_roc_list_generic =
 	\\}
 	\\
 
+## Generate the RocIo vtable-based I/O abstraction
+generate_roc_io : Str
+generate_roc_io =
+	\\/// Minimal I/O abstraction for Roc platform hosts.
+	\\///
+	\\/// Provides stderr output and fatal-error handling that can be routed
+	\\/// to different backends (POSIX, freestanding/WASM, custom).
+	\\///
+	\\/// Use `RocIo.default()` for most platforms; inject a custom vtable for
+	\\/// environments without POSIX stdio (e.g. WASM freestanding).
+	\\pub const RocIo = struct {
+	\\    ctx: ?*anyopaque,
+	\\    vtable: *const VTable,
+	\\
+	\\    pub const VTable = struct {
+	\\        /// Write to stderr. Best-effort: errors are silently ignored.
+	\\        writeStderr: *const fn (?*anyopaque, []const u8) void,
+	\\        /// Terminate the process or trap. Must not return.
+	\\        onFatal: *const fn (?*anyopaque) noreturn,
+	\\    };
+	\\
+	\\    /// Write `data` to stderr (best-effort).
+	\\    pub fn writeStderr(self: RocIo, data: []const u8) void {
+	\\        self.vtable.writeStderr(self.ctx, data);
+	\\    }
+	\\
+	\\    /// Terminate the process or trap. Does not return.
+	\\    pub fn onFatal(self: RocIo) noreturn {
+	\\        self.vtable.onFatal(self.ctx);
+	\\    }
+	\\
+	\\    /// Native (POSIX) implementation: writes to stderr, exits with code 1.
+	\\    pub fn native() RocIo {
+	\\        return .{ .ctx = null, .vtable = &native_vtable };
+	\\    }
+	\\
+	\\    /// Freestanding implementation: no-op stderr, @trap() on fatal.
+	\\    pub fn freestanding() RocIo {
+	\\        return .{ .ctx = null, .vtable = &freestanding_vtable };
+	\\    }
+	\\
+	\\    /// Select the appropriate implementation for the current build target.
+	\\    pub fn default() RocIo {
+	\\        if (comptime builtin.os.tag == .freestanding) {
+	\\            return freestanding();
+	\\        }
+	\\        return native();
+	\\    }
+	\\
+	\\    fn nativeWriteStderr(_: ?*anyopaque, data: []const u8) void {
+	\\        std.fs.File.stderr().writeAll(data) catch {};
+	\\    }
+	\\
+	\\    fn nativeOnFatal(_: ?*anyopaque) noreturn {
+	\\        std.process.exit(1);
+	\\    }
+	\\
+	\\    fn freestandingWriteStderr(_: ?*anyopaque, _: []const u8) void {}
+	\\
+	\\    fn freestandingOnFatal(_: ?*anyopaque) noreturn {
+	\\        @trap();
+	\\    }
+	\\
+	\\    const native_vtable: VTable = .{
+	\\        .writeStderr = &nativeWriteStderr,
+	\\        .onFatal = &nativeOnFatal,
+	\\    };
+	\\
+	\\    const freestanding_vtable: VTable = .{
+	\\        .writeStderr = &freestandingWriteStderr,
+	\\        .onFatal = &freestandingOnFatal,
+	\\    };
+	\\};
+	\\
+
+## Generate the RocEnv host environment struct
+generate_roc_env : Str
+generate_roc_env =
+	\\/// Host environment passed to the Roc runtime.
+	\\///
+	\\/// Bundles the allocator and I/O backend used by DefaultAllocators
+	\\/// and DefaultHandlers.
+	\\pub const RocEnv = struct {
+	\\    allocator: std.mem.Allocator,
+	\\    roc_io: RocIo,
+	\\};
+	\\
+
 ## Generate extern structs for element types found in the type table.
 ## Scans for Record types and generates Zig extern structs for them.
 ## Fields arrive pre-sorted by alignment descending from the compiler.
@@ -717,6 +805,12 @@ generate_zig_file = |hosted_functions, type_table, provides_list| {
 		.concat("\n")
 		.concat(generate_roc_list_generic)
 		.concat("\n")
+		.concat(generate_roc_io)
+		.concat("\n")
+		.concat(generate_roc_env)
+		.concat("\n")
+		.concat(generate_index_constants(hosted_functions, count))
+		.concat("\n")
 		.concat(generate_element_type_structs(type_table))
 		.concat(generate_tag_union_structs(type_table))
 		.concat(generate_all_record_structs(hosted_functions, type_table))
@@ -738,7 +832,7 @@ file_header =
 ## Import section
 generate_imports : Str
 generate_imports =
-	"const std = @import(\"std\");\n"
+	"const std = @import(\"std\");\nconst builtin = @import(\"builtin\");\n"
 
 ## Generate self-contained host ABI type definitions
 generate_host_abi_types : Str
@@ -1105,100 +1199,91 @@ generate_host_helpers =
 		.concat("\n")
 		.concat(generate_make_roc_ops)
 
-## Generate the DefaultAllocators generic function
+## Generate the DefaultAllocators struct
 generate_default_allocators : Str
 generate_default_allocators =
 	\\/// Default memory management functions for Roc platforms.
 	\\///
-	\\/// Returns a struct with `rocAlloc`, `rocDealloc`, and `rocRealloc` functions
-	\\/// that follow the Roc ABI and use `EnvType.allocator()` for allocation.
-	\\///
-	\\/// Memory layout: each allocation prepends size metadata so that dealloc/realloc
-	\\/// can recover the original allocation size (required because `roc_dealloc` does
-	\\/// not receive a length parameter).
-	\\///
-	\\/// `EnvType` must have an `.allocator()` method that returns `std.mem.Allocator`.
-	\\pub fn DefaultAllocators(comptime EnvType: type) type {
-	\\    return struct {
-	\\        /// Allocate memory for the Roc runtime using the host environment's allocator.
-	\\        pub fn rocAlloc(alloc_args: *RocAlloc, env_ptr: *anyopaque) callconv(.c) void {
-	\\            const host_env: *EnvType = @ptrCast(@alignCast(env_ptr));
-	\\            const allocator = host_env.allocator();
+	\\/// Uses `RocEnv.allocator` for allocation. Each allocation prepends
+	\\/// size metadata so that dealloc/realloc can recover the original
+	\\/// allocation size (required because `roc_dealloc` receives no length).
+	\\pub const DefaultAllocators = struct {
+	\\    /// Allocate memory for the Roc runtime.
+	\\    pub fn rocAlloc(alloc_args: *RocAlloc, env_ptr: *anyopaque) callconv(.c) void {
+	\\        const env: *RocEnv = @ptrCast(@alignCast(env_ptr));
+	\\        const allocator = env.allocator;
 	\\
-	\\            const min_alignment: usize = @max(alloc_args.alignment, @alignOf(usize));
-	\\            const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
-	\\            const size_storage_bytes = min_alignment;
-	\\            const total_size = alloc_args.length + size_storage_bytes;
+	\\        const min_alignment: usize = @max(alloc_args.alignment, @alignOf(usize));
+	\\        const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
+	\\        const size_storage_bytes = min_alignment;
+	\\        const total_size = alloc_args.length + size_storage_bytes;
 	\\
-	\\            const base_ptr = allocator.rawAlloc(total_size, align_enum, @returnAddress()) orelse {
-	\\                const stderr_file: std.fs.File = .stderr();
-	\\                stderr_file.writeAll("roc_alloc: out of memory\\n") catch {};
-	\\                std.process.exit(1);
-	\\            };
+	\\        const base_ptr = allocator.rawAlloc(total_size, align_enum, @returnAddress()) orelse {
+	\\            env.roc_io.writeStderr("roc_alloc: out of memory\\n");
+	\\            env.roc_io.onFatal();
+	\\        };
 	\\
-	\\            // Store total size immediately before the user data pointer
-	\\            const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
-	\\            size_ptr.* = total_size;
+	\\        // Store total size immediately before the user data pointer
+	\\        const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
+	\\        size_ptr.* = total_size;
 	\\
-	\\            alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
-	\\        }
+	\\        alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
+	\\    }
 	\\
-	\\        /// Free memory previously allocated by `rocAlloc`.
-	\\        pub fn rocDealloc(dealloc_args: *RocDealloc, env_ptr: *anyopaque) callconv(.c) void {
-	\\            const host_env: *EnvType = @ptrCast(@alignCast(env_ptr));
-	\\            const allocator = host_env.allocator();
+	\\    /// Free memory previously allocated by `rocAlloc`.
+	\\    pub fn rocDealloc(dealloc_args: *RocDealloc, env_ptr: *anyopaque) callconv(.c) void {
+	\\        const env: *RocEnv = @ptrCast(@alignCast(env_ptr));
+	\\        const allocator = env.allocator;
 	\\
-	\\            const min_alignment: usize = @max(dealloc_args.alignment, @alignOf(usize));
-	\\            const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
-	\\            const size_storage_bytes = min_alignment;
+	\\        const min_alignment: usize = @max(dealloc_args.alignment, @alignOf(usize));
+	\\        const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
+	\\        const size_storage_bytes = min_alignment;
 	\\
-	\\            const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
-	\\            const total_size = size_ptr.*;
+	\\        const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
+	\\        const total_size = size_ptr.*;
 	\\
-	\\            const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - size_storage_bytes);
-	\\            const slice = base_ptr[0..total_size];
-	\\            allocator.rawFree(slice, align_enum, @returnAddress());
-	\\        }
+	\\        const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - size_storage_bytes);
+	\\        const slice = base_ptr[0..total_size];
+	\\        allocator.rawFree(slice, align_enum, @returnAddress());
+	\\    }
 	\\
-	\\        /// Reallocate memory, copying existing data to the new allocation.
-	\\        pub fn rocRealloc(realloc_args: *RocRealloc, env_ptr: *anyopaque) callconv(.c) void {
-	\\            const host_env: *EnvType = @ptrCast(@alignCast(env_ptr));
-	\\            const allocator = host_env.allocator();
+	\\    /// Reallocate memory, copying existing data to the new allocation.
+	\\    pub fn rocRealloc(realloc_args: *RocRealloc, env_ptr: *anyopaque) callconv(.c) void {
+	\\        const env: *RocEnv = @ptrCast(@alignCast(env_ptr));
+	\\        const allocator = env.allocator;
 	\\
-	\\            const min_alignment: usize = @max(realloc_args.alignment, @alignOf(usize));
-	\\            const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
-	\\            const size_storage_bytes = min_alignment;
+	\\        const min_alignment: usize = @max(realloc_args.alignment, @alignOf(usize));
+	\\        const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
+	\\        const size_storage_bytes = min_alignment;
 	\\
-	\\            // Read old size from metadata
-	\\            const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));
-	\\            const old_total_size = old_size_ptr.*;
-	\\            const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(realloc_args.answer) - size_storage_bytes);
+	\\        // Read old size from metadata
+	\\        const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));
+	\\        const old_total_size = old_size_ptr.*;
+	\\        const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(realloc_args.answer) - size_storage_bytes);
 	\\
-	\\            // Allocate new block
-	\\            const new_total_size = realloc_args.new_length + size_storage_bytes;
-	\\            const new_base_ptr = allocator.rawAlloc(new_total_size, align_enum, @returnAddress()) orelse {
-	\\                const stderr_file: std.fs.File = .stderr();
-	\\                stderr_file.writeAll("roc_realloc: out of memory\\n") catch {};
-	\\                std.process.exit(1);
-	\\            };
+	\\        // Allocate new block
+	\\        const new_total_size = realloc_args.new_length + size_storage_bytes;
+	\\        const new_base_ptr = allocator.rawAlloc(new_total_size, align_enum, @returnAddress()) orelse {
+	\\            env.roc_io.writeStderr("roc_realloc: out of memory\\n");
+	\\            env.roc_io.onFatal();
+	\\        };
 	\\
-	\\            // Copy old user data to new location
-	\\            const old_user_data_size = old_total_size - size_storage_bytes;
-	\\            const copy_size = @min(old_user_data_size, realloc_args.new_length);
-	\\            const new_user_ptr: [*]u8 = @ptrFromInt(@intFromPtr(new_base_ptr) + size_storage_bytes);
-	\\            const old_user_ptr: [*]const u8 = @ptrCast(realloc_args.answer);
-	\\            @memcpy(new_user_ptr[0..copy_size], old_user_ptr[0..copy_size]);
+	\\        // Copy old user data to new location
+	\\        const old_user_data_size = old_total_size - size_storage_bytes;
+	\\        const copy_size = @min(old_user_data_size, realloc_args.new_length);
+	\\        const new_user_ptr: [*]u8 = @ptrFromInt(@intFromPtr(new_base_ptr) + size_storage_bytes);
+	\\        const old_user_ptr: [*]const u8 = @ptrCast(realloc_args.answer);
+	\\        @memcpy(new_user_ptr[0..copy_size], old_user_ptr[0..copy_size]);
 	\\
-	\\            // Free old allocation
-	\\            allocator.rawFree(old_base_ptr[0..old_total_size], align_enum, @returnAddress());
+	\\        // Free old allocation
+	\\        allocator.rawFree(old_base_ptr[0..old_total_size], align_enum, @returnAddress());
 	\\
-	\\            // Store new size and return user pointer
-	\\            const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_base_ptr) + size_storage_bytes - @sizeOf(usize));
-	\\            new_size_ptr.* = new_total_size;
-	\\            realloc_args.answer = new_user_ptr;
-	\\        }
-	\\    };
-	\\}
+	\\        // Store new size and return user pointer
+	\\        const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_base_ptr) + size_storage_bytes - @sizeOf(usize));
+	\\        new_size_ptr.* = new_total_size;
+	\\        realloc_args.answer = new_user_ptr;
+	\\    }
+	\\};
 	\\
 
 ## Generate the DefaultHandlers namespace
@@ -1206,35 +1291,34 @@ generate_default_handlers : Str
 generate_default_handlers =
 	\\/// Default handlers for dbg, expect-failed, and crash.
 	\\///
-	\\/// These print to stderr and don't use the env pointer. Suitable for most
-	\\/// platform hosts that don't need custom handling of these events.
+	\\/// Routes output through `RocEnv.roc_io` for platform portability.
 	\\pub const DefaultHandlers = struct {
 	\\    /// Print a `dbg` expression to stderr.
-	\\    pub fn rocDbg(dbg_args: *const RocDbg, _: *anyopaque) callconv(.c) void {
+	\\    pub fn rocDbg(dbg_args: *const RocDbg, env_ptr: *anyopaque) callconv(.c) void {
+	\\        const env: *RocEnv = @ptrCast(@alignCast(env_ptr));
 	\\        const msg = dbg_args.utf8_bytes[0..dbg_args.len];
-	\\        const stderr_file: std.fs.File = .stderr();
-	\\        stderr_file.writeAll("\\x1b[36m[ROC DBG]\\x1b[0m ") catch {};
-	\\        stderr_file.writeAll(msg) catch {};
-	\\        stderr_file.writeAll("\\n") catch {};
+	\\        env.roc_io.writeStderr("[ROC DBG] ");
+	\\        env.roc_io.writeStderr(msg);
+	\\        env.roc_io.writeStderr("\\n");
 	\\    }
 	\\
 	\\    /// Print a failed `expect` to stderr.
-	\\    pub fn rocExpectFailed(expect_args: *const RocExpectFailed, _: *anyopaque) callconv(.c) void {
+	\\    pub fn rocExpectFailed(expect_args: *const RocExpectFailed, env_ptr: *anyopaque) callconv(.c) void {
+	\\        const env: *RocEnv = @ptrCast(@alignCast(env_ptr));
 	\\        const msg = expect_args.utf8_bytes[0..expect_args.len];
-	\\        const stderr_file: std.fs.File = .stderr();
-	\\        stderr_file.writeAll("\\x1b[33m[ROC EXPECT]\\x1b[0m ") catch {};
-	\\        stderr_file.writeAll(msg) catch {};
-	\\        stderr_file.writeAll("\\n") catch {};
+	\\        env.roc_io.writeStderr("[ROC EXPECT] ");
+	\\        env.roc_io.writeStderr(msg);
+	\\        env.roc_io.writeStderr("\\n");
 	\\    }
 	\\
-	\\    /// Print a `crash` message to stderr and exit.
-	\\    pub fn rocCrashed(crash_args: *const RocCrashed, _: *anyopaque) callconv(.c) void {
+	\\    /// Print a `crash` message to stderr and terminate.
+	\\    pub fn rocCrashed(crash_args: *const RocCrashed, env_ptr: *anyopaque) callconv(.c) void {
+	\\        const env: *RocEnv = @ptrCast(@alignCast(env_ptr));
 	\\        const msg = crash_args.utf8_bytes[0..crash_args.len];
-	\\        const stderr_file: std.fs.File = .stderr();
-	\\        stderr_file.writeAll("\\x1b[31m[ROC CRASHED]\\x1b[0m ") catch {};
-	\\        stderr_file.writeAll(msg) catch {};
-	\\        stderr_file.writeAll("\\n") catch {};
-	\\        std.process.exit(1);
+	\\        env.roc_io.writeStderr("[ROC CRASHED] ");
+	\\        env.roc_io.writeStderr(msg);
+	\\        env.roc_io.writeStderr("\\n");
+	\\        env.roc_io.onFatal();
 	\\    }
 	\\};
 	\\
@@ -1244,22 +1328,20 @@ generate_make_roc_ops : Str
 generate_make_roc_ops =
 	\\/// Create a RocOps struct with default memory management and error handlers.
 	\\///
-	\\/// This is a convenience function that wires together `DefaultAllocators(EnvType)`,
-	\\/// `DefaultHandlers`, and the provided hosted functions into a ready-to-use `RocOps`.
+	\\/// Wires `DefaultAllocators`, `DefaultHandlers`, and the provided hosted
+	\\/// functions into a ready-to-use `RocOps`.
 	\\///
-	\\/// `EnvType` must have an `.allocator()` method that returns `std.mem.Allocator`.
-	\\///
-	\\/// Example usage:
+	\\/// Example:
+	\\/// ```zig
+	\\/// var env = RocEnv{ .allocator = gpa.allocator(), .roc_io = RocIo.default() };
+	\\/// var roc_ops = makeRocOps(&env, hostedFunctions(.{ ... }));
 	\\/// ```
-	\\/// var roc_ops = makeRocOps(HostEnv, &host_env, hostedFunctions(.{ ... }));
-	\\/// ```
-	\\pub fn makeRocOps(comptime EnvType: type, env: *EnvType, hosted_fns: HostedFunctions) RocOps {
-	\\    const Allocs = DefaultAllocators(EnvType);
+	\\pub fn makeRocOps(env: *RocEnv, hosted_fns: HostedFunctions) RocOps {
 	\\    return .{
 	\\        .env = @ptrCast(env),
-	\\        .roc_alloc = &Allocs.rocAlloc,
-	\\        .roc_dealloc = &Allocs.rocDealloc,
-	\\        .roc_realloc = &Allocs.rocRealloc,
+	\\        .roc_alloc = &DefaultAllocators.rocAlloc,
+	\\        .roc_dealloc = &DefaultAllocators.rocDealloc,
+	\\        .roc_realloc = &DefaultAllocators.rocRealloc,
 	\\        .roc_dbg = &DefaultHandlers.rocDbg,
 	\\        .roc_expect_failed = &DefaultHandlers.rocExpectFailed,
 	\\        .roc_crashed = &DefaultHandlers.rocCrashed,

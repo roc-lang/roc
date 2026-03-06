@@ -838,6 +838,15 @@ pub const Coordinator = struct {
         };
     }
 
+    /// Write a BUG diagnostic to stderr via the injected Io. No-op in release builds.
+    fn bugReport(self: *Coordinator, comptime fmt: []const u8, args: anytype) void {
+        if (comptime builtin.mode == .Debug) {
+            var buf: [512]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, fmt, args) catch fmt;
+            self.io.writeStderr(msg) catch {};
+        }
+    }
+
     /// Handle a result from a worker
     fn handleResult(self: *Coordinator, result: WorkerResult) !void {
         // Make a mutable copy so we can deinit after handling
@@ -862,13 +871,13 @@ pub const Coordinator = struct {
             std.debug.print("[COORD] PARSED: pkg={s} module={s} result_reports={}\n", .{ result.package_name, result.module_name, result.reports.items.len });
         }
         const pkg = self.packages.get(result.package_name) orelse {
-            if (builtin.mode == .Debug) std.debug.print("BUG: package '{s}' not found for parsed result (module={s}, id={})\n", .{
+            self.bugReport("BUG: package '{s}' not found for parsed result (module={s}, id={})\n", .{
                 result.package_name, result.module_name, result.module_id,
             });
             unreachable;
         };
         const mod = pkg.getModule(result.module_id) orelse {
-            if (builtin.mode == .Debug) std.debug.print("BUG: module id={} not found in package '{s}' for parsed result (module={s})\n", .{
+            self.bugReport("BUG: module id={} not found in package '{s}' for parsed result (module={s})\n", .{
                 result.module_id, result.package_name, result.module_name,
             });
             unreachable;
@@ -927,13 +936,13 @@ pub const Coordinator = struct {
             });
         }
         const pkg = self.packages.get(result.package_name) orelse {
-            if (builtin.mode == .Debug) std.debug.print("BUG: package '{s}' not found for canonicalized result (module={s}, id={})\n", .{
+            self.bugReport("BUG: package '{s}' not found for canonicalized result (module={s}, id={})\n", .{
                 result.package_name, result.module_name, result.module_id,
             });
             unreachable;
         };
         const mod = pkg.getModule(result.module_id) orelse {
-            if (builtin.mode == .Debug) std.debug.print("BUG: module id={} not found in package '{s}' for canonicalized result (module={s})\n", .{
+            self.bugReport("BUG: module id={} not found in package '{s}' for canonicalized result (module={s})\n", .{
                 result.module_id, result.package_name, result.module_name,
             });
             unreachable;
@@ -1006,7 +1015,7 @@ pub const Coordinator = struct {
             const child_id = try pkg.ensureModule(self.gpa, imp.module_name, imp.path);
             // Refresh mod pointer after potential resize
             const current_mod = pkg.getModule(result.module_id) orelse {
-                if (builtin.mode == .Debug) std.debug.print("BUG: module id={} not found in package '{s}' after ensureModule in canonicalized handler (module={s})\n", .{
+                self.bugReport("BUG: module id={} not found in package '{s}' after ensureModule in canonicalized handler (module={s})\n", .{
                     result.module_id, result.package_name, result.module_name,
                 });
                 unreachable;
@@ -1040,7 +1049,7 @@ pub const Coordinator = struct {
 
         // Refresh mod pointer after potential resizes from local imports
         const mod_after_imports = pkg.getModule(result.module_id) orelse {
-            if (builtin.mode == .Debug) std.debug.print("BUG: module id={} not found in package '{s}' after local imports in canonicalized handler (module={s})\n", .{
+            self.bugReport("BUG: module id={} not found in package '{s}' after local imports in canonicalized handler (module={s})\n", .{
                 result.module_id, result.package_name, result.module_name,
             });
             unreachable;
@@ -1092,13 +1101,13 @@ pub const Coordinator = struct {
             std.debug.print("[COORD] TYPE_CHECKED: pkg={s} module={s} result_reports={}\n", .{ result.package_name, result.module_name, result.reports.items.len });
         }
         const pkg = self.packages.get(result.package_name) orelse {
-            if (builtin.mode == .Debug) std.debug.print("BUG: package '{s}' not found for type_checked result (module={s}, id={})\n", .{
+            self.bugReport("BUG: package '{s}' not found for type_checked result (module={s}, id={})\n", .{
                 result.package_name, result.module_name, result.module_id,
             });
             unreachable;
         };
         const mod = pkg.getModule(result.module_id) orelse {
-            if (builtin.mode == .Debug) std.debug.print("BUG: module id={} not found in package '{s}' for type_checked result (module={s})\n", .{
+            self.bugReport("BUG: module id={} not found in package '{s}' for type_checked result (module={s})\n", .{
                 result.module_id, result.package_name, result.module_name,
             });
             unreachable;
@@ -1263,13 +1272,13 @@ pub const Coordinator = struct {
             std.debug.print("[COORD] PARSE FAILED: pkg={s} module={s} reports={}\n", .{ result.package_name, result.module_name, result.reports.items.len });
         }
         const pkg = self.packages.get(result.package_name) orelse {
-            if (builtin.mode == .Debug) std.debug.print("BUG: package '{s}' not found for parse_failed result (module={s}, id={})\n", .{
+            self.bugReport("BUG: package '{s}' not found for parse_failed result (module={s}, id={})\n", .{
                 result.package_name, result.module_name, result.module_id,
             });
             unreachable;
         };
         const mod = pkg.getModule(result.module_id) orelse {
-            if (builtin.mode == .Debug) std.debug.print("BUG: module id={} not found in package '{s}' for parse_failed result (module={s})\n", .{
+            self.bugReport("BUG: module id={} not found in package '{s}' for parse_failed result (module={s})\n", .{
                 result.module_id, result.package_name, result.module_name,
             });
             unreachable;
@@ -1306,13 +1315,13 @@ pub const Coordinator = struct {
     /// Handle cycle detection
     fn handleCycleDetected(self: *Coordinator, result: *messages.CycleDetected) !void {
         const pkg = self.packages.get(result.package_name) orelse {
-            if (builtin.mode == .Debug) std.debug.print("BUG: package '{s}' not found for cycle_detected result (id={})\n", .{
+            self.bugReport("BUG: package '{s}' not found for cycle_detected result (id={})\n", .{
                 result.package_name, result.module_id,
             });
             unreachable;
         };
         const mod = pkg.getModule(result.module_id) orelse {
-            if (builtin.mode == .Debug) std.debug.print("BUG: module id={} not found in package '{s}' for cycle_detected result\n", .{
+            self.bugReport("BUG: module id={} not found in package '{s}' for cycle_detected result\n", .{
                 result.module_id, result.package_name,
             });
             unreachable;
@@ -1347,13 +1356,13 @@ pub const Coordinator = struct {
         }
 
         const pkg = self.packages.get(result.package_name) orelse {
-            if (builtin.mode == .Debug) std.debug.print("BUG: package '{s}' not found for cache_hit result (module={s}, id={})\n", .{
+            self.bugReport("BUG: package '{s}' not found for cache_hit result (module={s}, id={})\n", .{
                 result.package_name, result.module_name, result.module_id,
             });
             unreachable;
         };
         const mod = pkg.getModule(result.module_id) orelse {
-            if (builtin.mode == .Debug) std.debug.print("BUG: module id={} not found in package '{s}' for cache_hit result (module={s})\n", .{
+            self.bugReport("BUG: module id={} not found in package '{s}' for cache_hit result (module={s})\n", .{
                 result.module_id, result.package_name, result.module_name,
             });
             unreachable;
@@ -1424,7 +1433,7 @@ pub const Coordinator = struct {
 
         // Refresh mod pointer after potential resizes from ensureModule calls
         const mod_after_imports = pkg.getModule(result.module_id) orelse {
-            if (builtin.mode == .Debug) std.debug.print("BUG: module id={} not found in package '{s}' after imports in cache_hit handler (module={s})\n", .{
+            self.bugReport("BUG: module id={} not found in package '{s}' after imports in cache_hit handler (module={s})\n", .{
                 result.module_id, result.package_name, result.module_name,
             });
             unreachable;

@@ -84,6 +84,14 @@ pub const CacheManager = struct {
 
     const Self = @This();
 
+    /// Print a verbose diagnostic via the injected Io. No-op when config.verbose is false.
+    fn verboseLog(self: *Self, comptime fmt: []const u8, args: anytype) void {
+        if (!self.config.verbose) return;
+        var buf: [1024]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, fmt, args) catch return;
+        self.io.writeStderr(msg) catch {};
+    }
+
     /// Initialize a new cache manager.
     pub fn init(allocator: Allocator, config: CacheConfig, io: Io) Self {
         return Self{
@@ -128,9 +136,7 @@ pub const CacheManager = struct {
 
         // Read cache data using memory mapping for better performance
         const mapped_cache = CacheModule.readFromFileMapped(self.allocator, cache_path, self.io) catch |err| {
-            if (self.config.verbose) {
-                std.log.debug("Failed to read cache file {s}: {}", .{ cache_path, err });
-            }
+            self.verboseLog("Failed to read cache file {s}: {}\n", .{ cache_path, err });
             self.stats.recordMiss();
             return CacheResult{ .miss = .{
                 .key = cache_key,
@@ -145,9 +151,7 @@ pub const CacheManager = struct {
             source,
             module_name,
         ) catch |err| {
-            if (self.config.verbose) {
-                std.log.debug("Failed to restore from cache {s}: {}", .{ cache_path, err });
-            }
+            self.verboseLog("Failed to restore from cache {s}: {}\n", .{ cache_path, err });
             self.stats.recordInvalidation();
             return CacheResult{ .miss = .{
                 .key = cache_key,
@@ -169,9 +173,7 @@ pub const CacheManager = struct {
 
         // Ensure cache subdirectory exists
         self.ensureCacheSubdir(cache_key) catch |err| {
-            if (self.config.verbose) {
-                std.log.debug("Failed to create cache subdirectory: {}", .{err});
-            }
+            self.verboseLog("Failed to create cache subdirectory: {}\n", .{err});
             self.stats.recordStoreFailure();
             return;
         };
@@ -181,9 +183,7 @@ pub const CacheManager = struct {
         defer arena.deinit();
 
         const cache_data = CacheModule.create(self.allocator, arena.allocator(), module_env, module_env, error_count, warning_count) catch |err| {
-            if (self.config.verbose) {
-                std.log.debug("Failed to serialize cache data: {}", .{err});
-            }
+            self.verboseLog("Failed to serialize cache data: {}\n", .{err});
             self.stats.recordStoreFailure();
             return;
         };
@@ -205,18 +205,14 @@ pub const CacheManager = struct {
 
         // Write to temp file
         self.io.writeFile(temp_path, cache_data) catch |err| {
-            if (self.config.verbose) {
-                std.log.debug("Failed to write cache temp file {s}: {}", .{ temp_path, err });
-            }
+            self.verboseLog("Failed to write cache temp file {s}: {}\n", .{ temp_path, err });
             self.stats.recordStoreFailure();
             return;
         };
 
         // Move temp file to final location (atomic operation)
         self.io.rename(temp_path, cache_path) catch |err| {
-            if (self.config.verbose) {
-                std.log.debug("Failed to rename cache file {s} -> {s}: {}", .{ temp_path, cache_path, err });
-            }
+            self.verboseLog("Failed to rename cache file {s} -> {s}: {}\n", .{ temp_path, cache_path, err });
             self.stats.recordStoreFailure();
             return;
         };
@@ -288,9 +284,7 @@ pub const CacheManager = struct {
 
         // Ensure cache subdirectory exists
         self.ensureCacheSubdirIn(cache_key, entries_dir) catch |err| {
-            if (self.config.verbose) {
-                std.log.debug("Failed to create cache subdirectory: {}", .{err});
-            }
+            self.verboseLog("Failed to create cache subdirectory: {}\n", .{err});
             self.stats.recordStoreFailure();
             return;
         };
@@ -311,18 +305,14 @@ pub const CacheManager = struct {
 
         // Write to temp file
         self.io.writeFile(temp_path, data) catch |err| {
-            if (self.config.verbose) {
-                std.log.debug("Failed to write cache temp file {s}: {}", .{ temp_path, err });
-            }
+            self.verboseLog("Failed to write cache temp file {s}: {}\n", .{ temp_path, err });
             self.stats.recordStoreFailure();
             return;
         };
 
         // Move temp file to final location (atomic operation)
         self.io.rename(temp_path, cache_path) catch |err| {
-            if (self.config.verbose) {
-                std.log.debug("Failed to rename cache file {s} -> {s}: {}", .{ temp_path, cache_path, err });
-            }
+            self.verboseLog("Failed to rename cache file {s} -> {s}: {}\n", .{ temp_path, cache_path, err });
             self.stats.recordStoreFailure();
             return;
         };
@@ -348,9 +338,7 @@ pub const CacheManager = struct {
 
         // Read cache data
         const data = self.io.readFile(cache_path, self.allocator) catch |err| {
-            if (self.config.verbose) {
-                std.log.debug("Failed to read cache file {s}: {}", .{ cache_path, err });
-            }
+            self.verboseLog("Failed to read cache file {s}: {}\n", .{ cache_path, err });
             self.stats.recordMiss();
             return null;
         };
@@ -575,9 +563,7 @@ pub const CacheManager = struct {
 
         // Ensure cache subdirectory exists
         self.ensureCacheSubdir(source_hash) catch |err| {
-            if (self.config.verbose) {
-                std.log.debug("Failed to create metadata cache subdirectory: {}", .{err});
-            }
+            self.verboseLog("Failed to create metadata cache subdirectory: {}\n", .{err});
             return;
         };
 
