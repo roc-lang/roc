@@ -5849,6 +5849,7 @@ const CollectedModuleTypeInfo = struct {
 /// Internal representation of a collected type for the type table.
 const CollectedTypeRepr = union(enum) {
     bool_,
+    box: u64,
     dec,
     f32_,
     f64_,
@@ -5967,6 +5968,21 @@ const TypeTable = struct {
         // Update placeholder with actual representation
         self.entries.items[@intCast(idx)] = repr;
 
+        // Assign synthetic names to anonymous records so glue generates struct defs
+        switch (repr) {
+            .record => |rec| {
+                if (rec.name.len == 0) {
+                    self.entries.items[@intCast(idx)] = .{ .record = .{
+                        .name = std.fmt.allocPrint(self.gpa, "AnonStruct{d}", .{idx}) catch "",
+                        .fields = rec.fields,
+                        .size = rec.size,
+                        .alignment = rec.alignment,
+                    } };
+                }
+            },
+            else => {},
+        }
+
         return idx;
     }
 
@@ -5989,6 +6005,7 @@ const TypeTable = struct {
     fn getSizeAlignForRepr(repr: CollectedTypeRepr) SizeAlign {
         return switch (repr) {
             .bool_ => .{ .size = 1, .alignment = 1 },
+            .box => .{ .size = 8, .alignment = 8 },
             .u8_, .i8_ => .{ .size = 1, .alignment = 1 },
             .u16_, .i16_ => .{ .size = 2, .alignment = 2 },
             .u32_, .i32_, .f32_ => .{ .size = 4, .alignment = 4 },
@@ -6045,8 +6062,11 @@ const TypeTable = struct {
             return .{ .unknown = self.gpa.dupe(u8, "List") catch "" };
         }
         if (std.mem.eql(u8, display_name, "Box")) {
-            // Box(T) is a heap-allocated pointer to T in the C ABI.
-            // Represent as unknown so glue scripts render it as *anyopaque.
+            const args = env.types.sliceNominalArgs(nominal);
+            if (args.len >= 1) {
+                const inner_id = self.getOrInsert(env, args[0]);
+                return .{ .box = inner_id };
+            }
             return .{ .unknown = self.gpa.dupe(u8, "Box") catch "" };
         }
         if (std.mem.eql(u8, display_name, "Str")) return .str_;
@@ -6530,26 +6550,27 @@ const ResultListFileStr = extern struct {
 /// Tag discriminant for TypeRepr tagged union (21 variants, alphabetical with Roc prefix)
 const TypeReprTag = enum(u8) {
     RocBool = 0,
-    RocDec = 1,
-    RocF32 = 2,
-    RocF64 = 3,
-    RocFunction = 4,
-    RocI128 = 5,
-    RocI16 = 6,
-    RocI32 = 7,
-    RocI64 = 8,
-    RocI8 = 9,
-    RocList = 10,
-    RocRecord = 11,
-    RocStr = 12,
-    RocTagUnion = 13,
-    RocU128 = 14,
-    RocU16 = 15,
-    RocU32 = 16,
-    RocU64 = 17,
-    RocU8 = 18,
-    RocUnit = 19,
-    RocUnknown = 20,
+    RocBox = 1,
+    RocDec = 2,
+    RocF32 = 3,
+    RocF64 = 4,
+    RocFunction = 5,
+    RocI128 = 6,
+    RocI16 = 7,
+    RocI32 = 8,
+    RocI64 = 9,
+    RocI8 = 10,
+    RocList = 11,
+    RocRecord = 12,
+    RocStr = 13,
+    RocTagUnion = 14,
+    RocU128 = 15,
+    RocU16 = 16,
+    RocU32 = 17,
+    RocU64 = 18,
+    RocU8 = 19,
+    RocUnit = 20,
+    RocUnknown = 21,
 };
 
 /// FunctionRepr := { args : List(U64), ret : U64 } — fields alphabetical
@@ -6576,6 +6597,7 @@ const TagUnionPayload = extern struct {
 
 /// Payload union for TypeRepr — max payload is 64 bytes (RecordPayload)
 const TypeReprPayload = extern union {
+    box_elem: u64,
     function: FunctionPayload,
     list_elem: u64,
     record: RecordPayload,
@@ -6695,6 +6717,10 @@ fn serializeTypeRepr(
 
     switch (entry) {
         .bool_ => result.tag = .RocBool,
+        .box => |inner_id| {
+            result.tag = .RocBox;
+            result.payload.box_elem = inner_id;
+        },
         .dec => result.tag = .RocDec,
         .f32_ => result.tag = .RocF32,
         .f64_ => result.tag = .RocF64,

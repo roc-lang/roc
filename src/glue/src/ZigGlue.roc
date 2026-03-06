@@ -78,6 +78,7 @@ type_repr_to_zig : List(TypeRepr), TypeRepr -> Str
 type_repr_to_zig = |type_table, type_repr| {
 	match type_repr {
 		RocBool => "bool"
+		RocBox(inner_id) => "*${type_id_to_zig(type_table, inner_id)}"
 		RocStr => "RocStr"
 		RocUnit => "void"
 		RocU8 => "u8"
@@ -125,6 +126,7 @@ is_repr_refcounted : List(TypeRepr), TypeRepr -> Bool
 is_repr_refcounted = |type_table, type_repr| {
 	match type_repr {
 		RocStr => Bool.True
+		RocBox(_) => Bool.True
 		RocList(_) => Bool.True
 		RocFunction(_) => Bool.True
 		RocRecord(rec) => List.any(rec.fields, |field| is_type_refcounted(type_table, field.type_id))
@@ -316,6 +318,7 @@ generate_element_type_structs = |type_table| {
 						"/// Element type for ${rec.name}\npub const ${struct_name} = extern struct {\n${$field_strs}};\n\n${assertions}",
 					)
 				}
+			RocBox(_) => {}
 			RocTagUnion(_) => {}
 			RocBool => {}
 			RocDec => {}
@@ -357,6 +360,7 @@ generate_tag_union_structs = |type_table| {
 					$seen_names = $seen_names.append(tu.name)
 					$structs = Str.concat($structs, generate_single_tag_union(type_table, tu))
 				}
+			RocBox(_) => {}
 			RocRecord(_) => {}
 			RocBool => {}
 			RocDec => {}
@@ -675,6 +679,7 @@ lookup_record_from_repr = |type_table, type_repr| {
 			} else {
 				{ found: Bool.False, fields: [], size: 0, alignment: 0 }
 			}
+		RocBox(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
 		RocBool => { found: Bool.False, fields: [], size: 0, alignment: 0 }
 		RocDec => { found: Bool.False, fields: [], size: 0, alignment: 0 }
 		RocF32 => { found: Bool.False, fields: [], size: 0, alignment: 0 }

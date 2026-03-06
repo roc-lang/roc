@@ -207,6 +207,7 @@ type_repr_to_rust : List(TypeRepr), TypeRepr -> Str
 type_repr_to_rust = |type_table, type_repr| {
 	match type_repr {
 		RocBool => "bool"
+		RocBox(inner_id) => "*mut ${type_id_to_rust(type_table, inner_id)}"
 		RocStr => "RocStr"
 		RocUnit => "()"
 		RocU8 => "u8"
