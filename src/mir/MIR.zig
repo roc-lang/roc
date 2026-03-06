@@ -199,6 +199,8 @@ pub const FieldNameSpan = extern struct {
 pub const Stmt = union(enum) {
     /// Immutable binding (e.g. `x = expr`)
     decl_const: Binding,
+    /// Immutable binding whose expression result is kept as a stable borrowed temp.
+    decl_borrow: Binding,
     /// Mutable binding (e.g. `x = expr` declared with `var`)
     decl_var: Binding,
     /// Mutation of existing var (e.g. `x = new_value`)

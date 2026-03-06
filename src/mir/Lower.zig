@@ -763,6 +763,18 @@ fn makeSyntheticBind(
     return .{ .symbol = symbol, .pattern = pattern };
 }
 
+fn debugAssertLookupExpr(self: *Self, expr_id: MIR.ExprId, context: []const u8) void {
+    if (!std.debug.runtime_safety) return;
+
+    const expr = self.store.getExpr(expr_id);
+    if (expr != .lookup) {
+        std.debug.panic(
+            "{s}: expected stable lookup operand, got {s}",
+            .{ context, @tagName(expr) },
+        );
+    }
+}
+
 fn toStrLowLevelForPrim(prim: Monotype.Prim) ?CIR.Expr.LowLevel {
     return switch (prim) {
         .u8 => .u8_to_str,
@@ -2903,11 +2915,33 @@ fn lowerStructuralEquality(
     const module_env = self.all_module_envs[self.current_module_idx];
     const mono = self.store.monotype_store.getMonotype(operand_monotype);
     return switch (mono) {
-        .record => |rec| try self.lowerRecordEquality(module_env, lhs, rhs, rec, ret_monotype, region),
-        .tuple => |tup| try self.lowerTupleEquality(module_env, lhs, rhs, tup, ret_monotype, region),
-        .tag_union => |tu| try self.lowerTagUnionEquality(module_env, lhs, rhs, tu, operand_monotype, ret_monotype, region),
-        .list => |lst| try self.lowerListEquality(module_env, lhs, rhs, lst, ret_monotype, region),
         .unit => try self.emitMirBoolLiteral(module_env, true, region),
+        .record, .tuple, .tag_union, .list => blk: {
+            // Structural equality may inspect the same operand many times; bind
+            // each side once so downstream helpers only work with stable lookups.
+            const lhs_bind = try self.makeSyntheticBind(operand_monotype, false);
+            const rhs_bind = try self.makeSyntheticBind(operand_monotype, false);
+            const lhs_lookup = try self.emitMirLookup(lhs_bind.symbol, operand_monotype, region);
+            const rhs_lookup = try self.emitMirLookup(rhs_bind.symbol, operand_monotype, region);
+
+            const inner = switch (mono) {
+                .record => |rec| try self.lowerRecordEquality(module_env, lhs_lookup, rhs_lookup, rec, ret_monotype, region),
+                .tuple => |tup| try self.lowerTupleEquality(module_env, lhs_lookup, rhs_lookup, tup, ret_monotype, region),
+                .tag_union => |tu| try self.lowerTagUnionEquality(module_env, lhs_lookup, rhs_lookup, tu, operand_monotype, ret_monotype, region),
+                .list => |lst| try self.lowerListEquality(module_env, lhs_lookup, rhs_lookup, lst, ret_monotype, region),
+                else => unreachable,
+            };
+
+            const stmts = try self.store.addStmts(self.allocator, &.{
+                .{ .decl_borrow = .{ .pattern = lhs_bind.pattern, .expr = lhs } },
+                .{ .decl_borrow = .{ .pattern = rhs_bind.pattern, .expr = rhs } },
+            });
+
+            break :blk try self.store.addExpr(self.allocator, .{ .block = .{
+                .stmts = stmts,
+                .final_expr = inner,
+            } }, ret_monotype, region);
+        },
         else => {
             if (std.debug.runtime_safety) {
                 std.debug.panic("lowerStructuralEquality: unexpected monotype {s}", .{@tagName(mono)});
@@ -2970,6 +3004,9 @@ fn lowerRecordEquality(
     ret_monotype: Monotype.Idx,
     region: Region,
 ) Allocator.Error!MIR.ExprId {
+    self.debugAssertLookupExpr(lhs, "lowerRecordEquality(lhs)");
+    self.debugAssertLookupExpr(rhs, "lowerRecordEquality(rhs)");
+
     const fields = self.store.monotype_store.getFields(rec.fields);
 
     // Empty record: always equal
@@ -3016,6 +3053,9 @@ fn lowerTupleEquality(
     ret_monotype: Monotype.Idx,
     region: Region,
 ) Allocator.Error!MIR.ExprId {
+    self.debugAssertLookupExpr(lhs, "lowerTupleEquality(lhs)");
+    self.debugAssertLookupExpr(rhs, "lowerTupleEquality(rhs)");
+
     const elems = self.store.monotype_store.getIdxSpan(tup.elems);
 
     // Empty tuple: always equal
@@ -3063,6 +3103,9 @@ fn lowerTagUnionEquality(
     ret_monotype: Monotype.Idx,
     region: Region,
 ) Allocator.Error!MIR.ExprId {
+    self.debugAssertLookupExpr(lhs, "lowerTagUnionEquality(lhs)");
+    self.debugAssertLookupExpr(rhs, "lowerTagUnionEquality(rhs)");
+
     const tags = self.store.monotype_store.getTags(tu.tags);
 
     // Empty tag union: vacuously true
@@ -3207,6 +3250,9 @@ fn lowerListEquality(
     ret_monotype: Monotype.Idx,
     region: Region,
 ) Allocator.Error!MIR.ExprId {
+    self.debugAssertLookupExpr(lhs, "lowerListEquality(lhs)");
+    self.debugAssertLookupExpr(rhs, "lowerListEquality(rhs)");
+
     const u64_mono = self.store.monotype_store.primIdx(.u64);
     const bool_mono = self.store.monotype_store.primIdx(.bool);
     const unit_mono = self.store.monotype_store.unit_idx;
@@ -3246,14 +3292,17 @@ fn lowerListEquality(
         .value = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 },
     } }, u64_mono, region);
 
-    // While condition: num_is_lt(i, len)
+    // While condition: if result then num_is_lt(i, len) else False
+    const result_lookup_cond = try self.emitMirLookup(result_bind.symbol, bool_mono, region);
     const i_lookup_cond = try self.emitMirLookup(i_bind.symbol, u64_mono, region);
     const len_lookup_cond = try self.emitMirLookup(len_bind.symbol, u64_mono, region);
     const cond_args = try self.store.addExprSpan(self.allocator, &.{ i_lookup_cond, len_lookup_cond });
-    const while_cond = try self.store.addExpr(self.allocator, .{ .run_low_level = .{
+    const while_len_cond = try self.store.addExpr(self.allocator, .{ .run_low_level = .{
         .op = .num_is_lt,
         .args = cond_args,
     } }, bool_mono, region);
+    const while_cond_false = try self.emitMirBoolLiteral(module_env, false, region);
+    const while_cond = try self.createBoolMatch(module_env, result_lookup_cond, while_len_cond, while_cond_false, bool_mono, region);
 
     // list_get_unsafe(lhs, i) and list_get_unsafe(rhs, i)
     const i_lookup_lhs = try self.emitMirLookup(i_bind.symbol, u64_mono, region);
@@ -3273,14 +3322,9 @@ fn lowerListEquality(
     // Compare elements
     const elem_eq = try self.lowerFieldEquality(module_env, lhs_elem, rhs_elem, lst.elem, ret_monotype, region);
 
-    // Mismatch body: { result = False; break }
+    // Mismatch body: { result = False; () }
     const false_set = try self.emitMirBoolLiteral(module_env, false, region);
-    const break_expr = try self.store.addExpr(self.allocator, .{ .break_expr = {} }, unit_mono, region);
-    const break_wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_mono);
-    const mismatch_stmts = try self.store.addStmts(self.allocator, &.{
-        .{ .mutate_var = .{ .pattern = result_bind.pattern, .expr = false_set } },
-        .{ .decl_const = .{ .pattern = break_wildcard, .expr = break_expr } },
-    });
+    const mismatch_stmts = try self.store.addStmts(self.allocator, &.{.{ .mutate_var = .{ .pattern = result_bind.pattern, .expr = false_set } }});
     const unit_expr_mismatch = try self.emitMirUnitExpr(region);
     const mismatch_body = try self.store.addExpr(self.allocator, .{ .block = .{
         .stmts = mismatch_stmts,

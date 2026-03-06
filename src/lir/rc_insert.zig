@@ -783,7 +783,7 @@ pub const RcInsertPass = struct {
             }
 
             // Shadowing via repeated decls must release the previous binding.
-            if (stmt == .decl) {
+            if (stmt == .decl or stmt == .decl_borrow) {
                 const before_len = stmt_buf.items.len;
                 try self.emitDeclShadowDecrefsForPattern(b.pattern, &block_decl_layouts, region, &stmt_buf);
                 if (stmt_buf.items.len > before_len) changed = true;
@@ -793,19 +793,24 @@ pub const RcInsertPass = struct {
             const new_binding: LirStmt.Binding = .{ .pattern = b.pattern, .expr = new_expr };
             try stmt_buf.append(self.allocator, switch (stmt) {
                 .decl => .{ .decl = new_binding },
+                .decl_borrow => .{ .decl_borrow = new_binding },
                 .mutate => .{ .mutate = new_binding },
             });
 
-            // Track live RC symbols and emit increfs for multi-use bindings
+            // Track live RC symbols and emit per-use ownership for new bindings.
             try self.trackLiveRcSymbolsForPattern(b.pattern);
             const before_len = stmt_buf.items.len;
-            try self.emitBlockIncrefsForPattern(b.pattern, region, &stmt_buf, stmts, stmt_index, final_expr);
+            switch (stmt) {
+                .decl => try self.emitBlockIncrefsForPattern(b.pattern, region, &stmt_buf, stmts, stmt_index, final_expr),
+                .decl_borrow => try self.emitBlockBorrowIncrefsForPattern(b.pattern, region, &stmt_buf, stmts, stmt_index, final_expr),
+                .mutate => try self.emitBlockIncrefsForPattern(b.pattern, region, &stmt_buf, stmts, stmt_index, final_expr),
+            }
             if (stmt_buf.items.len > before_len) changed = true;
 
             // Shadowed decls can introduce a fresh binding for a symbol whose
             // global uses were all consumed by the previous binding generation.
             // Release such unused new bindings immediately.
-            if (stmt == .decl) {
+            if (stmt == .decl or stmt == .decl_borrow) {
                 const before_shadow_unused = stmt_buf.items.len;
                 try self.emitDeclShadowedUnusedDecrefsForPattern(b.pattern, &block_decl_layouts, region, &stmt_buf);
                 if (stmt_buf.items.len > before_shadow_unused) changed = true;
@@ -824,14 +829,32 @@ pub const RcInsertPass = struct {
             const before_len = stmt_buf.items.len;
             for (stmts, 0..) |stmt, stmt_index| {
                 const b = stmt.binding();
-                try self.emitBlockDecrefsForPattern(
-                    b.pattern,
-                    region,
-                    &stmt_buf,
-                    stmts,
-                    stmt_index,
-                    final_expr,
-                );
+                switch (stmt) {
+                    .decl => try self.emitBlockDecrefsForPattern(
+                        b.pattern,
+                        region,
+                        &stmt_buf,
+                        stmts,
+                        stmt_index,
+                        final_expr,
+                    ),
+                    .decl_borrow => try self.emitBlockBorrowDecrefsForPattern(
+                        b.pattern,
+                        region,
+                        &stmt_buf,
+                        stmts,
+                        stmt_index,
+                        final_expr,
+                    ),
+                    .mutate => try self.emitBlockDecrefsForPattern(
+                        b.pattern,
+                        region,
+                        &stmt_buf,
+                        stmts,
+                        stmt_index,
+                        final_expr,
+                    ),
+                }
             }
             if (stmt_buf.items.len > before_len) changed = true;
         }
@@ -1786,6 +1809,18 @@ pub const RcInsertPass = struct {
         });
     }
 
+    /// Borrow temps keep the original produced reference alive until block exit.
+    /// Their generated uses are structural borrows, so no per-use incref is needed.
+    fn emitBlockBorrowIncrefsForPattern(
+        _: *RcInsertPass,
+        _: LirPatternId,
+        _: Region,
+        _: *std.ArrayList(LirStmt),
+        _: []const LirStmt,
+        _: usize,
+        _: LirExprId,
+    ) Allocator.Error!void {}
+
     /// Recursively emit decrefs for unused refcounted symbols bound by a pattern.
     /// Uses self.symbol_use_counts (global counts) — for use in processBlock.
     fn emitBlockDecrefsForPattern(
@@ -1809,6 +1844,36 @@ pub const RcInsertPass = struct {
                     if (use_count == 0) {
                         try ctx.pass.emitDecrefInto(symbol, resolved_layout, ctx.region, ctx.stmts);
                     }
+                }
+            }
+        };
+        try walkPatternBinds(self.store, pat_id, Ctx{
+            .pass = self,
+            .region = region,
+            .stmts = stmts,
+        });
+    }
+
+    /// Recursively emit cleanup decrefs for borrowed temps bound in a block.
+    /// These bindings own exactly one original produced reference until block exit.
+    fn emitBlockBorrowDecrefsForPattern(
+        self: *RcInsertPass,
+        pat_id: LirPatternId,
+        region: Region,
+        stmts: *std.ArrayList(LirStmt),
+        _: []const LirStmt,
+        _: usize,
+        _: LirExprId,
+    ) Allocator.Error!void {
+        const Ctx = struct {
+            pass: *RcInsertPass,
+            region: Region,
+            stmts: *std.ArrayList(LirStmt),
+            fn onBind(ctx: @This(), symbol: Symbol, layout_idx: LayoutIdx, _: bool) Allocator.Error!void {
+                const key = @as(u64, @bitCast(symbol));
+                const resolved_layout = ctx.pass.symbol_layouts.get(key) orelse layout_idx;
+                if (ctx.pass.layoutNeedsRc(resolved_layout)) {
+                    try ctx.pass.emitDecrefInto(symbol, resolved_layout, ctx.region, ctx.stmts);
                 }
             }
         };

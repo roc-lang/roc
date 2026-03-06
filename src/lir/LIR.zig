@@ -196,6 +196,7 @@ pub const LirStmtSpan = extern struct {
 /// RC insertion uses the distinction to emit a decref of the old value before mutation.
 pub const LirStmt = union(enum) {
     decl: Binding,
+    decl_borrow: Binding,
     mutate: Binding,
 
     pub const Binding = struct {
@@ -205,7 +206,7 @@ pub const LirStmt = union(enum) {
 
     pub fn binding(self: LirStmt) Binding {
         return switch (self) {
-            .decl, .mutate => |b| b,
+            .decl, .decl_borrow, .mutate => |b| b,
         };
     }
 };

@@ -2010,12 +2010,14 @@ test "structural equality: record == produces match_expr (field-by-field)" {
     defer env.deinit();
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
-    // Record equality is decomposed into short-circuit AND of field comparisons:
-    // match (x_eq) { True => y_eq, _ => False }
-    // The outermost expression should be a match_expr (short-circuit AND of field comparisons)
-    // or a run_low_level for a single-field record.
-    // For a 2-field record, we get match_expr for the short-circuit AND.
-    try testing.expect(result == .match_expr);
+    // Structural equality binds each operand once, then evaluates the comparison.
+    try testing.expect(result == .block);
+    const block = result.block;
+    const stmts = env.mir_store.getStmts(block.stmts);
+    try testing.expectEqual(@as(usize, 2), stmts.len);
+    try testing.expect(stmts[0] == .decl_borrow);
+    try testing.expect(stmts[1] == .decl_borrow);
+    try testing.expect(env.mir_store.getExpr(block.final_expr) == .match_expr);
     // Return type should be Bool
     const mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
     try testing.expect(mono == .prim);
@@ -2058,8 +2060,13 @@ test "structural equality: tuple == produces match_expr" {
     defer env.deinit();
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
-    // 2-element tuple equality: match (elem0_eq) { True => elem1_eq, _ => False }
-    try testing.expect(result == .match_expr);
+    try testing.expect(result == .block);
+    const block = result.block;
+    const stmts = env.mir_store.getStmts(block.stmts);
+    try testing.expectEqual(@as(usize, 2), stmts.len);
+    try testing.expect(stmts[0] == .decl_borrow);
+    try testing.expect(stmts[1] == .decl_borrow);
+    try testing.expect(env.mir_store.getExpr(block.final_expr) == .match_expr);
     const mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
     try testing.expect(mono == .prim);
     try testing.expectEqual(Monotype.Prim.bool, mono.prim);
@@ -2075,7 +2082,13 @@ test "structural equality: tag union == produces nested match_expr" {
     defer env.deinit();
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
-    try testing.expect(result == .match_expr);
+    try testing.expect(result == .block);
+    const block = result.block;
+    const stmts = env.mir_store.getStmts(block.stmts);
+    try testing.expectEqual(@as(usize, 2), stmts.len);
+    try testing.expect(stmts[0] == .decl_borrow);
+    try testing.expect(stmts[1] == .decl_borrow);
+    try testing.expect(env.mir_store.getExpr(block.final_expr) == .match_expr);
     const mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
     try testing.expect(mono == .prim);
     try testing.expectEqual(Monotype.Prim.bool, mono.prim);
@@ -2089,9 +2102,14 @@ test "structural equality: single-field record produces run_low_level (no match)
     defer env.deinit();
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
-    // Single-field record: directly returns the field comparison (num_is_eq),
-    // no short-circuit AND wrapper needed.
-    try testing.expect(result == .run_low_level);
+    try testing.expect(result == .block);
+    const block = result.block;
+    const stmts = env.mir_store.getStmts(block.stmts);
+    try testing.expectEqual(@as(usize, 2), stmts.len);
+    try testing.expect(stmts[0] == .decl_borrow);
+    try testing.expect(stmts[1] == .decl_borrow);
+    // Single-field record equality still lowers directly to the field comparison.
+    try testing.expect(env.mir_store.getExpr(block.final_expr) == .run_low_level);
 }
 
 test "structural equality: nested record produces match_expr" {
@@ -2102,10 +2120,15 @@ test "structural equality: nested record produces match_expr" {
     defer env.deinit();
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
-    // Single outer field, but the inner record has one field too.
-    // The outer field comparison recurses into the inner record.
-    // Result is run_low_level (single field at each level).
-    try testing.expect(result == .run_low_level);
+    try testing.expect(result == .block);
+    const block = result.block;
+    const stmts = env.mir_store.getStmts(block.stmts);
+    try testing.expectEqual(@as(usize, 2), stmts.len);
+    try testing.expect(stmts[0] == .decl_borrow);
+    try testing.expect(stmts[1] == .decl_borrow);
+    // The outer field comparison recurses into inner structural equality, which
+    // is itself wrapped in a bind-once block.
+    try testing.expect(env.mir_store.getExpr(block.final_expr) == .block);
 }
 
 test "structural equality: list == produces block with length check" {

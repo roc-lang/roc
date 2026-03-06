@@ -1457,7 +1457,7 @@ fn lowerBlock(self: *Self, block_data: anytype, mono_idx: Monotype.Idx, region: 
     // mutually-recursive closures inside the same block).
     for (mir_stmts) |stmt| {
         const binding = switch (stmt) {
-            .decl_const, .decl_var, .mutate_var => |b| b,
+            .decl_const, .decl_borrow, .decl_var, .mutate_var => |b| b,
         };
         const lir_pat = try self.lowerPattern(binding.pattern);
         try self.scratch_lir_pattern_ids.append(self.allocator, lir_pat);
@@ -1466,10 +1466,10 @@ fn lowerBlock(self: *Self, block_data: anytype, mono_idx: Monotype.Idx, region: 
     // Pass 2: Lower expressions and assemble statements using cached patterns.
     for (mir_stmts, 0..) |stmt, i| {
         const binding = switch (stmt) {
-            .decl_const, .decl_var, .mutate_var => |b| b,
+            .decl_const, .decl_borrow, .decl_var, .mutate_var => |b| b,
         };
         const lir_expr = try self.lowerExpr(binding.expr);
-        if (stmt == .decl_const or stmt == .decl_var) {
+        if (stmt == .decl_const or stmt == .decl_borrow or stmt == .decl_var) {
             const def_expr = self.lir_store.getExpr(lir_expr);
             const is_callable_def = switch (def_expr) {
                 .lambda => true,
@@ -1511,6 +1511,7 @@ fn lowerBlock(self: *Self, block_data: anytype, mono_idx: Monotype.Idx, region: 
         };
         try self.scratch_lir_stmts.append(self.allocator, switch (stmt) {
             .decl_const, .decl_var => .{ .decl = lir_binding },
+            .decl_borrow => .{ .decl_borrow = lir_binding },
             .mutate_var => .{ .mutate = lir_binding },
         });
     }
