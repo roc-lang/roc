@@ -106,11 +106,11 @@ const EchoCtx = struct {
         return .{ .ctx = @ptrCast(self), .vtable = echo_vtable };
     }
 
-    /// Check if `path` is one of the synthetic/embedded paths.
-    fn isSyntheticPath(self: *const @This(), path: []const u8) bool {
-        if (std.mem.eql(u8, path, self.app_abs_path)) return true;
-        if (std.mem.eql(u8, path, self.platform_main_path)) return true;
-        if (std.mem.eql(u8, path, self.echo_module_path)) return true;
+    /// Return the content for a synthetic/embedded path, or null if not synthetic.
+    fn getSyntheticContent(self: *const @This(), path: []const u8) ?[]const u8 {
+        if (std.mem.eql(u8, path, self.app_abs_path)) return self.synthetic_app_source;
+        if (std.mem.eql(u8, path, self.platform_main_path)) return echo_platform.platform_main_source;
+        if (std.mem.eql(u8, path, self.echo_module_path)) return echo_platform.echo_module_source;
         for (extra_files[0..extra_file_count]) |*ef| {
             var expected: [5 + MAX_NAME_LEN + 4]u8 = undefined;
             const prefix = "/app/";
@@ -120,10 +120,15 @@ const EchoCtx = struct {
                 @memcpy(expected[0..prefix.len], prefix);
                 @memcpy(expected[prefix.len..][0..ef.name_len], ef.name());
                 @memcpy(expected[prefix.len + ef.name_len ..][0..suffix.len], suffix);
-                if (std.mem.eql(u8, path, expected[0..total])) return true;
+                if (std.mem.eql(u8, path, expected[0..total])) return ef.content();
             }
         }
-        return false;
+        return null;
+    }
+
+    /// Check if `path` is one of the synthetic/embedded paths.
+    fn isSyntheticPath(self: *const @This(), path: []const u8) bool {
+        return self.getSyntheticContent(path) != null;
     }
 };
 
@@ -131,27 +136,10 @@ fn echoGetCtx(ctx_ptr: ?*anyopaque) *EchoCtx {
     return @ptrCast(@alignCast(ctx_ptr.?));
 }
 
-fn echoReadFile(ctx_ptr: ?*anyopaque, path: []const u8, gpa: Allocator) Io.ReadError![]const u8 {
+fn echoReadFile(ctx_ptr: ?*anyopaque, path: []const u8, gpa: Allocator) Io.ReadError![]u8 {
     const self = echoGetCtx(ctx_ptr);
-    if (std.mem.eql(u8, path, self.app_abs_path))
-        return gpa.dupe(u8, self.synthetic_app_source) catch return error.OutOfMemory;
-    if (std.mem.eql(u8, path, self.platform_main_path))
-        return gpa.dupe(u8, echo_platform.platform_main_source) catch return error.OutOfMemory;
-    if (std.mem.eql(u8, path, self.echo_module_path))
-        return gpa.dupe(u8, echo_platform.echo_module_source) catch return error.OutOfMemory;
-    for (extra_files[0..extra_file_count]) |*ef| {
-        var expected: [5 + MAX_NAME_LEN + 4]u8 = undefined;
-        const prefix = "/app/";
-        const suffix = ".roc";
-        const total = prefix.len + ef.name_len + suffix.len;
-        if (total <= expected.len) {
-            @memcpy(expected[0..prefix.len], prefix);
-            @memcpy(expected[prefix.len..][0..ef.name_len], ef.name());
-            @memcpy(expected[prefix.len + ef.name_len ..][0..suffix.len], suffix);
-            if (std.mem.eql(u8, path, expected[0..total]))
-                return gpa.dupe(u8, ef.content()) catch return error.OutOfMemory;
-        }
-    }
+    if (self.getSyntheticContent(path)) |content|
+        return gpa.dupe(u8, content) catch return error.OutOfMemory;
     return self.fallback.readFile(path, gpa);
 }
 

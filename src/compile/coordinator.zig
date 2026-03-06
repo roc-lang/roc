@@ -841,7 +841,7 @@ pub const Coordinator = struct {
     /// Write a BUG diagnostic to stderr via the injected Io. No-op in release builds.
     fn bugReport(self: *Coordinator, comptime fmt: []const u8, args: anytype) void {
         if (comptime builtin.mode == .Debug) {
-            var buf: [512]u8 = undefined;
+            var buf: [2048]u8 = undefined;
             const msg = std.fmt.bufPrint(&buf, fmt, args) catch fmt;
             self.io.writeStderr(msg) catch {};
         }
@@ -1180,7 +1180,7 @@ pub const Coordinator = struct {
                         if (imp_path) |path| {
                             defer self.gpa.free(path);
                             if (self.io.readFile(path, self.gpa) catch null) |source| {
-                                defer self.gpa.free(@constCast(source));
+                                defer self.gpa.free(source);
                                 imp_source_hash = CacheManager.computeSourceHash(source);
                             }
                         }
@@ -1208,7 +1208,7 @@ pub const Coordinator = struct {
                                 if (imp_path) |path| {
                                     defer self.gpa.free(path);
                                     if (self.io.readFile(path, self.gpa) catch null) |source| {
-                                        defer self.gpa.free(@constCast(source));
+                                        defer self.gpa.free(source);
                                         imp_source_hash = CacheManager.computeSourceHash(source);
                                     }
                                 }
@@ -1503,7 +1503,7 @@ pub const Coordinator = struct {
                 };
                 return false;
             };
-            defer self.gpa.free(@constCast(source));
+            defer self.gpa.free(source);
 
             // Compute current source hash and compare with stored hash
             const current_hash = CacheManager.computeSourceHash(source);
@@ -2363,7 +2363,7 @@ pub const Coordinator = struct {
         };
 
         // Normalize line endings
-        return base.source_utils.normalizeLineEndingsRealloc(module_alloc, @constCast(data));
+        return base.source_utils.normalizeLineEndingsRealloc(module_alloc, data);
     }
 
     /// Worker thread main function

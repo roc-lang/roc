@@ -1329,7 +1329,7 @@ const CliEchoState = struct {
     echo_module_path: []const u8,
 };
 
-fn cliEchoReadFile(ctx: ?*anyopaque, path: []const u8, gpa: std.mem.Allocator) FsIo.ReadError![]const u8 {
+fn cliEchoReadFile(ctx: ?*anyopaque, path: []const u8, gpa: std.mem.Allocator) FsIo.ReadError![]u8 {
     const self: *CliEchoState = @ptrCast(@alignCast(ctx.?));
     if (std.mem.eql(u8, path, self.app_abs_path))
         return gpa.dupe(u8, self.synthetic_app_source) catch error.OutOfMemory;

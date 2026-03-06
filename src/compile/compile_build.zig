@@ -1589,7 +1589,7 @@ pub const BuildEnv = struct {
         };
 
         // Normalize line endings (CRLF -> LF) for consistent cross-platform behavior.
-        return base.source_utils.normalizeLineEndingsRealloc(self.gpa, @constCast(data));
+        return base.source_utils.normalizeLineEndingsRealloc(self.gpa, data);
     }
 
     /// Cross-platform environment variable lookup.

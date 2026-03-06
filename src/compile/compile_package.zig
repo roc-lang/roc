@@ -811,7 +811,7 @@ pub const PackageEnv = struct {
         // Normalize line endings (CRLF -> LF) for consistent cross-platform behavior.
         // This reallocates to the correct size if normalization occurs, ensuring
         // proper memory management when the buffer is freed later.
-        return base.source_utils.normalizeLineEndingsRealloc(self.gpa, @constCast(data));
+        return base.source_utils.normalizeLineEndingsRealloc(self.gpa, data);
     }
 
     fn doCanonicalize(self: *PackageEnv, module_id: ModuleId) !void {

@@ -22,7 +22,7 @@ vtable: VTable,
 /// the first argument, allowing implementations to carry state.
 pub const VTable = struct {
     // --- Filesystem operations ---
-    readFile: *const fn (?*anyopaque, []const u8, Allocator) ReadError![]const u8,
+    readFile: *const fn (?*anyopaque, []const u8, Allocator) ReadError![]u8,
     readFileInto: *const fn (?*anyopaque, []const u8, []u8) ReadError!usize,
     writeFile: *const fn (?*anyopaque, []const u8, []const u8) WriteError!void,
     fileExists: *const fn (?*anyopaque, []const u8) bool,
@@ -46,7 +46,7 @@ pub const VTable = struct {
 // --- Filesystem wrapper methods ---
 
 /// Read the entire contents of `path`. Caller owns returned slice.
-pub fn readFile(self: Self, path: []const u8, allocator: Allocator) ReadError![]const u8 {
+pub fn readFile(self: Self, path: []const u8, allocator: Allocator) ReadError![]u8 {
     return self.vtable.readFile(self.ctx, path, allocator);
 }
 
@@ -246,11 +246,13 @@ pub const FileEntry = struct {
 /// Maximum valid file size for readToEndAlloc calls.
 pub const max_file_size = std.math.maxInt(u32);
 
-/// Wraps an OS-backed `Io` and intercepts `readFile` for a single path,
-/// returning `override_content` instead of reading from disk.
+/// Wraps an `Io` and intercepts `readFile` for a single path,
+/// returning `content` instead of reading from disk.
 ///
-/// All other vtable functions (writeFile, fileExists, stat, …) are unchanged.
-/// This works because OS vtable functions do not use the `ctx` pointer.
+/// All other vtable functions (writeFile, fileExists, stat, …) delegate to `base`.
+/// This is safe when `base` is `Io.os()` or `Io.default()` because those vtable
+/// functions ignore their `ctx` argument — so passing a `ReadFileOverride` pointer
+/// as `ctx` causes no harm.
 ///
 /// Usage:
 /// ```zig
@@ -263,26 +265,24 @@ pub const max_file_size = std.math.maxInt(u32);
 pub const ReadFileOverride = struct {
     path: []const u8,
     content: []const u8,
+    /// Fallback I/O for paths other than `path`.
+    /// Must be an implementation whose non-readFile vtable functions ignore `ctx`
+    /// (e.g. Io.os() or Io.default()). This is true for all OS-backed instances.
+    base: Self = os(),
 
     pub fn io(self: *@This()) Self {
-        return .{ .ctx = @ptrCast(self), .vtable = read_file_override_vtable };
+        var v = self.base.vtable;
+        v.readFile = &readFileOverrideFn;
+        return .{ .ctx = @ptrCast(self), .vtable = v };
     }
 };
 
-fn readFileOverrideFn(ctx: ?*anyopaque, path: []const u8, allocator: Allocator) ReadError![]const u8 {
+fn readFileOverrideFn(ctx: ?*anyopaque, path: []const u8, allocator: Allocator) ReadError![]u8 {
     const self: *ReadFileOverride = @ptrCast(@alignCast(ctx.?));
     if (std.mem.eql(u8, path, self.path))
         return allocator.dupe(u8, self.content) catch return error.OutOfMemory;
-    return osReadFile(null, path, allocator);
+    return self.base.vtable.readFile(self.base.ctx, path, allocator);
 }
-
-/// VTable for ReadFileOverride: only readFile is custom; all others are OS-backed.
-/// Since all OS functions ignore ctx, it's safe to pass a non-null ctx here.
-const read_file_override_vtable: VTable = blk: {
-    var v = os_vtable;
-    v.readFile = &readFileOverrideFn;
-    break :blk v;
-};
 
 const is_freestanding = builtin.os.tag == .freestanding;
 
@@ -298,7 +298,7 @@ const os_vtable = VTable{
     .dirName = &osDirName,
     .baseName = &osBaseName,
     .joinPath = &osJoinPath,
-    .canonicalize = &osCanonualize,
+    .canonicalize = &osCanonicalize,
     .makePath = &osMakePath,
     .rename = &osRename,
     .getEnvVar = &osGetEnvVar,
@@ -373,7 +373,7 @@ pub fn testing() Self {
 
 // --- OS implementations ---
 
-fn osReadFile(_: ?*anyopaque, path: []const u8, allocator: Allocator) ReadError![]const u8 {
+fn osReadFile(_: ?*anyopaque, path: []const u8, allocator: Allocator) ReadError![]u8 {
     const file = std.fs.cwd().openFile(path, .{}) catch |err| return switch (err) {
         error.FileNotFound => error.FileNotFound,
         error.AccessDenied => error.AccessDenied,
@@ -472,7 +472,7 @@ fn osJoinPath(_: ?*anyopaque, parts: []const []const u8, allocator: Allocator) A
     return std.fs.path.join(allocator, parts);
 }
 
-fn osCanonualize(_: ?*anyopaque, path: []const u8, allocator: Allocator) CanonicalizeError![]const u8 {
+fn osCanonicalize(_: ?*anyopaque, path: []const u8, allocator: Allocator) CanonicalizeError![]const u8 {
     return std.fs.realpathAlloc(allocator, path) catch |err| return switch (err) {
         error.FileNotFound => error.FileNotFound,
         error.AccessDenied => error.AccessDenied,
@@ -503,6 +503,10 @@ fn osGetEnvVar(_: ?*anyopaque, key: []const u8, allocator: Allocator) GetEnvVarE
     };
 }
 
+/// fetchUrl is intentionally a stub in the default OS vtable.
+/// Real HTTP download support is injected by BuildEnv.init() using nativeFetchUrl.
+/// Callers constructing their own Io for download support should set vtable.fetchUrl
+/// to a suitable implementation before use.
 fn osFetchUrl(_: ?*anyopaque, _: Allocator, _: []const u8, _: []const u8) FetchUrlError!void {
     return error.Unsupported;
 }
@@ -534,7 +538,7 @@ fn osIsTty(_: ?*anyopaque) bool {
 
 // --- Testing implementations — panic on every call ---
 
-fn testingReadFile(_: ?*anyopaque, _: []const u8, _: Allocator) ReadError![]const u8 {
+fn testingReadFile(_: ?*anyopaque, _: []const u8, _: Allocator) ReadError![]u8 {
     @panic("readFile should not be called in this test");
 }
 
@@ -598,7 +602,7 @@ fn testingIsTty(_: ?*anyopaque) bool {
 // Used on wasm32-freestanding where there is no real filesystem or stdio.
 // Callers must override with a proper implementation (e.g. WasmFilesystem).
 
-fn freestandingReadFile(_: ?*anyopaque, _: []const u8, _: Allocator) ReadError![]const u8 {
+fn freestandingReadFile(_: ?*anyopaque, _: []const u8, _: Allocator) ReadError![]u8 {
     return error.FileNotFound;
 }
 

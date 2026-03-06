@@ -101,7 +101,7 @@ fn fileExistsWasm(ctx_ptr: ?*anyopaque, path: []const u8) bool {
     return matchesSourceFile(self, path);
 }
 
-fn readFileWasm(ctx_ptr: ?*anyopaque, path: []const u8, alloc: Allocator) Io.ReadError![]const u8 {
+fn readFileWasm(ctx_ptr: ?*anyopaque, path: []const u8, alloc: Allocator) Io.ReadError![]u8 {
     const self = getCtx(ctx_ptr);
     if (matchesSourceFile(self, path)) {
         if (self.source) |source| {
