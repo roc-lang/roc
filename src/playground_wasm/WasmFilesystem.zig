@@ -7,6 +7,7 @@ const fs_mod = @import("fs");
 const Filesystem = fs_mod.Filesystem;
 
 const Allocator = std.mem.Allocator;
+
 // Helper function to handle OOM errors
 fn handleOom() noreturn {
     @panic("Out of memory");
@@ -54,19 +55,24 @@ pub fn wasm(wasm_ctx: *WasmContext) Filesystem {
 }
 
 const wasm_vtable = Filesystem.VTable{
-    .fileExists = &fileExistsWasm,
     .readFile = &readFileWasm,
     .readFileInto = &readFileIntoWasm,
     .writeFile = &writeFileWasm,
-    .openDir = &openDirWasm,
+    .fileExists = &fileExistsWasm,
+    .stat = &statWasm,
+    .listDir = &listDirWasm,
     .dirName = &dirNameWasm,
     .baseName = &baseNameWasm,
+    .joinPath = &joinPathWasm,
     .canonicalize = &canonicalizeWasm,
     .makePath = &makePathWasm,
     .rename = &renameWasm,
-    .getFileInfo = &getFileInfoWasm,
     .getEnvVar = &getEnvVarWasm,
     .fetchUrl = &fetchUrlWasm,
+    .writeStdout = &writeStdoutWasm,
+    .writeStderr = &writeStderrWasm,
+    .readStdin = &readStdinWasm,
+    .isTty = &isTtyWasm,
 };
 
 /// Recover the WasmContext from an opaque pointer.
@@ -74,7 +80,7 @@ fn getCtx(ctx_ptr: ?*anyopaque) *WasmContext {
     return @ptrCast(@alignCast(ctx_ptr.?));
 }
 
-/// Check if the given path matches the current source filename
+/// Check if the given path matches the current source filename.
 fn matchesSourceFile(self: *WasmContext, path: []const u8) bool {
     // Check exact match
     if (std.mem.eql(u8, path, self.filename)) return true;
@@ -90,21 +96,20 @@ fn matchesSourceFile(self: *WasmContext, path: []const u8) bool {
     return false;
 }
 
-fn fileExistsWasm(ctx_ptr: ?*anyopaque, absolute_path: []const u8) Filesystem.OpenError!bool {
+fn fileExistsWasm(ctx_ptr: ?*anyopaque, path: []const u8) bool {
     const self = getCtx(ctx_ptr);
-    return matchesSourceFile(self, absolute_path);
+    return matchesSourceFile(self, path);
 }
 
-fn readFileWasm(ctx_ptr: ?*anyopaque, relative_path: []const u8, alloc: Allocator) Filesystem.ReadError![]const u8 {
+fn readFileWasm(ctx_ptr: ?*anyopaque, path: []const u8, alloc: Allocator) Filesystem.ReadError![]const u8 {
     const self = getCtx(ctx_ptr);
-    if (matchesSourceFile(self, relative_path)) {
+    if (matchesSourceFile(self, path)) {
         if (self.source) |source| {
             return alloc.dupe(u8, source) catch handleOom();
         } else {
             return error.FileNotFound;
         }
     }
-
     return error.FileNotFound;
 }
 
@@ -121,7 +126,6 @@ fn readFileIntoWasm(ctx_ptr: ?*anyopaque, path: []const u8, buffer: []u8) Filesy
             return error.FileNotFound;
         }
     }
-
     return error.FileNotFound;
 }
 
@@ -129,7 +133,23 @@ fn writeFileWasm(_: ?*anyopaque, _: []const u8, _: []const u8) Filesystem.WriteE
     return error.AccessDenied;
 }
 
-fn openDirWasm(_: ?*anyopaque, _: []const u8) Filesystem.OpenError!Filesystem.Dir {
+fn statWasm(ctx_ptr: ?*anyopaque, path: []const u8) Filesystem.StatError!Filesystem.FileInfo {
+    const self = getCtx(ctx_ptr);
+    if (matchesSourceFile(self, path)) {
+        if (self.source) |source| {
+            return Filesystem.FileInfo{
+                .kind = .file,
+                .size = source.len,
+                .mtime_ns = 0,
+            };
+        } else {
+            return error.FileNotFound;
+        }
+    }
+    return error.FileNotFound;
+}
+
+fn listDirWasm(_: ?*anyopaque, _: []const u8, _: Allocator) Filesystem.ListError![]Filesystem.FileEntry {
     return error.FileNotFound;
 }
 
@@ -143,11 +163,30 @@ fn dirNameWasm(_: ?*anyopaque, absolute_path: []const u8) ?[]const u8 {
     return null;
 }
 
-fn baseNameWasm(_: ?*anyopaque, absolute_path: []const u8) ?[]const u8 {
+fn baseNameWasm(_: ?*anyopaque, absolute_path: []const u8) []const u8 {
     if (std.mem.lastIndexOfScalar(u8, absolute_path, '/')) |last_slash| {
         return absolute_path[last_slash + 1 ..];
     }
     return absolute_path;
+}
+
+fn joinPathWasm(_: ?*anyopaque, parts: []const []const u8, allocator: Allocator) Allocator.Error![]const u8 {
+    var total: usize = 0;
+    for (parts, 0..) |part, i| {
+        total += part.len;
+        if (i < parts.len - 1) total += 1;
+    }
+    const buf = try allocator.alloc(u8, total);
+    var pos: usize = 0;
+    for (parts, 0..) |part, i| {
+        @memcpy(buf[pos..][0..part.len], part);
+        pos += part.len;
+        if (i < parts.len - 1) {
+            buf[pos] = '/';
+            pos += 1;
+        }
+    }
+    return buf;
 }
 
 fn canonicalizeWasm(_: ?*anyopaque, root_relative_path: []const u8, alloc: Allocator) Filesystem.CanonicalizeError![]const u8 {
@@ -162,26 +201,26 @@ fn renameWasm(_: ?*anyopaque, _: []const u8, _: []const u8) Filesystem.RenameErr
     return error.AccessDenied;
 }
 
-fn getFileInfoWasm(ctx_ptr: ?*anyopaque, path: []const u8) Filesystem.GetFileInfoError!Filesystem.FileInfo {
-    const self = getCtx(ctx_ptr);
-    if (matchesSourceFile(self, path)) {
-        if (self.source) |source| {
-            return Filesystem.FileInfo{
-                .mtime_ns = 0,
-                .size = source.len,
-            };
-        } else {
-            return error.FileNotFound;
-        }
-    }
-
-    return error.FileNotFound;
-}
-
 fn getEnvVarWasm(_: ?*anyopaque, _: []const u8, _: Allocator) Filesystem.GetEnvVarError![]u8 {
     return error.EnvironmentVariableNotFound;
 }
 
-fn fetchUrlWasm(_: ?*anyopaque, _: Allocator, _: []const u8, _: std.fs.Dir) Filesystem.FetchUrlError!void {
+fn fetchUrlWasm(_: ?*anyopaque, _: Allocator, _: []const u8, _: []const u8) Filesystem.FetchUrlError!void {
     return error.Unsupported;
+}
+
+fn writeStdoutWasm(_: ?*anyopaque, _: []const u8) Filesystem.StdioError!void {
+    // WASM: stdout silently dropped (JS host can intercept via import override if desired)
+}
+
+fn writeStderrWasm(_: ?*anyopaque, _: []const u8) Filesystem.StdioError!void {
+    // WASM: stderr silently dropped
+}
+
+fn readStdinWasm(_: ?*anyopaque, _: []u8) Filesystem.StdioError!usize {
+    return 0;
+}
+
+fn isTtyWasm(_: ?*anyopaque) bool {
+    return false;
 }

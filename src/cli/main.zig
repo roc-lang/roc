@@ -2882,58 +2882,50 @@ fn resolveUrlPlatform(ctx: *CliContext, url: []const u8) (CliError || error{OutO
     const package_dir_path = try std.fs.path.join(ctx.arena, &.{ cache_dir_path, base58_hash });
 
     // 3. Check if already cached
-    var package_dir = std.fs.cwd().openDir(package_dir_path, .{}) catch |err| switch (err) {
-        error.FileNotFound => blk: {
-            // Not cached - need to download
-            std.log.info("Downloading platform from {s}...", .{url});
+    const already_cached = blk: {
+        var d = std.fs.cwd().openDir(package_dir_path, .{}) catch |err| switch (err) {
+            error.FileNotFound => break :blk false,
+            else => return ctx.fail(.{ .directory_not_found = .{ .path = package_dir_path } }),
+        };
+        d.close();
+        break :blk true;
+    };
 
-            // Create cache directory structure
-            std.fs.cwd().makePath(cache_dir_path) catch |make_err| {
+    if (!already_cached) {
+        // Not cached - need to download
+        std.log.info("Downloading platform from {s}...", .{url});
+
+        // Create cache directory structure
+        std.fs.cwd().makePath(cache_dir_path) catch |make_err| {
+            return ctx.fail(.{ .directory_create_failed = .{
+                .path = cache_dir_path,
+                .err = make_err,
+            } });
+        };
+
+        // Create package directory
+        std.fs.cwd().makeDir(package_dir_path) catch |make_err| switch (make_err) {
+            error.PathAlreadyExists => {}, // Race condition, another process created it
+            else => {
                 return ctx.fail(.{ .directory_create_failed = .{
-                    .path = cache_dir_path,
+                    .path = package_dir_path,
                     .err = make_err,
                 } });
-            };
+            },
+        };
 
-            // Create package directory
-            std.fs.cwd().makeDir(package_dir_path) catch |make_err| switch (make_err) {
-                error.PathAlreadyExists => {}, // Race condition, another process created it
-                else => {
-                    return ctx.fail(.{ .directory_create_failed = .{
-                        .path = package_dir_path,
-                        .err = make_err,
-                    } });
-                },
-            };
-
-            var new_package_dir = std.fs.cwd().openDir(package_dir_path, .{}) catch {
-                return ctx.fail(.{ .directory_not_found = .{
-                    .path = package_dir_path,
-                } });
-            };
-
-            // Download and extract
-            var gpa_copy = ctx.gpa;
-            download.downloadAndExtract(&gpa_copy, url, new_package_dir) catch |download_err| {
-                // Clean up failed download
-                new_package_dir.close();
-                std.fs.cwd().deleteTree(package_dir_path) catch {};
-                return ctx.fail(.{ .download_failed = .{
-                    .url = url,
-                    .err = download_err,
-                } });
-            };
-
-            std.log.info("Platform cached at {s}", .{package_dir_path});
-            break :blk new_package_dir;
-        },
-        else => {
-            return ctx.fail(.{ .directory_not_found = .{
-                .path = package_dir_path,
+        // Download and extract (path-based, no Dir handle needed)
+        var gpa_copy = ctx.gpa;
+        download.downloadAndExtract(&gpa_copy, url, package_dir_path) catch |download_err| {
+            std.fs.cwd().deleteTree(package_dir_path) catch {};
+            return ctx.fail(.{ .download_failed = .{
+                .url = url,
+                .err = download_err,
             } });
-        },
-    };
-    defer package_dir.close();
+        };
+
+        std.log.info("Platform cached at {s}", .{package_dir_path});
+    }
 
     // Platforms must have a main.roc entry point
     const platform_source_path = try std.fs.path.join(ctx.arena, &.{ package_dir_path, "main.roc" });

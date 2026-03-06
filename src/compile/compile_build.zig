@@ -19,6 +19,7 @@ const eval = @import("eval");
 const check = @import("check");
 const unbundle = @import("unbundle");
 const Filesystem = @import("fs").Filesystem;
+const Io = Filesystem;
 
 const Report = reporting.Report;
 const ReportBuilder = check.ReportBuilder;
@@ -57,14 +58,14 @@ const ThreadCondition = threading.Condition;
 /// Native fetchUrl implementation that downloads a tar.zst bundle via HTTP
 /// and extracts it into the destination directory. Used by the CLI to wire up
 /// real download support through the Filesystem vtable.
-pub const nativeFetchUrl: ?*const fn (?*anyopaque, Allocator, []const u8, std.fs.Dir) Filesystem.FetchUrlError!void = if (!is_freestanding)
+pub const nativeFetchUrl: ?*const fn (?*anyopaque, Allocator, []const u8, []const u8) Filesystem.FetchUrlError!void = if (!is_freestanding)
     &nativeFetchUrlImpl
 else
     null;
 
-fn nativeFetchUrlImpl(_: ?*anyopaque, allocator: Allocator, url: []const u8, dest_dir: std.fs.Dir) Filesystem.FetchUrlError!void {
+fn nativeFetchUrlImpl(_: ?*anyopaque, allocator: Allocator, url: []const u8, dest_path: []const u8) Filesystem.FetchUrlError!void {
     var alloc = allocator;
-    unbundle.download.downloadAndExtract(&alloc, url, dest_dir) catch {
+    unbundle.download.downloadAndExtract(&alloc, url, dest_path) catch {
         return error.DownloadFailed;
     };
 }
@@ -141,8 +142,8 @@ pub const BuildEnv = struct {
     cache_manager: ?*CacheManager = null,
     // File provider for reading sources (defaults to filesystem)
     file_provider: FileProvider = FileProvider.filesystem,
-    // Filesystem abstraction for OS operations (getEnvVar, readFile, etc.)
-    filesystem: Filesystem = Filesystem.default(),
+    // I/O abstraction for OS operations (getEnvVar, readFile, stdio, etc.)
+    filesystem: Io = Io.default(),
     // Explicit working directory for resolving relative paths
     cwd: []const u8,
 
@@ -198,6 +199,7 @@ pub const BuildEnv = struct {
         if (nativeFetchUrl) |fetch_fn| {
             env.filesystem.vtable.fetchUrl = fetch_fn;
         }
+        // Note: `filesystem.vtable` is a value type so this mutation is safe.
 
         return env;
     }
@@ -1653,49 +1655,46 @@ pub const BuildEnv = struct {
         errdefer self.gpa.free(package_dir_path);
 
         // Check if already cached
-        var package_dir = std.fs.cwd().openDir(package_dir_path, .{}) catch |err| switch (err) {
-            error.FileNotFound => blk: {
-                // Not cached - need to download
-                std.log.info("Downloading package from {s}...", .{url});
-
-                // Create cache directory structure
-                std.fs.cwd().makePath(cache_dir_path) catch |make_err| {
-                    std.log.err("Failed to create cache directory: {}", .{make_err});
+        const already_cached = blk: {
+            var d = std.fs.cwd().openDir(package_dir_path, .{}) catch |err| switch (err) {
+                error.FileNotFound => break :blk false,
+                else => {
+                    std.log.err("Failed to access package directory: {}", .{err});
                     return error.FileError;
-                };
-
-                // Create package directory
-                std.fs.cwd().makeDir(package_dir_path) catch |make_err| switch (make_err) {
-                    error.PathAlreadyExists => {}, // Race condition, another process created it
-                    else => {
-                        std.log.err("Failed to create package directory: {}", .{make_err});
-                        return error.FileError;
-                    },
-                };
-
-                var new_package_dir = std.fs.cwd().openDir(package_dir_path, .{}) catch |open_err| {
-                    std.log.err("Failed to open package directory: {}", .{open_err});
-                    return error.FileError;
-                };
-
-                // Download and extract via filesystem vtable
-                self.filesystem.fetchUrl(self.gpa, url, new_package_dir) catch |fetch_err| {
-                    // Clean up failed download
-                    new_package_dir.close();
-                    std.fs.cwd().deleteTree(package_dir_path) catch {};
-                    std.log.err("Failed to download package: {} (url: {s})", .{ fetch_err, url });
-                    return error.DownloadFailed;
-                };
-
-                std.log.info("Package cached at {s}", .{package_dir_path});
-                break :blk new_package_dir;
-            },
-            else => {
-                std.log.err("Failed to access package directory: {}", .{err});
-                return error.FileError;
-            },
+                },
+            };
+            d.close();
+            break :blk true;
         };
-        defer package_dir.close();
+
+        if (!already_cached) {
+            // Not cached - need to download
+            std.log.info("Downloading package from {s}...", .{url});
+
+            // Create cache directory structure
+            std.fs.cwd().makePath(cache_dir_path) catch |make_err| {
+                std.log.err("Failed to create cache directory: {}", .{make_err});
+                return error.FileError;
+            };
+
+            // Create package directory
+            std.fs.cwd().makeDir(package_dir_path) catch |make_err| switch (make_err) {
+                error.PathAlreadyExists => {}, // Race condition, another process created it
+                else => {
+                    std.log.err("Failed to create package directory: {}", .{make_err});
+                    return error.FileError;
+                },
+            };
+
+            // Download and extract via io vtable (path-based, no Dir handle needed)
+            self.filesystem.fetchUrl(self.gpa, url, package_dir_path) catch |fetch_err| {
+                std.fs.cwd().deleteTree(package_dir_path) catch {};
+                std.log.err("Failed to download package: {} (url: {s})", .{ fetch_err, url });
+                return error.DownloadFailed;
+            };
+
+            std.log.info("Package cached at {s}", .{package_dir_path});
+        }
 
         // Packages must have a main.roc entry point
         const source_path = std.fs.path.join(self.gpa, &.{ package_dir_path, "main.roc" }) catch {

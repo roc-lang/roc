@@ -11,20 +11,6 @@ const ModuleEnv = can.ModuleEnv;
 const Filesystem = fs_mod.Filesystem;
 const CacheStats = @import("cache_config.zig").CacheStats;
 const CacheConfig = @import("cache_config.zig").CacheConfig;
-const builtin = @import("builtin");
-
-const is_windows = builtin.target.os.tag == .windows;
-
-var stderr_file_writer: std.fs.File.Writer = .{
-    .interface = std.fs.File.Writer.initInterface(&.{}),
-    .file = if (is_windows) undefined else std.fs.File.stderr(),
-    .mode = .streaming,
-};
-
-fn stderrWriter() *std.Io.Writer {
-    if (is_windows) stderr_file_writer.file = std.fs.File.stderr();
-    return &stderr_file_writer.interface;
-}
 
 /// Result of a cache lookup operation
 pub const CacheResult = union(enum) {
@@ -92,17 +78,17 @@ pub const CacheMetadata = struct {
 /// then uses subdirectory splitting to organize cache files efficiently.
 pub const CacheManager = struct {
     config: CacheConfig,
-    filesystem: Filesystem,
+    io: Filesystem,
     allocator: Allocator,
     stats: CacheStats,
 
     const Self = @This();
 
     /// Initialize a new cache manager.
-    pub fn init(allocator: Allocator, config: CacheConfig, filesystem: Filesystem) Self {
+    pub fn init(allocator: Allocator, config: CacheConfig, io: Filesystem) Self {
         return Self{
             .config = config,
-            .filesystem = filesystem,
+            .io = io,
             .allocator = allocator,
             .stats = CacheStats{},
         };
@@ -133,8 +119,7 @@ pub const CacheManager = struct {
         defer self.allocator.free(cache_path);
 
         // Check if cache file exists
-        const exists = self.filesystem.fileExists(cache_path) catch false;
-        if (!exists) {
+        if (!self.io.fileExists(cache_path)) {
             self.stats.recordMiss();
             return CacheResult{ .miss = .{
                 .key = cache_key,
@@ -142,7 +127,7 @@ pub const CacheManager = struct {
         }
 
         // Read cache data using memory mapping for better performance
-        const mapped_cache = CacheModule.readFromFileMapped(self.allocator, cache_path, self.filesystem) catch |err| {
+        const mapped_cache = CacheModule.readFromFileMapped(self.allocator, cache_path, self.io) catch |err| {
             if (self.config.verbose) {
                 std.log.debug("Failed to read cache file {s}: {}", .{ cache_path, err });
             }
@@ -219,7 +204,7 @@ pub const CacheManager = struct {
         defer self.allocator.free(temp_path);
 
         // Write to temp file
-        self.filesystem.writeFile(temp_path, cache_data) catch |err| {
+        self.io.writeFile(temp_path, cache_data) catch |err| {
             if (self.config.verbose) {
                 std.log.debug("Failed to write cache temp file {s}: {}", .{ temp_path, err });
             }
@@ -228,7 +213,7 @@ pub const CacheManager = struct {
         };
 
         // Move temp file to final location (atomic operation)
-        self.filesystem.rename(temp_path, cache_path) catch |err| {
+        self.io.rename(temp_path, cache_path) catch |err| {
             if (self.config.verbose) {
                 std.log.debug("Failed to rename cache file {s} -> {s}: {}", .{ temp_path, cache_path, err });
             }
@@ -293,10 +278,7 @@ pub const CacheManager = struct {
         defer self.allocator.free(full_subdir);
 
         // Create the subdirectory
-        self.filesystem.makePath(full_subdir) catch |err| switch (err) {
-            error.PathAlreadyExists => {}, // OK
-            else => return err,
-        };
+        self.io.makePath(full_subdir) catch |err| return err;
     }
 
     /// Store raw bytes at a cache path determined by cache_key + entries_dir.
@@ -328,7 +310,7 @@ pub const CacheManager = struct {
         defer self.allocator.free(temp_path);
 
         // Write to temp file
-        self.filesystem.writeFile(temp_path, data) catch |err| {
+        self.io.writeFile(temp_path, data) catch |err| {
             if (self.config.verbose) {
                 std.log.debug("Failed to write cache temp file {s}: {}", .{ temp_path, err });
             }
@@ -337,7 +319,7 @@ pub const CacheManager = struct {
         };
 
         // Move temp file to final location (atomic operation)
-        self.filesystem.rename(temp_path, cache_path) catch |err| {
+        self.io.rename(temp_path, cache_path) catch |err| {
             if (self.config.verbose) {
                 std.log.debug("Failed to rename cache file {s} -> {s}: {}", .{ temp_path, cache_path, err });
             }
@@ -359,14 +341,13 @@ pub const CacheManager = struct {
         defer self.allocator.free(cache_path);
 
         // Check if cache file exists
-        const exists = self.filesystem.fileExists(cache_path) catch false;
-        if (!exists) {
+        if (!self.io.fileExists(cache_path)) {
             self.stats.recordMiss();
             return null;
         }
 
         // Read cache data
-        const data = self.filesystem.readFile(cache_path, self.allocator) catch |err| {
+        const data = self.io.readFile(cache_path, self.allocator) catch |err| {
             if (self.config.verbose) {
                 std.log.debug("Failed to read cache file {s}: {}", .{ cache_path, err });
             }
@@ -387,10 +368,10 @@ pub const CacheManager = struct {
     pub fn printStats(self: *const Self, allocator: Allocator) void {
         if (!self.config.verbose) return;
 
-        const stderr = stderrWriter();
-        CacheReporting.renderCacheStatsToTerminal(allocator, self.stats, stderr) catch {
-            // If we can't print stats, just continue
-        };
+        var buf: [8192]u8 = undefined;
+        var fbs = std.io.fixedBufferStream(&buf);
+        CacheReporting.renderCacheStatsToTerminal(allocator, self.stats, fbs.writer()) catch return;
+        self.io.writeStderr(fbs.getWritten()) catch {};
     }
 
     /// Restore a ProcessResult from cache data with diagnostic counts.
@@ -460,13 +441,12 @@ pub const CacheManager = struct {
         defer self.allocator.free(meta_path);
 
         // Check if metadata file exists
-        const exists = self.filesystem.fileExists(meta_path) catch false;
-        if (!exists) {
+        if (!self.io.fileExists(meta_path)) {
             return null;
         }
 
         // Read metadata file
-        const data = self.filesystem.readFile(meta_path, self.allocator) catch return null;
+        const data = self.io.readFile(meta_path, self.allocator) catch return null;
         defer self.allocator.free(data);
 
         // Parse metadata
@@ -660,8 +640,8 @@ pub const CacheManager = struct {
         const temp_path = std.fmt.allocPrint(self.allocator, "{s}.tmp", .{meta_path}) catch return;
         defer self.allocator.free(temp_path);
 
-        self.filesystem.writeFile(temp_path, buffer) catch return;
-        self.filesystem.rename(temp_path, meta_path) catch return;
+        self.io.writeFile(temp_path, buffer) catch return;
+        self.io.rename(temp_path, meta_path) catch return;
     }
 
     /// Load from cache using a pre-computed cache key (for fast path).
@@ -682,14 +662,13 @@ pub const CacheManager = struct {
         defer self.allocator.free(cache_path);
 
         // Check if cache file exists
-        const exists = self.filesystem.fileExists(cache_path) catch false;
-        if (!exists) {
+        if (!self.io.fileExists(cache_path)) {
             self.stats.recordMiss();
             return CacheResult{ .miss = .{ .key = cache_key } };
         }
 
         // Read cache data
-        var mapped_cache = CacheModule.readFromFileMapped(self.allocator, cache_path, self.filesystem) catch {
+        var mapped_cache = CacheModule.readFromFileMapped(self.allocator, cache_path, self.io) catch {
             self.stats.recordMiss();
             return CacheResult{ .miss = .{ .key = cache_key } };
         };

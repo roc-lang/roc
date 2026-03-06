@@ -162,7 +162,7 @@ fn cleanupTempDirs(allocator: Allocator, maybe_stats: ?*CleanupStats, filesystem
 
 /// Clean up persistent cache files older than 30 days.
 fn cleanupPersistentCache(allocator: Allocator, maybe_stats: ?*CleanupStats, filesystem: Filesystem) void {
-    const config = CacheConfig{ .filesystem = filesystem };
+    const config = CacheConfig{ .io = filesystem };
 
     // Get the base cache directory
     const cache_base = config.getEffectiveCacheDir(allocator) catch return;
@@ -327,7 +327,7 @@ fn cleanupLegacyTempDirs(allocator: Allocator, maybe_stats: ?*CleanupStats, file
 /// Old structure: ~/.cache/roc/{hash}/ or ~/.cache/roc/*.rcache (flat)
 /// New structure: ~/.cache/roc/{version}/mod/ and ~/.cache/roc/{version}/exe/
 fn cleanupLegacyPersistentCache(allocator: Allocator, maybe_stats: ?*CleanupStats, filesystem: Filesystem) void {
-    const config = CacheConfig{ .filesystem = filesystem };
+    const config = CacheConfig{ .io = filesystem };
 
     const cache_base = config.getEffectiveCacheDir(allocator) catch return;
     defer allocator.free(cache_base);

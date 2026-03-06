@@ -112,12 +112,12 @@ pub const CacheKey = struct {
 /// While the content hash is the primary validation, mtime provides an additional
 /// layer of validation and can help detect file system-level changes.
 fn getFileModTime(file_path: []const u8, fs: Filesystem) !i128 {
-    const file_info = fs.getFileInfo(file_path) catch |err| switch (err) {
+    const file_info = fs.stat(file_path) catch |err| switch (err) {
         error.FileNotFound => return 0, // Use 0 for non-existent files (e.g., in-memory sources)
         else => return err,
     };
 
-    return file_info.mtime_ns;
+    return file_info.mtime_ns orelse 0;
 }
 
 /// Get a hash representing the current compiler version.
