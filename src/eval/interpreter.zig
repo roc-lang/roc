@@ -356,6 +356,10 @@ pub const Interpreter = struct {
     translate_cache: std.AutoHashMap(ModuleVarKey, CacheEntry),
     // Types currently being translated (for cycle detection)
     translation_in_progress: std.AutoHashMap(ModuleVarKey, void),
+    // When translating a nominal type's backing, this holds the nominal type's
+    // runtime placeholder var. Used to resolve `.err` content in recursive self-references
+    // (the compiler serializes recursive references as `.err` to break cycles).
+    recursive_nominal_placeholder: ?types.Var = null,
     // Rigid variable substitution context for generic function instantiation
     // Maps rigid type variables to their concrete instantiations
     rigid_subst: std.AutoHashMap(types.Var, types.Var),
@@ -9806,7 +9810,12 @@ pub const Interpreter = struct {
                             }
 
                             // Translate backing (rigids will be substituted via translate_rigid_subst)
+                            // Track that we're translating a nominal type's backing, so recursive
+                            // self-references (serialized as .err) can resolve to this nominal's placeholder.
+                            const saved_recursive_nominal = self.recursive_nominal_placeholder;
+                            self.recursive_nominal_placeholder = placeholder;
                             const rt_backing = try self.translateTypeVar(module, ct_backing);
+                            self.recursive_nominal_placeholder = saved_recursive_nominal;
 
                             // Clear substitution map for next nominal type
                             self.translate_rigid_subst.clearRetainingCapacity();
@@ -10006,12 +10015,20 @@ pub const Interpreter = struct {
                     break :blk rt_rigid_var;
                 },
                 .err => {
-                    // Handle generic type parameters from compiled builtin modules.
-                    // When a generic type variable (like `item` or `state` in List.fold) is
-                    // serialized in the compiled Builtin module, it may have .err content
-                    // because no concrete type was known at compile time.
-                    // Create a fresh unbound variable to represent this generic parameter.
-                    // This will be properly instantiated/unified when the function is called.
+                    // Handle two cases:
+                    // 1. Recursive self-references in nominal types: The compiler serializes
+                    //    recursive type references as .err to break cycles. If we're currently
+                    //    translating a nominal type's backing, the .err represents the self-reference
+                    //    and should resolve to the nominal type's placeholder.
+                    if (self.recursive_nominal_placeholder) |nominal_placeholder| {
+                        break :blk nominal_placeholder;
+                    }
+                    // 2. Generic type parameters from compiled builtin modules.
+                    //    When a generic type variable (like `item` or `state` in List.fold) is
+                    //    serialized in the compiled Builtin module, it may have .err content
+                    //    because no concrete type was known at compile time.
+                    //    Create a fresh unbound variable to represent this generic parameter.
+                    //    This will be properly instantiated/unified when the function is called.
                     break :blk try self.runtime_types.fresh();
                 },
             }

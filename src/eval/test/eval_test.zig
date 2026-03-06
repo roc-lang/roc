@@ -3674,3 +3674,24 @@ test "map_err on Try with record error payload does not panic" {
     const roc_str: *const builtins.str.RocStr = @ptrCast(@alignCast(result.ptr.?));
     try testing.expectEqualStrings("hello", roc_str.asSlice());
 }
+
+test "recursive opaque type with method and match" {
+    // Regression test: recursive opaque type with a method that constructs
+    // a tag value, then matching on the result.
+    try helpers.runExpectI64(
+        \\{
+        \\    Tree := [Empty, Node(Tree)].{
+        \\        insert : Tree -> Tree
+        \\        insert = |_tree| Node(Empty)
+        \\    }
+        \\
+        \\    x : Tree
+        \\    x = Empty
+        \\    y = x.insert()
+        \\    match y {
+        \\        Node(_) => 1i64
+        \\        Empty => 0i64
+        \\    }
+        \\}
+    , 1, .no_trace);
+}
