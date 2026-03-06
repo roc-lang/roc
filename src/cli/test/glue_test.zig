@@ -211,6 +211,60 @@ test "glue command generated C header compiles with zig cc" {
     }
 }
 
+test "glue command with ZigGlue succeeds" {
+    // Regression test for nominal_translate_cache fix in interpreter.zig.
+    // Without the fix, the interpreter crashes with "misaligned ptr" when
+    // processing Types.entrypoints (List(EntryPoint)) because a partially-
+    // resolved type variable for the same nominal type gets translated
+    // instead of the fully-resolved one, producing a ZST layout for what
+    // should be a list field.
+    const allocator = std.testing.allocator;
+
+    // Create temp directory for output
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const tmp_path = tmp_dir.dir.realpathAlloc(allocator, ".") catch unreachable;
+    defer allocator.free(tmp_path);
+
+    // Run: roc glue src/glue/src/ZigGlue.roc <tmp_path> test/fx/platform/main.roc
+    const result = try util.runRocCommand(allocator, &.{
+        "glue",
+        "src/glue/src/ZigGlue.roc",
+        tmp_path,
+        "test/fx/platform/main.roc",
+    });
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    // Should not panic or crash
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "PANIC") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "unreachable") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "misaligned") == null);
+
+    // Should complete successfully
+    if (result.term != .Exited or result.term.Exited != 0) {
+        std.debug.print("\nZigGlue command failed!\nstderr:\n{s}\nstdout:\n{s}\n", .{ result.stderr, result.stdout });
+        std.debug.print("Exit term: {}\n", .{result.term});
+        try std.testing.expect(false);
+    }
+
+    // Should produce a Zig output file
+    const generated_path = std.fs.path.join(allocator, &.{ tmp_path, "roc_platform_abi.zig" }) catch unreachable;
+    defer allocator.free(generated_path);
+
+    const generated_content = std.fs.cwd().readFileAlloc(allocator, generated_path, 1024 * 1024) catch |err| {
+        std.debug.print("\nFailed to read generated file '{s}': {}\n", .{ generated_path, err });
+        try std.testing.expect(false);
+        unreachable;
+    };
+    defer allocator.free(generated_content);
+
+    // Generated file should contain key Zig constructs
+    try std.testing.expect(std.mem.indexOf(u8, generated_content, "pub const RocStr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated_content, "pub const RocOps") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated_content, "Entrypoint") != null);
+}
+
 test "CGlue.roc expect tests pass" {
     const allocator = std.testing.allocator;
 

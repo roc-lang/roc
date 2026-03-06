@@ -79,7 +79,15 @@ fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
     if (layout.tag == .list) {
         const raw_ptr = ptr orelse return;
         const list_value: *const RocList = builtins.utils.alignedPtrCast(*const RocList, @as([*]u8, @ptrCast(raw_ptr)), @src());
-        list_value.incref(1, false, roc_ops);
+        const list_info = layout_cache.getListInfo(layout);
+        if (comptime trace_refcount) {
+            traceRefcount("INCREF list (increfLayoutPtr) ptr=0x{x} len={} elems_rc={}", .{
+                @intFromPtr(list_value.getAllocationDataPtr(roc_ops)),
+                list_value.len(),
+                @intFromBool(list_info.contains_refcounted),
+            });
+        }
+        list_value.incref(1, list_info.contains_refcounted, roc_ops);
         return;
     }
     if (layout.tag == .box) {
@@ -124,6 +132,39 @@ fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
             const elem_offset = layout_cache.getTupleElementOffset(layout.data.tuple.idx, @intCast(elem_index));
             const elem_ptr = @as(*anyopaque, @ptrCast(base_ptr + elem_offset));
             increfLayoutPtr(elem_layout, elem_ptr, layout_cache, roc_ops, null);
+        }
+        return;
+    }
+    if (layout.tag == .closure) {
+        const closure_raw_ptr = ptr orelse return;
+
+        // Use the captures_layout_idx from the passed-in layout, NOT from the raw memory header.
+        // The layout parameter is authoritative and was set when the closure was created.
+        const captures_layout_idx = layout.data.closure.captures_layout_idx;
+        const idx_as_usize = @intFromEnum(captures_layout_idx);
+
+        // Debug assertion: closure layout index must be within bounds.
+        std.debug.assert(idx_as_usize < layout_cache.layouts.len());
+
+        const captures_layout = layout_cache.getLayout(captures_layout_idx);
+
+        // Only incref if there are actual captures (record with fields)
+        if (captures_layout.tag == .record) {
+            const record_data = layout_cache.getRecordData(captures_layout.data.record.idx);
+            if (record_data.fields.count > 0) {
+                if (comptime trace_refcount) {
+                    traceRefcount("INCREF closure captures (increfLayoutPtr) ptr=0x{x} fields={}", .{
+                        @intFromPtr(closure_raw_ptr),
+                        record_data.fields.count,
+                    });
+                }
+                const header_size = @sizeOf(layout_mod.Closure);
+                const cap_align = captures_layout.alignment(layout_cache.targetUsize());
+                const aligned_off = std.mem.alignForward(usize, header_size, @intCast(cap_align.toByteUnits()));
+                const base_ptr: [*]u8 = @ptrCast(closure_raw_ptr);
+                const rec_ptr: *anyopaque = @ptrCast(base_ptr + aligned_off);
+                increfLayoutPtr(captures_layout, rec_ptr, layout_cache, roc_ops, null);
+            }
         }
         return;
     }
@@ -175,6 +216,15 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
         const list_header: *const RocList = builtins.utils.alignedPtrCast(*const RocList, @as([*]u8, @ptrCast(raw_ptr)), @src());
         const list_value = list_header.*;
         const list_info = layout_cache.getListInfo(layout);
+
+        if (comptime trace_refcount) {
+            traceRefcount("DECREF list (decrefLayoutPtr) ptr=0x{x} len={} elems_rc={} unique={}", .{
+                @intFromPtr(list_value.getAllocationDataPtr(ops)),
+                list_value.len(),
+                @intFromBool(list_info.contains_refcounted),
+                @intFromBool(list_value.isUnique(ops)),
+            });
+        }
 
         // Decref elements when unique
         if (list_value.isUnique(ops)) {
@@ -1694,7 +1744,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
 
             if (comptime trace_refcount) {
                 traceRefcount("DECREF list ptr=0x{x} len={} elems_rc={} unique={}", .{
-                    @intFromPtr(list_value.getAllocationDataPtr()),
+                    @intFromPtr(list_value.getAllocationDataPtr(ops)),
                     list_value.len(),
                     @intFromBool(list_info.contains_refcounted),
                     @intFromBool(list_value.isUnique(ops)),

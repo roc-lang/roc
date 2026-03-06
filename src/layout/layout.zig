@@ -355,6 +355,12 @@ pub const TagUnionData = struct {
         };
     }
 
+    /// Compute the discriminant size in bytes from a variant count.
+    /// Can be called before a TagUnionData is created.
+    pub fn discriminantSize(variant_count: usize) u8 {
+        return if (variant_count <= 256) 1 else if (variant_count <= 65536) 2 else if (variant_count <= (1 << 32)) 4 else 8;
+    }
+
     /// Get the integer precision for this discriminant (always unsigned).
     pub fn discriminantPrecision(self: TagUnionData) types.Int.Precision {
         return precisionForDiscriminantSize(self.discriminant_size);

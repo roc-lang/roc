@@ -3180,6 +3180,36 @@ fn addPlatformProvidesItems(
             if (self.exposed_ident_texts.getPtr(ident_text)) |ptr| {
                 ptr.* = region;
             }
+
+            // Extract FFI symbol from the string value and store as a provides entry
+            if (field.value) |value_idx| {
+                const ffi_symbol_text = blk: {
+                    const value_expr = self.parse_ir.store.getExpr(value_idx);
+                    switch (value_expr) {
+                        .string => |str_like| {
+                            const parts = self.parse_ir.store.exprSlice(str_like.parts);
+                            if (parts.len > 0) {
+                                const first_part = self.parse_ir.store.getExpr(parts[0]);
+                                switch (first_part) {
+                                    .string_part => |sp| break :blk self.parse_ir.resolve(sp.token),
+                                    else => break :blk null,
+                                }
+                            }
+                            break :blk null;
+                        },
+                        .string_part => |str_part| break :blk self.parse_ir.resolve(str_part.token),
+                        else => break :blk null,
+                    }
+                };
+
+                if (ffi_symbol_text) |ffi_text| {
+                    const ffi_string_idx = try self.env.insertString(ffi_text);
+                    _ = try self.env.provides_entries.append(gpa, .{
+                        .ident = ident_idx,
+                        .ffi_symbol = ffi_string_idx,
+                    });
+                }
+            }
         }
     }
 }

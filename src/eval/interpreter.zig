@@ -2574,7 +2574,20 @@ pub const Interpreter = struct {
                 std.debug.assert(list_arg.layout.tag == .list or list_arg.layout.tag == .list_of_zst); // low-level .list_get_unsafe expects list layout
 
                 const roc_list = list_arg.asRocList().?;
-                const index = index_arg.asI128(); // U64 stored as i128
+
+                // Handle numeric type mismatch for index argument.
+                // The index should be U64 (integer), but due to numeric literal defaulting
+                // (e.g., `var $x = 0` defaulting to Dec), it may arrive as a fractional type.
+                // Convert frac → int by extracting the whole number part.
+                const index: i128 = if (index_arg.layout.tag == .scalar and index_arg.layout.data.scalar.tag == .frac) blk: {
+                    if (index_arg.layout.data.scalar.data.frac == .dec) {
+                        const dec_val = index_arg.asDec(roc_ops);
+                        std.debug.assert(@rem(dec_val.num, RocDec.one_point_zero.num) == 0); // Dec index must be a whole number
+                        break :blk @divTrunc(dec_val.num, RocDec.one_point_zero.num);
+                    } else {
+                        unreachable; // F32/F64 should never be used as a list index
+                    }
+                } else index_arg.asI128(); // Normal integer path
 
                 // Get element layout info
                 const list_info = self.runtime_layout_store.getListInfo(list_arg.layout);
@@ -8132,7 +8145,9 @@ pub const Interpreter = struct {
             },
             .applied_tag => |tag_pat| {
                 const union_resolved = self.resolveBaseVar(value_rt_var);
-                if (union_resolved.desc.content != .structure or union_resolved.desc.content.structure != .tag_union) return false;
+                if (union_resolved.desc.content != .structure or union_resolved.desc.content.structure != .tag_union) {
+                    return false;
+                }
 
                 var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
                 defer tag_list.deinit();
@@ -9664,9 +9679,10 @@ pub const Interpreter = struct {
                                 // Translate field name from source module's ident store to runtime ident store
                                 const source_field_name_str = module.getIdent(ct_field.name);
                                 const rt_field_name = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(source_field_name_str));
+                                const rt_field_var = try self.translateTypeVar(module, ct_field.var_);
                                 runtime_fields[j] = .{
                                     .name = rt_field_name,
-                                    .var_ = try self.translateTypeVar(module, ct_field.var_),
+                                    .var_ = rt_field_var,
                                 };
                             }
                             const rt_fields = try self.runtime_types.appendRecordFields(runtime_fields);
@@ -16205,32 +16221,37 @@ pub const Interpreter = struct {
                                     defer wide_tag_list.deinit();
                                     try self.appendUnionTags(wide_rt_var, &wide_tag_list);
 
-                                    // Find the wide discriminant by matching tag names
-                                    var wide_disc: ?u32 = null;
+                                    // Find the dest discriminant by matching tag names.
+                                    // This handles both directions:
+                                    // - narrow→wide: source has fewer tags, disc needs mapping to wider ordering
+                                    // - wide→narrow: source has more tags (e.g., full nominal type with 21 variants
+                                    //   placed into an open tag union with only 2 explicit variants due to type
+                                    //   inference not fully resolving flex extensions through nominal types)
+                                    var dest_disc: ?u32 = null;
                                     if (narrow_disc < narrow_tag_list.items.len and wide_tag_list.items.len > narrow_tag_list.items.len) {
-                                        const narrow_tag_name = narrow_tag_list.items[narrow_disc].name;
+                                        const source_tag_name = narrow_tag_list.items[narrow_disc].name;
                                         for (wide_tag_list.items, 0..) |wide_tag, wi| {
-                                            if (wide_tag.name == narrow_tag_name) {
-                                                wide_disc = @intCast(wi);
+                                            if (wide_tag.name == source_tag_name) {
+                                                dest_disc = @intCast(wi);
                                                 break;
                                             }
                                         }
                                     }
 
-                                    if (wide_disc) |wd| {
-                                        // Zero-fill the wide area, then copy narrow payload data
+                                    if (dest_disc) |dd| {
+                                        // Zero-fill the dest area, then copy source payload data
                                         @memset(base_ptr[0..wide_size], 0);
                                         try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
 
-                                        // Clear the narrow discriminant and write the wide one
+                                        // Clear the source discriminant and write the translated one
                                         const narrow_disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(values[0].layout.data.tag_union.idx);
                                         base_ptr[narrow_disc_offset] = 0;
 
                                         const wide_tu_data = self.runtime_layout_store.getTagUnionData(expected_payload_layout.data.tag_union.idx);
                                         const wide_disc_offset_val = self.runtime_layout_store.getTagUnionDiscriminantOffset(expected_payload_layout.data.tag_union.idx);
-                                        wide_tu_data.writeDiscriminantToPtr(base_ptr + wide_disc_offset_val, wd);
+                                        wide_tu_data.writeDiscriminantToPtr(base_ptr + wide_disc_offset_val, dd);
                                     } else {
-                                        // No widening needed (same disc mapping or unknown tag)
+                                        // Same tag ordering or unable to translate - just copy
                                         try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
                                     }
                                 } else {

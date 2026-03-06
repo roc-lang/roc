@@ -10,15 +10,18 @@ import pf.RecordRepr exposing [RecordRepr]
 import pf.TagUnionRepr exposing [TagUnionRepr]
 import pf.RecordField exposing [RecordField]
 import pf.TagVariant exposing [TagVariant]
+import pf.ProvidesEntry exposing [ProvidesEntry]
 
 make_glue : List(Types) -> Try(List(File), Str)
 make_glue = |types_list| {
 	# Collect all hosted functions from all modules, with module name prefix
 	var $hosted_functions = []
 	var $type_table = []
+	var $provides_entries = []
 
 	for types in types_list {
 		$type_table = types.type_table
+		$provides_entries = types.provides_entries
 
 		for mod in types.modules {
 			for func in mod.hosted_functions {
@@ -42,7 +45,7 @@ make_glue = |types_list| {
 	# Sort by index so array entries are in the correct order
 	sorted = List.sort_with($hosted_functions, compare_by_index)
 
-	zig_content = generate_zig_file(sorted, $type_table)
+	zig_content = generate_zig_file(sorted, $type_table, $provides_entries)
 
 	Ok([{ name: "roc_platform_abi.zig", content: zig_content }])
 }
@@ -56,147 +59,6 @@ compare_by_index = |a, b| {
 	}
 	EQ
 }
-
-# =============================================================================
-# Type String Parsing (reused from CGlue.roc)
-# =============================================================================
-
-## Parse a type string like "Str => {}"
-parse_type_str : Str -> { args : List(Str), ret : Str }
-parse_type_str = |type_str| {
-	parts = Str.split_on(type_str, " => ")
-
-	match parts {
-		[args_part, ret_part] => {
-			args = parse_args(args_part)
-			{ args, ret: ret_part }
-		}
-
-		_ => {
-			thin_arrow_parts = Str.split_on(type_str, " -> ")
-			match thin_arrow_parts {
-				[args_part2, ret_part2] => {
-					args = parse_args(args_part2)
-					{ args, ret: ret_part2 }
-				}
-
-				_ => { args: [], ret: type_str }
-			}
-		}
-	}
-}
-
-expect parse_type_str("Str => {}") == { args: ["Str"], ret: "{}" }
-expect parse_type_str("{}") == { args: [], ret: "{}" }
-expect parse_type_str("Str -> {}") == { args: ["Str"], ret: "{}" }
-expect parse_type_str("Str, Str -> {}") == { args: ["Str", "Str"], ret: "{}" }
-
-## Parse args portion of type string
-parse_args : Str -> List(Str)
-parse_args = |args_part| {
-	trimmed = Str.trim(args_part)
-	if trimmed == "()" or trimmed == "" or trimmed == "({})" or trimmed == "{}" {
-		return []
-	}
-
-	is_parenthesized = Str.starts_with(trimmed, "(") and Str.ends_with(trimmed, ")")
-	stripped = if is_parenthesized drop_first_last(trimmed) else trimmed
-
-	var $result = []
-	for s in Str.split_on(stripped, ", ") {
-		t = Str.trim(s)
-		if t != "" and t != "{}" {
-			$result = $result.append(t)
-		}
-	}
-
-	$result
-}
-
-expect parse_args("()") == []
-expect parse_args("") == []
-expect parse_args("({})") == []
-expect parse_args("{}") == []
-expect parse_args("Str") == ["Str"]
-expect parse_args("(Str)") == ["Str"]
-expect parse_args("Str, U64") == ["Str", "U64"]
-expect parse_args("(Str, U64)") == ["Str", "U64"]
-
-## Drop first and last character from string
-drop_first_last : Str -> Str
-drop_first_last = |s| {
-	bytes = Str.to_utf8(s)
-	len = List.len(bytes)
-	if len <= 2 {
-		return ""
-	}
-
-	new_bytes = List.sublist(bytes, { start: 1, len: len - 2 })
-	match Str.from_utf8(new_bytes) {
-		Ok(str) => str
-		Err(_) => s
-	}
-}
-
-expect drop_first_last("(Str)") == "Str"
-expect drop_first_last("ab") == ""
-expect drop_first_last("a") == ""
-expect drop_first_last("") == ""
-
-# =============================================================================
-# Roc Type to Zig Type Mapping
-# =============================================================================
-
-## Map a Roc type to its Zig equivalent
-roc_type_to_zig : Str -> Str
-roc_type_to_zig = |roc_type| {
-	trimmed = Str.trim(roc_type)
-
-	if trimmed == "{}" or trimmed == "()" or trimmed == "{  }" {
-		return "void"
-	}
-
-	if Str.starts_with(trimmed, "List") {
-		return "RocList"
-	}
-
-	match trimmed {
-		"Str" => "RocStr"
-		"Bool" => "bool"
-		"U8" => "u8"
-		"U16" => "u16"
-		"U32" => "u32"
-		"U64" => "u64"
-		"U128" => "u128"
-		"I8" => "i8"
-		"I16" => "i16"
-		"I32" => "i32"
-		"I64" => "i64"
-		"I128" => "i128"
-		"F32" => "f32"
-		"F64" => "f64"
-		_ => "*anyopaque"
-	}
-}
-
-expect roc_type_to_zig("Str") == "RocStr"
-expect roc_type_to_zig("Bool") == "bool"
-expect roc_type_to_zig("U8") == "u8"
-expect roc_type_to_zig("U16") == "u16"
-expect roc_type_to_zig("U32") == "u32"
-expect roc_type_to_zig("U64") == "u64"
-expect roc_type_to_zig("U128") == "u128"
-expect roc_type_to_zig("I8") == "i8"
-expect roc_type_to_zig("I16") == "i16"
-expect roc_type_to_zig("I32") == "i32"
-expect roc_type_to_zig("I64") == "i64"
-expect roc_type_to_zig("I128") == "i128"
-expect roc_type_to_zig("F32") == "f32"
-expect roc_type_to_zig("F64") == "f64"
-expect roc_type_to_zig("{}") == "void"
-expect roc_type_to_zig("()") == "void"
-expect roc_type_to_zig("List(U8)") == "RocList"
-expect roc_type_to_zig("{ foo : Str }") == "*anyopaque"
 
 # =============================================================================
 # TypeRepr-based Type Mapping
@@ -216,6 +78,7 @@ type_repr_to_zig : List(TypeRepr), TypeRepr -> Str
 type_repr_to_zig = |type_table, type_repr| {
 	match type_repr {
 		RocBool => "bool"
+		RocBox(inner_id) => "*${type_id_to_zig(type_table, inner_id)}"
 		RocStr => "RocStr"
 		RocUnit => "void"
 		RocU8 => "u8"
@@ -263,11 +126,27 @@ is_repr_refcounted : List(TypeRepr), TypeRepr -> Bool
 is_repr_refcounted = |type_table, type_repr| {
 	match type_repr {
 		RocStr => Bool.True
+		RocBox(_) => Bool.True
 		RocList(_) => Bool.True
 		RocFunction(_) => Bool.True
 		RocRecord(rec) => List.any(rec.fields, |field| is_type_refcounted(type_table, field.type_id))
 		RocTagUnion(tu) => List.any(tu.tags, |tag| List.any(tag.payload, |pid| is_type_refcounted(type_table, pid)))
-		_ => Bool.False
+		RocBool => Bool.False
+		RocDec => Bool.False
+		RocF32 => Bool.False
+		RocF64 => Bool.False
+		RocI128 => Bool.False
+		RocI16 => Bool.False
+		RocI32 => Bool.False
+		RocI64 => Bool.False
+		RocI8 => Bool.False
+		RocU128 => Bool.False
+		RocU16 => Bool.False
+		RocU32 => Bool.False
+		RocU64 => Bool.False
+		RocU8 => Bool.False
+		RocUnit => Bool.False
+		RocUnknown(_) => Bool.False
 	}
 }
 
@@ -439,7 +318,27 @@ generate_element_type_structs = |type_table| {
 						"/// Element type for ${rec.name}\npub const ${struct_name} = extern struct {\n${$field_strs}};\n\n${assertions}",
 					)
 				}
-			_ => {}
+			RocBox(_) => {}
+			RocTagUnion(_) => {}
+			RocBool => {}
+			RocDec => {}
+			RocF32 => {}
+			RocF64 => {}
+			RocFunction(_) => {}
+			RocI128 => {}
+			RocI16 => {}
+			RocI32 => {}
+			RocI64 => {}
+			RocI8 => {}
+			RocList(_) => {}
+			RocStr => {}
+			RocU128 => {}
+			RocU16 => {}
+			RocU32 => {}
+			RocU64 => {}
+			RocU8 => {}
+			RocUnit => {}
+			RocUnknown(_) => {}
 		}
 	}
 
@@ -461,7 +360,27 @@ generate_tag_union_structs = |type_table| {
 					$seen_names = $seen_names.append(tu.name)
 					$structs = Str.concat($structs, generate_single_tag_union(type_table, tu))
 				}
-			_ => {}
+			RocBox(_) => {}
+			RocRecord(_) => {}
+			RocBool => {}
+			RocDec => {}
+			RocF32 => {}
+			RocF64 => {}
+			RocFunction(_) => {}
+			RocI128 => {}
+			RocI16 => {}
+			RocI32 => {}
+			RocI64 => {}
+			RocI8 => {}
+			RocList(_) => {}
+			RocStr => {}
+			RocU128 => {}
+			RocU16 => {}
+			RocU32 => {}
+			RocU64 => {}
+			RocU8 => {}
+			RocUnit => {}
+			RocUnknown(_) => {}
 		}
 	}
 
@@ -726,33 +645,60 @@ expect lowercase_first("") == ""
 
 ## Look up a type_id in the type table and return record fields if it's a record.
 ## Follows single-variant tag unions (unwrapping to their payload).
+## Type annotation ensures the interpreter uses the full TypeRepr layout.
+lookup_record_in_type_table : List(TypeRepr), U64 -> { found: Bool, fields: List(RecordField), size: U64, alignment: U64 }
 lookup_record_in_type_table = |type_table, type_id| {
 	match List.get(type_table, type_id) {
-		Ok(type_repr) =>
-			match type_repr {
-				RocRecord(rec) =>
-					if List.len(rec.fields) > 0 {
-						{ found: Bool.True, fields: rec.fields, size: rec.size, alignment: rec.alignment }
-					} else {
-						{ found: Bool.False, fields: [], size: 0, alignment: 0 }
-					}
-				RocTagUnion(tu) =>
-					# Follow single-variant tag unions to their payload
-					if List.len(tu.tags) == 1 {
-						match List.first(tu.tags) {
-							Ok(tag) =>
-								match List.first(tag.payload) {
-									Ok(payload_id) => lookup_record_in_type_table(type_table, payload_id)
-									_ => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-								}
+		Ok(type_repr) => lookup_record_from_repr(type_table, type_repr)
+		Err(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+	}
+}
+
+## Match a TypeRepr and return record fields if it's a record.
+## Type annotation ensures the interpreter uses the full 21-variant TypeRepr layout.
+lookup_record_from_repr : List(TypeRepr), TypeRepr -> { found: Bool, fields: List(RecordField), size: U64, alignment: U64 }
+lookup_record_from_repr = |type_table, type_repr| {
+	match type_repr {
+		RocRecord(rec) =>
+			if List.len(rec.fields) > 0 {
+				{ found: Bool.True, fields: rec.fields, size: rec.size, alignment: rec.alignment }
+			} else {
+				{ found: Bool.False, fields: [], size: 0, alignment: 0 }
+			}
+		RocTagUnion(tu) =>
+			# Follow single-variant tag unions to their payload
+			if List.len(tu.tags) == 1 {
+				match List.first(tu.tags) {
+					Ok(tag) =>
+						match List.first(tag.payload) {
+							Ok(payload_id) => lookup_record_in_type_table(type_table, payload_id)
 							_ => { found: Bool.False, fields: [], size: 0, alignment: 0 }
 						}
-					} else {
-						{ found: Bool.False, fields: [], size: 0, alignment: 0 }
-					}
-				_ => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+					_ => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+				}
+			} else {
+				{ found: Bool.False, fields: [], size: 0, alignment: 0 }
 			}
-		Err(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocBox(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocBool => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocDec => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocF32 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocF64 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocFunction(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocI128 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocI16 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocI32 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocI64 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocI8 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocList(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocStr => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocU128 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocU16 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocU32 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocU64 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocU8 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocUnit => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocUnknown(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
 	}
 }
 
@@ -761,9 +707,7 @@ lookup_record_in_type_table = |type_table, type_id| {
 # =============================================================================
 
 ## Generate the complete Zig source file
-generate_zig_file = |hosted_functions, type_table| {
-	count = List.len(hosted_functions)
-
+generate_zig_file = |hosted_functions, type_table, provides_list| {
 	file_header
 		.concat(generate_imports)
 		.concat("\n")
@@ -772,8 +716,6 @@ generate_zig_file = |hosted_functions, type_table| {
 		.concat(generate_roc_str)
 		.concat("\n")
 		.concat(generate_roc_list_generic)
-		.concat("\n")
-		.concat(generate_index_constants(hosted_functions, count))
 		.concat("\n")
 		.concat(generate_element_type_structs(type_table))
 		.concat(generate_tag_union_structs(type_table))
@@ -784,6 +726,8 @@ generate_zig_file = |hosted_functions, type_table| {
 		.concat(generate_hosted_functions_helper(hosted_functions))
 		.concat("\n")
 		.concat(generate_host_helpers)
+		.concat("\n")
+		.concat(generate_entrypoint_externs(provides_list, type_table))
 }
 
 ## File header comment
@@ -986,21 +930,6 @@ generate_roc_str =
 	\\};
 	\\
 
-## Generate index constants and count
-generate_index_constants = |hosted_functions, count| {
-	var $constants = "/// Total number of hosted functions in this platform.\npub const hosted_function_count: u32 = ${U64.to_str(count)};\n\n"
-
-	for func in hosted_functions {
-		snake = name_to_snake(func.name)
-		$constants = Str.concat(
-			$constants,
-			"/// Dispatch index for ${func.name}.\npub const hosted_idx_${snake}: u32 = ${U64.to_str(func.index)};\n",
-		)
-	}
-
-	$constants
-}
-
 ## Generate extern structs for record return types using type table (correctly sorted by alignment).
 ## Only generates RetRecord structs when ret_type_id resolves to a record in the type table.
 ## Tag union return types (e.g., Try(Record, Str)) are not yet supported and are skipped.
@@ -1051,9 +980,7 @@ generate_all_args_structs = |hosted_functions, type_table| {
 ## Generate a single argument extern struct (empty string if no args).
 ## Uses type table for single-record args; positional for multi-arg or primitive args.
 generate_args_struct = |func, type_table| {
-	parsed = parse_type_str(func.type_str)
-
-	if List.is_empty(parsed.args) {
+	if !(has_meaningful_args(func, type_table)) {
 		return ""
 	}
 
@@ -1125,7 +1052,6 @@ generate_platform_fns_struct = |hosted_functions, type_table| {
 
 ## Get the Zig function pointer type for a hosted function
 hosted_fn_type = |func, type_table| {
-	parsed = parse_type_str(func.type_str)
 	struct_name = name_to_struct_name(func.name)
 
 	# Use type table to detect record return types
@@ -1141,7 +1067,7 @@ hosted_fn_type = |func, type_table| {
 		}
 	}
 
-	args_param = if List.is_empty(parsed.args) {
+	args_param = if !(has_meaningful_args(func, type_table)) {
 		"*anyopaque"
 	} else {
 		"*const ${struct_name}Args"
@@ -1341,3 +1267,136 @@ generate_make_roc_ops =
 	\\    };
 	\\}
 	\\
+
+# =============================================================================
+# Argument Helpers
+# =============================================================================
+
+## Check if a hosted function has meaningful (non-unit) arguments using the type table.
+has_meaningful_args = |func, type_table| {
+	if List.is_empty(func.arg_type_ids) {
+		Bool.False
+	} else if List.len(func.arg_type_ids) == 1 {
+		match List.first(func.arg_type_ids) {
+			Ok(id) =>
+				match List.get(type_table, id) {
+					Ok(RocUnit) => Bool.False
+					_ => Bool.True
+				}
+			_ => Bool.False
+		}
+	} else {
+		Bool.True
+	}
+}
+
+# =============================================================================
+# Entrypoint Declarations
+# =============================================================================
+
+## Get the return pointer type from a function TypeRepr
+ret_type_from_repr = |type_table, type_repr| {
+	match type_repr {
+		RocFunction(func) =>
+			if type_id_to_zig(type_table, func.ret) == "void" {
+				"*anyopaque"
+			} else {
+				"*${type_id_to_zig(type_table, func.ret)}"
+			}
+		_ => "*anyopaque"
+	}
+}
+
+## Get the return pointer type from a type_id
+ret_type_from_id = |type_table, type_id| {
+	match List.get(type_table, type_id) {
+		Ok(type_repr) => ret_type_from_repr(type_table, type_repr)
+		_ => "*anyopaque"
+	}
+}
+
+## Get the non-void args from a function TypeRepr
+meaningful_args_from_repr = |type_table, type_repr| {
+	match type_repr {
+		RocFunction(func) =>
+			List.keep_if(func.args, |arg_id|
+				type_id_to_zig(type_table, arg_id) != "void"
+			)
+		_ => []
+	}
+}
+
+## Get the non-void args from a type_id
+meaningful_args_from_id = |type_table, type_id| {
+	match List.get(type_table, type_id) {
+		Ok(type_repr) => meaningful_args_from_repr(type_table, type_repr)
+		_ => []
+	}
+}
+
+## Get the argument pointer type from a type_id
+arg_type_from_id = |type_table, type_id, ffi_symbol| {
+	meaningful_args = meaningful_args_from_id(type_table, type_id)
+	if List.len(meaningful_args) == 0 {
+		"?*anyopaque"
+	} else if List.len(meaningful_args) == 1 {
+		match List.first(meaningful_args) {
+			Ok(arg_id) => "?*const ${type_id_to_zig(type_table, arg_id)}"
+			_ => "?*anyopaque"
+		}
+	} else {
+		"?*const ${name_to_struct_name(ffi_symbol)}Args"
+	}
+}
+
+## Generate arg structs for multi-arg entrypoint functions
+generate_entrypoint_arg_structs = |provides_list, type_table| {
+	if List.is_empty(provides_list) {
+		return ""
+	}
+
+	var $result = ""
+
+	for entry in provides_list {
+		meaningful = meaningful_args_from_id(type_table, entry.type_id)
+		if List.len(meaningful) > 1 {
+			struct_name = name_to_struct_name(entry.ffi_symbol)
+			var $fields = ""
+			var $idx = 0
+			for arg_id in meaningful {
+				zig_type = type_id_to_zig(type_table, arg_id)
+				$fields = Str.concat($fields, "    arg${U64.to_str($idx)}: ${zig_type},\n")
+				$idx = $idx + 1
+			}
+			$result = Str.concat($result,
+				"/// Arguments for entrypoint: ${entry.name}\npub const ${struct_name}Args = extern struct {\n${$fields}};\n\n")
+		}
+	}
+
+	$result
+}
+
+## Generate extern declarations for entrypoints from the provides clause.
+generate_entrypoint_externs = |provides_list, type_table| {
+	if List.is_empty(provides_list) {
+		return ""
+	}
+
+	var $result = "// =============================================================================\n// Entrypoint Declarations\n//\n// Extern declarations for Roc entrypoints. Call these from your platform host\n// to invoke Roc application functions.\n// =============================================================================\n\n"
+
+	$result = Str.concat($result, generate_entrypoint_arg_structs(provides_list, type_table))
+
+	for entry in provides_list {
+		ret_type = ret_type_from_id(type_table, entry.type_id)
+		arg_type = arg_type_from_id(type_table, entry.type_id, entry.ffi_symbol)
+
+		$result = Str.concat(
+			$result,
+			"/// Entrypoint: ${entry.name}\npub extern fn roc__${entry.ffi_symbol}(ops: *RocOps, ret_ptr: ${ret_type}, arg_ptr: ${arg_type}) callconv(.c) void;\n\n",
+		)
+	}
+
+	$result
+}
+
+

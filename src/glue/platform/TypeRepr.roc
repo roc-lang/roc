@@ -7,6 +7,7 @@ import TagUnionRepr exposing [TagUnionRepr]
 ## Uses U64 indices into Types.type_table for type references.
 TypeRepr := [
     RocBool,
+    RocBox(U64),
     RocDec,
     RocF32,
     RocF64,
