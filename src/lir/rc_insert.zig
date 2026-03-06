@@ -1321,7 +1321,7 @@ pub const RcInsertPass = struct {
         const stmts_span = try self.store.addStmts(cleanup_stmts.items);
         // The block's final_expr is never reached (early_return diverges),
         // but we need a distinct valid expr — not early_ret_id which is already used as a stmt.
-        const dead_final = try self.store.addExpr(.{ .runtime_error = {} }, region);
+        const dead_final = try self.store.addExpr(.{ .runtime_error = .{ .ret_layout = ret.ret_layout } }, region);
         return self.store.addExpr(.{ .block = .{
             .stmts = stmts_span,
             .final_expr = dead_final,

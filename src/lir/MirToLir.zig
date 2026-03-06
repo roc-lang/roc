@@ -580,11 +580,16 @@ fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
         .run_low_level => |ll| self.lowerLowLevel(ll, mono_idx, region),
         .hosted => |h| self.lowerHosted(h, mono_idx, region),
         .runtime_err_can, .runtime_err_type, .runtime_err_ellipsis, .runtime_err_anno_only => {
-            return self.lir_store.addExpr(.runtime_error, region);
+            const ret_layout = try self.layoutFromMonotype(mono_idx);
+            return self.lir_store.addExpr(.{ .runtime_error = .{ .ret_layout = ret_layout } }, region);
         },
         .crash => |s| blk: {
             const lir_str_idx = try self.copyStringToLir(s);
-            break :blk self.lir_store.addExpr(.{ .crash = .{ .msg = lir_str_idx } }, region);
+            const ret_layout = try self.layoutFromMonotype(mono_idx);
+            break :blk self.lir_store.addExpr(.{ .crash = .{
+                .msg = lir_str_idx,
+                .ret_layout = ret_layout,
+            } }, region);
         },
         .dbg_expr => |d| self.lowerDbg(d, mono_idx, region),
         .expect => |e| self.lowerExpect(e, mono_idx, region),

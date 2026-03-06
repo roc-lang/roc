@@ -16,7 +16,6 @@
 const std = @import("std");
 const can = @import("can");
 const layout = @import("layout");
-const types = @import("types");
 const mir = @import("mir");
 const lir = @import("lir");
 const backend = @import("backend");
@@ -35,10 +34,10 @@ const WasmCodeGen = backend.wasm.WasmCodeGen;
 
 /// Extract the result layout from a LIR expression.
 /// Mirrors the logic in dev_evaluator.zig.
-fn lirExprResultLayout(store: *const LirExprStore, expr_id: LirExprId) ?layout.Idx {
+fn lirExprResultLayout(store: *const LirExprStore, expr_id: LirExprId) layout.Idx {
     const expr: LirExpr = store.getExpr(expr_id);
     return switch (expr) {
-        .block => |b| lirExprResultLayout(store, b.final_expr),
+        .block => |b| b.result_layout,
         .if_then_else => |ite| ite.result_layout,
         .match_expr => |w| w.result_layout,
         .dbg => |d| d.result_layout,
@@ -51,8 +50,7 @@ fn lirExprResultLayout(store: *const LirExprStore, expr_id: LirExprId) ?layout.I
         .tag => |t| t.union_layout,
         .zero_arg_tag => |z| z.union_layout,
         .struct_access => |sa| sa.field_layout,
-        // .closure removed — closures are now generic LIR constructs (struct, tag, discriminant_switch)
-        .nominal => |n| lirExprResultLayout(store, n.backing_expr) orelse n.nominal_layout,
+        .nominal => |n| n.nominal_layout,
         .discriminant_switch => |ds| ds.result_layout,
         .f64_literal => .f64,
         .f32_literal => .f32,
@@ -66,15 +64,19 @@ fn lirExprResultLayout(store: *const LirExprStore, expr_id: LirExprId) ?layout.I
         .hosted_call => |hc| hc.ret_layout,
         .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote => .str,
         .tag_payload_access => |tpa| tpa.payload_layout,
-        .for_loop, .while_loop => null, // loops don't have a result layout
-        .lambda,
-        .crash,
-        .runtime_error,
-        .incref,
-        .decref,
-        .free,
-        .break_expr,
-        => null,
+        .lambda => |l| l.fn_layout,
+        .for_loop, .while_loop, .incref, .decref, .free => .zst,
+        .crash => |c| c.ret_layout,
+        .runtime_error => |re| re.ret_layout,
+        .break_expr => {
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "LIR/eval invariant violated: lirExprResultLayout called on break_expr",
+                    .{},
+                );
+            }
+            unreachable;
+        },
     };
 }
 
@@ -234,14 +236,7 @@ pub const WasmEvaluator = struct {
 
         // Determine result layout
         const cir_expr = module_env.store.getExpr(expr_idx);
-        const result_layout = lirExprResultLayout(&lir_store, final_expr_id) orelse blk: {
-            const type_var = can.ModuleEnv.varFrom(expr_idx);
-            var type_scope = types.TypeScope.init(self.allocator);
-            defer type_scope.deinit();
-            break :blk layout_store_ptr.fromTypeVar(module_idx, type_var, &type_scope, null) catch {
-                return error.RuntimeError;
-            };
-        };
+        const result_layout = lirExprResultLayout(&lir_store, final_expr_id);
 
         // Detect tuple length
         const tuple_len: usize = if (cir_expr == .e_tuple)

@@ -374,10 +374,13 @@ pub const LirExpr = union(enum) {
     /// Crash with message
     crash: struct {
         msg: StringLiteral.Idx,
+        ret_layout: layout.Idx,
     },
 
     /// Runtime error (unreachable code)
-    runtime_error: void,
+    runtime_error: struct {
+        ret_layout: layout.Idx,
+    },
 
     /// Nominal wrapper (transparent at runtime)
     nominal: struct {

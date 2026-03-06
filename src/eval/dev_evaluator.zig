@@ -18,7 +18,6 @@ const builtin = @import("builtin");
 const base = @import("base");
 const can = @import("can");
 const layout = @import("layout");
-const types = @import("types");
 const backend = @import("backend");
 const mir = @import("mir");
 const MIR = mir.MIR;
@@ -173,15 +172,13 @@ const RocCrashed = builtins.host_abi.RocCrashed;
 const StaticDataInterner = backend.StaticDataInterner;
 const MemoryBackend = StaticDataInterner.MemoryBackend;
 
-/// Extract the result layout from a LIR expression for use as the overall
-/// expression result layout. For blocks and other compound expressions where the
-/// lowerer may have computed the layout from a CIR type variable with Content.err,
-/// this follows through to the final/inner expression to find the true layout.
-fn lirExprResultLayout(store: *const LirExprStore, expr_id: lir.LirExprId) ?layout.Idx {
+/// Extract the result layout from a LIR expression.
+/// This is total for value-producing expressions and unit-valued RC/loop nodes.
+fn lirExprResultLayout(store: *const LirExprStore, expr_id: lir.LirExprId) layout.Idx {
     const LirExpr = lir.LirExpr;
     const expr: LirExpr = store.getExpr(expr_id);
     return switch (expr) {
-        .block => |b| lirExprResultLayout(store, b.final_expr),
+        .block => |b| b.result_layout,
         .if_then_else => |ite| ite.result_layout,
         .match_expr => |w| w.result_layout,
         .dbg => |d| d.result_layout,
@@ -194,8 +191,7 @@ fn lirExprResultLayout(store: *const LirExprStore, expr_id: lir.LirExprId) ?layo
         .tag => |t| t.union_layout,
         .zero_arg_tag => |z| z.union_layout,
         .struct_access => |sa| sa.field_layout,
-        // .closure removed — closures are now generic LIR constructs (struct, tag, discriminant_switch)
-        .nominal => |n| lirExprResultLayout(store, n.backing_expr) orelse n.nominal_layout,
+        .nominal => |n| n.nominal_layout,
         .discriminant_switch => |ds| ds.result_layout,
         .f64_literal => .f64,
         .f32_literal => .f32,
@@ -208,16 +204,19 @@ fn lirExprResultLayout(store: *const LirExprStore, expr_id: lir.LirExprId) ?layo
         .empty_list => |l| l.list_layout,
         .hosted_call => |hc| hc.ret_layout,
         .tag_payload_access => |tpa| tpa.payload_layout,
-        .lambda,
-        .crash,
-        .runtime_error,
-        .incref,
-        .decref,
-        .free,
-        .for_loop,
-        .while_loop,
-        .break_expr,
-        => null,
+        .lambda => |l| l.fn_layout,
+        .for_loop, .while_loop, .incref, .decref, .free => .zst,
+        .crash => |c| c.ret_layout,
+        .runtime_error => |re| re.ret_layout,
+        .break_expr => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "LIR/eval invariant violated: lirExprResultLayout called on break_expr",
+                    .{},
+                );
+            }
+            unreachable;
+        },
 
         // String-producing operations always return Str layout
         .str_concat,
@@ -726,20 +725,9 @@ pub const DevEvaluator = struct {
             }
         }
 
-        // Determine the result layout from the LIR expression.
-        // We prefer the layout embedded in the LIR expression because the CIR
-        // type variable can have Content.err for expressions involving the `?`
-        // operator at top level (where the Err branch desugars to runtime_error).
+        // Determine the result layout from the lowered LIR expression.
         const cir_expr = module_env.store.getExpr(expr_idx);
-        const result_layout = lirExprResultLayout(&lir_store, final_expr_id) orelse blk: {
-            // Fallback: resolve from the CIR type variable
-            const type_var = can.ModuleEnv.varFrom(expr_idx);
-            var type_scope = types.TypeScope.init(self.allocator);
-            defer type_scope.deinit();
-            break :blk layout_store_ptr.fromTypeVar(module_idx, type_var, &type_scope, null) catch {
-                return error.RuntimeError;
-            };
-        };
+        const result_layout = lirExprResultLayout(&lir_store, final_expr_id);
 
         // Detect tuple expressions to set tuple_len
         const tuple_len: usize = if (cir_expr == .e_tuple)
