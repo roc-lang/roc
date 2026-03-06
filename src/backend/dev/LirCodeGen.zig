@@ -11672,9 +11672,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Convert callable values stored on stack to a concrete stack ValueLocation
         /// based on the expected return layout.
-        fn normalizeResultLocForLayout(self: *Self, loc: ValueLocation, ret_layout: layout.Idx) ValueLocation {
-            _ = self;
-            _ = ret_layout;
+        fn normalizeResultLocForLayout(_: *Self, loc: ValueLocation, _: layout.Idx) ValueLocation {
             return loc;
         }
 

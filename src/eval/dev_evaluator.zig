@@ -613,12 +613,9 @@ pub const DevEvaluator = struct {
     /// Lambda lifting and lambda set inference will be handled during
     /// CIR→MIR and MIR→LIR lowering respectively.
     pub fn prepareModulesForCodegen(
-        self: *DevEvaluator,
-        modules: []*ModuleEnv,
-    ) Error!void {
-        _ = self;
-        _ = modules;
-    }
+        _: *DevEvaluator,
+        _: []*ModuleEnv,
+    ) Error!void {}
 
     /// Result of code generation
     pub const CodeResult = struct {

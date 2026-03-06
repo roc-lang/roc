@@ -25,8 +25,7 @@ pub const FramePointerPolicy = enum {
     omit_if_possible,
 
     /// Target-default frame pointer policy.
-    pub fn forTarget(comptime target: anytype) FramePointerPolicy {
-        _ = target;
+    pub fn forTarget(comptime _: anytype) FramePointerPolicy {
         // Current backend policy is explicit and centralized:
         // all supported targets always use a frame pointer today.
         return .always;

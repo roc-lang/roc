@@ -4572,9 +4572,7 @@ fn emitI128TryToI128(self: *Self) Allocator.Error!void {
 /// The runtime return value is the capture itself, not a closure pointer.
 /// In the new pipeline, closures are lambda-lifted and represented as generic LIR
 /// constructs. There are no unwrapped capture closures in LIR anymore.
-fn getUnwrappedCaptureLayout(self: *const Self, body_id: LirExprId) ?layout.Idx {
-    _ = self;
-    _ = body_id;
+fn getUnwrappedCaptureLayout(_: *const Self, _: LirExprId) ?layout.Idx {
     return null;
 }
 

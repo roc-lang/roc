@@ -2430,8 +2430,7 @@ fn mapLowLevel(cir_op: CIR.Expr.LowLevel) ?LirExpr.LowLevel {
 
 /// Create a fresh synthetic symbol for generated code (ANF bindings).
 /// Uses a reserved high 32-bit namespace to avoid colliding with lowered symbols.
-fn freshSymbol(self: *Self, reassignable: bool) Symbol {
-    _ = reassignable;
+fn freshSymbol(self: *Self) Symbol {
     const id = self.next_synthetic_id;
     self.next_synthetic_id += 1;
     const raw = (@as(u64, std.math.maxInt(u32)) << 32) | @as(u64, id);
@@ -2440,7 +2439,7 @@ fn freshSymbol(self: *Self, reassignable: bool) Symbol {
 
 /// Create a bind pattern for a fresh symbol.
 fn freshBindPattern(self: *Self, layout_idx: layout.Idx, reassignable: bool, region: Region) Allocator.Error!struct { symbol: Symbol, pattern: LirPatternId } {
-    const sym = self.freshSymbol(reassignable);
+    const sym = self.freshSymbol();
     const pat = try self.lir_store.addPattern(.{ .bind = .{
         .symbol = sym,
         .layout_idx = layout_idx,
