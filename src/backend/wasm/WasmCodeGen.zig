@@ -2074,8 +2074,9 @@ fn valTypeToBlockType(vt: ValType) BlockType {
     };
 }
 
-/// Try to infer the layout.Idx of an expression (for signedness checks).
-fn exprLayoutIdx(self: *Self, expr_id: LirExprId) ?layout.Idx {
+/// Get the concrete layout of a value-producing expression.
+/// Non-value expressions panic in debug.
+fn exprLayoutIdx(self: *Self, expr_id: LirExprId) layout.Idx {
     const expr = self.store.getExpr(expr_id);
     return switch (expr) {
         .block => |b| b.result_layout,
@@ -2091,9 +2092,7 @@ fn exprLayoutIdx(self: *Self, expr_id: LirExprId) ?layout.Idx {
         .low_level => |ll| ll.ret_layout,
         .dbg => |d| d.result_layout,
         .expect => |e| e.result_layout,
-        .incref => |inc| self.exprLayoutIdx(inc.value),
-        .decref => |dec| self.exprLayoutIdx(dec.value),
-        .free => |f| self.exprLayoutIdx(f.value),
+        .incref, .decref, .free => layout.Idx.zst,
         .i64_literal => |i| i.layout_idx,
         .f64_literal => layout.Idx.f64,
         .f32_literal => layout.Idx.f32,
@@ -2111,7 +2110,16 @@ fn exprLayoutIdx(self: *Self, expr_id: LirExprId) ?layout.Idx {
         .discriminant_switch => |ds| ds.result_layout,
         .early_return => |er| er.ret_layout,
         .lambda => |l| l.fn_layout,
-        .for_loop, .while_loop, .break_expr, .crash, .runtime_error => layout.Idx.zst,
+        .for_loop, .while_loop => layout.Idx.zst,
+        .break_expr, .crash, .runtime_error => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "LIR/wasm invariant violated: exprLayoutIdx called on non-value expression {s}",
+                    .{@tagName(expr)},
+                );
+            }
+            unreachable;
+        },
         .empty_list => |l| l.list_layout,
         .list => |l| l.list_layout,
     };
@@ -2169,21 +2177,7 @@ fn exprValType(self: *Self, expr_id: LirExprId) ValType {
 
 /// Get the byte size of the value an expression produces.
 fn exprByteSize(self: *Self, expr_id: LirExprId) u32 {
-    if (self.exprLayoutIdx(expr_id)) |lay_idx| {
-        return self.layoutByteSize(lay_idx);
-    }
-    // Check for known composite types without layout indices
-    const expr = self.store.getExpr(expr_id);
-    switch (expr) {
-        .list, .empty_list => return 12, // RocList = ptr + len + cap
-        .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote => return 12, // RocStr
-        else => {},
-    }
-    // Fallback based on ValType
-    return switch (self.exprValType(expr_id)) {
-        .i32, .f32 => 4,
-        .i64, .f64 => 8,
-    };
+    return self.layoutByteSize(self.exprLayoutIdx(expr_id));
 }
 
 /// Check if an expression produces a composite value (stored in stack memory).
@@ -2277,14 +2271,15 @@ fn isCompositeLayout(self: *const Self, layout_idx: layout.Idx) bool {
 /// Leaves an i32 (bool) on the stack: 1 for equal, 0 for not equal.
 fn generateStructuralEq(self: *Self, lhs: LirExprId, rhs: LirExprId, negate: bool) Allocator.Error!void {
     // Check for string/list type via layout
-    if (self.exprLayoutIdx(lhs)) |lay_idx| {
+    {
+        const lay_idx = self.exprLayoutIdx(lhs);
         if (lay_idx == .str) {
             try self.generateStrEq(lhs, rhs, negate);
             return;
         }
         const ls = self.getLayoutStore();
         const l = ls.getLayout(lay_idx);
-        if (l.tag == .list) {
+        if (l.tag == .list or l.tag == .list_of_zst) {
             try self.generateListEq(lhs, rhs, lay_idx, negate);
             return;
         }
@@ -2319,7 +2314,8 @@ fn generateStructuralEq(self: *Self, lhs: LirExprId, rhs: LirExprId, negate: boo
     try self.emitLocalSet(rhs_local);
 
     // Try layout-aware comparison for records/tuples/tag unions containing heap types
-    if (self.exprLayoutIdx(lhs)) |lay_idx| {
+    {
+        const lay_idx = self.exprLayoutIdx(lhs);
         const ls = self.getLayoutStore();
         const l = ls.getLayout(lay_idx);
         switch (l.tag) {
@@ -5678,7 +5674,7 @@ fn generateCallArgs(self: *Self, args: LIR.LirExprSpan) Allocator.Error!void {
         // stack frame. Otherwise a subsequent arg's call can deallocate the
         // callee's stack frame and reuse the memory, clobbering this result.
         if (arg_exprs.len > 1 and i < arg_exprs.len - 1 and self.isCompositeExpr(arg_id)) {
-            const layout_idx = self.exprLayoutIdx(arg_id) orelse continue;
+            const layout_idx = self.exprLayoutIdx(arg_id);
             const repr = WasmLayout.wasmReprWithStore(layout_idx, self.getLayoutStore());
             switch (repr) {
                 .stack_memory => |size| if (size > 0) {
@@ -6440,10 +6436,7 @@ fn generateDiscriminantSwitch(self: *Self, ds: anytype) Allocator.Error!void {
 
     // Determine result block type from the first branch
     const first_branch_result_layout = self.exprLayoutIdx(branches[0]);
-    const bt: BlockType = if (first_branch_result_layout) |lay|
-        valTypeToBlockType(self.resolveValType(lay))
-    else
-        .i32;
+    const bt: BlockType = valTypeToBlockType(self.resolveValType(first_branch_result_layout));
 
     // Generate cascading if/else: if (disc == 0) { branch0 } else if (disc == 1) { branch1 } ...
     try self.generateDiscSwitchBranches(branches, disc_local, bt, 0);
@@ -7143,7 +7136,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const ls = self.getLayoutStore();
 
             // Get element layout from the list type
-            const list_layout_idx = self.exprLayoutIdx(args[0]) orelse unreachable;
+            const list_layout_idx = self.exprLayoutIdx(args[0]);
             const list_layout = ls.getLayout(list_layout_idx);
             const list_info = ls.getListInfo(list_layout);
             const elem_size: u32 = list_info.elem_size;
@@ -7750,7 +7743,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // Determine element size
             const elem_byte_size: u32 = blk: {
                 const ls = self.getLayoutStore();
-                const list_layout_idx = self.exprLayoutIdx(args[0]) orelse unreachable;
+                const list_layout_idx = self.exprLayoutIdx(args[0]);
                 const list_layout = ls.getLayout(list_layout_idx);
                 std.debug.assert(list_layout.tag == .list);
                 break :blk ls.layoutSize(ls.getLayout(list_layout.data.list));
@@ -7889,10 +7882,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // Look up field offsets structurally from the record layout.
             // The record is { start : U64, len : U64 }. Sorted alphabetically: len=0, start=1.
             const ls = self.getLayoutStore();
-            const record_layout_idx = self.exprLayoutIdx(args[1]) orelse {
-                if (builtin.mode == .Debug) std.debug.panic("LIR/wasm invariant violated: list_sublist record arg has no layout", .{});
-                unreachable;
-            };
+            const record_layout_idx = self.exprLayoutIdx(args[1]);
             const record_layout = ls.getLayout(record_layout_idx);
             const record_idx = record_layout.data.struct_.idx;
             const len_sorted_idx: u32 = 0;
@@ -8447,10 +8437,10 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const arg_vt = self.exprValType(args[0]);
 
             // Determine if unsigned from layout
-            const is_unsigned = if (arg_layout) |al| switch (al) {
+            const is_unsigned = switch (arg_layout) {
                 .u8, .u16, .u32, .u64, .u128 => true,
                 else => false,
-            } else false;
+            };
 
             switch (arg_vt) {
                 .i32 => {
@@ -9882,7 +9872,7 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LirExprId, re
     };
 
     // Check for composite types (i128/Dec)
-    const check_layout = if (is_comparison) self.exprLayoutIdx(args[0]) orelse ret_layout else ret_layout;
+    const check_layout = if (is_comparison) self.exprLayoutIdx(args[0]) else ret_layout;
     if (self.isCompositeExpr(args[0]) or self.isCompositeLayout(check_layout)) {
         return self.generateCompositeNumericOp(op, args, ret_layout, check_layout);
     }
@@ -9988,11 +9978,10 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LirExprId, re
         },
         .num_is_eq => {
             // Check for structural equality (strings, lists, records, etc.)
-            if (self.exprLayoutIdx(args[0])) |lay_idx| {
-                if (lay_idx == .str or self.isCompositeLayout(lay_idx)) {
-                    try self.generateStructuralEq(args[0], args[1], false);
-                    return;
-                }
+            const lay_idx = self.exprLayoutIdx(args[0]);
+            if (lay_idx == .str or self.isCompositeLayout(lay_idx)) {
+                try self.generateStructuralEq(args[0], args[1], false);
+                return;
             }
             try self.generateExpr(args[0]);
             try self.generateExpr(args[1]);
@@ -10007,7 +9996,7 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LirExprId, re
         .num_is_gt => {
             try self.generateExpr(args[0]);
             try self.generateExpr(args[1]);
-            const is_unsigned = if (self.exprLayoutIdx(args[0])) |lay| isUnsignedLayout(lay) else false;
+            const is_unsigned = isUnsignedLayout(self.exprLayoutIdx(args[0]));
             const wasm_op: u8 = switch (vt) {
                 .i32 => if (is_unsigned) Op.i32_gt_u else Op.i32_gt_s,
                 .i64 => if (is_unsigned) Op.i64_gt_u else Op.i64_gt_s,
@@ -10019,7 +10008,7 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LirExprId, re
         .num_is_gte => {
             try self.generateExpr(args[0]);
             try self.generateExpr(args[1]);
-            const is_unsigned = if (self.exprLayoutIdx(args[0])) |lay| isUnsignedLayout(lay) else false;
+            const is_unsigned = isUnsignedLayout(self.exprLayoutIdx(args[0]));
             const wasm_op: u8 = switch (vt) {
                 .i32 => if (is_unsigned) Op.i32_ge_u else Op.i32_ge_s,
                 .i64 => if (is_unsigned) Op.i64_ge_u else Op.i64_ge_s,
@@ -10031,7 +10020,7 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LirExprId, re
         .num_is_lt => {
             try self.generateExpr(args[0]);
             try self.generateExpr(args[1]);
-            const is_unsigned = if (self.exprLayoutIdx(args[0])) |lay| isUnsignedLayout(lay) else false;
+            const is_unsigned = isUnsignedLayout(self.exprLayoutIdx(args[0]));
             const wasm_op: u8 = switch (vt) {
                 .i32 => if (is_unsigned) Op.i32_lt_u else Op.i32_lt_s,
                 .i64 => if (is_unsigned) Op.i64_lt_u else Op.i64_lt_s,
@@ -10043,7 +10032,7 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LirExprId, re
         .num_is_lte => {
             try self.generateExpr(args[0]);
             try self.generateExpr(args[1]);
-            const is_unsigned = if (self.exprLayoutIdx(args[0])) |lay| isUnsignedLayout(lay) else false;
+            const is_unsigned = isUnsignedLayout(self.exprLayoutIdx(args[0]));
             const wasm_op: u8 = switch (vt) {
                 .i32 => if (is_unsigned) Op.i32_le_u else Op.i32_le_s,
                 .i64 => if (is_unsigned) Op.i64_le_u else Op.i64_le_s,
@@ -12684,7 +12673,7 @@ fn generateLLListSplitFirst(self: *Self, args: anytype, ret_layout: layout.Idx) 
     const elem_align = self.getListElemAlign(ret_layout);
     const elements_refcounted = blk: {
         const ls = self.getLayoutStore();
-        const list_layout_idx = self.exprLayoutIdx(args[0]) orelse break :blk false;
+        const list_layout_idx = self.exprLayoutIdx(args[0]);
         const list_layout = ls.getLayout(list_layout_idx);
         if (list_layout.tag == .list) {
             break :blk ls.layoutContainsRefcounted(ls.getLayout(list_layout.data.list));
