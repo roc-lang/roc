@@ -326,7 +326,7 @@ inline fn ensureTypeStoreIsFilled(self: *Self) Allocator.Error!void {
     if (type_nodes >= region_nodes) return;
     try self.types.ensureTotalCapacity(region_nodes);
     for (type_nodes..region_nodes) |_| {
-        _ = self.types.appendFromContentAssumeCapacity(.{ .flex = Flex.init() }, undefined);
+        _ = self.types.appendFromContentAssumeCapacity(.{ .flex = Flex.init() }, Rank.outermost);
     }
 }
 

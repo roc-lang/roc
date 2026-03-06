@@ -3678,9 +3678,7 @@ test "map_err on Try with record error payload does not panic" {
 test "recursive opaque type with method and match" {
     // Regression test: recursive opaque type with a method that constructs
     // a tag value, then matching on the result.
-    // Tests that tag expressions inside methods on recursive opaque types
-    // resolve correctly in the interpreter.
-    try runExpectI64(
+    try helpers.runExpectI64(
         \\{
         \\    Tree := [Empty, Node(Tree)].{
         \\        insert : Tree -> Tree
