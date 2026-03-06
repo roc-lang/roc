@@ -1,3 +1,0 @@
-Stderr := [].{
-    line! : Str => {}
-}

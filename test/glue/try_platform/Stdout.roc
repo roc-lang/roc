@@ -1,3 +1,0 @@
-Stdout := [].{
-    line! : Str => {}
-}

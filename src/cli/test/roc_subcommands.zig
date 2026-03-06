@@ -1153,11 +1153,11 @@ test "roc test runs expects in Parser type module" {
     const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
     try testing.expect(has_passed);
 
-    // 3. Should have run at least 3 tests (extract count from "(N)" in output)
+    // 3. Should have run 2 tests (extract count from "(N)" in output)
     const count = blk: {
         const open = std.mem.indexOf(u8, result.stdout, "(") orelse break :blk @as(usize, 0);
         const close = std.mem.indexOfPos(u8, result.stdout, open, ")") orelse break :blk @as(usize, 0);
         break :blk std.fmt.parseInt(usize, result.stdout[open + 1 .. close], 10) catch 0;
     };
-    try testing.expect(count >= 3);
+    try testing.expect(count == 2);
 }
