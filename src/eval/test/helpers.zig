@@ -349,6 +349,53 @@ fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []cons
     }
 }
 
+fn floatStringsEquivalent(comptime T: type, lhs: []const u8, rhs: []const u8) bool {
+    const lhs_val = std.fmt.parseFloat(f64, lhs) catch return false;
+    const rhs_val = std.fmt.parseFloat(f64, rhs) catch return false;
+
+    if (std.math.isNan(lhs_val) or std.math.isNan(rhs_val)) {
+        return std.math.isNan(lhs_val) and std.math.isNan(rhs_val);
+    }
+
+    if (std.math.isInf(lhs_val) or std.math.isInf(rhs_val)) {
+        return lhs_val == rhs_val;
+    }
+
+    const diff = @abs(lhs_val - rhs_val);
+    const magnitude = @max(@abs(lhs_val), @abs(rhs_val));
+    const base_epsilon: f64 = if (T == f32) 1e-6 else 1e-12;
+    const epsilon = if (magnitude > 1.0) magnitude * base_epsilon else base_epsilon;
+    return diff <= epsilon;
+}
+
+fn compareFloatWithBackends(
+    allocator: std.mem.Allocator,
+    interpreter_str: []const u8,
+    module_env: *ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
+    builtin_module_env: *const ModuleEnv,
+    comptime T: type,
+) !void {
+    const inspect_expr = wrapInStrInspect(module_env, expr_idx) catch return error.EvaluatorMismatch;
+
+    const dev_str = try devEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env);
+    defer allocator.free(dev_str);
+
+    const wasm_str = try wasmEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env);
+    defer allocator.free(wasm_str);
+
+    if (!floatStringsEquivalent(T, interpreter_str, dev_str) or
+        !floatStringsEquivalent(T, interpreter_str, wasm_str) or
+        !floatStringsEquivalent(T, dev_str, wasm_str))
+    {
+        std.debug.print(
+            "\nEvaluator mismatch!\n  interpreter: '{s}'\n  dev:         '{s}'\n  wasm:        '{s}'\n",
+            .{ interpreter_str, dev_str, wasm_str },
+        );
+        return error.EvaluatorMismatch;
+    }
+}
+
 /// Errors that can occur during WasmEvaluator string generation
 const WasmEvalError = error{
     WasmEvaluatorInitFailed,
@@ -1951,7 +1998,7 @@ pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: enum { tr
     const fmt_ctx = interpreterFormatCtx(&interpreter.runtime_layout_store);
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
-    try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    try compareFloatWithBackends(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env, f32);
 
     try std.testing.expectEqual(expected_int, int_value);
 }
@@ -1998,7 +2045,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     const fmt_ctx = interpreterFormatCtx(&interpreter.runtime_layout_store);
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
-    try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    try compareFloatWithBackends(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env, f64);
 
     const bool_val = int_val != 0;
     try std.testing.expectEqual(expected_bool, bool_val);
@@ -2036,7 +2083,7 @@ pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { tra
     const fmt_ctx = interpreterFormatCtx(&interpreter.runtime_layout_store);
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
-    try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    try compareFloatWithBackends(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env, f32);
 
     const epsilon: f32 = 0.0001;
     const diff = @abs(actual - expected_f32);
@@ -2078,7 +2125,7 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { tra
     const fmt_ctx = interpreterFormatCtx(&interpreter.runtime_layout_store);
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
-    try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    try compareFloatWithBackends(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env, f64);
 
     const epsilon: f64 = 0.000000001;
     const diff = @abs(actual - expected_f64);

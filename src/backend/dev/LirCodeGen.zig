@@ -9781,9 +9781,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
             const base_reg = frame_ptr;
 
-            // Get float value as u64 bits
-            const val_bits_reg = try self.ensureInGeneralReg(val_loc);
+            // Get float value as u64 bits.
+            // F32 values are carried through codegen as widened F64s, so convert them
+            // back to real F32 payload bits before calling the wrapper.
+            const val_bits_reg = if (fts.float_precision == .f32)
+                try self.materializeF32BitsInGeneralReg(val_loc)
+            else
+                try self.ensureInGeneralReg(val_loc);
             const is_f32: bool = (fts.float_precision == .f32);
+            if (val_loc == .float_reg) {
+                self.codegen.freeFloat(val_loc.float_reg);
+            }
 
             // roc_builtins_float_to_str(out, val_bits, is_f32, roc_ops)
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -11656,6 +11664,57 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return reg;
                 },
                 .noreturn => unreachable,
+            }
+        }
+
+        fn materializeF32BitsInGeneralReg(self: *Self, loc: ValueLocation) Allocator.Error!GeneralReg {
+            switch (loc) {
+                .general_reg => |reg| return reg,
+                .immediate_i64 => |val| {
+                    const f32_val: f32 = @floatFromInt(val);
+                    const bits: u32 = @bitCast(f32_val);
+                    const reg = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(reg, @as(i64, bits));
+                    return reg;
+                },
+                .immediate_f64 => |val| {
+                    const f32_val: f32 = @floatCast(val);
+                    const bits: u32 = @bitCast(f32_val);
+                    const reg = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(reg, @as(i64, bits));
+                    return reg;
+                },
+                .float_reg => |freg| {
+                    const reg = try self.allocTempGeneral();
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        try self.codegen.emit.fcvtFloatFloat(.single, freg, .double, freg);
+                        try self.codegen.emit.fmovGenFromFloat(.single, reg, freg);
+                    } else {
+                        const slot = self.codegen.allocStackSlot(4);
+                        try self.codegen.emit.cvtsd2ssRegReg(freg, freg);
+                        try self.codegen.emit.movssMemReg(.RBP, slot, freg);
+                        try self.codegen.emitLoadStack(.w32, reg, slot);
+                    }
+                    return reg;
+                },
+                .stack => |s| {
+                    const reg = try self.allocTempGeneral();
+                    const freg = self.codegen.allocFloat() orelse unreachable;
+                    try self.codegen.emitLoadStackF64(freg, s.offset);
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        try self.codegen.emit.fcvtFloatFloat(.single, freg, .double, freg);
+                        try self.codegen.emit.fmovGenFromFloat(.single, reg, freg);
+                    } else {
+                        const slot = self.codegen.allocStackSlot(4);
+                        try self.codegen.emit.cvtsd2ssRegReg(freg, freg);
+                        try self.codegen.emit.movssMemReg(.RBP, slot, freg);
+                        try self.codegen.emitLoadStack(.w32, reg, slot);
+                    }
+                    self.codegen.freeFloat(freg);
+                    return reg;
+                },
+                .noreturn => unreachable,
+                else => unreachable,
             }
         }
 
