@@ -10323,8 +10323,15 @@ fn generateStrLiteral(self: *Self, str_idx: anytype) Allocator.Error!void {
         WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory; // align
         WasmModule.leb128WriteU32(self.allocator, &self.body, base_offset + 11) catch return error.OutOfMemory; // offset
     } else {
-        // Large string — place data in a data segment
-        const data_offset = self.module.addDataSegment(str_bytes, 4) catch return error.OutOfMemory;
+        // Large string — place data in a data segment with static RC header.
+        // Runtime RC ops read/write at data_ptr - 4, so static literals must reserve
+        // those 4 bytes and initialize them to 0 (immortal static marker).
+        var segment_data = std.ArrayList(u8).empty;
+        defer segment_data.deinit(self.allocator);
+        try segment_data.appendNTimes(self.allocator, 0, 4);
+        try segment_data.appendSlice(self.allocator, str_bytes);
+        const segment_offset = self.module.addDataSegment(segment_data.items, 4) catch return error.OutOfMemory;
+        const data_offset = segment_offset + 4;
 
         // Store ptr (offset 0)
         self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;

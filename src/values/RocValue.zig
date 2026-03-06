@@ -284,10 +284,20 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
     if (self.lay.tag == .list_of_zst) {
         const roc_list = self.readList();
         const len = roc_list.len();
-        if (len == 0) {
-            return try allocator.dupe(u8, "[]");
+        var out = std.array_list.AlignedManaged(u8, null).init(allocator);
+        errdefer out.deinit();
+        try out.append('[');
+        if (len > 0) {
+            // list_of_zst does not carry concrete element data; render canonical ZST
+            // placeholders so interpreter/dev/wasm textual comparisons stay aligned.
+            var i: usize = 0;
+            while (i < len) : (i += 1) {
+                try out.appendSlice("{}");
+                if (i + 1 < len) try out.appendSlice(", ");
+            }
         }
-        return try std.fmt.allocPrint(allocator, "[<{d} zero-sized elements>]", .{len});
+        try out.append(']');
+        return out.toOwnedSlice();
     }
 
     // Records are now handled in the struct_ block above

@@ -6258,9 +6258,17 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     continue;
                 };
 
+                const method_name = original_env.getIdent(method_ident);
+                const translated_method_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text(method_name));
+                const origin_name = if (!original_env.qualified_module_ident.isNone())
+                    original_env.getIdent(original_env.qualified_module_ident)
+                else
+                    original_env.module_name;
+                const translated_origin_module = try @constCast(self.cir).insertIdent(base.Ident.for_text(origin_name));
+
                 constraint.resolved_target = .{
-                    .origin_module = nominal_type.origin_module,
-                    .method_ident = method_ident,
+                    .origin_module = translated_origin_module,
+                    .method_ident = translated_method_ident,
                 };
                 self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i] = constraint;
 

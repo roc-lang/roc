@@ -50,7 +50,7 @@ fn stackValueToRocValue(result: StackValue, layout_idx_hint: ?layout.Idx) values
 fn interpreterFormatCtx(layout_cache: *const layout.Store) values.RocValue.FormatContext {
     return .{
         .layout_store = layout_cache,
-        .ident_store = null, // match dev evaluator (no ident store)
+        .ident_store = layout_cache.getEnv().common.getIdentStore(),
     };
 }
 

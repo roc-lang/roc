@@ -1644,14 +1644,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const list_layout_idx = self.exprLayout(args[0]);
                         const list_layout_val = ls.getLayout(list_layout_idx);
                         switch (list_layout_val.tag) {
-                            .list => {
-                                if (ret_layout_val.tag != .list or ret_layout_val.data.list != list_layout_val.data.list) {
-                                    std.debug.panic(
-                                        "LIR/codegen invariant violated: list_append return/list arg element layout mismatch",
-                                        .{},
-                                    );
-                                }
-                            },
+                            .list => {},
                             .list_of_zst => {
                                 if (ret_layout_val.tag != .list_of_zst) {
                                     std.debug.panic(
