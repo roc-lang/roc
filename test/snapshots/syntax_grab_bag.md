@@ -987,7 +987,7 @@ The value's type, which does not have a method named **plus**, is:
 
     Str
 
-**Hint:** The **+** operator calls a method named  **plus** on the value preceding it, passing the value after the operator as the one argument.
+**Hint:** The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
 **TYPE MISMATCH**
 This `return` does not match the function's return type:

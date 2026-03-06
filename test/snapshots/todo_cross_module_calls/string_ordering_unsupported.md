@@ -19,7 +19,7 @@ The value before this **>** operator has a type that doesn't have a **is_gt** me
 ```
 ^^^^^^^^^^^^^^^^^^
 
-The value's type, which does not have a method named**is_gt**, is:
+The value's type, which does not have a method named **is_gt**, is:
 
     Str
 
@@ -33,7 +33,7 @@ The value before this **<** operator has a type that doesn't have a **is_lt** me
 ```
 ^^^^^^^^^^^^^^^^^^
 
-The value's type, which does not have a method named**is_lt**, is:
+The value's type, which does not have a method named **is_lt**, is:
 
     Str
 
@@ -47,7 +47,7 @@ The value before this **>=** operator has a type that doesn't have a **is_gte** 
 ```
 ^^^^^^^^^^^^^^^^^^
 
-The value's type, which does not have a method named**is_gte**, is:
+The value's type, which does not have a method named **is_gte**, is:
 
     Str
 
@@ -61,7 +61,7 @@ The value before this **<=** operator has a type that doesn't have a **is_lte** 
 ```
 ^^^^^^^^^^^^^^^^^^^
 
-The value's type, which does not have a method named**is_lte**, is:
+The value's type, which does not have a method named **is_lte**, is:
 
     Str
 
