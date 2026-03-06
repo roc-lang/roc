@@ -20,6 +20,7 @@ const can = @import("can");
 const reporting = @import("reporting");
 const echo_platform = @import("echo_platform");
 const roc_target = @import("roc_target");
+const layout = @import("layout");
 
 const ModuleEnv = can.ModuleEnv;
 const BuildEnv = compile.BuildEnv;
@@ -794,16 +795,18 @@ const TypeTable = struct {
     /// Pre-registers a placeholder before conversion to prevent infinite recursion
     /// on cyclic types (the placeholder is updated in-place after conversion).
     fn getOrInsert(self: *TypeTable, env: *const ModuleEnv, type_var: types.Var) u64 {
-        if (self.var_map.get(type_var)) |idx| {
+        const resolved = env.types.resolveVar(type_var);
+        const root_var = resolved.var_;
+
+        if (self.var_map.get(root_var)) |idx| {
             return idx;
         }
 
         // Pre-register placeholder to break cycles
         const idx: u64 = @intCast(self.entries.items.len);
         self.entries.append(self.gpa, .{ .unknown = "" }) catch return 0;
-        self.var_map.put(type_var, idx) catch {};
+        self.var_map.put(root_var, idx) catch {};
 
-        const resolved = env.types.resolveVar(type_var);
         const repr = self.convertContent(env, resolved.desc.content);
 
         // Update placeholder with actual representation
@@ -1251,7 +1254,7 @@ const TypeTable = struct {
 
         // Compute discriminant size/alignment from tag count.
         // Single-variant tag unions have no discriminant (ZigGlue unwraps them to payload).
-        const disc_size: u64 = if (tag_names.len <= 1) 0 else if (tag_names.len <= 256) 1 else if (tag_names.len <= 65536) 2 else if (tag_names.len <= 4294967296) 4 else 8;
+        const disc_size: u64 = if (tag_names.len <= 1) 0 else layout.TagUnionData.discriminantSize(tag_names.len);
         const disc_align: u64 = disc_size;
 
         // Compute overall tag union layout: payload at offset 0, discriminant at end

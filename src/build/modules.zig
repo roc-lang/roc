@@ -345,7 +345,7 @@ pub const ModuleType = enum {
             .sljmp => &.{},
             .echo_platform => &.{.builtins},
             .docs => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .check, .reporting },
-            .glue => &.{ .base, .parse, .compile, .can, .reporting, .echo_platform, .builtins, .roc_target, .types },
+            .glue => &.{ .base, .parse, .compile, .can, .reporting, .echo_platform, .builtins, .roc_target, .types, .layout },
         };
     }
 };
