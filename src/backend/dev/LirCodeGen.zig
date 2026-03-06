@@ -11699,18 +11699,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .stack => |s| {
                     const reg = try self.allocTempGeneral();
-                    const freg = self.codegen.allocFloat() orelse unreachable;
-                    try self.codegen.emitLoadStackF64(freg, s.offset);
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.fcvtFloatFloat(.single, freg, .double, freg);
-                        try self.codegen.emit.fmovGenFromFloat(.single, reg, freg);
+                    if (s.size == .dword) {
+                        // Tag-union payloads and other structural fields can hold a real
+                        // 4-byte F32 on the stack instead of the widened F64 carrier used
+                        // by float temporaries. Preserve those payload bits as-is.
+                        try self.codegen.emitLoadStack(.w32, reg, s.offset);
                     } else {
-                        const slot = self.codegen.allocStackSlot(4);
-                        try self.codegen.emit.cvtsd2ssRegReg(freg, freg);
-                        try self.codegen.emit.movssMemReg(.RBP, slot, freg);
-                        try self.codegen.emitLoadStack(.w32, reg, slot);
+                        const freg = self.codegen.allocFloat() orelse unreachable;
+                        try self.codegen.emitLoadStackF64(freg, s.offset);
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            try self.codegen.emit.fcvtFloatFloat(.single, freg, .double, freg);
+                            try self.codegen.emit.fmovGenFromFloat(.single, reg, freg);
+                        } else {
+                            const slot = self.codegen.allocStackSlot(4);
+                            try self.codegen.emit.cvtsd2ssRegReg(freg, freg);
+                            try self.codegen.emit.movssMemReg(.RBP, slot, freg);
+                            try self.codegen.emitLoadStack(.w32, reg, slot);
+                        }
+                        self.codegen.freeFloat(freg);
                     }
-                    self.codegen.freeFloat(freg);
                     return reg;
                 },
                 .noreturn => unreachable,

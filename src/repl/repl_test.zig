@@ -152,6 +152,10 @@ test "Repl - U8.from_str result format" {
     try expectBoth("U8.from_str(\"42\")", "Ok(42)");
 }
 
+test "Repl - F32.from_str result format" {
+    try expectBoth("F32.from_str(\"3.14\")", "Ok(3.140000104904175)");
+}
+
 test "Repl - list literals" {
     try expectBoth("List.len([1, 2, 3])", "3");
     try expectBoth("[1, 2, 3]", "[1.0, 2.0, 3.0]");
