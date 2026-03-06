@@ -7144,7 +7144,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate code for if-then-else
         fn generateIfThenElse(self: *Self, ite: anytype) Allocator.Error!ValueLocation {
             const branches = self.store.getIfBranches(ite.branches);
-
             // Collect jump targets for patching
             var end_patches = std.ArrayList(usize).empty;
             defer end_patches.deinit(self.allocator);
@@ -7190,7 +7189,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Generate condition
                 const cond_loc = try self.generateExpr(branch.cond);
                 const cond_reg = try self.ensureInGeneralReg(cond_loc);
-
                 // Compare with zero and branch if equal (condition is false)
                 const else_patch = try self.emitCmpZeroAndJump(cond_reg);
 
@@ -7695,7 +7693,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn generateMatch(self: *Self, when_expr: anytype) Allocator.Error!ValueLocation {
             // Evaluate the scrutinee (the value being matched)
             const value_loc = try self.generateExpr(when_expr.value);
-
             // Get the branches
             const branches = self.store.getMatchBranches(when_expr.branches);
             if (branches.len == 0) {
@@ -7715,11 +7712,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const tu_total_size: u32 = if (value_layout_val.tag == .tag_union) blk: {
                 const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
                 break :blk tu_data.size;
-            } else 0;
+            } else ls.layoutSizeAlign(value_layout_val).size;
             const tu_disc_size: u8 = if (value_layout_val.tag == .tag_union) blk: {
                 const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
                 break :blk tu_data.discriminant_size;
-            } else 4;
+            } else @intCast(@max(ls.layoutSizeAlign(value_layout_val).size, 1));
             // Use .w32 for discriminant loads when .w64 would read past the tag union.
             // Discriminants are at most 4 bytes, so .w32 is always sufficient.
             const disc_use_w32 = (tu_disc_offset + 8 > @as(i32, @intCast(tu_total_size)));
@@ -9910,7 +9907,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn generateDiscriminantSwitch(self: *Self, ds: anytype) Allocator.Error!ValueLocation {
             const ls = self.layout_store;
             const branches = self.store.getExprSpan(ds.branches);
-
             if (branches.len == 0) {
                 unreachable;
             }
@@ -14497,11 +14493,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const tu_total_size: u32 = if (value_layout_val.tag == .tag_union) blk: {
                 const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
                 break :blk tu_data.size;
-            } else 0;
+            } else ls.layoutSizeAlign(value_layout_val).size;
             const tu_disc_size: u8 = if (value_layout_val.tag == .tag_union) blk: {
                 const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
                 break :blk tu_data.discriminant_size;
-            } else 4;
+            } else @intCast(@max(ls.layoutSizeAlign(value_layout_val).size, 1));
             const disc_use_w32 = (tu_disc_offset + 8 > @as(i32, @intCast(tu_total_size)));
 
             // Collect jump targets for patching to end
