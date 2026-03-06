@@ -16,7 +16,7 @@ This **foo** method is being called on a value whose type doesn't have that meth
 ```
       ^^^
 
-The value's type, which does not have a method named**foo**, is:
+The value's type, which does not have a method named **foo**, is:
 
     Dec
 
