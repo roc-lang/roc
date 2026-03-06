@@ -1520,6 +1520,42 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .file_import_not_found => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const path_text = self.common.getString(data.path);
+            break :blk try CIR.Diagnostic.buildFileImportNotFoundReport(
+                allocator,
+                path_text,
+                region_info,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+        },
+        .file_import_io_error => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const path_text = self.common.getString(data.path);
+            break :blk try CIR.Diagnostic.buildFileImportIOErrorReport(
+                allocator,
+                path_text,
+                region_info,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+        },
+        .file_import_not_utf8 => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const path_text = self.common.getString(data.path);
+            break :blk try CIR.Diagnostic.buildFileImportNotUtf8Report(
+                allocator,
+                path_text,
+                region_info,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+        },
         .module_not_found => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 

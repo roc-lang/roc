@@ -10,6 +10,8 @@ pub const single_module = @import("compile_module.zig");
 pub const module_discovery = @import("module_discovery.zig");
 pub const dependency_sort = @import("dependency_sort.zig");
 pub const serialize_modules = @import("serialize_modules.zig");
+pub const runner = @import("runner.zig");
+pub const threading = @import("threading.zig");
 
 // Actor model components
 pub const messages = @import("messages.zig");
@@ -35,6 +37,7 @@ pub const CacheCleanup = cleanup;
 pub const CleanupStats = cleanup.CleanupStats;
 pub const PackageEnv = package.PackageEnv;
 pub const BuildEnv = build.BuildEnv;
+pub const Filesystem = @import("fs").Filesystem;
 
 // /// Global cache statistics (optional, for debugging)
 // var global_stats: Stats = .{};
@@ -71,6 +74,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("module_discovery.zig"));
     std.testing.refAllDecls(@import("dependency_sort.zig"));
     std.testing.refAllDecls(@import("serialize_modules.zig"));
+    std.testing.refAllDecls(@import("runner.zig"));
 
     // Actor model components
     std.testing.refAllDecls(@import("messages.zig"));

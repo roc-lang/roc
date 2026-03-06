@@ -946,7 +946,7 @@ tuple : Value((a, b, c))
 
 
 **TYPE MISMATCH**
-This `if` condition must evaluate to a `Bool`–either `True` or `False`:
+This `if` condition must evaluate to a `Bool` – either `True` or `False`:
 **fuzz_crash_023.md:70:5:70:8:**
 ```roc
 	if num {
@@ -1091,7 +1091,7 @@ The value before this **+** operator has a type that doesn't have a **plus** met
 ```
 		         ^^^^^^^^^^
 
-The value's type, which does not have a method named**plus**, is:
+The value's type, which does not have a method named **plus**, is:
 
     Str
 
@@ -2868,7 +2868,7 @@ expect {
 		(patt (type "Error -> U64"))
 		(patt (type "[Red, ..[Blue, Green, ..]], _arg -> Error"))
 		(patt (type "Error"))
-		(patt (type "List(Error) -> Try({  }, _d)"))
+		(patt (type "List(Error) -> Try({}, _d)"))
 		(patt (type "{}"))
 		(patt (type "Error")))
 	(type_decls
@@ -2915,7 +2915,7 @@ expect {
 		(expr (type "Error -> U64"))
 		(expr (type "[Red, ..[Blue, Green, ..]], _arg -> Error"))
 		(expr (type "Error"))
-		(expr (type "List(Error) -> Try({  }, _d)"))
+		(expr (type "List(Error) -> Try({}, _d)"))
 		(expr (type "{}"))
 		(expr (type "Error"))))
 ~~~

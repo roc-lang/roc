@@ -588,6 +588,7 @@ fn transformBodyWithCaptures(
         .e_typed_int,
         .e_typed_frac,
         .e_str_segment,
+        .e_bytes_literal,
         .e_str,
         .e_lookup_external,
         .e_lookup_pending,

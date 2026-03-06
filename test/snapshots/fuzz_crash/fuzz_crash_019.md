@@ -897,7 +897,7 @@ This **from_numeral** method is being called on a value whose type doesn't have 
 ```
 	^
 
-The value's type, which does not have a method named**from_numeral**, is:
+The value's type, which does not have a method named **from_numeral**, is:
 
     {}
 
@@ -2171,7 +2171,7 @@ expect {
 		(patt (type "[Blue, ..], [Tb, ..] -> Error"))
 		(patt (type "Error"))
 		(patt (type "_arg -> Error"))
-		(patt (type "{  }"))
+		(patt (type "{}"))
 		(patt (type "{}"))
 		(patt (type "Error")))
 	(type_decls
@@ -2208,7 +2208,7 @@ expect {
 		(expr (type "[Blue, ..], [Tb, ..] -> Error"))
 		(expr (type "Error"))
 		(expr (type "_arg -> Error"))
-		(expr (type "{  }"))
+		(expr (type "{}"))
 		(expr (type "{}"))
 		(expr (type "Error"))))
 ~~~

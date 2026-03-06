@@ -80,8 +80,9 @@ const FileProvider = compile_package.FileProvider;
 const Mode = compile_package.Mode;
 
 /// Threading features aren't available when targeting WebAssembly
-const threads_available = builtin.target.cpu.arch != .wasm32;
-const Thread = if (threads_available) std.Thread else struct {};
+const threading = @import("threading.zig");
+const is_freestanding = threading.is_freestanding;
+const Thread = threading.Thread;
 /// Allocators for a worker thread. Each worker has its own instance.
 /// This ensures thread-safe allocations without contention.
 ///
@@ -459,7 +460,7 @@ pub const Coordinator = struct {
     /// In multi-threaded mode, returns page_allocator which is guaranteed thread-safe.
     /// In single-threaded mode, returns gpa for better performance.
     pub fn getWorkerAllocator(self: *const Coordinator) Allocator {
-        return if (threads_available and self.mode == .multi_threaded)
+        return if (!is_freestanding and self.mode == .multi_threaded)
             std.heap.page_allocator
         else
             self.gpa;
@@ -484,7 +485,7 @@ pub const Coordinator = struct {
             .target = target,
             .packages = std.StringHashMap(*PackageState).init(gpa),
             .result_channel = try Channel(WorkerResult).init(gpa, channel.DEFAULT_CAPACITY),
-            .task_channel = try Channel(WorkerTask).init(if (threads_available) std.heap.page_allocator else gpa, initial_task_capacity),
+            .task_channel = try Channel(WorkerTask).init(if (!is_freestanding) std.heap.page_allocator else gpa, initial_task_capacity),
             .workers = std.ArrayList(Thread).empty,
             .inflight = std.atomic.Value(usize).init(0),
             .total_remaining = 0,
@@ -591,7 +592,7 @@ pub const Coordinator = struct {
         if (self.module_allocator) |alloc| return alloc;
         // Use page_allocator in multi-threaded mode for thread safety.
         // Module data is created by workers and used throughout canonicalization/type-checking.
-        return if (threads_available and self.mode == .multi_threaded)
+        return if (!is_freestanding and self.mode == .multi_threaded)
             std.heap.page_allocator
         else
             self.gpa;
@@ -616,7 +617,7 @@ pub const Coordinator = struct {
 
     /// Start the coordinator and spawn worker threads (for multi-threaded mode)
     pub fn start(self: *Coordinator) !void {
-        if (!threads_available or self.mode == .single_threaded or self.max_threads <= 1) {
+        if (is_freestanding or self.mode == .single_threaded or self.max_threads <= 1) {
             return;
         }
 
@@ -632,7 +633,7 @@ pub const Coordinator = struct {
 
     /// Shutdown workers and wait for them to complete
     pub fn shutdown(self: *Coordinator) void {
-        if (!threads_available) return;
+        if (is_freestanding) return;
 
         // Close both channels to wake any blocked workers
         self.result_channel.close();
@@ -658,20 +659,20 @@ pub const Coordinator = struct {
         // Increment inflight BEFORE sending to the channel. This ensures there is
         // no window where a worker could recv, execute, and the coordinator could
         // process the result (decrementing inflight) before we increment here.
-        if (threads_available and self.mode == .multi_threaded) {
+        if (!is_freestanding and self.mode == .multi_threaded) {
             _ = self.inflight.fetchAdd(1, .acquire);
         }
         self.task_channel.send(task) catch |err| switch (err) {
             error.Closed => {
                 // Undo the increment — shutting down, safe to drop
-                if (threads_available and self.mode == .multi_threaded) {
+                if (!is_freestanding and self.mode == .multi_threaded) {
                     _ = self.inflight.fetchSub(1, .release);
                 }
                 return;
             },
             error.Timeout => unreachable, // send() waits indefinitely
             error.OutOfMemory => {
-                if (threads_available and self.mode == .multi_threaded) {
+                if (!is_freestanding and self.mode == .multi_threaded) {
                     _ = self.inflight.fetchSub(1, .release);
                 }
                 return error.OutOfMemory;
@@ -715,7 +716,7 @@ pub const Coordinator = struct {
         while (!self.isComplete()) {
             var made_progress = false;
 
-            if (!threads_available or self.mode == .single_threaded or self.max_threads <= 1) {
+            if (is_freestanding or self.mode == .single_threaded or self.max_threads <= 1) {
                 // Single-threaded: process tasks inline
                 if (self.task_channel.tryRecv()) |task| {
                     const result = self.executeTaskInline(task);
@@ -744,50 +745,49 @@ pub const Coordinator = struct {
             } else {
                 iterations_without_progress += 1;
                 if (iterations_without_progress > 1000) {
-                    const task_count = self.task_channel.len();
-                    std.debug.print("Coordinator stuck: remaining={}, tasks={}, inflight={}\n", .{
-                        self.total_remaining,
-                        task_count,
-                        self.inflight.load(.acquire),
-                    });
-                    // Print package/module states with detailed diagnostics
-                    var pkg_it = self.packages.iterator();
-                    while (pkg_it.next()) |entry| {
-                        const pkg = entry.value_ptr.*;
-                        std.debug.print("  Package {s}: remaining={}, modules={}\n", .{
-                            pkg.name,
-                            pkg.remaining_modules,
-                            pkg.modules.items.len,
+                    // Stuck-coordinator diagnostics are only relevant on
+                    // threaded targets; on freestanding (WASM) we skip
+                    // straight to the panic.
+                    if (comptime !is_freestanding) {
+                        const task_count = self.task_channel.len();
+                        std.log.err("Coordinator stuck: remaining={}, tasks={}, inflight={}", .{
+                            self.total_remaining,
+                            task_count,
+                            self.inflight.load(.acquire),
                         });
-                        for (pkg.modules.items, 0..) |mod, i| {
-                            std.debug.print("    Module {}: {s} phase=.{s} ext_imports={}\n", .{
-                                i,
-                                mod.name,
-                                @tagName(mod.phase),
-                                mod.external_imports.items.len,
+                        var pkg_it = self.packages.iterator();
+                        while (pkg_it.next()) |entry| {
+                            const pkg = entry.value_ptr.*;
+                            std.log.err("  Package {s}: remaining={}, modules={}", .{
+                                pkg.name,
+                                pkg.remaining_modules,
+                                pkg.modules.items.len,
                             });
-                            // For non-Done modules, print additional diagnostics
-                            if (mod.phase != .Done) {
-                                // Print local imports and their status
-                                if (mod.imports.items.len > 0) {
-                                    std.debug.print("      local_imports ({}):", .{mod.imports.items.len});
-                                    for (mod.imports.items) |imp_id| {
-                                        if (pkg.getModule(imp_id)) |imp_mod| {
-                                            std.debug.print(" {s}(.{s})", .{ imp_mod.name, @tagName(imp_mod.phase) });
-                                        } else {
-                                            std.debug.print(" <invalid id={}>", .{imp_id});
+                            for (pkg.modules.items, 0..) |mod, i| {
+                                std.log.err("    Module {}: {s} phase=.{s} ext_imports={}", .{
+                                    i,
+                                    mod.name,
+                                    @tagName(mod.phase),
+                                    mod.external_imports.items.len,
+                                });
+                                if (mod.phase != .Done) {
+                                    if (mod.imports.items.len > 0) {
+                                        std.log.err("      local_imports ({}):", .{mod.imports.items.len});
+                                        for (mod.imports.items) |imp_id| {
+                                            if (pkg.getModule(imp_id)) |imp_mod| {
+                                                std.log.err("        {s}(.{s})", .{ imp_mod.name, @tagName(imp_mod.phase) });
+                                            } else {
+                                                std.log.err("        <invalid id={}>", .{imp_id});
+                                            }
                                         }
                                     }
-                                    std.debug.print("\n", .{});
-                                }
-                                // Print external imports and their readiness
-                                if (mod.external_imports.items.len > 0) {
-                                    std.debug.print("      ext_imports ({}):", .{mod.external_imports.items.len});
-                                    for (mod.external_imports.items) |ext_name| {
-                                        const ready = self.isExternalReady(pkg.name, ext_name);
-                                        std.debug.print(" {s}(ready={})", .{ ext_name, ready });
+                                    if (mod.external_imports.items.len > 0) {
+                                        std.log.err("      ext_imports ({}):", .{mod.external_imports.items.len});
+                                        for (mod.external_imports.items) |ext_name| {
+                                            const ready = self.isExternalReady(pkg.name, ext_name);
+                                            std.log.err("        {s}(ready={})", .{ ext_name, ready });
+                                        }
                                     }
-                                    std.debug.print("\n", .{});
                                 }
                             }
                         }
@@ -1984,7 +1984,7 @@ pub const Coordinator = struct {
 
     /// Execute a parse task (pure function)
     fn executeParse(self: *Coordinator, task: ParseTask) WorkerResult {
-        const start_time = if (threads_available) std.time.nanoTimestamp() else 0;
+        const start_time = if (!is_freestanding) std.time.nanoTimestamp() else 0;
 
         // Read source
         const src = self.readModuleSource(task.path) catch |err| {
@@ -2083,7 +2083,7 @@ pub const Coordinator = struct {
         // NOTE: allocators not freed here - cleanup happens in executeCanonicalize
         const parse_ast = parse.parse(&allocators, &env.common) catch {
             // Parse failed but we still have partial env
-            const end_time = if (threads_available) std.time.nanoTimestamp() else 0;
+            const end_time = if (!is_freestanding) std.time.nanoTimestamp() else 0;
             return .{
                 .parsed = .{
                     .package_name = task.package_name,
@@ -2093,7 +2093,7 @@ pub const Coordinator = struct {
                     .module_env = env,
                     .cached_ast = undefined, // Will be handled in error case
                     .reports = reports,
-                    .parse_ns = if (threads_available) @intCast(end_time - start_time) else 0,
+                    .parse_ns = if (!is_freestanding) @intCast(end_time - start_time) else 0,
                 },
             };
         };
@@ -2111,7 +2111,7 @@ pub const Coordinator = struct {
             reports.append(worker_alloc, rep) catch {};
         }
 
-        const end_time = if (threads_available) std.time.nanoTimestamp() else 0;
+        const end_time = if (!is_freestanding) std.time.nanoTimestamp() else 0;
 
         return .{
             .parsed = .{
@@ -2122,14 +2122,14 @@ pub const Coordinator = struct {
                 .module_env = env,
                 .cached_ast = parse_ast,
                 .reports = reports,
-                .parse_ns = if (threads_available) @intCast(end_time - start_time) else 0,
+                .parse_ns = if (!is_freestanding) @intCast(end_time - start_time) else 0,
             },
         };
     }
 
     /// Execute a canonicalize task (pure function)
     fn executeCanonicalize(self: *Coordinator, task: CanonicalizeTask) WorkerResult {
-        const start_time = if (threads_available) std.time.nanoTimestamp() else 0;
+        const start_time = if (!is_freestanding) std.time.nanoTimestamp() else 0;
 
         const env = task.module_env;
         const ast = task.cached_ast;
@@ -2169,12 +2169,13 @@ pub const Coordinator = struct {
             task.package_name,
             null, // Coordinator handles import resolution separately
             known_modules.items,
+            self.file_provider,
         ) catch {};
 
-        const canon_end = if (threads_available) std.time.nanoTimestamp() else 0;
+        const canon_end = if (!is_freestanding) std.time.nanoTimestamp() else 0;
 
         // Collect diagnostics
-        const diag_start = if (threads_available) std.time.nanoTimestamp() else 0;
+        const diag_start = if (!is_freestanding) std.time.nanoTimestamp() else 0;
         // Use worker allocator (thread-safe in multi-threaded mode) for result data
         const worker_alloc = self.getWorkerAllocator();
         // Pre-allocate to reduce allocation contention in multi-threaded mode
@@ -2187,7 +2188,7 @@ pub const Coordinator = struct {
             const rep = env.diagnosticToReport(d, worker_alloc, task.path) catch continue;
             reports.append(worker_alloc, rep) catch {};
         }
-        const diag_end = if (threads_available) std.time.nanoTimestamp() else 0;
+        const diag_end = if (!is_freestanding) std.time.nanoTimestamp() else 0;
 
         // Discover imports from env.imports
         // Pre-allocate to reduce allocation contention in multi-threaded mode
@@ -2250,15 +2251,15 @@ pub const Coordinator = struct {
                 .discovered_local_imports = local_imports,
                 .discovered_external_imports = external_imports,
                 .reports = reports,
-                .canonicalize_ns = if (threads_available) @intCast(canon_end - start_time) else 0,
-                .canonicalize_diagnostics_ns = if (threads_available) @intCast(diag_end - diag_start) else 0,
+                .canonicalize_ns = if (!is_freestanding) @intCast(canon_end - start_time) else 0,
+                .canonicalize_diagnostics_ns = if (!is_freestanding) @intCast(diag_end - diag_start) else 0,
             },
         };
     }
 
     /// Execute a type-check task (pure function)
     fn executeTypeCheck(self: *Coordinator, task: TypeCheckTask) WorkerResult {
-        const start_time = if (threads_available) std.time.nanoTimestamp() else 0;
+        const start_time = if (!is_freestanding) std.time.nanoTimestamp() else 0;
 
         const env = task.module_env;
 
@@ -2290,10 +2291,10 @@ pub const Coordinator = struct {
         };
         defer checker.deinit();
 
-        const check_end = if (threads_available) std.time.nanoTimestamp() else 0;
+        const check_end = if (!is_freestanding) std.time.nanoTimestamp() else 0;
 
         // Collect diagnostics
-        const diag_start = if (threads_available) std.time.nanoTimestamp() else 0;
+        const diag_start = if (!is_freestanding) std.time.nanoTimestamp() else 0;
         // Use worker allocator (thread-safe in multi-threaded mode) for result data
         const worker_alloc = self.getWorkerAllocator();
         // Pre-allocate to reduce allocation contention in multi-threaded mode
@@ -2333,7 +2334,7 @@ pub const Coordinator = struct {
             reports.append(worker_alloc, rep) catch {};
         }
 
-        const diag_end = if (threads_available) std.time.nanoTimestamp() else 0;
+        const diag_end = if (!is_freestanding) std.time.nanoTimestamp() else 0;
 
         // Free imported_envs slice (owned by coordinator)
         self.gpa.free(task.imported_envs);
@@ -2346,8 +2347,8 @@ pub const Coordinator = struct {
                 .path = task.path,
                 .module_env = env,
                 .reports = reports,
-                .type_check_ns = if (threads_available) @intCast(check_end - start_time) else 0,
-                .check_diagnostics_ns = if (threads_available) @intCast(diag_end - diag_start) else 0,
+                .type_check_ns = if (!is_freestanding) @intCast(check_end - start_time) else 0,
+                .check_diagnostics_ns = if (!is_freestanding) @intCast(diag_end - diag_start) else 0,
             },
         };
     }
@@ -2367,7 +2368,7 @@ pub const Coordinator = struct {
         // Each worker has its own allocators for thread safety.
         // - gpa: page_allocator for long-lived data (ModuleEnv, source)
         // - arena: for temporary allocations, reset between tasks
-        const backing = if (threads_available) std.heap.page_allocator else self.gpa;
+        const backing = if (!is_freestanding) std.heap.page_allocator else self.gpa;
         var worker_allocs = WorkerAllocators.init(backing);
         defer worker_allocs.deinit();
 
@@ -2544,7 +2545,7 @@ test "Coordinator isComplete logic" {
 
 test "Channel in coordinator context" {
     // Skip on wasm
-    if (builtin.target.cpu.arch == .wasm32) return error.SkipZigTest;
+    if (is_freestanding) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
 

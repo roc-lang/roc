@@ -113,6 +113,15 @@ test = |{}| {
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign (ident "echo!"))
+		(e-hosted-lambda (symbol "echo!")
+			(args
+				(p-underscore)))
+		(annotation
+			(ty-fn (effectful true)
+				(ty-lookup (name "Str") (builtin))
+				(ty-record))))
+	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda
 			(args
@@ -164,6 +173,7 @@ test = |{}| {
 ~~~clojure
 (inferred-types
 	(defs
+		(patt (type "Str => {}"))
 		(patt (type "_arg -> {}"))
 		(patt (type "Error"))
 		(patt (type "{ .. } -> Error")))
@@ -171,6 +181,7 @@ test = |{}| {
 		(nominal (type "Error")
 			(ty-header (name "Utf8Format"))))
 	(expressions
+		(expr (type "Str => {}"))
 		(expr (type "_arg -> {}"))
 		(expr (type "Error, Error -> List(U8)"))
 		(expr (type "{ .. } -> Error"))))

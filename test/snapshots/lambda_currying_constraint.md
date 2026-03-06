@@ -33,7 +33,7 @@ makeAdder = |x| |y| x + y
 ```
                     ^^^^^
 
-The value's type, which does not have a method named**plus**, is:
+The value's type, which does not have a method named **plus**, is:
 
     a
 
