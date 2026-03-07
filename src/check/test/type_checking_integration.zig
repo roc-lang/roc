@@ -1937,7 +1937,7 @@ test "check type - record - access - method missing parentheses" {
         \\```
         \\     ^^^^^^^^^^
         \\
-        \\Method calls require parentheses even with no arguments. Use `my_method`() instead.
+        \\Method calls require parentheses even with no arguments. Use `my_method()` instead.
         \\
         \\
     );
