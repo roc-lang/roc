@@ -281,6 +281,7 @@ pub const ReportBuilder = struct {
             bytes: []const u8,
             link: []const u8,
             ident: Ident.Idx,
+            ident_call: Ident.Idx,
             num_ord: u32,
             num: u32,
         },
@@ -311,6 +312,15 @@ pub const ReportBuilder = struct {
         fn ident(b: Ident.Idx) Doc {
             return Doc{
                 .type_ = .{ .ident = b },
+                .preceding_space = true,
+                .annotation = null,
+            };
+        }
+
+        /// Create a Doc that renders as "name()" — for showing a method call suggestion.
+        fn identCall(b: Ident.Idx) Doc {
+            return Doc{
+                .type_ = .{ .ident_call = b },
                 .preceding_space = true,
                 .annotation = null,
             };
@@ -367,6 +377,16 @@ pub const ReportBuilder = struct {
                         try report.document.addAnnotated(ident_bytes, annotation);
                     } else {
                         try report.document.addReflowingText(ident_bytes);
+                    }
+                },
+                .ident_call => |i| {
+                    var buf: [512]u8 = undefined;
+                    const with_parens = try std.fmt.bufPrint(&buf, "{s}()", .{builder.can_ir.getIdent(i)});
+                    const owned = try report.addOwnedString(with_parens);
+                    if (doc.annotation) |annotation| {
+                        try report.document.addAnnotated(owned, annotation);
+                    } else {
+                        try report.document.addReflowingText(owned);
                     }
                 },
                 .num_ord => |ord| {
@@ -2133,8 +2153,7 @@ pub const ReportBuilder = struct {
                         &.{
                             &.{
                                 D.bytes("Method calls require parentheses even with no arguments. Use"),
-                                D.ident(ctx.field_name).withAnnotation(.inline_code),
-                                D.bytes("()").withNoPrecedingSpace(),
+                                D.identCall(ctx.field_name).withAnnotation(.inline_code),
                                 D.bytes("instead."),
                             },
                         },
