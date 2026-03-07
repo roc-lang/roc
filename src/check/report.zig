@@ -2118,6 +2118,23 @@ pub const ReportBuilder = struct {
         const region = ProblemRegion{ .simple = regionIdxFrom(types.actual_var) };
         switch (record) {
             .not_a_record => {
+                if (ctx.is_method) {
+                    return try self.makeCustomReport(
+                        region,
+                        &.{
+                            D.ident(ctx.field_name).withAnnotation(.inline_code),
+                            D.bytes("is a method, not a record field. Did you forget the parentheses?"),
+                        },
+                        &.{
+                            &.{
+                                D.bytes("Method calls require parentheses even with no arguments. Use"),
+                                D.ident(ctx.field_name).withAnnotation(.inline_code),
+                                D.bytes("()").withNoPrecedingSpace(),
+                                D.bytes("instead."),
+                            },
+                        },
+                    );
+                }
                 return try self.makeBadTypeReport(
                     region,
                     &.{D.bytes("This is not a record, so it does not have any fields to access:")},

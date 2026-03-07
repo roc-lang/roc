@@ -4380,10 +4380,16 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     .record = .{ .fields = record_field_range, .ext = record_ext_var },
                 } }, env, expr_region);
 
+                // Check if the field name is actually a method on the receiver type.
+                // This helps provide a better error when the user writes `receiver.method`
+                // instead of `receiver.method()`.
+                const is_method = try self.isMethodOnNominalType(receiver_var, dot_access.field_name);
+
                 // Then, unify the actual receiver type with the expected record
                 _ = try self.unifyInContext(record_being_accessed, receiver_var, env, .{ .record_access = .{
                     .field_name = dot_access.field_name,
                     .field_region = dot_access.field_name_region,
+                    .is_method = is_method,
                 } });
                 _ = try self.unify(expr_var, record_field_var, env);
             }
@@ -5931,6 +5937,44 @@ fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
         }
     }
     self.constraints.items.clearRetainingCapacity();
+}
+
+/// Returns true if `method_ident` is a known method on the nominal type of `receiver_var`.
+/// Used to detect when a user writes `receiver.method` (missing parentheses) instead of
+/// `receiver.method()`.
+fn isMethodOnNominalType(self: *Self, receiver_var: Var, method_ident: Ident.Idx) std.mem.Allocator.Error!bool {
+    const nominal = switch (self.types.resolveVar(receiver_var).desc.content) {
+        .structure => |s| switch (s) {
+            .nominal_type => |n| n,
+            else => return false,
+        },
+        else => return false,
+    };
+
+    const origin_module_ident = nominal.origin_module;
+    // Find the module env that owns the type's method definitions.
+    const original_env: *const ModuleEnv = blk: {
+        // Type is defined in the module we're currently compiling.
+        if (origin_module_ident == self.builtin_ctx.module_name) break :blk self.cir;
+        // Type is defined in the Builtin module (and we're not compiling it).
+        if (origin_module_ident == self.cir.idents.builtin_module) {
+            break :blk if (self.builtin_ctx.builtin_module) |builtin_env| builtin_env else self.cir;
+        }
+        // Type is defined in an imported module; find it by matching idents.
+        // insertIdent converts the module name string to an Ident.Idx for
+        // index-based comparison (same approach as checkStaticDispatchConstraints).
+        for (self.imported_modules) |imported_env| {
+            const imported_name = if (!imported_env.qualified_module_ident.isNone())
+                imported_env.getIdent(imported_env.qualified_module_ident)
+            else
+                imported_env.module_name;
+            const imported_module_ident = try self.cir.insertIdent(base.Ident.for_text(imported_name));
+            if (imported_module_ident == origin_module_ident) break :blk imported_env;
+        }
+        return false; // Origin module not found; cannot determine if it's a method.
+    };
+
+    return original_env.lookupMethodIdentFromEnvConst(self.cir, nominal.ident.ident_idx, method_ident) != null;
 }
 
 /// Check static dispatch constraints

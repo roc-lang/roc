@@ -181,6 +181,9 @@ pub const Context = union(enum) {
         /// We have to use the real region here, because the field does not
         /// have its own CIR node
         field_region: base.Region,
+        /// True if field_name is actually a method on the receiver type,
+        /// i.e. the user wrote `receiver.method` instead of `receiver.method()`
+        is_method: bool = false,
     };
 
     /// Context for record update type errors
