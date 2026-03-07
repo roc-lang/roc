@@ -224,6 +224,8 @@ pub const ReportBuilder = struct {
     const ProblemRegion = union(enum) {
         simple: Region.Idx,
         focused: struct { outer: Region.Idx, highlight: Region.Idx },
+        /// A direct Region value, for when only a Region (not a Region.Idx) is available.
+        region: Region,
     };
 
     /// Region for source highlighting - can be either a Region.Idx or a direct Region
@@ -435,6 +437,7 @@ pub const ReportBuilder = struct {
             .focused => |ctx| {
                 try self.addFocusedSourceHighlight(&report, ctx.outer, ctx.highlight);
             },
+            .region => |r| try self.addSourceHighlightRegion(&report, r),
         }
         try report.document.addLineBreak();
 
@@ -498,6 +501,7 @@ pub const ReportBuilder = struct {
         switch (region) {
             .simple => |region_idx| try self.addSourceHighlight(&report, region_idx),
             .focused => |ctx| try self.addFocusedSourceHighlight(&report, ctx.outer, ctx.highlight),
+            .region => |r| try self.addSourceHighlightRegion(&report, r),
         }
         try report.document.addLineBreak();
 
@@ -541,6 +545,7 @@ pub const ReportBuilder = struct {
             .focused => |ctx| {
                 try self.addFocusedSourceHighlight(&report, ctx.outer, ctx.highlight);
             },
+            .region => |r| try self.addSourceHighlightRegion(&report, r),
         }
 
         // Print static hints
@@ -2120,7 +2125,7 @@ pub const ReportBuilder = struct {
             .not_a_record => {
                 if (ctx.is_method) {
                     return try self.makeCustomReport(
-                        region,
+                        ProblemRegion{ .region = ctx.field_region },
                         &.{
                             D.ident(ctx.field_name).withAnnotation(.inline_code),
                             D.bytes("is a method, not a record field. Did you forget the parentheses?"),

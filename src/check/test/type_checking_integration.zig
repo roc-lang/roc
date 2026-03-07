@@ -1822,11 +1822,11 @@ test "check type - record - access - method missing parentheses" {
     try checkTypesModule(source, .fail_with,
         \\**TYPE MISMATCH**
         \\`my_method` is a method, not a record field. Did you forget the parentheses?
-        \\**test:6:5:6:6:**
+        \\**test:6:6:6:16:**
         \\```roc
         \\y = x.my_method
         \\```
-        \\    ^
+        \\     ^^^^^^^^^^
         \\
         \\Method calls require parentheses even with no arguments. Use `my_method`() instead.
         \\
