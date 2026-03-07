@@ -151,6 +151,15 @@ pub const RcInsertPass = struct {
         try self.countUsesInto(expr_id, &self.symbol_use_counts);
     }
 
+    fn bumpUseCount(target: *std.AutoHashMap(u64, u32), key: u64) Allocator.Error!void {
+        const gop = try target.getOrPut(key);
+        if (gop.found_existing) {
+            gop.value_ptr.* += 1;
+        } else {
+            gop.value_ptr.* = 1;
+        }
+    }
+
     /// Count how many times each symbol is referenced, writing into `target`.
     /// Also records the layout for each symbol found in bind patterns.
     fn countUsesInto(self: *RcInsertPass, expr_id: LirExprId, target: *std.AutoHashMap(u64, u32)) Allocator.Error!void {
@@ -161,12 +170,7 @@ pub const RcInsertPass = struct {
             .lookup => |lookup| {
                 if (!lookup.symbol.isNone()) {
                     const key = @as(u64, @bitCast(lookup.symbol));
-                    const gop = try target.getOrPut(key);
-                    if (gop.found_existing) {
-                        gop.value_ptr.* += 1;
-                    } else {
-                        gop.value_ptr.* = 1;
-                    }
+                    try bumpUseCount(target, key);
                     if (!self.symbol_layouts.contains(key)) {
                         try self.symbol_layouts.put(key, lookup.layout_idx);
                     }
@@ -183,6 +187,16 @@ pub const RcInsertPass = struct {
                     try self.countUsesInto(stmt.binding().expr, target);
                 }
                 try self.countUsesInto(block.final_expr, target);
+            },
+            .borrow_scope => |scope| {
+                const bindings = self.store.getBorrowBindings(scope.bindings);
+                for (bindings) |binding| {
+                    try self.registerPatternSymbolInto(binding.pattern, target);
+                }
+                for (bindings) |binding| {
+                    try self.countUsesInto(binding.expr, target);
+                }
+                try self.countUsesInto(scope.body, target);
             },
             .call => |call| {
                 try self.countUsesInto(call.fn_expr, target);
@@ -389,6 +403,177 @@ pub const RcInsertPass = struct {
         }
     }
 
+    /// Count only the borrow-scope uses that consume their input value.
+    /// Borrowed bindings need one extra ref for each such use so the original
+    /// binding can remain alive until scope cleanup.
+    fn countBorrowConsumedUsesInto(
+        self: *RcInsertPass,
+        expr_id: LirExprId,
+        target: *std.AutoHashMap(u64, u32),
+    ) Allocator.Error!void {
+        if (expr_id.isNone()) return;
+
+        const expr = self.store.getExpr(expr_id);
+        switch (expr) {
+            .block => |block| {
+                const stmts = self.store.getStmts(block.stmts);
+                for (stmts) |stmt| {
+                    try self.countBorrowConsumedUsesInto(stmt.binding().expr, target);
+                }
+                try self.countBorrowConsumedUsesInto(block.final_expr, target);
+            },
+            .borrow_scope => |scope| {
+                const bindings = self.store.getBorrowBindings(scope.bindings);
+                for (bindings) |binding| {
+                    try self.countBorrowConsumedUsesInto(binding.expr, target);
+                }
+                try self.countBorrowConsumedUsesInto(scope.body, target);
+            },
+            .if_then_else => |ite| {
+                const branches = self.store.getIfBranches(ite.branches);
+                for (branches) |branch| {
+                    try self.countBorrowConsumedUsesInto(branch.cond, target);
+                    try self.countBorrowConsumedUsesInto(branch.body, target);
+                }
+                try self.countBorrowConsumedUsesInto(ite.final_else, target);
+            },
+            .match_expr => |w| {
+                try self.countBorrowConsumedValueInto(w.value, target);
+                const branches = self.store.getMatchBranches(w.branches);
+                for (branches) |branch| {
+                    try self.countBorrowConsumedUsesInto(branch.guard, target);
+                    try self.countBorrowConsumedUsesInto(branch.body, target);
+                }
+            },
+            .discriminant_switch => |ds| {
+                try self.countBorrowConsumedValueInto(ds.value, target);
+                const branches = self.store.getExprSpan(ds.branches);
+                for (branches) |branch| {
+                    try self.countBorrowConsumedUsesInto(branch, target);
+                }
+            },
+            .struct_access => |sa| {
+                try self.countBorrowConsumedValueInto(sa.struct_expr, target);
+            },
+            .tag_payload_access => |tpa| {
+                try self.countBorrowConsumedValueInto(tpa.value, target);
+            },
+            .call => |call| {
+                try self.countBorrowConsumedUsesInto(call.fn_expr, target);
+                const args = self.store.getExprSpan(call.args);
+                for (args) |arg_id| {
+                    try self.countBorrowConsumedUsesInto(arg_id, target);
+                }
+            },
+            .list => |list| {
+                const elems = self.store.getExprSpan(list.elems);
+                for (elems) |elem_id| {
+                    try self.countBorrowConsumedUsesInto(elem_id, target);
+                }
+            },
+            .struct_ => |s| {
+                const fields = self.store.getExprSpan(s.fields);
+                for (fields) |field_id| {
+                    try self.countBorrowConsumedUsesInto(field_id, target);
+                }
+            },
+            .tag => |t| {
+                const args = self.store.getExprSpan(t.args);
+                for (args) |arg_id| {
+                    try self.countBorrowConsumedUsesInto(arg_id, target);
+                }
+            },
+            .nominal => |n| try self.countBorrowConsumedUsesInto(n.backing_expr, target),
+            .early_return => |ret| try self.countBorrowConsumedUsesInto(ret.expr, target),
+            .dbg => |d| try self.countBorrowConsumedUsesInto(d.expr, target),
+            .expect => |e| {
+                try self.countBorrowConsumedUsesInto(e.cond, target);
+                try self.countBorrowConsumedUsesInto(e.body, target);
+            },
+            .low_level => |ll| {
+                const args = self.store.getExprSpan(ll.args);
+                switch (ll.op) {
+                    .str_is_eq, .str_caseless_ascii_equals => {
+                        for (args) |arg_id| {
+                            try self.countBorrowConsumedValueInto(arg_id, target);
+                        }
+                    },
+                    else => {
+                        for (args) |arg_id| {
+                            try self.countBorrowConsumedUsesInto(arg_id, target);
+                        }
+                    },
+                }
+            },
+            .hosted_call => |hc| {
+                const args = self.store.getExprSpan(hc.args);
+                for (args) |arg_id| {
+                    try self.countBorrowConsumedUsesInto(arg_id, target);
+                }
+            },
+            .str_concat => |span| {
+                const parts = self.store.getExprSpan(span);
+                for (parts) |part_id| {
+                    try self.countBorrowConsumedUsesInto(part_id, target);
+                }
+            },
+            .int_to_str => |its| try self.countBorrowConsumedUsesInto(its.value, target),
+            .float_to_str => |fts| try self.countBorrowConsumedUsesInto(fts.value, target),
+            .dec_to_str => |d| try self.countBorrowConsumedUsesInto(d, target),
+            .str_escape_and_quote => |s| try self.countBorrowConsumedUsesInto(s, target),
+            .for_loop => |fl| {
+                try self.countBorrowConsumedUsesInto(fl.list_expr, target);
+                try self.countBorrowConsumedUsesInto(fl.body, target);
+            },
+            .while_loop => |wl| {
+                try self.countBorrowConsumedUsesInto(wl.cond, target);
+                try self.countBorrowConsumedUsesInto(wl.body, target);
+            },
+            .lookup,
+            .lambda,
+            .incref,
+            .decref,
+            .free,
+            .i64_literal,
+            .i128_literal,
+            .f64_literal,
+            .f32_literal,
+            .dec_literal,
+            .str_literal,
+            .bool_literal,
+            .empty_list,
+            .zero_arg_tag,
+            .crash,
+            .runtime_error,
+            .break_expr,
+            => {},
+        }
+    }
+
+    fn countBorrowConsumedValueInto(
+        self: *RcInsertPass,
+        expr_id: LirExprId,
+        target: *std.AutoHashMap(u64, u32),
+    ) Allocator.Error!void {
+        if (expr_id.isNone()) return;
+
+        switch (self.store.getExpr(expr_id)) {
+            .lookup => |lookup| {
+                if (!lookup.symbol.isNone()) {
+                    const key = @as(u64, @bitCast(lookup.symbol));
+                    try bumpUseCount(target, key);
+                    if (!self.symbol_layouts.contains(key)) {
+                        try self.symbol_layouts.put(key, lookup.layout_idx);
+                    }
+                }
+            },
+            .nominal => |n| try self.countBorrowConsumedValueInto(n.backing_expr, target),
+            .block => |block| try self.countBorrowConsumedValueInto(block.final_expr, target),
+            .borrow_scope => |scope| try self.countBorrowConsumedValueInto(scope.body, target),
+            else => try self.countBorrowConsumedUsesInto(expr_id, target),
+        }
+    }
+
     /// Walk a pattern tree, calling ctx.onBind(symbol, layout_idx, reassignable) at each
     /// .bind and .as_pattern leaf. Handles the full recursion over all pattern
     /// variants so callers only need to implement the leaf action.
@@ -454,6 +639,7 @@ pub const RcInsertPass = struct {
 
         return switch (expr) {
             .block => |block| self.processBlock(expr_id, block.stmts, block.final_expr, block.result_layout, region),
+            .borrow_scope => |scope| self.processBorrowScope(scope, region),
             .if_then_else => |ite| self.processIfThenElse(ite.branches, ite.final_else, ite.result_layout, region),
             .match_expr => |w| self.processMatch(w.value, w.value_layout, w.branches, w.result_layout, region),
             .lambda => |lam| self.processLambda(lam, region, expr_id),
@@ -783,7 +969,7 @@ pub const RcInsertPass = struct {
             }
 
             // Shadowing via repeated decls must release the previous binding.
-            if (stmt == .decl or stmt == .decl_borrow) {
+            if (stmt == .decl) {
                 const before_len = stmt_buf.items.len;
                 try self.emitDeclShadowDecrefsForPattern(b.pattern, &block_decl_layouts, region, &stmt_buf);
                 if (stmt_buf.items.len > before_len) changed = true;
@@ -793,7 +979,6 @@ pub const RcInsertPass = struct {
             const new_binding: LirStmt.Binding = .{ .pattern = b.pattern, .expr = new_expr };
             try stmt_buf.append(self.allocator, switch (stmt) {
                 .decl => .{ .decl = new_binding },
-                .decl_borrow => .{ .decl_borrow = new_binding },
                 .mutate => .{ .mutate = new_binding },
             });
 
@@ -802,7 +987,6 @@ pub const RcInsertPass = struct {
             const before_len = stmt_buf.items.len;
             switch (stmt) {
                 .decl => try self.emitBlockIncrefsForPattern(b.pattern, region, &stmt_buf, stmts, stmt_index, final_expr),
-                .decl_borrow => try self.emitBlockBorrowIncrefsForPattern(b.pattern, region, &stmt_buf, stmts, stmt_index, final_expr),
                 .mutate => try self.emitBlockIncrefsForPattern(b.pattern, region, &stmt_buf, stmts, stmt_index, final_expr),
             }
             if (stmt_buf.items.len > before_len) changed = true;
@@ -810,7 +994,7 @@ pub const RcInsertPass = struct {
             // Shadowed decls can introduce a fresh binding for a symbol whose
             // global uses were all consumed by the previous binding generation.
             // Release such unused new bindings immediately.
-            if (stmt == .decl or stmt == .decl_borrow) {
+            if (stmt == .decl) {
                 const before_shadow_unused = stmt_buf.items.len;
                 try self.emitDeclShadowedUnusedDecrefsForPattern(b.pattern, &block_decl_layouts, region, &stmt_buf);
                 if (stmt_buf.items.len > before_shadow_unused) changed = true;
@@ -831,14 +1015,6 @@ pub const RcInsertPass = struct {
                 const b = stmt.binding();
                 switch (stmt) {
                     .decl => try self.emitBlockDecrefsForPattern(
-                        b.pattern,
-                        region,
-                        &stmt_buf,
-                        stmts,
-                        stmt_index,
-                        final_expr,
-                    ),
-                    .decl_borrow => try self.emitBlockBorrowDecrefsForPattern(
                         b.pattern,
                         region,
                         &stmt_buf,
@@ -871,6 +1047,53 @@ pub const RcInsertPass = struct {
             .stmts = new_stmts,
             .final_expr = new_final,
             .result_layout = result_layout,
+        } }, region);
+    }
+
+    fn processBorrowScope(
+        self: *RcInsertPass,
+        scope: anytype,
+        region: Region,
+    ) Allocator.Error!LirExprId {
+        var stmt_buf = std.ArrayList(LirStmt).empty;
+        defer stmt_buf.deinit(self.allocator);
+
+        var borrow_consumed_uses = std.AutoHashMap(u64, u32).init(self.allocator);
+        defer borrow_consumed_uses.deinit();
+        try self.countBorrowConsumedUsesInto(scope.body, &borrow_consumed_uses);
+
+        const bindings = self.store.getBorrowBindings(scope.bindings);
+        for (bindings) |binding| {
+            var scratch = std.AutoHashMap(u64, u32).init(self.allocator);
+            defer scratch.deinit();
+            try self.registerPatternSymbolInto(binding.pattern, &scratch);
+            const new_expr = try self.processExpr(binding.expr);
+            try stmt_buf.append(self.allocator, .{ .decl = .{
+                .pattern = binding.pattern,
+                .expr = new_expr,
+            } });
+            try self.emitBorrowRcOpsForPatternInto(binding.pattern, &borrow_consumed_uses, region, &stmt_buf);
+        }
+
+        const new_body = try self.processExpr(scope.body);
+        try stmt_buf.append(self.allocator, .{ .decl = .{
+            .pattern = scope.result_pattern,
+            .expr = new_body,
+        } });
+
+        for (bindings) |binding| {
+            try self.emitBlockBorrowDecrefsForPattern(binding.pattern, region, &stmt_buf, &.{}, 0, LirExprId.none);
+        }
+
+        const final_lookup = try self.store.addExpr(.{ .lookup = .{
+            .symbol = scope.result_symbol,
+            .layout_idx = scope.result_layout,
+        } }, region);
+        const stmts = try self.store.addStmts(stmt_buf.items);
+        return self.store.addExpr(.{ .block = .{
+            .stmts = stmts,
+            .final_expr = final_lookup,
+            .result_layout = scope.result_layout,
         } }, region);
     }
 
@@ -1396,6 +1619,15 @@ pub const RcInsertPass = struct {
                 }
                 try self.collectExprBoundSymbols(block.final_expr, set);
             },
+            .borrow_scope => |scope| {
+                const bindings = self.store.getBorrowBindings(scope.bindings);
+                for (bindings) |binding| {
+                    try self.collectPatternSymbols(binding.pattern, set);
+                    try self.collectExprBoundSymbols(binding.expr, set);
+                }
+                try self.collectPatternSymbols(scope.result_pattern, set);
+                try self.collectExprBoundSymbols(scope.body, set);
+            },
             .if_then_else => |ite| {
                 const ibs = self.store.getIfBranches(ite.branches);
                 for (ibs) |branch| {
@@ -1809,18 +2041,6 @@ pub const RcInsertPass = struct {
         });
     }
 
-    /// Borrow temps keep the original produced reference alive until block exit.
-    /// Their generated uses are structural borrows, so no per-use incref is needed.
-    fn emitBlockBorrowIncrefsForPattern(
-        _: *RcInsertPass,
-        _: LirPatternId,
-        _: Region,
-        _: *std.ArrayList(LirStmt),
-        _: []const LirStmt,
-        _: usize,
-        _: LirExprId,
-    ) Allocator.Error!void {}
-
     /// Recursively emit decrefs for unused refcounted symbols bound by a pattern.
     /// Uses self.symbol_use_counts (global counts) — for use in processBlock.
     fn emitBlockDecrefsForPattern(
@@ -2175,6 +2395,17 @@ fn countRcOps(store: *const LirExprStore, expr_id: LirExprId) RcOpCounts {
                 decrefs += sub.decrefs;
             }
             const sub = countRcOps(store, block.final_expr);
+            increfs += sub.increfs;
+            decrefs += sub.decrefs;
+        },
+        .borrow_scope => |scope| {
+            const bindings = store.getBorrowBindings(scope.bindings);
+            for (bindings) |binding| {
+                const sub = countRcOps(store, binding.expr);
+                increfs += sub.increfs;
+                decrefs += sub.decrefs;
+            }
+            const sub = countRcOps(store, scope.body);
             increfs += sub.increfs;
             decrefs += sub.decrefs;
         },

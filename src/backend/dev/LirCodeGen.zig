@@ -1314,6 +1314,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .if_then_else => |ite| ite.result_layout,
                 .match_expr => |w| w.result_layout,
                 .block => |b| b.result_layout,
+                .borrow_scope => |b| b.result_layout,
                 .dbg => |d| d.result_layout,
                 .expect => |e| e.result_layout,
                 .early_return => |er| er.ret_layout,
@@ -1397,6 +1398,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 // Blocks
                 .block => |block| try self.generateBlock(block),
+                .borrow_scope => {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("dev backend invariant violated: borrow_scope must be removed before codegen", .{});
+                    }
+                    unreachable;
+                },
 
                 // Function calls and lambdas
                 .call => |call| try self.generateCall(call),

@@ -2010,14 +2010,10 @@ test "structural equality: record == produces match_expr (field-by-field)" {
     defer env.deinit();
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
-    // Structural equality binds each operand once, then evaluates the comparison.
-    try testing.expect(result == .block);
-    const block = result.block;
-    const stmts = env.mir_store.getStmts(block.stmts);
-    try testing.expectEqual(@as(usize, 2), stmts.len);
-    try testing.expect(stmts[0] == .decl_borrow);
-    try testing.expect(stmts[1] == .decl_borrow);
-    try testing.expect(env.mir_store.getExpr(block.final_expr) == .match_expr);
+    try testing.expect(result == .borrow_scope);
+    const bindings = env.mir_store.getBorrowBindings(result.borrow_scope.bindings);
+    try testing.expectEqual(@as(usize, 2), bindings.len);
+    try testing.expect(env.mir_store.getExpr(result.borrow_scope.body) == .match_expr);
     // Return type should be Bool
     const mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
     try testing.expect(mono == .prim);
@@ -2060,13 +2056,10 @@ test "structural equality: tuple == produces match_expr" {
     defer env.deinit();
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
-    try testing.expect(result == .block);
-    const block = result.block;
-    const stmts = env.mir_store.getStmts(block.stmts);
-    try testing.expectEqual(@as(usize, 2), stmts.len);
-    try testing.expect(stmts[0] == .decl_borrow);
-    try testing.expect(stmts[1] == .decl_borrow);
-    try testing.expect(env.mir_store.getExpr(block.final_expr) == .match_expr);
+    try testing.expect(result == .borrow_scope);
+    const bindings = env.mir_store.getBorrowBindings(result.borrow_scope.bindings);
+    try testing.expectEqual(@as(usize, 2), bindings.len);
+    try testing.expect(env.mir_store.getExpr(result.borrow_scope.body) == .match_expr);
     const mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
     try testing.expect(mono == .prim);
     try testing.expectEqual(Monotype.Prim.bool, mono.prim);
@@ -2082,13 +2075,10 @@ test "structural equality: tag union == produces nested match_expr" {
     defer env.deinit();
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
-    try testing.expect(result == .block);
-    const block = result.block;
-    const stmts = env.mir_store.getStmts(block.stmts);
-    try testing.expectEqual(@as(usize, 2), stmts.len);
-    try testing.expect(stmts[0] == .decl_borrow);
-    try testing.expect(stmts[1] == .decl_borrow);
-    try testing.expect(env.mir_store.getExpr(block.final_expr) == .match_expr);
+    try testing.expect(result == .borrow_scope);
+    const bindings = env.mir_store.getBorrowBindings(result.borrow_scope.bindings);
+    try testing.expectEqual(@as(usize, 2), bindings.len);
+    try testing.expect(env.mir_store.getExpr(result.borrow_scope.body) == .match_expr);
     const mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
     try testing.expect(mono == .prim);
     try testing.expectEqual(Monotype.Prim.bool, mono.prim);
@@ -2102,14 +2092,10 @@ test "structural equality: single-field record produces run_low_level (no match)
     defer env.deinit();
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
-    try testing.expect(result == .block);
-    const block = result.block;
-    const stmts = env.mir_store.getStmts(block.stmts);
-    try testing.expectEqual(@as(usize, 2), stmts.len);
-    try testing.expect(stmts[0] == .decl_borrow);
-    try testing.expect(stmts[1] == .decl_borrow);
-    // Single-field record equality still lowers directly to the field comparison.
-    try testing.expect(env.mir_store.getExpr(block.final_expr) == .run_low_level);
+    try testing.expect(result == .borrow_scope);
+    const bindings = env.mir_store.getBorrowBindings(result.borrow_scope.bindings);
+    try testing.expectEqual(@as(usize, 2), bindings.len);
+    try testing.expect(env.mir_store.getExpr(result.borrow_scope.body) == .run_low_level);
 }
 
 test "structural equality: nested record produces match_expr" {
@@ -2120,15 +2106,10 @@ test "structural equality: nested record produces match_expr" {
     defer env.deinit();
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
-    try testing.expect(result == .block);
-    const block = result.block;
-    const stmts = env.mir_store.getStmts(block.stmts);
-    try testing.expectEqual(@as(usize, 2), stmts.len);
-    try testing.expect(stmts[0] == .decl_borrow);
-    try testing.expect(stmts[1] == .decl_borrow);
-    // The outer field comparison recurses into inner structural equality, which
-    // is itself wrapped in a bind-once block.
-    try testing.expect(env.mir_store.getExpr(block.final_expr) == .block);
+    try testing.expect(result == .borrow_scope);
+    const bindings = env.mir_store.getBorrowBindings(result.borrow_scope.bindings);
+    try testing.expectEqual(@as(usize, 2), bindings.len);
+    try testing.expect(env.mir_store.getExpr(result.borrow_scope.body) == .block or env.mir_store.getExpr(result.borrow_scope.body) == .borrow_scope);
 }
 
 test "structural equality: list == produces block with length check" {
@@ -2139,8 +2120,9 @@ test "structural equality: list == produces block with length check" {
     defer env.deinit();
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
-    // List equality: { len = list_len(lhs); match num_is_eq(list_len(rhs), len) { ... } }
-    try testing.expect(result == .block);
+    try testing.expect(result == .borrow_scope);
+    const bindings = env.mir_store.getBorrowBindings(result.borrow_scope.bindings);
+    try testing.expectEqual(@as(usize, 2), bindings.len);
     const mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
     try testing.expect(mono == .prim);
     try testing.expectEqual(Monotype.Prim.bool, mono.prim);

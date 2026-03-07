@@ -752,6 +752,12 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
             // Generate the final expression (the block's result)
             try self.generateExpr(b.final_expr);
         },
+        .borrow_scope => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("wasm backend invariant violated: borrow_scope must be removed before codegen", .{});
+            }
+            unreachable;
+        },
         .lookup => |l| {
             const key: u64 = @bitCast(l.symbol);
             if (self.storage.locals.get(key)) |local_info| {
@@ -2080,6 +2086,7 @@ fn exprLayoutIdx(self: *Self, expr_id: LirExprId) layout.Idx {
     const expr = self.store.getExpr(expr_id);
     return switch (expr) {
         .block => |b| b.result_layout,
+        .borrow_scope => |b| b.result_layout,
         .lookup => |l| l.layout_idx,
         .if_then_else => |ite| ite.result_layout,
         .match_expr => |w| w.result_layout,
@@ -2135,6 +2142,7 @@ fn exprValType(self: *Self, expr_id: LirExprId) ValType {
         .bool_literal => .i32,
         .i128_literal, .dec_literal => .i32, // pointer to stack memory
         .block => |b| self.exprValType(b.final_expr),
+        .borrow_scope => |b| self.resolveValType(b.result_layout),
         .lookup => |l| self.resolveValType(l.layout_idx),
         .if_then_else => |ite| self.resolveValType(ite.result_layout),
         .match_expr => |w| self.resolveValType(w.result_layout),
@@ -2198,6 +2206,7 @@ fn isCompositeExpr(self: *const Self, expr_id: LirExprId) bool {
         .zero_arg_tag => |z| self.isCompositeLayout(z.union_layout),
         .nominal => |nom| self.isCompositeExpr(nom.backing_expr),
         .block => |b| self.isCompositeExpr(b.final_expr),
+        .borrow_scope => |b| self.isCompositeLayout(b.result_layout),
         .if_then_else => |ite| self.isCompositeLayout(ite.result_layout),
         .match_expr => |w| self.isCompositeLayout(w.result_layout),
         .lookup => |l| self.isCompositeLayout(l.layout_idx),
@@ -2227,6 +2236,7 @@ fn exprNeedsCompositeCallStabilization(self: *const Self, expr_id: LirExprId) bo
         .call => true,
         .nominal => |nom| self.exprNeedsCompositeCallStabilization(nom.backing_expr),
         .block => |b| self.exprNeedsCompositeCallStabilization(b.final_expr),
+        .borrow_scope => |_| false,
         .incref => |inc| self.exprNeedsCompositeCallStabilization(inc.value),
         .decref => |dec| self.exprNeedsCompositeCallStabilization(dec.value),
         .free => |f| self.exprNeedsCompositeCallStabilization(f.value),
@@ -6663,7 +6673,7 @@ fn generateList(self: *Self, l: anytype) Allocator.Error!void {
 
     // Get element layout and size
     const elem_layout = ls.getLayout(l.elem_layout);
-    const elem_size: u32 = ls.layoutSizeAlign(elem_layout).size;
+    const elem_size: u32 = self.layoutByteSize(l.elem_layout);
     const elem_align: u32 = @intCast(ls.layoutSizeAlign(elem_layout).alignment.toByteUnits());
 
     // Allocate space for all elements on the heap so list literals remain valid
@@ -7138,9 +7148,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // Get element layout from the list type
             const list_layout_idx = self.exprLayoutIdx(args[0]);
             const list_layout = ls.getLayout(list_layout_idx);
-            const list_info = ls.getListInfo(list_layout);
-            const elem_size: u32 = list_info.elem_size;
-            const elem_layout_idx = list_info.elem_layout_idx;
+            const elem_layout_idx = list_layout.data.list;
+            const elem_size: u32 = self.layoutByteSize(elem_layout_idx);
             const elem_is_composite = self.isCompositeLayout(elem_layout_idx);
 
             // Generate list expression and save pointer

@@ -193,14 +193,26 @@ pub const FieldNameSpan = extern struct {
     }
 };
 
+/// Span of borrow bindings stored in borrow_bindings array.
+pub const BorrowBindingSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() BorrowBindingSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: BorrowBindingSpan) bool {
+        return self.len == 0;
+    }
+};
+
 // --- Composite types ---
 
 /// A let binding in a block.
 pub const Stmt = union(enum) {
     /// Immutable binding (e.g. `x = expr`)
     decl_const: Binding,
-    /// Immutable binding whose expression result is kept as a stable borrowed temp.
-    decl_borrow: Binding,
     /// Mutable binding (e.g. `x = expr` declared with `var`)
     decl_var: Binding,
     /// Mutation of existing var (e.g. `x = new_value`)
@@ -210,6 +222,12 @@ pub const Stmt = union(enum) {
         pattern: PatternId,
         expr: ExprId,
     };
+};
+
+/// A binding introduced for the duration of a borrow scope.
+pub const BorrowBinding = struct {
+    pattern: PatternId,
+    expr: ExprId,
 };
 
 /// A branch in a match expression.
@@ -326,6 +344,12 @@ pub const Expr = union(enum) {
     block: struct {
         stmts: StmtSpan,
         final_expr: ExprId,
+    },
+
+    /// Borrow scope with compiler-generated lexical bindings.
+    borrow_scope: struct {
+        bindings: BorrowBindingSpan,
+        body: ExprId,
     },
 
     // --- Access ---
@@ -515,6 +539,9 @@ pub const Store = struct {
     /// Statements (let bindings in blocks)
     stmts: std.ArrayListUnmanaged(Stmt),
 
+    /// Borrow-scope bindings
+    borrow_bindings: std.ArrayListUnmanaged(BorrowBinding),
+
     /// Captures (closure captured variables)
     captures: std.ArrayListUnmanaged(Capture),
 
@@ -563,6 +590,7 @@ pub const Store = struct {
             .branches = .empty,
             .branch_patterns = .empty,
             .stmts = .empty,
+            .borrow_bindings = .empty,
             .captures = .empty,
             .monotype_store = try Monotype.Store.init(allocator),
             .lifted_lambdas = .empty,
@@ -585,6 +613,7 @@ pub const Store = struct {
         self.branches.deinit(allocator);
         self.branch_patterns.deinit(allocator);
         self.stmts.deinit(allocator);
+        self.borrow_bindings.deinit(allocator);
         self.captures.deinit(allocator);
         self.monotype_store.deinit(allocator);
         self.lifted_lambdas.deinit(allocator);
@@ -741,6 +770,20 @@ pub const Store = struct {
     pub fn getStmts(self: *const Store, span: StmtSpan) []const Stmt {
         if (span.len == 0) return &.{};
         return self.stmts.items[span.start..][0..span.len];
+    }
+
+    /// Add borrow bindings and return a BorrowBindingSpan.
+    pub fn addBorrowBindings(self: *Store, allocator: Allocator, binding_list: []const BorrowBinding) !BorrowBindingSpan {
+        if (binding_list.len == 0) return BorrowBindingSpan.empty();
+        const start: u32 = @intCast(self.borrow_bindings.items.len);
+        try self.borrow_bindings.appendSlice(allocator, binding_list);
+        return .{ .start = start, .len = @intCast(binding_list.len) };
+    }
+
+    /// Get borrow bindings from a BorrowBindingSpan.
+    pub fn getBorrowBindings(self: *const Store, span: BorrowBindingSpan) []const BorrowBinding {
+        if (span.len == 0) return &.{};
+        return self.borrow_bindings.items[span.start..][0..span.len];
     }
 
     /// Add captures and return a CaptureSpan.

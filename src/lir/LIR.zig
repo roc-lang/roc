@@ -192,11 +192,24 @@ pub const LirStmtSpan = extern struct {
     }
 };
 
+/// Span of borrow bindings stored in the LIR store.
+pub const LirBorrowBindingSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() LirBorrowBindingSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: LirBorrowBindingSpan) bool {
+        return self.len == 0;
+    }
+};
+
 /// A statement in a block — either a declaration or a mutation of an existing variable.
 /// RC insertion uses the distinction to emit a decref of the old value before mutation.
 pub const LirStmt = union(enum) {
     decl: Binding,
-    decl_borrow: Binding,
     mutate: Binding,
 
     pub const Binding = struct {
@@ -206,9 +219,15 @@ pub const LirStmt = union(enum) {
 
     pub fn binding(self: LirStmt) Binding {
         return switch (self) {
-            .decl, .decl_borrow, .mutate => |b| b,
+            .decl, .mutate => |b| b,
         };
     }
+};
+
+/// A lexical binding introduced for the duration of a borrow scope.
+pub const LirBorrowBinding = struct {
+    pattern: LirPatternId,
+    expr: LirExprId,
 };
 
 /// Lowered expression - all types are layouts, all references are global symbols.
@@ -340,6 +359,16 @@ pub const LirExpr = union(enum) {
     block: struct {
         stmts: LirStmtSpan,
         final_expr: LirExprId,
+        result_layout: layout.Idx,
+    },
+
+    /// Borrow scope carried through lowering until RC insertion lowers it to an
+    /// explicit block with ordinary setup/cleanup statements.
+    borrow_scope: struct {
+        bindings: LirBorrowBindingSpan,
+        result_symbol: Symbol,
+        result_pattern: LirPatternId,
+        body: LirExprId,
         result_layout: layout.Idx,
     },
 

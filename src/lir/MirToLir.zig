@@ -70,6 +70,7 @@ scratch_anf_stmts: std.ArrayList(LirStmt),
 scratch_lir_expr_ids: std.ArrayList(LirExprId),
 scratch_lir_pattern_ids: std.ArrayList(LirPatternId),
 scratch_lir_stmts: std.ArrayList(LirStmt),
+scratch_lir_borrow_bindings: std.ArrayList(LIR.LirBorrowBinding),
 scratch_lir_match_branches: std.ArrayList(LirMatchBranch),
 scratch_lir_captures: std.ArrayList(LirCapture),
 
@@ -99,6 +100,7 @@ pub fn init(
         .scratch_lir_expr_ids = std.ArrayList(LirExprId).empty,
         .scratch_lir_pattern_ids = std.ArrayList(LirPatternId).empty,
         .scratch_lir_stmts = std.ArrayList(LirStmt).empty,
+        .scratch_lir_borrow_bindings = std.ArrayList(LIR.LirBorrowBinding).empty,
         .scratch_lir_match_branches = std.ArrayList(LirMatchBranch).empty,
         .scratch_lir_captures = std.ArrayList(LirCapture).empty,
         .scratch_layouts = std.ArrayList(layout.Layout).empty,
@@ -114,6 +116,7 @@ pub fn deinit(self: *Self) void {
     self.scratch_lir_expr_ids.deinit(self.allocator);
     self.scratch_lir_pattern_ids.deinit(self.allocator);
     self.scratch_lir_stmts.deinit(self.allocator);
+    self.scratch_lir_borrow_bindings.deinit(self.allocator);
     self.scratch_lir_match_branches.deinit(self.allocator);
     self.scratch_lir_captures.deinit(self.allocator);
     self.scratch_layouts.deinit(self.allocator);
@@ -207,6 +210,7 @@ fn isCallableExpr(self: *Self, expr_id: LirExprId, depth: u16) bool {
         .lambda => true,
         .nominal => |nom| self.isCallableExpr(nom.backing_expr, depth + 1),
         .block => |b| self.isCallableExpr(b.final_expr, depth + 1),
+        .borrow_scope => |b| self.isCallableExpr(b.body, depth + 1),
         .lookup => |lk| blk: {
             const def_id = self.lir_store.getSymbolDef(lk.symbol) orelse break :blk false;
             break :blk self.isCallableExpr(def_id, depth + 1);
@@ -499,6 +503,7 @@ fn isAtomicExpr(expr: LirExpr) bool {
         .if_then_else,
         .match_expr,
         .block,
+        .borrow_scope,
         .early_return,
         .break_expr,
         .low_level,
@@ -560,6 +565,7 @@ fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
         .lambda => |l| self.lowerLambda(l, mono_idx, region),
         .call => |c| self.lowerCall(c, mono_idx, region),
         .block => |b| self.lowerBlock(b, mono_idx, region),
+        .borrow_scope => |b| self.lowerBorrowScope(b, mono_idx, region),
         .record_access => |ra| self.lowerRecordAccess(ra, mir_expr_id, region),
         .tuple_access => |ta| self.lowerTupleAccess(ta, mir_expr_id, region),
         .str_escape_and_quote => |s| blk: {
@@ -1457,7 +1463,7 @@ fn lowerBlock(self: *Self, block_data: anytype, mono_idx: Monotype.Idx, region: 
     // mutually-recursive closures inside the same block).
     for (mir_stmts) |stmt| {
         const binding = switch (stmt) {
-            .decl_const, .decl_borrow, .decl_var, .mutate_var => |b| b,
+            .decl_const, .decl_var, .mutate_var => |b| b,
         };
         const lir_pat = try self.lowerPattern(binding.pattern);
         try self.scratch_lir_pattern_ids.append(self.allocator, lir_pat);
@@ -1466,10 +1472,10 @@ fn lowerBlock(self: *Self, block_data: anytype, mono_idx: Monotype.Idx, region: 
     // Pass 2: Lower expressions and assemble statements using cached patterns.
     for (mir_stmts, 0..) |stmt, i| {
         const binding = switch (stmt) {
-            .decl_const, .decl_borrow, .decl_var, .mutate_var => |b| b,
+            .decl_const, .decl_var, .mutate_var => |b| b,
         };
         const lir_expr = try self.lowerExpr(binding.expr);
-        if (stmt == .decl_const or stmt == .decl_borrow or stmt == .decl_var) {
+        if (stmt == .decl_const or stmt == .decl_var) {
             const def_expr = self.lir_store.getExpr(lir_expr);
             const is_callable_def = switch (def_expr) {
                 .lambda => true,
@@ -1511,7 +1517,6 @@ fn lowerBlock(self: *Self, block_data: anytype, mono_idx: Monotype.Idx, region: 
         };
         try self.scratch_lir_stmts.append(self.allocator, switch (stmt) {
             .decl_const, .decl_var => .{ .decl = lir_binding },
-            .decl_borrow => .{ .decl_borrow = lir_binding },
             .mutate_var => .{ .mutate = lir_binding },
         });
     }
@@ -1522,6 +1527,37 @@ fn lowerBlock(self: *Self, block_data: anytype, mono_idx: Monotype.Idx, region: 
     return self.lir_store.addExpr(.{ .block = .{
         .stmts = lir_stmts,
         .final_expr = lir_final,
+        .result_layout = result_layout,
+    } }, region);
+}
+
+fn lowerBorrowScope(self: *Self, scope_data: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
+    const result_layout = try self.layoutFromMonotype(mono_idx);
+    const mir_bindings = self.mir_store.getBorrowBindings(scope_data.bindings);
+
+    const save_len = self.scratch_lir_borrow_bindings.items.len;
+    defer self.scratch_lir_borrow_bindings.shrinkRetainingCapacity(save_len);
+
+    for (mir_bindings) |binding| {
+        const lir_pat = try self.lowerPattern(binding.pattern);
+        const lir_expr = try self.lowerExpr(binding.expr);
+        try self.scratch_lir_borrow_bindings.append(self.allocator, .{
+            .pattern = lir_pat,
+            .expr = lir_expr,
+        });
+    }
+
+    const lir_bindings = try self.lir_store.addBorrowBindings(self.scratch_lir_borrow_bindings.items[save_len..]);
+    const lir_body = try self.lowerExpr(scope_data.body);
+    // This temp must survive cleanup emitted after the scope body, so give it
+    // stable storage rather than letting later codegen keep it only in a register.
+    const result_bind = try self.freshBindPattern(result_layout, true, region);
+
+    return self.lir_store.addExpr(.{ .borrow_scope = .{
+        .bindings = lir_bindings,
+        .result_symbol = result_bind.symbol,
+        .result_pattern = result_bind.pattern,
+        .body = lir_body,
         .result_layout = result_layout,
     } }, region);
 }

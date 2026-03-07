@@ -2932,14 +2932,14 @@ fn lowerStructuralEquality(
                 else => unreachable,
             };
 
-            const stmts = try self.store.addStmts(self.allocator, &.{
-                .{ .decl_borrow = .{ .pattern = lhs_bind.pattern, .expr = lhs } },
-                .{ .decl_borrow = .{ .pattern = rhs_bind.pattern, .expr = rhs } },
+            const bindings = try self.store.addBorrowBindings(self.allocator, &.{
+                .{ .pattern = lhs_bind.pattern, .expr = lhs },
+                .{ .pattern = rhs_bind.pattern, .expr = rhs },
             });
 
-            break :blk try self.store.addExpr(self.allocator, .{ .block = .{
-                .stmts = stmts,
-                .final_expr = inner,
+            break :blk try self.store.addExpr(self.allocator, .{ .borrow_scope = .{
+                .bindings = bindings,
+                .body = inner,
             } }, ret_monotype, region);
         },
         else => {
@@ -3322,19 +3322,6 @@ fn lowerListEquality(
     // Compare elements
     const elem_eq = try self.lowerFieldEquality(module_env, lhs_elem, rhs_elem, lst.elem, ret_monotype, region);
 
-    // Mismatch body: { result = False; () }
-    const false_set = try self.emitMirBoolLiteral(module_env, false, region);
-    const mismatch_stmts = try self.store.addStmts(self.allocator, &.{.{ .mutate_var = .{ .pattern = result_bind.pattern, .expr = false_set } }});
-    const unit_expr_mismatch = try self.emitMirUnitExpr(region);
-    const mismatch_body = try self.store.addExpr(self.allocator, .{ .block = .{
-        .stmts = mismatch_stmts,
-        .final_expr = unit_expr_mismatch,
-    } }, unit_mono, region);
-
-    // Match on elem_eq: True => continue, _ => { result = False; break }
-    const unit_continue = try self.emitMirUnitExpr(region);
-    const elem_match = try self.createBoolMatch(module_env, elem_eq, unit_continue, mismatch_body, unit_mono, region);
-
     // i = num_plus(i, 1)
     const i_lookup_inc = try self.emitMirLookup(i_bind.symbol, u64_mono, region);
     const inc_args = try self.store.addExprSpan(self.allocator, &.{ i_lookup_inc, one });
@@ -3347,7 +3334,8 @@ fn lowerListEquality(
     const match_wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_mono);
     const unit_final = try self.emitMirUnitExpr(region);
     const while_body_stmts = try self.store.addStmts(self.allocator, &.{
-        .{ .decl_const = .{ .pattern = match_wildcard, .expr = elem_match } },
+        .{ .mutate_var = .{ .pattern = result_bind.pattern, .expr = elem_eq } },
+        .{ .decl_const = .{ .pattern = match_wildcard, .expr = unit_final } },
         .{ .mutate_var = .{ .pattern = i_bind.pattern, .expr = i_plus_one } },
     });
     const while_body = try self.store.addExpr(self.allocator, .{ .block = .{
