@@ -812,6 +812,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// body generation, patches all new entries to the loop exit offset.
         loop_break_patches: std.ArrayList(usize),
 
+        /// Stack of loop cleanups that must run before an early return jumps to
+        /// the enclosing procedure epilogue.
+        early_return_loop_cleanups: std.ArrayList(LoopCleanup),
+
         /// Stack slot where early return value is stored (for compileLambdaAsProc).
         /// Set by compileLambdaAsProc before generating the body.
         early_return_result_slot: ?i32 = null,
@@ -908,6 +912,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         pub const JumpRecord = struct {
             /// Offset of the jump instruction
             location: usize,
+        };
+
+        pub const LoopCleanup = struct {
+            value_loc: ValueLocation,
+            elem_alignment: u32,
+            elements_refcounted: bool,
+            elem_layout_idx: ?layout.Idx,
         };
 
         /// Byte width of a scalar value on the stack.
@@ -1044,6 +1055,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .internal_addr_patches = std.ArrayList(InternalAddrPatch).empty,
                 .early_return_patches = std.ArrayList(usize).empty,
                 .loop_break_patches = std.ArrayList(usize).empty,
+                .early_return_loop_cleanups = std.ArrayList(LoopCleanup).empty,
                 .scratch_arg_locs = try base.Scratch(ValueLocation).init(allocator),
                 .scratch_arg_infos = try base.Scratch(ArgInfo).init(allocator),
                 .scratch_pass_by_ptr = try base.Scratch(bool).init(allocator),
@@ -1073,6 +1085,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.internal_addr_patches.deinit(self.allocator);
             self.early_return_patches.deinit(self.allocator);
             self.loop_break_patches.deinit(self.allocator);
+            self.early_return_loop_cleanups.deinit(self.allocator);
             self.scratch_arg_locs.deinit();
             self.scratch_arg_infos.deinit();
             self.scratch_pass_by_ptr.deinit();
@@ -1103,6 +1116,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.join_point_param_patterns.clearRetainingCapacity();
             self.internal_call_patches.clearRetainingCapacity();
             self.internal_addr_patches.clearRetainingCapacity();
+            self.early_return_patches.clearRetainingCapacity();
+            self.loop_break_patches.clearRetainingCapacity();
+            self.early_return_loop_cleanups.clearRetainingCapacity();
         }
 
         /// Generate code for a LIR expression
@@ -1942,6 +1958,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // === END ===
                         self.codegen.patchJump(end_patch, self.codegen.currentOffset());
 
+                        if (ls.layoutContainsRefcounted(elem_layout_val)) {
+                            try self.emitIncrefAtStackOffset(result_slot, elem_layout_idx);
+                        }
+
+                        try self.emitDecrefValueByLayout(list_loc, list_layout_idx);
                         self.codegen.freeGeneral(index_reg);
                         return .{ .stack = .{ .offset = result_slot } };
                     }
@@ -1983,20 +2004,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(temp_reg);
                     self.codegen.freeGeneral(addr_reg);
 
-                    // Return with appropriate value location based on element type
-                    if (elem_layout_idx == .i128 or elem_layout_idx == .u128 or elem_layout_idx == .dec) {
-                        return .{ .stack_i128 = elem_slot };
-                    } else if (elem_layout_idx == .str) {
-                        return .{ .stack_str = elem_slot };
-                    } else if (elem_layout_val.tag == .list or elem_layout_val.tag == .list_of_zst) {
-                        return .{ .list_stack = .{
+                    var result_loc: ValueLocation = if (elem_layout_idx == .i128 or elem_layout_idx == .u128 or elem_layout_idx == .dec)
+                        .{ .stack_i128 = elem_slot }
+                    else if (elem_layout_idx == .str)
+                        .{ .stack_str = elem_slot }
+                    else if (elem_layout_val.tag == .list or elem_layout_val.tag == .list_of_zst)
+                        .{ .list_stack = .{
                             .struct_offset = elem_slot,
                             .data_offset = 0,
                             .num_elements = 0,
-                        } };
-                    } else {
-                        return .{ .stack = .{ .offset = elem_slot } };
+                        } }
+                    else
+                        .{ .stack = .{ .offset = elem_slot } };
+
+                    if (ls.layoutContainsRefcounted(elem_layout_val)) {
+                        try self.emitIncrefValueByLayout(result_loc, elem_layout_idx);
                     }
+
+                    result_loc = try self.stabilize(result_loc);
+                    try self.emitDecrefValueByLayout(list_loc, list_layout_idx);
+                    return result_loc;
                 },
                 .list_concat => {
                     // list_concat(list_a, list_b) -> List
@@ -3247,13 +3274,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // list_first(list) -> element  (same as list_get at index 0)
                     if (args.len != 1) unreachable;
                     const list_loc = try self.generateExpr(args[0]);
-                    return try self.listGetAtConstIndex(list_loc, 0, ll.ret_layout);
+                    return try self.listGetAtConstIndex(list_loc, 0, self.exprLayout(args[0]), ll.ret_layout);
                 },
                 .list_last => {
                     // list_last(list) -> element  (same as list_get at index len-1)
                     if (args.len != 1) unreachable;
                     const list_loc = try self.generateExpr(args[0]);
-                    return try self.listGetAtLastIndex(list_loc, ll.ret_layout);
+                    return try self.listGetAtLastIndex(list_loc, self.exprLayout(args[0]), ll.ret_layout);
                 },
                 .list_contains => {
                     // list_contains(list, element) -> bool
@@ -3266,13 +3293,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .list => {
                             const list_loc = try self.generateExpr(args[0]);
                             const needle_loc = try self.generateExpr(args[1]);
-                            return try self.generateListContains(list_loc, needle_loc, list_layout.data.list);
+                            return try self.generateListContains(
+                                list_loc,
+                                list_layout_idx,
+                                needle_loc,
+                                self.exprLayout(args[1]),
+                                list_layout.data.list,
+                            );
                         },
                         .list_of_zst => {
                             // ZST elements: contains = list is non-empty
                             const list_loc = try self.generateExpr(args[0]);
                             _ = try self.generateExpr(args[1]); // evaluate needle for side effects
-                            return try self.generateZstListContains(list_loc);
+                            return try self.generateZstListContains(list_loc, list_layout_idx);
                         },
                         else => unreachable,
                     }
@@ -4187,7 +4220,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Get element at constant index 0 from a list
-        fn listGetAtConstIndex(self: *Self, list_loc: ValueLocation, index: u64, ret_layout_idx: layout.Idx) Allocator.Error!ValueLocation {
+        fn listGetAtConstIndex(
+            self: *Self,
+            list_loc: ValueLocation,
+            index: u64,
+            list_layout_idx: layout.Idx,
+            ret_layout_idx: layout.Idx,
+        ) Allocator.Error!ValueLocation {
             const list_base: i32 = switch (list_loc) {
                 .stack => |s| s.offset,
                 .list_stack => |ls_info| ls_info.struct_offset,
@@ -4198,7 +4237,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const ret_layout_val = ls.getLayout(ret_layout_idx);
             const elem_size: u32 = ls.layoutSizeAlign(ret_layout_val).size;
 
-            if (elem_size == 0) return .{ .immediate_i64 = 0 };
+            if (elem_size == 0) {
+                try self.emitDecrefValueByLayout(list_loc, list_layout_idx);
+                return .{ .immediate_i64 = 0 };
+            }
 
             // Load list pointer
             const ptr_reg = try self.allocTempGeneral();
@@ -4221,19 +4263,31 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(temp_reg);
             self.codegen.freeGeneral(ptr_reg);
 
-            if (ret_layout_idx == .i128 or ret_layout_idx == .u128 or ret_layout_idx == .dec) {
-                return .{ .stack_i128 = elem_slot };
-            } else if (ret_layout_idx == .str) {
-                return .{ .stack_str = elem_slot };
-            } else if (ret_layout_val.tag == .list or ret_layout_val.tag == .list_of_zst) {
-                return .{ .list_stack = .{ .struct_offset = elem_slot, .data_offset = 0, .num_elements = 0 } };
-            } else {
-                return .{ .stack = .{ .offset = elem_slot } };
+            var result_loc: ValueLocation = if (ret_layout_idx == .i128 or ret_layout_idx == .u128 or ret_layout_idx == .dec)
+                .{ .stack_i128 = elem_slot }
+            else if (ret_layout_idx == .str)
+                .{ .stack_str = elem_slot }
+            else if (ret_layout_val.tag == .list or ret_layout_val.tag == .list_of_zst)
+                .{ .list_stack = .{ .struct_offset = elem_slot, .data_offset = 0, .num_elements = 0 } }
+            else
+                .{ .stack = .{ .offset = elem_slot } };
+
+            if (ls.layoutContainsRefcounted(ret_layout_val)) {
+                try self.emitIncrefValueByLayout(result_loc, ret_layout_idx);
             }
+
+            result_loc = try self.stabilize(result_loc);
+            try self.emitDecrefValueByLayout(list_loc, list_layout_idx);
+            return result_loc;
         }
 
         /// Get element at last index (len - 1) from a list
-        fn listGetAtLastIndex(self: *Self, list_loc: ValueLocation, ret_layout_idx: layout.Idx) Allocator.Error!ValueLocation {
+        fn listGetAtLastIndex(
+            self: *Self,
+            list_loc: ValueLocation,
+            list_layout_idx: layout.Idx,
+            ret_layout_idx: layout.Idx,
+        ) Allocator.Error!ValueLocation {
             const list_base: i32 = switch (list_loc) {
                 .stack => |s| s.offset,
                 .list_stack => |ls_info| ls_info.struct_offset,
@@ -4244,7 +4298,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const ret_layout_val = ls.getLayout(ret_layout_idx);
             const elem_size: u32 = ls.layoutSizeAlign(ret_layout_val).size;
 
-            if (elem_size == 0) return .{ .immediate_i64 = 0 };
+            if (elem_size == 0) {
+                try self.emitDecrefValueByLayout(list_loc, list_layout_idx);
+                return .{ .immediate_i64 = 0 };
+            }
 
             // Load list pointer and length
             const ptr_reg = try self.allocTempGeneral();
@@ -4284,15 +4341,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(temp_reg);
             self.codegen.freeGeneral(addr_reg);
 
-            if (ret_layout_idx == .i128 or ret_layout_idx == .u128 or ret_layout_idx == .dec) {
-                return .{ .stack_i128 = elem_slot };
-            } else if (ret_layout_idx == .str) {
-                return .{ .stack_str = elem_slot };
-            } else if (ret_layout_val.tag == .list or ret_layout_val.tag == .list_of_zst) {
-                return .{ .list_stack = .{ .struct_offset = elem_slot, .data_offset = 0, .num_elements = 0 } };
-            } else {
-                return .{ .stack = .{ .offset = elem_slot } };
+            var result_loc: ValueLocation = if (ret_layout_idx == .i128 or ret_layout_idx == .u128 or ret_layout_idx == .dec)
+                .{ .stack_i128 = elem_slot }
+            else if (ret_layout_idx == .str)
+                .{ .stack_str = elem_slot }
+            else if (ret_layout_val.tag == .list or ret_layout_val.tag == .list_of_zst)
+                .{ .list_stack = .{ .struct_offset = elem_slot, .data_offset = 0, .num_elements = 0 } }
+            else
+                .{ .stack = .{ .offset = elem_slot } };
+
+            if (ls.layoutContainsRefcounted(ret_layout_val)) {
+                try self.emitIncrefValueByLayout(result_loc, ret_layout_idx);
             }
+
+            result_loc = try self.stabilize(result_loc);
+            try self.emitDecrefValueByLayout(list_loc, list_layout_idx);
+            return result_loc;
         }
 
         /// Generate code for hosted function calls (platform-provided effects).
@@ -4475,7 +4539,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate list_contains: linear scan comparing each element
-        fn generateListContains(self: *Self, list_loc: ValueLocation, needle_loc: ValueLocation, elem_layout_idx: layout.Idx) Allocator.Error!ValueLocation {
+        fn generateListContains(
+            self: *Self,
+            list_loc: ValueLocation,
+            list_layout_idx: layout.Idx,
+            needle_loc: ValueLocation,
+            needle_layout_idx: layout.Idx,
+            elem_layout_idx: layout.Idx,
+        ) Allocator.Error!ValueLocation {
             const ls = self.layout_store;
             const elem_layout = ls.getLayout(elem_layout_idx);
             const elem_sa = ls.layoutSizeAlign(elem_layout);
@@ -4600,6 +4671,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.patchJump(exit_patch, self.codegen.currentOffset());
             self.codegen.patchJump(found_patch, self.codegen.currentOffset());
 
+            try self.emitDecrefValueByLayout(needle_loc, needle_layout_idx);
+            try self.emitDecrefValueByLayout(list_loc, list_layout_idx);
+
             // Load result from stack
             const res_reg = try self.allocTempGeneral();
             try self.codegen.emitLoadStack(.w64, res_reg, result_slot);
@@ -4607,7 +4681,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate list_contains for zero-sized element types: true iff list is non-empty
-        fn generateZstListContains(self: *Self, list_loc: ValueLocation) Allocator.Error!ValueLocation {
+        fn generateZstListContains(self: *Self, list_loc: ValueLocation, list_layout_idx: layout.Idx) Allocator.Error!ValueLocation {
             const list_base: i32 = switch (list_loc) {
                 .stack => |s| s.offset,
                 .list_stack => |ls_info| ls_info.struct_offset,
@@ -4623,6 +4697,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitCmpImm(len_reg, 0);
             try self.emitSetCond(result_reg, condNotEqual());
             self.codegen.freeGeneral(len_reg);
+            const keep_slot = self.codegen.allocStackSlot(8);
+            try self.codegen.emitStoreStack(.w64, keep_slot, result_reg);
+            try self.emitDecrefValueByLayout(list_loc, list_layout_idx);
+            try self.codegen.emitLoadStack(.w64, result_reg, keep_slot);
             return .{ .general_reg = result_reg };
         }
 
@@ -9332,6 +9410,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             std.debug.assert(elem_size <= 1024 * 1024); // Sanity check: < 1MB
 
             const is_zst = elem_size == 0;
+            const elem_sa_for_dec = ls.layoutSizeAlign(elem_layout);
+            const elem_alignment_for_dec: u32 = @intCast(elem_sa_for_dec.alignment.toByteUnits());
+            const elems_refcounted_for_dec = ls.layoutContainsRefcounted(elem_layout);
+
+            const saved_cleanup_len = self.early_return_loop_cleanups.items.len;
+            defer self.early_return_loop_cleanups.shrinkRetainingCapacity(saved_cleanup_len);
+            try self.early_return_loop_cleanups.append(self.allocator, .{
+                .value_loc = list_loc,
+                .elem_alignment = elem_alignment_for_dec,
+                .elements_refcounted = elems_refcounted_for_dec,
+                .elem_layout_idx = for_loop.elem_layout,
+            });
 
             // CRITICAL: Store loop state on stack, not in registers!
             // The loop body may call C functions which clobber caller-saved registers.
@@ -9464,9 +9554,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.loop_break_patches.shrinkRetainingCapacity(saved_break_patches_len);
 
             // The loop consumes the list input; release it when iteration finishes.
-            const elem_sa_for_dec = ls.layoutSizeAlign(elem_layout);
-            const elem_alignment_for_dec: u32 = @intCast(elem_sa_for_dec.alignment.toByteUnits());
-            const elems_refcounted_for_dec = ls.layoutContainsRefcounted(elem_layout);
             try self.emitListDecref(list_loc, elem_alignment_for_dec, elems_refcounted_for_dec, for_loop.elem_layout);
 
             // For loops return unit (empty record)
@@ -9562,6 +9649,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.copyResultToReturnPointer(return_loc, ret_layout, ret_slot);
             } else {
                 try self.moveToReturnRegisterWithLayout(return_loc, ret_layout);
+            }
+            var i = self.early_return_loop_cleanups.items.len;
+            while (i > 0) : (i -= 1) {
+                const cleanup = self.early_return_loop_cleanups.items[i - 1];
+                try self.emitListDecref(cleanup.value_loc, cleanup.elem_alignment, cleanup.elements_refcounted, cleanup.elem_layout_idx);
             }
             // Emit a jump (will be patched to the epilogue location)
             const patch = try self.codegen.emitJump();
