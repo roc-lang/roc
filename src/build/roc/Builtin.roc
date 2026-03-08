@@ -428,6 +428,20 @@ Builtin :: [].{
 			list.fold_rev(empty_list, |item, newlist| list_append_unsafe(newlist, item))
 		}
 
+		## Alias to [List.get], which enables the use of the subscript operator.
+		## Return an element from a list at the given index.
+		## > Note: The subscript operator is not yet implemented,
+		## > so this function is just an alias to [List.get] for now
+		##
+		## Returns `Err OutOfBounds` if the given index exceeds the List's length
+		## ```roc
+		## expect List.subscript(["bird", "lizzard"], 0) == Ok("bird")
+		## expect ["bird", "lizzard"][0] == Ok("bird")
+		## expect ["bird", "lizzard"][5] == Err(OutOfBounds)
+		## ```
+		subscript : List(item), U64 -> Try(item, [OutOfBounds, ..])
+		subscript = get
+
 		for_each! : List(item), (item => {}) => {}
 		for_each! = |items, cb!| for item in items {
 			cb!(item)
