@@ -404,39 +404,20 @@ fn runtimeRecordLayoutFromPattern(self: *Self, mono_idx: Monotype.Idx, rd: anyty
 }
 
 fn capturesLayoutForMember(self: *Self, member: LambdaSet.Member) Allocator.Error!layout.Idx {
-    if (member.captures_monotype.isNone()) return .zst;
+    if (member.closure_member.isNone()) return .zst;
 
-    if (self.mir_store.getSymbolDef(member.fn_symbol)) |def_expr_id| {
-        const def_expr = self.mir_store.getExpr(def_expr_id);
-        if (def_expr == .lambda) {
-            const captures_mono = self.mir_store.monotype_store.getMonotype(member.captures_monotype);
-            if (captures_mono == .tuple) {
-                const capture_elems = self.mir_store.monotype_store.getIdxSpan(captures_mono.tuple.elems);
-                if (capture_elems.len == 0) return .zst;
+    const closure_member = self.mir_store.getClosureMember(member.closure_member);
+    const capture_bindings = self.mir_store.getCaptureBindings(closure_member.capture_bindings);
+    if (capture_bindings.len == 0) return .zst;
 
-                const body_expr = self.mir_store.getExpr(def_expr.lambda.body);
-                if (body_expr == .block) {
-                    const stmts = self.mir_store.getStmts(body_expr.block.stmts);
-                    if (stmts.len >= capture_elems.len) {
-                        const save_layouts = self.scratch_layouts.items.len;
-                        defer self.scratch_layouts.shrinkRetainingCapacity(save_layouts);
+    const save_layouts = self.scratch_layouts.items.len;
+    defer self.scratch_layouts.shrinkRetainingCapacity(save_layouts);
 
-                        for (stmts[0..capture_elems.len]) |stmt| {
-                            const binding = switch (stmt) {
-                                .decl_const, .decl_var, .mutate_var => |b| b,
-                            };
-                            const field_layout_idx = try self.runtimeValueLayoutFromMirExpr(binding.expr);
-                            try self.scratch_layouts.append(self.allocator, self.layout_store.getLayout(field_layout_idx));
-                        }
-
-                        return self.layout_store.putTuple(self.scratch_layouts.items[save_layouts..]);
-                    }
-                }
-            }
-        }
+    for (capture_bindings) |binding| {
+        const field_layout_idx = try self.runtimeValueLayoutFromMirExpr(binding.source_expr);
+        try self.scratch_layouts.append(self.allocator, self.layout_store.getLayout(field_layout_idx));
     }
-
-    return self.layoutFromMonotype(member.captures_monotype);
+    return self.layout_store.putTuple(self.scratch_layouts.items[save_layouts..]);
 }
 
 fn layoutFromTagUnion(self: *Self, tu: anytype) Allocator.Error!layout.Idx {
@@ -502,8 +483,18 @@ fn closureValueLayoutFromLambdaSet(self: *Self, ls_idx: LambdaSet.Idx) Allocator
     if (self.computing_lambda_set_layouts.contains(ls_key)) {
         const ls_fallback = self.lambda_set_store.getLambdaSet(ls_idx);
         const members_fallback = self.lambda_set_store.getMembers(ls_fallback.members);
-        if (members_fallback.len == 1 and !members_fallback[0].captures_monotype.isNone()) {
-            return self.layoutFromMonotype(members_fallback[0].captures_monotype);
+        if (members_fallback.len == 1 and !members_fallback[0].closure_member.isNone()) {
+            const closure_member = self.mir_store.getClosureMember(members_fallback[0].closure_member);
+            const bindings = self.mir_store.getCaptureBindings(closure_member.capture_bindings);
+            if (bindings.len == 0) return .zst;
+
+            const save_layouts = self.scratch_layouts.items.len;
+            defer self.scratch_layouts.shrinkRetainingCapacity(save_layouts);
+            for (bindings) |binding| {
+                const fallback_layout = try self.layoutFromMonotype(binding.monotype);
+                try self.scratch_layouts.append(self.allocator, self.layout_store.getLayout(fallback_layout));
+            }
+            return self.layout_store.putTuple(self.scratch_layouts.items[save_layouts..]);
         }
     }
 
@@ -528,6 +519,16 @@ fn closureValueLayoutFromLambdaSet(self: *Self, ls_idx: LambdaSet.Idx) Allocator
     return self.layout_store.putTagUnion(self.scratch_layout_idxs.items[save..]);
 }
 
+fn lambdaSetForExpr(self: *Self, mir_expr_id: MIR.ExprId) ?LambdaSet.Idx {
+    if (self.lambda_set_store.getExprLambdaSet(mir_expr_id)) |ls_idx| return ls_idx;
+
+    return switch (self.mir_store.getExpr(mir_expr_id)) {
+        .lookup => |sym| self.lambda_set_store.getSymbolLambdaSet(sym),
+        .block => |block| self.lambda_set_store.getExprLambdaSet(block.final_expr),
+        else => null,
+    };
+}
+
 /// Compute the runtime value layout for a MIR expression.
 /// Function-typed values use lambda-set runtime layouts rather than the generic
 /// function monotype layout, because lifted closures are represented by their
@@ -536,15 +537,13 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
     const mono_idx = self.mir_store.typeOf(mir_expr_id);
     const mono = self.mir_store.monotype_store.getMonotype(mono_idx);
     if (mono == .func) {
-        const ls_idx = try LambdaSet.resolveExprLambdaSet(
-            self.allocator,
-            self.mir_store,
-            self.lambda_set_store,
-            mir_expr_id,
-        );
-        if (!ls_idx.isNone()) {
+        if (self.lambdaSetForExpr(mir_expr_id)) |ls_idx| {
             return self.closureValueLayoutFromLambdaSet(ls_idx);
         }
+        if (std.debug.runtime_safety) {
+            std.debug.panic("MirToLir: missing eager lambda set for function expression {}", .{@intFromEnum(mir_expr_id)});
+        }
+        unreachable;
     }
 
     const expr = self.mir_store.getExpr(mir_expr_id);
@@ -554,6 +553,12 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
             self.mir_store.getFieldNameSpan(rec.field_names),
             self.mir_store.getExprSpan(rec.fields),
         ),
+        .lookup => |sym| {
+            if (self.symbol_layouts.get(sym.raw())) |layout_idx| {
+                return layout_idx;
+            }
+        },
+        .block => |block| return self.runtimeValueLayoutFromMirExpr(block.final_expr),
         else => {},
     }
 
@@ -575,13 +580,8 @@ fn adaptFunctionValueToLambdaSet(
     defer target_members.deinit(self.allocator);
     if (target_members.items.len <= 1) return value_lir_expr;
 
-    const arg_ls_idx = try LambdaSet.resolveExprLambdaSet(
-        self.allocator,
-        self.mir_store,
-        self.lambda_set_store,
-        value_mir_expr,
-    );
-    if (arg_ls_idx.isNone() or arg_ls_idx == target_ls_idx) return value_lir_expr;
+    const arg_ls_idx = self.lambdaSetForExpr(value_mir_expr) orelse return value_lir_expr;
+    if (arg_ls_idx == target_ls_idx) return value_lir_expr;
 
     const arg_members = self.lambda_set_store.getMembers(self.lambda_set_store.getLambdaSet(arg_ls_idx).members);
     if (arg_members.len != 1) {
@@ -614,7 +614,7 @@ fn adaptFunctionValueToLambdaSet(
     };
 
     const target_layout = try self.closureValueLayoutFromLambdaSet(target_ls_idx);
-    if (arg_member.captures_monotype.isNone()) {
+    if (arg_member.closure_member.isNone()) {
         return self.lir_store.addExpr(.{ .zero_arg_tag = .{
             .discriminant = discr,
             .union_layout = target_layout,
@@ -639,6 +639,28 @@ fn snapshotLambdaSetMembers(
     const ls = self.lambda_set_store.getLambdaSet(ls_idx);
     try snapshot.appendSlice(self.allocator, self.lambda_set_store.getMembers(ls.members));
     return snapshot;
+}
+
+fn prepareLiftedDefCaptureLayout(self: *Self, fn_symbol: Symbol, def_expr_id: MIR.ExprId) Allocator.Error!void {
+    const closure_member_id = self.mir_store.getClosureMemberForFn(fn_symbol) orelse return;
+    const def_expr = self.mir_store.getExpr(def_expr_id);
+    if (def_expr != .lambda) return;
+
+    const params = self.mir_store.getPatternSpan(def_expr.lambda.params);
+    if (params.len == 0) return;
+
+    const captures_layout = try self.capturesLayoutForMember(.{
+        .fn_symbol = fn_symbol,
+        .closure_member = closure_member_id,
+    });
+
+    const last_pat = self.mir_store.getPattern(params[params.len - 1]);
+    switch (last_pat) {
+        .bind => |sym| {
+            try self.symbol_layouts.put(sym.raw(), captures_layout);
+        },
+        else => {},
+    }
 }
 
 /// Check if a monotype is a single-tag union (exactly one variant).
@@ -1033,7 +1055,7 @@ fn lowerTuple(self: *Self, tup: anytype, _: Monotype.Idx, mir_expr_id: MIR.ExprI
     const mir_elems = self.mir_store.getExprSpan(tup.elems);
     const tuple_layout_val = self.layout_store.getLayout(tuple_layout);
 
-    if (self.mir_store.closure_origins.contains(@intFromEnum(mir_expr_id))) {
+    if (self.mir_store.getExprClosureMember(mir_expr_id) != null) {
         const save_exprs = self.scratch_lir_expr_ids.items.len;
         defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
 
@@ -1192,13 +1214,7 @@ fn lowerLookup(self: *Self, sym: Symbol, mono_idx: Monotype.Idx, mir_expr_id: MI
     var layout_idx = try self.layoutFromMonotype(mono_idx);
     const mono = self.mir_store.monotype_store.getMonotype(mono_idx);
     if (mono == .func) {
-        const expr_ls_idx = try LambdaSet.resolveExprLambdaSet(
-            self.allocator,
-            self.mir_store,
-            self.lambda_set_store,
-            mir_expr_id,
-        );
-        if (!expr_ls_idx.isNone()) {
+        if (self.lambdaSetForExpr(mir_expr_id)) |expr_ls_idx| {
             layout_idx = try self.closureValueLayoutFromLambdaSet(expr_ls_idx);
         } else if (self.lambda_set_store.getSymbolLambdaSet(sym)) |ls_idx| {
             // Function values always use their lambda-set runtime payload layout.
@@ -1216,6 +1232,7 @@ fn lowerLookup(self: *Self, sym: Symbol, mono_idx: Monotype.Idx, mir_expr_id: MI
             if (!self.propagating_defs.contains(key)) {
                 try self.propagating_defs.put(key, {});
                 defer _ = self.propagating_defs.remove(key);
+                try self.prepareLiftedDefCaptureLayout(sym, mir_def_id);
                 const lir_def_id = try self.lowerExpr(mir_def_id);
                 try self.lir_store.registerSymbolDef(sym, lir_def_id);
             }
@@ -1232,12 +1249,7 @@ fn lowerMatch(self: *Self, match_data: anytype, mir_expr_id: MIR.ExprId, region:
     const value_layout = try self.layoutFromMonotype(cond_mono);
     const cond_id = try acc.ensureSymbol(cond_raw, value_layout, region);
     const result_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
-    const result_ls_idx = try LambdaSet.resolveExprLambdaSet(
-        self.allocator,
-        self.mir_store,
-        self.lambda_set_store,
-        mir_expr_id,
-    );
+    const result_ls_idx = self.lambdaSetForExpr(mir_expr_id) orelse LambdaSet.Idx.none;
 
     const mir_branches = self.mir_store.getBranches(match_data.branches);
 
@@ -1290,7 +1302,8 @@ fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, region: Region
         .prim, .unit, .record, .tuple, .tag_union, .list, .box, .recursive_placeholder => unreachable, // Lambda expressions always have .func monotype
     };
 
-    const lir_params = try self.lowerPatternSpan(self.mir_store.getPatternSpan(lam.params));
+    const mir_params = self.mir_store.getPatternSpan(lam.params);
+    const lir_params = try self.lowerPatternSpan(mir_params);
     const lir_body = try self.lowerExpr(lam.body);
 
     // After lambda lifting (Phase 2a), all lambdas reaching MirToLir have empty captures.
@@ -1335,13 +1348,7 @@ fn lowerCall(self: *Self, call_data: anytype, mir_expr_id: MIR.ExprId, region: R
     // Closure dispatch is driven by lambda sets for arbitrary callee expressions,
     // not just direct symbol lookups. This is required for nested calls where
     // intermediate call results are themselves closures.
-    const callee_ls_idx = try LambdaSet.resolveExprLambdaSet(
-        self.allocator,
-        self.mir_store,
-        self.lambda_set_store,
-        call_data.func,
-    );
-    if (!callee_ls_idx.isNone()) {
+    if (self.lambdaSetForExpr(call_data.func)) |callee_ls_idx| {
         const callee_symbol = if (func_mir_expr == .lookup) func_mir_expr.lookup else Symbol.none;
         return self.lowerClosureCall(call_data, callee_ls_idx, callee_symbol, ret_layout, region);
     }
@@ -1508,12 +1515,6 @@ fn monotypesStructurallyEqualRec(
 
 /// Follow lookups/blocks/closure origins to recover the lambda parameter span.
 fn resolveToLambdaParams(self: *Self, expr_id: MIR.ExprId) ?MIR.PatternSpan {
-    if (self.mir_store.closure_origins.get(@intFromEnum(expr_id))) |lifted_idx| {
-        const lifted = self.mir_store.lifted_lambdas.items[lifted_idx];
-        const lifted_def = self.mir_store.getSymbolDef(lifted.fn_symbol) orelse return null;
-        return self.resolveToLambdaParams(lifted_def);
-    }
-
     const expr = self.mir_store.getExpr(expr_id);
     return switch (expr) {
         .lambda => |lam| lam.params,
@@ -1564,13 +1565,7 @@ fn adaptFunctionArgToParamLambdaSet(
     defer param_members.deinit(self.allocator);
     if (param_members.items.len <= 1) return arg_lir_expr;
 
-    const arg_ls_idx = try LambdaSet.resolveExprLambdaSet(
-        self.allocator,
-        self.mir_store,
-        self.lambda_set_store,
-        arg_mir_expr,
-    );
-    if (arg_ls_idx.isNone()) return arg_lir_expr;
+    const arg_ls_idx = self.lambdaSetForExpr(arg_mir_expr) orelse return arg_lir_expr;
 
     const arg_members = self.lambda_set_store.getMembers(self.lambda_set_store.getLambdaSet(arg_ls_idx).members);
     if (arg_members.len != 1) {
@@ -1603,7 +1598,7 @@ fn adaptFunctionArgToParamLambdaSet(
     };
 
     const target_layout = try self.closureValueLayoutFromLambdaSet(param_ls_idx);
-    if (arg_member.captures_monotype.isNone()) {
+    if (arg_member.closure_member.isNone()) {
         return self.lir_store.addExpr(.{ .zero_arg_tag = .{
             .discriminant = discr,
             .union_layout = target_layout,
@@ -1701,6 +1696,7 @@ fn lowerClosureCall(
             if (!self.propagating_defs.contains(key)) {
                 try self.propagating_defs.put(key, {});
                 defer _ = self.propagating_defs.remove(key);
+                try self.prepareLiftedDefCaptureLayout(member.fn_symbol, lifted_def);
                 const lir_def = try self.lowerExpr(lifted_def);
                 try self.lir_store.registerSymbolDef(member.fn_symbol, lir_def);
             }
@@ -1712,7 +1708,7 @@ fn lowerClosureCall(
         } }, region);
         const call_user_args = try self.adaptClosureCallArgsToParams(lifted_def, mir_args, lir_user_args, region);
 
-        if (member.captures_monotype.isNone()) {
+        if (member.closure_member.isNone()) {
             // Zero-capture lambda: call with just user args, no extra captures param
             const call_expr = try self.lir_store.addExpr(.{ .call = .{
                 .fn_expr = fn_expr,
@@ -1775,6 +1771,7 @@ fn lowerClosureCall(
             if (!self.propagating_defs.contains(key)) {
                 try self.propagating_defs.put(key, {});
                 defer _ = self.propagating_defs.remove(key);
+                try self.prepareLiftedDefCaptureLayout(member.fn_symbol, lifted_def);
                 const lir_def = try self.lowerExpr(lifted_def);
                 try self.lir_store.registerSymbolDef(member.fn_symbol, lir_def);
             }
@@ -1794,7 +1791,7 @@ fn lowerClosureCall(
             try self.scratch_lir_expr_ids.append(self.allocator, arg_id);
         }
 
-        if (!member.captures_monotype.isNone()) {
+        if (!member.closure_member.isNone()) {
             // Extract payload (captures) from the tag union
             const captures_layout = try self.capturesLayoutForMember(member);
             const payload_expr = try self.lir_store.addExpr(.{ .tag_payload_access = .{
@@ -1945,7 +1942,20 @@ fn lowerBorrowScope(self: *Self, scope_data: anytype, _: MIR.ExprId, region: Reg
 fn lowerBindingPatternForExpr(self: *Self, mir_pat_id: MIR.PatternId, mir_expr_id: MIR.ExprId) Allocator.Error!LirPatternId {
     const pat = self.mir_store.getPattern(mir_pat_id);
     const region = Region.zero();
-    const runtime_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
+    const expr_mono_idx = self.mir_store.typeOf(mir_expr_id);
+    const expr_mono = self.mir_store.monotype_store.getMonotype(expr_mono_idx);
+    const bound_symbol = switch (pat) {
+        .bind => |sym| sym,
+        .as_pattern => |as_pat| as_pat.symbol,
+        else => Symbol.none,
+    };
+    const runtime_layout = if (expr_mono == .func and !bound_symbol.isNone())
+        if (self.lambda_set_store.getSymbolLambdaSet(bound_symbol)) |ls_idx|
+            try self.closureValueLayoutFromLambdaSet(ls_idx)
+        else
+            try self.runtimeValueLayoutFromMirExpr(mir_expr_id)
+    else
+        try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
 
     return switch (pat) {
         .bind => |sym| blk: {
@@ -1989,7 +1999,8 @@ fn lowerRecordAccess(self: *Self, ra: anytype, mir_expr_id: MIR.ExprId, region: 
     const lir_struct_raw = try self.lowerExpr(ra.record);
     const struct_layout = try self.runtimeValueLayoutFromMirExpr(ra.record);
     const lir_struct = try acc.ensureSymbol(lir_struct_raw, struct_layout, region);
-    const field_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
+    var field_layout: layout.Idx = undefined;
+    var field_layout_found = false;
 
     // Find the sorted field index from the layout's field list (alignment-sorted order),
     // not the monotype's field list (alphabetical order).
@@ -2001,9 +2012,14 @@ fn lowerRecordAccess(self: *Self, ra: anytype, mir_expr_id: MIR.ExprId, region: 
         for (0..layout_fields.len) |li| {
             if (layout_fields.get(li).name.eql(ra.field_name)) {
                 field_idx = @intCast(li);
+                field_layout = layout_fields.get(li).layout;
+                field_layout_found = true;
                 break;
             }
         }
+    }
+    if (!field_layout_found) {
+        field_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
     }
 
     const access_expr = try self.lir_store.addExpr(.{ .struct_access = .{
@@ -2020,7 +2036,8 @@ fn lowerTupleAccess(self: *Self, ta: anytype, mir_expr_id: MIR.ExprId, region: R
     const lir_struct_raw = try self.lowerExpr(ta.tuple);
     const struct_layout = try self.runtimeValueLayoutFromMirExpr(ta.tuple);
     const lir_struct = try acc.ensureSymbol(lir_struct_raw, struct_layout, region);
-    const field_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
+    var field_layout: layout.Idx = undefined;
+    var field_layout_found = false;
 
     // Find the sorted field index for this tuple element's original index.
     var field_idx: ?u16 = null;
@@ -2031,12 +2048,19 @@ fn lowerTupleAccess(self: *Self, ta: anytype, mir_expr_id: MIR.ExprId, region: R
         for (0..layout_fields.len) |li| {
             if (layout_fields.get(li).index == ta.elem_index) {
                 field_idx = @intCast(li);
+                field_layout = layout_fields.get(li).layout;
+                field_layout_found = true;
                 break;
             }
         }
     } else {
         // Single-element tuple optimized to non-struct layout; field_idx 0
         field_idx = 0;
+        field_layout = struct_layout;
+        field_layout_found = true;
+    }
+    if (!field_layout_found) {
+        field_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
     }
 
     const access_expr = try self.lir_store.addExpr(.{ .struct_access = .{
@@ -2381,7 +2405,7 @@ fn lowerPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Error!LirPatte
 
     return switch (pat) {
         .bind => |sym| blk: {
-            var layout_idx = try self.layoutFromMonotype(mono_idx);
+            var layout_idx = self.symbol_layouts.get(sym.raw()) orelse try self.layoutFromMonotype(mono_idx);
             const mono = self.mir_store.monotype_store.getMonotype(mono_idx);
             const has_callable_def = if (self.mir_store.getSymbolDef(sym)) |def_id|
                 LambdaSet.isLambdaExpr(self.mir_store, def_id)

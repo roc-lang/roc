@@ -5481,7 +5481,6 @@ pub fn canonicalizeExpr(
 
             // Get a slice of the captured vars in the body
             const captures_slice = self.scratch_captures.sliceFromStart(captures_top);
-
             // If there are no captures, this is a pure lambda.
             // A pure lambda has no free variables.
             if (captures_slice.len == 0) {

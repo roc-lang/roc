@@ -1,17 +1,13 @@
-//! Lambda Set Inference for MIR
+//! Eager lambda-set inference for MIR.
 //!
-//! Determines which lifted functions can flow to each function-typed symbol.
-//! After CIR→MIR lowering, closures have been lifted to top-level functions
-//! and their use sites produce captures tuples. This pass traces which lifted
-//! function(s) each symbol could refer to.
-//!
-//! Results are stored in a LambdaSetStore, consumed by MirToLir for dispatch.
+//! The pass computes one authoritative lambda-set result for every relevant
+//! expression, symbol, and callable member. Downstream consumers should query
+//! the store directly; they must not recover closure identity by walking MIR.
 
 const std = @import("std");
 const base = @import("base");
 const can = @import("can");
 const MIR = @import("MIR.zig");
-const Monotype = @import("Monotype.zig");
 
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
@@ -28,12 +24,10 @@ pub const Idx = enum(u32) {
     }
 };
 
-/// A member of a lambda set: one possible function that could be called.
+/// One possible callable member of a lambda set.
 pub const Member = struct {
-    /// Symbol of the lifted function
     fn_symbol: MIR.Symbol,
-    /// Monotype of the captures struct (tuple), or Monotype.Idx.none if no captures
-    captures_monotype: Monotype.Idx,
+    closure_member: MIR.ClosureMemberId,
 };
 
 /// Span of Member values in the members array.
@@ -50,25 +44,24 @@ pub const MemberSpan = extern struct {
     }
 };
 
-/// A lambda set: the set of possible functions at a given call site.
 pub const LambdaSet = struct {
     members: MemberSpan,
 };
 
-/// Storage for all lambda sets and the symbol→lambda_set mapping.
 pub const Store = struct {
-    /// All lambda sets
     lambda_sets: std.ArrayListUnmanaged(LambdaSet),
-    /// All members (referenced by MemberSpan)
     members: std.ArrayListUnmanaged(Member),
-    /// Map from MIR.Symbol (as u64) to its LambdaSet.Idx
     symbol_lambda_sets: std.AutoHashMapUnmanaged(u64, Idx),
+    expr_lambda_sets: std.AutoHashMapUnmanaged(u32, Idx),
+    member_return_lambda_sets: std.AutoHashMapUnmanaged(u64, Idx),
 
     pub fn init() Store {
         return .{
             .lambda_sets = .empty,
             .members = .empty,
             .symbol_lambda_sets = .empty,
+            .expr_lambda_sets = .empty,
+            .member_return_lambda_sets = .empty,
         };
     }
 
@@ -76,6 +69,8 @@ pub const Store = struct {
         self.lambda_sets.deinit(allocator);
         self.members.deinit(allocator);
         self.symbol_lambda_sets.deinit(allocator);
+        self.expr_lambda_sets.deinit(allocator);
+        self.member_return_lambda_sets.deinit(allocator);
     }
 
     pub fn addMembers(self: *Store, allocator: Allocator, member_list: []const Member) !MemberSpan {
@@ -100,15 +95,19 @@ pub const Store = struct {
         return self.lambda_sets.items[@intFromEnum(idx)];
     }
 
-    /// Look up the lambda set for a symbol, if any.
     pub fn getSymbolLambdaSet(self: *const Store, symbol: MIR.Symbol) ?Idx {
         return self.symbol_lambda_sets.get(symbol.raw());
     }
+
+    pub fn getExprLambdaSet(self: *const Store, expr_id: MIR.ExprId) ?Idx {
+        return self.expr_lambda_sets.get(@intFromEnum(expr_id));
+    }
+
+    pub fn getMemberReturnLambdaSet(self: *const Store, fn_symbol: MIR.Symbol) ?Idx {
+        return self.member_return_lambda_sets.get(fn_symbol.raw());
+    }
 };
 
-/// Check if an expression is directly a `.lambda`, following through
-/// `.block` wrappers only. Does NOT follow `.lookup` chains — aliases
-/// get their lambda sets through capture alias propagation in `infer()`.
 pub fn isLambdaExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId) bool {
     const expr = mir_store.getExpr(expr_id);
     return switch (expr) {
@@ -118,52 +117,315 @@ pub fn isLambdaExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId) bool {
     };
 }
 
-/// Run lambda set inference on a completed MIR store.
-/// Traces closure origins through symbol definitions to determine
-/// which lifted function(s) each function-typed symbol could refer to.
 pub fn infer(
     allocator: Allocator,
     mir_store: *const MIR.Store,
-    all_module_envs: []const *ModuleEnv,
+    _: []const *ModuleEnv,
 ) Allocator.Error!Store {
     var store = Store.init();
     errdefer store.deinit(allocator);
 
-    // For each symbol definition, check if it originates from a closure.
-    // If so, assign a singleton lambda set.
-    var sym_it = mir_store.symbol_defs.iterator();
-    while (sym_it.next()) |entry| {
-        const symbol_key = entry.key_ptr.*;
-        const expr_id = entry.value_ptr.*;
-        const symbol = MIR.Symbol.fromRaw(symbol_key);
+    var lambda_expr_symbols = std.AutoHashMapUnmanaged(u32, MIR.Symbol).empty;
+    defer lambda_expr_symbols.deinit(allocator);
 
-        const ls_idx = try resolveExprLambdaSet(allocator, mir_store, &store, expr_id);
-        if (!ls_idx.isNone()) {
-            try store.symbol_lambda_sets.put(allocator, symbol.raw(), ls_idx);
-        } else if (isLambdaExpr(mir_store, expr_id)) {
-            // Plain lambda (no captures) — create a singleton lambda set so that
-            // call dispatch goes through lowerClosureCall uniformly.
-            const member_span = try store.addMembers(allocator, &.{.{
-                .fn_symbol = symbol,
-                .captures_monotype = Monotype.Idx.none,
-            }});
-            const plain_ls = try store.addLambdaSet(allocator, .{ .members = member_span });
-            try store.symbol_lambda_sets.put(allocator, symbol.raw(), plain_ls);
-        }
-    }
+    try seedClosureMembers(allocator, mir_store, &store);
+    try seedSymbolDefs(allocator, mir_store, &store, &lambda_expr_symbols);
 
-    // Propagate lambda sets across both HOF call edges and capture aliases until
-    // stable. These relations depend on each other (a callee lambda set may come
-    // from aliasing, and that can unlock additional call-arg propagation).
     var changed = true;
     while (changed) {
         changed = false;
-        changed = (try propagateBoundFunctionSymbols(allocator, mir_store, &store)) or changed;
-        changed = (try propagateCallArgs(allocator, mir_store, &store, all_module_envs)) or changed;
-        changed = (try propagateCaptureAliases(allocator, mir_store, &store)) or changed;
+        changed = (try propagateExprAndBindingSets(allocator, mir_store, &store, &lambda_expr_symbols)) or changed;
+        changed = (try propagateCallArgs(allocator, mir_store, &store)) or changed;
+        changed = (try propagateCapturedFunctionLocals(allocator, mir_store, &store)) or changed;
+        changed = (try propagateMemberReturnSets(allocator, mir_store, &store)) or changed;
     }
 
     return store;
+}
+
+fn seedClosureMembers(allocator: Allocator, mir_store: *const MIR.Store, store: *Store) Allocator.Error!void {
+    var it = mir_store.expr_closure_members.iterator();
+    while (it.next()) |entry| {
+        const expr_id: MIR.ExprId = @enumFromInt(entry.key_ptr.*);
+        const member = memberFromClosureMember(mir_store, entry.value_ptr.*);
+        const singleton = try singletonLambdaSet(allocator, store, member);
+        try store.expr_lambda_sets.put(allocator, @intFromEnum(expr_id), singleton);
+    }
+}
+
+fn seedSymbolDefs(
+    allocator: Allocator,
+    mir_store: *const MIR.Store,
+    store: *Store,
+    lambda_expr_symbols: *std.AutoHashMapUnmanaged(u32, MIR.Symbol),
+) Allocator.Error!void {
+    var it = mir_store.symbol_defs.iterator();
+    while (it.next()) |entry| {
+        const symbol = MIR.Symbol.fromRaw(entry.key_ptr.*);
+        const expr_id = entry.value_ptr.*;
+
+        if (mir_store.getExprClosureMember(expr_id)) |closure_member| {
+            const member = memberFromClosureMember(mir_store, closure_member);
+            const singleton = try singletonLambdaSet(allocator, store, member);
+            try store.symbol_lambda_sets.put(allocator, symbol.raw(), singleton);
+            _ = try mergeExprLambdaSet(allocator, store, expr_id, singleton);
+            continue;
+        }
+
+        if (isLambdaExpr(mir_store, expr_id)) {
+            const member = plainLambdaMember(symbol);
+            const singleton = try singletonLambdaSet(allocator, store, member);
+            try store.symbol_lambda_sets.put(allocator, symbol.raw(), singleton);
+            try store.expr_lambda_sets.put(allocator, @intFromEnum(expr_id), singleton);
+            try lambda_expr_symbols.put(allocator, @intFromEnum(expr_id), symbol);
+        }
+    }
+}
+
+fn propagateExprAndBindingSets(
+    allocator: Allocator,
+    mir_store: *const MIR.Store,
+    store: *Store,
+    lambda_expr_symbols: *const std.AutoHashMapUnmanaged(u32, MIR.Symbol),
+) Allocator.Error!bool {
+    var changed = false;
+    var expr_index: u32 = 0;
+    while (expr_index < mir_store.exprs.items.len) : (expr_index += 1) {
+        const expr_id: MIR.ExprId = @enumFromInt(expr_index);
+        changed = (try propagateExprAndBindingSetsForExpr(
+            allocator,
+            mir_store,
+            store,
+            lambda_expr_symbols,
+            expr_id,
+        )) or changed;
+    }
+    return changed;
+}
+
+fn propagateExprAndBindingSetsForExpr(
+    allocator: Allocator,
+    mir_store: *const MIR.Store,
+    store: *Store,
+    lambda_expr_symbols: *const std.AutoHashMapUnmanaged(u32, MIR.Symbol),
+    expr_id: MIR.ExprId,
+) Allocator.Error!bool {
+    var changed = false;
+
+    if (lambda_expr_symbols.get(@intFromEnum(expr_id))) |symbol| {
+        const singleton = try singletonLambdaSet(allocator, store, plainLambdaMember(symbol));
+        changed = (try mergeExprLambdaSet(allocator, store, expr_id, singleton)) or changed;
+    }
+
+    switch (mir_store.getExpr(expr_id)) {
+        .block => |block| {
+            if (store.getExprLambdaSet(block.final_expr)) |ls_idx| {
+                changed = (try mergeExprLambdaSet(allocator, store, expr_id, ls_idx)) or changed;
+            }
+            const stmts = mir_store.getStmts(block.stmts);
+            for (stmts) |stmt| {
+                const binding = switch (stmt) {
+                    .decl_const, .decl_var, .mutate_var => |b| b,
+                };
+                if (store.getExprLambdaSet(binding.expr)) |ls_idx| {
+                    if (patternBoundSymbol(mir_store, binding.pattern)) |symbol| {
+                        changed = (try mergeIntoSymbol(allocator, store, symbol, ls_idx)) or changed;
+                    }
+                }
+            }
+        },
+        .borrow_scope => |scope| {
+            if (store.getExprLambdaSet(scope.body)) |ls_idx| {
+                changed = (try mergeExprLambdaSet(allocator, store, expr_id, ls_idx)) or changed;
+            }
+            for (mir_store.getBorrowBindings(scope.bindings)) |binding| {
+                if (store.getExprLambdaSet(binding.expr)) |ls_idx| {
+                    if (patternBoundSymbol(mir_store, binding.pattern)) |symbol| {
+                        changed = (try mergeIntoSymbol(allocator, store, symbol, ls_idx)) or changed;
+                    }
+                }
+            }
+        },
+        .match_expr => |match_expr| {
+            var merged: std.ArrayListUnmanaged(Member) = .empty;
+            defer merged.deinit(allocator);
+            for (mir_store.getBranches(match_expr.branches)) |branch| {
+                if (store.getExprLambdaSet(branch.body)) |ls_idx| {
+                    try appendMembersDedup(allocator, &merged, store.getMembers(store.getLambdaSet(ls_idx).members));
+                }
+            }
+            if (merged.items.len > 0) {
+                const merged_ls = try internLambdaSet(allocator, store, merged.items);
+                changed = (try mergeExprLambdaSet(allocator, store, expr_id, merged_ls)) or changed;
+            }
+        },
+        .call => |call| {
+            if (store.getExprLambdaSet(call.func)) |callee_ls| {
+                var merged: std.ArrayListUnmanaged(Member) = .empty;
+                defer merged.deinit(allocator);
+                for (store.getMembers(store.getLambdaSet(callee_ls).members)) |member| {
+                    if (store.getMemberReturnLambdaSet(member.fn_symbol)) |ret_ls| {
+                        try appendMembersDedup(allocator, &merged, store.getMembers(store.getLambdaSet(ret_ls).members));
+                    }
+                }
+                if (merged.items.len > 0) {
+                    const merged_ls = try internLambdaSet(allocator, store, merged.items);
+                    changed = (try mergeExprLambdaSet(allocator, store, expr_id, merged_ls)) or changed;
+                }
+            }
+        },
+        .lookup => |symbol| {
+            if (store.getSymbolLambdaSet(symbol)) |ls_idx| {
+                changed = (try mergeExprLambdaSet(allocator, store, expr_id, ls_idx)) or changed;
+            }
+        },
+        .record_access => |ra| {
+            if (resolveRecordFieldLambdaSet(mir_store, store, ra.record, ra.field_name)) |ls_idx| {
+                changed = (try mergeExprLambdaSet(allocator, store, expr_id, ls_idx)) or changed;
+            }
+        },
+        .tuple_access => |ta| {
+            if (resolveTupleElemLambdaSet(mir_store, store, ta.tuple, ta.elem_index)) |ls_idx| {
+                changed = (try mergeExprLambdaSet(allocator, store, expr_id, ls_idx)) or changed;
+            }
+        },
+        .hosted => |hosted| {
+            if (store.getExprLambdaSet(hosted.body)) |ls_idx| {
+                changed = (try mergeExprLambdaSet(allocator, store, expr_id, ls_idx)) or changed;
+            }
+        },
+        .dbg_expr => |dbg_expr| {
+            if (store.getExprLambdaSet(dbg_expr.expr)) |ls_idx| {
+                changed = (try mergeExprLambdaSet(allocator, store, expr_id, ls_idx)) or changed;
+            }
+        },
+        .expect => |expect| {
+            if (store.getExprLambdaSet(expect.body)) |ls_idx| {
+                changed = (try mergeExprLambdaSet(allocator, store, expr_id, ls_idx)) or changed;
+            }
+        },
+        .return_expr => |ret| {
+            if (store.getExprLambdaSet(ret.expr)) |ls_idx| {
+                changed = (try mergeExprLambdaSet(allocator, store, expr_id, ls_idx)) or changed;
+            }
+        },
+        else => {},
+    }
+
+    return changed;
+}
+
+fn propagateCallArgs(allocator: Allocator, mir_store: *const MIR.Store, store: *Store) Allocator.Error!bool {
+    var changed = false;
+    var expr_index: u32 = 0;
+    while (expr_index < mir_store.exprs.items.len) : (expr_index += 1) {
+        const expr = mir_store.getExpr(@enumFromInt(expr_index));
+        if (expr != .call) continue;
+
+        const call = expr.call;
+        const callee_ls = store.getExprLambdaSet(call.func) orelse continue;
+        const args = mir_store.getExprSpan(call.args);
+        for (args, 0..) |arg_expr, arg_index| {
+            const arg_ls = store.getExprLambdaSet(arg_expr) orelse continue;
+            for (store.getMembers(store.getLambdaSet(callee_ls).members)) |member| {
+                const params = paramsForMember(mir_store, member) orelse continue;
+                const param_ids = mir_store.getPatternSpan(params);
+                if (arg_index >= param_ids.len) continue;
+                const param_symbol = patternBoundSymbol(mir_store, param_ids[arg_index]) orelse continue;
+                changed = (try mergeIntoSymbol(allocator, store, param_symbol, arg_ls)) or changed;
+            }
+        }
+    }
+    return changed;
+}
+
+fn propagateCapturedFunctionLocals(allocator: Allocator, mir_store: *const MIR.Store, store: *Store) Allocator.Error!bool {
+    var changed = false;
+    for (mir_store.closure_members.items) |closure_member| {
+        for (mir_store.getCaptureBindings(closure_member.capture_bindings)) |binding| {
+            const ls_idx = store.getExprLambdaSet(binding.source_expr) orelse continue;
+            changed = (try mergeIntoSymbol(allocator, store, binding.local_symbol, ls_idx)) or changed;
+        }
+    }
+    return changed;
+}
+
+fn propagateMemberReturnSets(allocator: Allocator, mir_store: *const MIR.Store, store: *Store) Allocator.Error!bool {
+    var changed = false;
+
+    var it = mir_store.symbol_defs.iterator();
+    while (it.next()) |entry| {
+        const fn_symbol = MIR.Symbol.fromRaw(entry.key_ptr.*);
+        const def_expr_id = entry.value_ptr.*;
+        const params = resolveToLambdaParams(mir_store, def_expr_id) orelse continue;
+        _ = params;
+        const body = resolveToLambdaBody(mir_store, def_expr_id) orelse continue;
+        const body_ls = store.getExprLambdaSet(body) orelse continue;
+        changed = (try mergeMemberReturnLambdaSet(allocator, store, fn_symbol, body_ls)) or changed;
+    }
+
+    return changed;
+}
+
+fn paramsForMember(mir_store: *const MIR.Store, member: Member) ?MIR.PatternSpan {
+    const def_expr_id = mir_store.getSymbolDef(member.fn_symbol) orelse return null;
+    return resolveToLambdaParams(mir_store, def_expr_id);
+}
+
+fn resolveToLambdaParams(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?MIR.PatternSpan {
+    const expr = mir_store.getExpr(expr_id);
+    return switch (expr) {
+        .lambda => |lam| lam.params,
+        .block => |block| resolveToLambdaParams(mir_store, block.final_expr),
+        else => null,
+    };
+}
+
+fn resolveToLambdaBody(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?MIR.ExprId {
+    const expr = mir_store.getExpr(expr_id);
+    return switch (expr) {
+        .lambda => |lam| lam.body,
+        .block => |block| resolveToLambdaBody(mir_store, block.final_expr),
+        else => null,
+    };
+}
+
+fn resolveRecordFieldLambdaSet(mir_store: *const MIR.Store, store: *const Store, expr_id: MIR.ExprId, field_name: Ident.Idx) ?Idx {
+    const expr = mir_store.getExpr(expr_id);
+    return switch (expr) {
+        .record => |record| blk: {
+            const field_names = mir_store.getFieldNameSpan(record.field_names);
+            const fields = mir_store.getExprSpan(record.fields);
+            for (field_names, 0..) |name, i| {
+                if (!name.eql(field_name)) continue;
+                break :blk store.getExprLambdaSet(fields[i]);
+            }
+            break :blk null;
+        },
+        .lookup => |symbol| blk: {
+            const def_expr = mir_store.getSymbolDef(symbol) orelse break :blk null;
+            break :blk resolveRecordFieldLambdaSet(mir_store, store, def_expr, field_name);
+        },
+        .block => |block| resolveRecordFieldLambdaSet(mir_store, store, block.final_expr, field_name),
+        else => null,
+    };
+}
+
+fn resolveTupleElemLambdaSet(mir_store: *const MIR.Store, store: *const Store, expr_id: MIR.ExprId, elem_index: u32) ?Idx {
+    const expr = mir_store.getExpr(expr_id);
+    return switch (expr) {
+        .tuple => |tuple| blk: {
+            const elems = mir_store.getExprSpan(tuple.elems);
+            if (elem_index >= elems.len) break :blk null;
+            break :blk store.getExprLambdaSet(elems[elem_index]);
+        },
+        .lookup => |symbol| blk: {
+            const def_expr = mir_store.getSymbolDef(symbol) orelse break :blk null;
+            break :blk resolveTupleElemLambdaSet(mir_store, store, def_expr, elem_index);
+        },
+        .block => |block| resolveTupleElemLambdaSet(mir_store, store, block.final_expr, elem_index),
+        else => null,
+    };
 }
 
 fn patternBoundSymbol(mir_store: *const MIR.Store, pat_id: MIR.PatternId) ?MIR.Symbol {
@@ -174,955 +436,92 @@ fn patternBoundSymbol(mir_store: *const MIR.Store, pat_id: MIR.PatternId) ?MIR.S
     };
 }
 
-fn propagateBoundFunctionSymbols(
-    allocator: Allocator,
-    mir_store: *const MIR.Store,
-    ls_store: *Store,
-) Allocator.Error!bool {
-    var changed = false;
-
-    var expr_index: u32 = 0;
-    while (expr_index < mir_store.exprs.items.len) : (expr_index += 1) {
-        changed = (try propagateBoundFunctionSymbolsInExpr(
-            allocator,
-            mir_store,
-            ls_store,
-            @enumFromInt(expr_index),
-        )) or changed;
-    }
-
-    return changed;
-}
-
-fn propagateBoundFunctionSymbolsInExpr(
-    allocator: Allocator,
-    mir_store: *const MIR.Store,
-    ls_store: *Store,
-    expr_id: MIR.ExprId,
-) Allocator.Error!bool {
-    var changed = false;
-
-    switch (mir_store.getExpr(expr_id)) {
-        .block => |block| {
-            const stmts = mir_store.getStmts(block.stmts);
-            for (stmts) |stmt| {
-                const binding = switch (stmt) {
-                    .decl_const, .decl_var, .mutate_var => |b| b,
-                };
-
-                if (patternBoundSymbol(mir_store, binding.pattern)) |symbol| {
-                    const ls_idx = try resolveExprLambdaSet(allocator, mir_store, ls_store, binding.expr);
-                    if (!ls_idx.isNone()) {
-                        changed = (try mergeIntoSymbol(allocator, ls_store, symbol, ls_idx)) or changed;
-                    }
-                }
-
-                changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, binding.expr)) or changed;
-            }
-
-            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, block.final_expr)) or changed;
-        },
-        .lambda => |lam| {
-            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, lam.body)) or changed;
-        },
-        .match_expr => |match_expr| {
-            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, match_expr.cond)) or changed;
-            for (mir_store.getBranches(match_expr.branches)) |branch| {
-                if (!branch.guard.isNone()) {
-                    changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, branch.guard)) or changed;
-                }
-                changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, branch.body)) or changed;
-            }
-        },
-        .borrow_scope => |scope| {
-            for (mir_store.getBorrowBindings(scope.bindings)) |binding| {
-                if (patternBoundSymbol(mir_store, binding.pattern)) |symbol| {
-                    const ls_idx = try resolveExprLambdaSet(allocator, mir_store, ls_store, binding.expr);
-                    if (!ls_idx.isNone()) {
-                        changed = (try mergeIntoSymbol(allocator, ls_store, symbol, ls_idx)) or changed;
-                    }
-                }
-                changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, binding.expr)) or changed;
-            }
-            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, scope.body)) or changed;
-        },
-        .call => |call| {
-            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, call.func)) or changed;
-            for (mir_store.getExprSpan(call.args)) |arg| {
-                changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, arg)) or changed;
-            }
-        },
-        .list => |list| {
-            for (mir_store.getExprSpan(list.elems)) |elem| {
-                changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, elem)) or changed;
-            }
-        },
-        .record => |record| {
-            for (mir_store.getExprSpan(record.fields)) |field| {
-                changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, field)) or changed;
-            }
-        },
-        .tuple => |tuple| {
-            for (mir_store.getExprSpan(tuple.elems)) |elem| {
-                changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, elem)) or changed;
-            }
-        },
-        .tag => |tag| {
-            for (mir_store.getExprSpan(tag.args)) |arg| {
-                changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, arg)) or changed;
-            }
-        },
-        .run_low_level => |ll| {
-            for (mir_store.getExprSpan(ll.args)) |arg| {
-                changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, arg)) or changed;
-            }
-        },
-        .record_access => |ra| {
-            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, ra.record)) or changed;
-        },
-        .tuple_access => |ta| {
-            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, ta.tuple)) or changed;
-        },
-        .str_escape_and_quote => |inner| {
-            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, inner)) or changed;
-        },
-        .hosted => |hosted| {
-            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, hosted.body)) or changed;
-        },
-        .dbg_expr => |dbg_expr| {
-            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, dbg_expr.expr)) or changed;
-        },
-        .expect => |expect| {
-            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, expect.body)) or changed;
-        },
-        .for_loop => |for_loop| {
-            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, for_loop.list)) or changed;
-            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, for_loop.body)) or changed;
-        },
-        .while_loop => |while_loop| {
-            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, while_loop.cond)) or changed;
-            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, while_loop.body)) or changed;
-        },
-        .return_expr => |ret| {
-            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, ret.expr)) or changed;
-        },
-        else => {},
-    }
-
-    return changed;
-}
-
-/// Propagate lambda sets from call arguments to callee parameters.
-/// Uses pre-recorded HofCallArg entries from lowering — no expression scanning needed.
-fn propagateCallArgs(
-    allocator: Allocator,
-    mir_store: *const MIR.Store,
-    ls_store: *Store,
-    all_module_envs: []const *ModuleEnv,
-) Allocator.Error!bool {
-    var changed = false;
-
-    for (mir_store.hof_call_args.items) |hof| {
-        // Resolve the arg's lambda set — works for both lookups (hoisted lambdas)
-        // and direct closure expressions (captures tuples with closure_origins).
-        const arg_ls = getArgLambdaSet(allocator, mir_store, ls_store, hof.arg_expr) orelse continue;
-        const arg_index: usize = @intCast(hof.arg_index);
-        const call_expr = mir_store.getExpr(hof.call_func);
-        const owner_fn_symbol = if (call_expr == .lookup) call_expr.lookup else MIR.Symbol.none;
-
-        // Fast path: callee resolves directly to a lambda/lookup-with-def.
-        if (resolveToLambdaParams(mir_store, hof.call_func)) |params| {
-            changed = (try propagateArgIntoParams(
-                allocator,
-                mir_store,
-                ls_store,
-                all_module_envs,
-                params,
-                arg_index,
-                arg_ls,
-                owner_fn_symbol,
-            )) or changed;
-            continue;
-        }
-
-        // Fallback: callee may be a lookup to a symbol that has a lambda set
-        // but no direct symbol_def (e.g. higher-order parameter). In that case,
-        // propagate into each member function's corresponding parameter.
-        if (call_expr == .lookup) {
-            changed = (try propagateArgIntoCalleeMembers(
-                allocator,
-                mir_store,
-                ls_store,
-                all_module_envs,
-                call_expr.lookup,
-                arg_index,
-                arg_ls,
-            )) or changed;
-        }
-    }
-
-    return changed;
-}
-
-/// Propagate lambda sets through capture aliases. A capture-local inside
-/// a lifted function body aliases an outer-scope symbol; it should have
-/// the same lambda set so closure call dispatch works.
-fn propagateCaptureAliases(allocator: Allocator, mir_store: *const MIR.Store, ls_store: *Store) Allocator.Error!bool {
-    var changed = false;
-    var alias_it = mir_store.capture_symbol_aliases.iterator();
-    while (alias_it.next()) |entry| {
-        const capture_local_key = entry.key_ptr.*;
-        const canonical_key = entry.value_ptr.*;
-        if (ls_store.symbol_lambda_sets.get(canonical_key)) |ls_idx| {
-            const did_change = try mergeIntoSymbol(
-                allocator,
-                ls_store,
-                MIR.Symbol.fromRaw(capture_local_key),
-                ls_idx,
-            );
-            changed = did_change or changed;
-        }
-    }
-    return changed;
-}
-
-fn propagateArgIntoParams(
-    allocator: Allocator,
-    mir_store: *const MIR.Store,
-    ls_store: *Store,
-    all_module_envs: []const *ModuleEnv,
-    params: MIR.PatternSpan,
-    arg_index: usize,
-    arg_ls: Idx,
-    owner_fn_symbol: MIR.Symbol,
-) Allocator.Error!bool {
-    const param_ids = mir_store.getPatternSpan(params);
-    if (arg_index >= param_ids.len) return false;
-
-    const param_id = param_ids[arg_index];
-    const param_pat = mir_store.getPattern(param_id);
-    if (param_pat != .bind) return false;
-
-    const param_mono = mir_store.patternTypeOf(param_id);
-    if (std.debug.runtime_safety) {
-        assertLambdaSetCompatibleForParamType(
-            mir_store,
-            ls_store,
-            all_module_envs,
-            arg_ls,
-            param_mono,
-            param_pat.bind,
-            owner_fn_symbol,
-            arg_index,
-        );
-    }
-
-    return mergeIntoSymbol(allocator, ls_store, param_pat.bind, arg_ls);
-}
-
-fn propagateArgIntoCalleeMembers(
-    allocator: Allocator,
-    mir_store: *const MIR.Store,
-    ls_store: *Store,
-    all_module_envs: []const *ModuleEnv,
-    callee_symbol: MIR.Symbol,
-    arg_index: usize,
-    arg_ls: Idx,
-) Allocator.Error!bool {
-    const callee_ls_idx = ls_store.getSymbolLambdaSet(callee_symbol) orelse return false;
-    var members = try snapshotLambdaSetMembers(allocator, ls_store, callee_ls_idx);
-    defer members.deinit(allocator);
-
-    var changed = false;
-    for (members.items) |member| {
-        const def_expr_id = mir_store.getSymbolDef(member.fn_symbol) orelse continue;
-        const params = resolveToLambdaParams(mir_store, def_expr_id) orelse continue;
-        const did_change = try propagateArgIntoParams(
-            allocator,
-            mir_store,
-            ls_store,
-            all_module_envs,
-            params,
-            arg_index,
-            arg_ls,
-            member.fn_symbol,
-        );
-        changed = did_change or changed;
-    }
-    return changed;
-}
-
-fn symbolModuleIdx(sym: MIR.Symbol) u32 {
-    const raw = sym.raw();
-    return @intCast((raw >> 32) & 0x7fff_ffff);
-}
-
-fn identTextIfOwnedBy(env: *const ModuleEnv, ident: Ident.Idx) ?[]const u8 {
-    const ident_store = env.getIdentStoreConst();
-    const bytes = ident_store.interner.bytes.items.items;
-    const start: usize = @intCast(ident.idx);
-    if (start >= bytes.len) return null;
-
-    const tail = bytes[start..];
-    const end_rel = std.mem.indexOfScalar(u8, tail, 0) orelse return null;
-    const text = tail[0..end_rel];
-
-    const roundtrip = ident_store.findByString(text) orelse return null;
-    if (!roundtrip.eql(ident)) return null;
-    return text;
-}
-
-fn identTextInModule(
-    all_module_envs: []const *ModuleEnv,
-    module_idx: u32,
-    ident: Ident.Idx,
-) ?[]const u8 {
-    if (module_idx >= all_module_envs.len) return null;
-    return identTextIfOwnedBy(all_module_envs[module_idx], ident);
-}
-
-fn tagNameTextEquivalent(lhs: []const u8, rhs: []const u8) bool {
-    if (std.mem.eql(u8, lhs, rhs)) return true;
-    const lhs_last = if (std.mem.lastIndexOfScalar(u8, lhs, '.')) |dot| lhs[dot + 1 ..] else lhs;
-    const rhs_last = if (std.mem.lastIndexOfScalar(u8, rhs, '.')) |dot| rhs[dot + 1 ..] else rhs;
-    return std.mem.eql(u8, lhs_last, rhs_last);
-}
-
-fn monotypesCompatible(
-    mir_store: *const MIR.Store,
-    all_module_envs: []const *ModuleEnv,
-    lhs_mono: Monotype.Idx,
-    lhs_module_idx: u32,
-    rhs_mono: Monotype.Idx,
-    rhs_module_idx: u32,
-) bool {
-    var seen = std.AutoHashMap(u128, void).init(std.heap.page_allocator);
-    defer seen.deinit();
-    return monotypesCompatibleRec(
-        mir_store,
-        all_module_envs,
-        lhs_mono,
-        lhs_module_idx,
-        rhs_mono,
-        rhs_module_idx,
-        &seen,
-    );
-}
-
-fn monotypesCompatibleRec(
-    mir_store: *const MIR.Store,
-    all_module_envs: []const *ModuleEnv,
-    lhs_mono: Monotype.Idx,
-    lhs_module_idx: u32,
-    rhs_mono: Monotype.Idx,
-    rhs_module_idx: u32,
-    seen: *std.AutoHashMap(u128, void),
-) bool {
-    if (lhs_module_idx == rhs_module_idx and lhs_mono == rhs_mono) return true;
-
-    const lhs_u32: u32 = @intFromEnum(lhs_mono);
-    const rhs_u32: u32 = @intFromEnum(rhs_mono);
-    const key: u128 = (@as(u128, lhs_module_idx) << 96) |
-        (@as(u128, lhs_u32) << 64) |
-        (@as(u128, rhs_module_idx) << 32) |
-        @as(u128, rhs_u32);
-
-    if (seen.contains(key)) return true;
-    _ = seen.put(key, {}) catch return false;
-
-    const lhs = mir_store.monotype_store.getMonotype(lhs_mono);
-    const rhs = mir_store.monotype_store.getMonotype(rhs_mono);
-    if (std.meta.activeTag(lhs) != std.meta.activeTag(rhs)) return false;
-
-    return switch (lhs) {
-        .recursive_placeholder => false,
-        .unit => true,
-        .prim => |lhs_prim| lhs_prim == rhs.prim,
-        .list => |lhs_list| monotypesCompatibleRec(
-            mir_store,
-            all_module_envs,
-            lhs_list.elem,
-            lhs_module_idx,
-            rhs.list.elem,
-            rhs_module_idx,
-            seen,
-        ),
-        .box => |lhs_box| monotypesCompatibleRec(
-            mir_store,
-            all_module_envs,
-            lhs_box.inner,
-            lhs_module_idx,
-            rhs.box.inner,
-            rhs_module_idx,
-            seen,
-        ),
-        .tuple => |lhs_tuple| blk: {
-            const lhs_elems = mir_store.monotype_store.getIdxSpan(lhs_tuple.elems);
-            const rhs_elems = mir_store.monotype_store.getIdxSpan(rhs.tuple.elems);
-            if (lhs_elems.len != rhs_elems.len) break :blk false;
-            for (lhs_elems, rhs_elems) |lhs_elem, rhs_elem| {
-                if (!monotypesCompatibleRec(
-                    mir_store,
-                    all_module_envs,
-                    lhs_elem,
-                    lhs_module_idx,
-                    rhs_elem,
-                    rhs_module_idx,
-                    seen,
-                )) {
-                    break :blk false;
-                }
-            }
-            break :blk true;
-        },
-        .func => |lhs_func| blk: {
-            const rhs_func = rhs.func;
-            if (lhs_func.effectful != rhs_func.effectful) break :blk false;
-
-            const lhs_args = mir_store.monotype_store.getIdxSpan(lhs_func.args);
-            const rhs_args = mir_store.monotype_store.getIdxSpan(rhs_func.args);
-            if (lhs_args.len != rhs_args.len) break :blk false;
-            for (lhs_args, rhs_args) |lhs_arg, rhs_arg| {
-                if (!monotypesCompatibleRec(
-                    mir_store,
-                    all_module_envs,
-                    lhs_arg,
-                    lhs_module_idx,
-                    rhs_arg,
-                    rhs_module_idx,
-                    seen,
-                )) {
-                    break :blk false;
-                }
-            }
-
-            break :blk monotypesCompatibleRec(
-                mir_store,
-                all_module_envs,
-                lhs_func.ret,
-                lhs_module_idx,
-                rhs_func.ret,
-                rhs_module_idx,
-                seen,
-            );
-        },
-        .record => |lhs_record| blk: {
-            const lhs_fields = mir_store.monotype_store.getFields(lhs_record.fields);
-            const rhs_fields = mir_store.monotype_store.getFields(rhs.record.fields);
-            if (lhs_fields.len != rhs_fields.len) break :blk false;
-
-            for (lhs_fields, rhs_fields) |lhs_field, rhs_field| {
-                const lhs_name = identTextInModule(all_module_envs, lhs_module_idx, lhs_field.name) orelse return false;
-                const rhs_name = identTextInModule(all_module_envs, rhs_module_idx, rhs_field.name) orelse return false;
-                if (!std.mem.eql(u8, lhs_name, rhs_name)) break :blk false;
-
-                if (!monotypesCompatibleRec(
-                    mir_store,
-                    all_module_envs,
-                    lhs_field.type_idx,
-                    lhs_module_idx,
-                    rhs_field.type_idx,
-                    rhs_module_idx,
-                    seen,
-                )) {
-                    break :blk false;
-                }
-            }
-
-            break :blk true;
-        },
-        .tag_union => |lhs_union| blk: {
-            const lhs_tags = mir_store.monotype_store.getTags(lhs_union.tags);
-            const rhs_tags = mir_store.monotype_store.getTags(rhs.tag_union.tags);
-            if (lhs_tags.len != rhs_tags.len) break :blk false;
-
-            for (lhs_tags, rhs_tags) |lhs_tag, rhs_tag| {
-                const lhs_name = identTextInModule(all_module_envs, lhs_module_idx, lhs_tag.name) orelse return false;
-                const rhs_name = identTextInModule(all_module_envs, rhs_module_idx, rhs_tag.name) orelse return false;
-                if (!tagNameTextEquivalent(lhs_name, rhs_name)) break :blk false;
-
-                const lhs_payloads = mir_store.monotype_store.getIdxSpan(lhs_tag.payloads);
-                const rhs_payloads = mir_store.monotype_store.getIdxSpan(rhs_tag.payloads);
-                if (lhs_payloads.len != rhs_payloads.len) break :blk false;
-                for (lhs_payloads, rhs_payloads) |lhs_payload, rhs_payload| {
-                    if (!monotypesCompatibleRec(
-                        mir_store,
-                        all_module_envs,
-                        lhs_payload,
-                        lhs_module_idx,
-                        rhs_payload,
-                        rhs_module_idx,
-                        seen,
-                    )) {
-                        break :blk false;
-                    }
-                }
-            }
-
-            break :blk true;
-        },
+fn plainLambdaMember(symbol: MIR.Symbol) Member {
+    return .{
+        .fn_symbol = symbol,
+        .closure_member = .none,
     };
 }
 
-fn debugPrintMonotypeShallow(mir_store: *const MIR.Store, mono_idx: Monotype.Idx) void {
-    const mono = mir_store.monotype_store.getMonotype(mono_idx);
-    switch (mono) {
-        .unit => std.debug.print("mono {d}: unit\n", .{@intFromEnum(mono_idx)}),
-        .prim => |p| std.debug.print("mono {d}: prim.{s}\n", .{ @intFromEnum(mono_idx), @tagName(p) }),
-        .list => |l| std.debug.print("mono {d}: list elem={d}\n", .{ @intFromEnum(mono_idx), @intFromEnum(l.elem) }),
-        .box => |b| std.debug.print("mono {d}: box inner={d}\n", .{ @intFromEnum(mono_idx), @intFromEnum(b.inner) }),
-        .tuple => |t| {
-            const elems = mir_store.monotype_store.getIdxSpan(t.elems);
-            std.debug.print("mono {d}: tuple(", .{@intFromEnum(mono_idx)});
-            for (elems, 0..) |elem, i| {
-                if (i != 0) std.debug.print(", ", .{});
-                std.debug.print("{d}", .{@intFromEnum(elem)});
-            }
-            std.debug.print(")\n", .{});
-        },
-        .func => |f| {
-            const args = mir_store.monotype_store.getIdxSpan(f.args);
-            std.debug.print("mono {d}: func(", .{@intFromEnum(mono_idx)});
-            for (args, 0..) |arg, i| {
-                if (i != 0) std.debug.print(", ", .{});
-                std.debug.print("{d}", .{@intFromEnum(arg)});
-            }
-            std.debug.print(") -> {d} effectful={}\n", .{ @intFromEnum(f.ret), f.effectful });
-        },
-        .record => |r| {
-            const fields = mir_store.monotype_store.getFields(r.fields);
-            std.debug.print("mono {d}: record{{", .{@intFromEnum(mono_idx)});
-            for (fields, 0..) |field, i| {
-                if (i != 0) std.debug.print(", ", .{});
-                std.debug.print("{d}:{d}", .{ field.name.idx, @intFromEnum(field.type_idx) });
-            }
-            std.debug.print("}}\n", .{});
-        },
-        .tag_union => |u| {
-            const tags = mir_store.monotype_store.getTags(u.tags);
-            std.debug.print("mono {d}: tag_union[", .{@intFromEnum(mono_idx)});
-            for (tags, 0..) |tag, i| {
-                if (i != 0) std.debug.print(", ", .{});
-                std.debug.print("{d}(", .{tag.name.idx});
-                const payloads = mir_store.monotype_store.getIdxSpan(tag.payloads);
-                for (payloads, 0..) |p, j| {
-                    if (j != 0) std.debug.print(", ", .{});
-                    std.debug.print("{d}", .{@intFromEnum(p)});
-                }
-                std.debug.print(")", .{});
-            }
-            std.debug.print("]\n", .{});
-        },
-        .recursive_placeholder => std.debug.print("mono {d}: recursive_placeholder\n", .{@intFromEnum(mono_idx)}),
-    }
-}
-
-/// Debug-only assertion: every lambda-set member propagated into a function-typed
-/// parameter must be signature-compatible with that parameter type.
-fn assertLambdaSetCompatibleForParamType(
-    mir_store: *const MIR.Store,
-    ls_store: *Store,
-    all_module_envs: []const *ModuleEnv,
-    arg_ls_idx: Idx,
-    param_mono: Monotype.Idx,
-    param_symbol: MIR.Symbol,
-    owner_fn_symbol: MIR.Symbol,
-    arg_index: usize,
-) void {
-    const param_mono_val = mir_store.monotype_store.getMonotype(param_mono);
-    if (param_mono_val != .func) return;
-    const param_func = param_mono_val.func;
-    const param_args = mir_store.monotype_store.getIdxSpan(param_func.args);
-    const param_module_idx = symbolModuleIdx(param_symbol);
-
-    const arg_ls = ls_store.getLambdaSet(arg_ls_idx);
-    const members = ls_store.getMembers(arg_ls.members);
-    for (members) |member| {
-        const member_module_idx = symbolModuleIdx(member.fn_symbol);
-        const def_expr_id = mir_store.getSymbolDef(member.fn_symbol) orelse {
-            std.debug.panic(
-                "LambdaSet compatibility failure: missing def for member fn_symbol={d}",
-                .{member.fn_symbol.raw()},
-            );
-        };
-        const member_mono = mir_store.typeOf(def_expr_id);
-        const member_mono_val = mir_store.monotype_store.getMonotype(member_mono);
-        if (member_mono_val != .func) {
-            std.debug.panic(
-                "LambdaSet compatibility failure: member fn_symbol={d} has non-func monotype={d}",
-                .{ member.fn_symbol.raw(), @intFromEnum(member_mono) },
-            );
-        }
-
-        const member_func = member_mono_val.func;
-        const member_args = mir_store.monotype_store.getIdxSpan(member_func.args);
-        const expected_args = param_args.len + @as(usize, if (member.captures_monotype.isNone()) 0 else 1);
-        if (member_args.len != expected_args or !monotypesCompatible(
-            mir_store,
-            all_module_envs,
-            param_func.ret,
-            param_module_idx,
-            member_func.ret,
-            member_module_idx,
-        )) {
-            std.debug.print(
-                "LambdaSet compatibility mismatch: owner fn={d} arg_index={d} param_mono={d} param_symbol={d}\n",
-                .{
-                    owner_fn_symbol.raw(),
-                    arg_index,
-                    @intFromEnum(param_mono),
-                    param_symbol.raw(),
-                },
-            );
-            if (!owner_fn_symbol.isNone()) {
-                if (mir_store.getSymbolDef(owner_fn_symbol)) |owner_def_expr_id| {
-                    const owner_mono = mir_store.typeOf(owner_def_expr_id);
-                    const owner_mono_val = mir_store.monotype_store.getMonotype(owner_mono);
-                    if (owner_mono_val == .func) {
-                        const owner_args = mir_store.monotype_store.getIdxSpan(owner_mono_val.func.args);
-                        std.debug.print("  owner type args:", .{});
-                        for (owner_args) |a| {
-                            std.debug.print(" {d}", .{@intFromEnum(a)});
-                        }
-                        std.debug.print(" -> {d}\n", .{@intFromEnum(owner_mono_val.func.ret)});
-                    } else {
-                        std.debug.print("  owner type mono={d} (non-func)\n", .{@intFromEnum(owner_mono)});
-                    }
-                } else {
-                    std.debug.print("  owner has no symbol def\n", .{});
-                }
-            }
-            std.debug.print(
-                "  incoming member fn={d} captures={d}\n",
-                .{
-                    member.fn_symbol.raw(),
-                    if (member.captures_monotype.isNone()) @as(u32, std.math.maxInt(u32)) else @intFromEnum(member.captures_monotype),
-                },
-            );
-            std.debug.print("  param args:", .{});
-            for (param_args) |a| {
-                std.debug.print(" {d}", .{@intFromEnum(a)});
-            }
-            std.debug.print(" -> {d}\n", .{@intFromEnum(param_func.ret)});
-
-            std.debug.print("  member args:", .{});
-            for (member_args) |a| {
-                std.debug.print(" {d}", .{@intFromEnum(a)});
-            }
-            std.debug.print(" -> {d}\n", .{@intFromEnum(member_func.ret)});
-            std.debug.print("  module contexts: param_module={d}, member_module={d}\n", .{ param_module_idx, member_module_idx });
-
-            std.debug.print("  param func monotype detail:\n", .{});
-            debugPrintMonotypeShallow(mir_store, param_mono);
-            for (param_args) |a| debugPrintMonotypeShallow(mir_store, a);
-            debugPrintMonotypeShallow(mir_store, param_func.ret);
-
-            std.debug.print("  member func monotype detail:\n", .{});
-            debugPrintMonotypeShallow(mir_store, member_mono);
-            for (member_args) |a| debugPrintMonotypeShallow(mir_store, a);
-            debugPrintMonotypeShallow(mir_store, member_func.ret);
-
-            std.debug.panic(
-                "LambdaSet propagation type mismatch for fn-typed parameter symbol={d}",
-                .{param_symbol.raw()},
-            );
-        }
-
-        for (param_args, 0..) |param_arg_mono, i| {
-            if (!monotypesCompatible(
-                mir_store,
-                all_module_envs,
-                param_arg_mono,
-                param_module_idx,
-                member_args[i],
-                member_module_idx,
-            )) {
-                std.debug.print(
-                    "LambdaSet compatibility mismatch: owner fn={d} arg_index={d} param_symbol={d} param_arg #{d} expected mono={d}, got mono={d}\n",
-                    .{ owner_fn_symbol.raw(), arg_index, param_symbol.raw(), i, @intFromEnum(param_arg_mono), @intFromEnum(member_args[i]) },
-                );
-                std.debug.print("  param args:", .{});
-                for (param_args) |a| {
-                    std.debug.print(" {d}", .{@intFromEnum(a)});
-                }
-                std.debug.print(" -> {d}\n", .{@intFromEnum(param_func.ret)});
-
-                std.debug.print("  member fn={d} args:", .{member.fn_symbol.raw()});
-                for (member_args) |a| {
-                    std.debug.print(" {d}", .{@intFromEnum(a)});
-                }
-                std.debug.print(" -> {d}\n", .{@intFromEnum(member_func.ret)});
-
-                debugPrintMonotypeShallow(mir_store, param_arg_mono);
-                debugPrintMonotypeShallow(mir_store, member_args[i]);
-
-                std.debug.panic(
-                    "LambdaSet propagation type mismatch for fn-typed parameter symbol={d}",
-                    .{param_symbol.raw()},
-                );
-            }
-        }
-    }
-}
-
-/// Get the lambda set for a call argument expression.
-/// Handles lookups (check symbol_lambda_sets) and direct expressions (resolveExprLambdaSet).
-fn getArgLambdaSet(allocator: Allocator, mir_store: *const MIR.Store, ls_store: *Store, arg_expr_id: MIR.ExprId) ?Idx {
-    const ls = resolveExprLambdaSet(allocator, mir_store, ls_store, arg_expr_id) catch return null;
-    return if (ls.isNone()) null else ls;
-}
-
-/// Follow lookups, blocks, and closure origins to find the callee lambda's parameter list.
-fn resolveToLambdaParams(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?MIR.PatternSpan {
-    // Check closure origins first — captures tuples map to their lifted lambdas
-    if (mir_store.closure_origins.get(@intFromEnum(expr_id))) |lifted_idx| {
-        const lifted = mir_store.lifted_lambdas.items[lifted_idx];
-        const lifted_def = mir_store.getSymbolDef(lifted.fn_symbol) orelse return null;
-        return resolveToLambdaParams(mir_store, lifted_def);
-    }
-
-    const expr = mir_store.getExpr(expr_id);
-    return switch (expr) {
-        .lambda => |l| l.params,
-        .block => |block| resolveToLambdaParams(mir_store, block.final_expr),
-        .lookup => |sym| {
-            const def_expr_id = mir_store.getSymbolDef(sym) orelse return null;
-            return resolveToLambdaParams(mir_store, def_expr_id);
-        },
-        else => null,
+fn memberFromClosureMember(mir_store: *const MIR.Store, closure_member_id: MIR.ClosureMemberId) Member {
+    const closure_member = mir_store.getClosureMember(closure_member_id);
+    return .{
+        .fn_symbol = closure_member.fn_symbol,
+        .closure_member = closure_member_id,
     };
 }
 
-/// Assign or merge a lambda set into a symbol's existing lambda set.
-/// Returns true if the symbol's lambda set changed (new assignment or new members added).
-fn mergeIntoSymbol(allocator: Allocator, ls_store: *Store, sym: MIR.Symbol, new_ls_idx: Idx) Allocator.Error!bool {
-    const existing = ls_store.symbol_lambda_sets.get(sym.raw());
+fn singletonLambdaSet(allocator: Allocator, store: *Store, member: Member) Allocator.Error!Idx {
+    return internLambdaSet(allocator, store, &.{member});
+}
+
+fn internLambdaSet(allocator: Allocator, store: *Store, members: []const Member) Allocator.Error!Idx {
+    const span = try store.addMembers(allocator, members);
+    return store.addLambdaSet(allocator, .{ .members = span });
+}
+
+fn appendMembersDedup(allocator: Allocator, dest: *std.ArrayListUnmanaged(Member), src: []const Member) Allocator.Error!void {
+    for (src) |candidate| {
+        if (containsMember(dest.items, candidate)) continue;
+        try dest.append(allocator, candidate);
+    }
+}
+
+fn containsMember(existing: []const Member, candidate: Member) bool {
+    for (existing) |member| {
+        if (member.fn_symbol.eql(candidate.fn_symbol)) return true;
+    }
+    return false;
+}
+
+fn mergeIntoSymbol(allocator: Allocator, store: *Store, symbol: MIR.Symbol, new_ls_idx: Idx) Allocator.Error!bool {
+    const existing = store.symbol_lambda_sets.get(symbol.raw());
     if (existing == null) {
-        // No existing lambda set — assign directly
-        try ls_store.symbol_lambda_sets.put(allocator, sym.raw(), new_ls_idx);
+        try store.symbol_lambda_sets.put(allocator, symbol.raw(), new_ls_idx);
         return true;
     }
+    return mergeLambdaSetEntries(allocator, store, &store.symbol_lambda_sets, symbol.raw(), existing.?, new_ls_idx);
+}
 
-    // Merge: union the member lists, dedup by fn_symbol
-    const existing_ls = ls_store.getLambdaSet(existing.?);
-    const new_ls = ls_store.getLambdaSet(new_ls_idx);
-    const existing_members = ls_store.getMembers(existing_ls.members);
-    const new_members = ls_store.getMembers(new_ls.members);
+fn mergeExprLambdaSet(allocator: Allocator, store: *Store, expr_id: MIR.ExprId, new_ls_idx: Idx) Allocator.Error!bool {
+    const expr_key = @intFromEnum(expr_id);
+    const existing = store.expr_lambda_sets.get(expr_key);
+    if (existing == null) {
+        try store.expr_lambda_sets.put(allocator, expr_key, new_ls_idx);
+        return true;
+    }
+    return mergeLambdaSetEntries(allocator, store, &store.expr_lambda_sets, expr_key, existing.?, new_ls_idx);
+}
+
+fn mergeMemberReturnLambdaSet(allocator: Allocator, store: *Store, fn_symbol: MIR.Symbol, new_ls_idx: Idx) Allocator.Error!bool {
+    const existing = store.member_return_lambda_sets.get(fn_symbol.raw());
+    if (existing == null) {
+        try store.member_return_lambda_sets.put(allocator, fn_symbol.raw(), new_ls_idx);
+        return true;
+    }
+    return mergeLambdaSetEntries(allocator, store, &store.member_return_lambda_sets, fn_symbol.raw(), existing.?, new_ls_idx);
+}
+
+fn mergeLambdaSetEntries(
+    allocator: Allocator,
+    store: *Store,
+    map: anytype,
+    key: anytype,
+    existing_ls_idx: Idx,
+    new_ls_idx: Idx,
+) Allocator.Error!bool {
+    if (existing_ls_idx == new_ls_idx) return false;
+
+    const existing_members = store.getMembers(store.getLambdaSet(existing_ls_idx).members);
+    const new_members = store.getMembers(store.getLambdaSet(new_ls_idx).members);
 
     var merged: std.ArrayListUnmanaged(Member) = .empty;
     defer merged.deinit(allocator);
     try merged.appendSlice(allocator, existing_members);
+    try appendMembersDedup(allocator, &merged, new_members);
 
-    var changed = false;
-    for (new_members) |m| {
-        var found = false;
-        for (existing_members) |existing_m| {
-            if (existing_m.fn_symbol.eql(m.fn_symbol)) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            try merged.append(allocator, m);
-            changed = true;
-        }
-    }
-
-    if (changed) {
-        const member_span = try ls_store.addMembers(allocator, merged.items);
-        const merged_ls = try ls_store.addLambdaSet(allocator, .{ .members = member_span });
-        try ls_store.symbol_lambda_sets.put(allocator, sym.raw(), merged_ls);
-    }
-    return changed;
-}
-
-fn addMemberDedup(allocator: Allocator, members: *std.ArrayListUnmanaged(Member), candidate: Member) Allocator.Error!void {
-    for (members.items) |existing| {
-        if (existing.fn_symbol.eql(candidate.fn_symbol)) return;
-    }
-    try members.append(allocator, candidate);
-}
-
-fn snapshotLambdaSetMembers(
-    allocator: Allocator,
-    ls_store: *const Store,
-    ls_idx: Idx,
-) Allocator.Error!std.ArrayListUnmanaged(Member) {
-    var snapshot: std.ArrayListUnmanaged(Member) = .empty;
-    errdefer snapshot.deinit(allocator);
-
-    try snapshot.appendSlice(allocator, ls_store.getMembers(ls_store.getLambdaSet(ls_idx).members));
-    return snapshot;
-}
-
-/// Resolve the lambda set for an expression, following through blocks, lookups,
-/// and closure-returning calls.
-pub fn resolveExprLambdaSet(
-    allocator: Allocator,
-    mir_store: *const MIR.Store,
-    ls_store: *Store,
-    expr_id: MIR.ExprId,
-) Allocator.Error!Idx {
-    var visiting = std.AutoHashMapUnmanaged(u32, void).empty;
-    defer visiting.deinit(allocator);
-    return resolveExprLambdaSetRec(allocator, mir_store, ls_store, expr_id, &visiting);
-}
-
-fn resolveExprLambdaSetRec(
-    allocator: Allocator,
-    mir_store: *const MIR.Store,
-    ls_store: *Store,
-    expr_id: MIR.ExprId,
-    visiting: *std.AutoHashMapUnmanaged(u32, void),
-) Allocator.Error!Idx {
-    const expr_key = @intFromEnum(expr_id);
-    if (visiting.contains(expr_key)) return Idx.none;
-    try visiting.put(allocator, expr_key, {});
-    defer _ = visiting.remove(expr_key);
-
-    // Direct closure origin — singleton lambda set
-    if (mir_store.closure_origins.get(expr_key)) |lifted_idx| {
-        const lifted = mir_store.lifted_lambdas.items[lifted_idx];
-        const member_span = try ls_store.addMembers(allocator, &.{.{
-            .fn_symbol = lifted.fn_symbol,
-            .captures_monotype = lifted.captures_monotype,
-        }});
-        return try ls_store.addLambdaSet(allocator, .{ .members = member_span });
-    }
-
-    const expr = mir_store.getExpr(expr_id);
-    switch (expr) {
-        // Block: the lambda set is the lambda set of the final expression
-        .block => |block| {
-            return resolveExprLambdaSetRec(allocator, mir_store, ls_store, block.final_expr, visiting);
-        },
-        // Match: merge lambda sets from all branches
-        .match_expr => |match| {
-            const branches = mir_store.getBranches(match.branches);
-            var all_members: std.ArrayListUnmanaged(Member) = .empty;
-            defer all_members.deinit(allocator);
-
-            for (branches) |branch| {
-                const branch_ls = try resolveExprLambdaSetRec(allocator, mir_store, ls_store, branch.body, visiting);
-                if (!branch_ls.isNone()) {
-                    const branch_members = ls_store.getMembers(ls_store.getLambdaSet(branch_ls).members);
-                    for (branch_members) |m| {
-                        try addMemberDedup(allocator, &all_members, m);
-                    }
-                }
-            }
-
-            if (all_members.items.len == 0) return Idx.none;
-            const member_span = try ls_store.addMembers(allocator, all_members.items);
-            return try ls_store.addLambdaSet(allocator, .{ .members = member_span });
-        },
-        // Call: infer the return lambda set from each callee member's lambda body.
-        .call => |call| {
-            const callee_expr = mir_store.getExpr(call.func);
-            if (callee_expr == .lambda) {
-                return resolveExprLambdaSetRec(
-                    allocator,
-                    mir_store,
-                    ls_store,
-                    callee_expr.lambda.body,
-                    visiting,
-                );
-            }
-
-            const callee_ls = try resolveExprLambdaSetRec(allocator, mir_store, ls_store, call.func, visiting);
-            if (callee_ls.isNone()) return Idx.none;
-
-            var callee_members = try snapshotLambdaSetMembers(allocator, ls_store, callee_ls);
-            defer callee_members.deinit(allocator);
-            var returned_members: std.ArrayListUnmanaged(Member) = .empty;
-            defer returned_members.deinit(allocator);
-
-            for (callee_members.items) |callee_member| {
-                const callee_def = mir_store.getSymbolDef(callee_member.fn_symbol) orelse continue;
-                const callee_def_expr = mir_store.getExpr(callee_def);
-                if (callee_def_expr != .lambda) continue;
-
-                const body_ls = try resolveExprLambdaSetRec(
-                    allocator,
-                    mir_store,
-                    ls_store,
-                    callee_def_expr.lambda.body,
-                    visiting,
-                );
-                if (body_ls.isNone()) continue;
-
-                const body_members = ls_store.getMembers(ls_store.getLambdaSet(body_ls).members);
-                for (body_members) |m| {
-                    try addMemberDedup(allocator, &returned_members, m);
-                }
-            }
-
-            if (returned_members.items.len == 0) return Idx.none;
-            const member_span = try ls_store.addMembers(allocator, returned_members.items);
-            return try ls_store.addLambdaSet(allocator, .{ .members = member_span });
-        },
-        // Lookup: prefer known symbol lambda set, then follow definition.
-        .lookup => |symbol| {
-            if (ls_store.getSymbolLambdaSet(symbol)) |ls_idx| return ls_idx;
-            if (mir_store.getSymbolDef(symbol)) |def_expr| {
-                return resolveExprLambdaSetRec(allocator, mir_store, ls_store, def_expr, visiting);
-            }
-            return Idx.none;
-        },
-        .record_access => |ra| {
-            const field_expr = resolveRecordFieldExpr(mir_store, ra.record, ra.field_name) orelse return Idx.none;
-            return resolveExprLambdaSetRec(allocator, mir_store, ls_store, field_expr, visiting);
-        },
-        .tuple_access => |ta| {
-            const elem_expr = resolveTupleElemExpr(mir_store, ta.tuple, ta.elem_index) orelse return Idx.none;
-            return resolveExprLambdaSetRec(allocator, mir_store, ls_store, elem_expr, visiting);
-        },
-        // Everything else: not a closure value
-        else => return Idx.none,
-    }
-}
-
-fn resolveRecordFieldExpr(
-    mir_store: *const MIR.Store,
-    expr_id: MIR.ExprId,
-    field_name: base.Ident.Idx,
-) ?MIR.ExprId {
-    const expr = mir_store.getExpr(expr_id);
-    return switch (expr) {
-        .record => |record| blk: {
-            const field_names = mir_store.getFieldNameSpan(record.field_names);
-            const fields = mir_store.getExprSpan(record.fields);
-            for (field_names, 0..) |name, i| {
-                if (name.eql(field_name)) break :blk fields[i];
-            }
-            break :blk null;
-        },
-        .lookup => |symbol| blk: {
-            const def_expr = mir_store.getSymbolDef(symbol) orelse break :blk null;
-            break :blk resolveRecordFieldExpr(mir_store, def_expr, field_name);
-        },
-        .block => |block| resolveRecordFieldExpr(mir_store, block.final_expr, field_name),
-        else => null,
-    };
-}
-
-fn resolveTupleElemExpr(
-    mir_store: *const MIR.Store,
-    expr_id: MIR.ExprId,
-    elem_index: u32,
-) ?MIR.ExprId {
-    const expr = mir_store.getExpr(expr_id);
-    return switch (expr) {
-        .tuple => |tuple| blk: {
-            const elems = mir_store.getExprSpan(tuple.elems);
-            if (elem_index >= elems.len) break :blk null;
-            break :blk elems[elem_index];
-        },
-        .lookup => |symbol| blk: {
-            const def_expr = mir_store.getSymbolDef(symbol) orelse break :blk null;
-            break :blk resolveTupleElemExpr(mir_store, def_expr, elem_index);
-        },
-        .block => |block| resolveTupleElemExpr(mir_store, block.final_expr, elem_index),
-        else => null,
-    };
+    if (merged.items.len == existing_members.len) return false;
+    const merged_ls = try internLambdaSet(allocator, store, merged.items);
+    try map.put(allocator, key, merged_ls);
+    return true;
 }

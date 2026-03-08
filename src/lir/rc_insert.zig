@@ -3174,7 +3174,10 @@ fn countDecrefsForSymbol(store: *const LirExprStore, expr_id: LirExprId, symbol:
         .dec_to_str => |d| countDecrefsForSymbol(store, d, symbol),
         .str_escape_and_quote => |s| countDecrefsForSymbol(store, s, symbol),
         .tag_payload_access => |tpa| countDecrefsForSymbol(store, tpa.value, symbol),
-        .decref => |dec| if (@as(u64, @bitCast(dec.symbol)) == key) 1 else 0,
+        .decref => |dec| blk: {
+            const dec_expr = store.getExpr(dec.value);
+            break :blk if (dec_expr == .lookup and @as(u64, @bitCast(dec_expr.lookup.symbol)) == key) 1 else 0;
+        },
         else => 0,
     };
 }

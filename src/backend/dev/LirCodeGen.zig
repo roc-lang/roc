@@ -8443,20 +8443,32 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 else => unreachable,
             };
 
-            // struct_access consumes one reference to the parent aggregate.
-            // Preserve the selected field by detaching it and increfing as needed.
-            if (ls.layoutContainsRefcounted(struct_layout)) {
+            const field_layout = ls.getLayout(field_layout_idx);
+            const field_is_borrowed_interior = switch (field_loc) {
+                .stack, .stack_i128, .stack_str, .list_stack => true,
+                else => false,
+            };
+            const field_needs_detach = field_is_borrowed_interior and field_size > 0 and switch (field_layout.tag) {
+                .scalar, .zst => false,
+                else => true,
+            };
+
+            // struct_access must return an independent value, not an alias into the
+            // parent aggregate's storage. Detach composite interior fields so later
+            // stack use or parent cleanup cannot corrupt the extracted value.
+            if (field_needs_detach or ls.layoutContainsRefcounted(struct_layout)) {
                 if (field_size > 0) {
                     const detached_slot = self.codegen.allocStackSlot(field_size);
                     try self.copyBytesToStackOffset(detached_slot, field_loc, field_size);
                     field_loc = self.stackLocationForLayout(field_layout_idx, detached_slot);
                 }
 
-                const field_layout = ls.getLayout(field_layout_idx);
-                if (ls.layoutContainsRefcounted(field_layout)) {
+                if (field_size > 0 and ls.layoutContainsRefcounted(field_layout)) {
                     try self.emitIncrefValueByLayout(field_loc, field_layout_idx);
                 }
+            }
 
+            if (ls.layoutContainsRefcounted(struct_layout)) {
                 try self.emitDecrefValueByLayout(struct_loc, access.struct_layout);
             }
 

@@ -93,6 +93,17 @@ pub const RestIndex = enum(u32) {
     }
 };
 
+/// Index into Store.closure_members
+pub const ClosureMemberId = enum(u32) {
+    _,
+
+    pub const none: ClosureMemberId = @enumFromInt(std.math.maxInt(u32));
+
+    pub fn isNone(self: ClosureMemberId) bool {
+        return self == none;
+    }
+};
+
 // --- Span types ---
 
 /// Span of ExprId values stored in extra_data.
@@ -179,6 +190,20 @@ pub const CaptureSpan = extern struct {
     }
 };
 
+/// Span of CaptureBinding values stored in capture_bindings array.
+pub const CaptureBindingSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() CaptureBindingSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: CaptureBindingSpan) bool {
+        return self.len == 0;
+    }
+};
+
 /// Span of field names (Ident.Idx) stored in extra_data.
 pub const FieldNameSpan = extern struct {
     start: u32,
@@ -251,14 +276,22 @@ pub const Capture = struct {
     symbol: Symbol,
 };
 
-/// A closure that was lifted to a top-level function during CIR→MIR lowering.
-/// The lifted function takes the original params plus an explicit captures struct param.
-/// At the use site, the closure is replaced with a captures struct value.
-pub const LiftedLambda = struct {
+/// One capture slot of a lifted closure, described without committing to a layout.
+pub const CaptureBinding = struct {
+    /// Local symbol introduced in the lifted function body for this capture slot.
+    local_symbol: Symbol,
+    /// The source expression captured at the closure creation site.
+    source_expr: ExprId,
+    /// Monotype of the captured value.
+    monotype: Monotype.Idx,
+};
+
+/// Semantic closure member information for a lifted closure value.
+pub const ClosureMember = struct {
     /// Symbol of the lifted function (registered in symbol_defs)
     fn_symbol: Symbol,
-    /// Monotype of the captures struct (tuple of captured variable types)
-    captures_monotype: Monotype.Idx,
+    /// Capture slots in the order used by the closure payload.
+    capture_bindings: CaptureBindingSpan,
 };
 
 // --- Expression ---
@@ -499,18 +532,6 @@ pub const Pattern = union(enum) {
     runtime_error: void,
 };
 
-/// Record of a function-typed argument at a call site.
-/// Populated during lowering so lambda set inference can propagate
-/// lambda sets to HOF parameters without scanning all expressions.
-pub const HofCallArg = struct {
-    /// The callee expression (resolve to lambda to get params)
-    call_func: ExprId,
-    /// Which argument position in the call
-    arg_index: u16,
-    /// The argument expression (lookup for hoisted lambdas, or direct closure tuple)
-    arg_expr: ExprId,
-};
-
 // --- Store ---
 
 /// Flat storage for all MIR expressions, patterns, and their types.
@@ -545,6 +566,9 @@ pub const Store = struct {
     /// Captures (closure captured variables)
     captures: std.ArrayListUnmanaged(Capture),
 
+    /// Capture bindings for lifted closures
+    capture_bindings: std.ArrayListUnmanaged(CaptureBinding),
+
     /// The monotype store (owns all monotypes)
     monotype_store: Monotype.Store,
 
@@ -555,24 +579,14 @@ pub const Store = struct {
     /// `true` means symbol is reassignable (mutable), `false` means immutable.
     symbol_reassignable: std.AutoHashMapUnmanaged(u64, bool),
 
-    /// Closures lifted to top-level functions during CIR→MIR lowering.
-    /// Used by lambda set inference to build lambda sets.
-    lifted_lambdas: std.ArrayListUnmanaged(LiftedLambda),
+    /// Closure members produced by closure lifting.
+    closure_members: std.ArrayListUnmanaged(ClosureMember),
 
-    /// Maps a captures-tuple ExprId (produced by lowerClosure) to its index
-    /// in `lifted_lambdas`. Used by lambda set inference to trace which
-    /// lifted function a closure value corresponds to.
-    closure_origins: std.AutoHashMapUnmanaged(u32, u32),
+    /// Maps a closure-valued ExprId to its lifted closure member.
+    expr_closure_members: std.AutoHashMapUnmanaged(u32, ClosureMemberId),
 
-    /// Maps a capture-local symbol to the canonical (outer-scope) symbol it
-    /// aliases. Populated by lowerClosure for captures that reference
-    /// function-typed symbols. Used by lambda set inference to propagate
-    /// lambda sets from canonical symbols to their capture-local aliases.
-    capture_symbol_aliases: std.AutoHashMapUnmanaged(u64, u64),
-
-    /// Lambda arguments hoisted at call sites. Populated during lowering
-    /// so lambda set inference can propagate to HOF params efficiently.
-    hof_call_args: std.ArrayListUnmanaged(HofCallArg),
+    /// Maps a lifted function symbol to its closure member.
+    fn_closure_members: std.AutoHashMapUnmanaged(u64, ClosureMemberId),
 
     /// String literals copied from CIR during lowering.
     /// MIR owns its own string data so downstream passes (LIR, codegen)
@@ -592,11 +606,11 @@ pub const Store = struct {
             .stmts = .empty,
             .borrow_bindings = .empty,
             .captures = .empty,
+            .capture_bindings = .empty,
             .monotype_store = try Monotype.Store.init(allocator),
-            .lifted_lambdas = .empty,
-            .closure_origins = .empty,
-            .capture_symbol_aliases = .empty,
-            .hof_call_args = .empty,
+            .closure_members = .empty,
+            .expr_closure_members = .empty,
+            .fn_closure_members = .empty,
             .symbol_defs = .empty,
             .symbol_reassignable = .empty,
             .strings = .{},
@@ -615,11 +629,11 @@ pub const Store = struct {
         self.stmts.deinit(allocator);
         self.borrow_bindings.deinit(allocator);
         self.captures.deinit(allocator);
+        self.capture_bindings.deinit(allocator);
         self.monotype_store.deinit(allocator);
-        self.lifted_lambdas.deinit(allocator);
-        self.closure_origins.deinit(allocator);
-        self.capture_symbol_aliases.deinit(allocator);
-        self.hof_call_args.deinit(allocator);
+        self.closure_members.deinit(allocator);
+        self.expr_closure_members.deinit(allocator);
+        self.fn_closure_members.deinit(allocator);
         self.symbol_defs.deinit(allocator);
         self.symbol_reassignable.deinit(allocator);
         self.strings.deinit(allocator);
@@ -798,6 +812,49 @@ pub const Store = struct {
     pub fn getCaptures(self: *const Store, span: CaptureSpan) []const Capture {
         if (span.len == 0) return &.{};
         return self.captures.items[span.start..][0..span.len];
+    }
+
+    /// Add capture bindings and return a CaptureBindingSpan.
+    pub fn addCaptureBindings(self: *Store, allocator: Allocator, binding_list: []const CaptureBinding) !CaptureBindingSpan {
+        if (binding_list.len == 0) return CaptureBindingSpan.empty();
+        const start: u32 = @intCast(self.capture_bindings.items.len);
+        try self.capture_bindings.appendSlice(allocator, binding_list);
+        return .{ .start = start, .len = @intCast(binding_list.len) };
+    }
+
+    /// Get capture bindings from a CaptureBindingSpan.
+    pub fn getCaptureBindings(self: *const Store, span: CaptureBindingSpan) []const CaptureBinding {
+        if (span.len == 0) return &.{};
+        return self.capture_bindings.items[span.start..][0..span.len];
+    }
+
+    /// Register a lifted closure member.
+    pub fn addClosureMember(self: *Store, allocator: Allocator, member: ClosureMember) !ClosureMemberId {
+        const idx: u32 = @intCast(self.closure_members.items.len);
+        try self.closure_members.append(allocator, member);
+        const member_id: ClosureMemberId = @enumFromInt(idx);
+        try self.fn_closure_members.put(allocator, member.fn_symbol.raw(), member_id);
+        return member_id;
+    }
+
+    /// Get a closure member by ID.
+    pub fn getClosureMember(self: *const Store, id: ClosureMemberId) ClosureMember {
+        return self.closure_members.items[@intFromEnum(id)];
+    }
+
+    /// Look up a lifted closure member by its function symbol.
+    pub fn getClosureMemberForFn(self: *const Store, symbol: Symbol) ?ClosureMemberId {
+        return self.fn_closure_members.get(symbol.raw());
+    }
+
+    /// Register a closure-valued expression's member identity.
+    pub fn registerExprClosureMember(self: *Store, allocator: Allocator, expr_id: ExprId, member_id: ClosureMemberId) !void {
+        try self.expr_closure_members.put(allocator, @intFromEnum(expr_id), member_id);
+    }
+
+    /// Look up the closure member for a closure-valued expression, if any.
+    pub fn getExprClosureMember(self: *const Store, expr_id: ExprId) ?ClosureMemberId {
+        return self.expr_closure_members.get(@intFromEnum(expr_id));
     }
 
     /// Register a symbol definition.

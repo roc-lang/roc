@@ -133,6 +133,7 @@ scratch_branches: base.Scratch(MIR.Branch),
 scratch_branch_patterns: base.Scratch(MIR.BranchPattern),
 scratch_stmts: base.Scratch(MIR.Stmt),
 scratch_captures: base.Scratch(MIR.Capture),
+scratch_capture_bindings: base.Scratch(MIR.CaptureBinding),
 mono_scratches: Monotype.Store.Scratches,
 
 // --- Init/Deinit ---
@@ -188,6 +189,7 @@ pub fn init(
         .scratch_branch_patterns = try base.Scratch(MIR.BranchPattern).init(allocator),
         .scratch_stmts = try base.Scratch(MIR.Stmt).init(allocator),
         .scratch_captures = try base.Scratch(MIR.Capture).init(allocator),
+        .scratch_capture_bindings = try base.Scratch(MIR.CaptureBinding).init(allocator),
         .mono_scratches = blk: {
             var ms = try Monotype.Store.Scratches.init(allocator);
             ms.ident_store = all_module_envs[current_module_idx].getIdentStoreConst();
@@ -214,6 +216,7 @@ pub fn deinit(self: *Self) void {
     self.scratch_branch_patterns.deinit();
     self.scratch_stmts.deinit();
     self.scratch_captures.deinit();
+    self.scratch_capture_bindings.deinit();
     self.mono_scratches.deinit();
 }
 
@@ -804,8 +807,8 @@ fn lowerStrInspekt(self: *Self, module_env: *const ModuleEnv, run_ll: anytype, r
     }
 
     const arg_cir_expr = args[0];
-    const arg_mono = try self.resolveMonotype(arg_cir_expr);
     const lowered_arg = try self.lowerExpr(arg_cir_expr);
+    const arg_mono = self.store.typeOf(lowered_arg);
 
     // Evaluate the argument once, then inspect the bound lookup.
     const arg_bind = try self.makeSyntheticBind(arg_mono, false);
@@ -1737,36 +1740,6 @@ fn hoistLambdaArg(self: *Self, arg: MIR.ExprId) Allocator.Error!MIR.ExprId {
     return self.store.addExpr(self.allocator, .{ .lookup = sym }, self.store.typeOf(arg), self.store.getRegion(arg));
 }
 
-/// Record HOF call-arg edges for any function-typed args in a call.
-/// Handles both hoisted plain lambdas (lookups) and closure expressions (tuples).
-fn recordHofCallArgs(self: *Self, func_expr: MIR.ExprId, args: []const MIR.ExprId) Allocator.Error!void {
-    for (args, 0..) |arg, i| {
-        const arg_type_idx = self.store.typeOf(arg);
-        const arg_mono = self.store.monotype_store.getMonotype(arg_type_idx);
-        const is_fn_arg = blk: {
-            if (arg_mono == .func) break :blk true;
-
-            const arg_expr = self.store.getExpr(arg);
-            if (arg_expr == .lookup) {
-                // Check if the looked-up symbol was defined as a lambda
-                if (self.store.getSymbolDef(arg_expr.lookup)) |def_expr| {
-                    if (isLambdaExpr(self.store, def_expr)) break :blk true;
-                }
-            }
-            // Check if this is a closure captures tuple
-            if (self.store.closure_origins.contains(@intFromEnum(arg))) break :blk true;
-            break :blk false;
-        };
-        if (is_fn_arg) {
-            try self.store.hof_call_args.append(self.allocator, .{
-                .call_func = func_expr,
-                .arg_index = @intCast(i),
-                .arg_expr = arg,
-            });
-        }
-    }
-}
-
 fn isLambdaExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId) bool {
     const expr = mir_store.getExpr(expr_id);
     return switch (expr) {
@@ -2140,8 +2113,8 @@ fn lowerLambda(self: *Self, module_env: *const ModuleEnv, lambda: CIR.Expr.Lambd
 }
 
 /// Lower `e_closure` by lifting it to a top-level function with an explicit captures tuple parameter.
-/// At the use site, returns a tuple of the captured values.
-/// The lifted function is registered in symbol_defs and lifted_lambdas.
+/// At the use site, returns a tuple of the captured values and registers explicit
+/// MIR closure-member metadata for downstream analysis and lowering.
 fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Closure, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
     const inner_lambda_expr = module_env.store.getExpr(closure.lambda_idx);
     const lambda = inner_lambda_expr.e_lambda;
@@ -2196,8 +2169,16 @@ fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Clo
     const capture_monotypes = self.mono_scratches.idxs.sliceFromStart(idxs_top);
     const capture_lookup_exprs = self.scratch_expr_ids.sliceFromStart(expr_top);
 
+    var capture_monotypes_snapshot = std.ArrayList(Monotype.Idx).empty;
+    defer capture_monotypes_snapshot.deinit(self.allocator);
+    try capture_monotypes_snapshot.appendSlice(self.allocator, capture_monotypes);
+
+    var capture_lookup_exprs_snapshot = std.ArrayList(MIR.ExprId).empty;
+    defer capture_lookup_exprs_snapshot.deinit(self.allocator);
+    try capture_lookup_exprs_snapshot.appendSlice(self.allocator, capture_lookup_exprs);
+
     // --- Step 2: Create captures tuple monotype ---
-    const captures_tuple_elems = try self.store.monotype_store.addIdxSpan(self.allocator, capture_monotypes);
+    const captures_tuple_elems = try self.store.monotype_store.addIdxSpan(self.allocator, capture_monotypes_snapshot.items);
     const captures_tuple_monotype = try self.store.monotype_store.addMonotype(self.allocator, .{ .tuple = .{
         .elems = captures_tuple_elems,
     } });
@@ -2242,19 +2223,7 @@ fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Clo
     for (cir_capture_indices, 0..) |cap_idx, i| {
         const cap = module_env.store.getCapture(cap_idx);
         const local_symbol = try self.patternToSymbol(cap.pattern_idx);
-        const cap_monotype = capture_monotypes[i];
-
-        // Register capture-local → outer-scope symbol alias for lambda set inference.
-        // The outer symbol was resolved in Step 1 (before the scope change); recompute
-        // it by temporarily restoring the outer scope.
-        {
-            self.current_pattern_scope = saved_pattern_scope;
-            const outer_symbol = try self.patternToSymbol(cap.pattern_idx);
-            self.current_pattern_scope = lifted_fn_symbol.raw();
-            if (!local_symbol.eql(outer_symbol)) {
-                try self.store.capture_symbol_aliases.put(self.allocator, local_symbol.raw(), outer_symbol.raw());
-            }
-        }
+        const cap_monotype = capture_monotypes_snapshot.items[i];
 
         // lookup(captures_param)
         const captures_lookup = try self.store.addExpr(self.allocator, .{ .lookup = captures_param_symbol }, captures_tuple_monotype, region);
@@ -2313,22 +2282,33 @@ fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Clo
         .captures = MIR.CaptureSpan.empty(),
     } }, lifted_func_monotype, region);
 
-    // --- Step 10: Register the lifted function ---
+    const binding_top = self.scratch_capture_bindings.top();
+    defer self.scratch_capture_bindings.clearFrom(binding_top);
+    for (cir_capture_indices, 0..) |cap_idx, i| {
+        const cap = module_env.store.getCapture(cap_idx);
+        const local_symbol = try self.patternToSymbol(cap.pattern_idx);
+        try self.scratch_capture_bindings.append(.{
+            .local_symbol = local_symbol,
+            .source_expr = capture_lookup_exprs_snapshot.items[i],
+            .monotype = capture_monotypes_snapshot.items[i],
+        });
+    }
+    const capture_binding_span = try self.store.addCaptureBindings(self.allocator, self.scratch_capture_bindings.sliceFromStart(binding_top));
+
+    // --- Step 10: Register the lifted function and its semantic closure member ---
     try self.store.registerSymbolDef(self.allocator, lifted_fn_symbol, lifted_lambda_expr);
-    const lifted_idx: u32 = @intCast(self.store.lifted_lambdas.items.len);
-    try self.store.lifted_lambdas.append(self.allocator, .{
+    const member_id = try self.store.addClosureMember(self.allocator, .{
         .fn_symbol = lifted_fn_symbol,
-        .captures_monotype = captures_tuple_monotype,
+        .capture_bindings = capture_binding_span,
     });
 
     // --- Step 11: At the use site, return a tuple of capture values ---
-    const captures_tuple_span = try self.store.addExprSpan(self.allocator, capture_lookup_exprs);
+    const captures_tuple_span = try self.store.addExprSpan(self.allocator, capture_lookup_exprs_snapshot.items);
     const captures_tuple_expr = try self.store.addExpr(self.allocator, .{ .tuple = .{
         .elems = captures_tuple_span,
     } }, captures_tuple_monotype, region);
 
-    // Record that this expression originated from lifting this closure
-    try self.store.closure_origins.put(self.allocator, @intFromEnum(captures_tuple_expr), lifted_idx);
+    try self.store.registerExprClosureMember(self.allocator, captures_tuple_expr, member_id);
 
     return captures_tuple_expr;
 }
@@ -2445,7 +2425,36 @@ fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype:
         }
     }
 
-    const func = try self.lowerExpr(call.func);
+    const lowered_func = try self.hoistLambdaArg(try self.lowerExpr(call.func));
+    const func_mono = self.store.typeOf(lowered_func);
+    if (self.store.monotype_store.getMonotype(func_mono) == .func and self.store.getExpr(lowered_func) != .lookup) {
+        const func_bind = try self.makeSyntheticBind(func_mono, false);
+        const func_lookup = try self.emitMirLookup(func_bind.symbol, func_mono, region);
+
+        const call_arg_exprs = module_env.store.sliceExpr(call.args);
+        const args_top = self.scratch_expr_ids.top();
+        defer self.scratch_expr_ids.clearFrom(args_top);
+        for (call_arg_exprs) |arg_idx| {
+            const arg = try self.hoistLambdaArg(try self.lowerExpr(arg_idx));
+            try self.scratch_expr_ids.append(arg);
+        }
+        const lowered_call_args = self.scratch_expr_ids.sliceFromStart(args_top);
+        const args = try self.store.addExprSpan(self.allocator, lowered_call_args);
+        const call_expr = try self.store.addExpr(self.allocator, .{ .call = .{
+            .func = func_lookup,
+            .args = args,
+        } }, monotype, region);
+
+        const stmts = try self.store.addStmts(self.allocator, &.{MIR.Stmt{
+            .decl_const = .{ .pattern = func_bind.pattern, .expr = lowered_func },
+        }});
+
+        return try self.store.addExpr(self.allocator, .{ .block = .{
+            .stmts = stmts,
+            .final_expr = call_expr,
+        } }, monotype, region);
+    }
+    const func = lowered_func;
 
     const call_arg_exprs = module_env.store.sliceExpr(call.args);
     const args_top = self.scratch_expr_ids.top();
@@ -2455,7 +2464,6 @@ fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype:
         try self.scratch_expr_ids.append(arg);
     }
     const lowered_call_args = self.scratch_expr_ids.sliceFromStart(args_top);
-    try self.recordHofCallArgs(func, lowered_call_args);
     const args = try self.store.addExprSpan(self.allocator, lowered_call_args);
 
     return try self.store.addExpr(self.allocator, .{ .call = .{
@@ -3559,7 +3567,6 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
         const lowered_method_symbol = try self.specializeMethod(method_symbol, method_func_monotype);
         const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = lowered_method_symbol }, method_func_monotype, region);
 
-        try self.recordHofCallArgs(func_expr, lowered_call_args);
         const args = try self.store.addExprSpan(self.allocator, lowered_call_args);
 
         return try self.store.addExpr(self.allocator, .{ .call = .{

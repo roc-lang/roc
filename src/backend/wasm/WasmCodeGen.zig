@@ -6285,6 +6285,8 @@ fn generateStructAccess(self: *Self, sa: anytype) Allocator.Error!void {
 
     // Generate the struct expression → pushes i32 pointer
     try self.generateExpr(sa.struct_expr);
+    const struct_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(struct_ptr);
 
     // Get the field offset
     const struct_layout = ls.getLayout(sa.struct_layout);
@@ -6292,20 +6294,30 @@ fn generateStructAccess(self: *Self, sa: anytype) Allocator.Error!void {
 
     const field_offset = ls.getStructFieldOffset(struct_layout.data.struct_.idx, sa.field_idx);
     const field_byte_size = ls.getStructFieldSize(struct_layout.data.struct_.idx, sa.field_idx);
+    const field_layout = ls.getLayout(sa.field_layout);
 
     // Check if the field is a composite type
     if (self.isCompositeLayout(sa.field_layout) and field_byte_size > 0) {
-        // For composite fields, return a pointer to the field data
-        // (struct_ptr + field_offset)
+        const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitLocalGet(struct_ptr);
         if (field_offset > 0) {
             self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
             WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(field_offset)) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
         }
-        // Result is already an i32 pointer on the stack
+        try self.emitLocalSet(src_local);
+
+        const stable_align: u32 = @intCast(field_layout.alignment(ls.targetUsize()).toByteUnits());
+        const stable_offset = try self.allocStackMemory(field_byte_size, @max(stable_align, 1));
+        const stable_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitFpOffset(stable_offset);
+        try self.emitLocalSet(stable_local);
+        try self.emitMemCopy(stable_local, 0, src_local, field_byte_size);
+        try self.emitLocalGet(stable_local);
     } else {
         const field_vt = WasmLayout.resultValTypeWithStore(sa.field_layout, ls);
         // Load the field: [struct_ptr + field_offset] (size-aware for sub-32-bit fields)
+        try self.emitLocalGet(struct_ptr);
         try self.emitLoadOpSized(field_vt, field_byte_size, field_offset);
     }
 }

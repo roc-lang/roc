@@ -2987,10 +2987,10 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
     var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
     defer lambda_set_store.deinit(test_allocator);
 
-    const callee_ls = try LambdaSet.resolveExprLambdaSet(test_allocator, &mir_store, &lambda_set_store, root_expr.call.func);
+    const callee_ls = lambda_set_store.getExprLambdaSet(root_expr.call.func) orelse return error.TestUnexpectedResult;
     try std.testing.expect(!callee_ls.isNone());
 
-    const arg_ls = try LambdaSet.resolveExprLambdaSet(test_allocator, &mir_store, &lambda_set_store, root_args[1]);
+    const arg_ls = lambda_set_store.getExprLambdaSet(root_args[1]) orelse return error.TestUnexpectedResult;
     try std.testing.expect(!arg_ls.isNone());
     const arg_members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(arg_ls).members);
     try std.testing.expectEqual(@as(usize, 1), arg_members.len);
@@ -3430,7 +3430,7 @@ test "dev lowering: local any-style HOF directly calls passed predicate member" 
     var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
     defer lambda_set_store.deinit(test_allocator);
 
-    const arg_ls = try LambdaSet.resolveExprLambdaSet(test_allocator, &mir_store, &lambda_set_store, root_args[1]);
+    const arg_ls = lambda_set_store.getExprLambdaSet(root_args[1]) orelse return error.TestUnexpectedResult;
     try std.testing.expect(!arg_ls.isNone());
     const arg_members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(arg_ls).members);
     try std.testing.expectEqual(@as(usize, 1), arg_members.len);
@@ -3587,8 +3587,8 @@ test "lambda sets distinguish closure record fields with different captures" {
     var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
     defer lambda_set_store.deinit(test_allocator);
 
-    const add_a_ls = try LambdaSet.resolveExprLambdaSet(test_allocator, &mir_store, &lambda_set_store, add_a_binding.expr);
-    const add_b_ls = try LambdaSet.resolveExprLambdaSet(test_allocator, &mir_store, &lambda_set_store, add_b_binding.expr);
+    const add_a_ls = lambda_set_store.getExprLambdaSet(add_a_binding.expr) orelse return error.TestUnexpectedResult;
+    const add_b_ls = lambda_set_store.getExprLambdaSet(add_b_binding.expr) orelse return error.TestUnexpectedResult;
     try std.testing.expect(!add_a_ls.isNone());
     try std.testing.expect(!add_b_ls.isNone());
 
@@ -3597,6 +3597,319 @@ test "lambda sets distinguish closure record fields with different captures" {
     try std.testing.expectEqual(@as(usize, 1), add_a_members.len);
     try std.testing.expectEqual(@as(usize, 1), add_b_members.len);
     try std.testing.expect(!add_a_members[0].fn_symbol.eql(add_b_members[0].fn_symbol));
+
+    const add_a_pat = mir_store.getPattern(add_a_binding.pattern);
+    const add_b_pat = mir_store.getPattern(add_b_binding.pattern);
+    try std.testing.expect(add_a_pat == .bind);
+    try std.testing.expect(add_b_pat == .bind);
+    const add_a_sym = add_a_pat.bind;
+    const add_b_sym = add_b_pat.bind;
+    const add_a_sym_ls = lambda_set_store.getSymbolLambdaSet(add_a_sym) orelse return error.TestUnexpectedResult;
+    const add_b_sym_ls = lambda_set_store.getSymbolLambdaSet(add_b_sym) orelse return error.TestUnexpectedResult;
+    const add_a_sym_members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(add_a_sym_ls).members);
+    const add_b_sym_members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(add_b_sym_ls).members);
+    try std.testing.expectEqual(@as(usize, 1), add_a_sym_members.len);
+    try std.testing.expectEqual(@as(usize, 1), add_b_sym_members.len);
+    try std.testing.expect(!add_a_sym_members[0].fn_symbol.eql(add_b_sym_members[0].fn_symbol));
+}
+
+test "LIR record field closures keep distinct field indices and payload layouts" {
+    const resources = try parseAndCanonicalizeExpr(test_allocator,
+        \\{
+        \\    a = 10
+        \\    b = 20
+        \\    rec = { add_a: |x| x + a, add_b: |x| x + b }
+        \\    add_a = rec.add_a
+        \\    add_b = rec.add_b
+        \\    add_a(5) + add_b(5)
+        \\}
+    );
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(resources.builtin_module.env),
+        resources.module_env,
+    };
+
+    var lower = try mir.Lower.init(
+        test_allocator,
+        &mir_store,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const mir_expr = try lower.lowerExpr(resources.expr_idx);
+    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
+    defer lambda_set_store.deinit(test_allocator);
+
+    var layout_store = try layout.Store.init(
+        all_module_envs[0..],
+        resources.builtin_module.env.idents.builtin_str,
+        test_allocator,
+        base.target.TargetUsize.native,
+    );
+    defer layout_store.deinit();
+
+    var lir_store = LirExprStore.init(test_allocator);
+    defer lir_store.deinit();
+
+    var translator = lir.MirToLir.init(
+        test_allocator,
+        &mir_store,
+        &lir_store,
+        &layout_store,
+        &lambda_set_store,
+        resources.module_env.idents.true_tag,
+    );
+    defer translator.deinit();
+
+    const lir_expr = try translator.lower(mir_expr);
+    const root = lir_store.getExpr(lir_expr);
+    try std.testing.expect(root == .block);
+
+    const stmts = lir_store.getStmts(root.block.stmts);
+    try std.testing.expect(stmts.len >= 5);
+
+    const add_a_expr = stmts[3].binding().expr;
+    const add_b_expr = stmts[4].binding().expr;
+    const add_a_lir = lir_store.getExpr(add_a_expr);
+    const add_b_lir = lir_store.getExpr(add_b_expr);
+    try std.testing.expect(add_a_lir == .struct_access);
+    try std.testing.expect(add_b_lir == .struct_access);
+    try std.testing.expectEqual(@as(u16, 0), add_a_lir.struct_access.field_idx);
+    try std.testing.expectEqual(@as(u16, 1), add_b_lir.struct_access.field_idx);
+    try std.testing.expect(add_a_lir.struct_access.field_layout != layout.Idx.none);
+    try std.testing.expect(add_b_lir.struct_access.field_layout != layout.Idx.none);
+
+    const rec_stmt = stmts[2].binding().expr;
+    var rec_expr_id = rec_stmt;
+    while (lir_store.getExpr(rec_expr_id) == .block) {
+        rec_expr_id = lir_store.getExpr(rec_expr_id).block.final_expr;
+    }
+    const rec_lir = lir_store.getExpr(rec_expr_id);
+    try std.testing.expect(rec_lir == .struct_);
+
+    const rec_layout = layout_store.getLayout(rec_lir.struct_.struct_layout);
+    try std.testing.expect(rec_layout.tag == .struct_);
+    const rec_struct_idx = rec_layout.data.struct_.idx;
+    const add_a_struct_layout = layout_store.getLayout(add_a_lir.struct_access.struct_layout);
+    const add_b_struct_layout = layout_store.getLayout(add_b_lir.struct_access.struct_layout);
+    try std.testing.expect(add_a_struct_layout.tag == .struct_);
+    try std.testing.expect(add_b_struct_layout.tag == .struct_);
+    try std.testing.expectEqual(layout_store.layoutSize(rec_layout), layout_store.layoutSize(add_a_struct_layout));
+    try std.testing.expectEqual(layout_store.layoutSize(rec_layout), layout_store.layoutSize(add_b_struct_layout));
+    try std.testing.expectEqual(
+        layout_store.getStructFieldOffset(rec_struct_idx, add_a_lir.struct_access.field_idx),
+        layout_store.getStructFieldOffset(add_a_struct_layout.data.struct_.idx, add_a_lir.struct_access.field_idx),
+    );
+    try std.testing.expectEqual(
+        layout_store.getStructFieldOffset(rec_struct_idx, add_b_lir.struct_access.field_idx),
+        layout_store.getStructFieldOffset(add_b_struct_layout.data.struct_.idx, add_b_lir.struct_access.field_idx),
+    );
+
+    const add_a_size = layout_store.layoutSize(layout_store.getLayout(add_a_lir.struct_access.field_layout));
+    const add_b_size = layout_store.layoutSize(layout_store.getLayout(add_b_lir.struct_access.field_layout));
+    try std.testing.expectEqual(add_a_size, layout_store.getStructFieldSize(rec_struct_idx, add_a_lir.struct_access.field_idx));
+    try std.testing.expectEqual(add_b_size, layout_store.getStructFieldSize(rec_struct_idx, add_b_lir.struct_access.field_idx));
+}
+
+test "MIR record closure fields capture distinct outer symbols" {
+    const resources = try parseAndCanonicalizeExpr(test_allocator,
+        \\{
+        \\    a = 10
+        \\    b = 20
+        \\    rec = { add_a: |x| x + a, add_b: |x| x + b }
+        \\    add_a = rec.add_a
+        \\    add_b = rec.add_b
+        \\    add_a(5) + add_b(5)
+        \\}
+    );
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(resources.builtin_module.env),
+        resources.module_env,
+    };
+
+    var lower = try mir.Lower.init(
+        test_allocator,
+        &mir_store,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const mir_expr = try lower.lowerExpr(resources.expr_idx);
+    const root = mir_store.getExpr(mir_expr);
+    try std.testing.expect(root == .block);
+
+    const stmts = mir_store.getStmts(root.block.stmts);
+    try std.testing.expect(stmts.len >= 3);
+
+    const rec_binding = switch (stmts[2]) {
+        .decl_const, .decl_var, .mutate_var => |b| b,
+    };
+    const rec_expr = mir_store.getExpr(rec_binding.expr);
+    try std.testing.expect(rec_expr == .record);
+
+    const rec_fields = mir_store.getExprSpan(rec_expr.record.fields);
+    try std.testing.expectEqual(@as(usize, 2), rec_fields.len);
+    try std.testing.expect(mir_store.getExprClosureMember(rec_fields[0]) != null);
+    try std.testing.expect(mir_store.getExprClosureMember(rec_fields[1]) != null);
+
+    const add_a_tuple = mir_store.getExpr(rec_fields[0]);
+    const add_b_tuple = mir_store.getExpr(rec_fields[1]);
+    try std.testing.expect(add_a_tuple == .tuple);
+    try std.testing.expect(add_b_tuple == .tuple);
+
+    const add_a_elems = mir_store.getExprSpan(add_a_tuple.tuple.elems);
+    const add_b_elems = mir_store.getExprSpan(add_b_tuple.tuple.elems);
+    try std.testing.expectEqual(@as(usize, 1), add_a_elems.len);
+    try std.testing.expectEqual(@as(usize, 1), add_b_elems.len);
+
+    const add_a_capture = mir_store.getExpr(add_a_elems[0]);
+    const add_b_capture = mir_store.getExpr(add_b_elems[0]);
+    try std.testing.expect(add_a_capture == .lookup);
+    try std.testing.expect(add_b_capture == .lookup);
+    try std.testing.expect(!add_a_capture.lookup.eql(add_b_capture.lookup));
+}
+
+test "LIR lifted closure with function-valued captures keeps both capture slots" {
+    const resources = try parseAndCanonicalizeExpr(test_allocator,
+        \\{
+        \\    compose = |f, g| |x| f(g(x))
+        \\    a = 3
+        \\    b = 7
+        \\    add_a = |x| x + a
+        \\    add_b = |x| x + b
+        \\    add_both = compose(add_a, add_b)
+        \\    add_both(10)
+        \\}
+    );
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(resources.builtin_module.env),
+        resources.module_env,
+    };
+
+    var lower = try mir.Lower.init(
+        test_allocator,
+        &mir_store,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const mir_expr = try lower.lowerExpr(resources.expr_idx);
+    const root = mir_store.getExpr(mir_expr);
+    try std.testing.expect(root == .block);
+
+    const stmts = mir_store.getStmts(root.block.stmts);
+    try std.testing.expect(stmts.len >= 6);
+    const compose_binding = switch (stmts[0]) {
+        .decl_const, .decl_var, .mutate_var => |bnd| bnd,
+    };
+    const final_expr = mir_store.getExpr(root.block.final_expr);
+    try std.testing.expect(final_expr == .call);
+    const final_callee = mir_store.getExpr(final_expr.call.func);
+    try std.testing.expect(final_callee == .lookup);
+    const add_both_sym = final_callee.lookup;
+    var add_both_binding: ?MIR.Stmt.Binding = null;
+    for (stmts) |stmt| {
+        const binding = switch (stmt) {
+            .decl_const, .decl_var, .mutate_var => |bnd| bnd,
+        };
+        const pat = mir_store.getPattern(binding.pattern);
+        if (pat != .bind) continue;
+        if (!pat.bind.eql(add_both_sym)) continue;
+        add_both_binding = binding;
+        break;
+    }
+    try std.testing.expect(add_both_binding != null);
+    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
+    defer lambda_set_store.deinit(test_allocator);
+
+    const add_both_ls = lambda_set_store.getExprLambdaSet(add_both_binding.?.expr) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!add_both_ls.isNone());
+    const compose_pat = mir_store.getPattern(compose_binding.pattern);
+    try std.testing.expect(compose_pat == .bind);
+    const compose_sym = compose_pat.bind;
+    const compose_ls = lambda_set_store.getSymbolLambdaSet(compose_sym) orelse return error.TestUnexpectedResult;
+    const compose_members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(compose_ls).members);
+    try std.testing.expectEqual(@as(usize, 1), compose_members.len);
+    const compose_return_ls = lambda_set_store.getMemberReturnLambdaSet(compose_members[0].fn_symbol) orelse return error.TestUnexpectedResult;
+    const compose_return_members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(compose_return_ls).members);
+    try std.testing.expectEqual(@as(usize, 1), compose_return_members.len);
+    try std.testing.expect(!compose_return_members[0].closure_member.isNone());
+    const compose_return_closure = mir_store.getClosureMember(compose_return_members[0].closure_member);
+    try std.testing.expectEqual(@as(usize, 2), mir_store.getCaptureBindings(compose_return_closure.capture_bindings).len);
+
+    const members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(add_both_ls).members);
+    try std.testing.expectEqual(@as(usize, 1), members.len);
+    try std.testing.expect(!members[0].closure_member.isNone());
+    const closure_member = mir_store.getClosureMember(members[0].closure_member);
+    const add_both_sym_ls = lambda_set_store.getSymbolLambdaSet(add_both_sym) orelse return error.TestUnexpectedResult;
+    const sym_members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(add_both_sym_ls).members);
+    try std.testing.expectEqual(@as(usize, 1), sym_members.len);
+    try std.testing.expectEqual(sym_members[0].fn_symbol, members[0].fn_symbol);
+    try std.testing.expectEqual(@as(usize, 2), mir_store.getCaptureBindings(closure_member.capture_bindings).len);
+
+    var layout_store = try layout.Store.init(
+        all_module_envs[0..],
+        resources.builtin_module.env.idents.builtin_str,
+        test_allocator,
+        base.target.TargetUsize.native,
+    );
+    defer layout_store.deinit();
+
+    var lir_store = LirExprStore.init(test_allocator);
+    defer lir_store.deinit();
+
+    var translator = lir.MirToLir.init(
+        test_allocator,
+        &mir_store,
+        &lir_store,
+        &layout_store,
+        &lambda_set_store,
+        resources.module_env.idents.true_tag,
+    );
+    defer translator.deinit();
+
+    const lir_root_id = try translator.lower(mir_expr);
+
+    const lifted_def = lir_store.getSymbolDef(members[0].fn_symbol) orelse return error.TestUnexpectedResult;
+    const lifted_lir = lir_store.getExpr(lifted_def);
+    try std.testing.expect(lifted_lir == .lambda);
+
+    const params = lir_store.getPatternSpan(lifted_lir.lambda.params);
+    try std.testing.expect(params.len >= 2);
+    const captures_param = lir_store.getPattern(params[params.len - 1]);
+    try std.testing.expect(captures_param == .bind);
+    const captures_layout = layout_store.getLayout(captures_param.bind.layout_idx);
+    try std.testing.expect(captures_layout.tag == .struct_);
+    const capture_fields = layout_store.struct_fields.sliceRange(layout_store.getStructData(captures_layout.data.struct_.idx).getFields());
+    try std.testing.expectEqual(@as(usize, 2), capture_fields.len);
+    try std.testing.expect(capture_fields.get(0).layout != .zst);
+    try std.testing.expect(capture_fields.get(1).layout != .zst);
+
+    _ = lir_root_id;
 }
 
 test "eval tag - already primitive" {

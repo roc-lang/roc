@@ -347,6 +347,18 @@ test "closure: record field closure add_a preserves its capture" {
     try runExpectI64(code, 15, .no_trace);
 }
 
+test "closure: direct record field closure add_b preserves its capture" {
+    const code =
+        \\{
+        \\    a = 10
+        \\    b = 20
+        \\    rec = { add_a: |x| x + a, add_b: |x| x + b }
+        \\    rec.add_b(5)
+        \\}
+    ;
+    try runExpectI64(code, 25, .no_trace);
+}
+
 test "closure: record field closure add_b preserves its capture" {
     const code =
         \\{
