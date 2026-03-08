@@ -29,6 +29,7 @@ const base = @import("base");
 const layout = @import("layout");
 const types = @import("types");
 const mir = @import("mir");
+const CIR = @import("can").CIR;
 
 const StringLiteral = base.StringLiteral;
 const CalledVia = base.CalledVia;
@@ -380,6 +381,15 @@ pub const LirExpr = union(enum) {
 
     /// Break out of the enclosing loop (for_loop or while_loop)
     break_expr: void,
+
+    /// Semantic low-level builtin operation carried through RC insertion.
+    /// This preserves canonical borrow/consume semantics until ownership
+    /// legalization rewrites it into backend-facing `low_level`.
+    semantic_low_level: struct {
+        op: CIR.Expr.LowLevel,
+        args: LirExprSpan,
+        ret_layout: layout.Idx,
+    },
 
     /// Low-level builtin operation
     low_level: struct {

@@ -598,6 +598,9 @@ inline fn decref_ptr_to_refcount(
     // Use roc_ops.crash() instead of @panic for WASM compatibility.
     if (builtin.mode == .Debug) {
         if (refcount == POISON_VALUE) {
+            if (builtin.os.tag != .freestanding) {
+                DebugRefcountTracker.printHistory(@intFromPtr(refcount_ptr));
+            }
             roc_ops.crash("Use-after-free: decref on already-freed memory");
             return;
         }
@@ -1058,6 +1061,23 @@ pub const DebugRefcountTracker = struct {
             }
         }
         return leak_count;
+    }
+
+    pub fn printHistory(rc_addr: usize) void {
+        if (!active) return;
+
+        std.debug.print("DebugRefcountTracker history for rc_addr=0x{x}\n", .{rc_addr});
+        for (op_log[0..op_count]) |op| {
+            if (op.rc_addr == rc_addr) {
+                switch (op.kind) {
+                    .alloc => std.debug.print("  alloc(1)", .{}),
+                    .incref => std.debug.print("  incref(+{d})={d}", .{ op.amount, op.shadow_after }),
+                    .decref => std.debug.print("  decref={d}", .{op.shadow_after}),
+                    .free => std.debug.print("  free", .{}),
+                }
+                std.debug.print(" via {s}\n", .{@tagName(op.site)});
+            }
+        }
     }
 };
 

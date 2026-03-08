@@ -561,6 +561,447 @@ test "lowerExpr: block local closure call has resolvable symbol def and lambda s
     try testing.expect(!members[0].captures_monotype.isNone());
 }
 
+test "lambda set: closure-returning binding keeps resolvable lifted member" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    make_adder = |n| |x| x + n
+        \\    add5 = make_adder(5.I64)
+        \\    add5(10.I64)
+        \\}
+    );
+    defer env.deinit();
+
+    const expr = try env.lowerFirstDef();
+    const block = env.mir_store.getExpr(expr);
+    try testing.expect(block == .block);
+
+    const stmts = env.mir_store.getStmts(block.block.stmts);
+    try testing.expect(stmts.len >= 2);
+    try testing.expect(stmts[1] == .decl_const);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(env.builtin_module.env),
+        env.module_env,
+    };
+    var ls_store = try LambdaSet.infer(test_allocator, env.mir_store, all_module_envs[0..]);
+    defer ls_store.deinit(test_allocator);
+
+    const returned_closure_ls = try LambdaSet.resolveExprLambdaSet(
+        test_allocator,
+        env.mir_store,
+        &ls_store,
+        stmts[1].decl_const.expr,
+    );
+    try testing.expect(!returned_closure_ls.isNone());
+
+    const members = ls_store.getMembers(ls_store.getLambdaSet(returned_closure_ls).members);
+    try testing.expectEqual(@as(usize, 1), members.len);
+    try testing.expect(env.mir_store.getSymbolDef(members[0].fn_symbol) != null);
+    try testing.expect(!members[0].captures_monotype.isNone());
+
+    const final_expr = env.mir_store.getExpr(block.block.final_expr);
+    try testing.expect(final_expr == .call);
+
+    const callee_ls = try LambdaSet.resolveExprLambdaSet(
+        test_allocator,
+        env.mir_store,
+        &ls_store,
+        final_expr.call.func,
+    );
+    try testing.expect(!callee_ls.isNone());
+
+    const callee_members = ls_store.getMembers(ls_store.getLambdaSet(callee_ls).members);
+    try testing.expectEqual(@as(usize, 1), callee_members.len);
+    try testing.expect(env.mir_store.getSymbolDef(callee_members[0].fn_symbol) != null);
+}
+
+test "lambda set: higher-order closure param propagation keeps member defs stable" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    wrap = |f| |x| f(x)
+        \\    y = 10.I64
+        \\    add_y = |x| x + y
+        \\    wrap(add_y)(5.I64)
+        \\}
+    );
+    defer env.deinit();
+
+    const expr = try env.lowerFirstDef();
+    const block = env.mir_store.getExpr(expr);
+    try testing.expect(block == .block);
+
+    const final_expr = env.mir_store.getExpr(block.block.final_expr);
+    try testing.expect(final_expr == .call);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(env.builtin_module.env),
+        env.module_env,
+    };
+    var ls_store = try LambdaSet.infer(test_allocator, env.mir_store, all_module_envs[0..]);
+    defer ls_store.deinit(test_allocator);
+
+    const callee_ls = try LambdaSet.resolveExprLambdaSet(
+        test_allocator,
+        env.mir_store,
+        &ls_store,
+        final_expr.call.func,
+    );
+    try testing.expect(!callee_ls.isNone());
+
+    const members = ls_store.getMembers(ls_store.getLambdaSet(callee_ls).members);
+    try testing.expectEqual(@as(usize, 1), members.len);
+    try testing.expect(env.mir_store.getSymbolDef(members[0].fn_symbol) != null);
+}
+
+test "lambda set: exact closure factory program keeps symbol defs stable" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    make_adder = |n| |x| x + n
+        \\    add5 = make_adder(5)
+        \\    a = add5(10)
+        \\    b = add5(20)
+        \\    a + b
+        \\}
+    );
+    defer env.deinit();
+
+    const expr = try env.lowerFirstDef();
+    const block = env.mir_store.getExpr(expr);
+    try testing.expect(block == .block);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(env.builtin_module.env),
+        env.module_env,
+    };
+    var ls_store = try LambdaSet.infer(test_allocator, env.mir_store, all_module_envs[0..]);
+    defer ls_store.deinit(test_allocator);
+
+    try testing.expect(ls_store.lambda_sets.items.len > 0);
+    try testing.expect(ls_store.members.items.len > 0);
+    try testing.expect(env.mir_store.getSymbolDef(ls_store.members.items[0].fn_symbol) != null);
+}
+
+test "lambda set: factory-produced closure alias keeps captured symbol lambda set" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    make_adder = |n| |x| x + n
+        \\    add5 = make_adder(5)
+        \\    double_add5 = |x| add5(x) * 2
+        \\    double_add5(10)
+        \\}
+    );
+    defer env.deinit();
+
+    const expr = try env.lowerFirstDef();
+    const block = env.mir_store.getExpr(expr);
+    try testing.expect(block == .block);
+
+    const stmts = env.mir_store.getStmts(block.block.stmts);
+    var add5_sym: ?MIR.Symbol = null;
+    for (stmts) |stmt| {
+        if (stmt != .decl_const) continue;
+        const stmt_expr = env.mir_store.getExpr(stmt.decl_const.expr);
+        if (stmt_expr != .call) continue;
+        const pat = env.mir_store.getPattern(stmt.decl_const.pattern);
+        if (pat != .bind) continue;
+        add5_sym = pat.bind;
+        break;
+    }
+    const resolved_add5_sym = add5_sym orelse return error.TestUnexpectedResult;
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(env.builtin_module.env),
+        env.module_env,
+    };
+    var ls_store = try LambdaSet.infer(test_allocator, env.mir_store, all_module_envs[0..]);
+    defer ls_store.deinit(test_allocator);
+
+    const add5_ls = ls_store.getSymbolLambdaSet(resolved_add5_sym) orelse return error.TestUnexpectedResult;
+    const add5_members = ls_store.getMembers(ls_store.getLambdaSet(add5_ls).members);
+    try testing.expectEqual(@as(usize, 1), add5_members.len);
+
+    var found_capture_alias = false;
+    var alias_it = env.mir_store.capture_symbol_aliases.iterator();
+    while (alias_it.next()) |entry| {
+        if (entry.value_ptr.* != resolved_add5_sym.raw()) continue;
+        found_capture_alias = true;
+        const capture_local = MIR.Symbol.fromRaw(entry.key_ptr.*);
+        const capture_ls = ls_store.getSymbolLambdaSet(capture_local) orelse return error.TestUnexpectedResult;
+        try testing.expectEqual(add5_ls, capture_ls);
+    }
+    try testing.expect(found_capture_alias);
+}
+
+test "lambda set: closure extracted from record field keeps member defs stable" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    y = 10
+        \\    rec = { f: |x| x + y }
+        \\    f = rec.f
+        \\    f(5)
+        \\}
+    );
+    defer env.deinit();
+
+    const expr = try env.lowerFirstDef();
+    const block = env.mir_store.getExpr(expr);
+    try testing.expect(block == .block);
+
+    const stmts = env.mir_store.getStmts(block.block.stmts);
+    var extracted_sym: ?MIR.Symbol = null;
+    for (stmts) |stmt| {
+        if (stmt != .decl_const) continue;
+        const stmt_expr = env.mir_store.getExpr(stmt.decl_const.expr);
+        if (stmt_expr != .record_access) continue;
+        const pat = env.mir_store.getPattern(stmt.decl_const.pattern);
+        if (pat != .bind) continue;
+        extracted_sym = pat.bind;
+        break;
+    }
+    const resolved_f_sym = extracted_sym orelse return error.TestUnexpectedResult;
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(env.builtin_module.env),
+        env.module_env,
+    };
+    var ls_store = try LambdaSet.infer(test_allocator, env.mir_store, all_module_envs[0..]);
+    defer ls_store.deinit(test_allocator);
+
+    const f_ls = ls_store.getSymbolLambdaSet(resolved_f_sym) orelse return error.TestUnexpectedResult;
+    const members = ls_store.getMembers(ls_store.getLambdaSet(f_ls).members);
+    try testing.expectEqual(@as(usize, 1), members.len);
+    try testing.expect(env.mir_store.getSymbolDef(members[0].fn_symbol) != null);
+    try testing.expect(!members[0].captures_monotype.isNone());
+}
+
+test "lambda set: higher-order param receives both closure members" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    apply = |f, x| f(x)
+        \\    a = 10
+        \\    b = 20
+        \\    r1 = apply(|x| x + a, 5)
+        \\    r2 = apply(|x| x + b, 5)
+        \\    r1 + r2
+        \\}
+    );
+    defer env.deinit();
+
+    const expr = try env.lowerFirstDef();
+    const block = env.mir_store.getExpr(expr);
+    try testing.expect(block == .block);
+
+    const stmts = env.mir_store.getStmts(block.block.stmts);
+    var apply_sym: ?MIR.Symbol = null;
+    for (stmts) |stmt| {
+        if (stmt != .decl_const) continue;
+        const stmt_expr = env.mir_store.getExpr(stmt.decl_const.expr);
+        if (stmt_expr != .lambda) continue;
+        const pat = env.mir_store.getPattern(stmt.decl_const.pattern);
+        if (pat != .bind) continue;
+        apply_sym = pat.bind;
+        break;
+    }
+    const resolved_apply_sym = apply_sym orelse return error.TestUnexpectedResult;
+    const apply_def = env.mir_store.getSymbolDef(resolved_apply_sym) orelse return error.TestUnexpectedResult;
+    const apply_expr = env.mir_store.getExpr(apply_def);
+    try testing.expect(apply_expr == .lambda);
+
+    const apply_params = env.mir_store.getPatternSpan(apply_expr.lambda.params);
+    try testing.expectEqual(@as(usize, 2), apply_params.len);
+    const f_pat = env.mir_store.getPattern(apply_params[0]);
+    try testing.expect(f_pat == .bind);
+    const f_sym = f_pat.bind;
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(env.builtin_module.env),
+        env.module_env,
+    };
+    var ls_store = try LambdaSet.infer(test_allocator, env.mir_store, all_module_envs[0..]);
+    defer ls_store.deinit(test_allocator);
+
+    const f_ls = ls_store.getSymbolLambdaSet(f_sym) orelse return error.TestUnexpectedResult;
+    const members = ls_store.getMembers(ls_store.getLambdaSet(f_ls).members);
+    try testing.expectEqual(@as(usize, 2), members.len);
+    for (members) |member| {
+        try testing.expect(!member.captures_monotype.isNone());
+    }
+}
+
+test "lambda set: higher-order closure captures monotype stays numeric tuple" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    apply = |f, x| f(x)
+        \\    a = 10
+        \\    b = 20
+        \\    r1 = apply(|x| x + a, 5)
+        \\    r2 = apply(|x| x + b, 5)
+        \\    r1 + r2
+        \\}
+    );
+    defer env.deinit();
+
+    const expr = try env.lowerFirstDef();
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(env.builtin_module.env),
+        env.module_env,
+    };
+    var ls_store = try LambdaSet.infer(test_allocator, env.mir_store, all_module_envs[0..]);
+    defer ls_store.deinit(test_allocator);
+
+    const block = env.mir_store.getExpr(expr);
+    try testing.expect(block == .block);
+
+    const stmts = env.mir_store.getStmts(block.block.stmts);
+    var apply_sym: ?MIR.Symbol = null;
+    for (stmts) |stmt| {
+        if (stmt != .decl_const) continue;
+        const stmt_expr = env.mir_store.getExpr(stmt.decl_const.expr);
+        if (stmt_expr != .lambda) continue;
+        const pat = env.mir_store.getPattern(stmt.decl_const.pattern);
+        if (pat != .bind) continue;
+        apply_sym = pat.bind;
+        break;
+    }
+    const resolved_apply_sym = apply_sym orelse return error.TestUnexpectedResult;
+    const apply_def = env.mir_store.getSymbolDef(resolved_apply_sym) orelse return error.TestUnexpectedResult;
+    const apply_expr = env.mir_store.getExpr(apply_def);
+    try testing.expect(apply_expr == .lambda);
+
+    const apply_params = env.mir_store.getPatternSpan(apply_expr.lambda.params);
+    const f_pat = env.mir_store.getPattern(apply_params[0]);
+    try testing.expect(f_pat == .bind);
+    const f_sym = f_pat.bind;
+
+    const f_ls = ls_store.getSymbolLambdaSet(f_sym) orelse return error.TestUnexpectedResult;
+    const members = ls_store.getMembers(ls_store.getLambdaSet(f_ls).members);
+    try testing.expectEqual(@as(usize, 2), members.len);
+
+    const capture_mono = env.mir_store.monotype_store.getMonotype(members[0].captures_monotype);
+    try testing.expect(capture_mono == .tuple);
+    const elems = env.mir_store.monotype_store.getIdxSpan(capture_mono.tuple.elems);
+    try testing.expectEqual(@as(usize, 1), elems.len);
+    const elem_mono = env.mir_store.monotype_store.getMonotype(elems[0]);
+    try testing.expect(elem_mono == .prim);
+    try testing.expectEqual(Monotype.Prim.dec, elem_mono.prim);
+}
+
+test "lambda set: imported List.any receives predicate lambda set" {
+    var env = try MirTestEnv.initExpr("List.any([1.I64, 2.I64, 3.I64], |_x| True)");
+    defer env.deinit();
+
+    const expr = try env.lowerFirstDef();
+    const root_expr = env.mir_store.getExpr(expr);
+    try testing.expect(root_expr == .call);
+
+    const root_args = env.mir_store.getExprSpan(root_expr.call.args);
+    try testing.expectEqual(@as(usize, 2), root_args.len);
+
+    const callee_expr = env.mir_store.getExpr(root_expr.call.func);
+    try testing.expect(callee_expr == .lookup);
+    const any_sym = callee_expr.lookup;
+    const any_def = env.mir_store.getSymbolDef(any_sym) orelse return error.TestUnexpectedResult;
+
+    var lambda_def = any_def;
+    var params: MIR.PatternSpan = undefined;
+    var lambda_body: MIR.ExprId = undefined;
+    while (true) {
+        switch (env.mir_store.getExpr(lambda_def)) {
+            .lambda => |lam| {
+                params = lam.params;
+                lambda_body = lam.body;
+                break;
+            },
+            .block => |block| {
+                lambda_def = block.final_expr;
+            },
+            else => return error.TestUnexpectedResult,
+        }
+    }
+
+    const param_ids = env.mir_store.getPatternSpan(params);
+    try testing.expectEqual(@as(usize, 2), param_ids.len);
+
+    const list_param_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.patternTypeOf(param_ids[0]));
+    try testing.expect(list_param_mono == .list);
+    const list_elem_mono = env.mir_store.monotype_store.getMonotype(list_param_mono.list.elem);
+    try testing.expect(list_elem_mono == .prim);
+    try testing.expectEqual(Monotype.Prim.i64, list_elem_mono.prim);
+
+    const predicate_param_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.patternTypeOf(param_ids[1]));
+    try testing.expect(predicate_param_mono == .func);
+    const predicate_arg_monos = env.mir_store.monotype_store.getIdxSpan(predicate_param_mono.func.args);
+    try testing.expectEqual(@as(usize, 1), predicate_arg_monos.len);
+    const predicate_arg_mono = env.mir_store.monotype_store.getMonotype(predicate_arg_monos[0]);
+    try testing.expect(predicate_arg_mono == .prim);
+    try testing.expectEqual(Monotype.Prim.i64, predicate_arg_mono.prim);
+    const predicate_ret_mono = env.mir_store.monotype_store.getMonotype(predicate_param_mono.func.ret);
+    try testing.expect(predicate_ret_mono == .prim);
+    try testing.expectEqual(Monotype.Prim.bool, predicate_ret_mono.prim);
+
+    const predicate_pat = env.mir_store.getPattern(param_ids[1]);
+    try testing.expect(predicate_pat == .bind);
+    const predicate_sym = predicate_pat.bind;
+
+    var body_expr = lambda_body;
+    var loop_item_pat: ?MIR.PatternId = null;
+    while (true) {
+        switch (env.mir_store.getExpr(body_expr)) {
+            .block => |block| {
+                const stmts = env.mir_store.getStmts(block.stmts);
+                if (stmts.len > 0) {
+                    const stmt_expr_id = switch (stmts[0]) {
+                        .decl_const => |binding| binding.expr,
+                        .decl_var => |binding| binding.expr,
+                        .mutate_var => |binding| binding.expr,
+                    };
+                    const stmt_expr = env.mir_store.getExpr(stmt_expr_id);
+                    if (stmt_expr == .for_loop) {
+                        loop_item_pat = stmt_expr.for_loop.elem_pattern;
+                        break;
+                    }
+                }
+                body_expr = block.final_expr;
+            },
+            .for_loop => |loop| {
+                loop_item_pat = loop.elem_pattern;
+                break;
+            },
+            else => return error.TestUnexpectedResult,
+        }
+    }
+
+    const loop_item_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.patternTypeOf(loop_item_pat.?));
+    try testing.expect(loop_item_mono == .prim);
+    try testing.expectEqual(Monotype.Prim.i64, loop_item_mono.prim);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(env.builtin_module.env),
+        env.module_env,
+    };
+    var ls_store = try LambdaSet.infer(test_allocator, env.mir_store, all_module_envs[0..]);
+    defer ls_store.deinit(test_allocator);
+
+    const arg_ls = try LambdaSet.resolveExprLambdaSet(
+        test_allocator,
+        env.mir_store,
+        &ls_store,
+        root_args[1],
+    );
+    try testing.expect(!arg_ls.isNone());
+    const arg_members = ls_store.getMembers(ls_store.getLambdaSet(arg_ls).members);
+    try testing.expectEqual(@as(usize, 1), arg_members.len);
+
+    const predicate_ls = ls_store.getSymbolLambdaSet(predicate_sym) orelse return error.TestUnexpectedResult;
+    const members = ls_store.getMembers(ls_store.getLambdaSet(predicate_ls).members);
+    try testing.expectEqual(@as(usize, 1), members.len);
+    try testing.expectEqual(arg_members[0].fn_symbol, members[0].fn_symbol);
+    try testing.expectEqual(arg_members[0].captures_monotype, members[0].captures_monotype);
+    try testing.expect(env.mir_store.getSymbolDef(members[0].fn_symbol) != null);
+    try testing.expect(members[0].captures_monotype.isNone());
+}
+
 test "lowerExpr: lambda" {
     var env = try MirTestEnv.initFull("Test",
         \\main : U64 -> U64

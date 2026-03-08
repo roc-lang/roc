@@ -159,6 +159,10 @@ const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const LoadedModule = builtin_loading.LoadedModule;
 
+fn isBuiltinModuleEnv(env: *const ModuleEnv) bool {
+    return std.mem.eql(u8, env.module_name, "Builtin");
+}
+
 // Host ABI types for RocOps
 const RocOps = builtins.host_abi.RocOps;
 const RocAlloc = builtins.host_abi.RocAlloc;
@@ -185,6 +189,7 @@ fn lirExprResultLayout(store: *const LirExprStore, expr_id: lir.LirExprId) layou
         .dbg => |d| d.result_layout,
         .expect => |e| e.result_layout,
         .call => |c| c.ret_layout,
+        .semantic_low_level => |ll| ll.ret_layout,
         .low_level => |ll| ll.ret_layout,
         .early_return => |er| er.ret_layout,
         .lookup => |l| l.layout_idx,
@@ -536,11 +541,13 @@ pub const DevEvaluator = struct {
         // If we already have a global layout store, return it
         if (self.global_layout_store) |ls| return ls;
 
-        // Get builtin_str from module 0 (should be the builtin module)
-        const builtin_str = if (all_module_envs.len > 0)
-            all_module_envs[0].idents.builtin_str
-        else
-            null;
+        var builtin_str: ?base.Ident.Idx = null;
+        for (all_module_envs) |env| {
+            if (isBuiltinModuleEnv(env)) {
+                builtin_str = env.idents.builtin_str;
+                break;
+            }
+        }
 
         // Create the global layout store
         const ls = self.allocator.create(layout.Store) catch return error.OutOfMemory;
@@ -638,6 +645,8 @@ pub const DevEvaluator = struct {
     /// Generate code for a CIR expression
     ///
     /// This lowers CIR to Mono IR and then generates native machine code.
+    /// `all_module_envs` must use the same module ordering as `resolveImports`
+    /// for `module_env` so external lookup indices line up with MIR lowering.
     pub fn generateCode(
         self: *DevEvaluator,
         module_env: *ModuleEnv,

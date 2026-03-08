@@ -158,11 +158,158 @@ pub fn infer(
     var changed = true;
     while (changed) {
         changed = false;
+        changed = (try propagateBoundFunctionSymbols(allocator, mir_store, &store)) or changed;
         changed = (try propagateCallArgs(allocator, mir_store, &store, all_module_envs)) or changed;
         changed = (try propagateCaptureAliases(allocator, mir_store, &store)) or changed;
     }
 
     return store;
+}
+
+fn patternBoundSymbol(mir_store: *const MIR.Store, pat_id: MIR.PatternId) ?MIR.Symbol {
+    return switch (mir_store.getPattern(pat_id)) {
+        .bind => |sym| sym,
+        .as_pattern => |as_pat| as_pat.symbol,
+        else => null,
+    };
+}
+
+fn propagateBoundFunctionSymbols(
+    allocator: Allocator,
+    mir_store: *const MIR.Store,
+    ls_store: *Store,
+) Allocator.Error!bool {
+    var changed = false;
+
+    var expr_index: u32 = 0;
+    while (expr_index < mir_store.exprs.items.len) : (expr_index += 1) {
+        changed = (try propagateBoundFunctionSymbolsInExpr(
+            allocator,
+            mir_store,
+            ls_store,
+            @enumFromInt(expr_index),
+        )) or changed;
+    }
+
+    return changed;
+}
+
+fn propagateBoundFunctionSymbolsInExpr(
+    allocator: Allocator,
+    mir_store: *const MIR.Store,
+    ls_store: *Store,
+    expr_id: MIR.ExprId,
+) Allocator.Error!bool {
+    var changed = false;
+
+    switch (mir_store.getExpr(expr_id)) {
+        .block => |block| {
+            const stmts = mir_store.getStmts(block.stmts);
+            for (stmts) |stmt| {
+                const binding = switch (stmt) {
+                    .decl_const, .decl_var, .mutate_var => |b| b,
+                };
+
+                if (patternBoundSymbol(mir_store, binding.pattern)) |symbol| {
+                    const ls_idx = try resolveExprLambdaSet(allocator, mir_store, ls_store, binding.expr);
+                    if (!ls_idx.isNone()) {
+                        changed = (try mergeIntoSymbol(allocator, ls_store, symbol, ls_idx)) or changed;
+                    }
+                }
+
+                changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, binding.expr)) or changed;
+            }
+
+            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, block.final_expr)) or changed;
+        },
+        .lambda => |lam| {
+            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, lam.body)) or changed;
+        },
+        .match_expr => |match_expr| {
+            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, match_expr.cond)) or changed;
+            for (mir_store.getBranches(match_expr.branches)) |branch| {
+                if (!branch.guard.isNone()) {
+                    changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, branch.guard)) or changed;
+                }
+                changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, branch.body)) or changed;
+            }
+        },
+        .borrow_scope => |scope| {
+            for (mir_store.getBorrowBindings(scope.bindings)) |binding| {
+                if (patternBoundSymbol(mir_store, binding.pattern)) |symbol| {
+                    const ls_idx = try resolveExprLambdaSet(allocator, mir_store, ls_store, binding.expr);
+                    if (!ls_idx.isNone()) {
+                        changed = (try mergeIntoSymbol(allocator, ls_store, symbol, ls_idx)) or changed;
+                    }
+                }
+                changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, binding.expr)) or changed;
+            }
+            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, scope.body)) or changed;
+        },
+        .call => |call| {
+            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, call.func)) or changed;
+            for (mir_store.getExprSpan(call.args)) |arg| {
+                changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, arg)) or changed;
+            }
+        },
+        .list => |list| {
+            for (mir_store.getExprSpan(list.elems)) |elem| {
+                changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, elem)) or changed;
+            }
+        },
+        .record => |record| {
+            for (mir_store.getExprSpan(record.fields)) |field| {
+                changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, field)) or changed;
+            }
+        },
+        .tuple => |tuple| {
+            for (mir_store.getExprSpan(tuple.elems)) |elem| {
+                changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, elem)) or changed;
+            }
+        },
+        .tag => |tag| {
+            for (mir_store.getExprSpan(tag.args)) |arg| {
+                changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, arg)) or changed;
+            }
+        },
+        .run_low_level => |ll| {
+            for (mir_store.getExprSpan(ll.args)) |arg| {
+                changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, arg)) or changed;
+            }
+        },
+        .record_access => |ra| {
+            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, ra.record)) or changed;
+        },
+        .tuple_access => |ta| {
+            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, ta.tuple)) or changed;
+        },
+        .str_escape_and_quote => |inner| {
+            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, inner)) or changed;
+        },
+        .hosted => |hosted| {
+            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, hosted.body)) or changed;
+        },
+        .dbg_expr => |dbg_expr| {
+            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, dbg_expr.expr)) or changed;
+        },
+        .expect => |expect| {
+            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, expect.body)) or changed;
+        },
+        .for_loop => |for_loop| {
+            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, for_loop.list)) or changed;
+            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, for_loop.body)) or changed;
+        },
+        .while_loop => |while_loop| {
+            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, while_loop.cond)) or changed;
+            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, while_loop.body)) or changed;
+        },
+        .return_expr => |ret| {
+            changed = (try propagateBoundFunctionSymbolsInExpr(allocator, mir_store, ls_store, ret.expr)) or changed;
+        },
+        else => {},
+    }
+
+    return changed;
 }
 
 /// Propagate lambda sets from call arguments to callee parameters.
@@ -283,11 +430,11 @@ fn propagateArgIntoCalleeMembers(
     arg_ls: Idx,
 ) Allocator.Error!bool {
     const callee_ls_idx = ls_store.getSymbolLambdaSet(callee_symbol) orelse return false;
-    const callee_ls = ls_store.getLambdaSet(callee_ls_idx);
-    const members = ls_store.getMembers(callee_ls.members);
+    var members = try snapshotLambdaSetMembers(allocator, ls_store, callee_ls_idx);
+    defer members.deinit(allocator);
 
     var changed = false;
-    for (members) |member| {
+    for (members.items) |member| {
         const def_expr_id = mir_store.getSymbolDef(member.fn_symbol) orelse continue;
         const params = resolveToLambdaParams(mir_store, def_expr_id) orelse continue;
         const did_change = try propagateArgIntoParams(
@@ -796,6 +943,18 @@ fn addMemberDedup(allocator: Allocator, members: *std.ArrayListUnmanaged(Member)
     try members.append(allocator, candidate);
 }
 
+fn snapshotLambdaSetMembers(
+    allocator: Allocator,
+    ls_store: *const Store,
+    ls_idx: Idx,
+) Allocator.Error!std.ArrayListUnmanaged(Member) {
+    var snapshot: std.ArrayListUnmanaged(Member) = .empty;
+    errdefer snapshot.deinit(allocator);
+
+    try snapshot.appendSlice(allocator, ls_store.getMembers(ls_store.getLambdaSet(ls_idx).members));
+    return snapshot;
+}
+
 /// Resolve the lambda set for an expression, following through blocks, lookups,
 /// and closure-returning calls.
 pub fn resolveExprLambdaSet(
@@ -873,11 +1032,12 @@ fn resolveExprLambdaSetRec(
             const callee_ls = try resolveExprLambdaSetRec(allocator, mir_store, ls_store, call.func, visiting);
             if (callee_ls.isNone()) return Idx.none;
 
-            const callee_members = ls_store.getMembers(ls_store.getLambdaSet(callee_ls).members);
+            var callee_members = try snapshotLambdaSetMembers(allocator, ls_store, callee_ls);
+            defer callee_members.deinit(allocator);
             var returned_members: std.ArrayListUnmanaged(Member) = .empty;
             defer returned_members.deinit(allocator);
 
-            for (callee_members) |callee_member| {
+            for (callee_members.items) |callee_member| {
                 const callee_def = mir_store.getSymbolDef(callee_member.fn_symbol) orelse continue;
                 const callee_def_expr = mir_store.getExpr(callee_def);
                 if (callee_def_expr != .lambda) continue;
@@ -909,7 +1069,60 @@ fn resolveExprLambdaSetRec(
             }
             return Idx.none;
         },
+        .record_access => |ra| {
+            const field_expr = resolveRecordFieldExpr(mir_store, ra.record, ra.field_name) orelse return Idx.none;
+            return resolveExprLambdaSetRec(allocator, mir_store, ls_store, field_expr, visiting);
+        },
+        .tuple_access => |ta| {
+            const elem_expr = resolveTupleElemExpr(mir_store, ta.tuple, ta.elem_index) orelse return Idx.none;
+            return resolveExprLambdaSetRec(allocator, mir_store, ls_store, elem_expr, visiting);
+        },
         // Everything else: not a closure value
         else => return Idx.none,
     }
+}
+
+fn resolveRecordFieldExpr(
+    mir_store: *const MIR.Store,
+    expr_id: MIR.ExprId,
+    field_name: base.Ident.Idx,
+) ?MIR.ExprId {
+    const expr = mir_store.getExpr(expr_id);
+    return switch (expr) {
+        .record => |record| blk: {
+            const field_names = mir_store.getFieldNameSpan(record.field_names);
+            const fields = mir_store.getExprSpan(record.fields);
+            for (field_names, 0..) |name, i| {
+                if (name.eql(field_name)) break :blk fields[i];
+            }
+            break :blk null;
+        },
+        .lookup => |symbol| blk: {
+            const def_expr = mir_store.getSymbolDef(symbol) orelse break :blk null;
+            break :blk resolveRecordFieldExpr(mir_store, def_expr, field_name);
+        },
+        .block => |block| resolveRecordFieldExpr(mir_store, block.final_expr, field_name),
+        else => null,
+    };
+}
+
+fn resolveTupleElemExpr(
+    mir_store: *const MIR.Store,
+    expr_id: MIR.ExprId,
+    elem_index: u32,
+) ?MIR.ExprId {
+    const expr = mir_store.getExpr(expr_id);
+    return switch (expr) {
+        .tuple => |tuple| blk: {
+            const elems = mir_store.getExprSpan(tuple.elems);
+            if (elem_index >= elems.len) break :blk null;
+            break :blk elems[elem_index];
+        },
+        .lookup => |symbol| blk: {
+            const def_expr = mir_store.getSymbolDef(symbol) orelse break :blk null;
+            break :blk resolveTupleElemExpr(mir_store, def_expr, elem_index);
+        },
+        .block => |block| resolveTupleElemExpr(mir_store, block.final_expr, elem_index),
+        else => null,
+    };
 }

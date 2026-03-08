@@ -477,8 +477,26 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
     const expr: LirExpr = self.store.getExpr(expr_id);
     switch (expr) {
         .i64_literal => |val| {
-            self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI64(self.allocator, &self.body, val.value) catch return error.OutOfMemory;
+            switch (self.resolveValType(val.layout_idx)) {
+                .i32 => {
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, @truncate(val.value)) catch return error.OutOfMemory;
+                },
+                .i64 => {
+                    self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI64(self.allocator, &self.body, val.value) catch return error.OutOfMemory;
+                },
+                .f32 => {
+                    self.body.append(self.allocator, Op.f32_const) catch return error.OutOfMemory;
+                    const bytes: [4]u8 = @bitCast(@as(f32, @floatFromInt(val.value)));
+                    self.body.appendSlice(self.allocator, &bytes) catch return error.OutOfMemory;
+                },
+                .f64 => {
+                    self.body.append(self.allocator, Op.f64_const) catch return error.OutOfMemory;
+                    const bytes: [8]u8 = @bitCast(@as(f64, @floatFromInt(val.value)));
+                    self.body.appendSlice(self.allocator, &bytes) catch return error.OutOfMemory;
+                },
+            }
         },
         .f64_literal => |val| {
             self.body.append(self.allocator, Op.f64_const) catch return error.OutOfMemory;
@@ -897,6 +915,12 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
             try self.generateExpr(e.cond);
             self.body.append(self.allocator, Op.drop) catch return error.OutOfMemory;
             try self.generateExpr(e.body);
+        },
+        .semantic_low_level => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("wasm backend invariant violated: semantic_low_level must be removed before codegen", .{});
+            }
+            unreachable;
         },
         .low_level => |ll| {
             try self.generateLowLevel(ll);
@@ -2096,6 +2120,7 @@ fn exprLayoutIdx(self: *Self, expr_id: LirExprId) layout.Idx {
         .struct_access => |sa| sa.field_layout,
         .zero_arg_tag => |z| z.union_layout,
         .tag => |t| t.union_layout,
+        .semantic_low_level => |ll| ll.ret_layout,
         .low_level => |ll| ll.ret_layout,
         .dbg => |d| d.result_layout,
         .expect => |e| e.result_layout,
@@ -2136,7 +2161,7 @@ fn exprLayoutIdx(self: *Self, expr_id: LirExprId) layout.Idx {
 fn exprValType(self: *Self, expr_id: LirExprId) ValType {
     const expr = self.store.getExpr(expr_id);
     return switch (expr) {
-        .i64_literal => .i64,
+        .i64_literal => |i| self.resolveValType(i.layout_idx),
         .f64_literal => .f64,
         .f32_literal => .f32,
         .bool_literal => .i32,
@@ -2154,6 +2179,7 @@ fn exprValType(self: *Self, expr_id: LirExprId) ValType {
         .struct_access => |sa| self.resolveValType(sa.field_layout),
         .zero_arg_tag => .i32, // discriminant or pointer
         .tag => .i32, // pointer to stack memory
+        .semantic_low_level => |ll| self.resolveValType(ll.ret_layout),
         .low_level => |ll| self.resolveValType(ll.ret_layout),
         .dbg => |d| self.resolveValType(d.result_layout),
         .expect => |e| self.resolveValType(e.result_layout),
@@ -2212,6 +2238,7 @@ fn isCompositeExpr(self: *const Self, expr_id: LirExprId) bool {
         .lookup => |l| self.isCompositeLayout(l.layout_idx),
         .call => |c| self.isCompositeLayout(c.ret_layout),
         .struct_access => |sa| self.isCompositeLayout(sa.field_layout),
+        .semantic_low_level => |ll| self.isCompositeLayout(ll.ret_layout),
         .low_level => |ll| self.isCompositeLayout(ll.ret_layout),
         .dbg => |d| self.isCompositeLayout(d.result_layout),
         .expect => |e| self.isCompositeLayout(e.result_layout),

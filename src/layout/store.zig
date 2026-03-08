@@ -257,6 +257,11 @@ pub const Store = struct {
         return self.all_module_envs[0];
     }
 
+    /// Get all module environments in the layout store's module-index order.
+    pub fn moduleEnvs(self: *const Self) []const *const ModuleEnv {
+        return self.all_module_envs;
+    }
+
     /// Get the mutable module environment (used by interpreter for identifier insertion).
     /// Returns null if no mutable env was set via setMutableEnv.
     pub fn getMutableEnv(self: *Self) ?*ModuleEnv {

@@ -150,6 +150,34 @@ test "closure: passing two different closures to same HOF" {
     try runExpectI64(code, 40, .no_trace);
 }
 
+test "closure: passing two different closures to same HOF returns first result" {
+    const code =
+        \\{
+        \\    apply = |f, x| f(x)
+        \\    a = 10
+        \\    b = 20
+        \\    r1 = apply(|x| x + a, 5)
+        \\    r2 = apply(|x| x + b, 5)
+        \\    r1
+        \\}
+    ;
+    try runExpectI64(code, 15, .no_trace);
+}
+
+test "closure: passing two different closures to same HOF returns second result" {
+    const code =
+        \\{
+        \\    apply = |f, x| f(x)
+        \\    a = 10
+        \\    b = 20
+        \\    r1 = apply(|x| x + a, 5)
+        \\    r2 = apply(|x| x + b, 5)
+        \\    r2
+        \\}
+    ;
+    try runExpectI64(code, 25, .no_trace);
+}
+
 test "closure: HOF calling closure argument twice" {
     const code =
         \\{
@@ -304,6 +332,32 @@ test "closure: two closures in record, each with own captures" {
         \\}
     ;
     try runExpectI64(code, 40, .no_trace);
+}
+
+test "closure: record field closure add_a preserves its capture" {
+    const code =
+        \\{
+        \\    a = 10
+        \\    b = 20
+        \\    rec = { add_a: |x| x + a, add_b: |x| x + b }
+        \\    add_a = rec.add_a
+        \\    add_a(5)
+        \\}
+    ;
+    try runExpectI64(code, 15, .no_trace);
+}
+
+test "closure: record field closure add_b preserves its capture" {
+    const code =
+        \\{
+        \\    a = 10
+        \\    b = 20
+        \\    rec = { add_a: |x| x + a, add_b: |x| x + b }
+        \\    add_b = rec.add_b
+        \\    add_b(5)
+        \\}
+    ;
+    try runExpectI64(code, 25, .no_trace);
 }
 
 // TIER 8: Composition and chaining

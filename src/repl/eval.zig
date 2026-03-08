@@ -618,12 +618,9 @@ pub const Repl = struct {
         };
         const final_expr_idx = canonical_expr.get_idx();
 
-        // Build imported_modules with REPL module at index 0, Builtin at index 1.
-        // This order must match the all_module_envs passed to the dev evaluator's lowerer
-        // and the layout store. The lowerer uses resolved import indices to look up modules
-        // in all_module_envs, so the arrays must agree. This matches the test helpers
-        // (helpers.zig:1341-1347) which document: "index 0 = user module, index 1 = builtin".
-        const imported_modules = [_]*const ModuleEnv{ module_env, self.builtin_module.env };
+        // Keep imported module order aligned with resolveImports/getResolvedModule indices.
+        // For REPL expressions with Builtin imports, Builtin must come first.
+        const imported_modules = [_]*const ModuleEnv{ self.builtin_module.env, module_env };
 
         // Resolve imports - map each import to its index in imported_modules
         module_env.imports.resolveImports(module_env, &imported_modules);
@@ -763,7 +760,7 @@ pub const Repl = struct {
         if (comptime builtin.os.tag != .freestanding) {
             if (self.backend == .dev) {
                 if (self.dev_evaluator) |*dev_eval| {
-                    const all_module_envs: []const *ModuleEnv = &.{ module_env, self.builtin_module.env };
+                    const all_module_envs: []const *ModuleEnv = &.{ self.builtin_module.env, module_env };
                     var code_result = dev_eval.generateCode(module_env, inspect_expr, all_module_envs) catch |err| {
                         return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Dev backend codegen error: {s}", .{@errorName(err)}) };
                     };

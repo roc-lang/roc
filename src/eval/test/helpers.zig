@@ -10,6 +10,8 @@ const builtins = @import("builtins");
 const compiled_builtins = @import("compiled_builtins");
 
 const layout = @import("layout");
+const mir = @import("mir");
+const lir = @import("lir");
 const roc_target = @import("roc_target");
 const eval_mod = @import("../mod.zig");
 const builtin_loading_mod = eval_mod.builtin_loading;
@@ -36,6 +38,9 @@ const Can = can.Can;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 const Allocators = base.Allocators;
+const MIR = mir.MIR;
+const LambdaSet = mir.LambdaSet;
+const LirExprStore = lir.LirExprStore;
 
 /// Convert a StackValue to a RocValue for formatting.
 fn stackValueToRocValue(result: StackValue, layout_idx_hint: ?layout.Idx) values.RocValue {
@@ -150,9 +155,8 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     };
     defer dev_eval.deinit();
 
-    // Create module envs array for code generation
-    // Note: generateCode expects []const *ModuleEnv (mutable pointers in immutable slice)
-    const all_module_envs = [_]*ModuleEnv{ module_env, @constCast(builtin_module_env) };
+    // Keep module order aligned with resolveImports/getResolvedModule indices.
+    const all_module_envs = [_]*ModuleEnv{ @constCast(builtin_module_env), module_env };
 
     // Generate code using Mono IR pipeline
     var code_result = dev_eval.generateCode(module_env, expr_idx, &all_module_envs) catch {
@@ -257,7 +261,14 @@ fn forkAndExecute(
         // meaningless since we exit via _exit and no defers run.
         const child_alloc = std.heap.page_allocator;
 
-        const result_str = executeAndFormat(child_alloc, dev_eval, executable) catch {
+        const result_str = executeAndFormat(child_alloc, dev_eval, executable) catch |err| {
+            std.debug.print("child executeAndFormat error: {}", .{err});
+            if (err == error.RocCrashed) {
+                if (dev_eval.getCrashMessage()) |msg| {
+                    std.debug.print(" msg={s}", .{msg});
+                }
+            }
+            std.debug.print("\n", .{});
             posix.close(pipe_write);
             posix.exit(1);
         };
@@ -415,7 +426,8 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
     };
     defer wasm_eval.deinit();
 
-    const all_module_envs = [_]*ModuleEnv{ module_env, @constCast(builtin_module_env) };
+    // Keep module order aligned with resolveImports/getResolvedModule indices.
+    const all_module_envs = [_]*ModuleEnv{ @constCast(builtin_module_env), module_env };
 
     var wasm_result = wasm_eval.generateWasm(module_env, expr_idx, &all_module_envs) catch {
         return error.WasmGenerateCodeFailed;
@@ -2838,9 +2850,8 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
             .region = base.Region.zero(),
         } });
         const checker = try allocator.create(Check);
-        // Pass user module and Builtin as imported modules
-        // Order must match all_module_envs in devEvaluatorStr
-        const imported_envs = [_]*const ModuleEnv{ module_env, builtin_module.env };
+        // Keep imported module order aligned with resolveImports/getResolvedModule.
+        const imported_envs = [_]*const ModuleEnv{ builtin_module.env, module_env };
         // Resolve imports - map each import to its index in imported_envs
         module_env.imports.resolveImports(module_env, &imported_envs);
         checker.* = try Check.init(allocator, &module_env.types, module_env, &imported_envs, &module_envs_map, &module_env.store.regions, builtin_ctx);
@@ -2866,11 +2877,8 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     // need to be type-checked before they can be used
     module_env.all_defs = try module_env.store.defSpanFrom(0);
 
-    // Create type checker - pass Builtin as imported module
-    // IMPORTANT: The order here MUST match all_module_envs in devEvaluatorStr:
-    // index 0 = user module, index 1 = builtin module
-    // This ensures external lookups resolve to the correct module index.
-    const imported_envs = [_]*const ModuleEnv{ module_env, builtin_module.env };
+    // Keep imported module order aligned with resolveImports/getResolvedModule.
+    const imported_envs = [_]*const ModuleEnv{ builtin_module.env, module_env };
 
     // Resolve imports - map each import to its index in imported_envs
     module_env.imports.resolveImports(module_env, &imported_envs);
@@ -2920,6 +2928,675 @@ pub fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: anytype
 
 test "eval runtime error - returns crash error" {
     try runExpectError("{ crash \"test feature\" 0 }", error.Crash, .no_trace);
+}
+
+test "dev lowering: imported List.any directly calls passed predicate member" {
+    const resources = try parseAndCanonicalizeExpr(test_allocator, "List.any([1.I64, 2.I64, 3.I64], |x| x == 2.I64)");
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(resources.builtin_module.env),
+        resources.module_env,
+    };
+
+    var lower = try mir.Lower.init(
+        test_allocator,
+        &mir_store,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const mir_expr = try lower.lowerExpr(resources.expr_idx);
+    const root_expr = mir_store.getExpr(mir_expr);
+    try std.testing.expect(root_expr == .call);
+
+    const root_args = mir_store.getExprSpan(root_expr.call.args);
+    try std.testing.expectEqual(@as(usize, 2), root_args.len);
+
+    const root_callee = mir_store.getExpr(root_expr.call.func);
+    try std.testing.expect(root_callee == .lookup);
+    const any_sym = root_callee.lookup;
+    const any_def = mir_store.getSymbolDef(any_sym) orelse return error.TestUnexpectedResult;
+
+    var lambda_def = any_def;
+    var params: MIR.PatternSpan = undefined;
+    var lambda_body: MIR.ExprId = undefined;
+    while (true) {
+        switch (mir_store.getExpr(lambda_def)) {
+            .lambda => |lam| {
+                params = lam.params;
+                lambda_body = lam.body;
+                break;
+            },
+            .block => |block| lambda_def = block.final_expr,
+            else => return error.TestUnexpectedResult,
+        }
+    }
+
+    const param_ids = mir_store.getPatternSpan(params);
+    const predicate_pat = mir_store.getPattern(param_ids[1]);
+    try std.testing.expect(predicate_pat == .bind);
+    const predicate_sym = predicate_pat.bind;
+
+    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
+    defer lambda_set_store.deinit(test_allocator);
+
+    const callee_ls = try LambdaSet.resolveExprLambdaSet(test_allocator, &mir_store, &lambda_set_store, root_expr.call.func);
+    try std.testing.expect(!callee_ls.isNone());
+
+    const arg_ls = try LambdaSet.resolveExprLambdaSet(test_allocator, &mir_store, &lambda_set_store, root_args[1]);
+    try std.testing.expect(!arg_ls.isNone());
+    const arg_members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(arg_ls).members);
+    try std.testing.expectEqual(@as(usize, 1), arg_members.len);
+    const predicate_member_sym = arg_members[0].fn_symbol;
+
+    const predicate_ls = lambda_set_store.getSymbolLambdaSet(predicate_sym) orelse return error.TestUnexpectedResult;
+    const predicate_members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(predicate_ls).members);
+    try std.testing.expectEqual(@as(usize, 1), predicate_members.len);
+    try std.testing.expectEqual(predicate_member_sym, predicate_members[0].fn_symbol);
+
+    var layout_store = try layout.Store.init(
+        all_module_envs[0..],
+        resources.builtin_module.env.idents.builtin_str,
+        test_allocator,
+        base.target.TargetUsize.native,
+    );
+    defer layout_store.deinit();
+
+    var lir_store = LirExprStore.init(test_allocator);
+    defer lir_store.deinit();
+
+    var translator = lir.MirToLir.init(
+        test_allocator,
+        &mir_store,
+        &lir_store,
+        &layout_store,
+        &lambda_set_store,
+        resources.module_env.idents.true_tag,
+    );
+    defer translator.deinit();
+
+    const any_lir = try translator.lower(any_def);
+    var rc_pass = try lir.RcInsert.RcInsertPass.init(test_allocator, &lir_store, &layout_store);
+    defer rc_pass.deinit();
+    const any_lir_with_rc = try rc_pass.insertRcOps(any_lir);
+
+    const Search = struct {
+        fn containsCallTo(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, target: lir.LIR.Symbol) bool {
+            const expr = store.getExpr(expr_id);
+            switch (expr) {
+                .call => |call| {
+                    const fn_expr = store.getExpr(call.fn_expr);
+                    if (fn_expr == .lookup and fn_expr.lookup.symbol.eql(target)) return true;
+                    if (containsCallTo(store, call.fn_expr, target)) return true;
+                    for (store.getExprSpan(call.args)) |arg| {
+                        if (containsCallTo(store, arg, target)) return true;
+                    }
+                    return false;
+                },
+                .lambda => |lam| return containsCallTo(store, lam.body, target),
+                .block => |block| {
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        if (containsCallTo(store, stmt.binding().expr, target)) return true;
+                    }
+                    return containsCallTo(store, block.final_expr, target);
+                },
+                .if_then_else => |ite| {
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        if (containsCallTo(store, branch.cond, target)) return true;
+                        if (containsCallTo(store, branch.body, target)) return true;
+                    }
+                    return containsCallTo(store, ite.final_else, target);
+                },
+                .match_expr => |match_expr| {
+                    if (containsCallTo(store, match_expr.value, target)) return true;
+                    for (store.getMatchBranches(match_expr.branches)) |branch| {
+                        if (!branch.guard.isNone() and containsCallTo(store, branch.guard, target)) return true;
+                        if (containsCallTo(store, branch.body, target)) return true;
+                    }
+                    return false;
+                },
+                .borrow_scope => |scope| {
+                    for (store.getBorrowBindings(scope.bindings)) |binding| {
+                        if (containsCallTo(store, binding.expr, target)) return true;
+                    }
+                    return containsCallTo(store, scope.body, target);
+                },
+                .early_return => |ret| return containsCallTo(store, ret.expr, target),
+                .semantic_low_level => |ll| {
+                    for (store.getExprSpan(ll.args)) |arg| {
+                        if (containsCallTo(store, arg, target)) return true;
+                    }
+                    return false;
+                },
+                .low_level => |ll| {
+                    for (store.getExprSpan(ll.args)) |arg| {
+                        if (containsCallTo(store, arg, target)) return true;
+                    }
+                    return false;
+                },
+                .dbg => |dbg| return containsCallTo(store, dbg.expr, target),
+                .expect => |expect| return containsCallTo(store, expect.cond, target) or containsCallTo(store, expect.body, target),
+                .nominal => |nom| return containsCallTo(store, nom.backing_expr, target),
+                .struct_ => |s| {
+                    for (store.getExprSpan(s.fields)) |field| {
+                        if (containsCallTo(store, field, target)) return true;
+                    }
+                    return false;
+                },
+                .struct_access => |sa| return containsCallTo(store, sa.struct_expr, target),
+                .tag => |tag| {
+                    for (store.getExprSpan(tag.args)) |arg| {
+                        if (containsCallTo(store, arg, target)) return true;
+                    }
+                    return false;
+                },
+                .list => |list| {
+                    for (store.getExprSpan(list.elems)) |elem| {
+                        if (containsCallTo(store, elem, target)) return true;
+                    }
+                    return false;
+                },
+                .str_concat => |args| {
+                    for (store.getExprSpan(args)) |arg| {
+                        if (containsCallTo(store, arg, target)) return true;
+                    }
+                    return false;
+                },
+                .int_to_str => |its| return containsCallTo(store, its.value, target),
+                .float_to_str => |fts| return containsCallTo(store, fts.value, target),
+                .dec_to_str => |arg| return containsCallTo(store, arg, target),
+                .str_escape_and_quote => |arg| return containsCallTo(store, arg, target),
+                .discriminant_switch => |ds| {
+                    if (containsCallTo(store, ds.value, target)) return true;
+                    for (store.getExprSpan(ds.branches)) |branch| {
+                        if (containsCallTo(store, branch, target)) return true;
+                    }
+                    return false;
+                },
+                .tag_payload_access => |tpa| return containsCallTo(store, tpa.value, target),
+                .for_loop => |loop| return containsCallTo(store, loop.list_expr, target) or containsCallTo(store, loop.body, target),
+                .while_loop => |loop| return containsCallTo(store, loop.cond, target) or containsCallTo(store, loop.body, target),
+                .hosted_call => |call| {
+                    for (store.getExprSpan(call.args)) |arg| {
+                        if (containsCallTo(store, arg, target)) return true;
+                    }
+                    return false;
+                },
+                .incref => |rc| return containsCallTo(store, rc.value, target),
+                .decref => |rc| return containsCallTo(store, rc.value, target),
+                .free => |rc| return containsCallTo(store, rc.value, target),
+                else => return false,
+            }
+        }
+
+        fn containsEarlyReturn(store: *const LirExprStore, expr_id: lir.LIR.LirExprId) bool {
+            const expr = store.getExpr(expr_id);
+            switch (expr) {
+                .early_return => return true,
+                .lambda => |lam| return containsEarlyReturn(store, lam.body),
+                .block => |block| {
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        if (containsEarlyReturn(store, stmt.binding().expr)) return true;
+                    }
+                    return containsEarlyReturn(store, block.final_expr);
+                },
+                .if_then_else => |ite| {
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        if (containsEarlyReturn(store, branch.cond)) return true;
+                        if (containsEarlyReturn(store, branch.body)) return true;
+                    }
+                    return containsEarlyReturn(store, ite.final_else);
+                },
+                .match_expr => |match_expr| {
+                    if (containsEarlyReturn(store, match_expr.value)) return true;
+                    for (store.getMatchBranches(match_expr.branches)) |branch| {
+                        if (!branch.guard.isNone() and containsEarlyReturn(store, branch.guard)) return true;
+                        if (containsEarlyReturn(store, branch.body)) return true;
+                    }
+                    return false;
+                },
+                .borrow_scope => |scope| {
+                    for (store.getBorrowBindings(scope.bindings)) |binding| {
+                        if (containsEarlyReturn(store, binding.expr)) return true;
+                    }
+                    return containsEarlyReturn(store, scope.body);
+                },
+                .call => |call| {
+                    if (containsEarlyReturn(store, call.fn_expr)) return true;
+                    for (store.getExprSpan(call.args)) |arg| {
+                        if (containsEarlyReturn(store, arg)) return true;
+                    }
+                    return false;
+                },
+                .semantic_low_level => |ll| {
+                    for (store.getExprSpan(ll.args)) |arg| {
+                        if (containsEarlyReturn(store, arg)) return true;
+                    }
+                    return false;
+                },
+                .low_level => |ll| {
+                    for (store.getExprSpan(ll.args)) |arg| {
+                        if (containsEarlyReturn(store, arg)) return true;
+                    }
+                    return false;
+                },
+                .dbg => |dbg| return containsEarlyReturn(store, dbg.expr),
+                .expect => |expect| return containsEarlyReturn(store, expect.cond) or containsEarlyReturn(store, expect.body),
+                .nominal => |nom| return containsEarlyReturn(store, nom.backing_expr),
+                .struct_ => |s| {
+                    for (store.getExprSpan(s.fields)) |field| {
+                        if (containsEarlyReturn(store, field)) return true;
+                    }
+                    return false;
+                },
+                .struct_access => |sa| return containsEarlyReturn(store, sa.struct_expr),
+                .tag => |tag| {
+                    for (store.getExprSpan(tag.args)) |arg| {
+                        if (containsEarlyReturn(store, arg)) return true;
+                    }
+                    return false;
+                },
+                .list => |list| {
+                    for (store.getExprSpan(list.elems)) |elem| {
+                        if (containsEarlyReturn(store, elem)) return true;
+                    }
+                    return false;
+                },
+                .str_concat => |args| {
+                    for (store.getExprSpan(args)) |arg| {
+                        if (containsEarlyReturn(store, arg)) return true;
+                    }
+                    return false;
+                },
+                .int_to_str => |its| return containsEarlyReturn(store, its.value),
+                .float_to_str => |fts| return containsEarlyReturn(store, fts.value),
+                .dec_to_str => |arg| return containsEarlyReturn(store, arg),
+                .str_escape_and_quote => |arg| return containsEarlyReturn(store, arg),
+                .discriminant_switch => |ds| {
+                    if (containsEarlyReturn(store, ds.value)) return true;
+                    for (store.getExprSpan(ds.branches)) |branch| {
+                        if (containsEarlyReturn(store, branch)) return true;
+                    }
+                    return false;
+                },
+                .tag_payload_access => |tpa| return containsEarlyReturn(store, tpa.value),
+                .for_loop => |loop| return containsEarlyReturn(store, loop.list_expr) or containsEarlyReturn(store, loop.body),
+                .while_loop => |loop| return containsEarlyReturn(store, loop.cond) or containsEarlyReturn(store, loop.body),
+                .hosted_call => |call| {
+                    for (store.getExprSpan(call.args)) |arg| {
+                        if (containsEarlyReturn(store, arg)) return true;
+                    }
+                    return false;
+                },
+                .incref => |rc| return containsEarlyReturn(store, rc.value),
+                .decref => |rc| return containsEarlyReturn(store, rc.value),
+                .free => |rc| return containsEarlyReturn(store, rc.value),
+                else => return false,
+            }
+        }
+
+        fn firstEarlyReturnLayout(store: *const LirExprStore, expr_id: lir.LIR.LirExprId) ?layout.Idx {
+            const expr = store.getExpr(expr_id);
+            switch (expr) {
+                .early_return => |ret| return ret.ret_layout,
+                .lambda => |lam| return firstEarlyReturnLayout(store, lam.body),
+                .block => |block| {
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        if (firstEarlyReturnLayout(store, stmt.binding().expr)) |found| return found;
+                    }
+                    return firstEarlyReturnLayout(store, block.final_expr);
+                },
+                .if_then_else => |ite| {
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        if (firstEarlyReturnLayout(store, branch.cond)) |found| return found;
+                        if (firstEarlyReturnLayout(store, branch.body)) |found| return found;
+                    }
+                    return firstEarlyReturnLayout(store, ite.final_else);
+                },
+                .match_expr => |match_expr| {
+                    if (firstEarlyReturnLayout(store, match_expr.value)) |found| return found;
+                    for (store.getMatchBranches(match_expr.branches)) |branch| {
+                        if (!branch.guard.isNone()) {
+                            if (firstEarlyReturnLayout(store, branch.guard)) |found| return found;
+                        }
+                        if (firstEarlyReturnLayout(store, branch.body)) |found| return found;
+                    }
+                    return null;
+                },
+                .borrow_scope => |scope| {
+                    for (store.getBorrowBindings(scope.bindings)) |binding| {
+                        if (firstEarlyReturnLayout(store, binding.expr)) |found| return found;
+                    }
+                    return firstEarlyReturnLayout(store, scope.body);
+                },
+                .call => |call| {
+                    if (firstEarlyReturnLayout(store, call.fn_expr)) |found| return found;
+                    for (store.getExprSpan(call.args)) |arg| {
+                        if (firstEarlyReturnLayout(store, arg)) |found| return found;
+                    }
+                    return null;
+                },
+                .semantic_low_level => |ll| {
+                    for (store.getExprSpan(ll.args)) |arg| {
+                        if (firstEarlyReturnLayout(store, arg)) |found| return found;
+                    }
+                    return null;
+                },
+                .low_level => |ll| {
+                    for (store.getExprSpan(ll.args)) |arg| {
+                        if (firstEarlyReturnLayout(store, arg)) |found| return found;
+                    }
+                    return null;
+                },
+                .dbg => |dbg| return firstEarlyReturnLayout(store, dbg.expr),
+                .expect => |expect| return firstEarlyReturnLayout(store, expect.cond) orelse firstEarlyReturnLayout(store, expect.body),
+                .nominal => |nom| return firstEarlyReturnLayout(store, nom.backing_expr),
+                .struct_ => |s| {
+                    for (store.getExprSpan(s.fields)) |field| {
+                        if (firstEarlyReturnLayout(store, field)) |found| return found;
+                    }
+                    return null;
+                },
+                .struct_access => |sa| return firstEarlyReturnLayout(store, sa.struct_expr),
+                .tag => |tag| {
+                    for (store.getExprSpan(tag.args)) |arg| {
+                        if (firstEarlyReturnLayout(store, arg)) |found| return found;
+                    }
+                    return null;
+                },
+                .list => |list| {
+                    for (store.getExprSpan(list.elems)) |elem| {
+                        if (firstEarlyReturnLayout(store, elem)) |found| return found;
+                    }
+                    return null;
+                },
+                .str_concat => |args| {
+                    for (store.getExprSpan(args)) |arg| {
+                        if (firstEarlyReturnLayout(store, arg)) |found| return found;
+                    }
+                    return null;
+                },
+                .int_to_str => |its| return firstEarlyReturnLayout(store, its.value),
+                .float_to_str => |fts| return firstEarlyReturnLayout(store, fts.value),
+                .dec_to_str => |arg| return firstEarlyReturnLayout(store, arg),
+                .str_escape_and_quote => |arg| return firstEarlyReturnLayout(store, arg),
+                .discriminant_switch => |ds| {
+                    if (firstEarlyReturnLayout(store, ds.value)) |found| return found;
+                    for (store.getExprSpan(ds.branches)) |branch| {
+                        if (firstEarlyReturnLayout(store, branch)) |found| return found;
+                    }
+                    return null;
+                },
+                .tag_payload_access => |tpa| return firstEarlyReturnLayout(store, tpa.value),
+                .for_loop => |loop| {
+                    return firstEarlyReturnLayout(store, loop.list_expr) orelse
+                        firstEarlyReturnLayout(store, loop.body);
+                },
+                .while_loop => |loop| {
+                    return firstEarlyReturnLayout(store, loop.cond) orelse
+                        firstEarlyReturnLayout(store, loop.body);
+                },
+                .hosted_call => |call| {
+                    for (store.getExprSpan(call.args)) |arg| {
+                        if (firstEarlyReturnLayout(store, arg)) |found| return found;
+                    }
+                    return null;
+                },
+                .incref => |rc| return firstEarlyReturnLayout(store, rc.value),
+                .decref => |rc| return firstEarlyReturnLayout(store, rc.value),
+                .free => |rc| return firstEarlyReturnLayout(store, rc.value),
+                else => return null,
+            }
+        }
+    };
+
+    try std.testing.expect(Search.containsCallTo(&lir_store, any_lir_with_rc, predicate_member_sym));
+    try std.testing.expect(Search.containsEarlyReturn(&lir_store, any_lir_with_rc));
+    try std.testing.expectEqual(layout.Idx.bool, Search.firstEarlyReturnLayout(&lir_store, any_lir_with_rc).?);
+}
+
+test "dev lowering: local any-style HOF directly calls passed predicate member" {
+    const resources = try parseAndCanonicalizeExpr(test_allocator,
+        \\{
+        \\    f = |list, pred| {
+        \\        for item in list {
+        \\            if pred(item) { return True }
+        \\        }
+        \\        False
+        \\    }
+        \\    f([1.I64, 2.I64, 3.I64], |_x| True)
+        \\}
+    );
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(resources.builtin_module.env),
+        resources.module_env,
+    };
+
+    var lower = try mir.Lower.init(
+        test_allocator,
+        &mir_store,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const mir_expr = try lower.lowerExpr(resources.expr_idx);
+    const root_expr = mir_store.getExpr(mir_expr);
+    try std.testing.expect(root_expr == .block);
+
+    const final_expr = mir_store.getExpr(root_expr.block.final_expr);
+    try std.testing.expect(final_expr == .call);
+
+    const root_args = mir_store.getExprSpan(final_expr.call.args);
+    try std.testing.expectEqual(@as(usize, 2), root_args.len);
+
+    const root_callee = mir_store.getExpr(final_expr.call.func);
+    try std.testing.expect(root_callee == .lookup);
+    const any_sym = root_callee.lookup;
+    const any_def = mir_store.getSymbolDef(any_sym) orelse return error.TestUnexpectedResult;
+
+    var lambda_def = any_def;
+    var params: MIR.PatternSpan = undefined;
+    while (true) {
+        switch (mir_store.getExpr(lambda_def)) {
+            .lambda => |lam| {
+                params = lam.params;
+                break;
+            },
+            .block => |block| lambda_def = block.final_expr,
+            else => return error.TestUnexpectedResult,
+        }
+    }
+
+    const param_ids = mir_store.getPatternSpan(params);
+    const predicate_pat = mir_store.getPattern(param_ids[1]);
+    try std.testing.expect(predicate_pat == .bind);
+    const predicate_sym = predicate_pat.bind;
+
+    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
+    defer lambda_set_store.deinit(test_allocator);
+
+    const arg_ls = try LambdaSet.resolveExprLambdaSet(test_allocator, &mir_store, &lambda_set_store, root_args[1]);
+    try std.testing.expect(!arg_ls.isNone());
+    const arg_members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(arg_ls).members);
+    try std.testing.expectEqual(@as(usize, 1), arg_members.len);
+    const predicate_member_sym = arg_members[0].fn_symbol;
+
+    const predicate_ls = lambda_set_store.getSymbolLambdaSet(predicate_sym) orelse return error.TestUnexpectedResult;
+    const predicate_members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(predicate_ls).members);
+    try std.testing.expectEqual(@as(usize, 1), predicate_members.len);
+    try std.testing.expectEqual(predicate_member_sym, predicate_members[0].fn_symbol);
+
+    var layout_store = try layout.Store.init(
+        all_module_envs[0..],
+        resources.builtin_module.env.idents.builtin_str,
+        test_allocator,
+        base.target.TargetUsize.native,
+    );
+    defer layout_store.deinit();
+
+    var lir_store = LirExprStore.init(test_allocator);
+    defer lir_store.deinit();
+
+    var translator = lir.MirToLir.init(
+        test_allocator,
+        &mir_store,
+        &lir_store,
+        &layout_store,
+        &lambda_set_store,
+        resources.module_env.idents.true_tag,
+    );
+    defer translator.deinit();
+
+    const any_lir = try translator.lower(any_def);
+    var rc_pass = try lir.RcInsert.RcInsertPass.init(test_allocator, &lir_store, &layout_store);
+    defer rc_pass.deinit();
+    const any_lir_with_rc = try rc_pass.insertRcOps(any_lir);
+
+    const Search = struct {
+        fn containsCallTo(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, target: lir.LIR.Symbol) bool {
+            const expr = store.getExpr(expr_id);
+            switch (expr) {
+                .call => |call| {
+                    const fn_expr = store.getExpr(call.fn_expr);
+                    if (fn_expr == .lookup and fn_expr.lookup.symbol.eql(target)) return true;
+                    if (containsCallTo(store, call.fn_expr, target)) return true;
+                    for (store.getExprSpan(call.args)) |arg| {
+                        if (containsCallTo(store, arg, target)) return true;
+                    }
+                    return false;
+                },
+                .lambda => |lam| return containsCallTo(store, lam.body, target),
+                .block => |block| {
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        if (containsCallTo(store, stmt.binding().expr, target)) return true;
+                    }
+                    return containsCallTo(store, block.final_expr, target);
+                },
+                .if_then_else => |ite| {
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        if (containsCallTo(store, branch.cond, target)) return true;
+                        if (containsCallTo(store, branch.body, target)) return true;
+                    }
+                    return containsCallTo(store, ite.final_else, target);
+                },
+                .match_expr => |match_expr| {
+                    if (containsCallTo(store, match_expr.value, target)) return true;
+                    for (store.getMatchBranches(match_expr.branches)) |branch| {
+                        if (!branch.guard.isNone() and containsCallTo(store, branch.guard, target)) return true;
+                        if (containsCallTo(store, branch.body, target)) return true;
+                    }
+                    return false;
+                },
+                .borrow_scope => |scope| {
+                    for (store.getBorrowBindings(scope.bindings)) |binding| {
+                        if (containsCallTo(store, binding.expr, target)) return true;
+                    }
+                    return containsCallTo(store, scope.body, target);
+                },
+                .early_return => |ret| return containsCallTo(store, ret.expr, target),
+                .semantic_low_level => |ll| {
+                    for (store.getExprSpan(ll.args)) |arg| {
+                        if (containsCallTo(store, arg, target)) return true;
+                    }
+                    return false;
+                },
+                .low_level => |ll| {
+                    for (store.getExprSpan(ll.args)) |arg| {
+                        if (containsCallTo(store, arg, target)) return true;
+                    }
+                    return false;
+                },
+                .hosted_call => |hc| {
+                    for (store.getExprSpan(hc.args)) |arg| {
+                        if (containsCallTo(store, arg, target)) return true;
+                    }
+                    return false;
+                },
+                .for_loop => |loop| {
+                    if (containsCallTo(store, loop.list_expr, target)) return true;
+                    return containsCallTo(store, loop.body, target);
+                },
+                else => return false,
+            }
+        }
+    };
+
+    try std.testing.expect(Search.containsCallTo(&lir_store, any_lir_with_rc, predicate_member_sym));
+}
+
+test "lambda sets distinguish closure record fields with different captures" {
+    const resources = try parseAndCanonicalizeExpr(test_allocator,
+        \\{
+        \\    a = 10
+        \\    b = 20
+        \\    rec = { add_a: |x| x + a, add_b: |x| x + b }
+        \\    add_a = rec.add_a
+        \\    add_b = rec.add_b
+        \\    add_a(5) + add_b(5)
+        \\}
+    );
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(resources.builtin_module.env),
+        resources.module_env,
+    };
+
+    var lower = try mir.Lower.init(
+        test_allocator,
+        &mir_store,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const mir_expr = try lower.lowerExpr(resources.expr_idx);
+    const root_expr = mir_store.getExpr(mir_expr);
+    try std.testing.expect(root_expr == .block);
+
+    const stmts = mir_store.getStmts(root_expr.block.stmts);
+    try std.testing.expect(stmts.len >= 5);
+
+    const add_a_binding = switch (stmts[3]) {
+        .decl_const, .decl_var, .mutate_var => |b| b,
+    };
+    const add_b_binding = switch (stmts[4]) {
+        .decl_const, .decl_var, .mutate_var => |b| b,
+    };
+
+    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
+    defer lambda_set_store.deinit(test_allocator);
+
+    const add_a_ls = try LambdaSet.resolveExprLambdaSet(test_allocator, &mir_store, &lambda_set_store, add_a_binding.expr);
+    const add_b_ls = try LambdaSet.resolveExprLambdaSet(test_allocator, &mir_store, &lambda_set_store, add_b_binding.expr);
+    try std.testing.expect(!add_a_ls.isNone());
+    try std.testing.expect(!add_b_ls.isNone());
+
+    const add_a_members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(add_a_ls).members);
+    const add_b_members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(add_b_ls).members);
+    try std.testing.expectEqual(@as(usize, 1), add_a_members.len);
+    try std.testing.expectEqual(@as(usize, 1), add_b_members.len);
+    try std.testing.expect(!add_a_members[0].fn_symbol.eql(add_b_members[0].fn_symbol));
 }
 
 test "eval tag - already primitive" {

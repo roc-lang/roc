@@ -1126,6 +1126,18 @@ test "tag union equality - different tags with payload" {
     , false, .no_trace);
 }
 
+test "tag union match - direct numeric payload" {
+    try runExpectI64("match Ok(10) { Ok(n) => n + 5, Err(_) => 0 }", 15, .no_trace);
+}
+
+test "tag union match - direct record payload" {
+    try runExpectI64(
+        "match Ok({ value: 10 }) { Ok({ value }) => value + 5, Err(_) => 0 }",
+        15,
+        .no_trace,
+    );
+}
+
 test "tag union equality - string payloads" {
     try runExpectBool("Ok(\"hello\") == Ok(\"hello\")", true, .no_trace);
     try runExpectBool("Ok(\"hello\") == Ok(\"world\")", false, .no_trace);
@@ -2646,6 +2658,30 @@ test "debug 8783g: match on payload tag without fold" {
     , 101, .no_trace);
 }
 
+test "match on zst-payload tag union" {
+    try runExpectI64(
+        \\{
+        \\    item = A({})
+        \\    match item {
+        \\        A(_) => 1.I64
+        \\        B(_) => 0.I64
+        \\    }
+        \\}
+    , 1, .no_trace);
+}
+
+test "proc return of zst-payload tag union" {
+    try runExpectI64(
+        \\{
+        \\    make = || A({})
+        \\    match make() {
+        \\        A(_) => 1.I64
+        \\        _ => 0.I64
+        \\    }
+        \\}
+    , 1, .no_trace);
+}
+
 test "debug 8783f: fold with tag match single payload" {
     try runExpectI64(
         \\{
@@ -3902,6 +3938,59 @@ test "dev: polymorphic comparison lambda passed to List.any" {
 
 test "dev: List.any with inline lambda" {
     try runDevOnlyExpectStr("List.any([1, 2, 3], |x| x > 0)", "True");
+}
+
+test "dev: for loop early return exits enclosing function" {
+    try runDevOnlyExpectStr(
+        \\{
+        \\    f = |list| {
+        \\        for item in list {
+        \\            if True { return True }
+        \\        }
+        \\        False
+        \\    }
+        \\    f([1, 2, 3])
+        \\}
+    , "True");
+}
+
+test "dev: for loop closure call can trigger early return" {
+    try runDevOnlyExpectStr(
+        \\{
+        \\    f = |list, pred| {
+        \\        for item in list {
+        \\            if pred(item) { return True }
+        \\        }
+        \\        False
+        \\    }
+        \\    f([1, 2, 3], |_x| True)
+        \\}
+    , "True");
+}
+
+test "dev: local any-style HOF with equality predicate" {
+    try runDevOnlyExpectStr(
+        \\{
+        \\    f = |list, pred| {
+        \\        for item in list {
+        \\            if pred(item) { return True }
+        \\        }
+        \\        False
+        \\    }
+        \\    f([1, 2, 3], |x| x == 2)
+        \\}
+    , "True");
+}
+
+test "dev: inline any-style HOF with always true predicate" {
+    try runDevOnlyExpectStr(
+        \\(|list, pred| {
+        \\    for item in list {
+        \\        if pred(item) { return True }
+        \\    }
+        \\    False
+        \\})([1, 2, 3], |_x| True)
+    , "True");
 }
 
 test "polymorphic function called with two list types" {

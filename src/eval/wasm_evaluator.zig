@@ -26,6 +26,10 @@ const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const LoadedModule = builtin_loading.LoadedModule;
 
+fn isBuiltinModuleEnv(env: *const ModuleEnv) bool {
+    return std.mem.eql(u8, env.module_name, "Builtin");
+}
+
 const MIR = mir.MIR;
 const LirExprStore = lir.LirExprStore;
 const LirExprId = lir.LirExprId;
@@ -44,6 +48,7 @@ fn lirExprResultLayout(store: *const LirExprStore, expr_id: LirExprId) layout.Id
         .dbg => |d| d.result_layout,
         .expect => |e| e.result_layout,
         .call => |c| c.ret_layout,
+        .semantic_low_level => |ll| ll.ret_layout,
         .low_level => |ll| ll.ret_layout,
         .early_return => |er| er.ret_layout,
         .lookup => |l| l.layout_idx,
@@ -143,10 +148,13 @@ pub const WasmEvaluator = struct {
     fn ensureGlobalLayoutStore(self: *WasmEvaluator, all_module_envs: []const *ModuleEnv) Error!*layout.Store {
         if (self.global_layout_store) |ls| return ls;
 
-        const builtin_str = if (all_module_envs.len > 0)
-            all_module_envs[0].idents.builtin_str
-        else
-            null;
+        var builtin_str: ?@import("base").Ident.Idx = null;
+        for (all_module_envs) |env| {
+            if (isBuiltinModuleEnv(env)) {
+                builtin_str = env.idents.builtin_str;
+                break;
+            }
+        }
 
         const base = @import("base");
         const ls = self.allocator.create(layout.Store) catch return error.OutOfMemory;

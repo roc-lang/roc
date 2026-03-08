@@ -486,9 +486,6 @@ pub const Interpreter = struct {
     /// Array of all module environments, with env at index 0.
     /// Used by the layout store for ident lookups (getEnv() returns [0]).
     all_module_envs: []const *const can.ModuleEnv,
-    /// The other_envs array passed to resolveImports, stored directly.
-    /// resolved_idx values from getResolvedModule index into this array.
-    resolved_module_envs: []const *const can.ModuleEnv,
     module_envs: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv),
     /// Module envs keyed by translated idents (in runtime_layout_store.getEnv()'s ident space)
     /// Used for method lookup on nominal types whose origin_module was translated
@@ -540,6 +537,76 @@ pub const Interpreter = struct {
     /// Whether we allocated the all_module_envs slice (needs to be freed on deinit)
     owns_all_module_envs: bool = false,
 
+    fn importNameMatchesModule(source_env: *const can.ModuleEnv, import_idx: can.CIR.Import.Idx, module_env: *const can.ModuleEnv) bool {
+        const import_idx_int = @intFromEnum(import_idx);
+        if (import_idx_int >= source_env.imports.imports.items.items.len) return false;
+
+        const import_str_idx = source_env.imports.imports.items.items[import_idx_int];
+        const import_name = source_env.common.getString(import_str_idx);
+        const base_name = if (std.mem.lastIndexOf(u8, import_name, ".")) |dot_pos|
+            import_name[dot_pos + 1 ..]
+        else
+            import_name;
+
+        return std.mem.eql(u8, module_env.module_name, import_name) or
+            std.mem.eql(u8, module_env.module_name, base_name);
+    }
+
+    fn resolveImportedModuleEnvInSlice(source_env: *const can.ModuleEnv, import_idx: can.CIR.Import.Idx, module_envs: []const *const can.ModuleEnv) ?*const can.ModuleEnv {
+        if (source_env.imports.getResolvedModule(import_idx)) |resolved_idx| {
+            if (resolved_idx < module_envs.len) {
+                const resolved_env = module_envs[resolved_idx];
+                if (importNameMatchesModule(source_env, import_idx, resolved_env)) {
+                    return resolved_env;
+                }
+            }
+        }
+
+        for (module_envs) |module_env| {
+            if (importNameMatchesModule(source_env, import_idx, module_env)) {
+                return module_env;
+            }
+        }
+
+        return null;
+    }
+
+    fn resolveImportedModuleEnv(self: *Interpreter, source_env: *const can.ModuleEnv, import_idx: can.CIR.Import.Idx) ?*const can.ModuleEnv {
+        if (source_env == self.root_env or (self.app_env != null and source_env == self.app_env.?)) {
+            if (self.import_envs.get(import_idx)) |env| {
+                if (importNameMatchesModule(source_env, import_idx, env)) {
+                    return env;
+                }
+            }
+        }
+
+        return resolveImportedModuleEnvInSlice(source_env, import_idx, self.all_module_envs);
+    }
+
+    const ExternalLookupTarget = struct {
+        module_env: *const can.ModuleEnv,
+        def_idx: ?can.CIR.Def.Idx,
+    };
+
+    fn resolveExternalLookupTarget(self: *Interpreter, source_env: *const can.ModuleEnv, lookup: @TypeOf(@as(can.CIR.Expr, undefined).e_lookup_external), roc_ops: *RocOps) Error!ExternalLookupTarget {
+        const module_env = self.resolveImportedModuleEnv(source_env, lookup.module_idx) orelse {
+            traceDbg(roc_ops, "resolveExternalLookupTarget: UNRESOLVED import[{d}] in \"{s}\"", .{ @intFromEnum(lookup.module_idx), source_env.module_name });
+            self.triggerCrash("e_lookup_external: unresolved import", false, roc_ops);
+            return error.Crash;
+        };
+
+        const target_node_idx = lookup.target_node_idx;
+        const def_idx = if (@as(usize, target_node_idx) < module_env.store.nodes.len() and module_env.store.isDefNode(target_node_idx))
+            @as(can.CIR.Def.Idx, @enumFromInt(target_node_idx))
+        else
+            null;
+
+        return .{
+            .module_env = module_env,
+            .def_idx = def_idx,
+        };
+    }
+
     pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, builtin_module_env: ?*const can.ModuleEnv, other_envs: []const *const can.ModuleEnv, import_mapping: *const import_mapping_mod.ImportMapping, app_env: ?*can.ModuleEnv, constant_strings_arena: ?*std.heap.ArenaAllocator, target: roc_target.RocTarget) !Interpreter {
         // Build maps from Ident.Idx to ModuleEnv and module ID
         var module_envs = std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv){};
@@ -563,8 +630,6 @@ pub const Interpreter = struct {
 
         // Build all_module_envs with env prepended at index 0.
         // The layout store uses all_module_envs[0] for getEnv() — this must be env.
-        // resolved_module_envs stores other_envs directly for resolved_idx lookups
-        // (getResolvedModule returns indices into the array passed to resolveImports).
         const all_module_envs = try allocator.alloc(*const can.ModuleEnv, other_envs.len + 1);
         all_module_envs[0] = env;
         @memcpy(all_module_envs[1..], other_envs);
@@ -574,12 +639,9 @@ pub const Interpreter = struct {
             try module_ids.ensureTotalCapacity(allocator, @intCast(other_envs.len));
             try import_envs.ensureTotalCapacity(allocator, @intCast(total_import_count));
 
-            // resolved_idx values from resolveImports index into other_envs.
             for (0..import_count) |i| {
                 const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
-                const resolved_idx = env.imports.getResolvedModule(import_idx) orelse continue;
-                std.debug.assert(resolved_idx < other_envs.len);
-                const module_env = other_envs[resolved_idx];
+                const module_env = resolveImportedModuleEnvInSlice(env, import_idx, all_module_envs) orelse continue;
 
                 import_envs.putAssumeCapacity(import_idx, module_env);
 
@@ -596,16 +658,14 @@ pub const Interpreter = struct {
                 if (a_env != env) {
                     for (0..app_import_count) |i| {
                         const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
-                        const resolved_idx = a_env.imports.getResolvedModule(import_idx) orelse continue;
-                        std.debug.assert(resolved_idx < other_envs.len);
-                        const module_env = other_envs[resolved_idx];
+                        const module_env = resolveImportedModuleEnvInSlice(a_env, import_idx, all_module_envs) orelse continue;
                         try import_envs.put(allocator, import_idx, module_env);
                     }
                 }
             }
         }
 
-        var result = try initWithModuleEnvs(allocator, env, all_module_envs, other_envs, module_envs, module_ids, import_envs, next_id, builtin_types, builtin_module_env, import_mapping, app_env, constant_strings_arena, target);
+        var result = try initWithModuleEnvs(allocator, env, all_module_envs, module_envs, module_ids, import_envs, next_id, builtin_types, builtin_module_env, import_mapping, app_env, constant_strings_arena, target);
         result.owns_all_module_envs = true;
         return result;
     }
@@ -619,7 +679,6 @@ pub const Interpreter = struct {
         allocator: std.mem.Allocator,
         env: *can.ModuleEnv,
         all_module_envs: []const *const can.ModuleEnv,
-        resolved_module_envs: []const *const can.ModuleEnv,
         module_envs: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv),
         module_ids: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, u32),
         import_envs: std.AutoHashMapUnmanaged(can.CIR.Import.Idx, *const can.ModuleEnv),
@@ -656,7 +715,6 @@ pub const Interpreter = struct {
             .builtin_module_env = builtin_module_env,
             .app_env = app_env,
             .all_module_envs = all_module_envs,
-            .resolved_module_envs = resolved_module_envs,
             .module_envs = module_envs,
             .translated_module_envs = undefined, // Set after runtime_layout_store init
             .translated_builtin_module = base_pkg.Ident.Idx.NONE,
@@ -12511,30 +12569,14 @@ pub const Interpreter = struct {
                 // that have type annotations but no implementation bodies
                 if (func_expr_check == .e_lookup_external) {
                     const lookup = func_expr_check.e_lookup_external;
-                    // Resolve the module for this external lookup.
-                    // IMPORTANT: import_envs only contains mappings from the primary module and app_env.
-                    // When self.env is an imported module (like Helper calling Core), we must use
-                    // resolved_module_envs directly since import_envs won't have the right mappings.
-                    const other_env: ?*const can.ModuleEnv = blk: {
-                        // Only use import_envs if self.env is the primary module or app_env
-                        if (self.env == self.root_env or (self.app_env != null and self.env == @constCast(self.app_env.?))) {
-                            if (self.import_envs.get(lookup.module_idx)) |env| {
-                                break :blk env;
-                            }
-                        }
-                        // Fall back to resolved_module_envs for all cases
-                        const resolved_idx = self.env.imports.getResolvedModule(lookup.module_idx) orelse break :blk null;
-                        std.debug.assert(resolved_idx < self.resolved_module_envs.len);
-                        break :blk self.resolved_module_envs[resolved_idx];
-                    };
-                    if (other_env) |builtin_env| {
-                        const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
-                        const target_def = builtin_env.store.getDef(target_def_idx);
-                        const target_pattern = builtin_env.store.getPattern(target_def.pattern);
+                    const target = try self.resolveExternalLookupTarget(self.env, lookup, roc_ops);
+                    if (target.def_idx) |target_def_idx| {
+                        const target_def = target.module_env.store.getDef(target_def_idx);
+                        const target_pattern = target.module_env.store.getPattern(target_def.pattern);
                         if (target_pattern == .assign) {
                             const method_ident = target_pattern.assign.ident;
-                            const is_box_method = method_ident.eql(builtin_env.idents.builtin_box_box);
-                            const is_unbox_method = method_ident.eql(builtin_env.idents.builtin_box_unbox);
+                            const is_box_method = method_ident.eql(target.module_env.idents.builtin_box_box);
+                            const is_unbox_method = method_ident.eql(target.module_env.idents.builtin_box_unbox);
                             // Check if this is Box.box
                             if (is_box_method and arg_indices.len == 1) {
                                 const arg_expr = arg_indices[0];
@@ -14101,49 +14143,20 @@ pub const Interpreter = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        // Resolve the import to find the target module environment.
-        //
-        // Import indices (lookup.module_idx) are module-local - they index into a specific
-        // module's import list. We need to map this to the actual ModuleEnv.
-        //
-        // IMPORTANT: Each module has its own import index space! An import_idx of 1 in module A
-        // means something completely different than import_idx of 1 in module B.
-        //
-        // We MUST use env.imports.resolved_modules because it contains the correct mapping
-        // for the *current* module we're executing in. The import_envs hashmap was populated
-        // from the primary module's imports and should only be used as a fallback for
-        // backwards compatibility with unit tests that don't call resolveImports.
-        //
-        const other_env = blk: {
-            // Only use import_envs if self.env is the primary module or app_env,
-            // since import_envs only contains mappings from those modules.
-            if (self.env == self.root_env or (self.app_env != null and self.env == @constCast(self.app_env.?))) {
-                if (self.import_envs.get(lookup.module_idx)) |env| {
-                    traceDbg(roc_ops, "evalLookupExternal: \"{s}\" import[{d}] -> \"{s}\"", .{ self.env.module_name, @intFromEnum(lookup.module_idx), env.module_name });
-                    break :blk env;
-                }
-            }
-            // Fall back to resolved module indices + resolved_module_envs
-            // Note: resolved_idx is an index into the other_envs array passed to resolveImports,
-            // which is stored in resolved_module_envs (NOT all_module_envs which has env at [0])
-            if (self.env.imports.getResolvedModule(lookup.module_idx)) |resolved_idx| {
-                std.debug.assert(resolved_idx < self.resolved_module_envs.len);
-                break :blk self.resolved_module_envs[resolved_idx];
-            }
-            traceDbg(roc_ops, "evalLookupExternal: UNRESOLVED import[{d}] in \"{s}\"", .{ @intFromEnum(lookup.module_idx), self.env.module_name });
-            self.triggerCrash("e_lookup_external: unresolved import", false, roc_ops);
+        const target = try self.resolveExternalLookupTarget(self.env, lookup, roc_ops);
+        traceDbg(roc_ops, "evalLookupExternal: \"{s}\" import[{d}] -> \"{s}\"", .{ self.env.module_name, @intFromEnum(lookup.module_idx), target.module_env.module_name });
+
+        const target_def_idx = target.def_idx orelse {
+            self.triggerCrash("e_lookup_external: target is not a definition", false, roc_ops);
             return error.Crash;
         };
 
-        // The target_node_idx is a Def.Idx in the other module
-        const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
-
-        const target_def = other_env.store.getDef(target_def_idx);
+        const target_def = target.module_env.store.getDef(target_def_idx);
 
         // Save both env and bindings state
         const saved_env = self.env;
         const saved_bindings_len = self.bindings.items.len;
-        self.env = @constCast(other_env);
+        self.env = @constCast(target.module_env);
         defer {
             self.env = saved_env;
             // Use trimBindingList to properly decref bindings before removing them
@@ -20235,4 +20248,63 @@ test "interpreter: transitive module method resolution (A imports B imports C)" 
     // Verify we can retrieve all module IDs
     try std.testing.expectEqual(module_b_id, interp.getModuleIdForOrigin(module_b_ident));
     try std.testing.expectEqual(module_c_id, interp.getModuleIdForOrigin(module_c_ident));
+}
+
+test "interpreter: resolves imported module env when callee module has stale local resolved indices" {
+    const gpa = std.testing.allocator;
+
+    var module_a = try can.ModuleEnv.init(gpa, "ModuleA");
+    defer module_a.deinit();
+    try module_a.initCIRFields("ModuleA");
+
+    var module_b = try can.ModuleEnv.init(gpa, "ModuleB");
+    defer module_b.deinit();
+    try module_b.initCIRFields("ModuleB");
+
+    var module_c = try can.ModuleEnv.init(gpa, "ModuleC");
+    defer module_c.deinit();
+    try module_c.initCIRFields("ModuleC");
+
+    const module_c_ident_in_b = try module_b.insertIdent(base_pkg.Ident.for_text("ModuleC"));
+    const import_idx = try module_b.imports.getOrPutWithIdent(
+        gpa,
+        module_b.common.getStringStore(),
+        "ModuleC",
+        module_c_ident_in_b,
+    );
+
+    // Simulate a compiled/imported module whose local resolveImports ran against a different
+    // module array than the interpreter's all_module_envs. The stored resolved_idx points to
+    // slot 0 in a one-element local array, but slot 0 in the interpreter belongs to ModuleA.
+    module_b.imports.resolveImports(&module_b, &[_]*const can.ModuleEnv{&module_c});
+    try std.testing.expectEqual(@as(u32, 0), module_b.imports.getResolvedModule(import_idx).?);
+
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    const result_source = "Try(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Try", result_source);
+    defer result_module.deinit();
+    const str_source = compiled_builtins.builtin_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
+    defer str_module.deinit();
+
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+    var interp = try Interpreter.init(
+        gpa,
+        &module_a,
+        builtin_types_test,
+        null,
+        &[_]*const can.ModuleEnv{ &module_b, &module_c },
+        &empty_import_mapping,
+        null,
+        null,
+        roc_target.RocTarget.detectNative(),
+    );
+    defer interp.deinit();
+
+    const resolved_env = interp.resolveImportedModuleEnv(&module_b, import_idx);
+    try std.testing.expect(resolved_env != null);
+    try std.testing.expectEqualStrings("ModuleC", resolved_env.?.module_name);
 }
