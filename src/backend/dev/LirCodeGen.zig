@@ -7613,8 +7613,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        /// Emit list pattern bindings: length check, prefix/suffix element binding,
-        /// and rest-list extraction. Returns the conditional jump patch for length
+        /// Emit list pattern bindings: length check and prefix/suffix element binding.
+        /// Returns the conditional jump patch for length
         /// mismatch (null if last branch). Caller must free list_ptr_reg via freeGeneral.
         fn emitListPatternBindings(
             self: *Self,
@@ -7709,89 +7709,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
 
                 self.codegen.freeGeneral(suf_ptr_reg);
-            }
-
-            // Handle rest pattern (e.g. [first, .. as rest, last])
-            if (!list_pattern.rest.isNone()) {
-                const rest_slot = self.codegen.allocStackSlot(roc_str_size);
-
-                const prefix_count = @as(u32, @intCast(prefix_patterns.len));
-                const suffix_count = @as(u32, @intCast(suffix_patterns.len));
-                const prefix_byte_offset = prefix_count * @as(u32, @intCast(elem_size));
-
-                // Calculate rest pointer: original_ptr + prefix_len * elem_size
-                const rest_ptr_reg = try self.allocTempGeneral();
-                if (prefix_byte_offset == 0) {
-                    try self.codegen.emit.movRegReg(.w64, rest_ptr_reg, list_ptr_reg);
-                } else {
-                    try self.emitAddImm(rest_ptr_reg, list_ptr_reg, @intCast(prefix_byte_offset));
-                }
-
-                // Store rest pointer at rest_slot + 0
-                try self.emitStore(.w64, frame_ptr, rest_slot, rest_ptr_reg);
-                self.codegen.freeGeneral(rest_ptr_reg);
-
-                // Load original length from base_offset + 8
-                const rest_len_reg = try self.allocTempGeneral();
-                try self.emitLoad(.w64, rest_len_reg, frame_ptr, base_offset + 8);
-
-                // Calculate rest length: original_length - prefix_count - suffix_count
-                const total_fixed = prefix_count + suffix_count;
-                if (total_fixed > 0) {
-                    try self.emitSubImm(.w64, rest_len_reg, rest_len_reg, @intCast(total_fixed));
-                }
-
-                // Store rest length at rest_slot + 8
-                try self.emitStore(.w64, frame_ptr, rest_slot + 8, rest_len_reg);
-
-                // Store seamless-slice capacity_or_alloc_ptr at rest_slot + 16.
-                // If source list is already a slice, preserve its encoded alloc pointer.
-                // Otherwise encode the source allocation pointer as a seamless slice.
-                const rest_cap_reg = try self.allocTempGeneral();
-                const orig_cap_reg = try self.allocTempGeneral();
-                try self.emitLoad(.w64, orig_cap_reg, frame_ptr, base_offset + 16);
-
-                const source_is_slice_patch = blk: {
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.cmpRegImm12(.w64, orig_cap_reg, 0);
-                        const patch_loc = self.codegen.currentOffset();
-                        try self.codegen.emit.bcond(.mi, 0);
-                        break :blk patch_loc;
-                    } else {
-                        try self.codegen.emit.testRegReg(.w64, orig_cap_reg, orig_cap_reg);
-                        break :blk try self.codegen.emitCondJump(.sign);
-                    }
-                };
-
-                // Not a source slice: encode alloc ptr from source bytes pointer.
-                try self.emitMovRegReg(rest_cap_reg, list_ptr_reg);
-                try self.emitLsrImm(.w64, rest_cap_reg, rest_cap_reg, 1);
-                const slice_bit_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(slice_bit_reg, @as(i64, @bitCast(seamless_slice_bit)));
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.orrRegRegReg(.w64, rest_cap_reg, rest_cap_reg, slice_bit_reg);
-                } else {
-                    try self.codegen.emit.orRegReg(.w64, rest_cap_reg, slice_bit_reg);
-                }
-                self.codegen.freeGeneral(slice_bit_reg);
-                const cap_done_patch = try self.codegen.emitJump();
-
-                // Source is already a slice: reuse encoded alloc pointer.
-                self.codegen.patchJump(source_is_slice_patch, self.codegen.currentOffset());
-                try self.emitMovRegReg(rest_cap_reg, orig_cap_reg);
-                self.codegen.patchJump(cap_done_patch, self.codegen.currentOffset());
-                self.codegen.freeGeneral(orig_cap_reg);
-
-                try self.emitStore(.w64, frame_ptr, rest_slot + 16, rest_cap_reg);
-                self.codegen.freeGeneral(rest_cap_reg);
-                self.codegen.freeGeneral(rest_len_reg);
-
-                // Bind the rest pattern to the new list slot
-                try self.bindPattern(list_pattern.rest, .{ .list_stack = .{
-                    .struct_offset = rest_slot,
-                    .data_offset = 0,
-                    .num_elements = 0,
-                } });
             }
 
             self.codegen.freeGeneral(list_ptr_reg);
@@ -10603,91 +10520,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
 
                         self.codegen.freeGeneral(suf_ptr_reg);
-                    }
-
-                    // Handle rest pattern (the remaining list after prefix, before suffix)
-                    if (!lst.rest.isNone()) {
-                        // Create a new RocList for the remaining elements
-                        // RocList layout: bytes (ptr), length (usize), capacity_or_alloc_ptr (usize)
-                        const rest_slot = self.codegen.allocStackSlot(roc_str_size);
-
-                        const prefix_count = @as(u32, @intCast(prefix_patterns.len));
-                        const suffix_count_rest = @as(u32, @intCast(suffix_patterns.len));
-                        const prefix_byte_offset = prefix_count * elem_size;
-
-                        // Calculate rest pointer: original_ptr + prefix_len * elem_size
-                        const rest_ptr_reg = try self.allocTempGeneral();
-                        if (prefix_byte_offset == 0) {
-                            // No offset needed, just copy the pointer
-                            try self.codegen.emit.movRegReg(.w64, rest_ptr_reg, list_ptr_reg);
-                        } else {
-                            // Add offset to pointer: rest_ptr = list_ptr + prefix_byte_offset
-                            try self.emitAddImm(rest_ptr_reg, list_ptr_reg, @intCast(prefix_byte_offset));
-                        }
-
-                        // Store rest pointer at rest_slot + 0
-                        try self.emitStore(.w64, frame_ptr, rest_slot, rest_ptr_reg);
-                        self.codegen.freeGeneral(rest_ptr_reg);
-
-                        // Load original length from base_offset + 8
-                        const len_reg = try self.allocTempGeneral();
-                        try self.emitLoad(.w64, len_reg, frame_ptr, base_offset + 8);
-
-                        // Calculate rest length: original_length - prefix_count - suffix_count
-                        const total_fixed = prefix_count + suffix_count_rest;
-                        if (total_fixed > 0) {
-                            try self.emitSubImm(.w64, len_reg, len_reg, @intCast(total_fixed));
-                        }
-
-                        // Store rest length at rest_slot + 8
-                        try self.emitStore(.w64, frame_ptr, rest_slot + 8, len_reg);
-
-                        // Store seamless-slice capacity_or_alloc_ptr.
-                        const rest_cap_reg = try self.allocTempGeneral();
-                        const orig_cap_reg = try self.allocTempGeneral();
-                        try self.emitLoad(.w64, orig_cap_reg, frame_ptr, base_offset + 16);
-
-                        const source_is_slice_patch = blk: {
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.cmpRegImm12(.w64, orig_cap_reg, 0);
-                                const patch_loc = self.codegen.currentOffset();
-                                try self.codegen.emit.bcond(.mi, 0);
-                                break :blk patch_loc;
-                            } else {
-                                try self.codegen.emit.testRegReg(.w64, orig_cap_reg, orig_cap_reg);
-                                break :blk try self.codegen.emitCondJump(.sign);
-                            }
-                        };
-
-                        // Not a source slice: encode alloc ptr from source bytes pointer.
-                        try self.emitMovRegReg(rest_cap_reg, list_ptr_reg);
-                        try self.emitLsrImm(.w64, rest_cap_reg, rest_cap_reg, 1);
-                        const slice_bit_reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(slice_bit_reg, @as(i64, @bitCast(seamless_slice_bit)));
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.orrRegRegReg(.w64, rest_cap_reg, rest_cap_reg, slice_bit_reg);
-                        } else {
-                            try self.codegen.emit.orRegReg(.w64, rest_cap_reg, slice_bit_reg);
-                        }
-                        self.codegen.freeGeneral(slice_bit_reg);
-                        const cap_done_patch = try self.codegen.emitJump();
-
-                        // Source is already a slice: reuse encoded alloc pointer.
-                        self.codegen.patchJump(source_is_slice_patch, self.codegen.currentOffset());
-                        try self.emitMovRegReg(rest_cap_reg, orig_cap_reg);
-                        self.codegen.patchJump(cap_done_patch, self.codegen.currentOffset());
-                        self.codegen.freeGeneral(orig_cap_reg);
-
-                        try self.emitStore(.w64, frame_ptr, rest_slot + 16, rest_cap_reg);
-                        self.codegen.freeGeneral(rest_cap_reg);
-                        self.codegen.freeGeneral(len_reg);
-
-                        // Bind the rest pattern to the new list slot
-                        try self.bindPattern(lst.rest, .{ .list_stack = .{
-                            .struct_offset = rest_slot,
-                            .data_offset = 0,
-                            .num_elements = 0,
-                        } });
                     }
 
                     self.codegen.freeGeneral(list_ptr_reg);
@@ -13555,6 +13387,46 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             stack_arg_offset += @as(i32, num_regs) * 8;
                             reg_idx = max_arg_regs;
                         }
+                    },
+                    .as_pattern => |as_pat| {
+                        const num_regs = self.calcParamRegCount(as_pat.layout_idx);
+                        if (num_regs == 0) {
+                            continue;
+                        }
+
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            if (num_regs == 2 and (as_pat.layout_idx == .i128 or as_pat.layout_idx == .u128 or as_pat.layout_idx == .dec)) {
+                                if (reg_idx % 2 != 0) reg_idx += 1;
+                            }
+                        }
+
+                        const abi_size: u32 = @as(u32, num_regs) * 8;
+                        const stack_offset = self.codegen.allocStackSlot(@intCast(abi_size));
+
+                        if (param_pass_by_ptr[param_idx]) {
+                            const temp_r: GeneralReg = scratch_reg;
+                            const ptr_reg = self.getArgumentRegister(reg_idx);
+                            var ri: u8 = 0;
+                            while (ri < num_regs) : (ri += 1) {
+                                const off: i32 = @as(i32, ri) * 8;
+                                try self.emitLoad(.w64, temp_r, ptr_reg, off);
+                                try self.emitStore(.w64, frame_ptr, stack_offset + off, temp_r);
+                            }
+                            reg_idx += 1;
+                        } else if (reg_idx + num_regs <= max_arg_regs) {
+                            var ri: u8 = 0;
+                            while (ri < num_regs) : (ri += 1) {
+                                const arg_r = self.getArgumentRegister(reg_idx + ri);
+                                try self.codegen.emitStoreStack(.w64, stack_offset + @as(i32, ri) * 8, arg_r);
+                            }
+                            reg_idx += num_regs;
+                        } else {
+                            try self.copyFromCallerStack(stack_arg_offset, stack_offset, num_regs);
+                            stack_arg_offset += @as(i32, num_regs) * 8;
+                            reg_idx = max_arg_regs;
+                        }
+
+                        try self.bindPattern(pattern_id, self.stackLocationForLayout(as_pat.layout_idx, stack_offset));
                     },
                     .struct_ => |s| {
                         // Struct destructuring: store registers to stack, then delegate to bindPattern
