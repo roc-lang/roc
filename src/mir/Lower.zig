@@ -766,6 +766,14 @@ fn makeSyntheticBind(
     return .{ .symbol = symbol, .pattern = pattern };
 }
 
+fn registerBoundSymbolDefIfNeeded(self: *Self, pattern: MIR.PatternId, expr: MIR.ExprId) Allocator.Error!void {
+    if (self.patternBoundSymbol(pattern)) |symbol| {
+        if (self.store.getSymbolDef(symbol) == null) {
+            try self.store.registerSymbolDef(self.allocator, symbol, expr);
+        }
+    }
+}
+
 fn debugAssertLookupExpr(self: *Self, expr_id: MIR.ExprId, context: []const u8) void {
     if (!std.debug.runtime_safety) return;
 
@@ -814,6 +822,7 @@ fn lowerStrInspekt(self: *Self, module_env: *const ModuleEnv, run_ll: anytype, r
     const arg_bind = try self.makeSyntheticBind(arg_mono, false);
     const arg_lookup = try self.emitMirLookup(arg_bind.symbol, arg_mono, region);
     const inspected = try self.lowerStrInspektExpr(module_env, arg_lookup, arg_mono, region);
+    try self.registerBoundSymbolDefIfNeeded(arg_bind.pattern, lowered_arg);
 
     const stmts = try self.store.addStmts(self.allocator, &.{MIR.Stmt{
         .decl_const = .{ .pattern = arg_bind.pattern, .expr = lowered_arg },
@@ -2236,6 +2245,7 @@ fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Clo
 
         // let local_sym = tuple_access_expr
         const bind_pat = try self.store.addPattern(self.allocator, .{ .bind = local_symbol }, cap_monotype);
+        try self.registerBoundSymbolDefIfNeeded(bind_pat, tuple_access_expr);
         try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = bind_pat, .expr = tuple_access_expr } });
     }
 
@@ -2425,13 +2435,28 @@ fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype:
         }
     }
 
-    const lowered_func = try self.hoistLambdaArg(try self.lowerExpr(call.func));
+    return self.lowerCallWithLoweredFunc(
+        try self.lowerExpr(call.func),
+        module_env.store.sliceExpr(call.args),
+        monotype,
+        region,
+    );
+}
+
+fn lowerCallWithLoweredFunc(
+    self: *Self,
+    lowered_func_input: MIR.ExprId,
+    call_arg_exprs: []const CIR.Expr.Idx,
+    monotype: Monotype.Idx,
+    region: Region,
+) Allocator.Error!MIR.ExprId {
+    const lowered_func = try self.hoistLambdaArg(lowered_func_input);
     const func_mono = self.store.typeOf(lowered_func);
     if (self.store.monotype_store.getMonotype(func_mono) == .func and self.store.getExpr(lowered_func) != .lookup) {
         const func_bind = try self.makeSyntheticBind(func_mono, false);
+        try self.registerBoundSymbolDefIfNeeded(func_bind.pattern, lowered_func);
         const func_lookup = try self.emitMirLookup(func_bind.symbol, func_mono, region);
 
-        const call_arg_exprs = module_env.store.sliceExpr(call.args);
         const args_top = self.scratch_expr_ids.top();
         defer self.scratch_expr_ids.clearFrom(args_top);
         for (call_arg_exprs) |arg_idx| {
@@ -2456,7 +2481,6 @@ fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype:
     }
     const func = lowered_func;
 
-    const call_arg_exprs = module_env.store.sliceExpr(call.args);
     const args_top = self.scratch_expr_ids.top();
     defer self.scratch_expr_ids.clearFrom(args_top);
     for (call_arg_exprs) |arg_idx| {
@@ -2547,17 +2571,14 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                     });
                 } else {
                     const expr = try self.lowerExpr(decl.expr);
-                    if (self.patternBoundSymbol(pat)) |symbol| {
-                        if (self.store.getSymbolDef(symbol) == null) {
-                            try self.store.registerSymbolDef(self.allocator, symbol, expr);
-                        }
-                    }
+                    try self.registerBoundSymbolDefIfNeeded(pat, expr);
                     try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = pat, .expr = expr } });
                 }
             },
             .s_var => |var_decl| {
                 const pat = try self.lowerPattern(module_env, var_decl.pattern_idx);
                 const expr = try self.lowerExpr(var_decl.expr);
+                try self.registerBoundSymbolDefIfNeeded(pat, expr);
                 try self.scratch_stmts.append(.{ .decl_var = .{ .pattern = pat, .expr = expr } });
             },
             .s_reassign => |reassign| {
@@ -2688,6 +2709,7 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
         else
             try self.store.addPattern(self.allocator, .{ .bind = slot.symbol }, lowered_monotype);
 
+        try self.registerBoundSymbolDefIfNeeded(stmt_pattern, lowered);
         try self.scratch_stmts.items.insert(
             @intCast(slot.insert_idx),
             .{ .decl_const = .{ .pattern = stmt_pattern, .expr = lowered } },
@@ -3365,6 +3387,8 @@ fn lowerListEquality(
         .{ .decl_var = .{ .pattern = i_bind.pattern, .expr = zero } },
         .{ .decl_const = .{ .pattern = while_wildcard, .expr = while_expr } },
     });
+    try self.registerBoundSymbolDefIfNeeded(result_bind.pattern, true_init);
+    try self.registerBoundSymbolDefIfNeeded(i_bind.pattern, zero);
     const true_branch = try self.store.addExpr(self.allocator, .{ .block = .{
         .stmts = true_branch_stmts,
         .final_expr = result_lookup,
@@ -3378,6 +3402,7 @@ fn lowerListEquality(
     const outer_stmts = try self.store.addStmts(self.allocator, &.{
         .{ .decl_const = .{ .pattern = len_bind.pattern, .expr = len_lhs } },
     });
+    try self.registerBoundSymbolDefIfNeeded(len_bind.pattern, len_lhs);
     return try self.store.addExpr(self.allocator, .{ .block = .{
         .stmts = outer_stmts,
         .final_expr = len_match,
@@ -3674,6 +3699,7 @@ fn lowerRecord(self: *Self, module_env: *const ModuleEnv, record: anytype, monot
     } }, monotype, region);
 
     if (extension_binding) |ext| {
+        try self.registerBoundSymbolDefIfNeeded(ext.pattern, ext.expr);
         const stmts = try self.store.addStmts(self.allocator, &.{MIR.Stmt{
             .decl_const = .{
                 .pattern = ext.pattern,

@@ -3719,6 +3719,98 @@ test "LIR record field closures keep distinct field indices and payload layouts"
     try std.testing.expectEqual(add_b_size, layout_store.getStructFieldSize(rec_struct_idx, add_b_lir.struct_access.field_idx));
 }
 
+test "LIR parenthesized record field closure call registers synthetic closure binding" {
+    const resources = try parseAndCanonicalizeExpr(test_allocator,
+        \\{
+        \\    a = 10
+        \\    b = 20
+        \\    rec = { add_a: |x| x + a, add_b: |x| x + b }
+        \\    (rec.add_b)(5)
+        \\}
+    );
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(resources.builtin_module.env),
+        resources.module_env,
+    };
+
+    var lower = try mir.Lower.init(
+        test_allocator,
+        &mir_store,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const mir_expr = try lower.lowerExpr(resources.expr_idx);
+    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
+    defer lambda_set_store.deinit(test_allocator);
+
+    var layout_store = try layout.Store.init(
+        all_module_envs[0..],
+        resources.builtin_module.env.idents.builtin_str,
+        test_allocator,
+        base.target.TargetUsize.native,
+    );
+    defer layout_store.deinit();
+
+    var lir_store = LirExprStore.init(test_allocator);
+    defer lir_store.deinit();
+
+    var translator = lir.MirToLir.init(
+        test_allocator,
+        &mir_store,
+        &lir_store,
+        &layout_store,
+        &lambda_set_store,
+        resources.module_env.idents.true_tag,
+    );
+    defer translator.deinit();
+
+    const lir_expr = try translator.lower(mir_expr);
+    const root = lir_store.getExpr(lir_expr);
+    try std.testing.expect(root == .block);
+
+    const outer_final = lir_store.getExpr(root.block.final_expr);
+    try std.testing.expect(outer_final == .block);
+
+    const inner_stmts = lir_store.getStmts(outer_final.block.stmts);
+    try std.testing.expectEqual(@as(usize, 1), inner_stmts.len);
+
+    const synthetic_def_expr = inner_stmts[0].binding().expr;
+    const synthetic_def = lir_store.getExpr(synthetic_def_expr);
+    try std.testing.expect(synthetic_def == .struct_access);
+    try std.testing.expectEqual(@as(u16, 1), synthetic_def.struct_access.field_idx);
+
+    const call_expr = lir_store.getExpr(outer_final.block.final_expr);
+    try std.testing.expect(call_expr == .call);
+    const call_args = lir_store.getExprSpan(call_expr.call.args);
+    try std.testing.expectEqual(@as(usize, 2), call_args.len);
+
+    const lifted_lookup = lir_store.getExpr(call_expr.call.fn_expr);
+    try std.testing.expect(lifted_lookup == .lookup);
+    const lifted_def = lir_store.getSymbolDef(lifted_lookup.lookup.symbol) orelse return error.TestUnexpectedResult;
+    const lifted_expr = lir_store.getExpr(lifted_def);
+    try std.testing.expect(lifted_expr == .lambda);
+
+    const captures_lookup = lir_store.getExpr(call_args[1]);
+    try std.testing.expect(captures_lookup == .lookup);
+    const captures_def = lir_store.getSymbolDef(captures_lookup.lookup.symbol) orelse return error.TestUnexpectedResult;
+    var captures_value_expr = captures_def;
+    while (lir_store.getExpr(captures_value_expr) == .block) {
+        captures_value_expr = lir_store.getExpr(captures_value_expr).block.final_expr;
+    }
+    const captures_value = lir_store.getExpr(captures_value_expr);
+    try std.testing.expect(captures_value == .struct_access);
+    try std.testing.expectEqual(@as(u16, 1), captures_value.struct_access.field_idx);
+}
+
 test "MIR record closure fields capture distinct outer symbols" {
     const resources = try parseAndCanonicalizeExpr(test_allocator,
         \\{

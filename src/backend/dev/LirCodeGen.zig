@@ -7492,39 +7492,94 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const args = self.store.getPatternSpan(tag_pattern.args);
             if (args.len == 0) return;
 
-            // Get variant payload layout
-            const variant_payload_layout: ?layout.Idx = if (value_layout_val.tag == .tag_union) vl_blk: {
-                const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
-                const variants = ls.getTagUnionVariants(tu_data);
-                if (tag_pattern.discriminant < variants.len) {
-                    break :vl_blk variants.get(tag_pattern.discriminant).payload_layout;
-                }
-                break :vl_blk null;
-            } else null;
+            const variant_payload_layout, const stable_payload_loc = blk: {
+                if (value_layout_val.tag == .tag_union) {
+                    const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
+                    const variants = ls.getTagUnionVariants(tu_data);
+                    if (tag_pattern.discriminant >= variants.len) return;
 
-            // Get base offset of the tag union value
-            const base_offset: i32 = switch (value_loc) {
-                .stack => |s| s.offset,
-                .stack_str => |off| off,
-                else => unreachable,
+                    const payload_layout_idx = variants.get(tag_pattern.discriminant).payload_layout;
+                    const payload_layout_val = ls.getLayout(payload_layout_idx);
+                    const payload_size = ls.layoutSizeAlign(payload_layout_val).size;
+                    const base_offset: i32 = switch (value_loc) {
+                        .stack => |s| s.offset,
+                        .stack_str => |off| off,
+                        else => unreachable,
+                    };
+
+                    var payload_loc = self.stackLocationForLayout(payload_layout_idx, base_offset);
+                    if (payload_size > 0) {
+                        const detached_slot = self.codegen.allocStackSlot(payload_size);
+                        try self.copyBytesToStackOffset(detached_slot, payload_loc, payload_size);
+                        payload_loc = self.stackLocationForLayout(payload_layout_idx, detached_slot);
+                        if (ls.layoutContainsRefcounted(payload_layout_val)) {
+                            try self.emitIncrefValueByLayout(payload_loc, payload_layout_idx);
+                        }
+                    }
+
+                    break :blk .{ payload_layout_idx, payload_loc };
+                }
+
+                if (value_layout_val.tag == .box) {
+                    const inner_layout = ls.getLayout(value_layout_val.data.box);
+                    if (inner_layout.tag != .tag_union) return;
+
+                    const tu_data = ls.getTagUnionData(inner_layout.data.tag_union.idx);
+                    const variants = ls.getTagUnionVariants(tu_data);
+                    if (tag_pattern.discriminant >= variants.len) return;
+
+                    const payload_layout_idx = variants.get(tag_pattern.discriminant).payload_layout;
+                    const payload_layout_val = ls.getLayout(payload_layout_idx);
+                    const payload_size = ls.layoutSizeAlign(payload_layout_val).size;
+                    if (payload_size == 0) {
+                        break :blk .{ payload_layout_idx, self.stackLocationForLayout(payload_layout_idx, 0) };
+                    }
+
+                    const box_ptr_reg = try self.ensureInGeneralReg(value_loc);
+                    defer self.codegen.freeGeneral(box_ptr_reg);
+
+                    const detached_slot = self.codegen.allocStackSlot(payload_size);
+                    var copied: u32 = 0;
+                    while (copied < payload_size) {
+                        const temp_reg = try self.allocTempGeneral();
+                        try self.emitLoad(.w64, temp_reg, box_ptr_reg, @intCast(copied));
+                        try self.emitStore(.w64, frame_ptr, detached_slot + @as(i32, @intCast(copied)), temp_reg);
+                        self.codegen.freeGeneral(temp_reg);
+                        copied += 8;
+                    }
+
+                    const payload_loc = self.stackLocationForLayout(payload_layout_idx, detached_slot);
+                    if (ls.layoutContainsRefcounted(payload_layout_val)) {
+                        try self.emitIncrefValueByLayout(payload_loc, payload_layout_idx);
+                    }
+
+                    break :blk .{ payload_layout_idx, payload_loc };
+                }
+
+                return;
             };
 
+            const stable_payload_layout_val = ls.getLayout(variant_payload_layout);
+
             // Determine if payload is a tuple (multi-field payload)
-            const payload_is_tuple = if (variant_payload_layout) |pl| blk: {
-                break :blk ls.getLayout(pl).tag == .struct_;
-            } else false;
+            const payload_is_tuple = stable_payload_layout_val.tag == .struct_;
 
             for (args, 0..) |arg_pattern_id, arg_idx| {
-                const arg_loc: ValueLocation = if (payload_is_tuple and variant_payload_layout != null) blk: {
+                const arg_loc: ValueLocation = if (payload_is_tuple) blk: {
                     // Multi-arg tag: payload is a tuple, use tuple element offsets/layouts
-                    const pl_val = ls.getLayout(variant_payload_layout.?);
-                    const elem_offset = ls.getStructFieldOffsetByOriginalIndex(pl_val.data.struct_.idx, @intCast(arg_idx));
-                    const elem_layout = ls.getStructFieldLayoutByOriginalIndex(pl_val.data.struct_.idx, @intCast(arg_idx));
-                    break :blk self.stackLocationForLayout(elem_layout, base_offset + @as(i32, @intCast(elem_offset)));
-                } else if (variant_payload_layout) |pl| blk: {
+                    const payload_base: i32 = switch (stable_payload_loc) {
+                        .stack => |s| s.offset,
+                        .stack_i128 => |off| off,
+                        .stack_str => |off| off,
+                        else => unreachable,
+                    };
+                    const elem_offset = ls.getStructFieldOffsetByOriginalIndex(stable_payload_layout_val.data.struct_.idx, @intCast(arg_idx));
+                    const elem_layout = ls.getStructFieldLayoutByOriginalIndex(stable_payload_layout_val.data.struct_.idx, @intCast(arg_idx));
+                    break :blk self.stackLocationForLayout(elem_layout, payload_base + @as(i32, @intCast(elem_offset)));
+                } else blk: {
                     // Single-arg tag: use variant payload layout directly
-                    break :blk self.stackLocationForLayout(pl, base_offset);
-                } else .{ .stack = .{ .offset = base_offset + @as(i32, @intCast(arg_idx)) * 8 } };
+                    break :blk stable_payload_loc;
+                };
 
                 try self.bindPattern(arg_pattern_id, arg_loc);
             }
