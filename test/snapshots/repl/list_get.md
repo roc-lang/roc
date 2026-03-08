@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=List.first - getting the first element of a list
+description=List.get - getting an element from a list
 type=repl
 ~~~
 # SOURCE
