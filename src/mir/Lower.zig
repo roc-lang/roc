@@ -56,6 +56,11 @@ const SymbolMetadata = union(enum) {
     },
 };
 
+const PatternBinding = struct {
+    ident: Ident.Idx,
+    pattern_idx: CIR.Pattern.Idx,
+};
+
 // --- Fields ---
 
 allocator: Allocator,
@@ -1671,6 +1676,89 @@ fn patternBoundSymbol(self: *Self, pattern_id: MIR.PatternId) ?MIR.Symbol {
     };
 }
 
+fn collectPatternBindings(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    pattern_idx: CIR.Pattern.Idx,
+    out: *std.ArrayList(PatternBinding),
+) Allocator.Error!void {
+    switch (module_env.store.getPattern(pattern_idx)) {
+        .assign => |assign| try out.append(self.allocator, .{ .ident = assign.ident, .pattern_idx = pattern_idx }),
+        .as => |as_pat| {
+            try out.append(self.allocator, .{ .ident = as_pat.ident, .pattern_idx = pattern_idx });
+            try self.collectPatternBindings(module_env, as_pat.pattern, out);
+        },
+        .tuple => |tuple| {
+            for (module_env.store.slicePatterns(tuple.patterns)) |elem_pattern_idx| {
+                try self.collectPatternBindings(module_env, elem_pattern_idx, out);
+            }
+        },
+        .applied_tag => |tag| {
+            for (module_env.store.slicePatterns(tag.args)) |arg_pattern_idx| {
+                try self.collectPatternBindings(module_env, arg_pattern_idx, out);
+            }
+        },
+        .record_destructure => |record_pat| {
+            for (module_env.store.sliceRecordDestructs(record_pat.destructs)) |destruct_idx| {
+                const destruct = module_env.store.getRecordDestruct(destruct_idx);
+                switch (destruct.kind) {
+                    .Required => |sub_pattern_idx| try self.collectPatternBindings(module_env, sub_pattern_idx, out),
+                    .SubPattern => |sub_pattern_idx| try self.collectPatternBindings(module_env, sub_pattern_idx, out),
+                }
+            }
+        },
+        .list => |list_pat| {
+            for (module_env.store.slicePatterns(list_pat.patterns)) |elem_pattern_idx| {
+                try self.collectPatternBindings(module_env, elem_pattern_idx, out);
+            }
+            if (list_pat.rest_info) |rest| {
+                if (rest.pattern) |rest_pattern_idx| {
+                    try self.collectPatternBindings(module_env, rest_pattern_idx, out);
+                }
+            }
+        },
+        .nominal => |nom| try self.collectPatternBindings(module_env, nom.backing_pattern, out),
+        .nominal_external => |nom| try self.collectPatternBindings(module_env, nom.backing_pattern, out),
+        .underscore,
+        .num_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .str_literal,
+        .runtime_error,
+        => {},
+    }
+}
+
+fn alignAlternativePatternSymbols(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    representative_pattern_idx: CIR.Pattern.Idx,
+    alternative_pattern_idx: CIR.Pattern.Idx,
+) Allocator.Error!void {
+    var representative_bindings = std.ArrayList(PatternBinding).empty;
+    defer representative_bindings.deinit(self.allocator);
+
+    var alternative_bindings = std.ArrayList(PatternBinding).empty;
+    defer alternative_bindings.deinit(self.allocator);
+
+    try self.collectPatternBindings(module_env, representative_pattern_idx, &representative_bindings);
+    try self.collectPatternBindings(module_env, alternative_pattern_idx, &alternative_bindings);
+
+    for (alternative_bindings.items) |alt_binding| {
+        for (representative_bindings.items) |rep_binding| {
+            if (!rep_binding.ident.eql(alt_binding.ident)) continue;
+
+            const rep_symbol = try self.patternToSymbol(rep_binding.pattern_idx);
+            const base_key: u64 = (@as(u64, self.current_module_idx) << 32) | @intFromEnum(alt_binding.pattern_idx);
+            const key: u128 = (@as(u128, self.current_pattern_scope) << 64) | @as(u128, base_key);
+            try self.pattern_symbols.put(key, rep_symbol);
+            break;
+        }
+    }
+}
+
 /// Resolve a CIR pattern to a global MIR symbol.
 fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!MIR.Symbol {
     const base_key: u64 = (@as(u64, self.current_module_idx) << 32) | @intFromEnum(pattern_idx);
@@ -2093,8 +2181,18 @@ fn lowerMatch(self: *Self, module_env: *const ModuleEnv, match_expr: CIR.Expr.Ma
         const bp_top = self.scratch_branch_patterns.top();
         defer self.scratch_branch_patterns.clearFrom(bp_top);
 
-        for (cir_bp_indices) |bp_idx| {
+        const representative_pattern_idx = if (cir_bp_indices.len > 0)
+            module_env.store.getMatchBranchPattern(cir_bp_indices[0]).pattern
+        else
+            null;
+
+        for (cir_bp_indices, 0..) |bp_idx, bp_index| {
             const cir_bp = module_env.store.getMatchBranchPattern(bp_idx);
+            if (bp_index != 0) {
+                if (representative_pattern_idx) |rep_pattern_idx| {
+                    try self.alignAlternativePatternSymbols(module_env, rep_pattern_idx, cir_bp.pattern);
+                }
+            }
             const pat = try self.lowerPattern(module_env, cir_bp.pattern);
             try self.scratch_branch_patterns.append(.{ .pattern = pat, .degenerate = cir_bp.degenerate });
         }

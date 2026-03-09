@@ -2947,6 +2947,49 @@ fn collectBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) !void {
     }
 }
 
+fn boundPatternIdent(self: *Self, pattern_idx: Pattern.Idx) ?base.Ident.Idx {
+    return switch (self.env.store.getPattern(pattern_idx)) {
+        .assign => |assign| assign.ident,
+        .as => |as_pat| as_pat.ident,
+        else => null,
+    };
+}
+
+fn alternativePatternBindingsMatch(
+    self: *Self,
+    representative_bindings: []const Pattern.Idx,
+    candidate_bindings: []const Pattern.Idx,
+) bool {
+    if (representative_bindings.len != candidate_bindings.len) return false;
+
+    for (representative_bindings) |rep_pattern_idx| {
+        const rep_ident = self.boundPatternIdent(rep_pattern_idx) orelse return false;
+        var found = false;
+
+        for (candidate_bindings) |candidate_pattern_idx| {
+            const candidate_ident = self.boundPatternIdent(candidate_pattern_idx) orelse return false;
+            if (candidate_ident.eql(rep_ident)) {
+                found = true;
+                break;
+            }
+        }
+
+        if (!found) return false;
+    }
+
+    return true;
+}
+
+fn introduceExistingPatternBindingsIntoScope(
+    self: *Self,
+    pattern_bindings: []const Pattern.Idx,
+) std.mem.Allocator.Error!void {
+    for (pattern_bindings) |pattern_idx| {
+        const ident_idx = self.boundPatternIdent(pattern_idx) orelse continue;
+        _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false, true);
+    }
+}
+
 fn createExposedScope(
     self: *Self,
     exposes: AST.Collection.Idx,
@@ -6327,29 +6370,62 @@ pub fn canonicalizeExpr(
 
                     switch (pattern) {
                         .alternatives => |alt| {
-                            // Handle alternatives patterns by creating multiple BranchPattern entries
+                            // Handle alternative patterns in isolated scopes so later alternatives do
+                            // not shadow the representative binders the branch body should see.
+                            const LoweredAltPattern = struct {
+                                pattern_idx: Pattern.Idx,
+                                degenerate: bool,
+                            };
                             const alt_patterns = self.parse_ir.store.patternSlice(alt.patterns);
-                            for (alt_patterns) |alt_pattern_idx| {
+                            var representative_bindings = std.ArrayList(Pattern.Idx).empty;
+                            defer representative_bindings.deinit(self.env.gpa);
+
+                            for (alt_patterns, 0..) |alt_pattern_idx, alt_index| {
                                 const alt_pattern = self.parse_ir.store.getPattern(alt_pattern_idx);
                                 const alt_pattern_region = self.parse_ir.tokenizedRegionToRegion(alt_pattern.to_tokenized_region());
 
-                                const pattern_idx = blk: {
-                                    if (try self.canonicalizePattern(alt_pattern_idx)) |pattern_idx| {
-                                        break :blk pattern_idx;
-                                    } else {
-                                        const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .pattern_not_canonicalized = .{
+                                const lowered: LoweredAltPattern = blk: {
+                                    try self.scopeEnter(self.env.gpa, false);
+                                    defer self.scopeExit(self.env.gpa) catch {};
+
+                                    const pattern_idx = if (try self.canonicalizePattern(alt_pattern_idx)) |pattern_idx|
+                                        pattern_idx
+                                    else
+                                        try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .pattern_not_canonicalized = .{
                                             .region = alt_pattern_region,
                                         } });
-                                        break :blk malformed_idx;
+
+                                    const alt_bound_vars_top = self.scratch_bound_vars.top();
+                                    defer self.scratch_bound_vars.clearFrom(alt_bound_vars_top);
+                                    try self.collectBoundVarsToScratch(pattern_idx);
+                                    const alt_bound_vars = self.scratch_bound_vars.sliceFromStart(alt_bound_vars_top);
+
+                                     // Alternative-pattern scopes are temporary. Their binders are either
+                                     // reintroduced into the surrounding branch scope or intentionally
+                                     // absent there, so do not report them as unused when the temp scope exits.
+                                    for (alt_bound_vars) |alt_bound_pattern_idx| {
+                                        try self.used_patterns.put(self.env.gpa, alt_bound_pattern_idx, {});
                                     }
+
+                                    if (alt_index == 0) {
+                                        try representative_bindings.appendSlice(self.env.gpa, alt_bound_vars);
+                                        break :blk .{ .pattern_idx = pattern_idx, .degenerate = false };
+                                    }
+
+                                    break :blk .{
+                                        .pattern_idx = pattern_idx,
+                                        .degenerate = !self.alternativePatternBindingsMatch(representative_bindings.items, alt_bound_vars),
+                                    };
                                 };
 
                                 const branch_pattern_idx = try self.env.addMatchBranchPattern(Expr.Match.BranchPattern{
-                                    .pattern = pattern_idx,
-                                    .degenerate = false,
+                                    .pattern = lowered.pattern_idx,
+                                    .degenerate = lowered.degenerate,
                                 }, alt_pattern_region);
                                 try self.env.store.addScratchMatchBranchPattern(branch_pattern_idx);
                             }
+
+                            try self.introduceExistingPatternBindingsIntoScope(representative_bindings.items);
                         },
                         else => {
                             // Single pattern case

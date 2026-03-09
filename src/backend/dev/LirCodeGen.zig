@@ -7604,14 +7604,133 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     };
                     const elem_offset = ls.getStructFieldOffsetByOriginalIndex(stable_payload_layout_val.data.struct_.idx, @intCast(arg_idx));
                     const elem_layout = ls.getStructFieldLayoutByOriginalIndex(stable_payload_layout_val.data.struct_.idx, @intCast(arg_idx));
+                    if (builtin.mode == .Debug) {
+                        try self.assertPatternMatchesRuntimeLayout(arg_pattern_id, elem_layout, "match tag payload tuple element");
+                    }
                     break :blk self.stackLocationForLayout(elem_layout, payload_base + @as(i32, @intCast(elem_offset)));
                 } else blk: {
                     // Single-arg tag: use variant payload layout directly
+                    if (builtin.mode == .Debug) {
+                        try self.assertPatternMatchesRuntimeLayout(arg_pattern_id, variant_payload_layout, "match tag payload");
+                    }
                     break :blk stable_payload_loc;
                 };
 
                 try self.bindPattern(arg_pattern_id, arg_loc);
             }
+        }
+
+        fn assertPatternMatchesRuntimeLayout(
+            self: *Self,
+            pattern_id: LirPatternId,
+            runtime_layout_idx: layout.Idx,
+            comptime context: []const u8,
+        ) Allocator.Error!void {
+            if (builtin.mode != .Debug) return;
+
+            const ls = self.layout_store;
+            const pattern = self.store.getPattern(pattern_id);
+
+            switch (pattern) {
+                .bind => |bind| {
+                    if (bind.layout_idx != runtime_layout_idx) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: {s} bind layout mismatch: pattern={d} runtime={d}",
+                            .{ context, @intFromEnum(bind.layout_idx), @intFromEnum(runtime_layout_idx) },
+                        );
+                    }
+                },
+                .wildcard => |wc| {
+                    if (wc.layout_idx != runtime_layout_idx) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: {s} wildcard layout mismatch: pattern={d} runtime={d}",
+                            .{ context, @intFromEnum(wc.layout_idx), @intFromEnum(runtime_layout_idx) },
+                        );
+                    }
+                },
+                .as_pattern => |as_pat| {
+                    if (as_pat.layout_idx != runtime_layout_idx) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: {s} as-pattern layout mismatch: pattern={d} runtime={d}",
+                            .{ context, @intFromEnum(as_pat.layout_idx), @intFromEnum(runtime_layout_idx) },
+                        );
+                    }
+                    try self.assertPatternMatchesRuntimeLayout(as_pat.inner, runtime_layout_idx, context);
+                },
+                .struct_ => |s| {
+                    if (s.struct_layout != runtime_layout_idx) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: {s} struct layout mismatch: pattern={d} runtime={d}",
+                            .{ context, @intFromEnum(s.struct_layout), @intFromEnum(runtime_layout_idx) },
+                        );
+                    }
+
+                    const runtime_layout = ls.getLayout(runtime_layout_idx);
+                    if (runtime_layout.tag != .struct_) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: {s} expected runtime struct layout, got {s}",
+                            .{ context, @tagName(runtime_layout.tag) },
+                        );
+                    }
+
+                    const fields = self.store.getPatternSpan(s.fields);
+                    for (fields, 0..) |field_pattern_id, i| {
+                        const field_layout = ls.getStructFieldLayout(runtime_layout.data.struct_.idx, @intCast(i));
+                        try self.assertPatternMatchesRuntimeLayout(field_pattern_id, field_layout, context);
+                    }
+                },
+                .tag => |tag_pat| {
+                    if (tag_pat.union_layout != runtime_layout_idx) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: {s} tag layout mismatch: pattern={d} runtime={d}",
+                            .{ context, @intFromEnum(tag_pat.union_layout), @intFromEnum(runtime_layout_idx) },
+                        );
+                    }
+                },
+                .list => |list_pat| {
+                    if (list_pat.list_layout != runtime_layout_idx) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: {s} list layout mismatch: pattern={d} runtime={d}",
+                            .{ context, @intFromEnum(list_pat.list_layout), @intFromEnum(runtime_layout_idx) },
+                        );
+                    }
+                },
+                .int_literal, .float_literal, .str_literal => {},
+            }
+        }
+
+        fn patternLayoutCompatible(
+            self: *Self,
+            pattern_id: LirPatternId,
+            runtime_layout_idx: layout.Idx,
+        ) Allocator.Error!bool {
+            const ls = self.layout_store;
+            const pattern = self.store.getPattern(pattern_id);
+
+            return switch (pattern) {
+                .bind => |bind| bind.layout_idx == runtime_layout_idx,
+                .wildcard => |wc| wc.layout_idx == runtime_layout_idx,
+                .as_pattern => |as_pat| as_pat.layout_idx == runtime_layout_idx and try self.patternLayoutCompatible(as_pat.inner, runtime_layout_idx),
+                .struct_ => |s| blk: {
+                    if (s.struct_layout != runtime_layout_idx) break :blk false;
+
+                    const runtime_layout = ls.getLayout(runtime_layout_idx);
+                    if (runtime_layout.tag != .struct_) break :blk false;
+
+                    const fields = self.store.getPatternSpan(s.fields);
+                    for (fields, 0..) |field_pattern_id, i| {
+                        const field_layout = ls.getStructFieldLayout(runtime_layout.data.struct_.idx, @intCast(i));
+                        if (!try self.patternLayoutCompatible(field_pattern_id, field_layout)) {
+                            break :blk false;
+                        }
+                    }
+
+                    break :blk true;
+                },
+                .tag => |tag_pat| tag_pat.union_layout == runtime_layout_idx,
+                .list => |list_pat| list_pat.list_layout == runtime_layout_idx,
+                .int_literal, .float_literal, .str_literal => true,
+            };
         }
 
         /// Emit a string pattern comparison: generates literal, calls strEqual,
@@ -10682,6 +10801,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // For tags with single arg, bind directly at payload offset
                     // For tags with multiple args (tuples), need to use tuple element offsets
                     if (arg_patterns.len == 1) {
+                        if (builtin.mode == .Debug) {
+                            try self.assertPatternMatchesRuntimeLayout(arg_patterns[0], variant.payload_layout, "tag pattern payload");
+                        }
                         try self.bindPattern(arg_patterns[0], payload_loc);
                     } else {
                         // Multiple args means payload is a tuple - get offsets from tuple layout
@@ -10697,6 +10819,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 const tuple_elem_offset = ls.getStructFieldOffsetByOriginalIndex(payload_layout.data.struct_.idx, @intCast(i));
                                 const arg_offset = payload_base + @as(i32, @intCast(tuple_elem_offset));
                                 const tuple_elem_layout_idx = ls.getStructFieldLayoutByOriginalIndex(payload_layout.data.struct_.idx, @intCast(i));
+                                if (builtin.mode == .Debug) {
+                                    try self.assertPatternMatchesRuntimeLayout(arg_pattern_id, tuple_elem_layout_idx, "tag pattern tuple payload element");
+                                }
                                 try self.bindPattern(arg_pattern_id, self.stackLocationForLayout(tuple_elem_layout_idx, arg_offset));
                             }
                         } else {
@@ -16214,6 +16339,26 @@ test "generate bool literal" {
     defer allocator.free(result.code);
 
     try std.testing.expect(result.code.len > 0);
+}
+
+test "tag payload bind invariant rejects mismatched pattern layout" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirExprStore.init(allocator);
+    defer store.deinit();
+
+    const pattern_id = try store.addPattern(.{ .wildcard = .{ .layout_idx = .zst } }, base.Region.zero());
+
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, null);
+    defer codegen.deinit();
+
+    try std.testing.expect(!(try codegen.patternLayoutCompatible(pattern_id, .u8)));
 }
 
 test "generate addition" {

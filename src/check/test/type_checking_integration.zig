@@ -1640,6 +1640,53 @@ test "check type - match - diff branch types" {
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
+test "check type - match alternative binders unify when compatible" {
+    const source =
+        \\value = if True Ok(1.U8) else Err(2.U8)
+        \\result =
+        \\  match value {
+        \\    Ok(v) | Err(v) => v
+        \\  }
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "result" } }, "U8");
+}
+
+test "check type - match alternative binders reject incompatible types" {
+    const source =
+        \\value = if True A(1.U8) else B("x")
+        \\result =
+        \\  match value {
+        \\    A(v) | B(v) => v
+        \\  }
+    ;
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\The `v` binding in the second pattern of the first branch of this `match` does not match the same binding in the first pattern:
+        \\**test:3:3:**
+        \\```roc
+        \\  match value {
+        \\    A(v) | B(v) => v
+        \\  }
+        \\```
+        \\             ^
+        \\
+        \\In the second pattern, `v` is:
+        \\
+        \\    Str
+        \\
+        \\But in the first pattern, `v` is:
+        \\
+        \\    U8
+        \\
+        \\A name shared across `|` patterns in the same `match` branch must have one compatible type.
+        \\
+        \\
+        ,
+    );
+}
+
 // unary not
 
 test "check type - unary not" {

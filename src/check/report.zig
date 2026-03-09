@@ -656,6 +656,7 @@ pub const ReportBuilder = struct {
                     .if_condition => self.buildIfConditionReport(mismatch.types),
                     .if_branch => |ctx| self.buildIfBranchReport(mismatch.types, ctx),
                     .match_pattern => |ctx| self.buildMatchPatternReport(mismatch.types, ctx),
+                    .match_alt_binder => |ctx| self.buildMatchAltBinderReport(mismatch.types, ctx),
                     .match_branch => |ctx| self.buildMatchBranchReport(mismatch.types, ctx),
                     .list_entry => |ctx| self.buildListEntryReport(mismatch.types, ctx),
                     .fn_call_arity => |ctx| self.buildIncompatibleFnCallArity(mismatch.types, ctx),
@@ -958,6 +959,57 @@ pub const ReportBuilder = struct {
                 &.{
                     D.bytes("To learn about tags, see"),
                     D.link("https://www.roc-lang.org/tutorial#tags"),
+                },
+            },
+        );
+    }
+
+    fn buildMatchAltBinderReport(self: *Self, types: TypePair, ctx: Context.MatchAltBinderContext) !Report {
+        const branch_index = ctx.branch_index + 1;
+        const pattern_index = ctx.pattern_index + 1;
+        const first_pattern_index = ctx.first_pattern_index + 1;
+
+        return try self.makeMismatchReport(
+            ProblemRegion{ .focused = .{
+                .outer = regionIdxFrom(ctx.match_expr),
+                .highlight = regionIdxFrom(types.actual_var),
+            } },
+            &.{
+                D.bytes("The"),
+                D.ident(ctx.binder_ident).withAnnotation(.inline_code),
+                D.bytes("binding in the"),
+                D.num_ord(pattern_index),
+                D.bytes("pattern of the"),
+                D.num_ord(branch_index),
+                D.bytes("branch of this"),
+                D.bytes("match").withAnnotation(.inline_code),
+                D.bytes("does not match the same binding in the"),
+                D.num_ord(first_pattern_index),
+                D.bytes("pattern:"),
+            },
+            &.{
+                D.bytes("In the"),
+                D.num_ord(pattern_index),
+                D.bytes("pattern,"),
+                D.ident(ctx.binder_ident).withAnnotation(.inline_code),
+                D.bytes("is:"),
+            },
+            types.actual_snapshot,
+            &.{
+                D.bytes("But in the"),
+                D.num_ord(first_pattern_index),
+                D.bytes("pattern,"),
+                D.ident(ctx.binder_ident).withAnnotation(.inline_code),
+                D.bytes("is:"),
+            },
+            types.expected_snapshot,
+            &.{
+                &.{
+                    D.bytes("A name shared across"),
+                    D.bytes("|").withAnnotation(.inline_code),
+                    D.bytes("patterns in the same"),
+                    D.bytes("match").withAnnotation(.inline_code),
+                    D.bytes("branch must have one compatible type."),
                 },
             },
         );

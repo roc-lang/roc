@@ -3144,6 +3144,127 @@ fn getPatternIdent(self: *const Self, ptrn_idx: CIR.Pattern.Idx) ?Ident.Idx {
     }
 }
 
+const PatternBinding = struct {
+    ident: Ident.Idx,
+    pattern_idx: CIR.Pattern.Idx,
+};
+
+fn collectPatternBindings(
+    self: *const Self,
+    pattern_idx: CIR.Pattern.Idx,
+    out: *std.ArrayList(PatternBinding),
+) std.mem.Allocator.Error!void {
+    const pattern = self.cir.store.getPattern(pattern_idx);
+    switch (pattern) {
+        .assign => |assign| try out.append(self.gpa, .{ .ident = assign.ident, .pattern_idx = pattern_idx }),
+        .as => |as_pat| {
+            try out.append(self.gpa, .{ .ident = as_pat.ident, .pattern_idx = pattern_idx });
+            try self.collectPatternBindings(as_pat.pattern, out);
+        },
+        .tuple => |tuple| {
+            for (self.cir.store.slicePatterns(tuple.patterns)) |elem_pattern_idx| {
+                try self.collectPatternBindings(elem_pattern_idx, out);
+            }
+        },
+        .applied_tag => |tag| {
+            for (self.cir.store.slicePatterns(tag.args)) |arg_pattern_idx| {
+                try self.collectPatternBindings(arg_pattern_idx, out);
+            }
+        },
+        .record_destructure => |destructure| {
+            for (self.cir.store.sliceRecordDestructs(destructure.destructs)) |destruct_idx| {
+                const destruct = self.cir.store.getRecordDestruct(destruct_idx);
+                switch (destruct.kind) {
+                    .Required => |sub_pattern_idx| try self.collectPatternBindings(sub_pattern_idx, out),
+                    .SubPattern => |sub_pattern_idx| try self.collectPatternBindings(sub_pattern_idx, out),
+                }
+            }
+        },
+        .list => |list| {
+            for (self.cir.store.slicePatterns(list.patterns)) |elem_pattern_idx| {
+                try self.collectPatternBindings(elem_pattern_idx, out);
+            }
+            if (list.rest_info) |rest| {
+                if (rest.pattern) |rest_pattern_idx| {
+                    try self.collectPatternBindings(rest_pattern_idx, out);
+                }
+            }
+        },
+        .nominal => |nom| try self.collectPatternBindings(nom.backing_pattern, out),
+        .nominal_external => |nom| try self.collectPatternBindings(nom.backing_pattern, out),
+        .num_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .str_literal,
+        .underscore,
+        .runtime_error,
+        => {},
+    }
+}
+
+fn unifyMatchAltPatternBindings(
+    self: *Self,
+    branch_ptrn_idxs: []const CIR.Expr.Match.BranchPattern.Idx,
+    branch_index: u32,
+    num_branches: u32,
+    match_expr: CIR.Expr.Idx,
+    env: *Env,
+) std.mem.Allocator.Error!bool {
+    if (branch_ptrn_idxs.len <= 1) return false;
+
+    var baseline = std.AutoHashMap(u32, struct {
+        pattern_idx: CIR.Pattern.Idx,
+        pattern_index: u32,
+    }).init(self.gpa);
+    defer baseline.deinit();
+
+    var bindings: std.ArrayList(PatternBinding) = .empty;
+    defer bindings.deinit(self.gpa);
+
+    {
+        const first_branch_pattern = self.cir.store.getMatchBranchPattern(branch_ptrn_idxs[0]);
+        try self.collectPatternBindings(first_branch_pattern.pattern, &bindings);
+        for (bindings.items) |binding| {
+            try baseline.put(@as(u32, @bitCast(binding.ident)), .{
+                .pattern_idx = binding.pattern_idx,
+                .pattern_index = 0,
+            });
+        }
+    }
+
+    var had_type_error = false;
+
+    for (branch_ptrn_idxs[1..], 1..) |branch_ptrn_idx, pattern_index| {
+        bindings.clearRetainingCapacity();
+        const branch_pattern = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
+        try self.collectPatternBindings(branch_pattern.pattern, &bindings);
+
+        for (bindings.items) |binding| {
+            const key: u32 = @bitCast(binding.ident);
+            const first = baseline.get(key) orelse continue;
+            const result = try self.unifyInContext(
+                ModuleEnv.varFrom(first.pattern_idx),
+                ModuleEnv.varFrom(binding.pattern_idx),
+                env,
+                .{ .match_alt_binder = .{
+                    .branch_index = branch_index,
+                    .first_pattern_index = first.pattern_index,
+                    .pattern_index = @intCast(pattern_index),
+                    .num_branches = num_branches,
+                    .num_patterns = @intCast(branch_ptrn_idxs.len),
+                    .binder_ident = binding.ident,
+                    .match_expr = match_expr,
+                } },
+            );
+            if (!result.isOk()) had_type_error = true;
+        }
+    }
+
+    return had_type_error;
+}
+
 // expr //
 
 fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected) std.mem.Allocator.Error!bool {
@@ -5162,6 +5283,10 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
         if (!ptrn_result.isOk()) had_type_error = true;
     }
 
+    if (try self.unifyMatchAltPatternBindings(first_branch_ptrn_idxs, 0, @intCast(match.branches.span.len), expr_idx, env)) {
+        had_type_error = true;
+    }
+
     // Check guard if present
     if (first_branch.guard) |guard_idx| {
         does_fx = try self.checkExpr(guard_idx, env, .no_expectation) or does_fx;
@@ -5204,6 +5329,10 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
                 .match_expr = expr_idx,
             } });
             if (!ptrn_result.isOk()) had_type_error = true;
+        }
+
+        if (try self.unifyMatchAltPatternBindings(branch_ptrn_idxs, @intCast(branch_cur_index), @intCast(match.branches.span.len), expr_idx, env)) {
+            had_type_error = true;
         }
 
         // Check guard if present

@@ -422,6 +422,10 @@ pub const Interpreter = struct {
         /// Used to distinguish bindings from different modules with the same pattern_idx.
         source_env: *const can.ModuleEnv,
     };
+    const PatternBinding = struct {
+        ident: base_pkg.Ident.Idx,
+        pattern_idx: can.CIR.Pattern.Idx,
+    };
     const DefInProgress = struct {
         pattern_idx: can.CIR.Pattern.Idx,
         expr_idx: can.CIR.Expr.Idx,
@@ -7716,6 +7720,99 @@ pub const Interpreter = struct {
         for (0..actual_collected) |_| {
             if (value_stack.pop()) |val| {
                 val.decref(&self.runtime_layout_store, roc_ops);
+            }
+        }
+    }
+
+    fn collectPatternBindings(
+        self: *Interpreter,
+        pattern_idx: can.CIR.Pattern.Idx,
+        out: *std.ArrayList(PatternBinding),
+    ) !void {
+        switch (self.env.store.getPattern(pattern_idx)) {
+            .assign => |assign| try out.append(self.allocator, .{ .ident = assign.ident, .pattern_idx = pattern_idx }),
+            .as => |as_pat| {
+                try out.append(self.allocator, .{ .ident = as_pat.ident, .pattern_idx = pattern_idx });
+                try self.collectPatternBindings(as_pat.pattern, out);
+            },
+            .tuple => |tuple| {
+                for (self.env.store.slicePatterns(tuple.patterns)) |elem_pattern_idx| {
+                    try self.collectPatternBindings(elem_pattern_idx, out);
+                }
+            },
+            .applied_tag => |tag| {
+                for (self.env.store.slicePatterns(tag.args)) |arg_pattern_idx| {
+                    try self.collectPatternBindings(arg_pattern_idx, out);
+                }
+            },
+            .record_destructure => |record_pat| {
+                for (self.env.store.sliceRecordDestructs(record_pat.destructs)) |destruct_idx| {
+                    const destruct = self.env.store.getRecordDestruct(destruct_idx);
+                    switch (destruct.kind) {
+                        .Required => |sub_pattern_idx| try self.collectPatternBindings(sub_pattern_idx, out),
+                        .SubPattern => |sub_pattern_idx| try self.collectPatternBindings(sub_pattern_idx, out),
+                    }
+                }
+            },
+            .list => |list_pat| {
+                for (self.env.store.slicePatterns(list_pat.patterns)) |elem_pattern_idx| {
+                    try self.collectPatternBindings(elem_pattern_idx, out);
+                }
+                if (list_pat.rest_info) |rest| {
+                    if (rest.pattern) |rest_pattern_idx| {
+                        try self.collectPatternBindings(rest_pattern_idx, out);
+                    }
+                }
+            },
+            .nominal => |nom| try self.collectPatternBindings(nom.backing_pattern, out),
+            .nominal_external => |nom| try self.collectPatternBindings(nom.backing_pattern, out),
+            .underscore,
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            .runtime_error,
+            => {},
+        }
+    }
+
+    fn aliasAlternativeMatchBindings(
+        self: *Interpreter,
+        representative_pattern_idx: can.CIR.Pattern.Idx,
+        matched_pattern_idx: can.CIR.Pattern.Idx,
+        temp_binds: *std.array_list.AlignedManaged(Binding, null),
+        roc_ops: *RocOps,
+    ) !void {
+        var representative_bindings = std.ArrayList(PatternBinding).empty;
+        defer representative_bindings.deinit(self.allocator);
+
+        var matched_bindings = std.ArrayList(PatternBinding).empty;
+        defer matched_bindings.deinit(self.allocator);
+
+        try self.collectPatternBindings(representative_pattern_idx, &representative_bindings);
+        try self.collectPatternBindings(matched_pattern_idx, &matched_bindings);
+
+        for (representative_bindings.items) |rep_binding| {
+            for (matched_bindings.items) |matched_binding| {
+                if (!rep_binding.ident.eql(matched_binding.ident)) continue;
+                if (rep_binding.pattern_idx == matched_binding.pattern_idx) break;
+
+                for (temp_binds.items) |binding| {
+                    if (binding.pattern_idx != matched_binding.pattern_idx) continue;
+
+                    const alias_value = try self.pushCopy(binding.value, roc_ops);
+                    try temp_binds.append(.{
+                        .pattern_idx = rep_binding.pattern_idx,
+                        .value = alias_value,
+                        .expr_idx = binding.expr_idx,
+                        .source_env = binding.source_env,
+                    });
+                    break;
+                }
+
+                break;
             }
         }
     }
@@ -16118,8 +16215,12 @@ pub const Interpreter = struct {
                 while (branch_idx < mb.branches.len) : (branch_idx += 1) {
                     const br = self.env.store.getMatchBranch(mb.branches[branch_idx]);
                     const patterns = self.env.store.sliceMatchBranchPatterns(br.patterns);
+                    const representative_pattern_idx = if (patterns.len > 0)
+                        self.env.store.getMatchBranchPattern(patterns[0]).pattern
+                    else
+                        null;
 
-                    for (patterns) |bp_idx| {
+                    for (patterns, 0..) |bp_idx, pattern_index| {
                         var temp_binds = try std.array_list.AlignedManaged(Binding, null).initCapacity(self.allocator, 4);
                         defer {
                             self.trimBindingList(&temp_binds, 0, roc_ops);
@@ -16136,6 +16237,17 @@ pub const Interpreter = struct {
                             null,
                         )) {
                             continue;
+                        }
+
+                        if (pattern_index != 0) {
+                            if (representative_pattern_idx) |rep_pattern_idx| {
+                                try self.aliasAlternativeMatchBindings(
+                                    rep_pattern_idx,
+                                    self.env.store.getMatchBranchPattern(bp_idx).pattern,
+                                    &temp_binds,
+                                    roc_ops,
+                                );
+                            }
                         }
 
                         // Pattern matched! Add bindings
