@@ -2253,6 +2253,18 @@ test "issue 8737: tag union with tuple payload containing tag union" {
     , 42, .no_trace);
 }
 
+test "issue 8737: single tag arg tuple payload can destructure nested tuple pattern" {
+    try runExpectI64(
+        \\{
+        \\    result = XYZ((QQQ(1u8), 3u64))
+        \\    match result {
+        \\        XYZ((QQQ(_), n)) => if n == 3u64 1 else 0
+        \\        BBB => 0
+        \\    }
+        \\}
+    , 1, .no_trace);
+}
+
 test "early return: basic ? operator with Ok" {
     // The ? operator on Ok should unwrap the value
     try runExpectI64(
