@@ -1810,6 +1810,30 @@ test "check type - record - access - not a record" {
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
+test "check type - record - access - method missing parentheses" {
+    const source =
+        \\MyType := [A].{
+        \\    my_method = || 42
+        \\}
+        \\
+        \\x = MyType.A
+        \\y = x.my_method
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\`my_method` is a method, not a record field. Did you forget the parentheses?
+        \\**test:6:6:6:16:**
+        \\```roc
+        \\y = x.my_method
+        \\```
+        \\     ^^^^^^^^^^
+        \\
+        \\Method calls require parentheses even with no arguments. Use `my_method()` instead.
+        \\
+        \\
+    );
+}
+
 // record update
 
 test "check type - record - update 1" {
