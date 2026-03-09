@@ -1185,3 +1185,20 @@ test "roc test polymorphic list reverse with numeric literal does not overflow" 
     const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
     try testing.expect(has_passed);
 }
+
+test "roc test polymorphic list reverse within same module" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // A polymorphic function with a nested lambda (e.g. fold_rev callback)
+    // must also type-check correctly when tested from within the same module,
+    // not only from an external importer.
+    const result = try util.runRoc(gpa, &.{"test"}, "test/cli/PolymorphicListReverseMod.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+
+    const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
+    try testing.expect(has_passed);
+}
