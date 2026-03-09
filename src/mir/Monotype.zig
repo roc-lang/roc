@@ -106,7 +106,6 @@ pub const Monotype = union(enum) {
 
 /// Primitive type kinds.
 pub const Prim = enum {
-    bool,
     str,
     u8,
     i8,
@@ -196,6 +195,8 @@ pub const Store = struct {
     unit_idx: Idx,
     /// Pre-interned indices for each primitive monotype, indexed by `@intFromEnum(Prim)`.
     prim_idxs: [prim_count]Idx,
+    /// Cached ordinary tag-union monotype for nominal Bool.
+    bool_tag_union_idx: Idx,
 
     const prim_count = @typeInfo(Prim).@"enum".fields.len;
 
@@ -227,6 +228,20 @@ pub const Store = struct {
         return self.prim_idxs[@intFromEnum(prim)];
     }
 
+    pub fn addBoolTagUnion(self: *Store, allocator: Allocator, common_idents: CommonIdents) !Idx {
+        if (!self.bool_tag_union_idx.isNone()) return self.bool_tag_union_idx;
+
+        const false_payloads = Span.empty();
+        const true_payloads = Span.empty();
+        const tags = try self.addTags(allocator, &.{
+            .{ .name = common_idents.false_tag, .payloads = false_payloads },
+            .{ .name = common_idents.true_tag, .payloads = true_payloads },
+        });
+        const idx = try self.addMonotype(allocator, .{ .tag_union = .{ .tags = tags } });
+        self.bool_tag_union_idx = idx;
+        return idx;
+    }
+
     /// Pre-populate the store with the 16 fixed monotypes (unit + 15 primitives).
     pub fn init(allocator: Allocator) Allocator.Error!Store {
         var monotypes: std.ArrayListUnmanaged(Monotype) = .empty;
@@ -250,6 +265,7 @@ pub const Store = struct {
             .fields = .empty,
             .unit_idx = unit_idx,
             .prim_idxs = prim_idxs,
+            .bool_tag_union_idx = .none,
         };
     }
 
@@ -653,7 +669,7 @@ pub const Store = struct {
         if (origin.eql(common_idents.builtin_module)) {
             // Bool/Str: unqualified idents from source declarations
             if (ident.eql(common_idents.str)) return self.primIdx(.str);
-            if (ident.eql(common_idents.bool)) return self.primIdx(.bool);
+            if (ident.eql(common_idents.bool)) return try self.addBoolTagUnion(allocator, common_idents);
         }
 
         if (origin.eql(common_idents.builtin_module)) {

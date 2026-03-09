@@ -66,7 +66,7 @@ layout_store: *layout.Store,
 lambda_set_store: *LambdaSet.Store,
 
 /// Ident index for the `True` tag — needed to resolve Bool discriminants
-/// (Bool is `prim.bool`, not a `tag_union`, so we can't look up tags in the monotype).
+/// (Bool lowers as the ordinary `[False, True]` tag union monotype).
 true_tag: Ident.Idx,
 
 /// Counter for generating unique synthetic symbols (used by ANF let-binding).
@@ -184,7 +184,6 @@ fn layoutFromMonotypeInner(self: *Self, monotype: Monotype.Monotype) Allocator.E
         .recursive_placeholder => unreachable,
         .unit => .zst,
         .prim => |p| switch (p) {
-            .bool => .bool,
             .str => .str,
             .u8 => .u8,
             .i8 => .i8,
@@ -409,7 +408,7 @@ fn runtimeRecordLayoutFromExprs(
     field_names: []const Ident.Idx,
     field_exprs: []const MIR.ExprId,
 ) Allocator.Error!layout.Idx {
-    if (field_exprs.len == 0) return try self.layout_store.getEmptyRecordLayout();
+    if (field_exprs.len == 0) return .zst;
     if (field_exprs.len == 1) return self.runtimeValueLayoutFromMirExpr(field_exprs[0]);
 
     const env = self.layout_store.currentEnv();
@@ -937,29 +936,8 @@ fn isTrueTag(self: *const Self, tag_name: Ident.Idx) bool {
 fn tagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monotype.Idx) u16 {
     const monotype = self.mir_store.monotype_store.getMonotype(union_mono_idx);
     switch (monotype) {
-        .prim => |p| {
-            // Bool is a primitive, not a tag_union. Its discriminants are:
-            // False = 0, True = 1 (sorted alphabetically).
-            std.debug.assert(p == .bool);
-            return if (self.isTrueTag(tag_name)) 1 else 0;
-        },
         .tag_union => |tu| {
             const tags = self.mir_store.monotype_store.getTags(tu.tags);
-
-            // Bool tag_union (True/False): use the same convention as prim.bool.
-            // Only apply this to actual Bool, not arbitrary 2-tag zero-payload unions
-            // like Ok/Err — those must use the general sorted-tag-order discriminant.
-            if (tags.len == 2) {
-                const p0 = self.mir_store.monotype_store.getIdxSpan(tags[0].payloads);
-                const p1 = self.mir_store.monotype_store.getIdxSpan(tags[1].payloads);
-                if (p0.len == 0 and p1.len == 0) {
-                    if (self.isTrueTag(tags[0].name) or
-                        self.isTrueTag(tags[1].name))
-                    {
-                        return if (self.isTrueTag(tag_name)) 1 else 0;
-                    }
-                }
-            }
 
             // Only direct Ident.Idx equality is supported.
             for (tags, 0..) |tag, i| {
@@ -975,10 +953,10 @@ fn tagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monot
             }
             unreachable;
         },
-        .unit, .record, .tuple, .list, .box, .func, .recursive_placeholder => {
+        .prim, .unit, .record, .tuple, .list, .box, .func, .recursive_placeholder => {
             if (builtin.mode == .Debug) {
                 std.debug.panic(
-                    "tagDiscriminant expected tag_union/Bool; got {s} for tag ident idx {d} mono_idx={d}",
+                    "tagDiscriminant expected tag_union; got {s} for tag ident idx {d} mono_idx={d}",
                     .{ @tagName(std.meta.activeTag(monotype)), tag_name.idx, @intFromEnum(union_mono_idx) },
                 );
             }
@@ -2613,7 +2591,7 @@ fn emitZeroLiteral(self: *Self, mir_expr: MIR.ExprId, region: Region) Allocator.
             .f64 => LirExpr{ .f64_literal = 0.0 },
             .dec => LirExpr{ .dec_literal = 0 },
             .i128, .u128 => LirExpr{ .i128_literal = .{ .value = 0, .layout_idx = arg_layout_idx } },
-            .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64 => LirExpr{ .i64_literal = .{ .value = 0, .layout_idx = arg_layout_idx } },
+            .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64 => LirExpr{ .i64_literal = .{ .value = 0, .layout_idx = arg_layout_idx } },
         },
         .func, .tag_union, .record, .tuple, .list, .box, .unit, .recursive_placeholder => unreachable,
     }, region);
@@ -2902,10 +2880,6 @@ fn registerBindingPatternSymbols(
 
             const tags = switch (mono) {
                 .tag_union => |tu| self.mir_store.monotype_store.getTags(tu.tags),
-                .prim => |prim| switch (prim) {
-                    .bool => return,
-                    else => unreachable,
-                },
                 else => unreachable,
             };
 
@@ -3062,29 +3036,21 @@ fn lowerPatternInternal(
 
             const tags = switch (self.mir_store.monotype_store.getMonotype(mono_idx)) {
                 .tag_union => |tu| self.mir_store.monotype_store.getTags(tu.tags),
-                .prim => |prim| switch (prim) {
-                    .bool => null,
-                    else => unreachable,
-                },
                 else => unreachable,
             };
 
             const save_len = self.scratch_lir_pattern_ids.items.len;
             defer self.scratch_lir_pattern_ids.shrinkRetainingCapacity(save_len);
 
-            if (tags) |tag_set| {
-                for (tag_set) |tag_info| {
-                    if (!tag_info.name.eql(t.name)) continue;
-                    const payloads = self.mir_store.monotype_store.getIdxSpan(tag_info.payloads);
-                    for (mir_pat_args, payloads) |mir_arg_pat, payload_mono| {
-                        const arg_layout = try self.layoutFromMonotype(payload_mono);
-                        const lir_pat = try self.lowerPatternInternal(mir_arg_pat, arg_layout, collect_rest_bindings, region);
-                        try self.scratch_lir_pattern_ids.append(self.allocator, lir_pat);
-                    }
-                    break;
+            for (tags) |tag_info| {
+                if (!tag_info.name.eql(t.name)) continue;
+                const payloads = self.mir_store.monotype_store.getIdxSpan(tag_info.payloads);
+                for (mir_pat_args, payloads) |mir_arg_pat, payload_mono| {
+                    const arg_layout = try self.layoutFromMonotype(payload_mono);
+                    const lir_pat = try self.lowerPatternInternal(mir_arg_pat, arg_layout, collect_rest_bindings, region);
+                    try self.scratch_lir_pattern_ids.append(self.allocator, lir_pat);
                 }
-            } else {
-                std.debug.assert(mir_pat_args.len == 0);
+                break;
             }
 
             const lir_args = try self.lir_store.addPatternSpan(self.scratch_lir_pattern_ids.items[save_len..]);
@@ -4006,7 +3972,7 @@ test "MIR tuple access preserves element index" {
     defer testDeinit(&env);
 
     const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
-    const bool_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.bool)];
+    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, env.module_env.idents);
 
     // Create tuple monotype: (I64, Bool, I64)
     const tuple_elems = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{ i64_mono, bool_mono, i64_mono });
@@ -4171,7 +4137,7 @@ test "MIR single-tag union with multiple payloads emits tuple" {
     defer testDeinit(&env);
 
     const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
-    const bool_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.bool)];
+    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, env.module_env.idents);
 
     // Create a single-tag union with multiple payloads: [Pair I64 Bool]
     const tag_pair = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
@@ -4410,7 +4376,7 @@ test "MIR while_loop lowers to LIR while_loop" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const bool_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.bool)];
+    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, env.module_env.idents);
     const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
     const unit_mono = env.mir_store.monotype_store.unit_idx;
 
@@ -4472,7 +4438,7 @@ test "MIR expect lowers to LIR expect" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const bool_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.bool)];
+    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, env.module_env.idents);
     const unit_mono = env.mir_store.monotype_store.unit_idx;
 
     // Build MIR: expect (true)
@@ -4603,7 +4569,7 @@ test "MIR num_is_zero with f64 operand emits f64 zero literal" {
     defer testDeinit(&env);
 
     const f64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.f64)];
-    const bool_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.bool)];
+    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, env.module_env.idents);
 
     // Build MIR: run_low_level(.num_is_zero, [3.14])
     const arg0 = try env.mir_store.addExpr(allocator, .{ .frac_f64 = 3.14 }, f64_mono, Region.zero());
@@ -4636,7 +4602,7 @@ test "MIR num_is_zero with i128 operand emits i128 zero literal" {
     defer testDeinit(&env);
 
     const i128_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i128)];
-    const bool_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.bool)];
+    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, env.module_env.idents);
 
     // Build MIR: run_low_level(.num_is_zero, [42_i128])
     const arg0 = try env.mir_store.addExpr(allocator, .{ .int = .{
@@ -4716,7 +4682,7 @@ test "borrowed low-level large string literal lowers through LIR borrow_scope" {
     defer testDeinit(&env);
 
     const str_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.str)];
-    const bool_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.bool)];
+    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, env.module_env.idents);
 
     const large_text =
         "This string is deliberately longer than RocStr small-string storage";
@@ -4947,7 +4913,7 @@ test "MIR small i128 value emits i128_literal not i64_literal" {
 }
 
 // --- Bool.not LIR structural tests ---
-// Verify that a prim.bool match (like negBool produces) gets correct discriminants:
+// Verify that a Bool tag-union match (like negBool produces) gets correct discriminants:
 // True pattern → discriminant 1, False body → discriminant 0.
 
 test "LIR Bool match: True pattern gets discriminant 1, False body gets discriminant 0" {
@@ -4957,14 +4923,14 @@ test "LIR Bool match: True pattern gets discriminant 1, False body gets discrimi
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const bool_mono = env.mir_store.monotype_store.primIdx(.bool);
+    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, env.module_env.idents);
     const true_tag = env.module_env.idents.true_tag;
     const false_tag = env.module_env.idents.false_tag;
 
     // Build MIR: match <scrutinee> { True => False, _ => True }
     // This is exactly what negBool produces.
 
-    // Scrutinee: Bool.True tag with prim.bool monotype
+    // Scrutinee: Bool.True tag with ordinary Bool tag_union monotype
     const scrutinee = try env.mir_store.addExpr(allocator, .{ .tag = .{
         .name = true_tag,
         .args = MIR.ExprSpan.empty(),
@@ -5047,7 +5013,7 @@ test "LIR Bool match: False scrutinee gets discriminant 0" {
     try testInitLayoutStore(&env);
     defer testDeinit(&env);
 
-    const bool_mono = env.mir_store.monotype_store.primIdx(.bool);
+    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, env.module_env.idents);
     const true_tag = env.module_env.idents.true_tag;
     const false_tag = env.module_env.idents.false_tag;
 

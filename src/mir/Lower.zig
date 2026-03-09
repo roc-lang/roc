@@ -741,13 +741,14 @@ fn emitMirUnitExpr(self: *Self, region: Region) Allocator.Error!MIR.ExprId {
 }
 
 fn emitMirBoolLiteral(self: *Self, module_env: *const ModuleEnv, value: bool, region: Region) Allocator.Error!MIR.ExprId {
+    const bool_mono = try self.store.monotype_store.addBoolTagUnion(self.allocator, self.currentCommonIdents());
     return try self.store.addExpr(
         self.allocator,
         .{ .tag = .{
             .name = if (value) module_env.idents.true_tag else module_env.idents.false_tag,
             .args = MIR.ExprSpan.empty(),
         } },
-        self.store.monotype_store.primIdx(.bool),
+        bool_mono,
         region,
     );
 }
@@ -806,7 +807,7 @@ fn toStrLowLevelForPrim(prim: Monotype.Prim) ?CIR.Expr.LowLevel {
         .f32 => .f32_to_str,
         .f64 => .f64_to_str,
         .dec => .dec_to_str,
-        .bool, .str => null,
+        .str => null,
     };
 }
 
@@ -858,18 +859,6 @@ fn lowerStrInspektExpr(
                 break :blk try self.store.addExpr(
                     self.allocator,
                     .{ .str_escape_and_quote = value_expr },
-                    self.store.monotype_store.primIdx(.str),
-                    region,
-                );
-            },
-            .bool => blk: {
-                const true_str = try self.emitMirStrLiteral("True", region);
-                const false_str = try self.emitMirStrLiteral("False", region);
-                break :blk try self.createBoolMatch(
-                    module_env,
-                    value_expr,
-                    true_str,
-                    false_str,
                     self.store.monotype_store.primIdx(.str),
                     region,
                 );
@@ -1095,7 +1084,7 @@ fn lowerStrInspektList(
     region: Region,
 ) Allocator.Error!MIR.ExprId {
     const str_mono = self.store.monotype_store.primIdx(.str);
-    const bool_mono = self.store.monotype_store.primIdx(.bool);
+    const bool_mono = try self.store.monotype_store.addBoolTagUnion(self.allocator, self.currentCommonIdents());
     const unit_mono = self.store.monotype_store.unit_idx;
 
     const acc_bind = try self.makeSyntheticBind(str_mono, true);
@@ -2832,7 +2821,7 @@ fn lowerBinop(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop, monoty
         .@"and" => {
             const cond = try self.lowerExpr(binop.lhs);
             const body_true = try self.lowerExpr(binop.rhs);
-            const bool_monotype = self.store.monotype_store.primIdx(.bool);
+            const bool_monotype = try self.store.monotype_store.addBoolTagUnion(self.allocator, self.currentCommonIdents());
             const false_expr = try self.store.addExpr(self.allocator, .{ .tag = .{
                 .name = module_env.idents.false_tag,
                 .args = MIR.ExprSpan.empty(),
@@ -2844,7 +2833,7 @@ fn lowerBinop(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop, monoty
         .@"or" => {
             const cond = try self.lowerExpr(binop.lhs);
             const body_else = try self.lowerExpr(binop.rhs);
-            const bool_monotype = self.store.monotype_store.primIdx(.bool);
+            const bool_monotype = try self.store.monotype_store.addBoolTagUnion(self.allocator, self.currentCommonIdents());
             const true_expr = try self.store.addExpr(self.allocator, .{ .tag = .{
                 .name = module_env.idents.true_tag,
                 .args = MIR.ExprSpan.empty(),
@@ -2891,7 +2880,6 @@ fn lowerBinop(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop, monoty
                     // Primitives: emit low-level eq op directly.
                     .prim => |p| {
                         const op: CIR.Expr.LowLevel = switch (p) {
-                            .bool => .bool_is_eq,
                             .str => .str_is_eq,
                             else => .num_is_eq,
                         };
@@ -2988,7 +2976,7 @@ fn createBoolMatch(
     monotype: Monotype.Idx,
     region: Region,
 ) Allocator.Error!MIR.ExprId {
-    const bool_monotype = self.store.monotype_store.primIdx(.bool);
+    const bool_monotype = try self.store.monotype_store.addBoolTagUnion(self.allocator, self.currentCommonIdents());
 
     const true_pattern = try self.store.addPattern(self.allocator, .{ .tag = .{
         .name = module_env.idents.true_tag,
@@ -3012,7 +3000,7 @@ fn createBoolMatch(
 
 /// Negate a Bool: `match expr { True => False, _ => True }`
 fn negBool(self: *Self, module_env: *const ModuleEnv, expr: MIR.ExprId, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
-    const bool_monotype = self.store.monotype_store.primIdx(.bool);
+    const bool_monotype = try self.store.monotype_store.addBoolTagUnion(self.allocator, self.currentCommonIdents());
     const false_expr = try self.store.addExpr(self.allocator, .{ .tag = .{
         .name = module_env.idents.false_tag,
         .args = MIR.ExprSpan.empty(),
@@ -3095,7 +3083,6 @@ fn lowerFieldEquality(
     switch (mono) {
         .prim => |p| {
             const op: CIR.Expr.LowLevel = switch (p) {
-                .bool => .bool_is_eq,
                 .str => .str_is_eq,
                 else => .num_is_eq,
             };
@@ -3382,7 +3369,7 @@ fn lowerListEquality(
     self.debugAssertLookupExpr(rhs, "lowerListEquality(rhs)");
 
     const u64_mono = self.store.monotype_store.primIdx(.u64);
-    const bool_mono = self.store.monotype_store.primIdx(.bool);
+    const bool_mono = try self.store.monotype_store.addBoolTagUnion(self.allocator, self.currentCommonIdents());
     const unit_mono = self.store.monotype_store.unit_idx;
 
     // len = list_len(lhs)
@@ -4514,7 +4501,6 @@ fn typeBindingInvariant(comptime fmt: []const u8, args: anytype) noreturn {
 }
 
 fn builtinPrimForNominal(ident: Ident.Idx, common: ModuleEnv.CommonIdents) ?Monotype.Prim {
-    if (ident.eql(common.bool)) return .bool;
     if (ident.eql(common.str)) return .str;
     if (ident.eql(common.u8_type)) return .u8;
     if (ident.eql(common.i8_type)) return .i8;
@@ -4842,76 +4828,6 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
         .tag_union => |tag_union_row| {
             const mono_tags = switch (mono) {
                 .tag_union => |mtu| self.store.monotype_store.getTags(mtu.tags),
-                .prim => |p| {
-                    if (p == .bool) {
-                        const common = self.currentCommonIdents();
-                        var found_true = false;
-                        var found_false = false;
-                        var current_row = tag_union_row;
-                        rows: while (true) {
-                            const type_tags = self.types_store.getTagsSlice(current_row.tags);
-                            const type_tag_names = type_tags.items(.name);
-                            const type_tag_args = type_tags.items(.args);
-                            for (type_tag_names, type_tag_args) |tag_name, tag_args| {
-                                const payload_vars = self.types_store.sliceVars(tag_args);
-                                if (payload_vars.len != 0) {
-                                    typeBindingInvariant(
-                                        "bindFlatTypeMonotypes(tag_union Bool): non-empty payload for tag '{s}'",
-                                        .{module_env.getIdent(tag_name)},
-                                    );
-                                }
-                                if (tag_name.eql(common.true_tag)) {
-                                    found_true = true;
-                                } else if (tag_name.eql(common.false_tag)) {
-                                    found_false = true;
-                                } else {
-                                    typeBindingInvariant(
-                                        "bindFlatTypeMonotypes(tag_union Bool): unexpected tag '{s}'",
-                                        .{module_env.getIdent(tag_name)},
-                                    );
-                                }
-                            }
-
-                            var ext_var = current_row.ext;
-                            while (true) {
-                                const ext_resolved = self.types_store.resolveVar(ext_var);
-                                switch (ext_resolved.desc.content) {
-                                    .alias => |alias| {
-                                        ext_var = self.types_store.getAliasBackingVar(alias);
-                                        continue;
-                                    },
-                                    .structure => |ext_flat| switch (ext_flat) {
-                                        .tag_union => |next_row| {
-                                            current_row = next_row;
-                                            continue :rows;
-                                        },
-                                        .empty_tag_union => break :rows,
-                                        else => typeBindingInvariant(
-                                            "bindFlatTypeMonotypes(tag_union Bool): unexpected ext flat type '{s}'",
-                                            .{@tagName(ext_flat)},
-                                        ),
-                                    },
-                                    .flex, .rigid => break :rows,
-                                    .err => typeBindingInvariant(
-                                        "bindFlatTypeMonotypes(tag_union Bool): error extension",
-                                        .{},
-                                    ),
-                                }
-                            }
-                        }
-                        if (!(found_true and found_false)) {
-                            typeBindingInvariant(
-                                "bindFlatTypeMonotypes(tag_union Bool): missing True/False tags",
-                                .{},
-                            );
-                        }
-                        return;
-                    }
-                    typeBindingInvariant(
-                        "bindFlatTypeMonotypes(tag_union): expected tag_union/bool monotype, found prim '{s}'",
-                        .{@tagName(p)},
-                    );
-                },
                 else => typeBindingInvariant(
                     "bindFlatTypeMonotypes(tag_union): expected tag_union monotype, found '{s}'",
                     .{@tagName(mono)},

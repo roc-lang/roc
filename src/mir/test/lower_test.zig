@@ -47,7 +47,7 @@ test "MIR Store: add and get pattern" {
     var store = try MIR.Store.init(test_allocator);
     defer store.deinit(test_allocator);
 
-    const monotype = store.monotype_store.primIdx(.bool);
+    const monotype = store.monotype_store.primIdx(.i64);
     const symbol = testSymbolFromIdent(Ident.Idx.NONE);
     const pat_id = try store.addPattern(test_allocator, .{ .bind = symbol }, monotype);
 
@@ -102,7 +102,7 @@ test "MIR Store: branches" {
     var store = try MIR.Store.init(test_allocator);
     defer store.deinit(test_allocator);
 
-    const monotype = store.monotype_store.primIdx(.bool);
+    const monotype = store.monotype_store.primIdx(.i64);
     const body1 = try store.addExpr(test_allocator, .{ .int = .{
         .value = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 },
     } }, monotype, Region.zero());
@@ -181,7 +181,7 @@ test "MIR Store: multiple expressions round trip" {
 
     const i64_type = store.monotype_store.primIdx(.i64);
     const str_type = store.monotype_store.primIdx(.str);
-    const bool_type = store.monotype_store.primIdx(.bool);
+    const pattern_type = store.monotype_store.primIdx(.i64);
 
     // Add int
     const int_id = try store.addExpr(test_allocator, .{ .int = .{
@@ -197,13 +197,13 @@ test "MIR Store: multiple expressions round trip" {
     const list_id = try store.addExpr(test_allocator, .{ .list = .{ .elems = list_span } }, i64_type, Region.zero());
 
     // Add wildcard pattern
-    const wild_id = try store.addPattern(test_allocator, .wildcard, bool_type);
+    const wild_id = try store.addPattern(test_allocator, .wildcard, pattern_type);
 
     // Verify types
     try testing.expectEqual(i64_type, store.typeOf(int_id));
     try testing.expectEqual(str_type, store.typeOf(str_id));
     try testing.expectEqual(i64_type, store.typeOf(list_id));
-    try testing.expectEqual(bool_type, store.patternTypeOf(wild_id));
+    try testing.expectEqual(pattern_type, store.patternTypeOf(wild_id));
 
     // Verify expressions
     switch (store.getExpr(int_id)) {
@@ -234,7 +234,6 @@ test "Monotype Store: primitive types" {
     var store = try Monotype.Store.init(test_allocator);
     defer store.deinit(test_allocator);
 
-    try testing.expectEqual(Monotype.Prim.bool, store.getMonotype(store.primIdx(.bool)).prim);
     try testing.expectEqual(Monotype.Prim.str, store.getMonotype(store.primIdx(.str)).prim);
     try testing.expectEqual(Monotype.Prim.i64, store.getMonotype(store.primIdx(.i64)).prim);
 }
@@ -263,7 +262,7 @@ test "Monotype Store: func type" {
 
     const arg1 = store.primIdx(.i64);
     const arg2 = store.primIdx(.str);
-    const ret = store.primIdx(.bool);
+    const ret = store.primIdx(.i64);
 
     const args_span = try store.addIdxSpan(test_allocator, &.{ arg1, arg2 });
     const func = try store.addMonotype(test_allocator, .{ .func = .{
@@ -340,11 +339,15 @@ test "Monotype Store: all primitive types" {
     defer store.deinit(test_allocator);
 
     const prims = [_]Monotype.Prim{
-        .bool, .str,
-        .u8,   .i8,
-        .u16,  .i16,
-        .u32,  .i32,
-        .u64,  .i64,
+        .str,
+        .u8,
+        .i8,
+        .u16,
+        .i16,
+        .u32,
+        .i32,
+        .u64,
+        .i64,
         .u128, .i128,
         .f32,  .f64,
         .dec,
@@ -937,8 +940,7 @@ test "lambda set: imported List.any receives predicate lambda set" {
     try testing.expect(predicate_arg_mono == .prim);
     try testing.expectEqual(Monotype.Prim.i64, predicate_arg_mono.prim);
     const predicate_ret_mono = env.mir_store.monotype_store.getMonotype(predicate_param_mono.func.ret);
-    try testing.expect(predicate_ret_mono == .prim);
-    try testing.expectEqual(Monotype.Prim.bool, predicate_ret_mono.prim);
+    try testing.expect(predicate_ret_mono == .tag_union);
 
     const predicate_pat = env.mir_store.getPattern(param_ids[1]);
     try testing.expect(predicate_pat == .bind);
@@ -1960,7 +1962,7 @@ test "cross-module: string inequality lowers without error" {
 // These tests verify MIR lowering of Bool expressions from failing REPL snapshots.
 // If all pass, the Bool inversion bug is in LIR lowering or codegen, not MIR.
 
-test "Bool diagnostic MIR: Bool.True lowers to tag with prim.bool" {
+test "Bool diagnostic MIR: Bool.True lowers to tag with tag_union" {
     var env = try MirTestEnv.initExpr("Bool.True");
     defer env.deinit();
     const expr = try env.lowerFirstDef();
@@ -1971,13 +1973,12 @@ test "Bool diagnostic MIR: Bool.True lowers to tag with prim.bool" {
     // Check the tag name is "True"
     const tag_name = env.module_env.getIdent(result.tag.name);
     try testing.expectEqualStrings("True", tag_name);
-    // Monotype should be prim.bool
+    // Monotype should be tag_union
     const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .prim);
-    try testing.expectEqual(Monotype.Prim.bool, monotype.prim);
+    try testing.expect(monotype == .tag_union);
 }
 
-test "Bool diagnostic MIR: Bool.False lowers to tag with prim.bool" {
+test "Bool diagnostic MIR: Bool.False lowers to tag with tag_union" {
     var env = try MirTestEnv.initExpr("Bool.False");
     defer env.deinit();
     const expr = try env.lowerFirstDef();
@@ -1987,11 +1988,10 @@ test "Bool diagnostic MIR: Bool.False lowers to tag with prim.bool" {
     const tag_name = env.module_env.getIdent(result.tag.name);
     try testing.expectEqualStrings("False", tag_name);
     const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .prim);
-    try testing.expectEqual(Monotype.Prim.bool, monotype.prim);
+    try testing.expect(monotype == .tag_union);
 }
 
-test "Bool diagnostic MIR: Bool.not(True) lowers with prim.bool type" {
+test "Bool diagnostic MIR: Bool.not(True) lowers with tag_union type" {
     var env = try MirTestEnv.initExpr("Bool.not(True)");
     defer env.deinit();
     const expr = try env.lowerFirstDef();
@@ -1999,22 +1999,20 @@ test "Bool diagnostic MIR: Bool.not(True) lowers with prim.bool type" {
     // Bool.not may lower as a cross-module call or inlined match
     try testing.expect(result != .runtime_err_type);
     const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .prim);
-    try testing.expectEqual(Monotype.Prim.bool, monotype.prim);
+    try testing.expect(monotype == .tag_union);
 }
 
-test "Bool diagnostic MIR: Bool.not(False) lowers with prim.bool type" {
+test "Bool diagnostic MIR: Bool.not(False) lowers with tag_union type" {
     var env = try MirTestEnv.initExpr("Bool.not(False)");
     defer env.deinit();
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
     try testing.expect(result != .runtime_err_type);
     const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .prim);
-    try testing.expectEqual(Monotype.Prim.bool, monotype.prim);
+    try testing.expect(monotype == .tag_union);
 }
 
-test "Bool diagnostic MIR: !Bool.True lowers to match_expr with prim.bool" {
+test "Bool diagnostic MIR: !Bool.True lowers to match_expr with tag_union" {
     var env = try MirTestEnv.initFull("Test",
         \\main : Bool
         \\main = !Bool.True
@@ -2024,11 +2022,10 @@ test "Bool diagnostic MIR: !Bool.True lowers to match_expr with prim.bool" {
     // !Bool.True desugars via negBool to a match expression
     try testing.expect(env.mir_store.getExpr(expr) == .match_expr);
     const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .prim);
-    try testing.expectEqual(Monotype.Prim.bool, monotype.prim);
+    try testing.expect(monotype == .tag_union);
 }
 
-test "Bool diagnostic MIR: !Bool.False lowers to match_expr with prim.bool" {
+test "Bool diagnostic MIR: !Bool.False lowers to match_expr with tag_union" {
     var env = try MirTestEnv.initFull("Test",
         \\main : Bool
         \\main = !Bool.False
@@ -2037,11 +2034,10 @@ test "Bool diagnostic MIR: !Bool.False lowers to match_expr with prim.bool" {
     const expr = try env.lowerFirstDef();
     try testing.expect(env.mir_store.getExpr(expr) == .match_expr);
     const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .prim);
-    try testing.expectEqual(Monotype.Prim.bool, monotype.prim);
+    try testing.expect(monotype == .tag_union);
 }
 
-test "Bool diagnostic MIR: Bool.True and Bool.False lowers to match_expr with prim.bool" {
+test "Bool diagnostic MIR: Bool.True and Bool.False lowers to match_expr with tag_union" {
     var env = try MirTestEnv.initExpr("Bool.True and Bool.False");
     defer env.deinit();
     const expr = try env.lowerFirstDef();
@@ -2049,11 +2045,10 @@ test "Bool diagnostic MIR: Bool.True and Bool.False lowers to match_expr with pr
     // `and` short-circuit desugars to a match expression
     try testing.expect(result == .match_expr);
     const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .prim);
-    try testing.expectEqual(Monotype.Prim.bool, monotype.prim);
+    try testing.expect(monotype == .tag_union);
 }
 
-test "Bool diagnostic MIR: !Bool.True or !Bool.True lowers with prim.bool" {
+test "Bool diagnostic MIR: !Bool.True or !Bool.True lowers with tag_union" {
     var env = try MirTestEnv.initFull("Test",
         \\main : Bool
         \\main = !Bool.True or !Bool.True
@@ -2064,11 +2059,10 @@ test "Bool diagnostic MIR: !Bool.True or !Bool.True lowers with prim.bool" {
     // `or` short-circuit desugars to a match expression
     try testing.expect(result == .match_expr);
     const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .prim);
-    try testing.expectEqual(Monotype.Prim.bool, monotype.prim);
+    try testing.expect(monotype == .tag_union);
 }
 
-test "Bool diagnostic MIR: lambda negation applied to Bool.True lowers with prim.bool" {
+test "Bool diagnostic MIR: lambda negation applied to Bool.True lowers with tag_union" {
     var env = try MirTestEnv.initExpr("(|x| !x)(Bool.True)");
     defer env.deinit();
     const expr = try env.lowerFirstDef();
@@ -2076,8 +2070,7 @@ test "Bool diagnostic MIR: lambda negation applied to Bool.True lowers with prim
     // A lambda call should produce a .call expression
     try testing.expect(result != .runtime_err_type);
     const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .prim);
-    try testing.expectEqual(Monotype.Prim.bool, monotype.prim);
+    try testing.expect(monotype == .tag_union);
 }
 
 // --- Bool.not structural tests ---
@@ -2100,10 +2093,9 @@ test "Bool.not MIR: !Bool.True match has True pattern -> False body, wildcard ->
     const cond_tag_name = env.module_env.getIdent(cond.tag.name);
     try testing.expectEqualStrings("True", cond_tag_name);
 
-    // Check condition monotype is prim.bool
+    // Check condition monotype is tag_union
     const cond_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(result.match_expr.cond));
-    try testing.expect(cond_mono == .prim);
-    try testing.expectEqual(Monotype.Prim.bool, cond_mono.prim);
+    try testing.expect(cond_mono == .tag_union);
 
     // Check there are 2 branches
     const branches = env.mir_store.getBranches(result.match_expr.branches);
@@ -2116,10 +2108,9 @@ test "Bool.not MIR: !Bool.True match has True pattern -> False body, wildcard ->
     try testing.expect(pat0 == .tag);
     const pat0_name = env.module_env.getIdent(pat0.tag.name);
     try testing.expectEqualStrings("True", pat0_name);
-    // Pattern monotype should be prim.bool
+    // Pattern monotype should be tag_union
     const pat0_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.patternTypeOf(bp0[0].pattern));
-    try testing.expect(pat0_mono == .prim);
-    try testing.expectEqual(Monotype.Prim.bool, pat0_mono.prim);
+    try testing.expect(pat0_mono == .tag_union);
     // Body should be False tag
     const body0 = env.mir_store.getExpr(branches[0].body);
     try testing.expect(body0 == .tag);
@@ -2154,8 +2145,7 @@ test "Bool.not MIR: !Bool.False match has True pattern -> False body, wildcard -
     const cond_tag_name = env.module_env.getIdent(cond.tag.name);
     try testing.expectEqualStrings("False", cond_tag_name);
     const cond_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(result.match_expr.cond));
-    try testing.expect(cond_mono == .prim);
-    try testing.expectEqual(Monotype.Prim.bool, cond_mono.prim);
+    try testing.expect(cond_mono == .tag_union);
 
     // Branch structure should be identical: True => False, _ => True
     const branches = env.mir_store.getBranches(result.match_expr.branches);
@@ -2177,54 +2167,49 @@ test "Bool.not MIR: !Bool.False match has True pattern -> False body, wildcard -
     try testing.expectEqualStrings("True", env.module_env.getIdent(body1.tag.name));
 }
 
-test "Bool.not MIR: Bool.not(True) is a call with prim.bool return type" {
+test "Bool.not MIR: Bool.not(True) is a call with tag_union return type" {
     var env = try MirTestEnv.initExpr("Bool.not(True)");
     defer env.deinit();
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
     // Bool.not(True) should be a call expression (cross-module method call)
     try testing.expect(result == .call);
-    // Return type should be prim.bool
+    // Return type should be tag_union
     const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .prim);
-    try testing.expectEqual(Monotype.Prim.bool, monotype.prim);
-    // The argument should be a tag (True) with prim.bool type
+    try testing.expect(monotype == .tag_union);
+    // The argument should be a tag (True) with tag_union type
     const args = env.mir_store.getExprSpan(result.call.args);
     try testing.expectEqual(@as(usize, 1), args.len);
     const arg = env.mir_store.getExpr(args[0]);
     try testing.expect(arg == .tag);
     try testing.expectEqualStrings("True", env.module_env.getIdent(arg.tag.name));
     const arg_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(args[0]));
-    try testing.expect(arg_mono == .prim);
-    try testing.expectEqual(Monotype.Prim.bool, arg_mono.prim);
+    try testing.expect(arg_mono == .tag_union);
 }
 
-test "Bool.not MIR: Bool.not(False) is a call with prim.bool return type" {
+test "Bool.not MIR: Bool.not(False) is a call with tag_union return type" {
     var env = try MirTestEnv.initExpr("Bool.not(False)");
     defer env.deinit();
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
     try testing.expect(result == .call);
     const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .prim);
-    try testing.expectEqual(Monotype.Prim.bool, monotype.prim);
+    try testing.expect(monotype == .tag_union);
     const args = env.mir_store.getExprSpan(result.call.args);
     try testing.expectEqual(@as(usize, 1), args.len);
     const arg = env.mir_store.getExpr(args[0]);
     try testing.expect(arg == .tag);
     try testing.expectEqualStrings("False", env.module_env.getIdent(arg.tag.name));
     const arg_mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(args[0]));
-    try testing.expect(arg_mono == .prim);
-    try testing.expectEqual(Monotype.Prim.bool, arg_mono.prim);
+    try testing.expect(arg_mono == .tag_union);
 }
 
 // --- Nominal Bool vs structural tag union MIR tests ---
 // CRITICAL DISTINCTION: Bare tags like `True` and `False` without a Bool annotation
-// must lower to `.tag_union` monotype, NOT `prim.bool`. Only nominal `Bool` (via
-// qualified `Bool.True` or explicit `: Bool` annotation) gets `prim.bool`.
+// must lower to `.tag_union` monotype, and nominal `Bool` now does too.
 // See also: corresponding type-checking tests in type_checking_integration.zig.
 
-test "Nominal Bool MIR: annotated True lowers with prim.bool" {
+test "Nominal Bool MIR: annotated True lowers with tag_union" {
     var env = try MirTestEnv.initFull("Test",
         \\main : Bool
         \\main = True
@@ -2232,11 +2217,10 @@ test "Nominal Bool MIR: annotated True lowers with prim.bool" {
     defer env.deinit();
     const expr = try env.lowerFirstDef();
     const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .prim);
-    try testing.expectEqual(Monotype.Prim.bool, monotype.prim);
+    try testing.expect(monotype == .tag_union);
 }
 
-test "Nominal Bool MIR: annotated False lowers with prim.bool" {
+test "Nominal Bool MIR: annotated False lowers with tag_union" {
     var env = try MirTestEnv.initFull("Test",
         \\main : Bool
         \\main = False
@@ -2244,11 +2228,10 @@ test "Nominal Bool MIR: annotated False lowers with prim.bool" {
     defer env.deinit();
     const expr = try env.lowerFirstDef();
     const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(monotype == .prim);
-    try testing.expectEqual(Monotype.Prim.bool, monotype.prim);
+    try testing.expect(monotype == .tag_union);
 }
 
-test "Structural tag MIR: bare True lowers as tag_union not prim.bool" {
+test "Structural tag MIR: bare True lowers as tag_union" {
     var env = try MirTestEnv.initExpr("True");
     defer env.deinit();
     const expr = try env.lowerFirstDef();
@@ -2256,7 +2239,7 @@ test "Structural tag MIR: bare True lowers as tag_union not prim.bool" {
     try testing.expect(monotype == .tag_union);
 }
 
-test "Structural tag MIR: bare False lowers as tag_union not prim.bool" {
+test "Structural tag MIR: bare False lowers as tag_union" {
     var env = try MirTestEnv.initExpr("False");
     defer env.deinit();
     const expr = try env.lowerFirstDef();
@@ -2264,7 +2247,7 @@ test "Structural tag MIR: bare False lowers as tag_union not prim.bool" {
     try testing.expect(monotype == .tag_union);
 }
 
-test "Structural tag MIR: if True True else False lowers as tag_union not prim.bool" {
+test "Structural tag MIR: if True True else False lowers as tag_union" {
     var env = try MirTestEnv.initExpr("if True True else False");
     defer env.deinit();
     const expr = try env.lowerFirstDef();
@@ -2457,8 +2440,7 @@ test "structural equality: record == produces match_expr (field-by-field)" {
     try testing.expect(env.mir_store.getExpr(result.borrow_scope.body) == .match_expr);
     // Return type should be Bool
     const mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(mono == .prim);
-    try testing.expectEqual(Monotype.Prim.bool, mono.prim);
+    try testing.expect(mono == .tag_union);
 }
 
 test "structural equality: record != produces negated match_expr" {
@@ -2472,8 +2454,7 @@ test "structural equality: record != produces negated match_expr" {
     // != wraps the == result in negBool (match True => False, _ => True)
     try testing.expect(result == .match_expr);
     const mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(mono == .prim);
-    try testing.expectEqual(Monotype.Prim.bool, mono.prim);
+    try testing.expect(mono == .tag_union);
 }
 
 test "structural equality: empty record == is True" {
@@ -2502,8 +2483,7 @@ test "structural equality: tuple == produces match_expr" {
     try testing.expectEqual(@as(usize, 2), bindings.len);
     try testing.expect(env.mir_store.getExpr(result.borrow_scope.body) == .match_expr);
     const mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(mono == .prim);
-    try testing.expectEqual(Monotype.Prim.bool, mono.prim);
+    try testing.expect(mono == .tag_union);
 }
 
 test "structural equality: tag union == produces nested match_expr" {
@@ -2521,8 +2501,7 @@ test "structural equality: tag union == produces nested match_expr" {
     try testing.expectEqual(@as(usize, 2), bindings.len);
     try testing.expect(env.mir_store.getExpr(result.borrow_scope.body) == .match_expr);
     const mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(mono == .prim);
-    try testing.expectEqual(Monotype.Prim.bool, mono.prim);
+    try testing.expect(mono == .tag_union);
 }
 
 test "structural equality: single-field record produces run_low_level (no match)" {
@@ -2565,8 +2544,7 @@ test "structural equality: list == produces block with length check" {
     const bindings = env.mir_store.getBorrowBindings(result.borrow_scope.bindings);
     try testing.expectEqual(@as(usize, 2), bindings.len);
     const mono = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
-    try testing.expect(mono == .prim);
-    try testing.expectEqual(Monotype.Prim.bool, mono.prim);
+    try testing.expect(mono == .tag_union);
 }
 
 test "Dec.abs lowers to num_abs with Dec monotype, not unit" {
