@@ -4585,6 +4585,10 @@ pub fn canonicalizeExpr(
                         e.token,
                         &strip_tokens,
                     );
+                    if (comptime trace_modules) {
+                        const ident_text = self.env.getIdent(ident);
+                        std.debug.print("[TRACE-CAN] ident blk_qualified: qualified_name={s} ident={s} calling_module={s}\n", .{ qualified_name_text, ident_text, self.env.module_name });
+                    }
                     const qualified_ident = try self.env.insertIdent(base.Ident.for_text(qualified_name_text));
 
                     // Single-lookup approach: look up the qualified name exactly as written.
@@ -4652,6 +4656,18 @@ pub fn canonicalizeExpr(
                             }
                             break :blk null;
                         };
+                        if (comptime trace_modules) {
+                            const alias_text = self.env.getIdent(module_alias);
+                            if (module_info) |info| {
+                                const mn_text = self.env.getIdent(info.module_name);
+                                std.debug.print("[TRACE-CAN]   module_info found: alias={s} module_name={s} is_pkg_qual={}\n", .{ alias_text, mn_text, info.is_package_qualified });
+                            } else {
+                                std.debug.print("[TRACE-CAN]   module_info NOT found for alias={s}\n", .{alias_text});
+                                const is_type = self.scopeLookupTypeBinding(module_alias) != null;
+                                const in_envs = if (self.module_envs) |em| em.contains(module_alias) else false;
+                                std.debug.print("[TRACE-CAN]     is_type_in_scope={} is_in_module_envs={}\n", .{ is_type, in_envs });
+                            }
+                        }
                         const module_name = if (module_info) |info| info.module_name else {
                             // Not a module alias and not an auto-imported module
                             // Check if the qualifier is a type - if so, try to lookup associated items
@@ -4869,6 +4885,18 @@ pub fn canonicalizeExpr(
                                 break :blk module_env.getExposedNodeIndexById(qname_ident);
                             } else null;
 
+                            if (comptime trace_modules) {
+                                const ft = self.env.getIdent(ident);
+                                if (std.mem.eql(u8, ft, "pack")) {
+                                    const mn_text = self.env.getIdent(module_name);
+                                    std.debug.print("[TRACE-CAN]   pack lookup: module_name={s} lookup_module_name={s} import_idx={}\n", .{ mn_text, lookup_module_name, @intFromEnum(import_idx) });
+                                    if (auto_imported_type_info) |info| {
+                                        std.debug.print("[TRACE-CAN]   pack: env.module_name={s} is_placeholder={} statement_idx={}\n", .{ info.env.module_name, info.is_placeholder, info.statement_idx != null });
+                                        const qt = self.env.getIdent(info.qualified_type_ident);
+                                        std.debug.print("[TRACE-CAN]   pack: qualified_type_ident={s} target_node_idx_opt={?}\n", .{ qt, target_node_idx_opt });
+                                    }
+                                }
+                            }
                             // If target_node_idx_opt is null, we need to handle the error case
                             if (target_node_idx_opt == null) {
                                 // Check if the module is in module_envs - if not, the import failed (MODULE NOT FOUND)
@@ -13073,6 +13101,19 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
         };
 
         // Check if this is a type module (like Stdout) - look up the qualified method name directly
+        if (comptime trace_modules) {
+            const mn_text = self.env.getIdent(module_name);
+            const met_text = self.env.getIdent(method_name);
+            const has_envs = self.module_envs != null;
+            std.debug.print("[TRACE-CAN] tryModuleQualifiedLookup: module={s} method={s} calling_module={s} has_envs={}\n", .{ mn_text, met_text, self.env.module_name, has_envs });
+            if (self.module_envs) |envs_map| {
+                if (envs_map.get(module_name)) |ait| {
+                    std.debug.print("[TRACE-CAN]   found in module_envs: env.module_name={s} statement_idx={} is_placeholder={}\n", .{ ait.env.module_name, ait.statement_idx != null, ait.is_placeholder });
+                } else {
+                    std.debug.print("[TRACE-CAN]   NOT found in module_envs\n", .{});
+                }
+            }
+        }
         if (self.module_envs) |envs_map| {
             if (envs_map.get(module_name)) |auto_imported_type| {
                 if (auto_imported_type.statement_idx != null) {

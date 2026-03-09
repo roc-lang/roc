@@ -78,7 +78,7 @@ type_repr_to_zig : List(TypeRepr), TypeRepr -> Str
 type_repr_to_zig = |type_table, type_repr| {
 	match type_repr {
 		RocBool => "bool"
-		RocBox(inner_id) => "*${type_id_to_zig(type_table, inner_id)}"
+		RocBox(_) => "*anyopaque"
 		RocStr => "RocStr"
 		RocUnit => "void"
 		RocU8 => "u8"
@@ -150,10 +150,54 @@ is_repr_refcounted = |type_table, type_repr| {
 	}
 }
 
+## Check if a tag union is a Roc Try type: exactly [Err, Ok] with 0 or 1 payload each.
+is_try_type = |tu| {
+	if List.len(tu.tags) == 2 {
+		match List.get(tu.tags, 0) {
+			Ok(first) =>
+				match List.get(tu.tags, 1) {
+					Ok(second) =>
+						first.name == "Err" and second.name == "Ok"
+						and List.len(first.payload) <= 1
+						and List.len(second.payload) <= 1
+					_ => Bool.False
+				}
+			_ => Bool.False
+		}
+	} else {
+		Bool.False
+	}
+}
+
+## Get the Zig type for a Try variant's payload.
+## Returns "void" for empty/ZST payloads (the Try comptime function handles void -> [0]u8).
+try_variant_zig_type = |type_table, tag| {
+	if tag.payload_size == 0 {
+		"void"
+	} else {
+		match List.first(tag.payload) {
+			Ok(pid) => type_id_to_zig(type_table, pid)
+			Err(_) => "void"
+		}
+	}
+}
+
 ## Resolve a tag union to a Zig type. Single-variant unions are unwrapped to their payload.
-## Multi-variant unions with a name return a generated struct name.
+## Try types use the comptime Try(Ok, Err) constructor.
+## Other multi-variant unions with a name return a generated struct name.
 resolve_tag_union_type = |type_table, tu| {
-	if List.len(tu.tags) == 1 {
+	if is_try_type(tu) {
+		# Tags are sorted alphabetically: Err=index 0, Ok=index 1
+		err_type = match List.get(tu.tags, 0) {
+			Ok(err_tag) => try_variant_zig_type(type_table, err_tag)
+			_ => "void"
+		}
+		ok_type = match List.get(tu.tags, 1) {
+			Ok(ok_tag) => try_variant_zig_type(type_table, ok_tag)
+			_ => "void"
+		}
+		"Try(${ok_type}, ${err_type})"
+	} else if List.len(tu.tags) == 1 {
 		match List.first(tu.tags) {
 			Ok(tag) =>
 				match List.first(tag.payload) {
@@ -302,7 +346,7 @@ generate_element_type_structs = |type_table| {
 						zig_type = type_id_to_zig(type_table, field.type_id)
 						$field_strs = Str.concat(
 							$field_strs,
-							"    ${field.name}: ${zig_type},\n",
+							"    ${escape_zig_field_name(field.name)}: ${zig_type},\n",
 						)
 					}
 
@@ -356,7 +400,7 @@ generate_tag_union_structs = |type_table| {
 	for type_repr in type_table {
 		match type_repr {
 			RocTagUnion(tu) =>
-				if List.len(tu.tags) >= 2 and tu.name != "" and !(List.contains($seen_names, tu.name)) {
+				if List.len(tu.tags) >= 2 and tu.name != "" and !(List.contains($seen_names, tu.name)) and !(is_try_type(tu)) {
 					$seen_names = $seen_names.append(tu.name)
 					$structs = Str.concat($structs, generate_single_tag_union(type_table, tu))
 				}
@@ -486,6 +530,21 @@ str_replace_all = |s, from, to| {
 
 expect str_replace_all("a.b.c", ".", "_") == "a_b_c"
 expect str_replace_all("hello!", "!", "") == "hello"
+
+## Escape a Roc field name for use as a Zig identifier.
+## Roc field names can contain characters like `!` that are invalid in Zig identifiers.
+## Such names are wrapped with @"..." syntax.
+escape_zig_field_name : Str -> Str
+escape_zig_field_name = |name| {
+	bytes = Str.to_utf8(name)
+	needs_escape = List.any(bytes, |b|
+		!(b >= 'a' and b <= 'z')
+		and !(b >= 'A' and b <= 'Z')
+		and !(b >= '0' and b <= '9')
+		and b != '_'
+	)
+	if needs_escape { "@\"${name}\"" } else { name }
+}
 
 to_uppercase : U8 -> U8
 to_uppercase = |ch| ch - 32
@@ -646,24 +705,29 @@ expect lowercase_first("") == ""
 ## Look up a type_id in the type table and return record fields if it's a record.
 ## Follows single-variant tag unions (unwrapping to their payload).
 ## Type annotation ensures the interpreter uses the full TypeRepr layout.
-lookup_record_in_type_table : List(TypeRepr), U64 -> { found: Bool, fields: List(RecordField), size: U64, alignment: U64 }
+RecordLookup : { found: Bool, fields: List(RecordField), size: U64, alignment: U64, alt_fields: List(RecordField), alt_size: U64, alt_alignment: U64 }
+
+no_record : RecordLookup
+no_record = { found: Bool.False, fields: [], size: 0, alignment: 0, alt_fields: [], alt_size: 0, alt_alignment: 0 }
+
+lookup_record_in_type_table : List(TypeRepr), U64 -> RecordLookup
 lookup_record_in_type_table = |type_table, type_id| {
 	match List.get(type_table, type_id) {
 		Ok(type_repr) => lookup_record_from_repr(type_table, type_repr)
-		Err(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		Err(_) => no_record
 	}
 }
 
 ## Match a TypeRepr and return record fields if it's a record.
 ## Type annotation ensures the interpreter uses the full 21-variant TypeRepr layout.
-lookup_record_from_repr : List(TypeRepr), TypeRepr -> { found: Bool, fields: List(RecordField), size: U64, alignment: U64 }
+lookup_record_from_repr : List(TypeRepr), TypeRepr -> RecordLookup
 lookup_record_from_repr = |type_table, type_repr| {
 	match type_repr {
 		RocRecord(rec) =>
 			if List.len(rec.fields) > 0 {
-				{ found: Bool.True, fields: rec.fields, size: rec.size, alignment: rec.alignment }
+				{ found: Bool.True, fields: rec.fields, size: rec.size, alignment: rec.alignment, alt_fields: rec.alt_fields, alt_size: rec.alt_size, alt_alignment: rec.alt_alignment }
 			} else {
-				{ found: Bool.False, fields: [], size: 0, alignment: 0 }
+				no_record
 			}
 		RocTagUnion(tu) =>
 			# Follow single-variant tag unions to their payload
@@ -672,33 +736,33 @@ lookup_record_from_repr = |type_table, type_repr| {
 					Ok(tag) =>
 						match List.first(tag.payload) {
 							Ok(payload_id) => lookup_record_in_type_table(type_table, payload_id)
-							_ => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+							_ => no_record
 						}
-					_ => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+					_ => no_record
 				}
 			} else {
-				{ found: Bool.False, fields: [], size: 0, alignment: 0 }
+				no_record
 			}
-		RocBox(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocBool => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocDec => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocF32 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocF64 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocFunction(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocI128 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocI16 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocI32 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocI64 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocI8 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocList(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocStr => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocU128 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocU16 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocU32 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocU64 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocU8 => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocUnit => { found: Bool.False, fields: [], size: 0, alignment: 0 }
-		RocUnknown(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		RocBox(_) => no_record
+		RocBool => no_record
+		RocDec => no_record
+		RocF32 => no_record
+		RocF64 => no_record
+		RocFunction(_) => no_record
+		RocI128 => no_record
+		RocI16 => no_record
+		RocI32 => no_record
+		RocI64 => no_record
+		RocI8 => no_record
+		RocList(_) => no_record
+		RocStr => no_record
+		RocU128 => no_record
+		RocU16 => no_record
+		RocU32 => no_record
+		RocU64 => no_record
+		RocU8 => no_record
+		RocUnit => no_record
+		RocUnknown(_) => no_record
 	}
 }
 
@@ -712,6 +776,8 @@ generate_zig_file = |hosted_functions, type_table, provides_list| {
 		.concat(generate_imports)
 		.concat("\n")
 		.concat(generate_host_abi_types)
+		.concat("\n")
+		.concat(generate_try_type)
 		.concat("\n")
 		.concat(generate_roc_str)
 		.concat("\n")
@@ -799,6 +865,32 @@ generate_host_abi_types =
 	\\}
 	\\
 
+## Generate the comptime Try(Ok, Err) type constructor.
+## Roc's Try(ok, err) is the tag union [Ok(ok), Err(err)].
+## Layout: payload extern union at offset 0, u8 discriminant after.
+generate_try_type : Str
+generate_try_type =
+	\\/// Comptime constructor for Roc's `Try(Ok, Err)` result type.
+	\\///
+	\\/// Roc's `Try(ok, err)` is the tag union `[Ok(ok), Err(err)]`.
+	\\/// Layout: payload extern union at offset 0, u8 discriminant after.
+	\\/// Discriminant values: Err = 0, Ok = 1 (alphabetical).
+	\\///
+	\\/// Example: `Try(*anyopaque, i32)` for `Try(Box(Model), I32)`.
+	\\pub fn Try(comptime Ok: type, comptime Err: type) type {
+	\\    const OkField = if (@sizeOf(Ok) == 0) [0]u8 else Ok;
+	\\    const ErrField = if (@sizeOf(Err) == 0) [0]u8 else Err;
+	\\    return extern struct {
+	\\        payload: extern union {
+	\\            err: ErrField,
+	\\            ok: OkField,
+	\\        },
+	\\        tag: TryTag,
+	\\        pub const TryTag = enum(u8) { Err = 0, Ok = 1 };
+	\\    };
+	\\}
+	\\
+
 ## Generate self-contained RocStr type definition
 generate_roc_str : Str
 generate_roc_str =
@@ -811,7 +903,6 @@ generate_roc_str =
 	\\
 	\\    const Self = @This();
 	\\    const small_string_size = @sizeOf(RocStr);
-	\\    const small_str_max_length = small_string_size - 1;
 	\\    const seamless_slice_bit: usize = @as(usize, @bitCast(@as(isize, std.math.minInt(isize))));
 	\\
 	\\    /// Return the string contents as a `[]const u8` slice.
@@ -941,26 +1032,11 @@ generate_all_record_structs = |hosted_functions, type_table| {
 
 		if type_table_result.found {
 			struct_name = name_to_struct_name(func.name)
+			full_name = "${struct_name}RetRecord"
 
-			var $fields = ""
-			for field in type_table_result.fields {
-				zig_type = type_id_to_zig(type_table, field.type_id)
-				$fields = Str.concat(
-					$fields,
-					"    ${field.name}: ${zig_type},\n",
-				)
-			}
-
-			assertions = if type_table_result.size > 0 {
-				"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}RetRecord) != ${U64.to_str(type_table_result.size)}) @compileError(\"${struct_name}RetRecord size mismatch\");\n        if (@alignOf(${struct_name}RetRecord) != ${U64.to_str(type_table_result.alignment)}) @compileError(\"${struct_name}RetRecord alignment mismatch\");\n    }\n}\n\n"
-			} else {
-				""
-			}
-
-			doc = "/// Return type record for ${func.name}\n/// Fields ordered by alignment descending (Roc ABI)\n"
 			$structs = Str.concat(
 				$structs,
-				"${doc}pub const ${struct_name}RetRecord = extern struct {\n${$fields}};\n\n${assertions}",
+				generate_record_struct_def(full_name, "Return type record for ${func.name}", type_table_result, type_table),
 			)
 		}
 		# else: return type is not a record (tag union, primitive, etc.) — skip RetRecord generation
@@ -990,30 +1066,15 @@ generate_args_struct = |func, type_table| {
 	type_table_result = if List.len(func.arg_type_ids) == 1 {
 		match List.first(func.arg_type_ids) {
 			Ok(arg_id) => lookup_record_in_type_table(type_table, arg_id)
-			Err(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+			Err(_) => no_record
 		}
 	} else {
-		{ found: Bool.False, fields: [], size: 0, alignment: 0 }
+		no_record
 	}
 
 	if type_table_result.found {
-		var $fields = ""
-		for field in type_table_result.fields {
-			zig_type = type_id_to_zig(type_table, field.type_id)
-			$fields = Str.concat(
-				$fields,
-				"    ${field.name}: ${zig_type},\n",
-			)
-		}
-
-		assertions = if type_table_result.size > 0 {
-			"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}Args) != ${U64.to_str(type_table_result.size)}) @compileError(\"${struct_name}Args size mismatch\");\n        if (@alignOf(${struct_name}Args) != ${U64.to_str(type_table_result.alignment)}) @compileError(\"${struct_name}Args alignment mismatch\");\n    }\n}\n\n"
-		} else {
-			""
-		}
-
-		doc = "/// Arguments for ${func.name}\n/// Roc signature: ${func.type_str}\n"
-		return "${doc}pub const ${struct_name}Args = extern struct {\n${$fields}};\n\n${assertions}"
+		full_name = "${struct_name}Args"
+		return generate_record_struct_def(full_name, "Arguments for ${func.name}\n/// Roc signature: ${func.type_str}", type_table_result, type_table)
 	}
 
 	# Multi-arg or primitive args: use positional fields from type table
@@ -1031,6 +1092,57 @@ generate_args_struct = |func, type_table| {
 	doc = "/// Arguments for ${func.name}\n/// Roc signature: ${func.type_str}\n"
 
 	"${doc}pub const ${struct_name}Args = extern struct {\n${$positional_fields}};\n\n"
+}
+
+## Generate a record struct definition, with comptime conditional if alt layout differs.
+generate_record_struct_def = |name, doc_text, record_info, type_table| {
+	var $fields = ""
+	for field in record_info.fields {
+		zig_type = type_id_to_zig(type_table, field.type_id)
+		$fields = Str.concat(
+			$fields,
+			"    ${escape_zig_field_name(field.name)}: ${zig_type},\n",
+		)
+	}
+
+	has_alt = List.len(record_info.alt_fields) > 0
+
+	if has_alt {
+		# Emit comptime conditional struct for divergent 64-bit/32-bit layouts
+		var $alt_field_strs = ""
+		for alt_field in record_info.alt_fields {
+			zig_type = type_id_to_zig(type_table, alt_field.type_id)
+			$alt_field_strs = Str.concat(
+				$alt_field_strs,
+				"    ${escape_zig_field_name(alt_field.name)}: ${zig_type},\n",
+			)
+		}
+
+		assertions_64 = if record_info.size > 0 {
+			"    if (@sizeOf(${name}) != ${U64.to_str(record_info.size)}) @compileError(\"${name} size mismatch\");\n    if (@alignOf(${name}) != ${U64.to_str(record_info.alignment)}) @compileError(\"${name} alignment mismatch\");\n"
+		} else {
+			""
+		}
+
+		assertions_32 = if record_info.alt_size > 0 {
+			"    if (@sizeOf(${name}) != ${U64.to_str(record_info.alt_size)}) @compileError(\"${name} size mismatch\");\n    if (@alignOf(${name}) != ${U64.to_str(record_info.alt_alignment)}) @compileError(\"${name} alignment mismatch\");\n"
+		} else {
+			""
+		}
+
+		doc = "/// ${doc_text}\n/// Fields ordered by alignment descending (Roc ABI)\n"
+		"${doc}pub const ${name} = if (@sizeOf(usize) == 8) extern struct {\n${$fields}} else extern struct {\n${$alt_field_strs}};\n\ncomptime {\n    if (@sizeOf(usize) == 8) {\n${assertions_64}    }\n    if (@sizeOf(usize) == 4) {\n${assertions_32}    }\n}\n\n"
+	} else {
+		# Single layout — same for both targets
+		assertions = if record_info.size > 0 {
+			"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${name}) != ${U64.to_str(record_info.size)}) @compileError(\"${name} size mismatch\");\n        if (@alignOf(${name}) != ${U64.to_str(record_info.alignment)}) @compileError(\"${name} alignment mismatch\");\n    }\n}\n\n"
+		} else {
+			""
+		}
+
+		doc = "/// ${doc_text}\n/// Fields ordered by alignment descending (Roc ABI)\n"
+		"${doc}pub const ${name} = extern struct {\n${$fields}};\n\n${assertions}"
+	}
 }
 
 ## Generate the PlatformHostedFns struct type
@@ -1382,7 +1494,7 @@ generate_entrypoint_externs = |provides_list, type_table| {
 		return ""
 	}
 
-	var $result = "// =============================================================================\n// Entrypoint Declarations\n//\n// Extern declarations for Roc entrypoints. Call these from your platform host\n// to invoke Roc application functions.\n// =============================================================================\n\n"
+	var $result = "// Entrypoint Declarations\n//\n// Extern declarations for Roc entrypoints. Call these from your platform host\n// to invoke Roc application functions.\n\n"
 
 	$result = Str.concat($result, generate_entrypoint_arg_structs(provides_list, type_table))
 
