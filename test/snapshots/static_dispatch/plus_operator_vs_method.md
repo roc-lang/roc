@@ -40,7 +40,7 @@ result1 = a + b
 ```
           ^^^^^
 
-The value's type, which does not have a method named**plus**, is:
+The value's type, which does not have a method named **plus**, is:
 
     MyType
 
@@ -54,7 +54,7 @@ result2 = c.plus(d)
 ```
             ^^^^
 
-The value's type, which does not have a method named**plus**, is:
+The value's type, which does not have a method named **plus**, is:
 
     MyType
 

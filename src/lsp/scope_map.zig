@@ -326,6 +326,7 @@ pub const ScopeMap = struct {
             .e_ellipsis,
             .e_anno_only,
             .e_type_var_dispatch,
+            .e_bytes_literal,
             => {},
         }
     }
@@ -395,6 +396,9 @@ pub const ScopeMap = struct {
 
                     switch (destruct.kind) {
                         .SubPattern => |nested_pattern| {
+                            try self.extractBindingsFromPattern(module_env, nested_pattern, visible_from, visible_to, is_parameter, depth + 1);
+                        },
+                        .Rest => |nested_pattern| {
                             try self.extractBindingsFromPattern(module_env, nested_pattern, visible_from, visible_to, is_parameter, depth + 1);
                         },
                         .Required => {},

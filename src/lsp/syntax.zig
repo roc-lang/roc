@@ -241,7 +241,9 @@ pub const SyntaxChecker = struct {
         }
 
         // Create a fresh BuildEnv
-        var env = try BuildEnv.init(self.allocator, .single_threaded, 1, roc_target.RocTarget.detectNative());
+        const cwd = try std.process.getCwdAlloc(self.allocator);
+        defer self.allocator.free(cwd);
+        var env = try BuildEnv.init(self.allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd);
         env.compiler_version = build_options.compiler_version;
 
         if (self.cache_config.enabled) {

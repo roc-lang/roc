@@ -44,7 +44,7 @@ y = 5 -> call(|i| {i + 1})
 ```
                    ^^^^^
 
-The value's type, which does not have a method named**plus**, is:
+The value's type, which does not have a method named **plus**, is:
 
     Str
 

@@ -1179,6 +1179,10 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
         .str_literal => |str_idx| {
             try self.generateStrLiteral(str_idx);
         },
+        .bytes_literal => {
+            // bytes_literal (List(U8) file import) - not yet supported in WASM backend
+            unreachable;
+        },
         .dbg => |d| {
             // Debug: evaluate expression and return its value (print is a no-op in wasm)
             try self.generateExpr(d.expr);

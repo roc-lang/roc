@@ -63,6 +63,7 @@ test "canonicalizeAndTypeCheckModule preserves Try types in type printing" {
         builtin_modules.builtin_indices,
         imported_envs,
         &module_envs,
+        null,
     );
     defer result.deinit();
 

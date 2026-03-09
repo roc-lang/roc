@@ -424,6 +424,23 @@ test "closure with many captures (struct_captures)" {
     , 1005, .no_trace);
 }
 
+test "closure capturing as-bound variable" {
+    // Closures that capture a variable bound via `as` pattern in a match
+    // should canonicalize without panicking.
+    // Regression: canonicalize previously panicked with "unreachable" because
+    // it only expected .assign patterns in closure captures, not .as patterns.
+    const src =
+        \\match 1.I64 {
+        \\    _ as x => {
+        \\        g = |_| x
+        \\        g(0.I64)
+        \\    }
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, src);
+    defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
+}
+
 test "lambdas nested closures" {
     // Nested closures with block locals
     try runExpectI64(
@@ -3615,3 +3632,66 @@ test "Str.join_with" {
 // Note: Str.from_utf8 returns a Result which requires match support in all evaluators.
 // It is tested indirectly via the encode/decode tests. The wasm codegen for it is implemented
 // but we don't add a standalone test here to avoid DevEvaluator limitations with Result matching.
+
+test "map_err on Try with record error payload does not panic" {
+    // Regression test: calling .map_err on a Try(Str, [BadUtf8({ problem, index })])
+    // caused a "Record field not found in layout" panic because the Builtin module's
+    // type checker unified map_err's error type variables (a and b in
+    // Try(ok, a), (a -> b) -> Try(ok, b)), causing prepareCallWithFuncVar to corrupt
+    // the return type so the function body used the input error type instead of output.
+    //
+    // Uses the interpreter directly because the DevEvaluator doesn't support
+    // match on Try types (see note above about Str.from_utf8).
+    const src =
+        \\{
+        \\    result : Try(Str, [BadUtf8({ problem : U8, index : U64 })])
+        \\    result = Err(BadUtf8({ problem: 0u8, index: 0u64 }))
+        \\    mapped = result.map_err(|err| Wrapped({ msg: "hello", err }))
+        \\    match mapped {
+        \\        Ok(s) => s
+        \\        Err(Wrapped(r)) => r.msg
+        \\        Err(_) => "other error"
+        \\    }
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(test_allocator, src);
+    defer helpers.cleanupParseAndCanonical(test_allocator, resources);
+
+    var test_env_instance = TestEnv.init(helpers.interpreter_allocator);
+    defer test_env_instance.deinit();
+
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
+    defer interpreter.deinit();
+
+    const ops = test_env_instance.get_ops();
+    const result = try interpreter.eval(resources.expr_idx, ops);
+
+    try testing.expect(result.layout.tag == .scalar);
+    try testing.expect(result.layout.data.scalar.tag == .str);
+
+    const roc_str: *const builtins.str.RocStr = @ptrCast(@alignCast(result.ptr.?));
+    try testing.expectEqualStrings("hello", roc_str.asSlice());
+}
+
+test "recursive opaque type with method and match" {
+    // Regression test: recursive opaque type with a method that constructs
+    // a tag value, then matching on the result.
+    try helpers.runExpectI64(
+        \\{
+        \\    Tree := [Empty, Node(Tree)].{
+        \\        insert : Tree -> Tree
+        \\        insert = |_tree| Node(Empty)
+        \\    }
+        \\
+        \\    x : Tree
+        \\    x = Empty
+        \\    y = x.insert()
+        \\    match y {
+        \\        Node(_) => 1i64
+        \\        Empty => 0i64
+        \\    }
+        \\}
+    , 1, .no_trace);
+}

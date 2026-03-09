@@ -43,6 +43,7 @@ const unbundle = @import("unbundle");
 const ipc = @import("ipc");
 const fmt = @import("fmt");
 const eval = @import("eval");
+const echo_platform = @import("echo_platform");
 const lsp = @import("lsp");
 const cli_repl = @import("repl.zig");
 
@@ -88,12 +89,15 @@ const Mode = compile.package.Mode;
 const TimingInfo = compile.package.TimingInfo;
 const CacheManager = compile.CacheManager;
 const CacheConfig = compile.CacheConfig;
+const cache_config_mod = compile.config;
 const serialize_modules = compile.serialize_modules;
 const TestRunner = eval.TestRunner;
 const backend = @import("backend");
 const mono = @import("mono");
 const layout = @import("layout");
+const docs = @import("docs");
 const Allocators = base.Allocators;
+const RocTarget = @import("target.zig").RocTarget;
 
 /// Embedded interpreter shim libraries for different targets.
 /// The native shim is used for roc run and native builds.
@@ -123,7 +127,7 @@ const ShimLibraries = struct {
     const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/roc_interpreter_shim.lib");
 
     /// Get the appropriate shim library bytes for the given target
-    pub fn forTarget(target: roc_target.RocTarget) []const u8 {
+    pub fn forTarget(target: RocTarget) []const u8 {
         return switch (target) {
             .x64musl => x64musl,
             .arm64musl => arm64musl,
@@ -174,7 +178,7 @@ const BuiltinsObjects = struct {
     const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/libroc_builtins.a");
 
     /// Get the appropriate builtins library bytes for the given target
-    pub fn forTarget(target: roc_target.RocTarget) []const u8 {
+    pub fn forTarget(target: RocTarget) []const u8 {
         return switch (target) {
             .x64musl => x64musl,
             .arm64musl => arm64musl,
@@ -191,7 +195,7 @@ const BuiltinsObjects = struct {
     }
 
     /// Get the filename for builtins library on given target
-    pub fn filename(target: roc_target.RocTarget) []const u8 {
+    pub fn filename(target: RocTarget) []const u8 {
         return switch (target.toOsTag()) {
             .windows => "roc_builtins.lib",
             else => "libroc_builtins.a",
@@ -456,7 +460,7 @@ fn generateRandomSuffix(ctx: *CliContext) ![]u8 {
 /// Uses system temp directory to avoid race conditions when cache is cleared.
 pub fn createUniqueTempDir(ctx: *CliContext) ![]const u8 {
     // Get the version-specific temp directory: {temp}/roc/{version}
-    const version_temp_dir = try CacheConfig.getVersionTempDir(ctx.arena);
+    const version_temp_dir = try cache_config_mod.getVersionTempDir(Filesystem.default(), ctx.arena);
 
     // Ensure the roc/{version} directory exists
     // makePath automatically handles PathAlreadyExists internally
@@ -519,7 +523,7 @@ pub fn writeFdCoordinationFile(ctx: *CliContext, temp_exe_path: []const u8, shm_
 /// The exe_display_name is the name that will appear in `ps` output (e.g., "app.roc").
 pub fn createTempDirStructure(allocs: *Allocators, exe_path: []const u8, exe_display_name: []const u8, shm_handle: SharedMemoryHandle, _: ?[]const u8) ![]const u8 {
     // Get the version-specific temp directory: {temp}/roc/{version}
-    const version_temp_dir = try CacheConfig.getVersionTempDir(allocs.arena);
+    const version_temp_dir = try cache_config_mod.getVersionTempDir(Filesystem.default(), allocs.arena);
 
     // Ensure the roc/{version} directory exists
     // makePath automatically handles PathAlreadyExists internally
@@ -664,7 +668,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
     //
     // Uses page_allocator instead of GPA to avoid leak detection false positives
     // (the thread may still be running when the main thread's leak check fires).
-    if (compile.CacheCleanup.startBackgroundCleanup(std.heap.page_allocator)) |_| {
+    if (compile.CacheCleanup.startBackgroundCleanup(std.heap.page_allocator, Filesystem.default())) |_| {
         // Thread started successfully, will run in background
     } else |_| {
         // Non-fatal: cleanup failure shouldn't prevent compilation
@@ -961,6 +965,11 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
     };
 
+    // Check if this is a default_app (headerless file with main!)
+    if (readDefaultAppSource(ctx, args.path)) |source| {
+        return rocRunDefaultApp(ctx, args, source);
+    }
+
     // First, parse the app file to get the platform reference
     const platform_spec = try extractPlatformSpecFromApp(ctx, args.path);
 
@@ -987,7 +996,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
             // Select target: if --target is provided, use that; otherwise try native then fallback
             if (args.target) |target_str| {
                 // User explicitly specified a target
-                const parsed_target = roc_target.RocTarget.fromString(target_str) orelse {
+                const parsed_target = RocTarget.fromString(target_str) orelse {
                     const result = platform_validation.targets_validator.ValidationResult{
                         .invalid_target = .{ .target_str = target_str },
                     };
@@ -1261,6 +1270,173 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
     if (shm_result.warning_count > 0) {
         ctx.io.flush();
         std.process.exit(2);
+    }
+}
+
+/// Check if a file is a default_app (headerless file with a main! function).
+/// On success, returns the file source (caller owns the allocation).
+/// Returns null if the file is not a default_app.
+fn readDefaultAppSource(ctx: *CliContext, file_path: []const u8) ?[]const u8 {
+    const max_source_size = 256 * 1024 * 1024; // 256 MB
+    const source = std.fs.cwd().readFileAlloc(ctx.gpa, file_path, max_source_size) catch return null;
+
+    const module_name = base.module_path.getModuleNameAlloc(ctx.arena, file_path) catch {
+        ctx.gpa.free(source);
+        return null;
+    };
+
+    var env = ModuleEnv.init(ctx.gpa, source) catch {
+        ctx.gpa.free(source);
+        return null;
+    };
+    defer env.deinit();
+    env.common.source = source;
+    env.module_name = module_name;
+
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(ctx.gpa);
+    defer allocators.deinit();
+
+    const ast = parse.parse(&allocators, &env.common) catch {
+        ctx.gpa.free(source);
+        return null;
+    };
+    defer ast.deinit();
+
+    const file = ast.store.getFile();
+    const header = ast.store.getHeader(file.header);
+
+    // Only headerless files (type_module) can be default apps
+    if (header != .type_module) {
+        ctx.gpa.free(source);
+        return null;
+    }
+
+    if (!ast.hasMainBangDecl()) {
+        ctx.gpa.free(source);
+        return null;
+    }
+
+    return source;
+}
+
+/// Virtual file provider for the echo platform.
+/// Intercepts reads for the synthetic app source and embedded platform files,
+/// delegating all other reads to the real filesystem.
+const EchoFileProvider = struct {
+    app_abs_path: []const u8,
+    synthetic_app_source: []const u8,
+    platform_main_path: []const u8,
+    echo_module_path: []const u8,
+
+    const FileProvider = compile.package.FileProvider;
+
+    fn read(ctx_ptr: ?*anyopaque, path: []const u8, gpa: std.mem.Allocator) std.mem.Allocator.Error!?[]u8 {
+        const self: *@This() = @ptrCast(@alignCast(ctx_ptr.?));
+        if (std.mem.eql(u8, path, self.app_abs_path))
+            return try gpa.dupe(u8, self.synthetic_app_source);
+        if (std.mem.eql(u8, path, self.platform_main_path))
+            return try gpa.dupe(u8, echo_platform.platform_main_source);
+        if (std.mem.eql(u8, path, self.echo_module_path))
+            return try gpa.dupe(u8, echo_platform.echo_module_source);
+        return FileProvider.filesystem.read(null, path, gpa);
+    }
+
+    fn provider(self: *@This()) FileProvider {
+        return .{ .ctx = @ptrCast(self), .read = &@This().read };
+    }
+};
+
+/// Run a default_app (headerless file with main! and echo platform).
+/// This compiles the app with real platform .roc files through the standard
+/// multi-module pipeline, JIT-compiles main_for_host!, and executes it.
+fn rocRunDefaultApp(ctx: *CliContext, args: cli_args.RunArgs, original_source: []const u8) !void {
+    const HostedFn = echo_platform.host_abi.HostedFn;
+    const target = RocTarget.detectNative();
+    defer ctx.gpa.free(original_source);
+
+    const cwd_tmp = std.process.getCwdAlloc(ctx.gpa) catch return error.OutOfMemory;
+    defer ctx.gpa.free(cwd_tmp);
+    const app_abs = std.fs.path.resolve(ctx.gpa, &.{ cwd_tmp, args.path }) catch return error.OutOfMemory;
+    defer ctx.gpa.free(app_abs);
+
+    // Virtual paths for the echo platform — intercepted by EchoFileProvider,
+    // never actually read from disk. Derived from the app's directory so they
+    // are valid absolute paths on any OS.
+    const app_dir = std.fs.path.dirname(app_abs) orelse ".";
+    const platform_main_path = std.fs.path.join(ctx.gpa, &.{ app_dir, ".roc_echo_platform", "main.roc" }) catch return error.OutOfMemory;
+    defer ctx.gpa.free(platform_main_path);
+    const echo_module_path = std.fs.path.join(ctx.gpa, &.{ app_dir, ".roc_echo_platform", "Echo.roc" }) catch return error.OutOfMemory;
+    defer ctx.gpa.free(echo_module_path);
+
+    const header = std.fmt.allocPrint(
+        ctx.gpa,
+        "app [main!] {{ pf: platform \"{s}\" }}\n\nimport pf.Echo\n\necho! = |msg| Echo.line!(msg)\n\n",
+        .{platform_main_path},
+    ) catch return error.OutOfMemory;
+    defer ctx.gpa.free(header);
+
+    const synthetic_source = std.mem.concat(ctx.gpa, u8, &.{ header, original_source }) catch return error.OutOfMemory;
+    defer ctx.gpa.free(synthetic_source);
+
+    // Phase 2: Compile through standard pipeline
+    const cwd = try std.process.getCwdAlloc(ctx.gpa);
+    defer ctx.gpa.free(cwd);
+    var build_env = try BuildEnv.init(ctx.gpa, .single_threaded, 1, target, cwd);
+    defer build_env.deinit();
+
+    var echo_fp = EchoFileProvider{
+        .app_abs_path = app_abs,
+        .synthetic_app_source = synthetic_source,
+        .platform_main_path = platform_main_path,
+        .echo_module_path = echo_module_path,
+    };
+    build_env.setFileProvider(echo_fp.provider());
+
+    build_env.discoverDependencies(args.path) catch |err| {
+        _ = build_env.renderDiagnostics(ctx.io.stderr());
+        return err;
+    };
+
+    build_env.compileDiscovered() catch |err| {
+        _ = build_env.renderDiagnostics(ctx.io.stderr());
+        return err;
+    };
+
+    const diag = build_env.renderDiagnostics(ctx.io.stderr());
+    if (diag.errors > 0) return error.CompilationFailed;
+
+    // Phase 3: Prepare for execution
+    var resolved = try build_env.getResolvedModuleEnvs(ctx.arena);
+    try resolved.processHostedFunctions(ctx.gpa, null);
+    const entry = try resolved.findEntrypoint();
+
+    // Phase 4: Execute via interpreter
+    var hosted_fn_array = [_]HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
+    var roc_ops = echo_platform.makeDefaultRocOps(&hosted_fn_array);
+    var cli_args_list = echo_platform.buildCliArgs(args.app_args, &roc_ops);
+    var result_buf: [16]u8 align(16) = undefined;
+
+    compile.runner.runViaInterpreter(
+        ctx.gpa,
+        entry.platform_env,
+        build_env.builtin_modules,
+        resolved.all_module_envs,
+        entry.app_module_env,
+        entry.entrypoint_expr,
+        &roc_ops,
+        @ptrCast(&cli_args_list),
+        @ptrCast(&result_buf),
+        target,
+    ) catch |err| {
+        std.debug.print("Execution error: {}\n", .{err});
+        std.process.exit(1);
+    };
+
+    // Platform returns I8; bit-identical to u8 for std.process.exit
+    const exit_code = result_buf[0];
+    if (exit_code != 0) {
+        std.process.exit(exit_code);
     }
 }
 
@@ -1749,7 +1925,7 @@ pub fn setupSharedMemoryWithCoordinator(ctx: *CliContext, roc_file_path: []const
         ctx.gpa, // Use regular allocator for Coordinator internals
         .single_threaded,
         1,
-        roc_target.RocTarget.detectNative(), // IPC runs on host
+        RocTarget.detectNative(), // IPC runs on host
         &builtin_modules,
         build_options.compiler_version,
         null, // no cache for IPC
@@ -2860,7 +3036,7 @@ fn extractEntrypointsFromPlatform(ctx: *CliContext, roc_file_path: []const u8, e
 /// This library contains the shim code that runs in child processes to read ModuleEnv from shared memory.
 /// For native builds and roc run, use the native shim (pass null or native target).
 /// For cross-compilation, pass the target to get the appropriate shim.
-pub fn extractReadRocFilePathShimLibrary(ctx: *CliContext, output_path: []const u8, target: ?roc_target.RocTarget) !void {
+pub fn extractReadRocFilePathShimLibrary(ctx: *CliContext, output_path: []const u8, target: ?RocTarget) !void {
     _ = ctx; // unused but kept for consistency
 
     if (builtin.is_test) {
@@ -2954,7 +3130,9 @@ fn validateBundleWithCoordinator(
     defer ctx.gpa.free(abs_entry);
 
     // Create a BuildEnv to parse headers and discover modules via the Coordinator
-    var build_env = try BuildEnv.init(ctx.gpa, .single_threaded, 1, roc_target.RocTarget.detectNative());
+    const cwd = try std.process.getCwdAlloc(ctx.gpa);
+    defer ctx.gpa.free(cwd);
+    var build_env = try BuildEnv.init(ctx.gpa, .single_threaded, 1, RocTarget.detectNative(), cwd);
     defer build_env.deinit();
 
     // Run the build — the Coordinator discovers all transitive module dependencies
@@ -3318,6 +3496,15 @@ fn rocBuild(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         return;
     }
 
+    // Headerless apps use a simple builtin platform and cannot be compiled
+    if (readDefaultAppSource(ctx, args.path)) |source| {
+        ctx.gpa.free(source);
+        renderProblem(ctx.gpa, ctx.io.stderr(), .{
+            .build_not_supported_for_headerless = .{ .app_path = args.path },
+        });
+        return error.UnsupportedTarget;
+    }
+
     // Select build path based on backend
     switch (args.backend) {
         .dev => {
@@ -3366,7 +3553,10 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     const thread_count: usize = if (args.max_threads) |t| t else (std.Thread.getCpuCount() catch 1);
     const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, roc_target.RocTarget.detectNative());
+    const cwd = try std.process.getCwdAlloc(ctx.gpa);
+    defer ctx.gpa.free(cwd);
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd);
+
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
 
@@ -3382,16 +3572,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     // Phase 2: Discover dependencies (parses headers once, extracts TargetsConfig)
     build_env.discoverDependencies(args.path) catch |err| {
-        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-        defer build_env.freeDrainedReports(drained);
-
-        for (drained) |mod| {
-            for (mod.reports) |*report| {
-                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-                const config = reporting.ReportingConfig.initColorTerminal();
-                reporting.renderReportToTerminal(report, ctx.io.stderr(), palette, config) catch {};
-            }
-        }
+        _ = build_env.renderDiagnostics(ctx.io.stderr());
         return err;
     };
 
@@ -3488,94 +3669,39 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     build_env.setTarget(target);
 
     build_env.compileDiscovered() catch |err| {
-        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-        defer build_env.freeDrainedReports(drained);
-
-        for (drained) |mod| {
-            for (mod.reports) |*report| {
-                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-                const config = reporting.ReportingConfig.initColorTerminal();
-                reporting.renderReportToTerminal(report, ctx.io.stderr(), palette, config) catch {};
-            }
-        }
+        _ = build_env.renderDiagnostics(ctx.io.stderr());
         return err;
     };
 
-    // Drain reports and count errors/warnings
-    const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-    defer build_env.freeDrainedReports(drained);
-
-    var total_error_count: usize = 0;
-    var total_warning_count: usize = 0;
-
-    for (drained) |mod| {
-        for (mod.reports) |*report| {
-            switch (report.severity) {
-                .info => {},
-                .runtime_error, .fatal => total_error_count += 1,
-                .warning => total_warning_count += 1,
-            }
-            const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-            const config = reporting.ReportingConfig.initColorTerminal();
-            reporting.renderReportToTerminal(report, ctx.io.stderr(), palette, config) catch {};
-        }
-    }
-
-    if (total_error_count > 0 and !args.allow_errors) {
+    const diag = build_env.renderDiagnostics(ctx.io.stderr());
+    if (diag.errors > 0 and !args.allow_errors) {
         return error.CompilationFailed;
     }
 
-    // Get compiled modules - use getCompiledModules (not serialization order) to preserve
-    // the module ordering that matches the CIR's import resolution
-    const modules = build_env.getCompiledModules(ctx.arena) catch |err| {
+    // Get resolved module envs (Builtin at [0], imports re-resolved)
+    var resolved = build_env.getResolvedModuleEnvs(ctx.arena) catch |err| {
         std.log.err("Failed to get compiled modules: {}", .{err});
         return err;
     };
+    const modules = resolved.compiled_modules;
+    const all_module_envs = resolved.all_module_envs;
 
-    if (modules.len == 0) {
-        std.log.err("No modules were compiled", .{});
-        return error.NoModulesCompiled;
-    }
+    std.log.debug("Found {} modules", .{modules.len});
 
-    // Find platform module (primary module is platform main if present)
-    const platform_idx = BuildEnv.findPrimaryModuleIndex(modules) orelse {
-        std.log.err("No platform module found", .{});
-        return error.NoPlatformModule;
-    };
-    const platform_module = modules[platform_idx];
-
-    std.log.debug("Found {} modules, platform module at index {}", .{ modules.len, platform_idx });
-
-    // Get provides entries from the compiled platform module
-    const provides_entries = platform_module.provides_entries;
-    if (provides_entries.len == 0) {
+    // Find platform module and validate provides entries
+    const plat = resolved.getPlatformModule() catch {
         return ctx.fail(.{ .entrypoint_extraction_failed = .{
             .path = platform_source.?,
             .reason = "NoEntrypointFound",
         } });
-    }
+    };
+    const platform_module = plat.module;
+    const platform_idx = plat.platform_idx;
+    const provides_entries = plat.provides_entries;
     std.log.debug("Found {} provides entries", .{provides_entries.len});
 
-    // Build module envs array for layout store and lowering.
-    // Include the Builtin module first, matching the layout used during type-checking
-    // (where resolveImports resolved "Builtin" to index 0). Without this, resolved
-    // import indices for builtins (List, Str, Bool, etc.) point to the wrong module.
-    const builtin_env = build_env.builtin_modules.builtin_module.env;
-    var all_module_envs = try ctx.arena.alloc(*ModuleEnv, modules.len + 1);
-    all_module_envs[0] = builtin_env;
-    for (modules, 0..) |mod, i| {
-        all_module_envs[i + 1] = mod.env;
-    }
-
-    // Re-resolve imports against all_module_envs so resolved indices match this array.
-    // During type-checking, imports were resolved against a per-module imported_envs array
-    // (with Builtin at index 0). Now we re-resolve against the unified all_module_envs.
-    for (all_module_envs) |module| {
-        module.imports.resolveImports(module, all_module_envs);
-    }
-
     // Compiled modules (excluding Builtin at index 0) for pipelines that shouldn't process Builtin
-    const compiled_module_envs = all_module_envs[1..];
+    const compiled_module_envs = resolved.compiledModuleEnvs();
 
     // Run closure pipeline on modules (lambda lifting, inference, transformation)
     std.log.debug("Running closure pipeline...", .{});
@@ -3624,115 +3750,10 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         }
     }
 
-    // Process hosted functions - assign global indices based on alphabetical order
-    // and build a map for fast lookup during lowering.
-    var hosted_functions = mono.Lower.HostedFunctionMap.init(ctx.gpa);
+    // Process hosted functions - assign global indices and build lookup map for lowering
+    var hosted_functions = BuildEnv.ResolvedModules.HostedFunctionMap.init(ctx.gpa);
     defer hosted_functions.deinit();
-
-    {
-        const HostedCompiler = can.HostedCompiler;
-        var all_hosted_fns = std.ArrayList(HostedCompiler.HostedFunctionInfo).empty;
-        defer all_hosted_fns.deinit(ctx.gpa);
-
-        // Collect from platform sibling modules
-        for (modules) |mod| {
-            if (!mod.is_platform_sibling) continue;
-
-            var module_fns = HostedCompiler.collectAndSortHostedFunctions(mod.env) catch continue;
-            defer module_fns.deinit(mod.env.gpa);
-
-            for (module_fns.items) |fn_info| {
-                const name_copy = ctx.gpa.dupe(u8, fn_info.name_text) catch continue;
-                mod.env.gpa.free(fn_info.name_text);
-                all_hosted_fns.append(ctx.gpa, .{
-                    .symbol_name = fn_info.symbol_name,
-                    .expr_idx = fn_info.expr_idx,
-                    .name_text = name_copy,
-                }) catch {
-                    ctx.gpa.free(name_copy);
-                    continue;
-                };
-            }
-        }
-
-        if (all_hosted_fns.items.len > 0) {
-            // Sort globally by qualified name
-            const SortContext = struct {
-                pub fn lessThan(_: void, a: HostedCompiler.HostedFunctionInfo, b: HostedCompiler.HostedFunctionInfo) bool {
-                    return std.mem.order(u8, a.name_text, b.name_text) == .lt;
-                }
-            };
-            std.mem.sort(HostedCompiler.HostedFunctionInfo, all_hosted_fns.items, {}, SortContext.lessThan);
-
-            // Deduplicate
-            var write_idx: usize = 0;
-            for (all_hosted_fns.items, 0..) |fn_info, read_idx| {
-                if (write_idx == 0 or !std.mem.eql(u8, all_hosted_fns.items[write_idx - 1].name_text, fn_info.name_text)) {
-                    if (write_idx != read_idx) {
-                        all_hosted_fns.items[write_idx] = fn_info;
-                    }
-                    write_idx += 1;
-                } else {
-                    ctx.gpa.free(fn_info.name_text);
-                }
-            }
-            all_hosted_fns.shrinkRetainingCapacity(write_idx);
-
-            // Assign global indices and register in the hosted function registry
-            for (modules, 0..) |mod, global_module_idx| {
-                if (!mod.is_platform_sibling) continue;
-                const platform_env = mod.env;
-
-                const mod_all_defs = platform_env.store.sliceDefs(platform_env.all_defs);
-                for (mod_all_defs) |def_idx| {
-                    const def = platform_env.store.getDef(def_idx);
-                    const expr = platform_env.store.getExpr(def.expr);
-
-                    if (expr == .e_hosted_lambda) {
-                        const hosted = expr.e_hosted_lambda;
-                        const local_name = platform_env.getIdent(hosted.symbol_name);
-                        const plat_module_name = base.module_path.getModuleName(platform_env.module_name);
-                        const qualified_name = std.fmt.allocPrint(ctx.gpa, "{s}.{s}", .{ plat_module_name, local_name }) catch continue;
-                        defer ctx.gpa.free(qualified_name);
-
-                        const stripped_name = if (std.mem.endsWith(u8, qualified_name, "!"))
-                            qualified_name[0 .. qualified_name.len - 1]
-                        else
-                            qualified_name;
-
-                        for (all_hosted_fns.items, 0..) |fn_info, idx| {
-                            if (std.mem.eql(u8, fn_info.name_text, stripped_name)) {
-                                const hosted_index: u32 = @intCast(idx);
-
-                                // Update the CIR expression with the global index
-                                const expr_node_idx = @as(@TypeOf(platform_env.store.nodes).Idx, @enumFromInt(@intFromEnum(def.expr)));
-                                var expr_node = platform_env.store.nodes.get(expr_node_idx);
-                                var payload = expr_node.getPayload().expr_hosted_lambda;
-                                payload.index = hosted_index;
-                                expr_node.setPayload(.{ .expr_hosted_lambda = payload });
-                                platform_env.store.nodes.set(expr_node_idx, expr_node);
-
-                                // Register in the hosted function map for fast lookup during lowering
-                                // Store mappings for def_idx, pattern_idx, and expr_idx so lookup
-                                // succeeds regardless of which node target_node_idx points to
-                                const mod_idx: u16 = @intCast(global_module_idx + 1);
-                                hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def_idx)), hosted_index) catch {};
-                                hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def.pattern)), hosted_index) catch {};
-                                hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def.expr)), hosted_index) catch {};
-
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Free name_text strings
-            for (all_hosted_fns.items) |fn_info| {
-                ctx.gpa.free(fn_info.name_text);
-            }
-        }
-    }
+    try resolved.processHostedFunctions(ctx.gpa, &hosted_functions);
 
     // Create layout store
     std.log.debug("Creating layout store...", .{});
@@ -3747,14 +3768,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     };
     defer layout_store.deinit();
 
-    // Find the app module index
-    var app_module_idx: ?u32 = null;
-    for (modules, 0..) |mod, i| {
-        if (mod.is_app) {
-            app_module_idx = @intCast(i + 1);
-            break;
-        }
-    }
+    const app_module_idx = plat.app_module_idx;
     std.log.debug("App module index: {?}", .{app_module_idx});
 
     // Create Mono IR store
@@ -3980,8 +3994,8 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         try stdout.print("    Cache Hit: {}%\n", .{cache_percent});
     }
 
-    if (total_warning_count > 0) {
-        try stdout.print("  {} warning(s)\n", .{total_warning_count});
+    if (diag.warnings > 0) {
+        try stdout.print("  {} warning(s)\n", .{diag.warnings});
     }
 }
 
@@ -4019,7 +4033,10 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     const thread_count: usize = if (args.max_threads) |t| t else (std.Thread.getCpuCount() catch 1);
     const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, roc_target.RocTarget.detectNative());
+    const cwd = try std.process.getCwdAlloc(ctx.gpa);
+    defer ctx.gpa.free(cwd);
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd);
+
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
 
@@ -4035,17 +4052,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     // Phase 2: Discover dependencies (parses headers once, extracts TargetsConfig)
     build_env.discoverDependencies(args.path) catch |err| {
-        // Drain and display error reports
-        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-        defer build_env.freeDrainedReports(drained);
-
-        for (drained) |mod| {
-            for (mod.reports) |*report| {
-                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-                const config = reporting.ReportingConfig.initColorTerminal();
-                reporting.renderReportToTerminal(report, ctx.io.stderr(), palette, config) catch {};
-            }
-        }
+        _ = build_env.renderDiagnostics(ctx.io.stderr());
         return err;
     };
 
@@ -4141,43 +4148,12 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     build_env.setTarget(target);
 
     build_env.compileDiscovered() catch |err| {
-        // Drain and display error reports
-        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-        defer build_env.freeDrainedReports(drained);
-
-        for (drained) |mod| {
-            for (mod.reports) |*report| {
-                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-                const config = reporting.ReportingConfig.initColorTerminal();
-                reporting.renderReportToTerminal(report, ctx.io.stderr(), palette, config) catch {};
-            }
-        }
+        _ = build_env.renderDiagnostics(ctx.io.stderr());
         return err;
     };
 
-    // Drain reports and count errors/warnings
-    const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-    defer build_env.freeDrainedReports(drained);
-
-    var total_error_count: usize = 0;
-    var total_warning_count: usize = 0;
-
-    for (drained) |mod| {
-        for (mod.reports) |*report| {
-            switch (report.severity) {
-                .info => {},
-                .runtime_error, .fatal => total_error_count += 1,
-                .warning => total_warning_count += 1,
-            }
-            // Render all reports
-            const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-            const config = reporting.ReportingConfig.initColorTerminal();
-            reporting.renderReportToTerminal(report, ctx.io.stderr(), palette, config) catch {};
-        }
-    }
-
-    // Check if we should stop due to errors
-    if (total_error_count > 0 and !args.allow_errors) {
+    const embedded_diag = build_env.renderDiagnostics(ctx.io.stderr());
+    if (embedded_diag.errors > 0 and !args.allow_errors) {
         return error.CompilationFailed;
     }
 
@@ -4395,7 +4371,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     }
 
     // Exit with code 2 if there were warnings (but no errors)
-    if (total_warning_count > 0) {
+    if (embedded_diag.warnings > 0) {
         ctx.io.flush();
         std.process.exit(2);
     }
@@ -4788,10 +4764,16 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     const mode: Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
     // Initialize BuildEnv for compilation
-    var build_env = BuildEnv.init(ctx.gpa, mode, thread_count, roc_target.RocTarget.detectNative()) catch |err| {
+    const cwd = std.process.getCwdAlloc(ctx.gpa) catch |err| {
+        try stderr.print("Failed to get current working directory: {}\n", .{err});
+        return err;
+    };
+    defer ctx.gpa.free(cwd);
+    var build_env = BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd) catch |err| {
         try stderr.print("Failed to initialize build environment: {}\n", .{err});
         return err;
     };
+
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
 
@@ -4916,7 +4898,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
         builtin_types,
         builtin_module_env,
         &import_mapping,
-        roc_target.RocTarget.detectNative(),
+        RocTarget.detectNative(),
     ) catch |err| {
         try stderr.print("Failed to create compile-time evaluator: {}\n", .{err});
         return err;
@@ -5193,850 +5175,18 @@ fn rocRepl(ctx: *CliContext, repl_args: cli_args.ReplArgs) !void {
     return cli_repl.run(ctx, repl_args.backend);
 }
 
-/// Error types for glue generation operations.
-const GlueError = error{
-    GlueSpecNotFound,
-    NotPlatformFile,
-    FileNotFound,
-    ParseFailed,
-    PlatformPathResolution,
-    TempDirCreation,
-    SyntheticAppWrite,
-    BuildEnvInit,
-    CompilationFailed,
-    ModuleRetrieval,
-    JsonSerialization,
-    ExePathResolution,
-    ProcessSpawn,
-    ProcessFailed,
-    OutOfMemory,
-};
+const glue = @import("glue");
 
-/// Print platform glue information for a platform's main.roc file using full compilation path.
-/// This provides resolved types via TypeWriter and discovers hosted functions via e_hosted_lambda detection.
-fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
-    rocGlueInner(ctx, args) catch |err| {
-        const stderr = ctx.io.stderr();
-        (switch (err) {
-            error.GlueSpecNotFound => stderr.print("Error: Glue spec file not found: '{s}'\n", .{args.glue_spec}),
-            error.NotPlatformFile => blk: {
-                stderr.print("Error: '{s}' is not a platform file.\n", .{args.platform_path}) catch {};
-                break :blk stderr.print("The glue command only works with platform files.\n", .{});
-            },
-            error.FileNotFound => stderr.print("Error: File not found: '{s}'\n", .{args.platform_path}),
-            error.ParseFailed => stderr.print("Error: Failed to parse '{s}'\n", .{args.platform_path}),
-            error.PlatformPathResolution => stderr.print("Error: Could not resolve platform path\n", .{}),
-            error.TempDirCreation => stderr.print("Error: Could not create temp directory\n", .{}),
-            error.SyntheticAppWrite => stderr.print("Error: Could not write synthetic app\n", .{}),
-            error.BuildEnvInit => stderr.print("Error: Failed to initialize build environment\n", .{}),
-            error.CompilationFailed => stderr.print("Error: Compilation failed\n", .{}),
-            error.ModuleRetrieval => stderr.print("Error: Failed to get compiled modules\n", .{}),
-            error.JsonSerialization => stderr.print("Error: Failed to serialize types to JSON\n", .{}),
-            error.ExePathResolution => stderr.print("Error: Could not determine roc executable path\n", .{}),
-            error.ProcessSpawn => stderr.print("Error: Could not spawn process\n", .{}),
-            error.ProcessFailed => stderr.print("Error: Process failed\n", .{}),
-            error.OutOfMemory => stderr.print("Error: Out of memory\n", .{}),
-        }) catch {};
-        return err;
-    };
-}
-
-fn rocGlueInner(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
-    const stderr = ctx.io.stderr();
-
-    // 0. Validate glue spec file exists
-    std.fs.cwd().access(args.glue_spec, .{}) catch {
-        return error.GlueSpecNotFound;
-    };
-
-    // 1. Parse platform header to get requires entries and verify it's a platform file
-    const platform_info = parsePlatformHeader(ctx, args.platform_path) catch |err| {
-        return switch (err) {
-            error.NotPlatformFile => error.NotPlatformFile,
-            error.FileNotFound => error.FileNotFound,
-            error.ParseFailed => error.ParseFailed,
-            else => error.ParseFailed,
-        };
-    };
-    defer platform_info.deinit(ctx.gpa);
-
-    // 2. Compile platform using BuildEnv by creating a synthetic app
-    // BuildEnv expects an app file, so we create a minimal app that imports the platform
-    const platform_abs_path = std.fs.cwd().realpathAlloc(ctx.gpa, args.platform_path) catch {
-        return error.PlatformPathResolution;
-    };
-    defer ctx.gpa.free(platform_abs_path);
-
-    // Create temp directory for synthetic app and glue spec executable
+fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) glue.GlueError!void {
     const temp_dir = createUniqueTempDir(ctx) catch {
         return error.TempDirCreation;
     };
     defer std.fs.cwd().deleteTree(temp_dir) catch {};
-
-    // Generate synthetic app source that imports the platform
-    var app_source = std.ArrayList(u8).empty;
-    defer app_source.deinit(ctx.gpa);
-    const w = app_source.writer(ctx.gpa);
-
-    // Build requires clause: app [Alias1, Alias2, entry1, entry2, ...] { pf: platform "path" }
-    try w.print("app [", .{});
-
-    // Add type aliases first
-    for (platform_info.type_aliases, 0..) |alias, i| {
-        if (i > 0) try w.print(", ", .{});
-        try w.print("{s}", .{alias});
-    }
-
-    // Add requires entries
-    for (platform_info.requires_entries, 0..) |entry, i| {
-        if (platform_info.type_aliases.len > 0 or i > 0) {
-            try w.print(", ", .{});
-        }
-        try w.print("{s}", .{entry.name});
-    }
-
-    try w.print("] {{ pf: platform \"", .{});
-    // Escape backslashes for the Roc string literal (Windows paths contain backslashes)
-    for (platform_abs_path) |ch| {
-        if (ch == '\\') {
-            try w.print("\\\\", .{});
-        } else {
-            try w.print("{c}", .{ch});
-        }
-    }
-    try w.print("\" }}\n\n", .{});
-
-    // Generate type alias definitions: Model : {}
-    for (platform_info.type_aliases) |alias| {
-        try w.print("{s} : {{}}\n", .{alias});
-    }
-    if (platform_info.type_aliases.len > 0) {
-        try w.print("\n", .{});
-    }
-
-    // Generate stub implementations for each requires entry
-    for (platform_info.requires_entries) |entry| {
-        try w.print("{s} = {s}\n", .{ entry.name, entry.stub_expr });
-    }
-
-    // Write synthetic app to temp file
-    const synthetic_app_path = std.fs.path.join(ctx.gpa, &.{ temp_dir, "synthetic_app.roc" }) catch {
-        return error.OutOfMemory;
-    };
-    defer ctx.gpa.free(synthetic_app_path);
-
-    std.fs.cwd().writeFile(.{
-        .sub_path = synthetic_app_path,
-        .data = app_source.items,
-    }) catch {
-        return error.SyntheticAppWrite;
-    };
-
-    // Compile using BuildEnv
-    const thread_count: usize = 1;
-    const mode: Mode = .single_threaded;
-
-    var build_env = BuildEnv.init(ctx.gpa, mode, thread_count, roc_target.RocTarget.detectNative()) catch {
-        return error.BuildEnvInit;
-    };
-    defer build_env.deinit();
-
-    // Build the synthetic app (which compiles the platform as a dependency)
-    build_env.build(synthetic_app_path) catch {
-        // Drain and display error reports
-        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-        defer build_env.gpa.free(drained);
-        for (drained) |mod| {
-            for (mod.reports) |*report| {
-                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-                const config = reporting.ReportingConfig.initColorTerminal();
-                reporting.renderReportToTerminal(report, stderr, palette, config) catch {};
-            }
-        }
-        return error.CompilationFailed;
-    };
-
-    // Drain any reports (warnings, etc.)
-    {
-        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-        defer build_env.gpa.free(drained);
-        for (drained) |mod| {
-            for (mod.reports) |*report| {
-                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-                const config = reporting.ReportingConfig.initColorTerminal();
-                reporting.renderReportToTerminal(report, stderr, palette, config) catch {};
-            }
-        }
-    }
-
-    // Get compiled modules in dependency order
-    const modules = build_env.getModulesInSerializationOrder(ctx.gpa) catch {
-        return error.ModuleRetrieval;
-    };
-    defer ctx.gpa.free(modules);
-
-    // 3. Collect hosted functions from compiled platform modules
-    const HostedCompiler = can.HostedCompiler;
-    var all_hosted_fns = std.ArrayList(HostedCompiler.HostedFunctionInfo).empty;
-    defer {
-        for (all_hosted_fns.items) |fn_info| {
-            ctx.gpa.free(fn_info.name_text);
-        }
-        all_hosted_fns.deinit(ctx.gpa);
-    }
-
-    for (modules) |mod| {
-        if (mod.is_platform_sibling or mod.is_platform_main) {
-            var module_fns = HostedCompiler.collectAndSortHostedFunctions(mod.env) catch continue;
-            defer {
-                for (module_fns.items) |fn_info| {
-                    mod.env.gpa.free(fn_info.name_text);
-                }
-                module_fns.deinit(mod.env.gpa);
-            }
-
-            for (module_fns.items) |fn_info| {
-                const name_copy = ctx.gpa.dupe(u8, fn_info.name_text) catch continue;
-                all_hosted_fns.append(ctx.gpa, .{
-                    .symbol_name = fn_info.symbol_name,
-                    .expr_idx = fn_info.expr_idx,
-                    .name_text = name_copy,
-                }) catch {
-                    ctx.gpa.free(name_copy);
-                    continue;
-                };
-            }
-        }
-    }
-
-    // Sort hosted functions globally
-    const SortContext = struct {
-        pub fn lessThan(_: void, a: HostedCompiler.HostedFunctionInfo, b: HostedCompiler.HostedFunctionInfo) bool {
-            return std.mem.order(u8, a.name_text, b.name_text) == .lt;
-        }
-    };
-    std.mem.sort(HostedCompiler.HostedFunctionInfo, all_hosted_fns.items, {}, SortContext.lessThan);
-
-    // 4. Collect module type info for JSON serialization
-    var collected_modules = std.ArrayList(CollectedModuleTypeInfo).empty;
-    defer {
-        for (collected_modules.items) |*mod_info| {
-            mod_info.deinit(ctx.gpa);
-        }
-        collected_modules.deinit(ctx.gpa);
-    }
-
-    for (modules) |mod| {
-        if (mod.is_platform_sibling or mod.is_platform_main) {
-            if (collectModuleTypeInfo(ctx, &mod, mod.name, &all_hosted_fns)) |mod_info| {
-                collected_modules.append(ctx.gpa, mod_info) catch {};
-            }
-        }
-    }
-
-    // Serialize collected module type infos to JSON
-    const types_json = serializeModuleTypeInfosToJson(ctx.gpa, collected_modules.items) catch {
-        return error.JsonSerialization;
-    };
-    defer ctx.gpa.free(types_json);
-
-    // 5. Build and run the glue spec
-    // Get path to current roc executable
-    const roc_exe_path = std.fs.selfExePathAlloc(ctx.gpa) catch {
-        return error.ExePathResolution;
-    };
-    defer ctx.gpa.free(roc_exe_path);
-
-    // Use the same temp directory for glue spec executable
-    const glue_exe_path = std.fs.path.join(ctx.gpa, &.{ temp_dir, "glue_spec" }) catch {
-        return error.OutOfMemory;
-    };
-    defer ctx.gpa.free(glue_exe_path);
-
-    // Build the glue spec using roc build
-    {
-        var build_argv = std.ArrayList([]const u8).empty;
-        defer build_argv.deinit(ctx.gpa);
-
-        try build_argv.append(ctx.gpa, roc_exe_path);
-        try build_argv.append(ctx.gpa, "build");
-        try build_argv.append(ctx.gpa, args.glue_spec);
-        // Use --output=path format (CLI expects = not space)
-        const output_arg = std.fmt.allocPrint(ctx.gpa, "--output={s}", .{glue_exe_path}) catch {
-            return error.OutOfMemory;
-        };
-        defer ctx.gpa.free(output_arg);
-        try build_argv.append(ctx.gpa, output_arg);
-
-        var build_child = std.process.Child.init(build_argv.items, ctx.gpa);
-        build_child.stdout_behavior = .Inherit;
-        build_child.stderr_behavior = .Inherit;
-
-        build_child.spawn() catch {
-            return error.ProcessSpawn;
-        };
-
-        const term = build_child.wait() catch {
-            return error.ProcessFailed;
-        };
-
-        switch (term) {
-            .Exited => |exit_code| {
-                if (exit_code != 0) {
-                    return error.ProcessFailed;
-                }
-            },
-            else => {
-                return error.ProcessFailed;
-            },
-        }
-    }
-
-    // Run the glue spec with platform source path as argument
-    // The glue platform will compile the modules and extract types directly
-    {
-        var run_argv = std.ArrayList([]const u8).empty;
-        defer run_argv.deinit(ctx.gpa);
-
-        try run_argv.append(ctx.gpa, glue_exe_path);
-
-        // Pass platform source file path - the glue platform will do its own compilation
-        try run_argv.append(ctx.gpa, args.platform_path);
-
-        // Pass types JSON as argument
-        const types_json_arg = std.fmt.allocPrint(ctx.gpa, "--types-json={s}", .{types_json}) catch {
-            return error.OutOfMemory;
-        };
-        defer ctx.gpa.free(types_json_arg);
-        try run_argv.append(ctx.gpa, types_json_arg);
-
-        // Pass output directory as argument
-        const output_dir_arg = std.fmt.allocPrint(ctx.gpa, "--output-dir={s}", .{args.output_dir}) catch {
-            return error.OutOfMemory;
-        };
-        defer ctx.gpa.free(output_dir_arg);
-        try run_argv.append(ctx.gpa, output_dir_arg);
-
-        // Pass entry point names as additional arguments
-        for (platform_info.requires_entries) |entry| {
-            try run_argv.append(ctx.gpa, entry.name);
-        }
-
-        var run_child = std.process.Child.init(run_argv.items, ctx.gpa);
-        run_child.stdout_behavior = .Inherit;
-        run_child.stderr_behavior = .Inherit;
-
-        run_child.spawn() catch {
-            return error.ProcessSpawn;
-        };
-
-        const term = run_child.wait() catch {
-            return error.ProcessFailed;
-        };
-
-        switch (term) {
-            .Exited => |exit_code| {
-                if (exit_code != 0) {
-                    stderr.print("Glue spec exited with code {}\n", .{exit_code}) catch {};
-                    return error.ProcessFailed;
-                }
-            },
-            else => {
-                stderr.print("Glue spec terminated abnormally\n", .{}) catch {};
-                return error.ProcessFailed;
-            },
-        }
-    }
-}
-
-/// Information extracted from a platform header for glue generation.
-const PlatformHeaderInfo = struct {
-    requires_entries: []RequiresEntry,
-    type_aliases: [][]const u8,
-
-    const RequiresEntry = struct {
-        name: []const u8,
-        type_str: []const u8,
-        stub_expr: []const u8,
-    };
-
-    fn deinit(self: *const PlatformHeaderInfo, gpa: std.mem.Allocator) void {
-        for (self.requires_entries) |entry| {
-            gpa.free(entry.name);
-            gpa.free(entry.type_str);
-            gpa.free(entry.stub_expr);
-        }
-        gpa.free(self.requires_entries);
-        for (self.type_aliases) |alias| {
-            gpa.free(alias);
-        }
-        gpa.free(self.type_aliases);
-    }
-};
-
-/// Parse a platform header to extract requires entries and validate it's a platform file.
-fn parsePlatformHeader(ctx: *CliContext, platform_path: []const u8) !PlatformHeaderInfo {
-    // Read source file
-    var source = std.fs.cwd().readFileAlloc(ctx.gpa, platform_path, std.math.maxInt(usize)) catch |err| switch (err) {
-        error.FileNotFound => return error.FileNotFound,
-        else => return error.ParseFailed,
-    };
-    source = base.source_utils.normalizeLineEndingsRealloc(ctx.gpa, source) catch {
-        ctx.gpa.free(source);
-        return error.OutOfMemory;
-    };
-    defer ctx.gpa.free(source);
-
-    // Get module name from path
-    const module_name = std.fs.path.stem(platform_path);
-
-    // Create ModuleEnv
-    var env = ModuleEnv.init(ctx.gpa, source) catch return error.OutOfMemory;
-    defer env.deinit();
-
-    env.common.source = source;
-    env.module_name = module_name;
-    env.common.calcLineStarts(ctx.gpa) catch return error.OutOfMemory;
-
-    var allocators: base.Allocators = undefined;
-    allocators.initInPlace(ctx.gpa);
-    defer allocators.deinit();
-
-    // Parse the source code
-    var parse_ast = parse.parse(&allocators, &env.common) catch return error.ParseFailed;
-    defer parse_ast.deinit();
-
-    // Get the file header
-    const file_node = parse_ast.store.getFile();
-    const header = parse_ast.store.getHeader(file_node.header);
-
-    // Check if this is a platform file
-    switch (header) {
-        .platform => |platform_header| {
-            // Extract requires entries
-            const requires_entries_ast = parse_ast.store.requiresEntrySlice(platform_header.requires_entries);
-            var requires_entries = std.ArrayList(PlatformHeaderInfo.RequiresEntry).empty;
-            errdefer {
-                for (requires_entries.items) |entry| {
-                    ctx.gpa.free(entry.name);
-                    ctx.gpa.free(entry.type_str);
-                    ctx.gpa.free(entry.stub_expr);
-                }
-                requires_entries.deinit(ctx.gpa);
-            }
-
-            // Use a hash set to deduplicate type aliases across requires entries
-            var type_alias_set = std.StringHashMap(void).init(ctx.gpa);
-            defer type_alias_set.deinit();
-
-            for (requires_entries_ast) |entry_idx| {
-                const entry = parse_ast.store.getRequiresEntry(entry_idx);
-
-                // Extract type aliases from for-clause
-                const type_aliases_ast = parse_ast.store.forClauseTypeAliasSlice(entry.type_aliases);
-                for (type_aliases_ast) |alias_idx| {
-                    const alias = parse_ast.store.getForClauseTypeAlias(alias_idx);
-                    if (parse_ast.tokens.resolveIdentifier(alias.alias_name)) |ident_idx| {
-                        const alias_name = env.common.getIdent(ident_idx);
-                        if (!type_alias_set.contains(alias_name)) {
-                            try type_alias_set.put(try ctx.gpa.dupe(u8, alias_name), {});
-                        }
-                    }
-                }
-
-                if (parse_ast.tokens.resolveIdentifier(entry.entrypoint_name)) |ident_idx| {
-                    const name = env.common.getIdent(ident_idx);
-
-                    // Format type annotation to string
-                    var type_buf = std.ArrayList(u8).empty;
-                    defer type_buf.deinit(ctx.gpa);
-
-                    printTypeAnnoToBuf(ctx.gpa, &env, parse_ast, entry.type_anno, &type_buf);
-
-                    // Generate stub expression from type annotation
-                    var stub_buf = std.ArrayList(u8).empty;
-                    defer stub_buf.deinit(ctx.gpa);
-
-                    generateStubExprFromTypeAnno(ctx.gpa, &env, parse_ast, entry.type_anno, &stub_buf);
-
-                    try requires_entries.append(ctx.gpa, .{
-                        .name = try ctx.gpa.dupe(u8, name),
-                        .type_str = try type_buf.toOwnedSlice(ctx.gpa),
-                        .stub_expr = try stub_buf.toOwnedSlice(ctx.gpa),
-                    });
-                }
-            }
-
-            // Convert type alias set to owned slice
-            var type_aliases = std.ArrayList([]const u8).empty;
-            errdefer {
-                for (type_aliases.items) |alias| {
-                    ctx.gpa.free(alias);
-                }
-                type_aliases.deinit(ctx.gpa);
-            }
-            var alias_iter = type_alias_set.keyIterator();
-            while (alias_iter.next()) |key| {
-                try type_aliases.append(ctx.gpa, key.*);
-            }
-
-            return PlatformHeaderInfo{
-                .requires_entries = try requires_entries.toOwnedSlice(ctx.gpa),
-                .type_aliases = try type_aliases.toOwnedSlice(ctx.gpa),
-            };
-        },
-        else => return error.NotPlatformFile,
-    }
-}
-
-/// Collected module type information for JSON serialization
-const CollectedModuleTypeInfo = struct {
-    name: []const u8,
-    main_type: []const u8,
-    functions: std.ArrayList(CollectedFunctionInfo),
-    hosted_functions: std.ArrayList(CollectedHostedFunctionInfo),
-
-    const CollectedFunctionInfo = struct {
-        name: []const u8,
-        type_str: []const u8,
-    };
-
-    const CollectedHostedFunctionInfo = struct {
-        index: usize,
-        name: []const u8,
-        type_str: []const u8,
-    };
-
-    /// JSON-serializable view of CollectedModuleTypeInfo (uses slices instead of ArrayLists)
-    const JsonView = struct {
-        name: []const u8,
-        main_type: []const u8,
-        functions: []const CollectedFunctionInfo,
-        hosted_functions: []const CollectedHostedFunctionInfo,
-    };
-
-    fn deinit(self: *CollectedModuleTypeInfo, gpa: std.mem.Allocator) void {
-        gpa.free(self.name);
-        gpa.free(self.main_type);
-        for (self.functions.items) |f| {
-            gpa.free(f.name);
-            gpa.free(f.type_str);
-        }
-        self.functions.deinit(gpa);
-        for (self.hosted_functions.items) |h| {
-            gpa.free(h.name);
-            gpa.free(h.type_str);
-        }
-        self.hosted_functions.deinit(gpa);
-    }
-};
-
-/// Collect type information from a compiled module (same logic as printCompiledModuleTypes).
-fn collectModuleTypeInfo(
-    ctx: *CliContext,
-    compiled_module: *const BuildEnv.CompiledModuleInfo,
-    module_name: []const u8,
-    all_hosted_fns: *const std.ArrayList(can.HostedCompiler.HostedFunctionInfo),
-) ?CollectedModuleTypeInfo {
-    const env = compiled_module.env;
-
-    // Find main type
-    var main_type_str: []const u8 = "";
-    const all_stmts = env.store.sliceStatements(env.all_statements);
-
-    for (all_stmts) |stmt_idx| {
-        const stmt = env.store.getStatement(stmt_idx);
-        if (stmt == .s_nominal_decl) {
-            const nominal = stmt.s_nominal_decl;
-            const type_header = env.store.getTypeHeader(nominal.header);
-            const type_name = env.getIdent(type_header.relative_name);
-
-            if (std.mem.eql(u8, type_name, module_name)) {
-                var type_writer = env.initTypeWriter() catch continue;
-                defer type_writer.deinit();
-
-                const anno_node_idx: @TypeOf(env.store.nodes).Idx = @enumFromInt(@intFromEnum(nominal.anno));
-                const type_var = ModuleEnv.varFrom(anno_node_idx);
-
-                type_writer.write(type_var, .one_line) catch continue;
-                const type_str = type_writer.get();
-
-                main_type_str = ctx.gpa.dupe(u8, type_str) catch "";
-                break;
-            }
-        }
-    }
-
-    // Collect functions
-    const all_defs = env.store.sliceDefs(env.all_defs);
-    var functions = std.ArrayList(CollectedModuleTypeInfo.CollectedFunctionInfo).empty;
-    var hosted_functions = std.ArrayList(CollectedModuleTypeInfo.CollectedHostedFunctionInfo).empty;
-
-    const module_prefix = std.fmt.allocPrint(ctx.gpa, "{s}.", .{module_name}) catch return null;
-    defer ctx.gpa.free(module_prefix);
-
-    for (all_defs) |def_idx| {
-        const def = env.store.getDef(def_idx);
-        const expr = env.store.getExpr(def.expr);
-
-        const pattern = env.store.getPattern(def.pattern);
-        if (pattern != .assign) continue;
-
-        const def_name = env.getIdent(pattern.assign.ident);
-
-        if (std.mem.eql(u8, def_name, module_name)) continue;
-
-        const local_name = if (std.mem.startsWith(u8, def_name, module_prefix))
-            def_name[module_prefix.len..]
-        else
-            continue;
-
-        if (expr == .e_hosted_lambda) {
-            const qualified_name = if (std.mem.endsWith(u8, def_name, "!"))
-                def_name[0 .. def_name.len - 1]
-            else
-                def_name;
-
-            for (all_hosted_fns.items, 0..) |fn_info, global_idx| {
-                if (std.mem.eql(u8, fn_info.name_text, qualified_name)) {
-                    var type_writer = env.initTypeWriter() catch continue;
-                    defer type_writer.deinit();
-
-                    const def_node_idx: @TypeOf(env.store.nodes).Idx = @enumFromInt(@intFromEnum(def_idx));
-                    const type_var = ModuleEnv.varFrom(def_node_idx);
-
-                    type_writer.write(type_var, .one_line) catch continue;
-                    const type_str = type_writer.get();
-
-                    hosted_functions.append(ctx.gpa, .{
-                        .index = global_idx,
-                        .name = ctx.gpa.dupe(u8, local_name) catch continue,
-                        .type_str = ctx.gpa.dupe(u8, type_str) catch continue,
-                    }) catch continue;
-                    break;
-                }
-            }
-        } else if (expr == .e_lambda or def.annotation != null) {
-            var type_writer = env.initTypeWriter() catch continue;
-            defer type_writer.deinit();
-
-            const def_node_idx: @TypeOf(env.store.nodes).Idx = @enumFromInt(@intFromEnum(def_idx));
-            const type_var = ModuleEnv.varFrom(def_node_idx);
-
-            type_writer.write(type_var, .one_line) catch continue;
-            const type_str = type_writer.get();
-
-            functions.append(ctx.gpa, .{
-                .name = ctx.gpa.dupe(u8, local_name) catch continue,
-                .type_str = ctx.gpa.dupe(u8, type_str) catch continue,
-            }) catch continue;
-        }
-    }
-
-    return CollectedModuleTypeInfo{
-        .name = ctx.gpa.dupe(u8, module_name) catch return null,
-        .main_type = main_type_str,
-        .functions = functions,
-        .hosted_functions = hosted_functions,
-    };
-}
-
-/// Serialize collected module type infos to JSON.
-fn serializeModuleTypeInfosToJson(
-    gpa: std.mem.Allocator,
-    module_infos: []const CollectedModuleTypeInfo,
-) ![]const u8 {
-    // Create JSON-serializable views (slices instead of ArrayLists)
-    var json_views = std.ArrayList(CollectedModuleTypeInfo.JsonView).empty;
-    defer json_views.deinit(gpa);
-
-    for (module_infos) |mod| {
-        json_views.append(gpa, .{
-            .name = mod.name,
-            .main_type = mod.main_type,
-            .functions = mod.functions.items,
-            .hosted_functions = mod.hosted_functions.items,
-        }) catch return error.OutOfMemory;
-    }
-
-    // Serialize using std.json
-    var writer: std.io.Writer.Allocating = .init(gpa);
-    defer writer.deinit();
-    std.json.Stringify.value(json_views.items, .{}, &writer.writer) catch return error.OutOfMemory;
-    return writer.toOwnedSlice();
-}
-
-/// Print a type annotation to a buffer (for requires entries which use AST types)
-fn printTypeAnnoToBuf(gpa: std.mem.Allocator, env: *ModuleEnv, ast: *const parse.AST, type_anno_idx: parse.AST.TypeAnno.Idx, buf: *std.ArrayList(u8)) void {
-    const type_anno = ast.store.getTypeAnno(type_anno_idx);
-
-    switch (type_anno) {
-        .@"fn" => |f| {
-            const arrow = if (f.effectful) "=>" else "->";
-            const args = ast.store.typeAnnoSlice(f.args);
-            if (args.len == 0) {
-                buf.appendSlice(gpa, "()") catch {};
-            } else {
-                for (args, 0..) |arg_idx, i| {
-                    if (i > 0) buf.appendSlice(gpa, ", ") catch {};
-                    printTypeAnnoToBuf(gpa, env, ast, arg_idx, buf);
-                }
-            }
-            buf.appendSlice(gpa, " ") catch {};
-            buf.appendSlice(gpa, arrow) catch {};
-            buf.appendSlice(gpa, " ") catch {};
-            printTypeAnnoToBuf(gpa, env, ast, f.ret, buf);
-        },
-        .ty => |t| {
-            // Print qualified type name
-            const qualifiers = ast.store.tokenSlice(t.qualifiers);
-            for (qualifiers) |qual_tok_idx| {
-                const qual_tok: parse.tokenize.Token.Idx = @intCast(qual_tok_idx);
-                if (ast.tokens.resolveIdentifier(qual_tok)) |ident_idx| {
-                    buf.appendSlice(gpa, env.common.getIdent(ident_idx)) catch {};
-                    buf.append(gpa, '.') catch {};
-                }
-            }
-            if (ast.tokens.resolveIdentifier(t.token)) |ident_idx| {
-                buf.appendSlice(gpa, env.common.getIdent(ident_idx)) catch {};
-            }
-        },
-        .ty_var => |tv| {
-            if (ast.tokens.resolveIdentifier(tv.tok)) |ident_idx| {
-                buf.appendSlice(gpa, env.common.getIdent(ident_idx)) catch {};
-            }
-        },
-        .record => |r| {
-            buf.appendSlice(gpa, "{ ") catch {};
-            const fields = ast.store.annoRecordFieldSlice(r.fields);
-            for (fields, 0..) |field_idx, i| {
-                if (i > 0) buf.appendSlice(gpa, ", ") catch {};
-                const field = ast.store.getAnnoRecordField(field_idx) catch continue;
-                if (ast.tokens.resolveIdentifier(field.name)) |ident_idx| {
-                    buf.appendSlice(gpa, env.common.getIdent(ident_idx)) catch {};
-                    buf.appendSlice(gpa, " : ") catch {};
-                }
-                printTypeAnnoToBuf(gpa, env, ast, field.ty, buf);
-            }
-            buf.appendSlice(gpa, " }") catch {};
-            if (r.ext) |ext_idx| {
-                printTypeAnnoToBuf(gpa, env, ast, ext_idx, buf);
-            }
-        },
-        .tag_union => |tu| {
-            buf.append(gpa, '[') catch {};
-            const tags = ast.store.typeAnnoSlice(tu.tags);
-            for (tags, 0..) |tag_idx, i| {
-                if (i > 0) buf.appendSlice(gpa, ", ") catch {};
-                printTypeAnnoToBuf(gpa, env, ast, tag_idx, buf);
-            }
-            switch (tu.ext) {
-                .closed => {},
-                .open => buf.appendSlice(gpa, ", ..") catch {},
-                .named => |ext_idx| {
-                    buf.appendSlice(gpa, ", ..") catch {};
-                    printTypeAnnoToBuf(gpa, env, ast, ext_idx, buf);
-                },
-            }
-            buf.append(gpa, ']') catch {};
-        },
-        .tuple => |t| {
-            buf.append(gpa, '(') catch {};
-            const annos = ast.store.typeAnnoSlice(t.annos);
-            for (annos, 0..) |anno_idx, i| {
-                if (i > 0) buf.appendSlice(gpa, ", ") catch {};
-                printTypeAnnoToBuf(gpa, env, ast, anno_idx, buf);
-            }
-            buf.append(gpa, ')') catch {};
-        },
-        .apply => |a| {
-            const args = ast.store.typeAnnoSlice(a.args);
-            if (args.len > 0) {
-                printTypeAnnoToBuf(gpa, env, ast, args[0], buf);
-                if (args.len > 1) {
-                    buf.append(gpa, ' ') catch {};
-                    for (args[1..], 0..) |arg_idx, i| {
-                        if (i > 0) buf.append(gpa, ' ') catch {};
-                        printTypeAnnoToBuf(gpa, env, ast, arg_idx, buf);
-                    }
-                }
-            }
-        },
-        .parens => |p| {
-            buf.append(gpa, '(') catch {};
-            printTypeAnnoToBuf(gpa, env, ast, p.anno, buf);
-            buf.append(gpa, ')') catch {};
-        },
-        .underscore => {
-            buf.append(gpa, '_') catch {};
-        },
-        .underscore_type_var => {
-            buf.append(gpa, '_') catch {};
-        },
-        .malformed => {
-            buf.appendSlice(gpa, "<malformed>") catch {};
-        },
-    }
-}
-
-/// Generate a stub expression from a type annotation.
-/// This produces valid Roc expressions that will crash at runtime rather than compile-time.
-/// Uses `...` inside lambdas to defer the crash to runtime.
-fn generateStubExprFromTypeAnno(gpa: std.mem.Allocator, env: *ModuleEnv, ast: *const parse.AST, type_anno_idx: parse.AST.TypeAnno.Idx, buf: *std.ArrayList(u8)) void {
-    const type_anno = ast.store.getTypeAnno(type_anno_idx);
-
-    switch (type_anno) {
-        .@"fn" => |f| {
-            // Generate lambda stub
-            const args = ast.store.typeAnnoSlice(f.args);
-            if (args.len == 0) {
-                // No args: || body
-                buf.appendSlice(gpa, "|| ") catch {};
-            } else {
-                // Has args: |_, _, ...| body
-                buf.append(gpa, '|') catch {};
-                for (0..args.len) |i| {
-                    if (i > 0) buf.appendSlice(gpa, ", ") catch {};
-                    buf.append(gpa, '_') catch {};
-                }
-                buf.appendSlice(gpa, "| ") catch {};
-            }
-
-            // Check if return type is unit {}
-            const ret_anno = ast.store.getTypeAnno(f.ret);
-            if (ret_anno == .record) {
-                const record = ret_anno.record;
-                const fields = ast.store.annoRecordFieldSlice(record.fields);
-                if (fields.len == 0 and record.ext == null) {
-                    // Return type is {} (unit) - return empty record
-                    buf.appendSlice(gpa, "{}") catch {};
-                    return;
-                }
-            }
-
-            // Non-unit return type - use { ... } to crash at runtime (not compile-time)
-            // The block syntax is required for single-line lambdas
-            buf.appendSlice(gpa, "{ ... }") catch {};
-        },
-        .record => |r| {
-            buf.appendSlice(gpa, "{ ") catch {};
-            const fields = ast.store.annoRecordFieldSlice(r.fields);
-            for (fields, 0..) |field_idx, i| {
-                if (i > 0) buf.appendSlice(gpa, ", ") catch {};
-                const field = ast.store.getAnnoRecordField(field_idx) catch continue;
-                if (ast.tokens.resolveIdentifier(field.name)) |ident_idx| {
-                    buf.appendSlice(gpa, env.common.getIdent(ident_idx)) catch {};
-                    buf.appendSlice(gpa, ": ") catch {};
-                }
-                generateStubExprFromTypeAnno(gpa, env, ast, field.ty, buf);
-            }
-            buf.appendSlice(gpa, " }") catch {};
-        },
-        else => {
-            // For all other types, use { ... } to crash at runtime
-            buf.appendSlice(gpa, "{ ... }") catch {};
-        },
-    }
+    return glue.rocGlue(ctx.gpa, ctx.io.stderr(), ctx.io.stdout(), .{
+        .glue_spec = args.glue_spec,
+        .output_dir = args.output_dir,
+        .platform_path = args.platform_path,
+    }, temp_dir);
 }
 
 /// Reads, parses, formats, and overwrites all Roc files at the given paths.
@@ -6289,7 +5439,10 @@ fn checkFileWithBuildEnvPreserved(
     const thread_count: usize = if (max_threads) |t| t else (std.Thread.getCpuCount() catch 1);
     const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, roc_target.RocTarget.detectNative());
+    const cwd = try std.process.getCwdAlloc(ctx.gpa);
+    defer ctx.gpa.free(cwd);
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd);
+
     build_env.compiler_version = build_options.compiler_version;
     // Note: We do NOT defer build_env.deinit() here because we're returning it
 
@@ -6396,7 +5549,10 @@ fn checkFileWithBuildEnv(
     const thread_count: usize = if (max_threads) |t| t else (std.Thread.getCpuCount() catch 1);
     const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, roc_target.RocTarget.detectNative());
+    const cwd = try std.process.getCwdAlloc(ctx.gpa);
+    defer ctx.gpa.free(cwd);
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd);
+
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
 
@@ -6824,6 +5980,8 @@ fn getContentType(file_path: []const u8) []const u8 {
         return "image/jpeg";
     } else if (std.mem.endsWith(u8, file_path, ".svg")) {
         return "image/svg+xml";
+    } else if (std.mem.endsWith(u8, file_path, ".woff2")) {
+        return "font/woff2";
     } else {
         return "text/plain";
     }
@@ -6945,517 +6103,104 @@ fn rocDocs(ctx: *CliContext, args: cli_args.DocsArgs) !void {
     }
 }
 
-/// Associated item (type or value) within a module or type
-pub const AssociatedItem = struct {
-    name: []const u8,
-    children: []AssociatedItem, // Nested associated items (for types with associated items)
+// Documentation generation uses the docs module's extraction pipeline.
+// See src/docs/ for DocModel, extract, and render_type modules.
 
-    fn deinit(self: AssociatedItem, gpa: Allocator) void {
-        gpa.free(self.name);
-        for (self.children) |child| {
-            child.deinit(gpa);
-        }
-        gpa.free(self.children);
-    }
-};
-
-/// Information about an imported module
-pub const ModuleInfo = struct {
-    name: []const u8, // e.g., "Foo" or "foo.Bar"
-    link_path: []const u8, // e.g., "Foo" or "foo/Bar"
-    associated_items: []AssociatedItem, // Types and values defined in this module
-
-    fn deinit(self: ModuleInfo, gpa: Allocator) void {
-        gpa.free(self.name);
-        gpa.free(self.link_path);
-        for (self.associated_items) |item| {
-            item.deinit(gpa);
-        }
-        gpa.free(self.associated_items);
-    }
-};
-
-/// Recursively write associated items as nested <ul> elements
-fn writeAssociatedItems(writer: anytype, items: []const AssociatedItem, indent_level: usize) !void {
-    // Write opening <ul>
-    try writer.splatByteAll(' ', indent_level * 2);
-    try writer.writeAll("<ul>\n");
-
-    for (items) |item| {
-        // Write <li> with item name
-        try writer.splatByteAll(' ', (indent_level + 1) * 2);
-        try writer.print("<li>{s}\n", .{item.name});
-
-        // Recursively write children if any
-        if (item.children.len > 0) {
-            try writeAssociatedItems(writer, item.children, indent_level + 2);
-        }
-
-        // Close <li>
-        try writer.splatByteAll(' ', (indent_level + 1) * 2);
-        try writer.writeAll("</li>\n");
-    }
-
-    // Write closing </ul>
-    try writer.splatByteAll(' ', indent_level * 2);
-    try writer.writeAll("</ul>\n");
-}
-
-/// Generate HTML index file for a package or app
-pub fn generatePackageIndex(
-    ctx: *CliContext,
-    output_path: []const u8,
-    module_path: []const u8,
-    package_shorthands: []const []const u8,
-    imported_modules: []const ModuleInfo,
-) !void {
-    // Create output directory if it doesn't exist
-    std.fs.cwd().makePath(output_path) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
-
-    // Create index.html file
-    const index_path = try std.fs.path.join(ctx.arena, &[_][]const u8{ output_path, "index.html" });
-
-    const file = try std.fs.cwd().createFile(index_path, .{});
-    defer file.close();
-
-    var file_buffer: [4096]u8 = undefined;
-    var file_writer = file.writer(&file_buffer);
-    const writer = &file_writer.interface;
-
-    // Write HTML header
-    try writer.writeAll("<!DOCTYPE html>\n<html>\n<head>\n");
-    try writer.writeAll("  <meta charset=\"UTF-8\">\n");
-    try writer.writeAll("  <title>Documentation</title>\n");
-    try writer.writeAll("</head>\n<body>\n");
-
-    // Write module path as h1
-    try writer.print("  <h1>{s}</h1>\n", .{module_path});
-
-    // Write sidebar with imported modules if any
-    if (imported_modules.len > 0) {
-        try writer.writeAll("  <ul class='sidebar'>\n");
-        for (imported_modules) |mod_info| {
-            try writer.print("    <li>\n      <a href=\"{s}\">{s}</a>\n", .{ mod_info.link_path, mod_info.name });
-
-            // Write nested associated items if any
-            if (mod_info.associated_items.len > 0) {
-                try writeAssociatedItems(writer, mod_info.associated_items, 3);
-            }
-
-            try writer.writeAll("    </li>\n");
-        }
-        try writer.writeAll("  </ul>\n");
-    }
-
-    // Write links to package dependencies if any exist
-    if (package_shorthands.len > 0) {
-        try writer.writeAll("  <ul>\n");
-        for (package_shorthands) |shorthand| {
-            try writer.print("    <li><a href=\"{s}\">{s}</a></li>\n", .{ shorthand, shorthand });
-        }
-        try writer.writeAll("  </ul>\n");
-    }
-
-    try writer.writeAll("</body>\n</html>\n");
-    try writer.flush();
-}
-
-/// Generate HTML index file for a module
-pub fn generateModuleIndex(
-    ctx: *CliContext,
-    output_path: []const u8,
-    module_name: []const u8,
-) !void {
-    // Create output directory if it doesn't exist
-    std.fs.cwd().makePath(output_path) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
-
-    // Create index.html file
-    const index_path = try std.fs.path.join(ctx.arena, &[_][]const u8{ output_path, "index.html" });
-
-    const file = try std.fs.cwd().createFile(index_path, .{});
-    defer file.close();
-
-    var file_buffer: [4096]u8 = undefined;
-    var file_writer = file.writer(&file_buffer);
-    const writer = &file_writer.interface;
-
-    // Write HTML header
-    try writer.writeAll("<!DOCTYPE html>\n<html>\n<head>\n");
-    try writer.writeAll("  <meta charset=\"UTF-8\">\n");
-    try writer.print("  <title>{s}</title>\n", .{module_name});
-    try writer.writeAll("</head>\n<body>\n");
-
-    // Write module name as h1
-    try writer.print("  <h1>{s}</h1>\n", .{module_name});
-
-    try writer.writeAll("</body>\n</html>\n");
-    try writer.flush();
-}
-
-/// Extract associated items from a record expression (recursively)
-fn extractRecordAssociatedItems(
-    ctx: *CliContext,
-    module_env: *const ModuleEnv,
-    record_fields: can.CIR.RecordField.Span,
-) ![]AssociatedItem {
-    var items = std.array_list.Managed(AssociatedItem).init(ctx.gpa);
-    errdefer {
-        for (items.items) |item| {
-            item.deinit(ctx.gpa);
-        }
-        items.deinit();
-    }
-
-    const fields_slice = module_env.store.sliceRecordFields(record_fields);
-    for (fields_slice) |field_idx| {
-        const field = module_env.store.getRecordField(field_idx);
-        const field_name = try ctx.gpa.dupe(u8, module_env.getIdentText(field.name));
-        errdefer ctx.gpa.free(field_name);
-
-        // Check if the field value is a nominal type (has nested associated items)
-        const field_expr = module_env.store.getExpr(field.value);
-        const children = switch (field_expr) {
-            .e_nominal => |nom| blk: {
-                // Get the nominal type's backing expression
-                const backing_expr = module_env.store.getExpr(nom.backing_expr);
-                break :blk switch (backing_expr) {
-                    .e_record => |rec| try extractRecordAssociatedItems(ctx, module_env, rec.fields),
-                    else => try ctx.gpa.alloc(AssociatedItem, 0),
-                };
-            },
-            else => try ctx.gpa.alloc(AssociatedItem, 0),
-        };
-
-        try items.append(.{
-            .name = field_name,
-            .children = children,
-        });
-    }
-
-    return try items.toOwnedSlice();
-}
-
-/// Extract associated items from a module's exports
-fn extractAssociatedItems(
-    ctx: *CliContext,
-    module_env: *const ModuleEnv,
-) ![]AssociatedItem {
-    var items = std.array_list.Managed(AssociatedItem).init(ctx.gpa);
-    errdefer {
-        for (items.items) |item| {
-            item.deinit(ctx.gpa);
-        }
-        items.deinit();
-    }
-
-    // Get all exported definitions
-    const exports_slice = module_env.store.sliceDefs(module_env.exports);
-
-    // If no exports, try all_defs (for modules that are still being processed)
-    const defs_slice = if (exports_slice.len == 0)
-        module_env.store.sliceDefs(module_env.all_defs)
-    else
-        exports_slice;
-
-    for (defs_slice) |def_idx| {
-        const def = module_env.store.getDef(def_idx);
-
-        // Get the pattern to find the name
-        const pattern = module_env.store.getPattern(def.pattern);
-
-        // Extract name from pattern (could be assign, nominal, etc.)
-        const name_ident_opt = switch (pattern) {
-            .assign => |a| a.ident,
-            .nominal => |n| blk: {
-                // For nominal types, we need to get the statement and extract the header
-                const stmt = module_env.store.getStatement(n.nominal_type_decl);
-                break :blk switch (stmt) {
-                    .s_nominal_decl => |decl| module_env.store.getTypeHeader(decl.header).name,
-                    else => continue,
-                };
-            },
-            else => continue,
-        };
-
-        const name = try ctx.gpa.dupe(u8, module_env.getIdentText(name_ident_opt));
-        errdefer ctx.gpa.free(name);
-
-        // Extract nested associated items if this is a nominal type with a record
-        const children = switch (pattern) {
-            .nominal => blk: {
-                // For nominal types, look at the expression to find associated items
-                const expr = module_env.store.getExpr(def.expr);
-                break :blk switch (expr) {
-                    .e_nominal => |nom_expr| blk2: {
-                        const backing = module_env.store.getExpr(nom_expr.backing_expr);
-                        break :blk2 switch (backing) {
-                            .e_record => |record| try extractRecordAssociatedItems(ctx, module_env, record.fields),
-                            else => try ctx.gpa.alloc(AssociatedItem, 0),
-                        };
-                    },
-                    else => try ctx.gpa.alloc(AssociatedItem, 0),
-                };
-            },
-            else => try ctx.gpa.alloc(AssociatedItem, 0),
-        };
-
-        try items.append(.{
-            .name = name,
-            .children = children,
-        });
-    }
-
-    return try items.toOwnedSlice();
-}
-
-/// Generate documentation for the root and all its dependencies and imported modules
+/// Generate documentation for the root and all its dependencies and imported modules.
+///
+/// Builds a PackageDocs by extracting documentation from all compiled modules,
+/// then generates an HTML documentation site in the output directory.
 fn generateDocs(
     ctx: *CliContext,
     build_env: *compile.BuildEnv,
     module_path: []const u8,
     base_output_dir: []const u8,
 ) !void {
-    // First, determine if this is an app or other kind
-    var pkg_iter = build_env.packages.iterator();
-    const first_pkg = if (pkg_iter.next()) |entry| entry.value_ptr.* else return;
+    const DocModel = docs.DocModel;
+    const extract = docs.extract;
 
-    const is_app = first_pkg.kind == .app;
+    // Determine if we're documenting a platform or something else by checking the module path
+    // If the path contains "platform", we're documenting a platform directly
+    const is_documenting_platform = std.mem.indexOf(u8, module_path, "platform") != null;
 
-    if (is_app) {
-        // For apps, collect all imported modules and generate sidebar
-        try generateAppDocs(ctx, build_env, module_path, base_output_dir);
-    } else {
-        // For packages, just generate package dependency docs
-        try generatePackageDocs(ctx, build_env, module_path, base_output_dir, "");
-    }
-}
-
-/// Generate docs for an app module
-fn generateAppDocs(
-    ctx: *CliContext,
-    build_env: *compile.BuildEnv,
-    module_path: []const u8,
-    base_output_dir: []const u8,
-) !void {
-    // Collect all imported modules (both local and from packages)
-    var modules_map = std.StringHashMap(ModuleInfo).init(ctx.gpa);
-    defer {
-        var it = modules_map.iterator();
-        while (it.next()) |entry| {
-            entry.value_ptr.deinit(ctx.gpa);
-        }
-        modules_map.deinit();
-    }
-
-    // Get the root package
-    var pkg_iter = build_env.packages.iterator();
-    const first_pkg = if (pkg_iter.next()) |entry| entry.value_ptr.* else return;
-
-    // Iterate through schedulers to get modules
-    var sched_iter = build_env.schedulers.iterator();
-    while (sched_iter.next()) |sched_entry| {
-        const package_name = sched_entry.key_ptr.*;
-        const package_env = sched_entry.value_ptr.*;
-
-        // Iterate through modules in this package
-        for (package_env.modules.items) |module_state| {
-            // Process external imports (e.g., "cli.Stdout")
-            for (module_state.external_imports.items) |ext_import| {
-                // Parse the import (e.g., "cli.Stdout" -> { .qualifier = "cli", .module = "Stdout" })
-                if (base.module_path.parseQualifiedImport(ext_import)) |qualified| {
-                    // Create full name and link path
-                    const full_name = try ctx.arena.dupe(u8, ext_import);
-                    const link_path = try std.fmt.allocPrint(ctx.arena, "{s}/{s}", .{ qualified.qualifier, qualified.module });
-
-                    const empty_items = [_]AssociatedItem{};
-                    const mod_info = ModuleInfo{
-                        .name = full_name,
-                        .link_path = link_path,
-                        .associated_items = &empty_items,
-                    };
-
-                    // Add to map (deduplicates automatically)
-                    const gop = try modules_map.getOrPut(full_name);
-                    if (!gop.found_existing) {
-                        gop.value_ptr.* = mod_info;
-                    }
-
-                    // Generate index.html for this module
-                    const module_output_dir = try std.fs.path.join(ctx.arena, &[_][]const u8{ base_output_dir, qualified.qualifier, qualified.module });
-                    generateModuleIndex(ctx, module_output_dir, ext_import) catch |err| {
-                        std.debug.print("Warning: failed to generate module index for {s}: {}\n", .{ ext_import, err });
-                    };
-                }
-            }
-
-            // Process local imports (non-external modules in the same package)
-            for (module_state.imports.items) |import_id| {
-                if (import_id < package_env.modules.items.len) {
-                    const imported_module = package_env.modules.items[import_id];
-                    const module_name = imported_module.name;
-
-                    // Skip if this is the root module itself
-                    if (std.mem.eql(u8, module_name, "main")) continue;
-
-                    // Only include if it's a local module (not from a package)
-                    if (std.mem.eql(u8, package_name, first_pkg.name)) {
-                        const full_name = try ctx.gpa.dupe(u8, module_name);
-                        const link_path = try ctx.gpa.dupe(u8, module_name);
-
-                        // Extract associated items from the module if it has an env
-                        const associated_items = if (imported_module.env) |*mod_env|
-                            try extractAssociatedItems(ctx, mod_env)
-                        else
-                            try ctx.gpa.alloc(AssociatedItem, 0);
-
-                        const mod_info = ModuleInfo{
-                            .name = full_name,
-                            .link_path = link_path,
-                            .associated_items = associated_items,
-                        };
-
-                        const gop = try modules_map.getOrPut(full_name);
-                        if (!gop.found_existing) {
-                            gop.value_ptr.* = mod_info;
-                        } else {
-                            // Free the duplicates
-                            ctx.gpa.free(full_name);
-                            ctx.gpa.free(link_path);
-                            for (associated_items) |item| {
-                                item.deinit(ctx.gpa);
-                            }
-                            ctx.gpa.free(associated_items);
-                        }
-
-                        // Generate index.html for this local module
-                        const module_output_dir = try std.fs.path.join(ctx.arena, &[_][]const u8{ base_output_dir, module_name });
-                        generateModuleIndex(ctx, module_output_dir, module_name) catch |err| {
-                            std.debug.print("Warning: failed to generate module index for {s}: {}\n", .{ module_name, err });
-                        };
-                    }
-                }
-            }
-        }
-    }
-
-    // Convert map to sorted list
-    var modules_list = std.ArrayList(ModuleInfo).empty;
-    defer modules_list.deinit(ctx.gpa);
-    var map_iter = modules_map.iterator();
-    while (map_iter.next()) |entry| {
-        try modules_list.append(ctx.gpa, entry.value_ptr.*);
-    }
-
-    // Collect package shorthands
-    var shorthands_list = std.array_list.Managed([]const u8).init(ctx.gpa);
-    defer {
-        for (shorthands_list.items) |item| ctx.gpa.free(item);
-        shorthands_list.deinit();
-    }
-
-    var shorthand_iter = first_pkg.shorthands.iterator();
-    while (shorthand_iter.next()) |sh_entry| {
-        const shorthand = try ctx.gpa.dupe(u8, sh_entry.key_ptr.*);
-        try shorthands_list.append(shorthand);
-    }
-
-    // Generate root index.html
-    try generatePackageIndex(ctx, base_output_dir, module_path, shorthands_list.items, modules_list.items);
-
-    // Generate package dependency docs recursively
-    shorthand_iter = first_pkg.shorthands.iterator();
-    while (shorthand_iter.next()) |sh_entry| {
-        const shorthand = sh_entry.key_ptr.*;
-        const dep_ref = sh_entry.value_ptr.*;
-
-        generatePackageDocs(ctx, build_env, dep_ref.root_file, base_output_dir, shorthand) catch |err| {
-            std.debug.print("Warning: failed to generate docs for package {s}: {}\n", .{ shorthand, err });
-        };
-    }
-}
-
-/// Recursively generate documentation for a package and its dependencies
-fn generatePackageDocs(
-    ctx: *CliContext,
-    build_env: *compile.BuildEnv,
-    module_path: []const u8,
-    base_output_dir: []const u8,
-    relative_path: []const u8,
-) error{OutOfMemory}!void {
-    const output_dir = if (relative_path.len == 0)
-        try ctx.arena.dupe(u8, base_output_dir)
+    // Determine the root package name from the module path
+    // Extract basename without extension (e.g., "app.roc" -> "app")
+    const basename = std.fs.path.basename(module_path);
+    const pkg_name = if (std.mem.endsWith(u8, basename, ".roc"))
+        try ctx.gpa.dupe(u8, basename[0 .. basename.len - 4])
     else
-        try std.fs.path.join(ctx.arena, &[_][]const u8{ base_output_dir, relative_path });
+        try ctx.gpa.dupe(u8, basename);
 
-    var shorthands_list = std.array_list.Managed([]const u8).init(ctx.gpa);
+    // Collect ModuleDocs from all compiled modules
+    var module_docs_list = std.ArrayList(DocModel.ModuleDocs).empty;
     defer {
-        for (shorthands_list.items) |item| ctx.gpa.free(item);
-        shorthands_list.deinit();
+        for (module_docs_list.items) |*mod| mod.deinit(ctx.gpa);
+        module_docs_list.deinit(ctx.gpa);
     }
 
-    var pkg_iter = build_env.packages.iterator();
-    while (pkg_iter.next()) |entry| {
-        const pkg = entry.value_ptr;
-
-        var shorthand_iter = pkg.shorthands.iterator();
-        while (shorthand_iter.next()) |sh_entry| {
-            const shorthand = try ctx.gpa.dupe(u8, sh_entry.key_ptr.*);
-            try shorthands_list.append(shorthand);
-        }
-
-        shorthand_iter = pkg.shorthands.iterator();
-        while (shorthand_iter.next()) |sh_entry| {
-            const shorthand = sh_entry.key_ptr.*;
-
-            const dep_relative_path = if (relative_path.len == 0)
-                try ctx.arena.dupe(u8, shorthand)
-            else
-                try std.fs.path.join(ctx.arena, &[_][]const u8{ relative_path, shorthand });
-
-            const dep_ref = sh_entry.value_ptr.*;
-            generatePackageDocs(ctx, build_env, dep_ref.root_file, base_output_dir, dep_relative_path) catch |err| {
-                std.debug.print("Warning: failed to generate docs for {s}: {}\n", .{ shorthand, err });
-            };
-        }
-
-        break;
-    }
-
-    // For standalone modules, extract and display their exports
-    var module_infos = std.array_list.Managed(ModuleInfo).init(ctx.gpa);
-    defer {
-        for (module_infos.items) |mod| mod.deinit(ctx.gpa);
-        module_infos.deinit();
-    }
-
-    // Get the module's exports if it's a standalone module
     var sched_iter = build_env.schedulers.iterator();
     while (sched_iter.next()) |sched_entry| {
+        const sched_pkg_name = sched_entry.key_ptr.*;
         const package_env = sched_entry.value_ptr.*;
 
-        // Check ALL modules in this package
         for (package_env.modules.items) |module_state| {
             if (module_state.env) |*mod_env| {
-                const associated_items = try extractAssociatedItems(ctx, mod_env);
-                const mod_name = try ctx.gpa.dupe(u8, module_state.name);
+                // Skip platform main.roc modules when documenting an app
+                // Platform modules are still included when documenting a platform directly
+                if (mod_env.module_kind == .platform and !is_documenting_platform) {
+                    continue;
+                }
 
-                try module_infos.append(.{
-                    .name = mod_name,
-                    .link_path = try ctx.gpa.dupe(u8, ""),
-                    .associated_items = associated_items,
-                });
+                var mod_docs = extract.extractModuleDocs(ctx.gpa, mod_env, sched_pkg_name) catch |err| {
+                    std.debug.print("Warning: failed to extract docs for module {s}: {}\n", .{ module_state.name, err });
+                    continue;
+                };
+                module_docs_list.append(ctx.gpa, mod_docs) catch {
+                    mod_docs.deinit(ctx.gpa);
+                    continue;
+                };
             }
         }
     }
 
-    generatePackageIndex(ctx, output_dir, module_path, shorthands_list.items, module_infos.items) catch |err| {
-        std.debug.print("Warning: failed to generate index for {s}: {}\n", .{ module_path, err });
+    // Extract documentation from the Builtin module.
+    // The Builtin module is special — it's pre-compiled and lives in build_env.builtin_modules.
+    {
+        const builtin_env = build_env.builtin_modules.builtin_module.env;
+
+        const builtin_docs = extract.extractModuleDocs(ctx.gpa, builtin_env, "Builtin") catch |err| blk: {
+            std.debug.print("Warning: failed to extract docs for Builtin module: {}\n", .{err});
+            break :blk null;
+        };
+
+        if (builtin_docs) |b_docs| {
+            module_docs_list.append(ctx.gpa, b_docs) catch {
+                var d = b_docs;
+                d.deinit(ctx.gpa);
+            };
+        }
+    }
+
+    const modules_slice = module_docs_list.toOwnedSlice(ctx.gpa) catch return;
+
+    var package_docs = DocModel.PackageDocs{
+        .name = pkg_name,
+        .modules = modules_slice,
+    };
+    defer package_docs.deinit(ctx.gpa);
+
+    // Create output directory
+    std.fs.cwd().makePath(base_output_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+
+    // Generate HTML documentation site
+    // TODO: support --format md and --format json output formats
+    const render_html = docs.render_html;
+    render_html.renderPackageDocs(ctx.gpa, &package_docs, base_output_dir) catch |err| {
+        std.debug.print("Error: failed to generate HTML docs: {}\n", .{err});
+        return err;
     };
 }
 

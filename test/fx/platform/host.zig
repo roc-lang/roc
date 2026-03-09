@@ -602,17 +602,7 @@ const RocStr = builtins.str.RocStr;
 /// Hosted function: Stderr.line! (index 0 - sorted alphabetically)
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
 /// Returns {} and takes Str as argument
-fn hostedStderrLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
-    _ = ret_ptr; // Return value is {} which is zero-sized
-
-    // Arguments struct for single Str parameter
-    const Args = extern struct { str: RocStr };
-    // Debug check: verify args_ptr is properly aligned for Args
-    const args_addr = @intFromPtr(args_ptr);
-    if (args_addr % @alignOf(Args) != 0) {
-        std.debug.panic("[hostedStderrLine] args_ptr=0x{x} not aligned to {} bytes", .{ args_addr, @alignOf(Args) });
-    }
-    const args: *Args = @ptrCast(@alignCast(args_ptr));
+fn hostedStderrLine(ops: *builtins.host_abi.RocOps, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
     const message = args.str.asSlice();
 
     const host: *HostEnv = @ptrCast(@alignCast(ops.env));
@@ -691,11 +681,8 @@ fn hostedStderrLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_pt
 /// Hosted function: Stdin.line! (index 1 - sorted alphabetically)
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
 /// Returns Str and takes {} as argument
-fn hostedStdinLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
-    _ = args_ptr; // Argument is {} which is zero-sized
-
+fn hostedStdinLine(ops: *builtins.host_abi.RocOps, result: *RocStr, _: *anyopaque) callconv(.c) void {
     const host: *HostEnv = @ptrCast(@alignCast(ops.env));
-    const result: *RocStr = @ptrCast(@alignCast(ret_ptr));
 
     // Test mode: consume next stdin_input entry from spec
     if (host.test_state.enabled) {
@@ -782,17 +769,7 @@ fn hostedStdinLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_ptr
 /// Hosted function: Stdout.line! (index 2 - sorted alphabetically)
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
 /// Returns {} and takes Str as argument
-fn hostedStdoutLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
-    _ = ret_ptr; // Return value is {} which is zero-sized
-
-    // Arguments struct for single Str parameter
-    const Args = extern struct { str: RocStr };
-    // Debug check: verify args_ptr is properly aligned for Args
-    const args_addr = @intFromPtr(args_ptr);
-    if (args_addr % @alignOf(Args) != 0) {
-        std.debug.panic("[hostedStdoutLine] args_ptr=0x{x} not aligned to {} bytes", .{ args_addr, @alignOf(Args) });
-    }
-    const args: *Args = @ptrCast(@alignCast(args_ptr));
+fn hostedStdoutLine(ops: *builtins.host_abi.RocOps, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
     const message = args.str.asSlice();
 
     const host: *HostEnv = @ptrCast(@alignCast(ops.env));
@@ -871,17 +848,12 @@ fn hostedStdoutLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_pt
 /// Hosted function: Builder.print_value! (index 0 - sorted alphabetically: "Builder.print_value!" comes before "Stderr.line!")
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
 /// Returns {} and takes Builder as argument
-fn hostedBuilderPrintValue(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
-    _ = ret_ptr; // Return value is {} which is zero-sized
+const BuilderArgs = extern struct {
+    count: u64,
+    value: RocStr,
+};
 
-    // Builder is a record with { value: Str, count: U64 }
-    // Roc may order fields alphabetically or by alignment, so let's try count first
-    const Args = extern struct {
-        count: u64,
-        value: RocStr,
-    };
-
-    const args: *Args = @ptrCast(@alignCast(args_ptr));
+fn hostedBuilderPrintValue(ops: *builtins.host_abi.RocOps, _: *anyopaque, args: *const BuilderArgs) callconv(.c) void {
     const value_slice = args.value.asSlice();
 
     // Format the output messages
@@ -911,33 +883,23 @@ fn hostedBuilderPrintValue(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, 
 /// Hosted function: Host.get_greeting! (index 1 - sorted alphabetically)
 /// This tests hosted effects on opaque types with data (not just []).
 /// Takes Host { name: Str } as first argument, returns Str
-fn hostedHostGetGreeting(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
-    // Host is { name: Str }, so args contains the Host record
-    const Args = extern struct {
-        name: RocStr,
-    };
-
-    const args: *Args = @ptrCast(@alignCast(args_ptr));
+fn hostedHostGetGreeting(ops: *builtins.host_abi.RocOps, ret: *RocStr, args: *const extern struct { name: RocStr }) callconv(.c) void {
     const name_slice = args.name.asSlice();
 
     // Create the result string: "Hello, <name>!"
     var buf: [256]u8 = undefined;
     const result_str = std.fmt.bufPrint(&buf, "Hello, {s}!", .{name_slice}) catch "Hello!";
-    const result = RocStr.fromSlice(result_str, ops);
-
-    // Write result to return pointer
-    const ret: *RocStr = @ptrCast(@alignCast(ret_ptr));
-    ret.* = result;
+    ret.* = RocStr.fromSlice(result_str, ops);
 }
 
 /// Array of hosted function pointers, sorted alphabetically by fully-qualified name
 /// These correspond to the hosted functions defined in Stderr, Stdin, Stdout, Builder, and Host Type Modules
 const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{
-    hostedBuilderPrintValue, // Builder.print_value! (index 0)
-    hostedHostGetGreeting, // Host.get_greeting! (index 1)
-    hostedStderrLine, // Stderr.line! (index 2)
-    hostedStdinLine, // Stdin.line! (index 3)
-    hostedStdoutLine, // Stdout.line! (index 4)
+    builtins.host_abi.hostedFn(&hostedBuilderPrintValue), // Builder.print_value! (index 0)
+    builtins.host_abi.hostedFn(&hostedHostGetGreeting), // Host.get_greeting! (index 1)
+    builtins.host_abi.hostedFn(&hostedStderrLine), // Stderr.line! (index 2)
+    builtins.host_abi.hostedFn(&hostedStdinLine), // Stdin.line! (index 3)
+    builtins.host_abi.hostedFn(&hostedStdoutLine), // Stdout.line! (index 4)
 };
 
 /// Platform host entrypoint

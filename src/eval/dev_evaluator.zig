@@ -214,6 +214,7 @@ fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoEx
         .str_literal => .str,
         .unary_not => .bool,
         // Expressions whose result layout is handled by the fromTypeVar fallback
+        .bytes_literal,
         .for_loop,
         .while_loop,
         .list,
@@ -497,7 +498,7 @@ pub const DevEvaluator = struct {
         // This avoids undefined behavior from using `undefined` for the pointer
         const empty_hosted_fns = struct {
             fn dummyHostedFn(_: *RocOps, _: *anyopaque, _: *anyopaque) callconv(.c) void {}
-            var empty: [1]builtins.host_abi.HostedFn = .{&dummyHostedFn};
+            var empty: [1]builtins.host_abi.HostedFn = .{builtins.host_abi.hostedFn(&dummyHostedFn)};
         };
         const roc_ops = RocOps{
             .env = @ptrCast(roc_env),

@@ -41,6 +41,15 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign (ident "echo!"))
+		(e-hosted-lambda (symbol "echo!")
+			(args
+				(p-underscore)))
+		(annotation
+			(ty-fn (effectful true)
+				(ty-lookup (name "Str") (builtin))
+				(ty-record))))
+	(d-let
 		(p-assign (ident "x"))
 		(e-num (value "5")))
 	(d-let
@@ -58,9 +67,11 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
+		(patt (type "Str => {}"))
 		(patt (type "Dec"))
 		(patt (type "_arg -> Dec")))
 	(expressions
+		(expr (type "Str => {}"))
 		(expr (type "Dec"))
 		(expr (type "_arg -> Dec"))))
 ~~~

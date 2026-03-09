@@ -508,7 +508,7 @@ pub const Store = struct {
         }
 
         // Discriminant size from variant count
-        const discriminant_size: u8 = if (variant_layouts.len <= 256) 1 else if (variant_layouts.len <= 65536) 2 else if (variant_layouts.len <= (1 << 32)) 4 else 8;
+        const discriminant_size: u8 = TagUnionData.discriminantSize(variant_layouts.len);
         const disc_align = TagUnionData.alignmentForDiscriminantSize(discriminant_size);
 
         // Canonical layout: payload at offset 0, discriminant after (aligned)
@@ -2622,13 +2622,15 @@ pub const Store = struct {
                     // Check if this nominal's backing type just finished.
                     // The backing_var should match the var we just cached.
                     if (progress.backing_var == current.var_) {
-                        // Skip container types - they should be handled in the container finish path.
-                        // This prevents incorrect matching when a recursion_var resolves to the same
-                        // var as the backing type, but we haven't actually finished processing the container.
-                        if (current.desc.content == .structure) {
-                            const flat_type = current.desc.content.structure;
-                            if (flat_type == .tag_union or flat_type == .record or flat_type == .tuple) {
-                                // Container type - will be handled in container path below
+                        // Skip container types that actually pushed a pending container - they
+                        // will be handled in the container finish path below.
+                        // IMPORTANT: Only skip if the computed layout is a container type.
+                        // No-payload tag unions (enums) resolve to scalar discriminant layout
+                        // without pushing a container, so they must be handled here.
+                        {
+                            const computed = self.getLayout(layout_idx);
+                            if (computed.tag == .tag_union or computed.tag == .record or computed.tag == .tuple) {
+                                // Container layout - will be handled in container path below
                                 continue;
                             }
                         }
