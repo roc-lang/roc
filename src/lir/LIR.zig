@@ -593,7 +593,7 @@ pub const LirExpr = union(enum) {
         // List operations
         list_len,
         list_is_empty,
-        list_get,
+        list_get_unsafe,
         list_set,
         list_append,
         list_prepend,

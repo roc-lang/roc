@@ -7140,9 +7140,9 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitLoadOp(.i32, 4);
             self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
         },
-        .list_get => {
+        .list_get_unsafe => {
             // args[0] = list, args[1] = index
-            // Returns Result(elem, [OutOfBounds]) — a tag union with bounds checking.
+            // Returns bare element without bounds checking.
             const ls = self.getLayoutStore();
 
             // Get element layout from the list type
@@ -7181,83 +7181,24 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             }
             try self.emitLocalSet(index_local);
 
-            // Check if return type is a tag union (Result type with bounds checking)
-            const ret_layout_obj = ls.getLayout(ll.ret_layout);
-            if (ret_layout_obj.tag == .tag_union) {
-                const tu_data = ls.getTagUnionData(ret_layout_obj.data.tag_union.idx);
-                const tu_size = ls.layoutSize(ret_layout_obj);
-                const disc_offset: u32 = tu_data.discriminant_offset;
-                const disc_size: u32 = tu_data.discriminant_size;
-                const align_val: u32 = @intCast(ret_layout_obj.data.tag_union.alignment.toByteUnits());
+            if (builtin.mode == .Debug and ls.getLayout(ll.ret_layout).tag == .tag_union) {
+                std.debug.panic(
+                    "WasmCodeGen invariant violated: list_get_unsafe must not return a tag_union layout",
+                    .{},
+                );
+            }
 
-                // Allocate stack memory for the Result tag union
-                const result_offset = try self.allocStackMemory(tu_size, align_val);
-                const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-                try self.emitFpOffset(result_offset);
-                try self.emitLocalSet(result_local);
+            try self.emitLocalGet(list_local);
+            try self.emitLoadOp(.i32, 0);
+            try self.emitLocalGet(index_local);
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(elem_size)) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
 
-                // Bounds check: list.len > index
-                try self.emitLocalGet(list_local);
-                try self.emitLoadOp(.i32, 4); // load length at offset 4
-                try self.emitLocalGet(index_local);
-                self.body.append(self.allocator, Op.i32_gt_u) catch return error.OutOfMemory;
-
-                // if (in bounds) — Ok path
-                self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
-                self.body.append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
-
-                // Compute element address: elements_ptr + index * elem_size
-                try self.emitLocalGet(list_local);
-                try self.emitLoadOp(.i32, 0); // load elements_ptr at offset 0
-                try self.emitLocalGet(index_local);
-                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(elem_size)) catch return error.OutOfMemory;
-                self.body.append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
-                self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-
-                if (elem_is_composite) {
-                    // Composite element: copy the full data into the tag union payload.
-                    const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-                    try self.emitLocalSet(src_local);
-                    try self.emitMemCopy(result_local, 0, src_local, elem_size);
-                } else {
-                    // Load element and store to result payload area
-                    const elem_vt = self.resolveValType(elem_layout_idx);
-                    try self.emitLoadOpSized(elem_vt, elem_size, 0);
-                    try self.emitStoreToMemSized(result_local, 0, elem_vt, elem_size);
-                }
-
-                // Set discriminant to 1 (Ok — alphabetically after Err)
-                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                WasmModule.leb128WriteI32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
-                try self.emitStoreToMemSized(result_local, disc_offset, .i32, disc_size);
-
-                // else — Err path (out of bounds)
-                self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
-
-                // Set discriminant to 0 (Err — alphabetically before Ok)
-                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-                try self.emitStoreToMemSized(result_local, disc_offset, .i32, disc_size);
-
-                self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
-
-                // Push pointer to result tag union
-                try self.emitLocalGet(result_local);
-            } else {
-                // Non-tag-union return — direct element access (no bounds checking)
-                try self.emitLocalGet(list_local);
-                try self.emitLoadOp(.i32, 0);
-                try self.emitLocalGet(index_local);
-                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(elem_size)) catch return error.OutOfMemory;
-                self.body.append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
-                self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-
-                if (!elem_is_composite) {
-                    const elem_vt = self.resolveValType(elem_layout_idx);
-                    try self.emitLoadOpSized(elem_vt, elem_size, 0);
-                }
+            if (!elem_is_composite) {
+                const elem_vt = self.resolveValType(elem_layout_idx);
+                try self.emitLoadOpSized(elem_vt, elem_size, 0);
             }
         },
 

@@ -35,7 +35,7 @@ pub fn semanticToBackend(cir_op: CIR.Expr.LowLevel) ?LIR.LirExpr.LowLevel {
         // List operations
         .list_len => .list_len,
         .list_is_empty => .list_is_empty,
-        .list_get_unsafe => .list_get,
+        .list_get_unsafe => .list_get_unsafe,
         .list_append_unsafe => .list_append,
         .list_append => .list_append,
         .list_concat => .list_concat,

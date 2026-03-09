@@ -1782,15 +1782,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         },
                     };
                 },
-                .list_get => {
-                    // list_get(list, index) -> element or Try(element, [OutOfBounds])
-                    //
-                    // When ret_layout is a tag_union (from List.get method dispatch),
-                    // this performs bounds checking and returns a proper Try result:
-                    //   if index < list.len then Ok(element) else Err(OutOfBounds)
-                    //
-                    // When ret_layout is NOT a tag_union (from list_get_unsafe),
-                    // this returns the bare element without bounds checking.
+                .list_get_unsafe => {
+                    // list_get_unsafe(list, index) -> element
                     std.debug.assert(args.len >= 2);
                     const list_loc = try self.generateExpr(args[0]);
                     const index_loc = try self.generateExpr(args[1]);
@@ -1803,8 +1796,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     };
 
                     const ls = self.layout_store;
-                    const ret_layout_val = ls.getLayout(ll.ret_layout);
-
                     const list_layout_idx = self.exprLayout(args[0]);
                     const list_layout_val = ls.getLayout(list_layout_idx);
                     const list_elem_layout: layout.Idx = switch (list_layout_val.tag) {
@@ -1821,51 +1812,27 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         },
                     };
 
-                    // list_get_unsafe can return a tag-union element directly.
-                    // Only treat this as safe List.get when return type differs
-                    // from the list's element layout (i.e. Try(elem, err)).
-                    const is_safe_get = ret_layout_val.tag == .tag_union and ll.ret_layout != list_elem_layout;
-                    if (builtin.mode == .Debug and !is_safe_get) {
-                        // Layout indices are not globally canonicalized yet, so identical
-                        // logical layouts can have different indices. For unsafe list_get,
-                        // require ABI compatibility (size/alignment), not index identity.
-                        const ret_sa = ls.layoutSizeAlign(ls.getLayout(ll.ret_layout));
-                        const elem_sa = ls.layoutSizeAlign(ls.getLayout(list_elem_layout));
-                        if (ret_sa.size != elem_sa.size or ret_sa.alignment != elem_sa.alignment) {
+                    if (builtin.mode == .Debug) {
+                        const ret_layout_val = ls.getLayout(ll.ret_layout);
+                        if (ret_layout_val.tag == .tag_union) {
                             std.debug.panic(
-                                "LIR/codegen invariant violated: unsafe list_get ret/elem ABI mismatch (ret_size={d}, ret_align={d}, elem_size={d}, elem_align={d})",
-                                .{
-                                    ret_sa.size,
-                                    ret_sa.alignment.toByteUnits(),
-                                    elem_sa.size,
-                                    elem_sa.alignment.toByteUnits(),
-                                },
+                                "LIR/codegen invariant violated: list_get_unsafe must not return a tag_union layout",
+                                .{},
+                            );
+                        }
+                        if (!try self.layoutsStructurallyCompatible(ll.ret_layout, list_elem_layout)) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: list_get_unsafe ret/elem layout mismatch (ret={d}, elem={d})",
+                                .{ @intFromEnum(ll.ret_layout), @intFromEnum(list_elem_layout) },
                             );
                         }
                     }
 
-                    const elem_layout_idx: layout.Idx = if (is_safe_get) blk: {
-                        if (builtin.mode == .Debug and ret_layout_val.tag != .tag_union) {
-                            std.debug.panic(
-                                "LIR/codegen invariant violated: safe list_get must use a tag_union return layout",
-                                .{},
-                            );
-                        }
-                        const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
-                        const variants = ls.getTagUnionVariants(tu_data);
-                        // Ok is discriminant 1 (tags sorted alphabetically: Err=0, Ok=1)
-                        if (builtin.mode == .Debug and variants.len <= 1) {
-                            std.debug.panic(
-                                "LIR/codegen invariant violated: safe list_get return union missing Ok variant",
-                                .{},
-                            );
-                        }
-                        break :blk variants.get(1).payload_layout;
-                    } else list_elem_layout;
+                    const elem_layout_idx = list_elem_layout;
                     const elem_layout_val = ls.getLayout(elem_layout_idx);
                     const elem_size: u32 = ls.layoutSizeAlign(elem_layout_val).size;
 
-                    if (elem_size == 0 and !is_safe_get) {
+                    if (elem_size == 0) {
                         // ZST element with unsafe get - no actual data to load
                         return .{ .immediate_i64 = 0 };
                     }
@@ -1896,85 +1863,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         else => unreachable,
                     }
 
-                    if (is_safe_get) {
-                        // Safe List.get: bounds check + Try result construction
-                        const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
-                        const tag_size = tu_data.size;
-                        const disc_offset = tu_data.discriminant_offset;
-                        const disc_size = tu_data.discriminant_size;
-
-                        // Allocate result slot for the tag union
-                        const result_slot = self.codegen.allocStackSlot(tag_size);
-                        try self.zeroStackArea(result_slot, tag_size);
-
-                        // Load list length (offset 8 in list struct)
-                        const len_reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadStack(.w64, len_reg, list_base + 8);
-
-                        // Compare: index < length (unsigned)
-                        try self.emitCmpRegReg(index_reg, len_reg);
-                        self.codegen.freeGeneral(len_reg);
-
-                        // Jump to else (Err) if index >= length (unsigned compare)
-                        // aarch64: cs = carry set = unsigned >=
-                        // x86_64: above_or_equal = unsigned >=
-                        const unsigned_ge = if (comptime target.toCpuArch() == .aarch64) .cs else .above_or_equal;
-                        const else_patch = try self.codegen.emitCondJump(unsigned_ge);
-
-                        // === THEN branch: Ok(element) ===
-                        // Load list pointer
-                        const ptr_reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadStack(.w64, ptr_reg, list_base);
-
-                        // Calculate element address: ptr + index * elem_size
-                        if (elem_size == 0) {
-                            // ZST element - nothing to load, just store discriminant
-                            self.codegen.freeGeneral(ptr_reg);
-                        } else {
-                            const addr_reg = try self.allocTempGeneral();
-                            try self.codegen.emit.movRegReg(.w64, addr_reg, index_reg);
-
-                            if (elem_size != 1) {
-                                const size_reg = try self.allocTempGeneral();
-                                try self.codegen.emitLoadImm(size_reg, elem_size);
-                                try self.emitMulRegs(.w64, addr_reg, addr_reg, size_reg);
-                                self.codegen.freeGeneral(size_reg);
-                            }
-
-                            try self.emitAddRegs(.w64, addr_reg, addr_reg, ptr_reg);
-                            self.codegen.freeGeneral(ptr_reg);
-
-                            // Copy element into payload area of tag union (at result_slot + 0)
-                            const temp_reg = try self.allocTempGeneral();
-                            try self.copyChunked(temp_reg, addr_reg, 0, frame_ptr, result_slot, elem_size);
-                            self.codegen.freeGeneral(temp_reg);
-                            self.codegen.freeGeneral(addr_reg);
-                        }
-
-                        // Store Ok discriminant (1)
-                        try self.storeDiscriminant(result_slot + @as(i32, @intCast(disc_offset)), 1, disc_size);
-
-                        // Jump to end
-                        const end_patch = try self.codegen.emitJump();
-
-                        // === ELSE branch: Err(OutOfBounds) ===
-                        self.codegen.patchJump(else_patch, self.codegen.currentOffset());
-                        // Result is already zeroed (payload = 0 for Err).
-                        // Store Err discriminant (0) — already 0 from zeroing, but be explicit
-                        try self.storeDiscriminant(result_slot + @as(i32, @intCast(disc_offset)), 0, disc_size);
-
-                        // === END ===
-                        self.codegen.patchJump(end_patch, self.codegen.currentOffset());
-
-                        if (ls.layoutContainsRefcounted(elem_layout_val)) {
-                            try self.emitIncrefAtStackOffset(result_slot, elem_layout_idx);
-                        }
-
-                        self.codegen.freeGeneral(index_reg);
-                        return .{ .stack = .{ .offset = result_slot } };
-                    }
-
-                    // Unsafe list_get: no bounds checking, return bare element
                     // Load list pointer (offset 0 in list struct)
                     const ptr_reg = try self.allocTempGeneral();
                     try self.codegen.emitLoadStack(.w64, ptr_reg, list_base);

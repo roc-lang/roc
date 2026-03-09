@@ -322,6 +322,88 @@ fn runtimeTupleLayoutFromExprs(self: *Self, mir_expr_ids: []const MIR.ExprId) Al
     return self.layout_store.putTuple(self.scratch_layouts.items[save_layouts..]);
 }
 
+fn runtimeListLayoutFromExprs(
+    self: *Self,
+    elem_mono_idx: Monotype.Idx,
+    elem_exprs: []const MIR.ExprId,
+) Allocator.Error!layout.Idx {
+    if (elem_exprs.len == 0) {
+        return self.layout_store.insertList(try self.layoutFromMonotype(elem_mono_idx));
+    }
+
+    const elem_layout_idx = try self.runtimeValueLayoutFromMirExpr(elem_exprs[0]);
+    return self.layout_store.insertList(elem_layout_idx);
+}
+
+fn runtimeTagLayoutFromExpr(
+    self: *Self,
+    tag_data: anytype,
+    union_mono_idx: Monotype.Idx,
+) Allocator.Error!layout.Idx {
+    const tags = switch (self.mir_store.monotype_store.getMonotype(union_mono_idx)) {
+        .tag_union => |tu| self.mir_store.monotype_store.getTags(tu.tags),
+        else => unreachable,
+    };
+    const mir_args = self.mir_store.getExprSpan(tag_data.args);
+
+    if (tags.len == 0) return .zst;
+
+    if (tags.len == 1) {
+        if (mir_args.len == 0) return .zst;
+        if (mir_args.len == 1) return self.runtimeValueLayoutFromMirExpr(mir_args[0]);
+        return self.runtimeTupleLayoutFromExprs(mir_args);
+    }
+
+    if (tags.len == 2) {
+        const p0 = self.mir_store.monotype_store.getIdxSpan(tags[0].payloads);
+        const p1 = self.mir_store.monotype_store.getIdxSpan(tags[1].payloads);
+        if (p0.len == 0 and p1.len == 0) return .bool;
+    }
+
+    const zst_idx = try self.layout_store.ensureZstLayout();
+    const save_idxs = self.scratch_layout_idxs.items.len;
+    defer self.scratch_layout_idxs.shrinkRetainingCapacity(save_idxs);
+
+    var found_active = false;
+    for (tags) |tag| {
+        if (tag.name.eql(tag_data.name)) {
+            found_active = true;
+            if (mir_args.len == 0) {
+                try self.scratch_layout_idxs.append(self.allocator, zst_idx);
+            } else if (mir_args.len == 1) {
+                try self.scratch_layout_idxs.append(self.allocator, try self.runtimeValueLayoutFromMirExpr(mir_args[0]));
+            } else {
+                try self.scratch_layout_idxs.append(self.allocator, try self.runtimeTupleLayoutFromExprs(mir_args));
+            }
+            continue;
+        }
+
+        const payloads = self.mir_store.monotype_store.getIdxSpan(tag.payloads);
+        if (payloads.len == 0) {
+            try self.scratch_layout_idxs.append(self.allocator, zst_idx);
+        } else if (payloads.len == 1) {
+            try self.scratch_layout_idxs.append(self.allocator, try self.layoutFromMonotype(payloads[0]));
+        } else {
+            const save_layouts = self.scratch_layouts.items.len;
+            defer self.scratch_layouts.shrinkRetainingCapacity(save_layouts);
+            for (payloads) |p| {
+                const p_idx = try self.layoutFromMonotype(p);
+                try self.scratch_layouts.append(self.allocator, self.layout_store.getLayout(p_idx));
+            }
+            try self.scratch_layout_idxs.append(self.allocator, try self.layout_store.putTuple(self.scratch_layouts.items[save_layouts..]));
+        }
+    }
+
+    if (builtin.mode == .Debug and !found_active) {
+        std.debug.panic(
+            "MirToLir invariant violated: active tag ident idx {d} missing from tag union mono_idx={d}",
+            .{ tag_data.name.idx, @intFromEnum(union_mono_idx) },
+        );
+    }
+
+    return self.layout_store.putTagUnion(self.scratch_layout_idxs.items[save_idxs..]);
+}
+
 fn runtimeRecordLayoutFromExprs(
     self: *Self,
     field_names: []const Ident.Idx,
@@ -674,6 +756,27 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
 
     const expr = self.mir_store.getExpr(mir_expr_id);
     switch (expr) {
+        .list => |list_data| {
+            return self.runtimeListLayoutFromExprs(
+                mono.list.elem,
+                self.mir_store.getExprSpan(list_data.elems),
+            );
+        },
+        .tag => |tag_data| {
+            if (mono == .tag_union) {
+                return self.runtimeTagLayoutFromExpr(tag_data, mono_idx);
+            }
+            return self.layoutFromMonotype(mono_idx);
+        },
+        .run_low_level => |ll| {
+            if (ll.op == .list_get_unsafe) {
+                const args = self.mir_store.getExprSpan(ll.args);
+                if (builtin.mode == .Debug and args.len == 0) {
+                    std.debug.panic("MirToLir invariant violated: list_get_unsafe missing list argument", .{});
+                }
+                return self.runtimeListElemLayoutFromMirExpr(args[0]);
+            }
+        },
         .tuple => |tup| return self.runtimeTupleLayoutFromExprs(self.mir_store.getExprSpan(tup.elems)),
         .record => |rec| return self.runtimeRecordLayoutFromExprs(
             self.mir_store.getFieldNameSpan(rec.field_names),
@@ -689,6 +792,25 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
     }
 
     return self.layoutFromMonotype(mono_idx);
+}
+
+fn runtimeListElemLayoutFromMirExpr(self: *Self, list_mir_expr_id: MIR.ExprId) Allocator.Error!layout.Idx {
+    const list_layout_idx = try self.runtimeValueLayoutFromMirExpr(list_mir_expr_id);
+    const list_layout = self.layout_store.getLayout(list_layout_idx);
+
+    return switch (list_layout.tag) {
+        .list => list_layout.data.list,
+        .list_of_zst => .zst,
+        else => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "MirToLir invariant violated: expected list layout for list_get_unsafe source, got {s}",
+                    .{@tagName(list_layout.tag)},
+                );
+            }
+            unreachable;
+        },
+    };
 }
 
 /// Adapt a function-typed value to the runtime layout of a target lambda set.
@@ -998,10 +1120,10 @@ fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
             const lir_str_idx = try self.copyStringToLir(s);
             break :blk self.lir_store.addExpr(.{ .str_literal = lir_str_idx }, region);
         },
-        .list => |l| self.lowerList(l, mono_idx, region),
+        .list => |l| self.lowerList(l, mono_idx, mir_expr_id, region),
         .record => |r| self.lowerRecord(r, mono_idx, mir_expr_id, region),
         .tuple => |t| self.lowerTuple(t, mono_idx, mir_expr_id, region),
-        .tag => |t| self.lowerTag(t, mono_idx, region),
+        .tag => |t| self.lowerTag(t, mono_idx, mir_expr_id, region),
         .lookup => |sym| self.lowerLookup(sym, mono_idx, mir_expr_id, region),
         .match_expr => |m| self.lowerMatch(m, mir_expr_id, region),
         .lambda => |l| self.lowerLambda(l, mono_idx, region),
@@ -1025,7 +1147,7 @@ fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
             const result = try self.lir_store.addExpr(.{ .str_escape_and_quote = arg }, region);
             break :blk try acc.finish(result, .str, region);
         },
-        .run_low_level => |ll| self.lowerLowLevel(ll, mono_idx, region),
+        .run_low_level => |ll| self.lowerLowLevel(ll, mir_expr_id, region),
         .hosted => |h| self.lowerHosted(h, mono_idx, region),
         .runtime_err_can, .runtime_err_type, .runtime_err_ellipsis, .runtime_err_anno_only => {
             const ret_layout = try self.layoutFromMonotype(mono_idx);
@@ -1094,12 +1216,14 @@ fn lowerInt(self: *Self, int_data: anytype, mono_idx: Monotype.Idx, region: Regi
     }
 }
 
-fn lowerList(self: *Self, list_data: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
-    const list_layout = try self.layoutFromMonotype(mono_idx);
-    const monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
-    const elem_layout = switch (monotype) {
-        .list => |l| try self.layoutFromMonotype(l.elem),
-        .prim, .unit, .record, .tuple, .tag_union, .box, .func, .recursive_placeholder => unreachable,
+fn lowerList(self: *Self, list_data: anytype, mono_idx: Monotype.Idx, mir_expr_id: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
+    _ = mono_idx;
+    const list_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
+    const list_layout_val = self.layout_store.getLayout(list_layout);
+    const elem_layout = switch (list_layout_val.tag) {
+        .list => list_layout_val.data.list,
+        .list_of_zst => .zst,
+        .scalar, .box, .box_of_zst, .struct_, .closure, .zst, .tag_union => unreachable,
     };
 
     const mir_elems = self.mir_store.getExprSpan(list_data.elems);
@@ -1291,7 +1415,7 @@ fn lowerTuple(self: *Self, tup: anytype, _: Monotype.Idx, mir_expr_id: MIR.ExprI
     }
 }
 
-fn lowerTag(self: *Self, tag_data: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
+fn lowerTag(self: *Self, tag_data: anytype, mono_idx: Monotype.Idx, mir_expr_id: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
     const mir_args = self.mir_store.getExprSpan(tag_data.args);
 
     // Single-tag unions are optimized to just their payload layout (no discriminant),
@@ -1317,7 +1441,7 @@ fn lowerTag(self: *Self, tag_data: anytype, mono_idx: Monotype.Idx, region: Regi
         }
     }
 
-    const union_layout = try self.layoutFromMonotype(mono_idx);
+    const union_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
     const discriminant = self.tagDiscriminant(tag_data.name, mono_idx);
 
     if (mir_args.len == 0) {
@@ -1379,8 +1503,7 @@ fn lowerLookup(self: *Self, sym: Symbol, mono_idx: Monotype.Idx, mir_expr_id: MI
 fn lowerMatch(self: *Self, match_data: anytype, mir_expr_id: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
     var acc = self.startLetAccumulator();
     const cond_raw = try self.lowerExpr(match_data.cond);
-    const cond_mono = self.mir_store.typeOf(match_data.cond);
-    const value_layout = try self.layoutFromMonotype(cond_mono);
+    const value_layout = try self.runtimeValueLayoutFromMirExpr(match_data.cond);
     const cond_id = try acc.ensureSymbol(cond_raw, value_layout, region);
     const result_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
     const result_ls_idx = self.lambdaSetForExpr(mir_expr_id) orelse LambdaSet.Idx.none;
@@ -2330,8 +2453,8 @@ fn lowerTupleAccess(self: *Self, ta: anytype, mir_expr_id: MIR.ExprId, region: R
     return acc.finish(access_expr, field_layout, region);
 }
 
-fn lowerLowLevel(self: *Self, ll: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
-    const ret_layout = try self.layoutFromMonotype(mono_idx);
+fn lowerLowLevel(self: *Self, ll: anytype, mir_expr_id: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
+    const ret_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
     const mir_args = self.mir_store.getExprSpan(ll.args);
     var acc = self.startLetAccumulator();
     const arg_ownership = ll.op.getArgOwnership();

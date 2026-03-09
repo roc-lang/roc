@@ -2759,6 +2759,20 @@ test "issue 8821: List.get with records and pattern match on Try type" {
     , "Alice", .no_trace);
 }
 
+test "issue 8821 reduced: List.get with records and match ignores payload body" {
+    try runExpectI64(
+        \\{
+        \\    clients : List({ id : U64, name : Str })
+        \\    clients = [{ id: 1, name: "Alice" }]
+        \\
+        \\    match List.get(clients, 0) {
+        \\        Ok(client) => 1
+        \\        Err(_) => 0
+        \\    }
+        \\}
+    , 1, .no_trace);
+}
+
 test "encode: just convert string to utf8" {
     // Simple test: convert string to utf8 and back
     try runExpectStr(
