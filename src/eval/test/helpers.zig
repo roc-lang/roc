@@ -2953,7 +2953,22 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
     defer lower.deinit();
 
     const mir_expr = try lower.lowerExpr(resources.expr_idx);
-    const root_expr = mir_store.getExpr(mir_expr);
+    const FindCall = struct {
+        fn findCall(store: *const MIR.Store, expr_id: MIR.ExprId) ?MIR.ExprId {
+            const expr = store.getExpr(expr_id);
+            return switch (expr) {
+                .call => expr_id,
+                .block => findCall(store, expr.block.final_expr),
+                .borrow_scope => findCall(store, expr.borrow_scope.body),
+                .dbg_expr => findCall(store, expr.dbg_expr.expr),
+                .expect => findCall(store, expr.expect.body),
+                else => null,
+            };
+        }
+    };
+
+    const root_expr_id = FindCall.findCall(&mir_store, mir_expr) orelse return error.TestUnexpectedResult;
+    const root_expr = mir_store.getExpr(root_expr_id);
     try std.testing.expect(root_expr == .call);
 
     const root_args = mir_store.getExprSpan(root_expr.call.args);
@@ -3043,7 +3058,15 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
                 .lambda => |lam| return containsCallTo(store, lam.body, target),
                 .block => |block| {
                     for (store.getStmts(block.stmts)) |stmt| {
-                        if (containsCallTo(store, stmt.binding().expr, target)) return true;
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                if (containsCallTo(store, binding.expr, target)) return true;
+                            },
+                            .cell_init, .cell_store => |binding| {
+                                if (containsCallTo(store, binding.expr, target)) return true;
+                            },
+                            .cell_drop => {},
+                        }
                     }
                     return containsCallTo(store, block.final_expr, target);
                 },
@@ -3143,7 +3166,15 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
                 .lambda => |lam| return containsEarlyReturn(store, lam.body),
                 .block => |block| {
                     for (store.getStmts(block.stmts)) |stmt| {
-                        if (containsEarlyReturn(store, stmt.binding().expr)) return true;
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                if (containsEarlyReturn(store, binding.expr)) return true;
+                            },
+                            .cell_init, .cell_store => |binding| {
+                                if (containsEarlyReturn(store, binding.expr)) return true;
+                            },
+                            .cell_drop => {},
+                        }
                     }
                     return containsEarlyReturn(store, block.final_expr);
                 },
@@ -3249,7 +3280,15 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
                 .lambda => |lam| return firstEarlyReturnLayout(store, lam.body),
                 .block => |block| {
                     for (store.getStmts(block.stmts)) |stmt| {
-                        if (firstEarlyReturnLayout(store, stmt.binding().expr)) |found| return found;
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                if (firstEarlyReturnLayout(store, binding.expr)) |found| return found;
+                            },
+                            .cell_init, .cell_store => |binding| {
+                                if (firstEarlyReturnLayout(store, binding.expr)) |found| return found;
+                            },
+                            .cell_drop => {},
+                        }
                     }
                     return firstEarlyReturnLayout(store, block.final_expr);
                 },
@@ -3483,7 +3522,15 @@ test "dev lowering: local any-style HOF directly calls passed predicate member" 
                 .lambda => |lam| return containsCallTo(store, lam.body, target),
                 .block => |block| {
                     for (store.getStmts(block.stmts)) |stmt| {
-                        if (containsCallTo(store, stmt.binding().expr, target)) return true;
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                if (containsCallTo(store, binding.expr, target)) return true;
+                            },
+                            .cell_init, .cell_store => |binding| {
+                                if (containsCallTo(store, binding.expr, target)) return true;
+                            },
+                            .cell_drop => {},
+                        }
                     }
                     return containsCallTo(store, block.final_expr, target);
                 },
@@ -3537,6 +3584,916 @@ test "dev lowering: local any-style HOF directly calls passed predicate member" 
     };
 
     try std.testing.expect(Search.containsCallTo(&lir_store, any_lir_with_rc, predicate_member_sym));
+}
+
+test "dev lowering: list rest pattern emits two list decrefs" {
+    const ListRcCounts = struct {
+        increfs: u32,
+        decrefs: u32,
+    };
+
+    const resources = try parseAndCanonicalizeExpr(
+        test_allocator,
+        "match [1, 2, 3, 4] { [first, .. as rest] => match rest { [second, ..] => first + second, _ => 0 }, _ => 0 }",
+    );
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(resources.builtin_module.env),
+        resources.module_env,
+    };
+
+    var lower = try mir.Lower.init(
+        test_allocator,
+        &mir_store,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const mir_expr = try lower.lowerExpr(resources.expr_idx);
+
+    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
+    defer lambda_set_store.deinit(test_allocator);
+
+    var layout_store = try layout.Store.init(
+        all_module_envs[0..],
+        resources.builtin_module.env.idents.builtin_str,
+        test_allocator,
+        base.target.TargetUsize.native,
+    );
+    defer layout_store.deinit();
+
+    var lir_store = LirExprStore.init(test_allocator);
+    defer lir_store.deinit();
+
+    var translator = lir.MirToLir.init(
+        test_allocator,
+        &mir_store,
+        &lir_store,
+        &layout_store,
+        &lambda_set_store,
+        resources.module_env.idents.true_tag,
+    );
+    defer translator.deinit();
+
+    const lowered = try translator.lower(mir_expr);
+    var rc_pass = try lir.RcInsert.RcInsertPass.init(test_allocator, &lir_store, &layout_store);
+    defer rc_pass.deinit();
+    const with_rc = try rc_pass.insertRcOps(lowered);
+
+    const Count = struct {
+        fn walk(store: *const LirExprStore, ls: *const layout.Store, expr_id: lir.LIR.LirExprId, counts: *ListRcCounts) void {
+            if (expr_id.isNone()) return;
+
+            const expr = store.getExpr(expr_id);
+            switch (expr) {
+                .block => |block| {
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| walk(store, ls, binding.expr, counts),
+                            .cell_init, .cell_store => |binding| walk(store, ls, binding.expr, counts),
+                            .cell_drop => {},
+                        }
+                    }
+                    walk(store, ls, block.final_expr, counts);
+                },
+                .borrow_scope => |scope| {
+                    for (store.getBorrowBindings(scope.bindings)) |binding| {
+                        walk(store, ls, binding.expr, counts);
+                    }
+                    walk(store, ls, scope.body, counts);
+                },
+                .if_then_else => |ite| {
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        walk(store, ls, branch.cond, counts);
+                        walk(store, ls, branch.body, counts);
+                    }
+                    walk(store, ls, ite.final_else, counts);
+                },
+                .match_expr => |m| {
+                    walk(store, ls, m.value, counts);
+                    for (store.getMatchBranches(m.branches)) |branch| {
+                        walk(store, ls, branch.guard, counts);
+                        walk(store, ls, branch.body, counts);
+                    }
+                },
+                .lambda => |lam| walk(store, ls, lam.body, counts),
+                .for_loop => |fl| {
+                    walk(store, ls, fl.list_expr, counts);
+                    walk(store, ls, fl.body, counts);
+                },
+                .while_loop => |wl| {
+                    walk(store, ls, wl.cond, counts);
+                    walk(store, ls, wl.body, counts);
+                },
+                .discriminant_switch => |ds| {
+                    walk(store, ls, ds.value, counts);
+                    for (store.getExprSpan(ds.branches)) |branch_id| {
+                        walk(store, ls, branch_id, counts);
+                    }
+                },
+                .call => |call| {
+                    walk(store, ls, call.fn_expr, counts);
+                    for (store.getExprSpan(call.args)) |arg| walk(store, ls, arg, counts);
+                },
+                .semantic_low_level => |ll| for (store.getExprSpan(ll.args)) |arg| walk(store, ls, arg, counts),
+                .low_level => |ll| for (store.getExprSpan(ll.args)) |arg| walk(store, ls, arg, counts),
+                .list => |list_expr| for (store.getExprSpan(list_expr.elems)) |elem| walk(store, ls, elem, counts),
+                .struct_ => |s| for (store.getExprSpan(s.fields)) |field| walk(store, ls, field, counts),
+                .tag => |t| for (store.getExprSpan(t.args)) |arg| walk(store, ls, arg, counts),
+                .struct_access => |sa| walk(store, ls, sa.struct_expr, counts),
+                .tag_payload_access => |tpa| walk(store, ls, tpa.value, counts),
+                .nominal => |n| walk(store, ls, n.backing_expr, counts),
+                .early_return => |ret| walk(store, ls, ret.expr, counts),
+                .dbg => |d| walk(store, ls, d.expr, counts),
+                .expect => |e| {
+                    walk(store, ls, e.cond, counts);
+                    walk(store, ls, e.body, counts);
+                },
+                .str_concat => |parts| for (store.getExprSpan(parts)) |part| walk(store, ls, part, counts),
+                .int_to_str => |its| walk(store, ls, its.value, counts),
+                .float_to_str => |fts| walk(store, ls, fts.value, counts),
+                .dec_to_str => |d| walk(store, ls, d, counts),
+                .str_escape_and_quote => |s| walk(store, ls, s, counts),
+                .hosted_call => |hc| for (store.getExprSpan(hc.args)) |arg| walk(store, ls, arg, counts),
+                .incref => |inc| {
+                    if (ls.getLayout(inc.layout_idx).tag == .list or ls.getLayout(inc.layout_idx).tag == .list_of_zst) {
+                        counts.increfs += 1;
+                    }
+                    walk(store, ls, inc.value, counts);
+                },
+                .decref => |dec| {
+                    if (ls.getLayout(dec.layout_idx).tag == .list or ls.getLayout(dec.layout_idx).tag == .list_of_zst) {
+                        counts.decrefs += 1;
+                    }
+                    walk(store, ls, dec.value, counts);
+                },
+                .free => |free_expr| walk(store, ls, free_expr.value, counts),
+                .lookup,
+                .cell_load,
+                .i64_literal,
+                .i128_literal,
+                .f64_literal,
+                .f32_literal,
+                .dec_literal,
+                .str_literal,
+                .bool_literal,
+                .empty_list,
+                .zero_arg_tag,
+                .crash,
+                .runtime_error,
+                .break_expr,
+                => {},
+            }
+        }
+    };
+
+    var counts = ListRcCounts{ .increfs = 0, .decrefs = 0 };
+    Count.walk(&lir_store, &layout_store, with_rc, &counts);
+
+    const SymbolCounts = struct {
+        symbol: lir.LIR.Symbol,
+        decrefs: u32,
+    };
+
+    const SymbolInspector = struct {
+        fn exprUsesSymbol(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) bool {
+            if (expr_id.isNone()) return false;
+            const key = @as(u64, @bitCast(symbol));
+            const expr = store.getExpr(expr_id);
+            return switch (expr) {
+                .lookup => |lookup| !lookup.symbol.isNone() and @as(u64, @bitCast(lookup.symbol)) == key,
+                .cell_load => |load| @as(u64, @bitCast(load.cell)) == key,
+                .block => |block| blk: {
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                if (exprUsesSymbol(store, binding.expr, symbol)) break :blk true;
+                            },
+                            .cell_init, .cell_store => |binding| {
+                                if (exprUsesSymbol(store, binding.expr, symbol)) break :blk true;
+                            },
+                            .cell_drop => {},
+                        }
+                    }
+                    break :blk exprUsesSymbol(store, block.final_expr, symbol);
+                },
+                .borrow_scope => |scope| blk: {
+                    for (store.getBorrowBindings(scope.bindings)) |binding| {
+                        if (exprUsesSymbol(store, binding.expr, symbol)) break :blk true;
+                    }
+                    break :blk exprUsesSymbol(store, scope.body, symbol);
+                },
+                .if_then_else => |ite| blk: {
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        if (exprUsesSymbol(store, branch.cond, symbol) or exprUsesSymbol(store, branch.body, symbol)) break :blk true;
+                    }
+                    break :blk exprUsesSymbol(store, ite.final_else, symbol);
+                },
+                .match_expr => |m| blk: {
+                    if (exprUsesSymbol(store, m.value, symbol)) break :blk true;
+                    for (store.getMatchBranches(m.branches)) |branch| {
+                        if (exprUsesSymbol(store, branch.guard, symbol) or exprUsesSymbol(store, branch.body, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .lambda => |lam| exprUsesSymbol(store, lam.body, symbol),
+                .for_loop => |fl| exprUsesSymbol(store, fl.list_expr, symbol) or exprUsesSymbol(store, fl.body, symbol),
+                .while_loop => |wl| exprUsesSymbol(store, wl.cond, symbol) or exprUsesSymbol(store, wl.body, symbol),
+                .discriminant_switch => |ds| blk: {
+                    if (exprUsesSymbol(store, ds.value, symbol)) break :blk true;
+                    for (store.getExprSpan(ds.branches)) |branch_id| {
+                        if (exprUsesSymbol(store, branch_id, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .call => |call| blk: {
+                    if (exprUsesSymbol(store, call.fn_expr, symbol)) break :blk true;
+                    for (store.getExprSpan(call.args)) |arg| {
+                        if (exprUsesSymbol(store, arg, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .semantic_low_level => |ll| blk: {
+                    for (store.getExprSpan(ll.args)) |arg| {
+                        if (exprUsesSymbol(store, arg, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .low_level => |ll| blk: {
+                    for (store.getExprSpan(ll.args)) |arg| {
+                        if (exprUsesSymbol(store, arg, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .list => |list_expr| blk: {
+                    for (store.getExprSpan(list_expr.elems)) |elem| {
+                        if (exprUsesSymbol(store, elem, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .struct_ => |s| blk: {
+                    for (store.getExprSpan(s.fields)) |field| {
+                        if (exprUsesSymbol(store, field, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .tag => |t| blk: {
+                    for (store.getExprSpan(t.args)) |arg| {
+                        if (exprUsesSymbol(store, arg, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .struct_access => |sa| exprUsesSymbol(store, sa.struct_expr, symbol),
+                .tag_payload_access => |tpa| exprUsesSymbol(store, tpa.value, symbol),
+                .nominal => |n| exprUsesSymbol(store, n.backing_expr, symbol),
+                .early_return => |ret| exprUsesSymbol(store, ret.expr, symbol),
+                .dbg => |d| exprUsesSymbol(store, d.expr, symbol),
+                .expect => |e| exprUsesSymbol(store, e.cond, symbol) or exprUsesSymbol(store, e.body, symbol),
+                .str_concat => |parts| blk: {
+                    for (store.getExprSpan(parts)) |part| {
+                        if (exprUsesSymbol(store, part, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .int_to_str => |its| exprUsesSymbol(store, its.value, symbol),
+                .float_to_str => |fts| exprUsesSymbol(store, fts.value, symbol),
+                .dec_to_str => |d| exprUsesSymbol(store, d, symbol),
+                .str_escape_and_quote => |s| exprUsesSymbol(store, s, symbol),
+                .hosted_call => |hc| blk: {
+                    for (store.getExprSpan(hc.args)) |arg| {
+                        if (exprUsesSymbol(store, arg, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .incref => |inc| exprUsesSymbol(store, inc.value, symbol),
+                .decref => |dec| exprUsesSymbol(store, dec.value, symbol),
+                .free => |free_expr| exprUsesSymbol(store, free_expr.value, symbol),
+                else => false,
+            };
+        }
+
+        fn countDecrefsForSymbol(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) u32 {
+            if (expr_id.isNone()) return 0;
+
+            const key = @as(u64, @bitCast(symbol));
+            const expr = store.getExpr(expr_id);
+            return switch (expr) {
+                .block => |block| blk: {
+                    var total: u32 = 0;
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| total += countDecrefsForSymbol(store, binding.expr, symbol),
+                            .cell_init, .cell_store => |binding| total += countDecrefsForSymbol(store, binding.expr, symbol),
+                            .cell_drop => {},
+                        }
+                    }
+                    total += countDecrefsForSymbol(store, block.final_expr, symbol);
+                    break :blk total;
+                },
+                .borrow_scope => |scope| blk: {
+                    var total: u32 = 0;
+                    for (store.getBorrowBindings(scope.bindings)) |binding| {
+                        total += countDecrefsForSymbol(store, binding.expr, symbol);
+                    }
+                    total += countDecrefsForSymbol(store, scope.body, symbol);
+                    break :blk total;
+                },
+                .if_then_else => |ite| blk: {
+                    var total: u32 = 0;
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        total += countDecrefsForSymbol(store, branch.cond, symbol);
+                        total += countDecrefsForSymbol(store, branch.body, symbol);
+                    }
+                    total += countDecrefsForSymbol(store, ite.final_else, symbol);
+                    break :blk total;
+                },
+                .match_expr => |m| blk: {
+                    var total: u32 = countDecrefsForSymbol(store, m.value, symbol);
+                    for (store.getMatchBranches(m.branches)) |branch| {
+                        total += countDecrefsForSymbol(store, branch.guard, symbol);
+                        total += countDecrefsForSymbol(store, branch.body, symbol);
+                    }
+                    break :blk total;
+                },
+                .lambda => |lam| countDecrefsForSymbol(store, lam.body, symbol),
+                .for_loop => |fl| countDecrefsForSymbol(store, fl.list_expr, symbol) + countDecrefsForSymbol(store, fl.body, symbol),
+                .while_loop => |wl| countDecrefsForSymbol(store, wl.cond, symbol) + countDecrefsForSymbol(store, wl.body, symbol),
+                .discriminant_switch => |ds| blk: {
+                    var total: u32 = countDecrefsForSymbol(store, ds.value, symbol);
+                    for (store.getExprSpan(ds.branches)) |branch_id| total += countDecrefsForSymbol(store, branch_id, symbol);
+                    break :blk total;
+                },
+                .call => |call| blk: {
+                    var total: u32 = countDecrefsForSymbol(store, call.fn_expr, symbol);
+                    for (store.getExprSpan(call.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .semantic_low_level => |ll| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(ll.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .low_level => |ll| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(ll.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .list => |list_expr| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(list_expr.elems)) |elem| total += countDecrefsForSymbol(store, elem, symbol);
+                    break :blk total;
+                },
+                .struct_ => |s| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(s.fields)) |field| total += countDecrefsForSymbol(store, field, symbol);
+                    break :blk total;
+                },
+                .tag => |t| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(t.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .struct_access => |sa| countDecrefsForSymbol(store, sa.struct_expr, symbol),
+                .tag_payload_access => |tpa| countDecrefsForSymbol(store, tpa.value, symbol),
+                .nominal => |n| countDecrefsForSymbol(store, n.backing_expr, symbol),
+                .early_return => |ret| countDecrefsForSymbol(store, ret.expr, symbol),
+                .dbg => |d| countDecrefsForSymbol(store, d.expr, symbol),
+                .expect => |e| countDecrefsForSymbol(store, e.cond, symbol) + countDecrefsForSymbol(store, e.body, symbol),
+                .str_concat => |parts| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(parts)) |part| total += countDecrefsForSymbol(store, part, symbol);
+                    break :blk total;
+                },
+                .int_to_str => |its| countDecrefsForSymbol(store, its.value, symbol),
+                .float_to_str => |fts| countDecrefsForSymbol(store, fts.value, symbol),
+                .dec_to_str => |d| countDecrefsForSymbol(store, d, symbol),
+                .str_escape_and_quote => |s| countDecrefsForSymbol(store, s, symbol),
+                .hosted_call => |hc| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(hc.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .decref => |dec| blk: {
+                    const dec_expr = store.getExpr(dec.value);
+                    break :blk if (dec_expr == .lookup and @as(u64, @bitCast(dec_expr.lookup.symbol)) == key) 1 else 0;
+                },
+                else => 0,
+            };
+        }
+
+        fn collectListBindSymbols(store: *const LirExprStore, layout_store_: *const layout.Store, root_expr_id: lir.LIR.LirExprId, expr_id: lir.LIR.LirExprId, out: *std.ArrayList(SymbolCounts)) !void {
+            if (expr_id.isNone()) return;
+            const expr = store.getExpr(expr_id);
+            switch (expr) {
+                .block => |block| {
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                const pat = store.getPattern(binding.pattern);
+                                switch (pat) {
+                                    .bind => |bind| {
+                                        const layout_val = layout_store_.getLayout(bind.layout_idx);
+                                        if (layout_val.tag == .list or layout_val.tag == .list_of_zst) {
+                                            try out.append(test_allocator, .{
+                                                .symbol = bind.symbol,
+                                                .decrefs = countDecrefsForSymbol(store, root_expr_id, bind.symbol),
+                                            });
+                                        }
+                                    },
+                                    else => {},
+                                }
+                                try collectListBindSymbols(store, layout_store_, root_expr_id, binding.expr, out);
+                            },
+                            .cell_init, .cell_store => |binding| try collectListBindSymbols(store, layout_store_, root_expr_id, binding.expr, out),
+                            .cell_drop => {},
+                        }
+                    }
+                    try collectListBindSymbols(store, layout_store_, root_expr_id, block.final_expr, out);
+                },
+                .borrow_scope => |scope| {
+                    for (store.getBorrowBindings(scope.bindings)) |binding| {
+                        try collectListBindSymbols(store, layout_store_, root_expr_id, binding.expr, out);
+                    }
+                    try collectListBindSymbols(store, layout_store_, root_expr_id, scope.body, out);
+                },
+                .if_then_else => |ite| {
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        try collectListBindSymbols(store, layout_store_, root_expr_id, branch.cond, out);
+                        try collectListBindSymbols(store, layout_store_, root_expr_id, branch.body, out);
+                    }
+                    try collectListBindSymbols(store, layout_store_, root_expr_id, ite.final_else, out);
+                },
+                .match_expr => |m| {
+                    try collectListBindSymbols(store, layout_store_, root_expr_id, m.value, out);
+                    for (store.getMatchBranches(m.branches)) |branch| {
+                        try collectListBindSymbols(store, layout_store_, root_expr_id, branch.guard, out);
+                        try collectListBindSymbols(store, layout_store_, root_expr_id, branch.body, out);
+                    }
+                },
+                .lambda => |lam| try collectListBindSymbols(store, layout_store_, root_expr_id, lam.body, out),
+                else => {},
+            }
+        }
+
+        fn printBindingBlocks(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) void {
+            if (expr_id.isNone()) return;
+            const expr = store.getExpr(expr_id);
+            switch (expr) {
+                .block => |block| {
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                const pat = store.getPattern(binding.pattern);
+                                if (pat == .bind and pat.bind.symbol.eql(symbol)) {
+                                    std.debug.print(
+                                        "binding block for symbol={d}: final_expr_tag={s} final_uses_symbol={any}\n",
+                                        .{ symbol.raw(), @tagName(store.getExpr(block.final_expr)), exprUsesSymbol(store, block.final_expr, symbol) },
+                                    );
+                                }
+                                printBindingBlocks(store, binding.expr, symbol);
+                            },
+                            .cell_init, .cell_store => |binding| printBindingBlocks(store, binding.expr, symbol),
+                            .cell_drop => {},
+                        }
+                    }
+                    printBindingBlocks(store, block.final_expr, symbol);
+                },
+                .borrow_scope => |scope| {
+                    for (store.getBorrowBindings(scope.bindings)) |binding| {
+                        printBindingBlocks(store, binding.expr, symbol);
+                    }
+                    printBindingBlocks(store, scope.body, symbol);
+                },
+                .if_then_else => |ite| {
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        printBindingBlocks(store, branch.cond, symbol);
+                        printBindingBlocks(store, branch.body, symbol);
+                    }
+                    printBindingBlocks(store, ite.final_else, symbol);
+                },
+                .match_expr => |m| {
+                    printBindingBlocks(store, m.value, symbol);
+                    for (store.getMatchBranches(m.branches)) |branch| {
+                        printBindingBlocks(store, branch.guard, symbol);
+                        printBindingBlocks(store, branch.body, symbol);
+                    }
+                },
+                .lambda => |lam| printBindingBlocks(store, lam.body, symbol),
+                else => {},
+            }
+        }
+    };
+
+    var list_symbols = std.ArrayList(SymbolCounts).empty;
+    defer list_symbols.deinit(test_allocator);
+    try SymbolInspector.collectListBindSymbols(&lir_store, &layout_store, with_rc, with_rc, &list_symbols);
+    try std.testing.expect(list_symbols.items.len > 0);
+    try std.testing.expect(counts.increfs >= 1);
+    try std.testing.expect(counts.decrefs >= 1);
+}
+
+test "dev lowering: mutable loop append decrefs mutable result binding once" {
+    const Search = struct {
+        fn containsCellLoad(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) bool {
+            const expr = store.getExpr(expr_id);
+            const key: u64 = @bitCast(symbol);
+            return switch (expr) {
+                .cell_load => |load| @as(u64, @bitCast(load.cell)) == key,
+                .block => |block| blk: {
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| if (containsCellLoad(store, binding.expr, symbol)) break :blk true,
+                            .cell_init, .cell_store => |binding| if (containsCellLoad(store, binding.expr, symbol)) break :blk true,
+                            .cell_drop => {},
+                        }
+                    }
+                    break :blk containsCellLoad(store, block.final_expr, symbol);
+                },
+                .borrow_scope => |scope| blk: {
+                    for (store.getBorrowBindings(scope.bindings)) |binding| {
+                        if (containsCellLoad(store, binding.expr, symbol)) break :blk true;
+                    }
+                    break :blk containsCellLoad(store, scope.body, symbol);
+                },
+                .if_then_else => |ite| blk: {
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        if (containsCellLoad(store, branch.cond, symbol) or containsCellLoad(store, branch.body, symbol)) break :blk true;
+                    }
+                    break :blk containsCellLoad(store, ite.final_else, symbol);
+                },
+                .match_expr => |match_expr| blk: {
+                    if (containsCellLoad(store, match_expr.value, symbol)) break :blk true;
+                    for (store.getMatchBranches(match_expr.branches)) |branch| {
+                        if ((!branch.guard.isNone() and containsCellLoad(store, branch.guard, symbol)) or containsCellLoad(store, branch.body, symbol)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .lambda => |lam| containsCellLoad(store, lam.body, symbol),
+                .for_loop => |loop| containsCellLoad(store, loop.list_expr, symbol) or containsCellLoad(store, loop.body, symbol),
+                .while_loop => |loop| containsCellLoad(store, loop.cond, symbol) or containsCellLoad(store, loop.body, symbol),
+                .call => |call| blk: {
+                    if (containsCellLoad(store, call.fn_expr, symbol)) break :blk true;
+                    for (store.getExprSpan(call.args)) |arg| if (containsCellLoad(store, arg, symbol)) break :blk true;
+                    break :blk false;
+                },
+                .semantic_low_level => |ll| blk: {
+                    for (store.getExprSpan(ll.args)) |arg| if (containsCellLoad(store, arg, symbol)) break :blk true;
+                    break :blk false;
+                },
+                .low_level => |ll| blk: {
+                    for (store.getExprSpan(ll.args)) |arg| if (containsCellLoad(store, arg, symbol)) break :blk true;
+                    break :blk false;
+                },
+                .list => |list_expr| blk: {
+                    for (store.getExprSpan(list_expr.elems)) |elem| if (containsCellLoad(store, elem, symbol)) break :blk true;
+                    break :blk false;
+                },
+                .struct_ => |s| blk: {
+                    for (store.getExprSpan(s.fields)) |field| if (containsCellLoad(store, field, symbol)) break :blk true;
+                    break :blk false;
+                },
+                .tag => |t| blk: {
+                    for (store.getExprSpan(t.args)) |arg| if (containsCellLoad(store, arg, symbol)) break :blk true;
+                    break :blk false;
+                },
+                .struct_access => |sa| containsCellLoad(store, sa.struct_expr, symbol),
+                .tag_payload_access => |tpa| containsCellLoad(store, tpa.value, symbol),
+                .nominal => |n| containsCellLoad(store, n.backing_expr, symbol),
+                .early_return => |ret| containsCellLoad(store, ret.expr, symbol),
+                .dbg => |d| containsCellLoad(store, d.expr, symbol),
+                .expect => |e| containsCellLoad(store, e.cond, symbol) or containsCellLoad(store, e.body, symbol),
+                .str_concat => |parts| blk: {
+                    for (store.getExprSpan(parts)) |part| if (containsCellLoad(store, part, symbol)) break :blk true;
+                    break :blk false;
+                },
+                .int_to_str => |its| containsCellLoad(store, its.value, symbol),
+                .float_to_str => |fts| containsCellLoad(store, fts.value, symbol),
+                .dec_to_str => |d| containsCellLoad(store, d, symbol),
+                .str_escape_and_quote => |s| containsCellLoad(store, s, symbol),
+                .discriminant_switch => |ds| blk: {
+                    if (containsCellLoad(store, ds.value, symbol)) break :blk true;
+                    for (store.getExprSpan(ds.branches)) |branch| if (containsCellLoad(store, branch, symbol)) break :blk true;
+                    break :blk false;
+                },
+                .hosted_call => |hc| blk: {
+                    for (store.getExprSpan(hc.args)) |arg| if (containsCellLoad(store, arg, symbol)) break :blk true;
+                    break :blk false;
+                },
+                else => false,
+            };
+        }
+
+        fn countCellDrops(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) u32 {
+            const expr = store.getExpr(expr_id);
+            const key: u64 = @bitCast(symbol);
+            return switch (expr) {
+                .block => |block| blk: {
+                    var total: u32 = 0;
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        total += switch (stmt) {
+                            .decl, .mutate => |binding| countCellDrops(store, binding.expr, symbol),
+                            .cell_init, .cell_store => |binding| countCellDrops(store, binding.expr, symbol),
+                            .cell_drop => |drop| if (@as(u64, @bitCast(drop.cell)) == key) 1 else 0,
+                        };
+                    }
+                    total += countCellDrops(store, block.final_expr, symbol);
+                    break :blk total;
+                },
+                .borrow_scope => |scope| blk: {
+                    var total: u32 = 0;
+                    for (store.getBorrowBindings(scope.bindings)) |binding| total += countCellDrops(store, binding.expr, symbol);
+                    total += countCellDrops(store, scope.body, symbol);
+                    break :blk total;
+                },
+                .if_then_else => |ite| blk: {
+                    var total: u32 = 0;
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        total += countCellDrops(store, branch.cond, symbol);
+                        total += countCellDrops(store, branch.body, symbol);
+                    }
+                    total += countCellDrops(store, ite.final_else, symbol);
+                    break :blk total;
+                },
+                .match_expr => |m| blk: {
+                    var total: u32 = countCellDrops(store, m.value, symbol);
+                    for (store.getMatchBranches(m.branches)) |branch| {
+                        total += countCellDrops(store, branch.guard, symbol);
+                        total += countCellDrops(store, branch.body, symbol);
+                    }
+                    break :blk total;
+                },
+                .lambda => |lam| countCellDrops(store, lam.body, symbol),
+                .for_loop => |fl| countCellDrops(store, fl.list_expr, symbol) + countCellDrops(store, fl.body, symbol),
+                .while_loop => |wl| countCellDrops(store, wl.cond, symbol) + countCellDrops(store, wl.body, symbol),
+                .discriminant_switch => |ds| blk: {
+                    var total: u32 = countCellDrops(store, ds.value, symbol);
+                    for (store.getExprSpan(ds.branches)) |branch_id| total += countCellDrops(store, branch_id, symbol);
+                    break :blk total;
+                },
+                .call => |call| blk: {
+                    var total: u32 = countCellDrops(store, call.fn_expr, symbol);
+                    for (store.getExprSpan(call.args)) |arg| total += countCellDrops(store, arg, symbol);
+                    break :blk total;
+                },
+                .semantic_low_level => |ll| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(ll.args)) |arg| total += countCellDrops(store, arg, symbol);
+                    break :blk total;
+                },
+                .low_level => |ll| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(ll.args)) |arg| total += countCellDrops(store, arg, symbol);
+                    break :blk total;
+                },
+                .list => |list_expr| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(list_expr.elems)) |elem| total += countCellDrops(store, elem, symbol);
+                    break :blk total;
+                },
+                .struct_ => |s| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(s.fields)) |field| total += countCellDrops(store, field, symbol);
+                    break :blk total;
+                },
+                .tag => |t| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(t.args)) |arg| total += countCellDrops(store, arg, symbol);
+                    break :blk total;
+                },
+                .struct_access => |sa| countCellDrops(store, sa.struct_expr, symbol),
+                .tag_payload_access => |tpa| countCellDrops(store, tpa.value, symbol),
+                .nominal => |n| countCellDrops(store, n.backing_expr, symbol),
+                .early_return => |ret| countCellDrops(store, ret.expr, symbol),
+                .dbg => |d| countCellDrops(store, d.expr, symbol),
+                .expect => |e| countCellDrops(store, e.cond, symbol) + countCellDrops(store, e.body, symbol),
+                .str_concat => |parts| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(parts)) |part| total += countCellDrops(store, part, symbol);
+                    break :blk total;
+                },
+                .int_to_str => |its| countCellDrops(store, its.value, symbol),
+                .float_to_str => |fts| countCellDrops(store, fts.value, symbol),
+                .dec_to_str => |d| countCellDrops(store, d, symbol),
+                .str_escape_and_quote => |s| countCellDrops(store, s, symbol),
+                .hosted_call => |hc| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(hc.args)) |arg| total += countCellDrops(store, arg, symbol);
+                    break :blk total;
+                },
+                else => 0,
+            };
+        }
+
+        fn countDecrefsForSymbol(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) u32 {
+            if (expr_id.isNone()) return 0;
+
+            const key = @as(u64, @bitCast(symbol));
+            const expr = store.getExpr(expr_id);
+            return switch (expr) {
+                .block => |block| blk: {
+                    var total: u32 = 0;
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| total += countDecrefsForSymbol(store, binding.expr, symbol),
+                            .cell_init, .cell_store => |binding| total += countDecrefsForSymbol(store, binding.expr, symbol),
+                            .cell_drop => {},
+                        }
+                    }
+                    total += countDecrefsForSymbol(store, block.final_expr, symbol);
+                    break :blk total;
+                },
+                .borrow_scope => |scope| blk: {
+                    var total: u32 = 0;
+                    for (store.getBorrowBindings(scope.bindings)) |binding| total += countDecrefsForSymbol(store, binding.expr, symbol);
+                    total += countDecrefsForSymbol(store, scope.body, symbol);
+                    break :blk total;
+                },
+                .if_then_else => |ite| blk: {
+                    var total: u32 = 0;
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        total += countDecrefsForSymbol(store, branch.cond, symbol);
+                        total += countDecrefsForSymbol(store, branch.body, symbol);
+                    }
+                    total += countDecrefsForSymbol(store, ite.final_else, symbol);
+                    break :blk total;
+                },
+                .match_expr => |match_expr| blk: {
+                    var total: u32 = countDecrefsForSymbol(store, match_expr.value, symbol);
+                    for (store.getMatchBranches(match_expr.branches)) |branch| {
+                        total += countDecrefsForSymbol(store, branch.guard, symbol);
+                        total += countDecrefsForSymbol(store, branch.body, symbol);
+                    }
+                    break :blk total;
+                },
+                .lambda => |lam| countDecrefsForSymbol(store, lam.body, symbol),
+                .for_loop => |fl| countDecrefsForSymbol(store, fl.list_expr, symbol) + countDecrefsForSymbol(store, fl.body, symbol),
+                .while_loop => |wl| countDecrefsForSymbol(store, wl.cond, symbol) + countDecrefsForSymbol(store, wl.body, symbol),
+                .discriminant_switch => |ds| blk: {
+                    var total: u32 = countDecrefsForSymbol(store, ds.value, symbol);
+                    for (store.getExprSpan(ds.branches)) |branch_id| total += countDecrefsForSymbol(store, branch_id, symbol);
+                    break :blk total;
+                },
+                .call => |call| blk: {
+                    var total: u32 = countDecrefsForSymbol(store, call.fn_expr, symbol);
+                    for (store.getExprSpan(call.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .semantic_low_level => |ll| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(ll.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .low_level => |ll| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(ll.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .list => |list_expr| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(list_expr.elems)) |elem| total += countDecrefsForSymbol(store, elem, symbol);
+                    break :blk total;
+                },
+                .struct_ => |s| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(s.fields)) |field| total += countDecrefsForSymbol(store, field, symbol);
+                    break :blk total;
+                },
+                .tag => |t| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(t.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .struct_access => |sa| countDecrefsForSymbol(store, sa.struct_expr, symbol),
+                .tag_payload_access => |tpa| countDecrefsForSymbol(store, tpa.value, symbol),
+                .nominal => |n| countDecrefsForSymbol(store, n.backing_expr, symbol),
+                .early_return => |ret| countDecrefsForSymbol(store, ret.expr, symbol),
+                .dbg => |d| countDecrefsForSymbol(store, d.expr, symbol),
+                .expect => |e| countDecrefsForSymbol(store, e.cond, symbol) + countDecrefsForSymbol(store, e.body, symbol),
+                .str_concat => |parts| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(parts)) |part| total += countDecrefsForSymbol(store, part, symbol);
+                    break :blk total;
+                },
+                .int_to_str => |its| countDecrefsForSymbol(store, its.value, symbol),
+                .float_to_str => |fts| countDecrefsForSymbol(store, fts.value, symbol),
+                .dec_to_str => |d| countDecrefsForSymbol(store, d, symbol),
+                .str_escape_and_quote => |s| countDecrefsForSymbol(store, s, symbol),
+                .hosted_call => |hc| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(hc.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .decref => |dec| blk: {
+                    const dec_expr = store.getExpr(dec.value);
+                    break :blk if (dec_expr == .lookup and @as(u64, @bitCast(dec_expr.lookup.symbol)) == key) 1 else 0;
+                },
+                .incref => |rc| countDecrefsForSymbol(store, rc.value, symbol),
+                .free => |rc| countDecrefsForSymbol(store, rc.value, symbol),
+                else => 0,
+            };
+        }
+    };
+
+    const resources = try parseAndCanonicalizeExpr(
+        test_allocator,
+        \\{
+        \\    list = [1.I64, 2.I64, 3.I64]
+        \\    var $result = List.with_capacity(List.len(list))
+        \\    for item in list {
+        \\        $result = List.append($result, item)
+        \\    }
+        \\    $result
+        \\}
+    );
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(resources.builtin_module.env),
+        resources.module_env,
+    };
+
+    var lower = try mir.Lower.init(
+        test_allocator,
+        &mir_store,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const mir_expr = try lower.lowerExpr(resources.expr_idx);
+
+    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
+    defer lambda_set_store.deinit(test_allocator);
+
+    var layout_store = try layout.Store.init(
+        all_module_envs[0..],
+        resources.builtin_module.env.idents.builtin_str,
+        test_allocator,
+        base.target.TargetUsize.native,
+    );
+    defer layout_store.deinit();
+
+    var lir_store = LirExprStore.init(test_allocator);
+    defer lir_store.deinit();
+
+    var translator = lir.MirToLir.init(
+        test_allocator,
+        &mir_store,
+        &lir_store,
+        &layout_store,
+        &lambda_set_store,
+        resources.module_env.idents.true_tag,
+    );
+    defer translator.deinit();
+
+    const lowered = try translator.lower(mir_expr);
+    var rc_pass = try lir.RcInsert.RcInsertPass.init(test_allocator, &lir_store, &layout_store);
+    defer rc_pass.deinit();
+    const with_rc = try rc_pass.insertRcOps(lowered);
+
+    const root = lir_store.getExpr(with_rc);
+    try std.testing.expect(root == .block);
+
+    const stmts = lir_store.getStmts(root.block.stmts);
+    var found_mutable_result = false;
+    var found_cell_result = false;
+    for (stmts) |stmt| {
+        switch (stmt) {
+            .decl, .mutate => |binding| {
+                const pat = lir_store.getPattern(binding.pattern);
+                if (pat != .bind) continue;
+                if (!pat.bind.reassignable) continue;
+
+                const layout_val = layout_store.getLayout(pat.bind.layout_idx);
+                if (layout_val.tag != .list and layout_val.tag != .list_of_zst) continue;
+
+                found_mutable_result = true;
+                try std.testing.expectEqual(@as(u32, 1), Search.countDecrefsForSymbol(&lir_store, with_rc, pat.bind.symbol));
+            },
+            .cell_init => |cell| {
+                const layout_val = layout_store.getLayout(cell.layout_idx);
+                if (layout_val.tag != .list and layout_val.tag != .list_of_zst) continue;
+                found_cell_result = true;
+                try std.testing.expect(Search.containsCellLoad(&lir_store, with_rc, cell.cell));
+                try std.testing.expectEqual(@as(u32, 0), Search.countCellDrops(&lir_store, with_rc, cell.cell));
+            },
+            .cell_store, .cell_drop => {},
+        }
+    }
+
+    try std.testing.expect(found_mutable_result or found_cell_result);
 }
 
 test "lambda sets distinguish closure record fields with different captures" {

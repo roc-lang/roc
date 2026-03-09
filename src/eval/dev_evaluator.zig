@@ -193,6 +193,7 @@ fn lirExprResultLayout(store: *const LirExprStore, expr_id: lir.LirExprId) layou
         .low_level => |ll| ll.ret_layout,
         .early_return => |er| er.ret_layout,
         .lookup => |l| l.layout_idx,
+        .cell_load => |l| l.layout_idx,
         .struct_ => |s| s.struct_layout,
         .tag => |t| t.union_layout,
         .zero_arg_tag => |z| z.union_layout,

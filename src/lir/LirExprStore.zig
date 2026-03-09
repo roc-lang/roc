@@ -259,6 +259,13 @@ pub fn getPatternSpan(self: *const Self, span: LirPatternSpan) []const LirPatter
     return @ptrCast(slice);
 }
 
+/// Get mutable pattern IDs from a span.
+pub fn getPatternSpanMut(self: *Self, span: LirPatternSpan) []LirPatternId {
+    if (span.len == 0) return &.{};
+    const slice = self.extra_data.items[span.start..][0..span.len];
+    return @ptrCast(slice);
+}
+
 /// Add match branches and return a span
 pub fn addMatchBranches(self: *Self, branches: []const LirMatchBranch) Allocator.Error!LirMatchBranchSpan {
     if (branches.len == 0) {
@@ -276,6 +283,12 @@ pub fn addMatchBranches(self: *Self, branches: []const LirMatchBranch) Allocator
 
 /// Get match branches from a span
 pub fn getMatchBranches(self: *const Self, span: LirMatchBranchSpan) []const LirMatchBranch {
+    if (span.len == 0) return &.{};
+    return self.match_branches.items[span.start..][0..span.len];
+}
+
+/// Get mutable match branches from a span.
+pub fn getMatchBranchesMut(self: *Self, span: LirMatchBranchSpan) []LirMatchBranch {
     if (span.len == 0) return &.{};
     return self.match_branches.items[span.start..][0..span.len];
 }
@@ -301,6 +314,12 @@ pub fn getIfBranches(self: *const Self, span: LirIfBranchSpan) []const LirIfBran
     return self.if_branches.items[span.start..][0..span.len];
 }
 
+/// Get mutable if branches from a span.
+pub fn getIfBranchesMut(self: *Self, span: LirIfBranchSpan) []LirIfBranch {
+    if (span.len == 0) return &.{};
+    return self.if_branches.items[span.start..][0..span.len];
+}
+
 /// Add statements (let bindings) and return a span
 pub fn addStmts(self: *Self, statements: []const LirStmt) Allocator.Error!LirStmtSpan {
     if (statements.len == 0) {
@@ -322,6 +341,12 @@ pub fn getStmts(self: *const Self, span: LirStmtSpan) []const LirStmt {
     return self.stmts.items[span.start..][0..span.len];
 }
 
+/// Get mutable statements from a span.
+pub fn getStmtsMut(self: *Self, span: LirStmtSpan) []LirStmt {
+    if (span.len == 0) return &.{};
+    return self.stmts.items[span.start..][0..span.len];
+}
+
 /// Add borrow bindings and return a span
 pub fn addBorrowBindings(self: *Self, bindings: []const LirBorrowBinding) Allocator.Error!LirBorrowBindingSpan {
     if (bindings.len == 0) {
@@ -339,6 +364,12 @@ pub fn addBorrowBindings(self: *Self, bindings: []const LirBorrowBinding) Alloca
 
 /// Get borrow bindings from a span
 pub fn getBorrowBindings(self: *const Self, span: LirBorrowBindingSpan) []const LirBorrowBinding {
+    if (span.len == 0) return &.{};
+    return self.borrow_bindings.items[span.start..][0..span.len];
+}
+
+/// Get mutable borrow bindings from a span.
+pub fn getBorrowBindingsMut(self: *Self, span: LirBorrowBindingSpan) []LirBorrowBinding {
     if (span.len == 0) return &.{};
     return self.borrow_bindings.items[span.start..][0..span.len];
 }

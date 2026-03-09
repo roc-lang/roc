@@ -15,6 +15,7 @@ const LirExprStore = lir.LirExprStore;
 const LirExpr = LIR.LirExpr;
 const LirExprId = LIR.LirExprId;
 const LirPattern = LIR.LirPattern;
+const Symbol = LIR.Symbol;
 const WasmModule = @import("WasmModule.zig");
 const WasmLayout = @import("WasmLayout.zig");
 const Storage = @import("Storage.zig");
@@ -568,6 +569,19 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
             // Process statements (let bindings)
             const stmts = self.store.getStmts(b.stmts);
             for (stmts) |stmt_union| {
+                switch (stmt_union) {
+                    .cell_init => |cell| {
+                        try self.bindCellValue(cell.cell, cell.layout_idx, cell.expr);
+                        continue;
+                    },
+                    .cell_store => |cell| {
+                        try self.bindCellValue(cell.cell, cell.layout_idx, cell.expr);
+                        continue;
+                    },
+                    .cell_drop => continue,
+                    .decl, .mutate => {},
+                }
+
                 const stmt = stmt_union.binding();
                 const pattern = self.store.getPattern(stmt.pattern);
                 switch (pattern) {
@@ -790,6 +804,21 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
                 }
             } else if (self.store.getSymbolDef(l.symbol)) |def_id| {
                 // Symbol not in locals — resolve via getSymbolDef and generate the expression.
+                try self.generateExpr(def_id);
+            } else {
+                unreachable;
+            }
+        },
+        .cell_load => |l| {
+            const key: u64 = @bitCast(l.cell);
+            if (self.storage.locals.get(key)) |local_info| {
+                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, local_info.idx) catch return error.OutOfMemory;
+                const expected_vt = self.resolveValType(l.layout_idx);
+                if (local_info.val_type != expected_vt) {
+                    try self.emitConversion(local_info.val_type, expected_vt);
+                }
+            } else if (self.store.getSymbolDef(l.cell)) |def_id| {
                 try self.generateExpr(def_id);
             } else {
                 unreachable;
@@ -2030,6 +2059,41 @@ fn generateMatchBranches(self: *Self, branches: []const LIR.LirMatchBranch, valu
     }
 }
 
+fn bindCellValue(self: *Self, cell: Symbol, layout_idx: layout.Idx, expr_id: LirExprId) Allocator.Error!void {
+    const target_is_composite = self.isCompositeLayout(layout_idx);
+
+    if (target_is_composite) {
+        try self.generateExpr(expr_id);
+
+        if (self.exprNeedsCompositeCallStabilization(expr_id)) {
+            const ret_size = self.layoutByteSize(layout_idx);
+            if (ret_size > 0) {
+                const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                try self.emitLocalSet(src_local);
+                const dst_offset = try self.allocStackMemory(ret_size, 4);
+                const dst_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                try self.emitFpOffset(dst_offset);
+                try self.emitLocalSet(dst_local);
+                try self.emitMemCopy(dst_local, 0, src_local, ret_size);
+                try self.emitLocalGet(dst_local);
+            }
+        }
+
+        const local_idx = self.storage.getLocal(cell) orelse
+            (self.storage.allocLocal(cell, .i32) catch return error.OutOfMemory);
+        try self.emitLocalSet(local_idx);
+        return;
+    }
+
+    const vt = self.resolveValType(layout_idx);
+    try self.generateExpr(expr_id);
+    const expr_vt = self.exprValType(expr_id);
+    try self.emitConversion(expr_vt, vt);
+    const local_idx = self.storage.getLocal(cell) orelse
+        (self.storage.allocLocal(cell, vt) catch return error.OutOfMemory);
+    try self.emitLocalSet(local_idx);
+}
+
 /// Check whether a layout represents an unsigned integer type.
 fn isUnsignedLayout(layout_idx: layout.Idx) bool {
     return switch (layout_idx) {
@@ -2085,6 +2149,7 @@ fn exprLayoutIdx(self: *Self, expr_id: LirExprId) layout.Idx {
         .hosted_call => |hc| hc.ret_layout,
         .discriminant_switch => |ds| ds.result_layout,
         .early_return => |er| er.ret_layout,
+        .cell_load => |l| l.layout_idx,
         .lambda => |l| l.fn_layout,
         .for_loop, .while_loop => layout.Idx.zst,
         .break_expr, .crash, .runtime_error => {
@@ -2113,6 +2178,7 @@ fn exprValType(self: *Self, expr_id: LirExprId) ValType {
         .block => |b| self.exprValType(b.final_expr),
         .borrow_scope => |b| self.resolveValType(b.result_layout),
         .lookup => |l| self.resolveValType(l.layout_idx),
+        .cell_load => |l| self.resolveValType(l.layout_idx),
         .if_then_else => |ite| self.resolveValType(ite.result_layout),
         .match_expr => |w| self.resolveValType(w.result_layout),
         .nominal => |nom| self.exprValType(nom.backing_expr),
@@ -2180,6 +2246,7 @@ fn isCompositeExpr(self: *const Self, expr_id: LirExprId) bool {
         .if_then_else => |ite| self.isCompositeLayout(ite.result_layout),
         .match_expr => |w| self.isCompositeLayout(w.result_layout),
         .lookup => |l| self.isCompositeLayout(l.layout_idx),
+        .cell_load => |l| self.isCompositeLayout(l.layout_idx),
         .call => |c| self.isCompositeLayout(c.ret_layout),
         .struct_access => |sa| self.isCompositeLayout(sa.field_layout),
         .semantic_low_level => |ll| self.isCompositeLayout(ll.ret_layout),

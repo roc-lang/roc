@@ -532,12 +532,6 @@ fn wrapListPrepend(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap:
     out.* = listPrepend(list, alignment, element, element_width, false, null, @ptrCast(&rcNone), @ptrCast(&copy_fallback), roc_ops);
 }
 
-/// Wrapper: listSublist for drop_first/drop_last/take_first/take_last
-fn wrapListSublist(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, start: u64, len: u64, roc_ops: *RocOps) callconv(.c) void {
-    const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    out.* = listSublist(list, alignment, element_width, false, start, len, null, @ptrCast(&rcNone), roc_ops);
-}
-
 /// Wrapper: listReplace for list_set
 fn wrapListReplace(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, index: u64, element: ?[*]u8, element_width: usize, out_element: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
     const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
@@ -746,6 +740,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Map from mutable variable symbol to fixed stack slot info
         /// Mutable variables need fixed slots so re-bindings can update the value at runtime
         mutable_var_slots: std.AutoHashMap(u64, MutableVarInfo),
+
+        /// Active mutable cells in lexical scope order.
+        active_cells: std.ArrayList(ActiveCell),
 
         /// Map from JoinPointId to code offset (for recursive closure jumps)
         join_points: std.AutoHashMap(u32, usize),
@@ -1039,6 +1036,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .static_interner = static_interner,
                 .symbol_locations = std.AutoHashMap(u64, ValueLocation).init(allocator),
                 .mutable_var_slots = std.AutoHashMap(u64, MutableVarInfo).init(allocator),
+                .active_cells = std.ArrayList(ActiveCell).empty,
                 .join_points = std.AutoHashMap(u32, usize).init(allocator),
                 .current_recursive_symbol = null,
                 .current_recursive_join_point = null,
@@ -1068,6 +1066,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.deinit();
             self.symbol_locations.deinit();
             self.mutable_var_slots.deinit();
+            self.active_cells.deinit(self.allocator);
             self.join_points.deinit();
             self.proc_registry.deinit();
             self.compiled_lambdas.deinit();
@@ -1097,6 +1096,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.reset();
             self.symbol_locations.clearRetainingCapacity();
             self.mutable_var_slots.clearRetainingCapacity();
+            self.active_cells.clearRetainingCapacity();
             self.join_points.clearRetainingCapacity();
             self.current_recursive_symbol = null;
             self.current_recursive_join_point = null;
@@ -1138,6 +1138,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Clear any leftover state from compileAllProcs
             self.symbol_locations.clearRetainingCapacity();
             self.mutable_var_slots.clearRetainingCapacity();
+            self.active_cells.clearRetainingCapacity();
             self.codegen.callee_saved_used = 0;
 
             // Initialize stack_offset to reserve space for callee-saved area
@@ -1322,6 +1323,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .struct_ => |s| s.struct_layout,
                 .tag => |tag| tag.union_layout,
                 .lookup => |lookup| lookup.layout_idx,
+                .cell_load => |load| load.layout_idx,
                 .struct_access => |sa| sa.field_layout,
                 .call => |call| call.ret_layout,
                 .semantic_low_level => |ll| ll.ret_layout,
@@ -1408,6 +1410,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 // Lookups
                 .lookup => |lookup| try self.generateLookup(lookup.symbol, lookup.layout_idx),
+                .cell_load => |load| try self.generateCellLoad(load.cell, load.layout_idx),
 
                 // Control flow
                 .if_then_else => |ite| try self.generateIfThenElse(ite),
@@ -3937,6 +3940,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn callListSublist(self: *Self, ll: anytype, list_loc: ValueLocation, n_loc: ValueLocation, mode: enum { drop_first, drop_last, take_first, take_last }) Allocator.Error!ValueLocation {
             const ls = self.layout_store;
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const elements_refcounted = blk: {
+                const ret_layout = ls.getLayout(ll.ret_layout);
+                break :blk switch (ret_layout.tag) {
+                    .list => ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list)),
+                    .list_of_zst => false,
+                    else => unreachable,
+                };
+            };
 
             const elem_size_align: layout.SizeAlign = blk: {
                 const ret_layout = ls.getLayout(ll.ret_layout);
@@ -3999,13 +4010,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(n_reg);
             self.codegen.freeGeneral(len_reg);
 
-            // Call wrapListSublist(out, list_bytes, list_len, list_cap, alignment, element_width, start, len, roc_ops)
+            // Call roc_builtins_list_sublist(out, list_bytes, list_len, list_cap,
+            // alignment, element_width, start, len, elements_refcounted, roc_ops)
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
             const alignment_bytes = elem_size_align.alignment.toByteUnits();
-            const fn_addr: usize = @intFromPtr(&wrapListSublist);
+            const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_sublist);
 
             {
-                // wrapListSublist(out, list_bytes, list_len, list_cap, alignment, element_width, start, len, roc_ops)
+                // roc_builtins_list_sublist(out, list_bytes, list_len, list_cap,
+                // alignment, element_width, start, len, elements_refcounted, roc_ops)
                 const base_reg = frame_ptr;
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -4017,6 +4030,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addImmArg(@intCast(elem_size_align.size));
                 try builder.addMemArg(base_reg, start_slot);
                 try builder.addMemArg(base_reg, len_slot);
+                try builder.addImmArg(if (elements_refcounted) 1 else 0);
                 try builder.addRegArg(roc_ops_reg);
 
                 try self.callBuiltin(&builder, fn_addr, .list_sublist);
@@ -4029,6 +4043,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn callListSublistFromRecord(self: *Self, ll: anytype, list_loc: ValueLocation, record_loc: ValueLocation, record_layout_idx: ?layout.Idx) Allocator.Error!ValueLocation {
             const ls = self.layout_store;
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const elements_refcounted = blk: {
+                const ret_layout = ls.getLayout(ll.ret_layout);
+                break :blk switch (ret_layout.tag) {
+                    .list => ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list)),
+                    .list_of_zst => false,
+                    else => unreachable,
+                };
+            };
 
             const elem_size_align: layout.SizeAlign = blk: {
                 const ret_layout = ls.getLayout(ll.ret_layout);
@@ -4072,10 +4094,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
             const alignment_bytes = elem_size_align.alignment.toByteUnits();
-            const fn_addr: usize = @intFromPtr(&wrapListSublist);
+            const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_sublist);
 
             {
-                // wrapListSublist(out, list_bytes, list_len, list_cap, alignment, element_width, start, len, roc_ops)
+                // roc_builtins_list_sublist(out, list_bytes, list_len, list_cap,
+                // alignment, element_width, start, len, elements_refcounted, roc_ops)
                 const base_reg = frame_ptr;
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 try builder.addLeaArg(base_reg, result_offset);
@@ -4086,6 +4109,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addImmArg(@intCast(elem_size_align.size));
                 try builder.addMemArg(base_reg, record_off + start_field_off);
                 try builder.addMemArg(base_reg, record_off + len_field_off);
+                try builder.addImmArg(if (elements_refcounted) 1 else 0);
                 try builder.addRegArg(roc_ops_reg);
                 try self.callBuiltin(&builder, fn_addr, .list_sublist);
             }
@@ -4169,7 +4193,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.freeGeneral(ptr_reg);
             }
 
-            // Build rest list via wrapListSublist, writing directly into result+list_field_offset
+            const rest_list_layout_idx = if (field0_is_list) field0_layout_idx else field1_layout_idx;
+            const rest_elements_refcounted = blk: {
+                const rest_layout = ls.getLayout(rest_list_layout_idx);
+                break :blk switch (rest_layout.tag) {
+                    .list => ls.layoutContainsRefcounted(ls.getLayout(rest_layout.data.list)),
+                    .list_of_zst => false,
+                    else => unreachable,
+                };
+            };
+
+            // Build rest list via roc_builtins_list_sublist, writing directly into result+list_field_offset
             // For split_first: start=1, len=len-1
             // For split_last: start=0, len=len-1
             const start_slot = self.codegen.allocStackSlot(8);
@@ -4212,8 +4246,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addImmArg(@intCast(elem_size));
                 try builder.addMemArg(frame_ptr, start_slot);
                 try builder.addMemArg(frame_ptr, sublist_len_slot);
+                try builder.addImmArg(if (rest_elements_refcounted) 1 else 0);
                 try builder.addRegArg(roc_ops_reg);
-                try self.callBuiltin(&builder, @intFromPtr(&wrapListSublist), .list_sublist);
+                try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_list_sublist), .list_sublist);
             }
 
             // Return the record as a stack value
@@ -9661,6 +9696,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const cleanup = self.early_return_loop_cleanups.items[i - 1];
                 try self.emitListDecref(cleanup.value_loc, cleanup.elem_alignment, cleanup.elements_refcounted, cleanup.elem_layout_idx);
             }
+
+            var cell_index = self.active_cells.items.len;
+            while (cell_index > 0) {
+                cell_index -= 1;
+                const cell = self.active_cells.items[cell_index];
+                try self.dropCell(cell.cell, cell.layout_idx);
+            }
+
             // Move the preserved value to the return register (or copy to return pointer)
             if (self.ret_ptr_slot) |ret_slot| {
                 try self.copyResultToReturnPointer(preserved_return_loc, ret_layout, ret_slot);
@@ -10274,18 +10317,133 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate code for a block
         fn generateBlock(self: *Self, block: anytype) Allocator.Error!ValueLocation {
             const stmts = self.store.getStmts(block.stmts);
+            const saved_active_cells_len = self.active_cells.items.len;
 
             // Process each statement
             for (stmts) |stmt| {
-                const b = stmt.binding();
-
-                // Generate code for the expression
-                const expr_loc = try self.generateExpr(b.expr);
-                try self.bindPattern(b.pattern, expr_loc);
+                switch (stmt) {
+                    .decl, .mutate => |b| {
+                        const expr_loc = try self.generateExpr(b.expr);
+                        try self.bindPattern(b.pattern, expr_loc);
+                    },
+                    .cell_init => |cell| {
+                        const expr_loc = try self.generateExpr(cell.expr);
+                        try self.initializeCell(cell.cell, cell.layout_idx, expr_loc);
+                    },
+                    .cell_store => |cell| {
+                        const expr_loc = try self.generateExpr(cell.expr);
+                        try self.storeCell(cell.cell, cell.layout_idx, expr_loc);
+                    },
+                    .cell_drop => |cell| try self.dropCell(cell.cell, cell.layout_idx),
+                }
             }
 
             // Generate the final expression
-            return self.generateExpr(block.final_expr);
+            const final_loc = try self.generateExpr(block.final_expr);
+
+            var i = self.active_cells.items.len;
+            while (i > saved_active_cells_len) {
+                i -= 1;
+                const cell = self.active_cells.items[i];
+                try self.dropCell(cell.cell, cell.layout_idx);
+            }
+            self.active_cells.shrinkRetainingCapacity(saved_active_cells_len);
+
+            return final_loc;
+        }
+
+        fn mutableSlotSize(self: *Self, layout_idx: layout.Idx) u32 {
+            const ls = self.layout_store;
+            const layout_val = ls.getLayout(layout_idx);
+            const raw_size = ls.layoutSizeAlign(layout_val).size;
+            return if (raw_size != 0 and raw_size < 8) 8 else raw_size;
+        }
+
+        const CellStorage = struct {
+            slot: i32,
+            size: u32,
+            tracked_mutable_slot: bool,
+        };
+
+        fn resolveCellStorage(self: *Self, cell: Symbol, layout_idx: layout.Idx) ?CellStorage {
+            const cell_key: u64 = @bitCast(cell);
+            if (self.mutable_var_slots.get(cell_key)) |info| {
+                return .{
+                    .slot = info.slot,
+                    .size = info.size,
+                    .tracked_mutable_slot = true,
+                };
+            }
+
+            const loc = self.symbol_locations.get(cell_key) orelse return null;
+            return switch (loc) {
+                .stack => |s| .{
+                    .slot = s.offset,
+                    .size = self.mutableSlotSize(layout_idx),
+                    .tracked_mutable_slot = false,
+                },
+                .stack_i128 => |offset| .{
+                    .slot = offset,
+                    .size = 16,
+                    .tracked_mutable_slot = false,
+                },
+                .stack_str => |offset| .{
+                    .slot = offset,
+                    .size = roc_str_size,
+                    .tracked_mutable_slot = false,
+                },
+                .list_stack => |ls_info| .{
+                    .slot = ls_info.struct_offset,
+                    .size = roc_str_size,
+                    .tracked_mutable_slot = false,
+                },
+                else => null,
+            };
+        }
+
+        fn initializeCell(self: *Self, cell: Symbol, layout_idx: layout.Idx, value_loc: ValueLocation) Allocator.Error!void {
+            const cell_key: u64 = @bitCast(cell);
+            const normalized_value_loc = self.coerceImmediateToLayout(value_loc, layout_idx);
+            const size = self.mutableSlotSize(layout_idx);
+            const fixed_slot = self.codegen.allocStackSlot(size);
+            try self.copyBytesToStackOffset(fixed_slot, normalized_value_loc, size);
+            try self.mutable_var_slots.put(cell_key, .{ .slot = fixed_slot, .size = size });
+            try self.active_cells.append(self.allocator, .{ .cell = cell, .layout_idx = layout_idx });
+        }
+
+        fn storeCell(self: *Self, cell: Symbol, layout_idx: layout.Idx, value_loc: ValueLocation) Allocator.Error!void {
+            const storage = self.resolveCellStorage(cell, layout_idx) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("LIR/codegen invariant violated: store to unknown cell {d}", .{@as(u64, @bitCast(cell))});
+                }
+                unreachable;
+            };
+            const normalized_value_loc = self.coerceImmediateToLayout(value_loc, layout_idx);
+            try self.emitDecrefAtStackOffset(storage.slot, layout_idx);
+            try self.copyBytesToStackOffset(storage.slot, normalized_value_loc, storage.size);
+        }
+
+        fn dropCell(self: *Self, cell: Symbol, layout_idx: layout.Idx) Allocator.Error!void {
+            const cell_key: u64 = @bitCast(cell);
+            const storage = self.resolveCellStorage(cell, layout_idx) orelse return;
+            try self.emitDecrefAtStackOffset(storage.slot, layout_idx);
+            if (storage.tracked_mutable_slot) {
+                _ = self.mutable_var_slots.remove(cell_key);
+            }
+        }
+
+        fn generateCellLoad(self: *Self, cell: Symbol, layout_idx: layout.Idx) Allocator.Error!ValueLocation {
+            const storage = self.resolveCellStorage(cell, layout_idx) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("LIR/codegen invariant violated: load from unknown cell {d}", .{@as(u64, @bitCast(cell))});
+                }
+                unreachable;
+            };
+
+            const slot = self.codegen.allocStackSlot(storage.size);
+            try self.copyBytesToStackOffset(slot, self.stackLocationForLayout(layout_idx, storage.slot), storage.size);
+            try self.emitIncrefAtStackOffset(slot, layout_idx);
+            return self.stackLocationForLayout(layout_idx, slot);
         }
 
         /// Bind a value to a pattern.
@@ -10298,59 +10456,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const normalized_value_loc = self.coerceImmediateToLayout(value_loc, bind.layout_idx);
                     if (normalized_value_loc == .list_stack) {} else if (normalized_value_loc == .stack) {}
 
-                    // Check if this is a reassignable (mutable) variable
-                    if (bind.reassignable) {
-                        // Mutable variables need fixed stack slots for runtime updates
-                        if (self.mutable_var_slots.get(symbol_key)) |var_info| {
-                            // Re-binding: copy new value to the fixed slot at runtime
-                            try self.copyBytesToStackOffset(var_info.slot, normalized_value_loc, var_info.size);
-                            // symbol_locations already points to the fixed slot, don't change it
-                        } else {
-                            // First binding: allocate a fixed slot and copy value there
-                            const ls = self.layout_store;
-
-                            // Use the pattern's layout for the mutable variable size.
-                            const size: u32 = blk: {
-                                const layout_val = ls.getLayout(bind.layout_idx);
-                                const raw_size = ls.layoutSizeAlign(layout_val).size;
-                                // Mutable scalar values are often loaded/stored through 64-bit
-                                // paths; give them an 8-byte home to avoid reading stale high bits.
-                                break :blk if (raw_size != 0 and raw_size < 8) 8 else raw_size;
-                            };
-
-                            // Allocate a fixed stack slot for this mutable variable
-                            const fixed_slot = self.codegen.allocStackSlot(size);
-
-                            // Copy the initial value to the fixed slot
-                            try self.copyBytesToStackOffset(fixed_slot, normalized_value_loc, size);
-
-                            // Record the fixed slot info for future re-bindings
-                            try self.mutable_var_slots.put(symbol_key, .{ .slot = fixed_slot, .size = size });
-
-                            // Point symbol_locations to the fixed slot
-                            // IMPORTANT: Preserve the correct ValueLocation type so that
-                            // subsequent code correctly handles multi-register values
-                            if (normalized_value_loc == .list_stack) {
-                                try self.symbol_locations.put(symbol_key, .{ .list_stack = .{
-                                    .struct_offset = fixed_slot,
-                                    .data_offset = 0,
-                                    .num_elements = 0,
-                                } });
-                            } else if (normalized_value_loc == .stack_str or size == roc_str_size) {
-                                // Strings are roc_str_size bytes - preserve .stack_str so return handling
-                                // loads all 3 registers (ptr, len, capacity)
-                                try self.symbol_locations.put(symbol_key, .{ .stack_str = fixed_slot });
-                            } else if (normalized_value_loc == .stack_i128 or size == 16) {
-                                // Dec/i128 values are 16 bytes - preserve .stack_i128
-                                try self.symbol_locations.put(symbol_key, .{ .stack_i128 = fixed_slot });
-                            } else {
-                                try self.symbol_locations.put(symbol_key, .{ .stack = .{ .offset = fixed_slot } });
-                            }
-                        }
-                    } else {
-                        // Non-mutable: just record the location as before
-                        try self.symbol_locations.put(symbol_key, normalized_value_loc);
-                    }
+                    try self.symbol_locations.put(symbol_key, normalized_value_loc);
+                    try self.trackMutableSlotFromSymbolLocation(bind, symbol_key);
                 },
                 .wildcard => {
                     // Ignore the value
@@ -16371,3 +16478,7 @@ test "generate unary minus" {
 
     try std.testing.expect(result.code.len > 0);
 }
+        const ActiveCell = struct {
+            cell: Symbol,
+            layout_idx: layout.Idx,
+        };

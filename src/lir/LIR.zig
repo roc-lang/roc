@@ -212,15 +212,30 @@ pub const LirBorrowBindingSpan = extern struct {
 pub const LirStmt = union(enum) {
     decl: Binding,
     mutate: Binding,
+    cell_init: CellBinding,
+    cell_store: CellBinding,
+    cell_drop: CellDrop,
 
     pub const Binding = struct {
         pattern: LirPatternId,
         expr: LirExprId,
     };
 
+    pub const CellBinding = struct {
+        cell: Symbol,
+        layout_idx: layout.Idx,
+        expr: LirExprId,
+    };
+
+    pub const CellDrop = struct {
+        cell: Symbol,
+        layout_idx: layout.Idx,
+    };
+
     pub fn binding(self: LirStmt) Binding {
         return switch (self) {
             .decl, .mutate => |b| b,
+            else => std.debug.panic("binding() called on non-binding stmt {s}", .{@tagName(self)}),
         };
     }
 };
@@ -268,6 +283,12 @@ pub const LirExpr = union(enum) {
     /// Lookup a symbol - globally unique identifier + its layout
     lookup: struct {
         symbol: Symbol,
+        layout_idx: layout.Idx,
+    },
+
+    /// Load the current value of a mutable cell into a fresh owned value.
+    cell_load: struct {
+        cell: Symbol,
         layout_idx: layout.Idx,
     },
 

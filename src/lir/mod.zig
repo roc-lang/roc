@@ -34,6 +34,9 @@ pub const TailRecursion = @import("TailRecursion.zig");
 /// MIR → LIR translation pass
 pub const MirToLir = @import("MirToLir.zig");
 
+/// Ownership normalization for binding-based RC analysis
+pub const OwnershipNormalize = @import("OwnershipNormalize.zig");
+
 /// LIR-level reference counting insertion pass
 pub const RcInsert = @import("rc_insert.zig");
 
@@ -81,6 +84,7 @@ test "lir tests" {
     std.testing.refAllDecls(LIR);
     std.testing.refAllDecls(LirExprStore);
     std.testing.refAllDecls(MirToLir);
+    std.testing.refAllDecls(OwnershipNormalize);
     std.testing.refAllDecls(TailRecursion);
     std.testing.refAllDecls(RcInsert);
 }
