@@ -336,15 +336,36 @@ pub const ComptimeEvaluator = struct {
 
         // Get the runtime type variable from the StackValue
         const rt_var = stack_value.rt_var;
+
         const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
 
-        // Check if it's a tag union type
+        // Check if this is a non-opaque nominal type (declared with :=) whose backing
+        // is a tag union (e.g. Color := [Red, Green, Blue]). We must NOT fold these because
+        // the folded expression loses the nominal type information, causing layout
+        // inconsistencies when the test runner's interpreter later evaluates it.
+        // Opaque types (declared with ::) like builtin numeric types (Dec, I64) are safe
+        // to fold since they go through numeric paths (e_num) that preserve type info.
+        if (resolved.desc.content == .structure and
+            resolved.desc.content.structure == .nominal_type)
+        {
+            const nom = resolved.desc.content.structure.nominal_type;
+            if (!nom.is_opaque) {
+                const backing_var = self.interpreter.runtime_types.getNominalBackingVar(nom);
+                const backing_resolved = self.interpreter.runtime_types.resolveVar(backing_var);
+                if (backing_resolved.desc.content == .structure and
+                    backing_resolved.desc.content.structure == .tag_union) return;
+            }
+        }
+
+        // Check if it's a tag union type (without unwrapping nominals/aliases)
         const is_tag_union = resolved.desc.content == .structure and
             resolved.desc.content.structure == .tag_union;
 
         // Special case for Bool type: u8 scalar with value 0 or 1
-        // This handles nominal Bool types that aren't properly tracked through rt_var
-        if (layout.tag == .scalar and layout.data.scalar.tag == .int and
+        // This handles Bool types (which may be aliases or nominals not fully tracked
+        // through rt_var). Only apply when the type is NOT detected as a bare tag union,
+        // to avoid misidentifying tag union discriminants as Bool.
+        if (!is_tag_union and layout.tag == .scalar and layout.data.scalar.tag == .int and
             layout.data.scalar.data.int == .u8)
         {
             const val = stack_value.asI128();
