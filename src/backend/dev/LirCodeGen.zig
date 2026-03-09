@@ -7534,25 +7534,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (tag_pattern.discriminant >= variants.len) return;
 
                     const payload_layout_idx = variants.get(tag_pattern.discriminant).payload_layout;
-                    const payload_layout_val = ls.getLayout(payload_layout_idx);
-                    const payload_size = ls.layoutSizeAlign(payload_layout_val).size;
                     const base_offset: i32 = switch (value_loc) {
                         .stack => |s| s.offset,
                         .stack_str => |off| off,
                         else => unreachable,
                     };
 
-                    var payload_loc = self.stackLocationForLayout(payload_layout_idx, base_offset);
-                    if (payload_size > 0) {
-                        const detached_slot = self.codegen.allocStackSlot(payload_size);
-                        try self.copyBytesToStackOffset(detached_slot, payload_loc, payload_size);
-                        payload_loc = self.stackLocationForLayout(payload_layout_idx, detached_slot);
-                        if (ls.layoutContainsRefcounted(payload_layout_val)) {
-                            try self.emitIncrefValueByLayout(payload_loc, payload_layout_idx);
-                        }
-                    }
-
-                    break :blk .{ payload_layout_idx, payload_loc };
+                    // Match-pattern payload bindings borrow from the scrutinee. RC insertion
+                    // models branch pattern binds that way, so do not detach or retain here.
+                    break :blk .{
+                        payload_layout_idx,
+                        self.stackLocationForLayout(payload_layout_idx, base_offset),
+                    };
                 }
 
                 if (value_layout_val.tag == .box) {
@@ -7573,6 +7566,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const box_ptr_reg = try self.ensureInGeneralReg(value_loc);
                     defer self.codegen.freeGeneral(box_ptr_reg);
 
+                    // Boxed tag-pattern payloads are also borrowed from the scrutinee, but the
+                    // current value-location model cannot point into heap storage directly. Copy
+                    // the payload bytes to stack without retaining the underlying RC payloads.
                     const detached_slot = self.codegen.allocStackSlot(payload_size);
                     var copied: u32 = 0;
                     while (copied < payload_size) {
@@ -7583,12 +7579,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         copied += 8;
                     }
 
-                    const payload_loc = self.stackLocationForLayout(payload_layout_idx, detached_slot);
-                    if (ls.layoutContainsRefcounted(payload_layout_val)) {
-                        try self.emitIncrefValueByLayout(payload_loc, payload_layout_idx);
-                    }
-
-                    break :blk .{ payload_layout_idx, payload_loc };
+                    break :blk .{
+                        payload_layout_idx,
+                        self.stackLocationForLayout(payload_layout_idx, detached_slot),
+                    };
                 }
 
                 return;
