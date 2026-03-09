@@ -85,6 +85,10 @@ symbol_layouts: std.AutoHashMap(u64, layout.Idx),
 /// Recursion guard for computing runtime lambda-set payload layouts.
 computing_lambda_set_layouts: std.AutoHashMap(u32, void),
 
+/// Recursion guard for computing runtime layouts of direct call results by
+/// evaluating callee bodies under call-site argument layouts.
+computing_call_runtime_layouts: std.AutoHashMap(u32, void),
+
 /// Scratch buffer for ANF Let-binding accumulation
 scratch_anf_stmts: std.ArrayList(LirStmt),
 
@@ -120,6 +124,7 @@ pub fn init(
         .propagating_defs = std.AutoHashMap(u64, void).init(allocator),
         .symbol_layouts = std.AutoHashMap(u64, layout.Idx).init(allocator),
         .computing_lambda_set_layouts = std.AutoHashMap(u32, void).init(allocator),
+        .computing_call_runtime_layouts = std.AutoHashMap(u32, void).init(allocator),
         .scratch_anf_stmts = std.ArrayList(LirStmt).empty,
         .scratch_lir_expr_ids = std.ArrayList(LirExprId).empty,
         .scratch_lir_pattern_ids = std.ArrayList(LirPatternId).empty,
@@ -138,6 +143,7 @@ pub fn deinit(self: *Self) void {
     self.propagating_defs.deinit();
     self.symbol_layouts.deinit();
     self.computing_lambda_set_layouts.deinit();
+    self.computing_call_runtime_layouts.deinit();
     self.scratch_anf_stmts.deinit(self.allocator);
     self.scratch_lir_expr_ids.deinit(self.allocator);
     self.scratch_lir_pattern_ids.deinit(self.allocator);
@@ -755,6 +761,11 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
 
     const expr = self.mir_store.getExpr(mir_expr_id);
     switch (expr) {
+        .call => |call_data| {
+            if (try self.runtimeLayoutFromDirectCallBody(mir_expr_id, call_data.func, self.mir_store.getExprSpan(call_data.args))) |layout_idx| {
+                return layout_idx;
+            }
+        },
         .list => |list_data| {
             return self.runtimeListLayoutFromExprs(
                 mono.list.elem,
@@ -791,6 +802,125 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
     }
 
     return self.layoutFromMonotype(mono_idx);
+}
+
+fn appendUniquePatternSymbolKey(self: *Self, out: *std.ArrayList(u64), sym: Symbol) Allocator.Error!void {
+    const sym_key: u64 = @bitCast(sym);
+    for (out.items) |existing| {
+        if (existing == sym_key) return;
+    }
+    try out.append(self.allocator, sym_key);
+}
+
+fn collectPatternBindingSymbolKeys(
+    self: *Self,
+    mir_pat_id: MIR.PatternId,
+    out: *std.ArrayList(u64),
+) Allocator.Error!void {
+    const pat = self.mir_store.getPattern(mir_pat_id);
+    switch (pat) {
+        .bind => |sym| try self.appendUniquePatternSymbolKey(out, sym),
+        .wildcard,
+        .int_literal,
+        .str_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .runtime_error,
+        => {},
+        .as_pattern => |as_pat| {
+            try self.appendUniquePatternSymbolKey(out, as_pat.symbol);
+            try self.collectPatternBindingSymbolKeys(as_pat.pattern, out);
+        },
+        .tag => |tag_pat| {
+            for (self.mir_store.getPatternSpan(tag_pat.args)) |arg_pattern_id| {
+                try self.collectPatternBindingSymbolKeys(arg_pattern_id, out);
+            }
+        },
+        .record_destructure => |rd| {
+            for (self.mir_store.getPatternSpan(rd.destructs)) |field_pattern_id| {
+                try self.collectPatternBindingSymbolKeys(field_pattern_id, out);
+            }
+        },
+        .tuple_destructure => |td| {
+            for (self.mir_store.getPatternSpan(td.elems)) |elem_pattern_id| {
+                try self.collectPatternBindingSymbolKeys(elem_pattern_id, out);
+            }
+        },
+        .list_destructure => |ld| {
+            for (self.mir_store.getPatternSpan(ld.patterns)) |elem_pattern_id| {
+                try self.collectPatternBindingSymbolKeys(elem_pattern_id, out);
+            }
+            if (!ld.rest_pattern.isNone()) {
+                try self.collectPatternBindingSymbolKeys(ld.rest_pattern, out);
+            }
+        },
+    }
+}
+
+fn resolveToLambda(self: *Self, expr_id: MIR.ExprId) ?struct { params: MIR.PatternSpan, body: MIR.ExprId } {
+    const expr = self.mir_store.getExpr(expr_id);
+    return switch (expr) {
+        .lambda => |lam| .{ .params = lam.params, .body = lam.body },
+        .block => |block| self.resolveToLambda(block.final_expr),
+        .lookup => |sym| blk: {
+            const def_expr_id = self.mir_store.getSymbolDef(sym) orelse break :blk null;
+            break :blk self.resolveToLambda(def_expr_id);
+        },
+        else => null,
+    };
+}
+
+fn runtimeLayoutFromDirectCallBody(
+    self: *Self,
+    call_expr_id: MIR.ExprId,
+    callee_expr_id: MIR.ExprId,
+    call_args: []const MIR.ExprId,
+) Allocator.Error!?layout.Idx {
+    const resolved = self.resolveToLambda(callee_expr_id) orelse return null;
+    const params = self.mir_store.getPatternSpan(resolved.params);
+    if (params.len != call_args.len) return null;
+
+    const call_key = @intFromEnum(call_expr_id);
+    if (self.computing_call_runtime_layouts.contains(call_key)) return null;
+    try self.computing_call_runtime_layouts.put(call_key, {});
+    defer _ = self.computing_call_runtime_layouts.remove(call_key);
+
+    const SavedSymbolLayout = struct {
+        sym_key: u64,
+        previous: ?layout.Idx,
+    };
+
+    var bound_symbols = std.ArrayList(u64).empty;
+    defer bound_symbols.deinit(self.allocator);
+    for (params) |param_pat_id| {
+        try self.collectPatternBindingSymbolKeys(param_pat_id, &bound_symbols);
+    }
+
+    var saved_layouts = std.ArrayList(SavedSymbolLayout).empty;
+    defer saved_layouts.deinit(self.allocator);
+    for (bound_symbols.items) |sym_key| {
+        try saved_layouts.append(self.allocator, .{
+            .sym_key = sym_key,
+            .previous = self.symbol_layouts.get(sym_key),
+        });
+    }
+    defer {
+        for (saved_layouts.items) |saved| {
+            if (saved.previous) |layout_idx| {
+                self.symbol_layouts.put(saved.sym_key, layout_idx) catch unreachable;
+            } else {
+                _ = self.symbol_layouts.remove(saved.sym_key);
+            }
+        }
+    }
+
+    for (params, call_args) |param_pat_id, arg_expr_id| {
+        const arg_runtime_layout = try self.runtimeValueLayoutFromMirExpr(arg_expr_id);
+        try self.registerBindingPatternSymbols(param_pat_id, arg_runtime_layout);
+    }
+
+    return try self.runtimeValueLayoutFromMirExpr(resolved.body);
 }
 
 fn runtimeListElemLayoutFromMirExpr(self: *Self, list_mir_expr_id: MIR.ExprId) Allocator.Error!layout.Idx {
@@ -2829,6 +2959,61 @@ fn registerPatternSymbolLayout(self: *Self, sym: Symbol, mono_idx: Monotype.Idx,
     try self.symbol_layouts.put(sym_key, resolved_layout);
 }
 
+fn runtimeTagPayloadArgLayout(
+    self: *Self,
+    mono_idx: Monotype.Idx,
+    tag_name: Ident.Idx,
+    union_runtime_layout: layout.Idx,
+    arg_count: usize,
+    arg_index: usize,
+) Allocator.Error!layout.Idx {
+    std.debug.assert(arg_count > 0);
+
+    if (self.isSingleTagUnion(mono_idx)) {
+        if (arg_count == 1) return union_runtime_layout;
+
+        const tuple_layout = self.layout_store.getLayout(union_runtime_layout);
+        if (builtin.mode == .Debug and tuple_layout.tag != .struct_) {
+            std.debug.panic(
+                "MirToLir invariant violated: single-tag payload runtime layout must be struct_ for multi-arg pattern, got {s}",
+                .{@tagName(tuple_layout.tag)},
+            );
+        }
+        return self.layout_store.getStructFieldLayoutByOriginalIndex(tuple_layout.data.struct_.idx, @intCast(arg_index));
+    }
+
+    const union_layout = self.layout_store.getLayout(union_runtime_layout);
+    if (builtin.mode == .Debug and union_layout.tag != .tag_union) {
+        std.debug.panic(
+            "MirToLir invariant violated: tag-pattern runtime layout must be tag_union, got {s}",
+            .{@tagName(union_layout.tag)},
+        );
+    }
+
+    const discriminant = self.tagDiscriminant(tag_name, mono_idx);
+    const tu_data = self.layout_store.getTagUnionData(union_layout.data.tag_union.idx);
+    const variants = self.layout_store.getTagUnionVariants(tu_data);
+    if (builtin.mode == .Debug and discriminant >= variants.len) {
+        std.debug.panic(
+            "MirToLir invariant violated: tag discriminant {d} out of bounds for runtime tag_union layout",
+            .{discriminant},
+        );
+    }
+
+    const payload_layout = variants.get(discriminant).payload_layout;
+    if (arg_count == 1) return payload_layout;
+
+    const payload_layout_val = self.layout_store.getLayout(payload_layout);
+    if (builtin.mode == .Debug and payload_layout_val.tag != .struct_) {
+        std.debug.panic(
+            "MirToLir invariant violated: multi-arg tag payload runtime layout must be struct_, got {s}",
+            .{@tagName(payload_layout_val.tag)},
+        );
+    }
+
+    return self.layout_store.getStructFieldLayoutByOriginalIndex(payload_layout_val.data.struct_.idx, @intCast(arg_index));
+}
+
 fn registerBindingPatternSymbols(
     self: *Self,
     mir_pat_id: MIR.PatternId,
@@ -2852,44 +3037,16 @@ fn registerBindingPatternSymbols(
             try self.registerBindingPatternSymbols(as_pat.pattern, runtime_layout);
         },
         .tag => |tag_pat| {
-            const mono = self.mir_store.monotype_store.getMonotype(mono_idx);
             const arg_patterns = self.mir_store.getPatternSpan(tag_pat.args);
-
-            if (self.isSingleTagUnion(mono_idx)) {
-                if (arg_patterns.len == 1) {
-                    try self.registerBindingPatternSymbols(arg_patterns[0], runtime_layout);
-                } else if (arg_patterns.len > 1) {
-                    const tuple_layout = try self.layoutFromMonotype(mono_idx);
-                    const tuple_layout_val = self.layout_store.getLayout(tuple_layout);
-                    if (tuple_layout_val.tag == .struct_) {
-                        const struct_data = self.layout_store.getStructData(tuple_layout_val.data.struct_.idx);
-                        const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
-                        for (0..layout_fields.len) |li| {
-                            const original_index = layout_fields.get(li).index;
-                            try self.registerBindingPatternSymbols(arg_patterns[original_index], layout_fields.get(li).layout);
-                        }
-                    } else {
-                        for (arg_patterns) |arg_pattern_id| {
-                            const arg_runtime = try self.layoutFromMonotype(self.mir_store.patternTypeOf(arg_pattern_id));
-                            try self.registerBindingPatternSymbols(arg_pattern_id, arg_runtime);
-                        }
-                    }
-                }
-                return;
-            }
-
-            const tags = switch (mono) {
-                .tag_union => |tu| self.mir_store.monotype_store.getTags(tu.tags),
-                else => unreachable,
-            };
-
-            for (tags) |tag_info| {
-                if (!tag_info.name.eql(tag_pat.name)) continue;
-                const payloads = self.mir_store.monotype_store.getIdxSpan(tag_info.payloads);
-                for (arg_patterns, payloads) |arg_pattern_id, payload_mono| {
-                    try self.registerBindingPatternSymbols(arg_pattern_id, try self.layoutFromMonotype(payload_mono));
-                }
-                break;
+            for (arg_patterns, 0..) |arg_pattern_id, arg_index| {
+                const arg_runtime = try self.runtimeTagPayloadArgLayout(
+                    mono_idx,
+                    tag_pat.name,
+                    runtime_layout,
+                    arg_patterns.len,
+                    arg_index,
+                );
+                try self.registerBindingPatternSymbols(arg_pattern_id, arg_runtime);
             }
         },
         .record_destructure => |rd| {
@@ -3031,26 +3188,22 @@ fn lowerPatternInternal(
                 }
             }
 
-            const union_layout = try self.layoutFromMonotype(mono_idx);
+            const union_layout = runtime_layout;
             const discriminant = self.tagDiscriminant(t.name, mono_idx);
-
-            const tags = switch (self.mir_store.monotype_store.getMonotype(mono_idx)) {
-                .tag_union => |tu| self.mir_store.monotype_store.getTags(tu.tags),
-                else => unreachable,
-            };
 
             const save_len = self.scratch_lir_pattern_ids.items.len;
             defer self.scratch_lir_pattern_ids.shrinkRetainingCapacity(save_len);
 
-            for (tags) |tag_info| {
-                if (!tag_info.name.eql(t.name)) continue;
-                const payloads = self.mir_store.monotype_store.getIdxSpan(tag_info.payloads);
-                for (mir_pat_args, payloads) |mir_arg_pat, payload_mono| {
-                    const arg_layout = try self.layoutFromMonotype(payload_mono);
-                    const lir_pat = try self.lowerPatternInternal(mir_arg_pat, arg_layout, collect_rest_bindings, region);
-                    try self.scratch_lir_pattern_ids.append(self.allocator, lir_pat);
-                }
-                break;
+            for (mir_pat_args, 0..) |mir_arg_pat, arg_index| {
+                const arg_layout = try self.runtimeTagPayloadArgLayout(
+                    mono_idx,
+                    t.name,
+                    runtime_layout,
+                    mir_pat_args.len,
+                    arg_index,
+                );
+                const lir_pat = try self.lowerPatternInternal(mir_arg_pat, arg_layout, collect_rest_bindings, region);
+                try self.scratch_lir_pattern_ids.append(self.allocator, lir_pat);
             }
 
             const lir_args = try self.lir_store.addPatternSpan(self.scratch_lir_pattern_ids.items[save_len..]);

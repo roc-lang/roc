@@ -2773,6 +2773,18 @@ test "issue 8821 reduced: List.get with records and match ignores payload body" 
     , 1, .no_trace);
 }
 
+test "issue 8821 reduced: List.get with records without matching result" {
+    try runExpectI64(
+        \\{
+        \\    clients : List({ id : U64, name : Str })
+        \\    clients = [{ id: 1, name: "Alice" }]
+        \\
+        \\    result = List.get(clients, 0)
+        \\    1
+        \\}
+    , 1, .no_trace);
+}
+
 test "encode: just convert string to utf8" {
     // Simple test: convert string to utf8 and back
     try runExpectStr(

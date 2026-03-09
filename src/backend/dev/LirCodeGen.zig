@@ -11306,6 +11306,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Check if the function was compiled as a procedure
             if (self.proc_registry.get(symbol_key)) |proc| {
+                if (builtin.mode == .Debug) {
+                    if (self.getSymbolDefRelaxed(lookup.symbol)) |def_expr_id| {
+                        const def_expr = self.store.getExpr(def_expr_id);
+                        const lambda_ret_layout = switch (def_expr) {
+                            .lambda => |lambda| lambda.ret_layout,
+                            .nominal => |nom| blk: {
+                                const inner = self.store.getExpr(nom.backing_expr);
+                                if (inner == .lambda) break :blk inner.lambda.ret_layout;
+                                break :blk ret_layout;
+                            },
+                            else => ret_layout,
+                        };
+                        if (!try self.layoutsStructurallyCompatible(ret_layout, lambda_ret_layout)) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: lookup call ret_layout {d} disagrees with compiled lambda ret_layout {d} for symbol {d}",
+                                .{ @intFromEnum(ret_layout), @intFromEnum(lambda_ret_layout), lookup.symbol.raw() },
+                            );
+                        }
+                    }
+                }
                 return try self.generateCallToCompiledProc(proc, args_span, ret_layout);
             }
 
@@ -11315,6 +11335,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 return switch (def_expr) {
                     .lambda => |lambda| {
+                        if (builtin.mode == .Debug and !try self.layoutsStructurallyCompatible(ret_layout, lambda.ret_layout)) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: lookup call ret_layout {d} disagrees with lambda ret_layout {d} for symbol {d}",
+                                .{ @intFromEnum(ret_layout), @intFromEnum(lambda.ret_layout), lookup.symbol.raw() },
+                            );
+                        }
                         const saved_binding_symbol = self.current_binding_symbol;
                         self.current_binding_symbol = lookup.symbol;
                         defer self.current_binding_symbol = saved_binding_symbol;
@@ -11325,6 +11351,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // Unwrap nominal and retry with the inner expression
                         const inner = self.store.getExpr(nom.backing_expr);
                         if (inner == .lambda) {
+                            if (builtin.mode == .Debug and !try self.layoutsStructurallyCompatible(ret_layout, inner.lambda.ret_layout)) {
+                                std.debug.panic(
+                                    "LIR/codegen invariant violated: lookup call ret_layout {d} disagrees with nominal lambda ret_layout {d} for symbol {d}",
+                                    .{ @intFromEnum(ret_layout), @intFromEnum(inner.lambda.ret_layout), lookup.symbol.raw() },
+                                );
+                            }
                             const saved_binding_symbol = self.current_binding_symbol;
                             self.current_binding_symbol = lookup.symbol;
                             defer self.current_binding_symbol = saved_binding_symbol;
