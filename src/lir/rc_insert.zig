@@ -1892,7 +1892,11 @@ pub const RcInsertPass = struct {
             .dec_to_str => |d| try self.countConsumedUsesInto(d, target),
             .str_escape_and_quote => |s| try self.countConsumedUsesInto(s, target),
             .for_loop => |fl| {
-                try self.countConsumedValueInto(fl.list_expr, target);
+                // Loop sources are borrowed. Any retained owner used to keep the
+                // source alive across the loop is introduced explicitly outside
+                // the loop, so the loop itself must not mark the original source
+                // binding as consumed.
+                try self.countConsumedUsesInto(fl.list_expr, target);
                 try self.registerPatternSymbolInto(fl.elem_pattern, target);
                 try self.countConsumedUsesInto(fl.body, target);
             },
@@ -4719,7 +4723,7 @@ test "RC if result matched later tail-cleans matched binding" {
     try std.testing.expectEqual(@as(u32, 1), countDecrefsForSymbol(&env.lir_store, result, sym_result));
 }
 
-test "RC lambda loop source is consumed by the loop itself" {
+test "RC lambda loop source is borrowed and tail-cleans the param owner" {
     const allocator = std.testing.allocator;
 
     var env = try testInit();
@@ -4756,10 +4760,10 @@ test "RC lambda loop source is consumed by the loop itself" {
     const rc = countRcOps(&env.lir_store, result);
 
     try std.testing.expectEqual(@as(u32, 0), rc.increfs);
-    try std.testing.expectEqual(@as(u32, 0), rc.decrefs);
+    try std.testing.expectEqual(@as(u32, 1), rc.decrefs);
 }
 
-test "RC fold-style lambda body does not tail-decref consumed list param" {
+test "RC fold-style lambda body tail-cleans borrowed list param" {
     const allocator = std.testing.allocator;
 
     var env = try testInit();
@@ -4805,10 +4809,10 @@ test "RC fold-style lambda body does not tail-decref consumed list param" {
 
     const result = try pass.insertRcOps(lam);
 
-    try std.testing.expectEqual(@as(u32, 0), countDecrefsForSymbol(&env.lir_store, result, sym_list));
+    try std.testing.expectEqual(@as(u32, 1), countDecrefsForSymbol(&env.lir_store, result, sym_list));
 }
 
-test "RC builtin-fold shape does not decref consumed list param" {
+test "RC builtin-fold shape tail-cleans borrowed list param" {
     const allocator = std.testing.allocator;
 
     var env = try testInit();
@@ -4894,7 +4898,7 @@ test "RC builtin-fold shape does not decref consumed list param" {
 
     const result = try pass.insertRcOps(lam);
 
-    try std.testing.expectEqual(@as(u32, 0), countDecrefsForSymbol(&env.lir_store, result, sym_list));
+    try std.testing.expectEqual(@as(u32, 1), countDecrefsForSymbol(&env.lir_store, result, sym_list));
 }
 
 test "RC mutable list binding tail-cleans borrowed final use" {
@@ -5041,6 +5045,7 @@ test "RC mutable list loop accumulator tail-cleans current binding after borrowe
 
     const result = try pass.insertRcOps(block_expr);
 
+    try std.testing.expectEqual(@as(u32, 1), countDecrefsForSymbol(&env.lir_store, result, sym_src));
     try std.testing.expectEqual(@as(u32, 1), countDecrefsForSymbol(&env.lir_store, result, sym_acc));
 }
 
