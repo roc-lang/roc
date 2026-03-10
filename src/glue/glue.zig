@@ -1065,8 +1065,8 @@ const TypeTable = struct {
             const names = slice.items(.name);
             const vars = slice.items(.var_);
             for (names, vars) |n, v| {
-                all_names.append(self.gpa, n) catch {};
-                all_vars.append(self.gpa, v) catch {};
+                all_names.append(self.gpa, n) catch return self.oomUnknown("record");
+                all_vars.append(self.gpa, v) catch return self.oomUnknown("record");
             }
 
             // Follow the extension variable to the next record segment
