@@ -8616,7 +8616,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const variant_payload_layout: ?layout.Idx = if (tag.discriminant < variants.len) blk: {
                 break :blk variants.get(tag.discriminant).payload_layout;
             } else null;
-
             // Get argument expressions and store them as payload
             const arg_exprs = self.store.getExprSpan(tag.args);
             if (arg_exprs.len == 1) {
@@ -9772,7 +9771,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             while (cell_index > 0) {
                 cell_index -= 1;
                 const cell = self.active_cells.items[cell_index];
-                try self.dropCell(cell.cell, cell.layout_idx);
+                try self.emitCellCleanup(cell.cell, cell.layout_idx);
             }
 
             // Move the preserved value to the return register (or copy to return pointer)
@@ -10492,6 +10491,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const normalized_value_loc = self.coerceImmediateToLayout(value_loc, layout_idx);
             try self.emitDecrefAtStackOffset(storage.slot, layout_idx);
             try self.copyBytesToStackOffset(storage.slot, normalized_value_loc, storage.size);
+        }
+
+        fn emitCellCleanup(self: *Self, cell: Symbol, layout_idx: layout.Idx) Allocator.Error!void {
+            const storage = self.resolveCellStorage(cell, layout_idx) orelse return;
+            try self.emitDecrefAtStackOffset(storage.slot, layout_idx);
         }
 
         fn dropCell(self: *Self, cell: Symbol, layout_idx: layout.Idx) Allocator.Error!void {
