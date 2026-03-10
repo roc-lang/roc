@@ -7381,74 +7381,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
     }, region);
 
     if (e.qualifiers.span.len == 0) {
-        // Tag without a qualifier - check if it's a local nominal type first
-        // For types like `Utf8Format := {}`, using `Utf8Format` as a value should
-        // create a nominal instance with the default backing value
-        if (self.scopeLookupTypeDecl(tag_name)) |nominal_type_decl_stmt_idx| {
-            switch (self.env.store.getStatement(nominal_type_decl_stmt_idx)) {
-                .s_nominal_decl => |nom_decl| {
-                    // Get the backing type to determine what kind of default value to create
-                    const anno = self.env.store.getTypeAnno(nom_decl.anno);
-
-                    // Create the appropriate backing expression based on the type annotation
-                    const backing_expr_idx: CIR.Expr.Idx = switch (anno) {
-                        // For record backing type (including empty record `{}`),
-                        // create an empty record as the default value
-                        .record => try self.env.addExpr(CIR.Expr{
-                            .e_empty_record = .{},
-                        }, region),
-                        // For tag union backing types like [Format], create a tag with the correct variant name
-                        .tag_union => |tu| blk: {
-                            const tags_slice = self.env.store.sliceFromSpan(CIR.TypeAnno.Idx, tu.tags.span);
-                            if (tags_slice.len == 1) {
-                                const first_tag_anno = self.env.store.getTypeAnno(tags_slice[0]);
-                                switch (first_tag_anno) {
-                                    .tag => |t| {
-                                        // Create tag with the actual variant name, not the nominal type name
-                                        break :blk try self.env.addExpr(CIR.Expr{
-                                            .e_tag = .{
-                                                .name = t.name,
-                                                .args = CIR.Expr.Span{ .span = DataSpan.empty() },
-                                            },
-                                        }, region);
-                                    },
-                                    else => break :blk tag_expr_idx,
-                                }
-                            }
-                            // Non-singleton tag unions - fall back to tag_expr_idx
-                            break :blk tag_expr_idx;
-                        },
-                        // For apply and other backing types, use the tag expression as fallback
-                        .apply => tag_expr_idx,
-                        else => tag_expr_idx,
-                    };
-
-                    // Determine the backing type for the nominal expression
-                    const backing_type: CIR.Expr.NominalBackingType = switch (anno) {
-                        .record => .record,
-                        else => .tag,
-                    };
-
-                    // Create the e_nominal expression
-                    const expr_idx = try self.env.addExpr(CIR.Expr{
-                        .e_nominal = .{
-                            .nominal_type_decl = nominal_type_decl_stmt_idx,
-                            .backing_expr = backing_expr_idx,
-                            .backing_type = backing_type,
-                        },
-                    }, region);
-
-                    const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
-                    return CanonicalizedExpr{
-                        .idx = expr_idx,
-                        .free_vars = free_vars_span,
-                    };
-                },
-                else => {}, // Not a nominal type, fall through to regular tag handling
-            }
-        }
-
-        // Not a local nominal type - treat as anonymous structural tag
+        // Unqualified names in tag position are always structural tags at canonicalization time.
         const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
         return CanonicalizedExpr{ .idx = tag_expr_idx, .free_vars = free_vars_span };
     } else if (e.qualifiers.span.len == 1) {
