@@ -17,8 +17,10 @@ const ModuleEnv = can.ModuleEnv;
 pub const Idx = enum(u32) {
     _,
 
+    /// Sentinel used when no lambda set has been assigned.
     pub const none: Idx = @enumFromInt(std.math.maxInt(u32));
 
+    /// Whether this index is the sentinel empty value.
     pub fn isNone(self: Idx) bool {
         return self == none;
     }
@@ -35,19 +37,23 @@ pub const MemberSpan = extern struct {
     start: u32,
     len: u16,
 
+    /// The empty span.
     pub fn empty() MemberSpan {
         return .{ .start = 0, .len = 0 };
     }
 
+    /// Whether this span contains no members.
     pub fn isEmpty(self: MemberSpan) bool {
         return self.len == 0;
     }
 };
 
+/// One deduplicated lambda-set entry.
 pub const LambdaSet = struct {
     members: MemberSpan,
 };
 
+/// Eagerly-computed lambda-set facts for expressions, symbols, and callable members.
 pub const Store = struct {
     lambda_sets: std.ArrayListUnmanaged(LambdaSet),
     members: std.ArrayListUnmanaged(Member),
@@ -55,6 +61,7 @@ pub const Store = struct {
     expr_lambda_sets: std.AutoHashMapUnmanaged(u32, Idx),
     member_return_lambda_sets: std.AutoHashMapUnmanaged(u64, Idx),
 
+    /// Create an empty lambda-set store.
     pub fn init() Store {
         return .{
             .lambda_sets = .empty,
@@ -65,6 +72,7 @@ pub const Store = struct {
         };
     }
 
+    /// Release all lambda-set analysis storage.
     pub fn deinit(self: *Store, allocator: Allocator) void {
         self.lambda_sets.deinit(allocator);
         self.members.deinit(allocator);
@@ -73,6 +81,7 @@ pub const Store = struct {
         self.member_return_lambda_sets.deinit(allocator);
     }
 
+    /// Append callable members and return their span.
     pub fn addMembers(self: *Store, allocator: Allocator, member_list: []const Member) !MemberSpan {
         if (member_list.len == 0) return MemberSpan.empty();
         const start: u32 = @intCast(self.members.items.len);
@@ -80,34 +89,41 @@ pub const Store = struct {
         return .{ .start = start, .len = @intCast(member_list.len) };
     }
 
+    /// Resolve a member span into the underlying member slice.
     pub fn getMembers(self: *const Store, span: MemberSpan) []const Member {
         if (span.len == 0) return &.{};
         return self.members.items[span.start..][0..span.len];
     }
 
+    /// Intern one lambda-set entry and return its index.
     pub fn addLambdaSet(self: *Store, allocator: Allocator, ls: LambdaSet) !Idx {
         const idx: u32 = @intCast(self.lambda_sets.items.len);
         try self.lambda_sets.append(allocator, ls);
         return @enumFromInt(idx);
     }
 
+    /// Read one interned lambda-set entry.
     pub fn getLambdaSet(self: *const Store, idx: Idx) LambdaSet {
         return self.lambda_sets.items[@intFromEnum(idx)];
     }
 
+    /// Get the lambda set inferred for a symbol, if one exists.
     pub fn getSymbolLambdaSet(self: *const Store, symbol: MIR.Symbol) ?Idx {
         return self.symbol_lambda_sets.get(symbol.raw());
     }
 
+    /// Get the lambda set inferred for an expression, if one exists.
     pub fn getExprLambdaSet(self: *const Store, expr_id: MIR.ExprId) ?Idx {
         return self.expr_lambda_sets.get(@intFromEnum(expr_id));
     }
 
+    /// Get the inferred return lambda set for a callable member, if one exists.
     pub fn getMemberReturnLambdaSet(self: *const Store, fn_symbol: MIR.Symbol) ?Idx {
         return self.member_return_lambda_sets.get(fn_symbol.raw());
     }
 };
 
+/// Whether an expression evaluates directly to a lambda, ignoring block wrappers.
 pub fn isLambdaExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId) bool {
     const expr = mir_store.getExpr(expr_id);
     return switch (expr) {
@@ -117,6 +133,7 @@ pub fn isLambdaExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId) bool {
     };
 }
 
+/// Infer authoritative lambda sets for all reachable MIR expressions and symbols.
 pub fn infer(
     allocator: Allocator,
     mir_store: *const MIR.Store,

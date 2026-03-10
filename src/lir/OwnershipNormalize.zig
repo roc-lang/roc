@@ -1,3 +1,4 @@
+//! Assigns stable RC reference identities to bindings, patterns, and lookups in LIR.
 const std = @import("std");
 const base = @import("base");
 const lir = @import("LIR.zig");
@@ -11,16 +12,20 @@ const LirStmt = lir.LirStmt;
 const Symbol = lir.Symbol;
 const LayoutIdx = @import("layout").Idx;
 
+/// Stable identity for one RC-relevant binding/reference in normalized LIR.
 pub const RefId = enum(u32) {
     _,
 
+    /// Sentinel used for unassigned lookup/pattern slots.
     pub const none: RefId = @enumFromInt(std.math.maxInt(u32));
 
+    /// Whether this ref slot is unassigned.
     pub fn isNone(self: RefId) bool {
         return self == none;
     }
 };
 
+/// How a normalized binding owns, borrows, or aliases a value.
 pub const OwnerKind = union(enum) {
     unmanaged,
     owned,
@@ -28,6 +33,7 @@ pub const OwnerKind = union(enum) {
     retained: RefId,
 };
 
+/// RC-relevant metadata for one normalized binding/reference.
 pub const RefInfo = struct {
     symbol: Symbol,
     layout_idx: LayoutIdx,
@@ -37,18 +43,21 @@ pub const RefInfo = struct {
     shadowed_ref: RefId,
 };
 
+/// Output of ownership normalization for one lowered LIR expression tree.
 pub const Result = struct {
     ref_infos: std.ArrayList(RefInfo),
     lookup_ref_ids: std.ArrayList(RefId),
     pattern_ref_ids: std.ArrayList(RefId),
     allocator: Allocator,
 
+    /// Release normalization side tables.
     pub fn deinit(self: *Result) void {
         self.ref_infos.deinit(self.allocator);
         self.lookup_ref_ids.deinit(self.allocator);
         self.pattern_ref_ids.deinit(self.allocator);
     }
 
+    /// Get the normalized reference identity for a lookup expression, if any.
     pub fn getLookupRef(self: *const Result, expr_id: LirExprId) ?RefId {
         const idx = @intFromEnum(expr_id);
         if (idx >= self.lookup_ref_ids.items.len) return null;
@@ -56,6 +65,7 @@ pub const Result = struct {
         return if (ref_id.isNone()) null else ref_id;
     }
 
+    /// Get the normalized reference identity for a pattern node, if any.
     pub fn getPatternRef(self: *const Result, pat_id: LirPatternId) ?RefId {
         const idx = @intFromEnum(pat_id);
         if (idx >= self.pattern_ref_ids.items.len) return null;
@@ -63,6 +73,7 @@ pub const Result = struct {
         return if (ref_id.isNone()) null else ref_id;
     }
 
+    /// Read binding metadata for a normalized reference identity.
     pub fn getRefInfo(self: *const Result, ref_id: RefId) RefInfo {
         return self.ref_infos.items[@intFromEnum(ref_id)];
     }
@@ -393,6 +404,7 @@ const Analyzer = struct {
     }
 };
 
+/// Normalize bindings and lookups into stable RC reference identities.
 pub fn analyze(allocator: Allocator, store: *const LirExprStore, root_expr: LirExprId) Allocator.Error!Result {
     var analyzer = try Analyzer.init(allocator, store);
     errdefer {

@@ -6400,9 +6400,9 @@ pub fn canonicalizeExpr(
                                     try self.collectBoundVarsToScratch(pattern_idx);
                                     const alt_bound_vars = self.scratch_bound_vars.sliceFromStart(alt_bound_vars_top);
 
-                                     // Alternative-pattern scopes are temporary. Their binders are either
-                                     // reintroduced into the surrounding branch scope or intentionally
-                                     // absent there, so do not report them as unused when the temp scope exits.
+                                    // Alternative-pattern scopes are temporary. Their binders are either
+                                    // reintroduced into the surrounding branch scope or intentionally
+                                    // absent there, so do not report them as unused when the temp scope exits.
                                     for (alt_bound_vars) |alt_bound_pattern_idx| {
                                         try self.used_patterns.put(self.env.gpa, alt_bound_pattern_idx, {});
                                     }

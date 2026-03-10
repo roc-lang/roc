@@ -1,3 +1,4 @@
+//! Maps semantic CIR low-level operations to backend-facing LIR low-level ops.
 const CIR = @import("can").CIR;
 const LIR = @import("LIR.zig");
 

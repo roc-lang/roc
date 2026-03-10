@@ -348,8 +348,10 @@ test "Monotype Store: all primitive types" {
         .i32,
         .u64,
         .i64,
-        .u128, .i128,
-        .f32,  .f64,
+        .u128,
+        .i128,
+        .f32,
+        .f64,
         .dec,
     };
 
@@ -541,15 +543,16 @@ test "lowerExpr: block local closure call has resolvable symbol def and lambda s
     const block = env.mir_store.getExpr(expr);
     try testing.expect(block == .block);
 
-    const final_expr = env.mir_store.getExpr(block.block.final_expr);
+    var final_expr_id = block.block.final_expr;
+    while (env.mir_store.getExpr(final_expr_id) == .block) {
+        final_expr_id = env.mir_store.getExpr(final_expr_id).block.final_expr;
+    }
+    const final_expr = env.mir_store.getExpr(final_expr_id);
     try testing.expect(final_expr == .call);
 
     const callee = env.mir_store.getExpr(final_expr.call.func);
     try testing.expect(callee == .lookup);
     const closure_sym = callee.lookup;
-
-    const closure_def = env.mir_store.getSymbolDef(closure_sym) orelse return error.TestUnexpectedResult;
-    try testing.expect(env.mir_store.closure_origins.contains(@intFromEnum(closure_def)));
 
     const all_module_envs = [_]*ModuleEnv{
         @constCast(env.builtin_module.env),
@@ -561,7 +564,8 @@ test "lowerExpr: block local closure call has resolvable symbol def and lambda s
     const closure_ls = ls_store.getSymbolLambdaSet(closure_sym) orelse return error.TestUnexpectedResult;
     const members = ls_store.getMembers(ls_store.getLambdaSet(closure_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
-    try testing.expect(!members[0].captures_monotype.isNone());
+    const closure_member = env.mir_store.getClosureMember(members[0].closure_member);
+    try testing.expectEqual(@as(usize, 1), env.mir_store.getCaptureBindings(closure_member.capture_bindings).len);
 }
 
 test "lambda set: closure-returning binding keeps resolvable lifted member" {
@@ -589,29 +593,22 @@ test "lambda set: closure-returning binding keeps resolvable lifted member" {
     var ls_store = try LambdaSet.infer(test_allocator, env.mir_store, all_module_envs[0..]);
     defer ls_store.deinit(test_allocator);
 
-    const returned_closure_ls = try LambdaSet.resolveExprLambdaSet(
-        test_allocator,
-        env.mir_store,
-        &ls_store,
-        stmts[1].decl_const.expr,
-    );
-    try testing.expect(!returned_closure_ls.isNone());
+    const returned_closure_ls = ls_store.getExprLambdaSet(stmts[1].decl_const.expr) orelse return error.TestUnexpectedResult;
 
     const members = ls_store.getMembers(ls_store.getLambdaSet(returned_closure_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
     try testing.expect(env.mir_store.getSymbolDef(members[0].fn_symbol) != null);
-    try testing.expect(!members[0].captures_monotype.isNone());
+    const returned_closure_member = env.mir_store.getClosureMember(members[0].closure_member);
+    try testing.expectEqual(@as(usize, 1), env.mir_store.getCaptureBindings(returned_closure_member.capture_bindings).len);
 
-    const final_expr = env.mir_store.getExpr(block.block.final_expr);
+    var final_expr_id = block.block.final_expr;
+    while (env.mir_store.getExpr(final_expr_id) == .block) {
+        final_expr_id = env.mir_store.getExpr(final_expr_id).block.final_expr;
+    }
+    const final_expr = env.mir_store.getExpr(final_expr_id);
     try testing.expect(final_expr == .call);
 
-    const callee_ls = try LambdaSet.resolveExprLambdaSet(
-        test_allocator,
-        env.mir_store,
-        &ls_store,
-        final_expr.call.func,
-    );
-    try testing.expect(!callee_ls.isNone());
+    const callee_ls = ls_store.getExprLambdaSet(final_expr.call.func) orelse return error.TestUnexpectedResult;
 
     const callee_members = ls_store.getMembers(ls_store.getLambdaSet(callee_ls).members);
     try testing.expectEqual(@as(usize, 1), callee_members.len);
@@ -633,7 +630,11 @@ test "lambda set: higher-order closure param propagation keeps member defs stabl
     const block = env.mir_store.getExpr(expr);
     try testing.expect(block == .block);
 
-    const final_expr = env.mir_store.getExpr(block.block.final_expr);
+    var final_expr_id = block.block.final_expr;
+    while (env.mir_store.getExpr(final_expr_id) == .block) {
+        final_expr_id = env.mir_store.getExpr(final_expr_id).block.final_expr;
+    }
+    const final_expr = env.mir_store.getExpr(final_expr_id);
     try testing.expect(final_expr == .call);
 
     const all_module_envs = [_]*ModuleEnv{
@@ -643,13 +644,7 @@ test "lambda set: higher-order closure param propagation keeps member defs stabl
     var ls_store = try LambdaSet.infer(test_allocator, env.mir_store, all_module_envs[0..]);
     defer ls_store.deinit(test_allocator);
 
-    const callee_ls = try LambdaSet.resolveExprLambdaSet(
-        test_allocator,
-        env.mir_store,
-        &ls_store,
-        final_expr.call.func,
-    );
-    try testing.expect(!callee_ls.isNone());
+    const callee_ls = ls_store.getExprLambdaSet(final_expr.call.func) orelse return error.TestUnexpectedResult;
 
     const members = ls_store.getMembers(ls_store.getLambdaSet(callee_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
@@ -723,16 +718,18 @@ test "lambda set: factory-produced closure alias keeps captured symbol lambda se
     const add5_members = ls_store.getMembers(ls_store.getLambdaSet(add5_ls).members);
     try testing.expectEqual(@as(usize, 1), add5_members.len);
 
-    var found_capture_alias = false;
-    var alias_it = env.mir_store.capture_symbol_aliases.iterator();
-    while (alias_it.next()) |entry| {
-        if (entry.value_ptr.* != resolved_add5_sym.raw()) continue;
-        found_capture_alias = true;
-        const capture_local = MIR.Symbol.fromRaw(entry.key_ptr.*);
-        const capture_ls = ls_store.getSymbolLambdaSet(capture_local) orelse return error.TestUnexpectedResult;
-        try testing.expectEqual(add5_ls, capture_ls);
+    var found_capture_lookup = false;
+    for (env.mir_store.closure_members.items) |closure_member| {
+        const capture_bindings = env.mir_store.getCaptureBindings(closure_member.capture_bindings);
+        for (capture_bindings) |binding| {
+            const source_expr = env.mir_store.getExpr(binding.source_expr);
+            if (source_expr != .lookup or !source_expr.lookup.eql(resolved_add5_sym)) continue;
+            found_capture_lookup = true;
+            const capture_ls = ls_store.getSymbolLambdaSet(binding.local_symbol) orelse return error.TestUnexpectedResult;
+            try testing.expectEqual(add5_ls, capture_ls);
+        }
     }
-    try testing.expect(found_capture_alias);
+    try testing.expect(found_capture_lookup);
 }
 
 test "lambda set: closure extracted from record field keeps member defs stable" {
@@ -774,7 +771,8 @@ test "lambda set: closure extracted from record field keeps member defs stable" 
     const members = ls_store.getMembers(ls_store.getLambdaSet(f_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
     try testing.expect(env.mir_store.getSymbolDef(members[0].fn_symbol) != null);
-    try testing.expect(!members[0].captures_monotype.isNone());
+    const closure_member = env.mir_store.getClosureMember(members[0].closure_member);
+    try testing.expectEqual(@as(usize, 1), env.mir_store.getCaptureBindings(closure_member.capture_bindings).len);
 }
 
 test "lambda set: higher-order param receives both closure members" {
@@ -827,7 +825,8 @@ test "lambda set: higher-order param receives both closure members" {
     const members = ls_store.getMembers(ls_store.getLambdaSet(f_ls).members);
     try testing.expectEqual(@as(usize, 2), members.len);
     for (members) |member| {
-        try testing.expect(!member.captures_monotype.isNone());
+        const closure_member = env.mir_store.getClosureMember(member.closure_member);
+        try testing.expectEqual(@as(usize, 1), env.mir_store.getCaptureBindings(closure_member.capture_bindings).len);
     }
 }
 
@@ -881,11 +880,10 @@ test "lambda set: higher-order closure captures monotype stays numeric tuple" {
     const members = ls_store.getMembers(ls_store.getLambdaSet(f_ls).members);
     try testing.expectEqual(@as(usize, 2), members.len);
 
-    const capture_mono = env.mir_store.monotype_store.getMonotype(members[0].captures_monotype);
-    try testing.expect(capture_mono == .tuple);
-    const elems = env.mir_store.monotype_store.getIdxSpan(capture_mono.tuple.elems);
-    try testing.expectEqual(@as(usize, 1), elems.len);
-    const elem_mono = env.mir_store.monotype_store.getMonotype(elems[0]);
+    const closure_member = env.mir_store.getClosureMember(members[0].closure_member);
+    const capture_bindings = env.mir_store.getCaptureBindings(closure_member.capture_bindings);
+    try testing.expectEqual(@as(usize, 1), capture_bindings.len);
+    const elem_mono = env.mir_store.monotype_store.getMonotype(capture_bindings[0].monotype);
     try testing.expect(elem_mono == .prim);
     try testing.expectEqual(Monotype.Prim.dec, elem_mono.prim);
 }
@@ -985,13 +983,7 @@ test "lambda set: imported List.any receives predicate lambda set" {
     var ls_store = try LambdaSet.infer(test_allocator, env.mir_store, all_module_envs[0..]);
     defer ls_store.deinit(test_allocator);
 
-    const arg_ls = try LambdaSet.resolveExprLambdaSet(
-        test_allocator,
-        env.mir_store,
-        &ls_store,
-        root_args[1],
-    );
-    try testing.expect(!arg_ls.isNone());
+    const arg_ls = ls_store.getExprLambdaSet(root_args[1]) orelse return error.TestUnexpectedResult;
     const arg_members = ls_store.getMembers(ls_store.getLambdaSet(arg_ls).members);
     try testing.expectEqual(@as(usize, 1), arg_members.len);
 
@@ -999,9 +991,8 @@ test "lambda set: imported List.any receives predicate lambda set" {
     const members = ls_store.getMembers(ls_store.getLambdaSet(predicate_ls).members);
     try testing.expectEqual(@as(usize, 1), members.len);
     try testing.expectEqual(arg_members[0].fn_symbol, members[0].fn_symbol);
-    try testing.expectEqual(arg_members[0].captures_monotype, members[0].captures_monotype);
     try testing.expect(env.mir_store.getSymbolDef(members[0].fn_symbol) != null);
-    try testing.expect(members[0].captures_monotype.isNone());
+    try testing.expect(members[0].closure_member.isNone());
 }
 
 test "lowerExpr: lambda" {

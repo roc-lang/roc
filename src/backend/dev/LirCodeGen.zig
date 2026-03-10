@@ -38,7 +38,6 @@ const increfDataPtrC = builtins.utils.increfDataPtrC;
 const decrefDataPtrC = builtins.utils.decrefDataPtrC;
 const freeDataPtrC = builtins.utils.freeDataPtrC;
 const rcNone = builtins.utils.rcNone;
-const seamless_slice_bit = builtins.list.SEAMLESS_SLICE_BIT;
 
 // List builtin functions - using C-compatible wrappers to avoid ABI issues
 // with 24-byte RocList struct returns on aarch64
@@ -48,7 +47,6 @@ const RocList = builtins.list.RocList;
 // Additional list builtins (return RocList by value with callconv(.c))
 const listConcat = builtins.list.listConcat;
 const listPrepend = builtins.list.listPrepend;
-const listSublist = builtins.list.listSublist;
 const listReplace = builtins.list.listReplace;
 const listReserve = builtins.list.listReserve;
 const listReleaseExcessCapacity = builtins.list.listReleaseExcessCapacity;
@@ -10974,24 +10972,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        /// Load the address of a compiled procedure into a general register.
-        /// Uses ADR (aarch64) or LEA rip-relative (x86_64) and records an
-        /// internal address patch so the reference survives prologue shifts.
-        fn emitCodePointerToReg(self: *Self, reg: GeneralReg, code_offset: usize) !void {
-            const current = self.codegen.currentOffset();
-            try self.internal_addr_patches.append(self.allocator, .{
-                .instr_offset = current,
-                .target_offset = code_offset,
-            });
-            const rel: i64 = @as(i64, @intCast(code_offset)) - @as(i64, @intCast(current));
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.adr(reg, @intCast(rel));
-            } else {
-                const lea_size: i64 = 7;
-                try self.codegen.emit.leaRegRipRel(reg, @intCast(rel - lea_size));
-            }
-        }
-
         /// Emit a call instruction to a specific code offset.
         /// Records the call position so it can be re-patched if the surrounding
         /// code is shifted by compileLambdaAsProc's deferred prologue pattern.
@@ -16611,7 +16591,7 @@ test "generate unary minus" {
 
     try std.testing.expect(result.code.len > 0);
 }
-        const ActiveCell = struct {
-            cell: Symbol,
-            layout_idx: layout.Idx,
-        };
+const ActiveCell = struct {
+    cell: Symbol,
+    layout_idx: layout.Idx,
+};

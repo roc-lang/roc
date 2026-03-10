@@ -77,7 +77,94 @@ const test_allocator = std.testing.allocator;
 /// Use std.testing.allocator for interpreter tests so leaks fail tests.
 pub const interpreter_allocator = test_allocator;
 
-const TestParseError = parse.Parser.Error || error{ TokenizeError, SyntaxError };
+const ParsedExprResources = struct {
+    module_env: *ModuleEnv,
+    parse_ast: *parse.AST,
+    can: *Can,
+    checker: *Check,
+    expr_idx: CIR.Expr.Idx,
+    bool_stmt: CIR.Statement.Idx,
+    builtin_module: LoadedModule,
+    builtin_indices: CIR.BuiltinIndices,
+    builtin_types: BuiltinTypes,
+};
+
+fn renderReportToMarkdownBuffer(buf: *std.array_list.Managed(u8), report: anytype) !void {
+    buf.clearRetainingCapacity();
+    var unmanaged = buf.moveToUnmanaged();
+    defer buf.* = unmanaged.toManaged(buf.allocator);
+
+    var writer_alloc = std.Io.Writer.Allocating.fromArrayList(buf.allocator, &unmanaged);
+    defer unmanaged = writer_alloc.toArrayList();
+
+    report.render(&writer_alloc.writer, .markdown) catch |err| switch (err) {
+        error.WriteFailed => return error.OutOfMemory,
+        else => return err,
+    };
+}
+
+fn failWithRenderedDiagnostic(kind: []const u8, rendered: []const u8) noreturn {
+    std.debug.panic("{s} unexpectedly reported errors:\n\n{s}", .{ kind, rendered });
+}
+
+fn failWithReport(kind: []const u8, allocator: std.mem.Allocator, report: anytype) noreturn {
+    var report_buf = std.array_list.Managed(u8).initCapacity(allocator, 256) catch @panic("OOM rendering diagnostic");
+    defer report_buf.deinit();
+
+    renderReportToMarkdownBuffer(&report_buf, report) catch @panic("failed rendering diagnostic");
+    failWithRenderedDiagnostic(kind, report_buf.items);
+}
+
+fn reportFilename(module_env: *ModuleEnv) []const u8 {
+    return if (module_env.module_name.len == 0) "test" else module_env.module_name;
+}
+
+fn assertNoParseDiagnostics(allocator: std.mem.Allocator, module_env: *ModuleEnv, parse_ast: *parse.AST) !void {
+    const filename = reportFilename(module_env);
+    for (parse_ast.tokenize_diagnostics.items) |tok_diag| {
+        var report = try parse_ast.tokenizeDiagnosticToReport(tok_diag, allocator, filename);
+        defer report.deinit();
+        failWithReport("Parse", allocator, &report);
+    }
+
+    for (parse_ast.parse_diagnostics.items) |diag| {
+        var report = try parse_ast.parseDiagnosticToReport(&module_env.common, diag, allocator, filename);
+        defer report.deinit();
+        failWithReport("Parse", allocator, &report);
+    }
+}
+
+fn assertNoCanonicalizeDiagnostics(allocator: std.mem.Allocator, module_env: *ModuleEnv) !void {
+    const diagnostics = try module_env.getDiagnostics();
+    defer allocator.free(diagnostics);
+
+    for (diagnostics) |diagnostic| {
+        var report = try module_env.diagnosticToReport(diagnostic, allocator, module_env.module_name);
+        defer report.deinit();
+        failWithReport("Canonicalization", allocator, &report);
+    }
+}
+
+fn assertNoTypeProblems(allocator: std.mem.Allocator, module_env: *ModuleEnv, checker: *Check) !void {
+    var report_builder = try check.ReportBuilder.init(
+        allocator,
+        module_env,
+        module_env,
+        &checker.snapshots,
+        &checker.problems,
+        module_env.module_name,
+        &.{},
+        &checker.import_mapping,
+        &checker.regions,
+    );
+    defer report_builder.deinit();
+
+    for (checker.problems.problems.items) |problem| {
+        var report = try report_builder.build(problem);
+        defer report.deinit();
+        failWithReport("Type checking", allocator, &report);
+    }
+}
 
 const TraceWriter = struct {
     buffer: [256]u8 = undefined,
@@ -263,10 +350,13 @@ fn forkAndExecute(
 
         const result_str = executeAndFormat(child_alloc, dev_eval, executable) catch |err| {
             std.debug.print("child executeAndFormat error: {}", .{err});
-            if (err == error.RocCrashed) {
-                if (dev_eval.getCrashMessage()) |msg| {
-                    std.debug.print(" msg={s}", .{msg});
-                }
+            switch (err) {
+                error.RocCrashed => {
+                    if (dev_eval.getCrashMessage()) |msg| {
+                        std.debug.print(" msg={s}", .{msg});
+                    }
+                },
+                else => {},
             }
             std.debug.print("\n", .{});
             posix.close(pipe_write);
@@ -1914,11 +2004,24 @@ pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: e
     try std.testing.expect(false);
 }
 
+/// Helper for tests that intentionally expect parse/canonicalize/type problems.
+pub fn runExpectProblem(src: []const u8) !void {
+    const resources = try parseAndCanonicalizeExprAllowProblems(test_allocator, src);
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    const can_diags_slice = try resources.module_env.getDiagnostics();
+    defer test_allocator.free(can_diags_slice);
+    const can_diags = can_diags_slice.len;
+    const type_problems = resources.checker.problems.problems.items.len;
+
+    try std.testing.expect(can_diags + type_problems > 0);
+}
+
 /// Helper function to verify type mismatch error and runtime crash.
 /// This tests both compile-time behavior (type mismatch reported) and
 /// runtime behavior (crash encountered instead of successfully evaluating).
 pub fn runExpectTypeMismatchAndCrash(src: []const u8) !void {
-    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
+    const resources = try parseAndCanonicalizeExprAllowProblems(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
     // Step 1: Verify that the type checker detected a type-level dispatch failure.
@@ -1995,7 +2098,7 @@ pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: enum { tr
 
     // Check if this is an integer or Dec
     const int_value = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) blk: {
-        // Suffixed integer literals (e.g., 255u8, 42i32) remain as integers
+        // Suffixed integer literals (e.g., 255.U8, 42.I32) remain as integers
         break :blk result.asI128();
     } else blk: {
         // Unsuffixed numeric literals default to Dec, so extract the integer value
@@ -2536,7 +2639,7 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
 }
 
 /// Like runExpectListI64 but expects an empty list with .list_of_zst layout.
-/// This is for cases like List.repeat(7i64, 0) which returns an empty list.
+/// This is for cases like List.repeat(7.I64, 0) which returns an empty list.
 pub fn runExpectEmptyListI64(src: []const u8, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
@@ -2762,18 +2865,11 @@ fn rewriteNumericLiteralExpr(
     // For Dec type, keep the original e_dec/e_dec_small expression
 }
 
-/// Parses and canonicalizes a Roc expression for testing, returning all necessary context.
-pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) TestParseError!struct {
-    module_env: *ModuleEnv,
-    parse_ast: *parse.AST,
-    can: *Can,
-    checker: *Check,
-    expr_idx: CIR.Expr.Idx,
-    bool_stmt: CIR.Statement.Idx,
-    builtin_module: LoadedModule,
-    builtin_indices: CIR.BuiltinIndices,
-    builtin_types: BuiltinTypes,
-} {
+fn parseAndCanonicalizeExprInternal(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    enforce_no_reports: bool,
+) !ParsedExprResources {
     // Load Builtin module once - Bool, Try, and Str are all types within this module
     const builtin_indices = try deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
     var builtin_module = try loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source);
@@ -2792,18 +2888,16 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     // NOTE: allocators is not freed here - caller handles cleanup via cleanupTestResources
     const parse_ast = try parse.parseExpr(&allocators, &module_env.common);
 
-    // Check for parse errors in test code
-    // NOTE: This is TEST-ONLY behavior! In production, the parser continues and collects
-    // diagnostics to provide better error messages. But for tests, we want to fail early
-    // on syntax errors to catch issues like semicolons that shouldn't be in Roc code.
-    if (parse_ast.tokenize_diagnostics.items.len > 0) {
-        // Found tokenization errors in test code
-        return error.TokenizeError;
-    }
+    if (enforce_no_reports) {
+        try assertNoParseDiagnostics(allocator, module_env, parse_ast);
+    } else {
+        if (parse_ast.tokenize_diagnostics.items.len > 0) {
+            return error.TokenizeError;
+        }
 
-    if (parse_ast.parse_diagnostics.items.len > 0) {
-        // Found parse errors in test code
-        return error.SyntaxError;
+        if (parse_ast.parse_diagnostics.items.len > 0) {
+            return error.SyntaxError;
+        }
     }
 
     // Empty scratch space (required before canonicalization)
@@ -2844,6 +2938,11 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     // Canonicalize the expression (following REPL pattern)
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
     const canonical_expr = try czer.canonicalizeExpr(expr_idx) orelse {
+        if (enforce_no_reports) {
+            try assertNoCanonicalizeDiagnostics(allocator, module_env);
+            std.debug.panic("Canonicalization unexpectedly failed without a diagnostic report.", .{});
+        }
+
         // If canonicalization fails, create a runtime error
         const diagnostic_idx = try module_env.store.addDiagnostic(.{ .not_implemented = .{
             .feature = try module_env.insertString("canonicalization failed"),
@@ -2872,6 +2971,10 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     };
     const canonical_expr_idx = canonical_expr.get_idx();
 
+    if (enforce_no_reports) {
+        try assertNoCanonicalizeDiagnostics(allocator, module_env);
+    }
+
     // Set up all_defs from scratch defs so type checker can process them
     // This is critical for local type declarations whose associated block defs
     // need to be type-checked before they can be used
@@ -2888,6 +2991,10 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
 
     // Type check the expression (including any defs from local type declarations)
     _ = try checker.checkExprReplWithDefs(canonical_expr_idx);
+
+    if (enforce_no_reports) {
+        try assertNoTypeProblems(allocator, module_env, checker);
+    }
 
     // Rewrite deferred numeric literals to match their inferred types
     try rewriteDeferredNumericLiterals(module_env, &module_env.types, &checker.import_mapping);
@@ -2909,6 +3016,15 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
         .builtin_indices = builtin_indices,
         .builtin_types = builtin_types,
     };
+}
+
+/// Parses and canonicalizes a Roc expression for testing, returning all necessary context.
+pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) !ParsedExprResources {
+    return parseAndCanonicalizeExprInternal(allocator, source, true);
+}
+
+fn parseAndCanonicalizeExprAllowProblems(allocator: std.mem.Allocator, source: []const u8) !ParsedExprResources {
+    return parseAndCanonicalizeExprInternal(allocator, source, false);
 }
 
 /// Cleanup resources allocated by parseAndCanonicalizeExpr.
@@ -4423,8 +4539,7 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
         }
     };
 
-    const resources = try parseAndCanonicalizeExpr(
-        test_allocator,
+    const resources = try parseAndCanonicalizeExpr(test_allocator,
         \\{
         \\    list = [1.I64, 2.I64, 3.I64]
         \\    var $result = List.with_capacity(List.len(list))
@@ -5062,5 +5177,45 @@ test "interpreter reuse across multiple evaluations" {
         }
 
         try std.testing.expectEqual(@as(usize, 0), interpreter.bindings.items.len);
+    }
+}
+
+test "parse diagnostic reporting crashes if module name is uninitialized" {
+    const source =
+        \\{
+        \\    test_fn = |l| {
+        \\        var $total = 0
+        \\        for e in l {
+        \\            var _$temp = [e]
+        \\            $total = $total + e
+        \\        }
+        \\        $total
+        \\    }
+        \\    test_fn([1, 2])
+        \\}
+    ;
+
+    const module_env = try test_allocator.create(ModuleEnv);
+    defer {
+        module_env.deinit();
+        test_allocator.destroy(module_env);
+    }
+    module_env.* = try ModuleEnv.init(test_allocator, source);
+    module_env.common.source = source;
+    try module_env.common.calcLineStarts(module_env.gpa);
+
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(test_allocator);
+    defer allocators.deinit();
+
+    const parse_ast = try parse.parseExpr(&allocators, &module_env.common);
+    defer parse_ast.deinit();
+
+    try std.testing.expect(parse_ast.parse_diagnostics.items.len > 0);
+
+    const filename = reportFilename(module_env);
+    for (parse_ast.parse_diagnostics.items) |diag| {
+        var report = try parse_ast.parseDiagnosticToReport(&module_env.common, diag, test_allocator, filename);
+        defer report.deinit();
     }
 }

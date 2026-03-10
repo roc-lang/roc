@@ -42,14 +42,17 @@ const DeferredListRestBinding = struct {
     source_symbol: Symbol,
     list_layout: layout.Idx,
     target_pattern: MIR.PatternId,
+    discard_symbol: Symbol = Symbol.none,
     prefix_count: u32,
     suffix_count: u32,
 };
 
 const LoweredBindingPattern = struct {
     pattern: LirPatternId,
-    deferred_start: usize,
-    deferred_len: usize,
+    deferred_rest_start: usize,
+    deferred_rest_len: usize,
+    deferred_cleanup_start: usize,
+    deferred_cleanup_len: usize,
 };
 
 const TopLevelRestBindingRewrite = struct {
@@ -57,6 +60,11 @@ const TopLevelRestBindingRewrite = struct {
     destructure_pattern: LirPatternId,
     source_symbol: Symbol,
     source_layout: layout.Idx,
+};
+
+const BindingOwnershipMode = enum {
+    owned,
+    borrowed,
 };
 
 const DirectCallSpecialization = struct {
@@ -124,6 +132,7 @@ scratch_lir_borrow_bindings: std.ArrayList(LIR.LirBorrowBinding),
 scratch_lir_match_branches: std.ArrayList(LirMatchBranch),
 scratch_lir_captures: std.ArrayList(LirCapture),
 scratch_deferred_list_rest_bindings: std.ArrayList(DeferredListRestBinding),
+scratch_deferred_binding_cleanups: std.ArrayList(LirStmt),
 
 /// Scratch buffers for layout building (reused across layoutFrom* calls)
 scratch_layouts: std.ArrayList(layout.Layout),
@@ -164,6 +173,7 @@ pub fn init(
         .scratch_lir_match_branches = std.ArrayList(LirMatchBranch).empty,
         .scratch_lir_captures = std.ArrayList(LirCapture).empty,
         .scratch_deferred_list_rest_bindings = std.ArrayList(DeferredListRestBinding).empty,
+        .scratch_deferred_binding_cleanups = std.ArrayList(LirStmt).empty,
         .scratch_layouts = std.ArrayList(layout.Layout).empty,
         .scratch_layout_idxs = std.ArrayList(layout.Idx).empty,
         .scratch_specialization_key = std.ArrayList(u8).empty,
@@ -196,6 +206,7 @@ pub fn deinit(self: *Self) void {
     self.scratch_lir_match_branches.deinit(self.allocator);
     self.scratch_lir_captures.deinit(self.allocator);
     self.scratch_deferred_list_rest_bindings.deinit(self.allocator);
+    self.scratch_deferred_binding_cleanups.deinit(self.allocator);
     self.scratch_layouts.deinit(self.allocator);
     self.scratch_layout_idxs.deinit(self.allocator);
     self.scratch_specialization_key.deinit(self.allocator);
@@ -1567,18 +1578,6 @@ fn isSingleTagUnion(self: *const Self, mono_idx: Monotype.Idx) bool {
     };
 }
 
-fn isTrueTag(self: *const Self, tag_name: Ident.Idx) bool {
-    if (tag_name.eql(self.true_tag)) return true;
-
-    for (self.layout_store.moduleEnvs()) |env| {
-        if (env.getIdentStoreConst().findByString("True")) |true_ident| {
-            if (tag_name.eql(true_ident)) return true;
-        }
-    }
-
-    return false;
-}
-
 fn identTextIfOwnedBy(env: anytype, ident: Ident.Idx) ?[]const u8 {
     const ident_store = env.getIdentStoreConst();
     const bytes = ident_store.interner.bytes.items.items;
@@ -1610,55 +1609,6 @@ fn identsTextEqual(self: *const Self, lhs: Ident.Idx, rhs: Ident.Idx) bool {
     const lhs_text = self.identText(lhs) orelse return false;
     const rhs_text = self.identText(rhs) orelse return false;
     return std.mem.eql(u8, lhs_text, rhs_text);
-}
-
-const RecordFieldResolution = struct {
-    original_index: u16,
-    type_idx: Monotype.Idx,
-};
-
-fn resolveRecordField(self: *const Self, record_mono_idx: Monotype.Idx, field_name: Ident.Idx) ?RecordFieldResolution {
-    const mono = self.mir_store.monotype_store.getMonotype(record_mono_idx);
-    switch (mono) {
-        .record => |record| {
-            const fields = self.mir_store.monotype_store.getFields(record.fields);
-            for (fields, 0..) |field, i| {
-                if (!self.identsTextEqual(field.name, field_name)) continue;
-                return .{
-                    .original_index = @intCast(i),
-                    .type_idx = field.type_idx,
-                };
-            }
-        },
-        else => {},
-    }
-    return null;
-}
-
-const RuntimeStructFieldResolution = struct {
-    sorted_index: u16,
-    field_layout: layout.Idx,
-};
-
-fn resolveRuntimeStructFieldByOriginalIndex(
-    self: *const Self,
-    runtime_layout: layout.Idx,
-    original_index: u16,
-) ?RuntimeStructFieldResolution {
-    const layout_val = self.layout_store.getLayout(runtime_layout);
-    if (layout_val.tag != .struct_) return null;
-
-    const struct_data = self.layout_store.getStructData(layout_val.data.struct_.idx);
-    const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
-    for (0..layout_fields.len) |li| {
-        const field = layout_fields.get(li);
-        if (field.index != original_index) continue;
-        return .{
-            .sorted_index = @intCast(li),
-            .field_layout = field.layout,
-        };
-    }
-    return null;
 }
 
 /// Given a tag name and the monotype of the containing tag union,
@@ -2249,8 +2199,10 @@ fn lowerMatch(self: *Self, match_data: anytype, mir_expr_id: MIR.ExprId, region:
 
     const save_len = self.scratch_lir_match_branches.items.len;
     const save_rest_bindings = self.scratch_deferred_list_rest_bindings.items.len;
+    const save_cleanup_bindings = self.scratch_deferred_binding_cleanups.items.len;
     defer self.scratch_lir_match_branches.shrinkRetainingCapacity(save_len);
     defer self.scratch_deferred_list_rest_bindings.shrinkRetainingCapacity(save_rest_bindings);
+    defer self.scratch_deferred_binding_cleanups.shrinkRetainingCapacity(save_cleanup_bindings);
     for (mir_branches) |branch| {
         const branch_patterns = self.mir_store.getBranchPatterns(branch.patterns);
         if (branch_patterns.len == 0) continue;
@@ -2274,7 +2226,7 @@ fn lowerMatch(self: *Self, match_data: anytype, mir_expr_id: MIR.ExprId, region:
             try self.lowerExpr(branch.guard);
 
         for (branch_patterns) |bp| {
-            const lowered_pat = try self.lowerBindingPatternForRuntimeLayout(bp.pattern, value_layout, region);
+            const lowered_pat = try self.lowerBindingPatternForRuntimeLayout(bp.pattern, value_layout, .borrowed, region);
             const rewrite = try self.rewriteTopLevelRestBinding(lowered_pat, region);
             const branch_body = if (rewrite) |rw| blk: {
                 const save_stmt_len = self.scratch_lir_stmts.items.len;
@@ -2289,9 +2241,13 @@ fn lowerMatch(self: *Self, match_data: anytype, mir_expr_id: MIR.ExprId, region:
                     .expr = owned_source,
                 } });
                 try self.appendDeferredListRestBindingDecls(
-                    lowered_pat.deferred_start,
-                    lowered_pat.deferred_len,
+                    lowered_pat.deferred_rest_start,
+                    lowered_pat.deferred_rest_len,
                     region,
+                );
+                try self.appendDeferredBindingCleanupDecls(
+                    lowered_pat.deferred_cleanup_start,
+                    lowered_pat.deferred_cleanup_len,
                 );
                 const stmts = try self.lir_store.addStmts(self.scratch_lir_stmts.items[save_stmt_len..]);
                 break :blk try self.lir_store.addExpr(.{ .block = .{
@@ -2303,8 +2259,10 @@ fn lowerMatch(self: *Self, match_data: anytype, mir_expr_id: MIR.ExprId, region:
                 break :blk try self.wrapExprWithDeferredListRestBindings(
                     lir_body,
                     result_layout,
-                    lowered_pat.deferred_start,
-                    lowered_pat.deferred_len,
+                    lowered_pat.deferred_rest_start,
+                    lowered_pat.deferred_rest_len,
+                    lowered_pat.deferred_cleanup_start,
+                    lowered_pat.deferred_cleanup_len,
                     region,
                 );
             };
@@ -2371,7 +2329,9 @@ fn lowerLambdaWithParamLayouts(
         );
     }
     const save_rest_bindings = self.scratch_deferred_list_rest_bindings.items.len;
+    const save_cleanup_bindings = self.scratch_deferred_binding_cleanups.items.len;
     defer self.scratch_deferred_list_rest_bindings.shrinkRetainingCapacity(save_rest_bindings);
+    defer self.scratch_deferred_binding_cleanups.shrinkRetainingCapacity(save_cleanup_bindings);
     var param_infos = std.ArrayList(LoweredBindingPattern).empty;
     defer param_infos.deinit(self.allocator);
     var param_rewrites = std.ArrayList(?TopLevelRestBindingRewrite).empty;
@@ -2388,7 +2348,7 @@ fn lowerLambdaWithParamLayouts(
     for (mir_params, 0..) |mir_param_id, i| {
         const param_layout = param_layouts[i];
         try self.registerBindingPatternSymbols(mir_param_id, param_layout);
-        const lowered = try self.lowerBindingPatternForRuntimeLayout(mir_param_id, param_layout, region);
+        const lowered = try self.lowerBindingPatternForRuntimeLayout(mir_param_id, param_layout, .owned, region);
         try param_infos.append(self.allocator, lowered);
         const rewrite = try self.rewriteTopLevelRestBinding(lowered, region);
         try param_rewrites.append(self.allocator, rewrite);
@@ -2413,8 +2373,10 @@ fn lowerLambdaWithParamLayouts(
             lir_body,
             ret_layout,
             param_rewrites.items[lambda_param_idx],
-            info.deferred_start,
-            info.deferred_len,
+            info.deferred_rest_start,
+            info.deferred_rest_len,
+            info.deferred_cleanup_start,
+            info.deferred_cleanup_len,
             region,
         );
     }
@@ -2984,8 +2946,10 @@ fn lowerClosureCall(
 fn lowerBlock(self: *Self, block_data: anytype, _: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
     const LoweredStmtInfo = struct {
         pattern: LirPatternId = LirPatternId.none,
-        deferred_start: usize = 0,
-        deferred_len: usize = 0,
+        deferred_rest_start: usize = 0,
+        deferred_rest_len: usize = 0,
+        deferred_cleanup_start: usize = 0,
+        deferred_cleanup_len: usize = 0,
         cell_symbol: Symbol = Symbol.none,
         cell_layout: layout.Idx = .none,
     };
@@ -2996,11 +2960,13 @@ fn lowerBlock(self: *Self, block_data: anytype, _: MIR.ExprId, region: Region) A
     const save_stmts_len = self.scratch_lir_stmts.items.len;
     const save_pattern_ids_len = self.scratch_lir_pattern_ids.items.len;
     const save_rest_bindings = self.scratch_deferred_list_rest_bindings.items.len;
+    const save_cleanup_bindings = self.scratch_deferred_binding_cleanups.items.len;
     var binding_infos = std.ArrayList(LoweredStmtInfo).empty;
     defer binding_infos.deinit(self.allocator);
     defer self.scratch_lir_stmts.shrinkRetainingCapacity(save_stmts_len);
     defer self.scratch_lir_pattern_ids.shrinkRetainingCapacity(save_pattern_ids_len);
     defer self.scratch_deferred_list_rest_bindings.shrinkRetainingCapacity(save_rest_bindings);
+    defer self.scratch_deferred_binding_cleanups.shrinkRetainingCapacity(save_cleanup_bindings);
 
     // Pass 1: Lower all binding patterns first so symbol->layout registrations
     // are available to all statement expressions (including forward captures in
@@ -3013,11 +2979,13 @@ fn lowerBlock(self: *Self, block_data: anytype, _: MIR.ExprId, region: Region) A
             .decl_const => {
                 const runtime_layout = try self.runtimeValueLayoutFromMirExpr(binding.expr);
                 try self.registerBindingPatternSymbols(binding.pattern, runtime_layout);
-                const lowered = try self.lowerBindingPatternForRuntimeLayout(binding.pattern, runtime_layout, region);
+                const lowered = try self.lowerBindingPatternForRuntimeLayout(binding.pattern, runtime_layout, .owned, region);
                 try binding_infos.append(self.allocator, .{
                     .pattern = lowered.pattern,
-                    .deferred_start = lowered.deferred_start,
-                    .deferred_len = lowered.deferred_len,
+                    .deferred_rest_start = lowered.deferred_rest_start,
+                    .deferred_rest_len = lowered.deferred_rest_len,
+                    .deferred_cleanup_start = lowered.deferred_cleanup_start,
+                    .deferred_cleanup_len = lowered.deferred_cleanup_len,
                 });
                 try self.scratch_lir_pattern_ids.append(self.allocator, lowered.pattern);
             },
@@ -3103,9 +3071,13 @@ fn lowerBlock(self: *Self, block_data: anytype, _: MIR.ExprId, region: Region) A
                 };
                 try self.scratch_lir_stmts.append(self.allocator, .{ .decl = lir_binding });
                 try self.appendDeferredListRestBindingDecls(
-                    binding_infos.items[i].deferred_start,
-                    binding_infos.items[i].deferred_len,
+                    binding_infos.items[i].deferred_rest_start,
+                    binding_infos.items[i].deferred_rest_len,
                     region,
+                );
+                try self.appendDeferredBindingCleanupDecls(
+                    binding_infos.items[i].deferred_cleanup_start,
+                    binding_infos.items[i].deferred_cleanup_len,
                 );
             },
             .decl_var => {
@@ -3149,15 +3121,17 @@ fn lowerBorrowScope(self: *Self, scope_data: anytype, _: MIR.ExprId, region: Reg
 
     const save_len = self.scratch_lir_borrow_bindings.items.len;
     const save_rest_bindings = self.scratch_deferred_list_rest_bindings.items.len;
+    const save_cleanup_bindings = self.scratch_deferred_binding_cleanups.items.len;
     var binding_infos = std.ArrayList(LoweredBindingPattern).empty;
     defer binding_infos.deinit(self.allocator);
     defer self.scratch_lir_borrow_bindings.shrinkRetainingCapacity(save_len);
     defer self.scratch_deferred_list_rest_bindings.shrinkRetainingCapacity(save_rest_bindings);
+    defer self.scratch_deferred_binding_cleanups.shrinkRetainingCapacity(save_cleanup_bindings);
 
     for (mir_bindings) |binding| {
         const runtime_layout = try self.runtimeValueLayoutFromMirExpr(binding.expr);
         try self.registerBindingPatternSymbols(binding.pattern, runtime_layout);
-        const lowered = try self.lowerBindingPatternForRuntimeLayout(binding.pattern, runtime_layout, region);
+        const lowered = try self.lowerBindingPatternForRuntimeLayout(binding.pattern, runtime_layout, .borrowed, region);
         const lir_expr = try self.lowerExpr(binding.expr);
         try binding_infos.append(self.allocator, lowered);
         try self.scratch_lir_borrow_bindings.append(self.allocator, .{
@@ -3175,8 +3149,10 @@ fn lowerBorrowScope(self: *Self, scope_data: anytype, _: MIR.ExprId, region: Reg
         lir_body = try self.wrapExprWithDeferredListRestBindings(
             lir_body,
             result_layout,
-            info.deferred_start,
-            info.deferred_len,
+            info.deferred_rest_start,
+            info.deferred_rest_len,
+            info.deferred_cleanup_start,
+            info.deferred_cleanup_len,
             region,
         );
     }
@@ -3191,15 +3167,6 @@ fn lowerBorrowScope(self: *Self, scope_data: anytype, _: MIR.ExprId, region: Reg
         .body = lir_body,
         .result_layout = result_layout,
     } }, region);
-}
-
-fn lowerBindingPatternForExpr(self: *Self, mir_pat_id: MIR.PatternId, mir_expr_id: MIR.ExprId) Allocator.Error!LirPatternId {
-    const runtime_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
-    const lowered = try self.lowerBindingPatternForRuntimeLayout(mir_pat_id, runtime_layout, Region.zero());
-    if (builtin.mode == .Debug and lowered.deferred_len != 0) {
-        std.debug.panic("MirToLir invariant violated: binding rest patterns must be expanded by the caller", .{});
-    }
-    return lowered.pattern;
 }
 
 fn lowerRecordAccess(self: *Self, ra: anytype, _: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
@@ -3646,7 +3613,9 @@ fn lowerHosted(self: *Self, h: anytype, mono_idx: Monotype.Idx, region: Region) 
     };
     const mir_params = self.mir_store.getPatternSpan(h.params);
     const save_rest_bindings = self.scratch_deferred_list_rest_bindings.items.len;
+    const save_cleanup_bindings = self.scratch_deferred_binding_cleanups.items.len;
     defer self.scratch_deferred_list_rest_bindings.shrinkRetainingCapacity(save_rest_bindings);
+    defer self.scratch_deferred_binding_cleanups.shrinkRetainingCapacity(save_cleanup_bindings);
 
     var param_infos = std.ArrayList(LoweredBindingPattern).empty;
     defer param_infos.deinit(self.allocator);
@@ -3661,7 +3630,7 @@ fn lowerHosted(self: *Self, h: anytype, mono_idx: Monotype.Idx, region: Region) 
         else
             unreachable;
         try self.registerBindingPatternSymbols(mir_param_id, param_layout);
-        const lowered = try self.lowerBindingPatternForRuntimeLayout(mir_param_id, param_layout, region);
+        const lowered = try self.lowerBindingPatternForRuntimeLayout(mir_param_id, param_layout, .owned, region);
         try param_infos.append(self.allocator, lowered);
         const rewrite = try self.rewriteTopLevelRestBinding(lowered, region);
         try param_rewrites.append(self.allocator, rewrite);
@@ -3706,8 +3675,10 @@ fn lowerHosted(self: *Self, h: anytype, mono_idx: Monotype.Idx, region: Region) 
             hosted_call,
             ret_layout,
             param_rewrites.items[hosted_param_idx],
-            info.deferred_start,
-            info.deferred_len,
+            info.deferred_rest_start,
+            info.deferred_rest_len,
+            info.deferred_cleanup_start,
+            info.deferred_cleanup_len,
             region,
         );
     }
@@ -3770,17 +3741,21 @@ fn lowerForLoop(self: *Self, f: anytype, mono_idx: Monotype.Idx, region: Region)
 
     const elem_layout = try self.runtimeListElemLayoutFromMirExpr(f.list);
     const save_rest_bindings = self.scratch_deferred_list_rest_bindings.items.len;
+    const save_cleanup_bindings = self.scratch_deferred_binding_cleanups.items.len;
     defer self.scratch_deferred_list_rest_bindings.shrinkRetainingCapacity(save_rest_bindings);
+    defer self.scratch_deferred_binding_cleanups.shrinkRetainingCapacity(save_cleanup_bindings);
     try self.registerBindingPatternSymbols(f.elem_pattern, elem_layout);
-    const lowered_pat = try self.lowerBindingPatternForRuntimeLayout(f.elem_pattern, elem_layout, region);
+    const lowered_pat = try self.lowerBindingPatternForRuntimeLayout(f.elem_pattern, elem_layout, .borrowed, region);
     const elem_rewrite = try self.rewriteTopLevelRestBinding(lowered_pat, region);
     const raw_body = try self.lowerExpr(f.body);
     const lir_body = try self.wrapExprWithTopLevelRestBindingPrelude(
         raw_body,
         .zst,
         elem_rewrite,
-        lowered_pat.deferred_start,
-        lowered_pat.deferred_len,
+        lowered_pat.deferred_rest_start,
+        lowered_pat.deferred_rest_len,
+        lowered_pat.deferred_cleanup_start,
+        lowered_pat.deferred_cleanup_len,
         region,
     );
 
@@ -4023,15 +3998,62 @@ fn lowerBindingPatternForRuntimeLayout(
     self: *Self,
     mir_pat_id: MIR.PatternId,
     runtime_layout: layout.Idx,
+    ownership_mode: BindingOwnershipMode,
     region: Region,
 ) Allocator.Error!LoweredBindingPattern {
-    const save_len = self.scratch_deferred_list_rest_bindings.items.len;
-    const pattern = try self.lowerPatternInternal(mir_pat_id, runtime_layout, true, region);
+    const save_rest_len = self.scratch_deferred_list_rest_bindings.items.len;
+    const save_cleanup_len = self.scratch_deferred_binding_cleanups.items.len;
+    const pattern = try self.lowerPatternInternal(mir_pat_id, runtime_layout, true, ownership_mode, region);
     return .{
         .pattern = pattern,
-        .deferred_start = save_len,
-        .deferred_len = self.scratch_deferred_list_rest_bindings.items.len - save_len,
+        .deferred_rest_start = save_rest_len,
+        .deferred_rest_len = self.scratch_deferred_list_rest_bindings.items.len - save_rest_len,
+        .deferred_cleanup_start = save_cleanup_len,
+        .deferred_cleanup_len = self.scratch_deferred_binding_cleanups.items.len - save_cleanup_len,
     };
+}
+
+fn deferOwnedBindingCleanup(
+    self: *Self,
+    symbol: Symbol,
+    layout_idx: layout.Idx,
+    region: Region,
+) Allocator.Error!void {
+    if (!self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(layout_idx))) return;
+
+    const lookup = try self.lir_store.addExpr(.{ .lookup = .{
+        .symbol = symbol,
+        .layout_idx = layout_idx,
+    } }, region);
+    const decref = try self.lir_store.addExpr(.{ .decref = .{
+        .value = lookup,
+        .layout_idx = layout_idx,
+    } }, region);
+    const wildcard = try self.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = layout_idx } }, region);
+    try self.scratch_deferred_binding_cleanups.append(self.allocator, .{ .decl = .{
+        .pattern = wildcard,
+        .expr = decref,
+    } });
+}
+
+fn lowerWildcardBindingPattern(
+    self: *Self,
+    runtime_layout: layout.Idx,
+    ownership_mode: BindingOwnershipMode,
+    region: Region,
+) Allocator.Error!LirPatternId {
+    if (ownership_mode == .borrowed or !self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(runtime_layout))) {
+        return self.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = runtime_layout } }, region);
+    }
+
+    const symbol = self.freshSymbol();
+    try self.symbol_layouts.put(symbol.raw(), runtime_layout);
+    try self.deferOwnedBindingCleanup(symbol, runtime_layout, region);
+    return self.lir_store.addPattern(.{ .bind = .{
+        .symbol = symbol,
+        .layout_idx = runtime_layout,
+        .reassignable = false,
+    } }, region);
 }
 
 fn lowerPatternInternal(
@@ -4039,6 +4061,7 @@ fn lowerPatternInternal(
     mir_pat_id: MIR.PatternId,
     runtime_layout: layout.Idx,
     collect_rest_bindings: bool,
+    ownership_mode: BindingOwnershipMode,
     region: Region,
 ) Allocator.Error!LirPatternId {
     const pat = self.mir_store.getPattern(mir_pat_id);
@@ -4056,15 +4079,15 @@ fn lowerPatternInternal(
                 .reassignable = reassignable,
             } }, region);
         },
-        .wildcard => self.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = runtime_layout } }, region),
+        .wildcard => self.lowerWildcardBindingPattern(runtime_layout, ownership_mode, region),
         .tag => |t| blk: {
             const mir_pat_args = self.mir_store.getPatternSpan(t.args);
 
             if (self.isSingleTagUnion(mono_idx)) {
                 if (mir_pat_args.len == 0) {
-                    break :blk self.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = runtime_layout } }, region);
+                    break :blk self.lowerWildcardBindingPattern(runtime_layout, ownership_mode, region);
                 } else if (mir_pat_args.len == 1) {
-                    break :blk self.lowerPatternInternal(mir_pat_args[0], runtime_layout, collect_rest_bindings, region);
+                    break :blk self.lowerPatternInternal(mir_pat_args[0], runtime_layout, collect_rest_bindings, ownership_mode, region);
                 } else {
                     const tuple_layout = try self.layoutFromMonotype(mono_idx);
                     const tuple_layout_val = self.layout_store.getLayout(tuple_layout);
@@ -4080,6 +4103,7 @@ fn lowerPatternInternal(
                                 mir_pat_args[original_index],
                                 layout_fields.get(li).layout,
                                 collect_rest_bindings,
+                                ownership_mode,
                                 region,
                             );
                             try self.scratch_lir_pattern_ids.append(self.allocator, lir_pat);
@@ -4091,7 +4115,7 @@ fn lowerPatternInternal(
                             .fields = lir_elems,
                         } }, region);
                     } else {
-                        const lir_elems = try self.lowerPatternSpanInternal(mir_pat_args, collect_rest_bindings, region);
+                        const lir_elems = try self.lowerPatternSpanInternal(mir_pat_args, collect_rest_bindings, ownership_mode, region);
                         break :blk self.lir_store.addPattern(.{ .struct_ = .{
                             .struct_layout = tuple_layout,
                             .fields = lir_elems,
@@ -4114,7 +4138,7 @@ fn lowerPatternInternal(
                     mir_pat_args.len,
                     arg_index,
                 );
-                const lir_pat = try self.lowerPatternInternal(mir_arg_pat, arg_layout, collect_rest_bindings, region);
+                const lir_pat = try self.lowerPatternInternal(mir_arg_pat, arg_layout, collect_rest_bindings, ownership_mode, region);
                 try self.scratch_lir_pattern_ids.append(self.allocator, lir_pat);
             }
 
@@ -4158,12 +4182,13 @@ fn lowerPatternInternal(
 
             if (all_fields.len == 1) {
                 if (mir_patterns.len == 0) {
-                    break :blk self.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = record_layout } }, region);
+                    break :blk self.lowerWildcardBindingPattern(record_layout, ownership_mode, region);
                 }
                 break :blk try self.lowerPatternInternal(
                     mir_patterns[0],
                     record_layout,
                     collect_rest_bindings,
+                    ownership_mode,
                     region,
                 );
             }
@@ -4185,6 +4210,7 @@ fn lowerPatternInternal(
                                 mir_patterns[mi],
                                 layout_fields.get(li).layout,
                                 collect_rest_bindings,
+                                ownership_mode,
                                 region,
                             );
                             try self.scratch_lir_pattern_ids.append(self.allocator, lir_pat);
@@ -4194,7 +4220,7 @@ fn lowerPatternInternal(
                     }
                     if (!found) {
                         const field_layout_idx = layout_fields.get(li).layout;
-                        const lir_pat = try self.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = field_layout_idx } }, region);
+                        const lir_pat = try self.lowerWildcardBindingPattern(field_layout_idx, ownership_mode, region);
                         try self.scratch_lir_pattern_ids.append(self.allocator, lir_pat);
                     }
                 }
@@ -4205,7 +4231,7 @@ fn lowerPatternInternal(
                     .fields = lir_fields,
                 } }, region);
             } else {
-                const lir_fields = try self.lowerPatternSpanInternal(mir_patterns, collect_rest_bindings, region);
+                const lir_fields = try self.lowerPatternSpanInternal(mir_patterns, collect_rest_bindings, ownership_mode, region);
                 break :blk self.lir_store.addPattern(.{ .struct_ = .{
                     .struct_layout = record_layout,
                     .fields = lir_fields,
@@ -4230,6 +4256,7 @@ fn lowerPatternInternal(
                         mir_patterns[original_index],
                         layout_fields.get(li).layout,
                         collect_rest_bindings,
+                        ownership_mode,
                         region,
                     );
                     try self.scratch_lir_pattern_ids.append(self.allocator, lir_pat);
@@ -4241,7 +4268,7 @@ fn lowerPatternInternal(
                     .fields = lir_fields,
                 } }, region);
             } else {
-                const lir_elems = try self.lowerPatternSpanInternal(mir_patterns, collect_rest_bindings, region);
+                const lir_elems = try self.lowerPatternSpanInternal(mir_patterns, collect_rest_bindings, ownership_mode, region);
                 break :blk self.lir_store.addPattern(.{ .struct_ = .{
                     .struct_layout = struct_layout,
                     .fields = lir_elems,
@@ -4257,13 +4284,32 @@ fn lowerPatternInternal(
             };
             const all_patterns = self.mir_store.getPatternSpan(ld.patterns);
             const has_rest = !ld.rest_index.isNone();
+            const needs_owned_rest_discard =
+                has_rest and
+                ld.rest_pattern.isNone() and
+                collect_rest_bindings and
+                ownership_mode == .owned and
+                self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(list_layout));
+            var deferred_rest_source_symbol = Symbol.none;
 
             const rest_pat: LirPatternId = if (!has_rest) rest_blk: {
                 break :rest_blk LirPatternId.none;
             } else if (ld.rest_pattern.isNone()) rest_blk: {
-                break :rest_blk try self.lir_store.addPattern(.{ .wildcard = .{
-                    .layout_idx = list_layout,
-                } }, region);
+                if (!needs_owned_rest_discard) {
+                    break :rest_blk try self.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = list_layout } }, region);
+                }
+
+                deferred_rest_source_symbol = self.freshSymbol();
+                const discard_symbol = self.freshSymbol();
+                try self.scratch_deferred_list_rest_bindings.append(self.allocator, .{
+                    .source_symbol = deferred_rest_source_symbol,
+                    .list_layout = list_layout,
+                    .target_pattern = MIR.PatternId.none,
+                    .discard_symbol = discard_symbol,
+                    .prefix_count = if (ld.rest_index.isNone()) 0 else @intFromEnum(ld.rest_index),
+                    .suffix_count = if (ld.rest_index.isNone()) 0 else @as(u32, @intCast(all_patterns.len - @as(usize, @intFromEnum(ld.rest_index)))),
+                });
+                break :rest_blk try self.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = list_layout } }, region);
             } else if (!collect_rest_bindings) {
                 if (builtin.mode == .Debug) {
                     std.debug.panic("MirToLir invariant violated: bound list rest pattern must be lowered as an explicit binding", .{});
@@ -4271,6 +4317,7 @@ fn lowerPatternInternal(
                 unreachable;
             } else rest_blk: {
                 const source_symbol = self.freshSymbol();
+                deferred_rest_source_symbol = source_symbol;
                 try self.scratch_deferred_list_rest_bindings.append(self.allocator, .{
                     .source_symbol = source_symbol,
                     .list_layout = list_layout,
@@ -4278,13 +4325,11 @@ fn lowerPatternInternal(
                     .prefix_count = if (ld.rest_index.isNone()) 0 else @intFromEnum(ld.rest_index),
                     .suffix_count = if (ld.rest_index.isNone()) 0 else @as(u32, @intCast(all_patterns.len - @as(usize, @intFromEnum(ld.rest_index)))),
                 });
-                break :rest_blk try self.lir_store.addPattern(.{ .wildcard = .{
-                    .layout_idx = list_layout,
-                } }, region);
+                break :rest_blk try self.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = list_layout } }, region);
             };
 
             const list_pattern = if (ld.rest_index.isNone()) blk2: {
-                const lir_prefix = try self.lowerPatternSpanWithLayoutInternal(all_patterns, elem_layout, collect_rest_bindings, region);
+                const lir_prefix = try self.lowerPatternSpanWithLayoutInternal(all_patterns, elem_layout, collect_rest_bindings, .borrowed, region);
                 break :blk2 try self.lir_store.addPattern(.{ .list = .{
                     .list_layout = list_layout,
                     .elem_layout = elem_layout,
@@ -4294,8 +4339,8 @@ fn lowerPatternInternal(
                 } }, region);
             } else blk2: {
                 const rest_idx: u32 = @intFromEnum(ld.rest_index);
-                const lir_prefix = try self.lowerPatternSpanWithLayoutInternal(all_patterns[0..rest_idx], elem_layout, collect_rest_bindings, region);
-                const lir_suffix = try self.lowerPatternSpanWithLayoutInternal(all_patterns[rest_idx..], elem_layout, collect_rest_bindings, region);
+                const lir_prefix = try self.lowerPatternSpanWithLayoutInternal(all_patterns[0..rest_idx], elem_layout, collect_rest_bindings, .borrowed, region);
+                const lir_suffix = try self.lowerPatternSpanWithLayoutInternal(all_patterns[rest_idx..], elem_layout, collect_rest_bindings, .borrowed, region);
                 break :blk2 try self.lir_store.addPattern(.{ .list = .{
                     .list_layout = list_layout,
                     .elem_layout = elem_layout,
@@ -4305,12 +4350,12 @@ fn lowerPatternInternal(
                 } }, region);
             };
 
-            if (ld.rest_pattern.isNone()) break :blk list_pattern;
+            if (ld.rest_pattern.isNone() and !needs_owned_rest_discard) break :blk list_pattern;
 
-            const synthetic_sym_key: u64 = @bitCast(self.scratch_deferred_list_rest_bindings.items[self.scratch_deferred_list_rest_bindings.items.len - 1].source_symbol);
+            const synthetic_sym_key: u64 = @bitCast(deferred_rest_source_symbol);
             try self.symbol_layouts.put(synthetic_sym_key, list_layout);
             break :blk try self.lir_store.addPattern(.{ .as_pattern = .{
-                .symbol = self.scratch_deferred_list_rest_bindings.items[self.scratch_deferred_list_rest_bindings.items.len - 1].source_symbol,
+                .symbol = deferred_rest_source_symbol,
                 .layout_idx = list_layout,
                 .reassignable = false,
                 .inner = list_pattern,
@@ -4318,7 +4363,7 @@ fn lowerPatternInternal(
         },
         .as_pattern => |ap| blk: {
             const layout_idx = try self.runtimeLayoutForBindingSymbol(ap.symbol, mono_idx, runtime_layout);
-            const inner = try self.lowerPatternInternal(ap.pattern, runtime_layout, collect_rest_bindings, region);
+            const inner = try self.lowerPatternInternal(ap.pattern, runtime_layout, collect_rest_bindings, .borrowed, region);
             const reassignable = self.mir_store.isSymbolReassignable(ap.symbol);
             const sym_key: u64 = @bitCast(ap.symbol);
             try self.symbol_layouts.put(sym_key, layout_idx);
@@ -4337,13 +4382,14 @@ fn lowerPatternSpanInternal(
     self: *Self,
     mir_pat_ids: []const MIR.PatternId,
     collect_rest_bindings: bool,
+    ownership_mode: BindingOwnershipMode,
     region: Region,
 ) Allocator.Error!LirPatternSpan {
     const save_len = self.scratch_lir_pattern_ids.items.len;
     defer self.scratch_lir_pattern_ids.shrinkRetainingCapacity(save_len);
     for (mir_pat_ids) |mir_id| {
         const pat_layout = try self.layoutFromMonotype(self.mir_store.patternTypeOf(mir_id));
-        const lir_id = try self.lowerPatternInternal(mir_id, pat_layout, collect_rest_bindings, region);
+        const lir_id = try self.lowerPatternInternal(mir_id, pat_layout, collect_rest_bindings, ownership_mode, region);
         try self.scratch_lir_pattern_ids.append(self.allocator, lir_id);
     }
     return self.lir_store.addPatternSpan(self.scratch_lir_pattern_ids.items[save_len..]);
@@ -4354,12 +4400,13 @@ fn lowerPatternSpanWithLayoutInternal(
     mir_pat_ids: []const MIR.PatternId,
     runtime_layout: layout.Idx,
     collect_rest_bindings: bool,
+    ownership_mode: BindingOwnershipMode,
     region: Region,
 ) Allocator.Error!LirPatternSpan {
     const save_len = self.scratch_lir_pattern_ids.items.len;
     defer self.scratch_lir_pattern_ids.shrinkRetainingCapacity(save_len);
     for (mir_pat_ids) |mir_id| {
-        const lir_id = try self.lowerPatternInternal(mir_id, runtime_layout, collect_rest_bindings, region);
+        const lir_id = try self.lowerPatternInternal(mir_id, runtime_layout, collect_rest_bindings, ownership_mode, region);
         try self.scratch_lir_pattern_ids.append(self.allocator, lir_id);
     }
     return self.lir_store.addPatternSpan(self.scratch_lir_pattern_ids.items[save_len..]);
@@ -4370,12 +4417,9 @@ fn lowerPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Error!LirPatte
         mir_pat_id,
         try self.layoutFromMonotype(self.mir_store.patternTypeOf(mir_pat_id)),
         false,
+        .borrowed,
         Region.zero(),
     );
-}
-
-fn lowerPatternSpan(self: *Self, mir_pat_ids: []const MIR.PatternId) Allocator.Error!LirPatternSpan {
-    return self.lowerPatternSpanInternal(mir_pat_ids, false, Region.zero());
 }
 
 fn buildListRestBindingExpr(
@@ -4434,13 +4478,43 @@ fn appendDeferredListRestBindingDecls(
     while (i < deferred_len) : (i += 1) {
         const binding = self.scratch_deferred_list_rest_bindings.items[deferred_start + i];
         const binding_expr = try self.buildListRestBindingExpr(binding, region);
-        try self.registerBindingPatternSymbols(binding.target_pattern, binding.list_layout);
-        const lowered = try self.lowerBindingPatternForRuntimeLayout(binding.target_pattern, binding.list_layout, region);
-        try self.scratch_lir_stmts.append(self.allocator, .{ .decl = .{
-            .pattern = lowered.pattern,
-            .expr = binding_expr,
-        } });
-        try self.appendDeferredListRestBindingDecls(lowered.deferred_start, lowered.deferred_len, region);
+        if (binding.target_pattern.isNone()) {
+            std.debug.assert(!binding.discard_symbol.isNone());
+            const discard_pattern = try self.lir_store.addPattern(.{ .bind = .{
+                .symbol = binding.discard_symbol,
+                .layout_idx = binding.list_layout,
+                .reassignable = false,
+            } }, region);
+            try self.scratch_lir_stmts.append(self.allocator, .{ .decl = .{
+                .pattern = discard_pattern,
+                .expr = binding_expr,
+            } });
+            try self.deferOwnedBindingCleanup(binding.discard_symbol, binding.list_layout, region);
+            try self.appendDeferredBindingCleanupDecls(self.scratch_deferred_binding_cleanups.items.len - 1, 1);
+        } else {
+            try self.registerBindingPatternSymbols(binding.target_pattern, binding.list_layout);
+            const lowered = try self.lowerBindingPatternForRuntimeLayout(binding.target_pattern, binding.list_layout, .owned, region);
+            try self.scratch_lir_stmts.append(self.allocator, .{ .decl = .{
+                .pattern = lowered.pattern,
+                .expr = binding_expr,
+            } });
+            try self.appendDeferredListRestBindingDecls(lowered.deferred_rest_start, lowered.deferred_rest_len, region);
+            try self.appendDeferredBindingCleanupDecls(lowered.deferred_cleanup_start, lowered.deferred_cleanup_len);
+        }
+    }
+}
+
+fn appendDeferredBindingCleanupDecls(
+    self: *Self,
+    deferred_start: usize,
+    deferred_len: usize,
+) Allocator.Error!void {
+    var i: usize = 0;
+    while (i < deferred_len) : (i += 1) {
+        try self.scratch_lir_stmts.append(
+            self.allocator,
+            self.scratch_deferred_binding_cleanups.items[deferred_start + i],
+        );
     }
 }
 
@@ -4449,7 +4523,7 @@ fn rewriteTopLevelRestBinding(
     lowered: LoweredBindingPattern,
     region: Region,
 ) Allocator.Error!?TopLevelRestBindingRewrite {
-    if (lowered.deferred_len == 0) return null;
+    if (lowered.deferred_rest_len == 0) return null;
     const pat = self.lir_store.getPattern(lowered.pattern);
     if (pat != .as_pattern) return null;
 
@@ -4472,11 +4546,13 @@ fn wrapExprWithTopLevelRestBindingPrelude(
     body: LirExprId,
     body_layout: layout.Idx,
     rewrite: ?TopLevelRestBindingRewrite,
-    deferred_start: usize,
-    deferred_len: usize,
+    deferred_rest_start: usize,
+    deferred_rest_len: usize,
+    deferred_cleanup_start: usize,
+    deferred_cleanup_len: usize,
     region: Region,
 ) Allocator.Error!LirExprId {
-    if (rewrite == null and deferred_len == 0) return body;
+    if (rewrite == null and deferred_rest_len == 0 and deferred_cleanup_len == 0) return body;
 
     const save_len = self.scratch_lir_stmts.items.len;
     defer self.scratch_lir_stmts.shrinkRetainingCapacity(save_len);
@@ -4492,7 +4568,8 @@ fn wrapExprWithTopLevelRestBindingPrelude(
         } });
     }
 
-    try self.appendDeferredListRestBindingDecls(deferred_start, deferred_len, region);
+    try self.appendDeferredListRestBindingDecls(deferred_rest_start, deferred_rest_len, region);
+    try self.appendDeferredBindingCleanupDecls(deferred_cleanup_start, deferred_cleanup_len);
     const stmts = try self.lir_store.addStmts(self.scratch_lir_stmts.items[save_len..]);
     return self.lir_store.addExpr(.{ .block = .{
         .stmts = stmts,
@@ -4505,16 +4582,19 @@ fn wrapExprWithDeferredListRestBindings(
     self: *Self,
     body: LirExprId,
     body_layout: layout.Idx,
-    deferred_start: usize,
-    deferred_len: usize,
+    deferred_rest_start: usize,
+    deferred_rest_len: usize,
+    deferred_cleanup_start: usize,
+    deferred_cleanup_len: usize,
     region: Region,
 ) Allocator.Error!LirExprId {
-    if (deferred_len == 0) return body;
+    if (deferred_rest_len == 0 and deferred_cleanup_len == 0) return body;
 
     const save_len = self.scratch_lir_stmts.items.len;
     defer self.scratch_lir_stmts.shrinkRetainingCapacity(save_len);
 
-    try self.appendDeferredListRestBindingDecls(deferred_start, deferred_len, region);
+    try self.appendDeferredListRestBindingDecls(deferred_rest_start, deferred_rest_len, region);
+    try self.appendDeferredBindingCleanupDecls(deferred_cleanup_start, deferred_cleanup_len);
     const stmts = try self.lir_store.addStmts(self.scratch_lir_stmts.items[save_len..]);
     return self.lir_store.addExpr(.{ .block = .{
         .stmts = stmts,
@@ -5074,7 +5154,6 @@ test "MIR tuple access preserves element index" {
     // Original tuple element 2 (I64) is at sorted position 1 (sorted: I64@0, I64@2, Bool@1)
     try testing.expectEqual(@as(u16, 1), inner.struct_access.field_idx);
 }
-
 
 test "MIR lookup propagates symbol def to LIR store" {
     const allocator = testing.allocator;

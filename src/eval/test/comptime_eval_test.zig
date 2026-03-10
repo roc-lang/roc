@@ -2988,7 +2988,7 @@ test "issue 8979: while (True) with break should not crash" {
 test "issue 8979: while (True) with conditional break should not crash" {
     const src =
         \\result = {
-        \\    var $i = 0i64
+        \\    var $i = 0.I64
         \\    while (True) {
         \\        if $i >= 5 {
         \\            break
@@ -3015,7 +3015,7 @@ test "issue 8979: while with mutable condition should not crash" {
         \\    while ($continue) {
         \\        $continue = False
         \\    }
-        \\    42i64
+        \\    42.I64
         \\}
     ;
 
@@ -3031,7 +3031,7 @@ test "issue 8979: while with mutable condition should not crash" {
 test "issue 8979: while with comparison involving mutable var should not crash" {
     const src =
         \\result = {
-        \\    var $i = 0i64
+        \\    var $i = 0.I64
         \\    while ($i < 5) {
         \\        $i = $i + 1
         \\    }
@@ -3070,7 +3070,7 @@ test "issue 8979: nested while - inner break does not save outer loop" {
     const src =
         \\e = {
         \\    while (True) {
-        \\        var $j = 0i64
+        \\        var $j = 0.I64
         \\        while ($j < 3) {
         \\            if $j == 2 { break }
         \\            $j = $j + 1

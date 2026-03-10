@@ -1828,7 +1828,7 @@ test "I128: rem_by" {
 
 test "F32: literal only" {
     // Simplest possible F32 test - just return a literal
-    try runExpectF32("3.14f32", 3.14, .no_trace);
+    try runExpectF32("3.14.F32", 3.14, .no_trace);
 }
 
 test "F32: variable assignment" {
@@ -1836,7 +1836,7 @@ test "F32: variable assignment" {
     try runExpectF32(
         \\{
         \\    a : F32
-        \\    a = 3.14f32
+        \\    a = 3.14.F32
         \\    a
         \\}
     , 3.14, .no_trace);
@@ -1846,7 +1846,7 @@ test "F32: negate" {
     try runExpectF32(
         \\{
         \\    a : F32
-        \\    a = 3.14f32
+        \\    a = 3.14.F32
         \\    -a
         \\}
     , -3.14, .no_trace);
@@ -1856,9 +1856,9 @@ test "F32: plus" {
     try runExpectF32(
         \\{
         \\    a : F32
-        \\    a = 1.5f32
+        \\    a = 1.5.F32
         \\    b : F32
-        \\    b = 2.5f32
+        \\    b = 2.5.F32
         \\    a + b
         \\}
     , 4.0, .no_trace);
@@ -1866,9 +1866,9 @@ test "F32: plus" {
     try runExpectF32(
         \\{
         \\    a : F32
-        \\    a = 3.14159f32
+        \\    a = 3.14159.F32
         \\    b : F32
-        \\    b = 2.71828f32
+        \\    b = 2.71828.F32
         \\    a + b
         \\}
     , 5.85987, .no_trace);
@@ -1876,9 +1876,9 @@ test "F32: plus" {
     try runExpectF32(
         \\{
         \\    a : F32
-        \\    a = -10.5f32
+        \\    a = -10.5.F32
         \\    b : F32
-        \\    b = 10.5f32
+        \\    b = 10.5.F32
         \\    a + b
         \\}
     , 0.0, .no_trace);
@@ -1888,9 +1888,9 @@ test "F32: minus" {
     try runExpectF32(
         \\{
         \\    a : F32
-        \\    a = 10.0f32
+        \\    a = 10.0.F32
         \\    b : F32
-        \\    b = 3.5f32
+        \\    b = 3.5.F32
         \\    a - b
         \\}
     , 6.5, .no_trace);
@@ -1898,9 +1898,9 @@ test "F32: minus" {
     try runExpectF32(
         \\{
         \\    a : F32
-        \\    a = 2.5f32
+        \\    a = 2.5.F32
         \\    b : F32
-        \\    b = 5.0f32
+        \\    b = 5.0.F32
         \\    a - b
         \\}
     , -2.5, .no_trace);
@@ -1908,9 +1908,9 @@ test "F32: minus" {
     try runExpectF32(
         \\{
         \\    a : F32
-        \\    a = 100.0f32
+        \\    a = 100.0.F32
         \\    b : F32
-        \\    b = 100.0f32
+        \\    b = 100.0.F32
         \\    a - b
         \\}
     , 0.0, .no_trace);
@@ -1920,9 +1920,9 @@ test "F32: times" {
     try runExpectF32(
         \\{
         \\    a : F32
-        \\    a = 2.5f32
+        \\    a = 2.5.F32
         \\    b : F32
-        \\    b = 4.0f32
+        \\    b = 4.0.F32
         \\    a * b
         \\}
     , 10.0, .no_trace);
@@ -1930,9 +1930,9 @@ test "F32: times" {
     try runExpectF32(
         \\{
         \\    a : F32
-        \\    a = -3.0f32
+        \\    a = -3.0.F32
         \\    b : F32
-        \\    b = 2.5f32
+        \\    b = 2.5.F32
         \\    a * b
         \\}
     , -7.5, .no_trace);
@@ -1940,9 +1940,9 @@ test "F32: times" {
     try runExpectF32(
         \\{
         \\    a : F32
-        \\    a = 0.5f32
+        \\    a = 0.5.F32
         \\    b : F32
-        \\    b = 0.5f32
+        \\    b = 0.5.F32
         \\    a * b
         \\}
     , 0.25, .no_trace);
@@ -1952,9 +1952,9 @@ test "F32: div_by" {
     try runExpectF32(
         \\{
         \\    a : F32
-        \\    a = 10.0f32
+        \\    a = 10.0.F32
         \\    b : F32
-        \\    b = 2.0f32
+        \\    b = 2.0.F32
         \\    a / b
         \\}
     , 5.0, .no_trace);
@@ -1962,9 +1962,9 @@ test "F32: div_by" {
     try runExpectF32(
         \\{
         \\    a : F32
-        \\    a = 7.5f32
+        \\    a = 7.5.F32
         \\    b : F32
-        \\    b = 2.5f32
+        \\    b = 2.5.F32
         \\    a / b
         \\}
     , 3.0, .no_trace);
@@ -1972,9 +1972,9 @@ test "F32: div_by" {
     try runExpectF32(
         \\{
         \\    a : F32
-        \\    a = 1.0f32
+        \\    a = 1.0.F32
         \\    b : F32
-        \\    b = 3.0f32
+        \\    b = 3.0.F32
         \\    a / b
         \\}
     , 0.3333333, .no_trace);
@@ -1986,7 +1986,7 @@ test "F64: negate" {
     try runExpectF64(
         \\{
         \\    a : F64
-        \\    a = 3.141592653589793f64
+        \\    a = 3.141592653589793.F64
         \\    -a
         \\}
     , -3.141592653589793, .no_trace);
@@ -1994,7 +1994,7 @@ test "F64: negate" {
     try runExpectF64(
         \\{
         \\    a : F64
-        \\    a = -2.718281828459045f64
+        \\    a = -2.718281828459045.F64
         \\    -a
         \\}
     , 2.718281828459045, .no_trace);
@@ -2002,7 +2002,7 @@ test "F64: negate" {
     try runExpectF64(
         \\{
         \\    a : F64
-        \\    a = 0.0f64
+        \\    a = 0.0.F64
         \\    -a
         \\}
     , 0.0, .no_trace);
@@ -2012,9 +2012,9 @@ test "F64: plus" {
     try runExpectF64(
         \\{
         \\    a : F64
-        \\    a = 1.5f64
+        \\    a = 1.5.F64
         \\    b : F64
-        \\    b = 2.5f64
+        \\    b = 2.5.F64
         \\    a + b
         \\}
     , 4.0, .no_trace);
@@ -2022,9 +2022,9 @@ test "F64: plus" {
     try runExpectF64(
         \\{
         \\    a : F64
-        \\    a = 3.141592653589793f64
+        \\    a = 3.141592653589793.F64
         \\    b : F64
-        \\    b = 2.718281828459045f64
+        \\    b = 2.718281828459045.F64
         \\    a + b
         \\}
     , 5.859874482048838, .no_trace);
@@ -2032,9 +2032,9 @@ test "F64: plus" {
     try runExpectF64(
         \\{
         \\    a : F64
-        \\    a = -100.123456789f64
+        \\    a = -100.123456789.F64
         \\    b : F64
-        \\    b = 100.123456789f64
+        \\    b = 100.123456789.F64
         \\    a + b
         \\}
     , 0.0, .no_trace);
@@ -2044,9 +2044,9 @@ test "F64: minus" {
     try runExpectF64(
         \\{
         \\    a : F64
-        \\    a = 10.5f64
+        \\    a = 10.5.F64
         \\    b : F64
-        \\    b = 3.25f64
+        \\    b = 3.25.F64
         \\    a - b
         \\}
     , 7.25, .no_trace);
@@ -2054,9 +2054,9 @@ test "F64: minus" {
     try runExpectF64(
         \\{
         \\    a : F64
-        \\    a = 2.5f64
+        \\    a = 2.5.F64
         \\    b : F64
-        \\    b = 5.75f64
+        \\    b = 5.75.F64
         \\    a - b
         \\}
     , -3.25, .no_trace);
@@ -2064,9 +2064,9 @@ test "F64: minus" {
     try runExpectF64(
         \\{
         \\    a : F64
-        \\    a = 1000.0f64
+        \\    a = 1000.0.F64
         \\    b : F64
-        \\    b = 1000.0f64
+        \\    b = 1000.0.F64
         \\    a - b
         \\}
     , 0.0, .no_trace);
@@ -2076,9 +2076,9 @@ test "F64: times" {
     try runExpectF64(
         \\{
         \\    a : F64
-        \\    a = 2.5f64
+        \\    a = 2.5.F64
         \\    b : F64
-        \\    b = 4.0f64
+        \\    b = 4.0.F64
         \\    a * b
         \\}
     , 10.0, .no_trace);
@@ -2086,9 +2086,9 @@ test "F64: times" {
     try runExpectF64(
         \\{
         \\    a : F64
-        \\    a = -3.5f64
+        \\    a = -3.5.F64
         \\    b : F64
-        \\    b = 2.0f64
+        \\    b = 2.0.F64
         \\    a * b
         \\}
     , -7.0, .no_trace);
@@ -2096,9 +2096,9 @@ test "F64: times" {
     try runExpectF64(
         \\{
         \\    a : F64
-        \\    a = 1.414213562373095f64
+        \\    a = 1.414213562373095.F64
         \\    b : F64
-        \\    b = 1.414213562373095f64
+        \\    b = 1.414213562373095.F64
         \\    a * b
         \\}
     , 2.0, .no_trace);
@@ -2108,9 +2108,9 @@ test "F64: div_by" {
     try runExpectF64(
         \\{
         \\    a : F64
-        \\    a = 10.0f64
+        \\    a = 10.0.F64
         \\    b : F64
-        \\    b = 2.0f64
+        \\    b = 2.0.F64
         \\    a / b
         \\}
     , 5.0, .no_trace);
@@ -2118,9 +2118,9 @@ test "F64: div_by" {
     try runExpectF64(
         \\{
         \\    a : F64
-        \\    a = 22.0f64
+        \\    a = 22.0.F64
         \\    b : F64
-        \\    b = 7.0f64
+        \\    b = 7.0.F64
         \\    a / b
         \\}
     , 3.142857142857143, .no_trace);
@@ -2128,9 +2128,9 @@ test "F64: div_by" {
     try runExpectF64(
         \\{
         \\    a : F64
-        \\    a = 1.0f64
+        \\    a = 1.0.F64
         \\    b : F64
-        \\    b = 3.0f64
+        \\    b = 3.0.F64
         \\    a / b
         \\}
     , 0.3333333333333333, .no_trace);
@@ -2140,11 +2140,11 @@ test "F64: div_by" {
 // Dec is stored as i128 with 18 decimal places (10^18 = 1.0)
 
 test "Dec: negate" {
-    // 3.14dec stored as 3.14 * 10^18 = 3140000000000000000
+    // 3.14.Dec stored as 3.14 * 10^18 = 3140000000000000000
     try runExpectDec(
         \\{
         \\    a : Dec
-        \\    a = 3.14dec
+        \\    a = 3.14.Dec
         \\    -a
         \\}
     , -3140000000000000000, .no_trace);
@@ -2152,7 +2152,7 @@ test "Dec: negate" {
     try runExpectDec(
         \\{
         \\    a : Dec
-        \\    a = -2.5dec
+        \\    a = -2.5.Dec
         \\    -a
         \\}
     , 2500000000000000000, .no_trace);
@@ -2160,21 +2160,21 @@ test "Dec: negate" {
     try runExpectDec(
         \\{
         \\    a : Dec
-        \\    a = 0.0dec
+        \\    a = 0.0.Dec
         \\    -a
         \\}
     , 0, .no_trace);
 }
 
 test "Dec: plus" {
-    // 1.5dec + 2.5dec = 4.0dec
+    // 1.5.Dec + 2.5.Dec = 4.0.Dec
     // Stored as: 1500000000000000000 + 2500000000000000000 = 4000000000000000000
     try runExpectDec(
         \\{
         \\    a : Dec
-        \\    a = 1.5dec
+        \\    a = 1.5.Dec
         \\    b : Dec
-        \\    b = 2.5dec
+        \\    b = 2.5.Dec
         \\    a + b
         \\}
     , 4000000000000000000, .no_trace);
@@ -2182,9 +2182,9 @@ test "Dec: plus" {
     try runExpectDec(
         \\{
         \\    a : Dec
-        \\    a = 3.14159dec
+        \\    a = 3.14159.Dec
         \\    b : Dec
-        \\    b = 2.71828dec
+        \\    b = 2.71828.Dec
         \\    a + b
         \\}
     , 5859870000000000000, .no_trace);
@@ -2192,9 +2192,9 @@ test "Dec: plus" {
     try runExpectDec(
         \\{
         \\    a : Dec
-        \\    a = -10.5dec
+        \\    a = -10.5.Dec
         \\    b : Dec
-        \\    b = 10.5dec
+        \\    b = 10.5.Dec
         \\    a + b
         \\}
     , 0, .no_trace);
@@ -2204,9 +2204,9 @@ test "Dec: minus" {
     try runExpectDec(
         \\{
         \\    a : Dec
-        \\    a = 10.0dec
+        \\    a = 10.0.Dec
         \\    b : Dec
-        \\    b = 3.5dec
+        \\    b = 3.5.Dec
         \\    a - b
         \\}
     , 6500000000000000000, .no_trace);
@@ -2214,9 +2214,9 @@ test "Dec: minus" {
     try runExpectDec(
         \\{
         \\    a : Dec
-        \\    a = 2.5dec
+        \\    a = 2.5.Dec
         \\    b : Dec
-        \\    b = 5.0dec
+        \\    b = 5.0.Dec
         \\    a - b
         \\}
     , -2500000000000000000, .no_trace);
@@ -2224,23 +2224,23 @@ test "Dec: minus" {
     try runExpectDec(
         \\{
         \\    a : Dec
-        \\    a = 100.0dec
+        \\    a = 100.0.Dec
         \\    b : Dec
-        \\    b = 100.0dec
+        \\    b = 100.0.Dec
         \\    a - b
         \\}
     , 0, .no_trace);
 }
 
 test "Dec: times" {
-    // 2.5dec * 4.0dec = 10.0dec
+    // 2.5.Dec * 4.0.Dec = 10.0.Dec
     // In fixed-point: (2.5 * 10^18) * (4.0 * 10^18) / 10^18 = 10.0 * 10^18
     try runExpectDec(
         \\{
         \\    a : Dec
-        \\    a = 2.5dec
+        \\    a = 2.5.Dec
         \\    b : Dec
-        \\    b = 4.0dec
+        \\    b = 4.0.Dec
         \\    a * b
         \\}
     , 10000000000000000000, .no_trace);
@@ -2248,9 +2248,9 @@ test "Dec: times" {
     try runExpectDec(
         \\{
         \\    a : Dec
-        \\    a = -3.0dec
+        \\    a = -3.0.Dec
         \\    b : Dec
-        \\    b = 2.5dec
+        \\    b = 2.5.Dec
         \\    a * b
         \\}
     , -7500000000000000000, .no_trace);
@@ -2258,23 +2258,23 @@ test "Dec: times" {
     try runExpectDec(
         \\{
         \\    a : Dec
-        \\    a = 0.5dec
+        \\    a = 0.5.Dec
         \\    b : Dec
-        \\    b = 0.5dec
+        \\    b = 0.5.Dec
         \\    a * b
         \\}
     , 250000000000000000, .no_trace);
 }
 
 test "Dec: div_by" {
-    // 10.0dec / 2.0dec = 5.0dec
+    // 10.0.Dec / 2.0.Dec = 5.0.Dec
     // In fixed-point: (10.0 * 10^18 * 10^18) / (2.0 * 10^18) = 5.0 * 10^18
     try runExpectDec(
         \\{
         \\    a : Dec
-        \\    a = 10.0dec
+        \\    a = 10.0.Dec
         \\    b : Dec
-        \\    b = 2.0dec
+        \\    b = 2.0.Dec
         \\    a / b
         \\}
     , 5000000000000000000, .no_trace);
@@ -2282,9 +2282,9 @@ test "Dec: div_by" {
     try runExpectDec(
         \\{
         \\    a : Dec
-        \\    a = 7.5dec
+        \\    a = 7.5.Dec
         \\    b : Dec
-        \\    b = 2.5dec
+        \\    b = 2.5.Dec
         \\    a / b
         \\}
     , 3000000000000000000, .no_trace);
@@ -2292,9 +2292,9 @@ test "Dec: div_by" {
     try runExpectDec(
         \\{
         \\    a : Dec
-        \\    a = 1.0dec
+        \\    a = 1.0.Dec
         \\    b : Dec
-        \\    b = 3.0dec
+        \\    b = 3.0.Dec
         \\    a / b
         \\}
     , 333333333333333333, .no_trace);
@@ -2307,7 +2307,7 @@ test "Dec: to_str" {
     try runExpectStr(
         \\{
         \\    a : Dec
-        \\    a = 100.0dec
+        \\    a = 100.0.Dec
         \\    Dec.to_str(a)
         \\}
     , "100.0", .no_trace);
@@ -2316,7 +2316,7 @@ test "Dec: to_str" {
     try runExpectStr(
         \\{
         \\    a : Dec
-        \\    a = 123.45dec
+        \\    a = 123.45.Dec
         \\    Dec.to_str(a)
         \\}
     , "123.45", .no_trace);
@@ -2325,7 +2325,7 @@ test "Dec: to_str" {
     try runExpectStr(
         \\{
         \\    a : Dec
-        \\    a = -123.45dec
+        \\    a = -123.45.Dec
         \\    Dec.to_str(a)
         \\}
     , "-123.45", .no_trace);
@@ -2334,7 +2334,7 @@ test "Dec: to_str" {
     try runExpectStr(
         \\{
         \\    a : Dec
-        \\    a = 123.0dec
+        \\    a = 123.0.Dec
         \\    Dec.to_str(a)
         \\}
     , "123.0", .no_trace);
@@ -2343,7 +2343,7 @@ test "Dec: to_str" {
     try runExpectStr(
         \\{
         \\    a : Dec
-        \\    a = -123.0dec
+        \\    a = -123.0.Dec
         \\    Dec.to_str(a)
         \\}
     , "-123.0", .no_trace);
@@ -2352,7 +2352,7 @@ test "Dec: to_str" {
     try runExpectStr(
         \\{
         \\    a : Dec
-        \\    a = 0.45dec
+        \\    a = 0.45.Dec
         \\    Dec.to_str(a)
         \\}
     , "0.45", .no_trace);
@@ -2361,7 +2361,7 @@ test "Dec: to_str" {
     try runExpectStr(
         \\{
         \\    a : Dec
-        \\    a = -0.45dec
+        \\    a = -0.45.Dec
         \\    Dec.to_str(a)
         \\}
     , "-0.45", .no_trace);
@@ -2370,7 +2370,7 @@ test "Dec: to_str" {
     try runExpectStr(
         \\{
         \\    a : Dec
-        \\    a = 0.0dec
+        \\    a = 0.0.Dec
         \\    Dec.to_str(a)
         \\}
     , "0.0", .no_trace);

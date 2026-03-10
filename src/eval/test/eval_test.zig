@@ -35,6 +35,7 @@ const runExpectListI64 = helpers.runExpectListI64;
 const runExpectListZst = helpers.runExpectListZst;
 const runExpectDec = helpers.runExpectDec;
 const runExpectTypeMismatchAndCrash = helpers.runExpectTypeMismatchAndCrash;
+const runExpectProblem = helpers.runExpectProblem;
 const ExpectedField = helpers.ExpectedField;
 const runDevOnlyExpectStr = helpers.runDevOnlyExpectStr;
 
@@ -359,7 +360,7 @@ test "simple lambdas" {
     try runExpectI64("(|x| x * 2.I64 + 1.I64)(10.I64)", 21, .no_trace);
     try runExpectI64("(|x| x - 3.I64)(8.I64)", 5, .no_trace);
     try runExpectI64("(|x| 100.I64 - x)(25.I64)", 75, .no_trace);
-    try runExpectI64("(|x| 5.I64)(99.I64)", 5, .no_trace);
+    try runExpectI64("(|_x| 5.I64)(99.I64)", 5, .no_trace);
     try runExpectI64("(|x| x + x)(7.I64)", 14, .no_trace);
 }
 
@@ -380,7 +381,7 @@ test "lambdas with unary minus" {
     try runExpectI64("(|x| -x)(5.I64)", -5, .no_trace);
     try runExpectI64("(|x| -x)(0.I64)", 0, .no_trace);
     try runExpectI64("(|x| -x)(-3.I64)", 3, .no_trace);
-    try runExpectI64("(|x| -5.I64)(999.I64)", -5, .no_trace);
+    try runExpectI64("(|_x| -5.I64)(999.I64)", -5, .no_trace);
     try runExpectI64("(|x| if True -x else 0.I64)(5.I64)", -5, .no_trace);
     try runExpectI64("(|x| if True -10.I64 else x)(999.I64)", -10, .no_trace);
 }
@@ -470,56 +471,56 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
 
 test "integer type evaluation" {
     // Test integer types to verify basic evaluation works
-    try runExpectI64("255u8", 255, .no_trace);
-    try runExpectI64("42i32", 42, .no_trace);
-    try runExpectI64("123i64", 123, .no_trace);
+    try runExpectI64("255.U8", 255, .no_trace);
+    try runExpectI64("42.I32", 42, .no_trace);
+    try runExpectI64("123.I64", 123, .no_trace);
 }
 
 test "decimal literal evaluation" {
     // Test basic decimal literals - these should be parsed and evaluated correctly
-    try runExpectSuccess("1.5dec", .no_trace);
-    try runExpectSuccess("0.0dec", .no_trace);
-    try runExpectSuccess("123.456dec", .no_trace);
-    try runExpectSuccess("-1.5dec", .no_trace);
+    try runExpectSuccess("1.5.Dec", .no_trace);
+    try runExpectSuccess("0.0.Dec", .no_trace);
+    try runExpectSuccess("123.456.Dec", .no_trace);
+    try runExpectSuccess("-1.5.Dec", .no_trace);
 }
 
 test "decimal arithmetic with negative values" {
     // one_point_zero = 10^18 = 1_000_000_000_000_000_000
     const one = 1_000_000_000_000_000_000;
-    try runExpectDec("-1.5dec", -one - one / 2, .no_trace);
-    try runExpectDec("1.5dec", one + one / 2, .no_trace);
-    try runExpectDec("-1.5dec + 2.5dec", one, .no_trace);
-    try runExpectDec("0.0dec - 1.0dec", -one, .no_trace);
+    try runExpectDec("-1.5.Dec", -one - one / 2, .no_trace);
+    try runExpectDec("1.5.Dec", one + one / 2, .no_trace);
+    try runExpectDec("-1.5.Dec + 2.5.Dec", one, .no_trace);
+    try runExpectDec("0.0.Dec - 1.0.Dec", -one, .no_trace);
 }
 
 test "float literal evaluation" {
     // Test float literals - these should work correctly
-    try runExpectSuccess("3.14f64", .no_trace);
-    try runExpectSuccess("2.5f32", .no_trace);
-    try runExpectSuccess("-3.14f64", .no_trace);
-    try runExpectSuccess("0.0f32", .no_trace);
+    try runExpectSuccess("3.14.F64", .no_trace);
+    try runExpectSuccess("2.5.F32", .no_trace);
+    try runExpectSuccess("-3.14.F64", .no_trace);
+    try runExpectSuccess("0.0.F32", .no_trace);
 }
 
 test "comprehensive integer literal formats" {
     // Test various integer literal formats and precisions
 
     // Unsigned integers
-    try runExpectI64("0u8", 0, .no_trace);
-    try runExpectI64("255u8", 255, .no_trace);
-    try runExpectI64("1000u16", 1000, .no_trace);
-    try runExpectI64("65535u16", 65535, .no_trace);
-    try runExpectI64("100000u32", 100000, .no_trace);
-    try runExpectI64("999999999u64", 999999999, .no_trace);
+    try runExpectI64("0.U8", 0, .no_trace);
+    try runExpectI64("255.U8", 255, .no_trace);
+    try runExpectI64("1000.U16", 1000, .no_trace);
+    try runExpectI64("65535.U16", 65535, .no_trace);
+    try runExpectI64("100000.U32", 100000, .no_trace);
+    try runExpectI64("999999999.U64", 999999999, .no_trace);
 
     // Signed integers
-    try runExpectI64("-128i8", -128, .no_trace);
-    try runExpectI64("127i8", 127, .no_trace);
-    try runExpectI64("-32768i16", -32768, .no_trace);
-    try runExpectI64("32767i16", 32767, .no_trace);
-    try runExpectI64("-2147483648i32", -2147483648, .no_trace);
-    try runExpectI64("2147483647i32", 2147483647, .no_trace);
-    try runExpectI64("-999999999i64", -999999999, .no_trace);
-    try runExpectI64("999999999i64", 999999999, .no_trace);
+    try runExpectI64("-128.I8", -128, .no_trace);
+    try runExpectI64("127.I8", 127, .no_trace);
+    try runExpectI64("-32768.I16", -32768, .no_trace);
+    try runExpectI64("32767.I16", 32767, .no_trace);
+    try runExpectI64("-2147483648.I32", -2147483648, .no_trace);
+    try runExpectI64("2147483647.I32", 2147483647, .no_trace);
+    try runExpectI64("-999999999.I64", -999999999, .no_trace);
+    try runExpectI64("999999999.I64", 999999999, .no_trace);
 
     // Default integer type (i64)
     try runExpectI64("42", 42, .no_trace);
@@ -1714,17 +1715,17 @@ test "record update evaluates extension expression once" {
     // Regression: `{ ..expr, field: ... }` must evaluate `expr` exactly once.
     try runExpectI64(
         \\{
-        \\    var $calls = 0i64
+        \\    var $calls = 0.I64
         \\    rec = {
         \\        ..({
-        \\            $calls = $calls + 1i64
-        \\            { a: 1i64, b: 2i64, c: 3i64 }
+        \\            $calls = $calls + 1.I64
+        \\            { a: 1.I64, b: 2.I64, c: 3.I64 }
         \\        }),
-        \\        a: 10i64,
-        \\        b: 20i64,
-        \\        c: 30i64
+        \\        a: 10.I64,
+        \\        b: 20.I64,
+        \\        c: 30.I64
         \\    }
-        \\    rec.a + rec.b + rec.c + $calls * 100i64
+        \\    rec.a + rec.b + rec.c + $calls * 100.I64
         \\}
     , 160, .no_trace);
 }
@@ -1732,15 +1733,15 @@ test "record update evaluates extension expression once" {
 test "record update synthesizes missing fields without re-evaluating extension" {
     try runExpectI64(
         \\{
-        \\    var $calls = 0i64
+        \\    var $calls = 0.I64
         \\    rec = {
         \\        ..({
-        \\            $calls = $calls + 1i64
+        \\            $calls = $calls + 1.I64
         \\            { a: $calls, b: $calls, c: $calls }
         \\        }),
-        \\        c: 99i64
+        \\        c: 99.I64
         \\    }
-        \\    rec.a * 1000i64 + rec.b * 100i64 + rec.c + $calls * 10i64
+        \\    rec.a * 1000.I64 + rec.b * 100.I64 + rec.c + $calls * 10.I64
         \\}
     , 1209, .no_trace);
 }
@@ -1808,7 +1809,7 @@ test "List.map - basic identity" {
 test "List.map - single element" {
     // Map on single element list
     try runExpectListI64(
-        "List.map([42i64], |x| x)",
+        "List.map([42.I64], |x| x)",
         &[_]i64{42},
         .no_trace,
     );
@@ -1817,7 +1818,7 @@ test "List.map - single element" {
 test "List.map - longer list with squaring" {
     // Check that map on a longer list with squaring works
     try runExpectListI64(
-        "List.map([1i64, 2i64, 3i64, 4i64, 5i64], |x| x * x)",
+        "List.map([1.I64, 2.I64, 3.I64, 4.I64, 5.I64], |x| x * x)",
         &[_]i64{ 1, 4, 9, 16, 25 },
         .no_trace,
     );
@@ -1826,7 +1827,7 @@ test "List.map - longer list with squaring" {
 test "List.map - doubling" {
     // Map with doubling function
     try runExpectListI64(
-        "List.map([1i64, 2i64, 3i64], |x| x * 2i64)",
+        "List.map([1.I64, 2.I64, 3.I64], |x| x * 2.I64)",
         &[_]i64{ 2, 4, 6 },
         .no_trace,
     );
@@ -1835,7 +1836,7 @@ test "List.map - doubling" {
 test "List.map - adding" {
     // Map with adding function
     try runExpectListI64(
-        "List.map([10i64, 20i64], |x| x + 5i64)",
+        "List.map([10.I64, 20.I64], |x| x + 5.I64)",
         &[_]i64{ 15, 25 },
         .no_trace,
     );
@@ -1866,7 +1867,7 @@ test "empty list with non-numeric type constraint should be list of zst" {
 test "List.append - basic case" {
     // Append two non-empty lists
     try runExpectListI64(
-        "List.append([1i64, 2i64], 3i64)",
+        "List.append([1.I64, 2.I64], 3.I64)",
         &[_]i64{ 1, 2, 3 },
         .no_trace,
     );
@@ -1875,7 +1876,7 @@ test "List.append - basic case" {
 test "List.append - empty case" {
     // Append to empty list
     try runExpectListI64(
-        "List.append([], 42i64)",
+        "List.append([], 42.I64)",
         &[_]i64{42},
         .no_trace,
     );
@@ -1895,7 +1896,7 @@ test "List.append - zst case" {
 test "List.repeat - basic case" {
     // Repeat a value multiple times
     try runExpectListI64(
-        "List.repeat(7i64, 4)",
+        "List.repeat(7.I64, 4)",
         &[_]i64{ 7, 7, 7, 7 },
         .no_trace,
     );
@@ -1903,7 +1904,7 @@ test "List.repeat - basic case" {
 
 test "List.repeat - empty case" {
     // Repeat a value zero times returns empty list
-    try helpers.runExpectEmptyListI64("List.repeat(7i64, 0)", .no_trace);
+    try helpers.runExpectEmptyListI64("List.repeat(7.I64, 0)", .no_trace);
 }
 
 test "List.with_capacity - unknown case" {
@@ -1918,7 +1919,7 @@ test "List.with_capacity - unknown case" {
 test "List.with_capacity - append case" {
     // Create a list with specified capacity
     try runExpectListI64(
-        "List.with_capacity(5).append(10i64)",
+        "List.with_capacity(5).append(10.I64)",
         &[_]i64{10},
         .trace,
     );
@@ -1986,6 +1987,7 @@ test "nested match with Result type - regression" {
         \\            _ => Err(Oops)
         \\        }
         \\    }
+        \\    _ => Err(Oops)
         \\}
     , .no_trace);
 }
@@ -2176,16 +2178,16 @@ test "method calls on numeric variables with flex types - regression" {
 }
 
 test "issue 8667: List.with_capacity should be inferred as List(I64)" {
-    // When List.with_capacity is used with List.append(_, 1i64), the type checker should
+    // When List.with_capacity is used with List.append(_, 1.I64), the type checker should
     // unify the list element type to I64. This means the layout should be .list (not .list_of_zst).
     // If it's .list_of_zst, that indicates a type inference bug.
-    try runExpectListI64("List.append(List.with_capacity(1), 1i64)", &[_]i64{1}, .no_trace);
+    try runExpectListI64("List.append(List.with_capacity(1), 1.I64)", &[_]i64{1}, .no_trace);
 
     // Test fold with inline lambda that calls append
-    try runExpectListI64("[1i64].fold(List.with_capacity(1), |acc, item| acc.append(item))", &[_]i64{1}, .no_trace);
+    try runExpectListI64("[1.I64].fold(List.with_capacity(1), |acc, item| acc.append(item))", &[_]i64{1}, .no_trace);
 
     // Also test the fold case which is where the bug was originally reported
-    try runExpectListI64("[1i64].fold(List.with_capacity(1), List.append)", &[_]i64{1}, .no_trace);
+    try runExpectListI64("[1.I64].fold(List.with_capacity(1), List.append)", &[_]i64{1}, .no_trace);
 }
 
 test "issue 8710: tag union with heap payload in tuple should not leak" {
@@ -2196,12 +2198,12 @@ test "issue 8710: tag union with heap payload in tuple should not leak" {
     // so the payload was never decremented and would leak.
     // We create a list, wrap in Ok, and return just the list length to verify the
     // tuple is properly cleaned up (the test allocator catches any leaks).
-    try runExpectI64("[1i64, 2i64, 3i64].len()", 3, .no_trace);
+    try runExpectI64("[1.I64, 2.I64, 3.I64].len()", 3, .no_trace);
     // Also test the actual bug scenario: tag union in a tuple
     try runExpectListI64(
         \\{
-        \\    list = [1i64, 2i64, 3i64]
-        \\    tuple = (Ok(list), 42i64)
+        \\    list = [1.I64, 2.I64, 3.I64]
+        \\    _tuple = (Ok(list), 42.I64)
         \\    list
         \\}
     , &[_]i64{ 1, 2, 3 }, .no_trace);
@@ -2244,7 +2246,7 @@ test "issue 8737: tag union with tuple payload containing tag union" {
     // The match branches force type inference to produce a 2-variant type
     try runExpectI64(
         \\{
-        \\    result = XYZ((QQQ(1u8), 3u64))
+        \\    result = XYZ((QQQ(1.U8), 3.U64))
         \\    match result {
         \\        XYZ(_) => 42
         \\        BBB => 0
@@ -2256,9 +2258,9 @@ test "issue 8737: tag union with tuple payload containing tag union" {
 test "issue 8737: single tag arg tuple payload can destructure nested tuple pattern" {
     try runExpectI64(
         \\{
-        \\    result = XYZ((QQQ(1u8), 3u64))
+        \\    result = XYZ((QQQ(1.U8), 3.U64))
         \\    match result {
-        \\        XYZ((QQQ(_), n)) => if n == 3u64 1 else 0
+        \\        XYZ((QQQ(_), n)) => if n == 3.U64 1 else 0
         \\        BBB => 0
         \\    }
         \\}
@@ -2333,7 +2335,7 @@ test "Decoder: create ok result - check result is Ok" {
     // Test that we can create a decode result and it is an Ok
     try runExpectBool(
         \\{
-        \\    result = { result: Ok(42i64), rest: [] }
+        \\    result = { result: Ok(42.I64), rest: [] }
         \\    match result.result {
         \\        Ok(_) => Bool.True
         \\        Err(_) => Bool.False
@@ -2346,10 +2348,10 @@ test "Decoder: create ok result - extract value" {
     // Test that we can extract the value from a decode result
     try runExpectI64(
         \\{
-        \\    result = { result: Ok(42i64), rest: [] }
+        \\    result = { result: Ok(42.I64), rest: [] }
         \\    match result.result {
         \\        Ok(n) => n
-        \\        Err(_) => 0i64
+        \\        Err(_) => 0.I64
         \\    }
         \\}
     , 42, .no_trace);
@@ -2359,32 +2361,13 @@ test "Decoder: create err result" {
     // Test that we can create an error decode result
     try runExpectBool(
         \\{
-        \\    result = { result: Err(TooShort), rest: [1u8, 2u8, 3u8] }
+        \\    result = { result: Err(TooShort), rest: [1.U8, 2.U8, 3.U8] }
         \\    match result.result {
         \\        Ok(_) => Bool.True
         \\        Err(_) => Bool.False
         \\    }
         \\}
     , false, .no_trace);
-}
-
-test "decode: I32.decode with simple format" {
-    // Test I32.decode with a format that provides decode_i32
-    try runExpectI64(
-        \\{
-        \\    Fmt := {}.{
-        \\        decode_i32 : Fmt, List(U8) -> (Try(I32, [Err]), List(U8))
-        \\        decode_i32 = |_fmt, src| (Ok(42.I32), src)
-        \\    }
-        \\    fmt : Fmt
-        \\    fmt = {}
-        \\    (result, _rest) = I32.decode([], fmt)
-        \\    match result {
-        \\        Ok(n) => n.to_i64()
-        \\        Err(_) => 0i64
-        \\    }
-        \\}
-    , 42, .no_trace);
 }
 
 test "decode: I32.decode with record field format mismatches and crashes" {
@@ -2396,238 +2379,10 @@ test "decode: I32.decode with record field format mismatches and crashes" {
         \\    (result, _rest) = I32.decode([], fmt)
         \\    match result {
         \\        Ok(n) => n.to_i64()
-        \\        Err(_) => 0i64
+        \\        Err(_) => 0.I64
         \\    }
         \\}
     );
-}
-
-test "decode: I64.decode with simple format" {
-    // Test I64.decode with a simple format that returns a constant
-    try runExpectI64(
-        \\{
-        \\    Fmt := {}.{
-        \\        decode_i64 : Fmt, List(U8) -> (Try(I64, [Err]), List(U8))
-        \\        decode_i64 = |_fmt, src| (Ok(99.I64), src)
-        \\    }
-        \\    fmt : Fmt
-        \\    fmt = {}
-        \\    (result, _rest) = I64.decode([], fmt)
-        \\    match result {
-        \\        Ok(n) => n
-        \\        Err(_) => 0i64
-        \\    }
-        \\}
-    , 99, .no_trace);
-}
-
-test "decode: U8.decode success" {
-    // Test U8.decode with simple constant format
-    try runExpectI64(
-        \\{
-        \\    Fmt := {}.{
-        \\        decode_u8 : Fmt, List(U8) -> (Try(U8, [Empty]), List(U8))
-        \\        decode_u8 = |_fmt, src| (Ok(255.U8), src)
-        \\    }
-        \\    fmt : Fmt
-        \\    fmt = {}
-        \\    (result, _rest) = U8.decode([], fmt)
-        \\    match result {
-        \\        Ok(n) => n.to_i64()
-        \\        Err(_) => -1i64
-        \\    }
-        \\}
-    , 255, .no_trace);
-}
-
-test "decode: U8.decode error" {
-    // Test U8.decode returns error - use I64 result to avoid complex match
-    try runExpectI64(
-        \\{
-        \\    Fmt := {}.{
-        \\        decode_u8 : Fmt, List(U8) -> (Try(U8, [Empty]), List(U8))
-        \\        decode_u8 = |_fmt, src| (Err(Empty), src)
-        \\    }
-        \\    fmt : Fmt
-        \\    fmt = {}
-        \\    (result, _rest) = U8.decode([], fmt)
-        \\    match result {
-        \\        Ok(_) => 0i64
-        \\        Err(_) => 1i64
-        \\    }
-        \\}
-    , 1, .no_trace);
-}
-
-test "decode: Bool.decode true" {
-    // Test Bool.decode returns true
-    try runExpectBool(
-        \\{
-        \\    Fmt := {}.{
-        \\        decode_bool : Fmt, List(U8) -> (Try(Bool, [Empty]), List(U8))
-        \\        decode_bool = |_fmt, src| (Ok(Bool.True), src)
-        \\    }
-        \\    fmt : Fmt
-        \\    fmt = {}
-        \\    (result, _rest) = Bool.decode([], fmt)
-        \\    match result {
-        \\        Ok(b) => b
-        \\        Err(_) => Bool.False
-        \\    }
-        \\}
-    , true, .no_trace);
-}
-
-test "decode: Bool.decode false" {
-    // Test Bool.decode returns false
-    try runExpectBool(
-        \\{
-        \\    Fmt := {}.{
-        \\        decode_bool : Fmt, List(U8) -> (Try(Bool, [Empty]), List(U8))
-        \\        decode_bool = |_fmt, src| (Ok(Bool.False), src)
-        \\    }
-        \\    fmt : Fmt
-        \\    fmt = {}
-        \\    (result, _rest) = Bool.decode([], fmt)
-        \\    match result {
-        \\        Ok(b) => b
-        \\        Err(_) => Bool.True  # Return True on error to distinguish
-        \\    }
-        \\}
-    , false, .no_trace);
-}
-
-test "decode: Str.decode success" {
-    // Test Str.decode with constant
-    try runExpectStr(
-        \\{
-        \\    Fmt := {}.{
-        \\        decode_str : Fmt, List(U8) -> (Try(Str, [BadUtf8]), List(U8))
-        \\        decode_str = |_fmt, src| (Ok("hi"), src)
-        \\    }
-        \\    fmt : Fmt
-        \\    fmt = {}
-        \\    (result, _rest) = Str.decode([], fmt)
-        \\    match result {
-        \\        Ok(s) => s
-        \\        Err(_) => "error"
-        \\    }
-        \\}
-    , "hi", .no_trace);
-}
-
-test "decode: rest returned from decode" {
-    // Verify that decode returns the rest bytes
-    try runExpectI64(
-        \\{
-        \\    Fmt := {}.{
-        \\        decode_u8 : Fmt, List(U8) -> (Try(U8, [Empty]), List(U8))
-        \\        decode_u8 = |_fmt, src| (Ok(1.U8), src)
-        \\    }
-        \\    fmt : Fmt
-        \\    fmt = {}
-        \\    (result, _rest) = U8.decode([5u8], fmt)
-        \\    match result {
-        \\        Ok(n) => n.to_i64()
-        \\        Err(_) => 0i64
-        \\    }
-        \\}
-    , 1, .no_trace);
-}
-
-test "decode: U16.decode" {
-    // Test U16.decode
-    try runExpectI64(
-        \\{
-        \\    Fmt := {}.{
-        \\        decode_u16 : Fmt, List(U8) -> (Try(U16, [Err]), List(U8))
-        \\        decode_u16 = |_fmt, src| (Ok(1000.U16), src)
-        \\    }
-        \\    fmt : Fmt
-        \\    fmt = {}
-        \\    (result, _rest) = U16.decode([], fmt)
-        \\    match result {
-        \\        Ok(n) => n.to_i64()
-        \\        Err(_) => 0i64
-        \\    }
-        \\}
-    , 1000, .no_trace);
-}
-
-test "decode: U32.decode" {
-    // Test U32.decode
-    try runExpectI64(
-        \\{
-        \\    Fmt := {}.{
-        \\        decode_u32 : Fmt, List(U8) -> (Try(U32, [Err]), List(U8))
-        \\        decode_u32 = |_fmt, src| (Ok(100000.U32), src)
-        \\    }
-        \\    fmt : Fmt
-        \\    fmt = {}
-        \\    (result, _rest) = U32.decode([], fmt)
-        \\    match result {
-        \\        Ok(n) => n.to_i64()
-        \\        Err(_) => 0i64
-        \\    }
-        \\}
-    , 100000, .no_trace);
-}
-
-test "decode: U64.decode" {
-    // Test U64.decode
-    try runExpectI64(
-        \\{
-        \\    Fmt := {}.{
-        \\        decode_u64 : Fmt, List(U8) -> (Try(U64, [Err]), List(U8))
-        \\        decode_u64 = |_fmt, src| (Ok(9223372036854775807.U64), src)
-        \\    }
-        \\    fmt : Fmt
-        \\    fmt = {}
-        \\    (result, _rest) = U64.decode([], fmt)
-        \\    match result {
-        \\        Ok(n) => n.to_i64_wrap()
-        \\        Err(_) => 0i64
-        \\    }
-        \\}
-    , 9223372036854775807, .no_trace);
-}
-
-test "decode: I8.decode negative" {
-    // Test I8.decode with negative value
-    try runExpectI64(
-        \\{
-        \\    Fmt := {}.{
-        \\        decode_i8 : Fmt, List(U8) -> (Try(I8, [Err]), List(U8))
-        \\        decode_i8 = |_fmt, src| (Ok(-42.I8), src)
-        \\    }
-        \\    fmt : Fmt
-        \\    fmt = {}
-        \\    (result, _rest) = I8.decode([], fmt)
-        \\    match result {
-        \\        Ok(n) => n.to_i64()
-        \\        Err(_) => 0i64
-        \\    }
-        \\}
-    , -42, .no_trace);
-}
-
-test "decode: I16.decode negative" {
-    // Test I16.decode with negative value
-    try runExpectI64(
-        \\{
-        \\    Fmt := {}.{
-        \\        decode_i16 : Fmt, List(U8) -> (Try(I16, [Err]), List(U8))
-        \\        decode_i16 = |_fmt, src| (Ok(-1000.I16), src)
-        \\    }
-        \\    fmt : Fmt
-        \\    fmt = {}
-        \\    (result, _rest) = I16.decode([], fmt)
-        \\    match result {
-        \\        Ok(n) => n.to_i64()
-        \\        Err(_) => 0i64
-        \\    }
-        \\}
-    , -1000, .no_trace);
 }
 
 // TODO: Test with multiple decode methods in same format has issues
@@ -2766,7 +2521,7 @@ test "issue 8821 reduced: List.get with records and match ignores payload body" 
         \\    clients = [{ id: 1, name: "Alice" }]
         \\
         \\    match List.get(clients, 0) {
-        \\        Ok(client) => 1
+        \\        Ok(_client) => 1
         \\        Err(_) => 0
         \\    }
         \\}
@@ -2779,7 +2534,7 @@ test "issue 8821 reduced: List.get with records without matching result" {
         \\    clients : List({ id : U64, name : Str })
         \\    clients = [{ id: 1, name: "Alice" }]
         \\
-        \\    result = List.get(clients, 0)
+        \\    _result = List.get(clients, 0)
         \\    1
         \\}
     , 1, .no_trace);
@@ -2802,7 +2557,7 @@ test "static dispatch: List.sum uses item.plus and item.default" {
     try runExpectI64(
         \\{
         \\    list : List(I64)
-        \\    list = [1i64, 2i64, 3i64, 4i64, 5i64]
+        \\    list = [1.I64, 2.I64, 3.I64, 4.I64, 5.I64]
         \\    List.sum(list)
         \\}
     , 15, .no_trace);
@@ -2833,54 +2588,6 @@ test "issue 8814: List.get with numeric literal on function parameter - regressi
     , "hello", .no_trace);
 }
 
-test "nominal: structural record unifies with nominal type via annotation" {
-    // Test that a structural record literal unifies with a nominal type
-    // when the variable has a type annotation.
-    try runExpectStr(
-        \\{
-        \\    Foo := { bar : Str }
-        \\    x : Foo
-        \\    x = { bar: "hello" }
-        \\    x.bar
-        \\}
-    , "hello", .no_trace);
-}
-
-test "nominal: empty record unifies with nominal type via annotation" {
-    // Test that {} unifies with a nominal type backed by {}
-    // when the variable has a type annotation.
-    try runExpectI64(
-        \\{
-        \\    Foo := {}
-        \\    x : Foo
-        \\    x = {}
-        \\    42.I64
-        \\}
-    , 42, .no_trace);
-}
-
-test "encode: Str.encode with local format type" {
-    // Test cross-module dispatch: Str.encode (in Builtin) calls Fmt.encode_str
-    // where Fmt is a local type defined in the test.
-    // Note: uses match instead of ? to avoid return_outside_fn at top level
-    // which causes the block's type variable to resolve to Content.err.
-    try runExpectListI64(
-        \\{
-        \\    Utf8Format := {}.{
-        \\        encode_str : Utf8Format, Str -> Try(List(U8), [])
-        \\        encode_str = |_fmt, s| Ok(Str.to_utf8(s))
-        \\    }
-        \\    fmt : Utf8Format
-        \\    fmt = {}
-        \\    result = Str.encode("hi", fmt)
-        \\    match result {
-        \\        Ok(bytes) => List.map(bytes, |b| U8.to_i64(b))
-        \\        Err(_) => []
-        \\    }
-        \\}
-    , &[_]i64{ 104, 105 }, .no_trace);
-}
-
 test "issue 8831: self-referential value definition should produce error, not crash" {
     // Regression test for GitHub issue #8831
     // A self-referential value definition like `a = a` should produce a
@@ -2890,12 +2597,12 @@ test "issue 8831: self-referential value definition should produce error, not cr
     // The fix is to detect during canonicalization that the RHS of a definition
     // refers to a variable that is being defined in the current definition and
     // hasn't been introduced to the scope yet.
-    try runExpectError(
+    try runExpectProblem(
         \\{
         \\    a = a
         \\    a
         \\}
-    , error.Crash, .no_trace);
+    );
 }
 
 test "issue 8831: nested self-reference in list should also error" {
@@ -2903,12 +2610,12 @@ test "issue 8831: nested self-reference in list should also error" {
     // Even nested self-references like `a = [a]` should error during canonicalization.
     // In Roc, shadowing is not allowed, so `a = [a]` cannot reference an outer `a`.
     // Only lambdas are allowed to self-reference (for recursive function calls).
-    try runExpectError(
+    try runExpectProblem(
         \\{
         \\    a = [a]
         \\    a
         \\}
-    , error.Crash, .no_trace);
+    );
 }
 
 test "issue 9043: self-reference in tuple pattern with var element should error" {
@@ -2916,13 +2623,13 @@ test "issue 9043: self-reference in tuple pattern with var element should error"
     // A self-referential definition with a mutable variable in a tuple pattern
     // like `(_, var $n) = f($n)` should produce a compile-time error.
     // Previously this would crash with "e_lookup_local: definition not found".
-    try runExpectError(
+    try runExpectProblem(
         \\{
         \\    next = |idx| (idx, idx + 1)
         \\    (_, var $n) = next($n)
         \\    $n
         \\}
-    , error.Crash, .no_trace);
+    );
 }
 
 test "recursive function with record - stack memory restoration (issue #8813)" {
@@ -2962,7 +2669,7 @@ test "issue 8872: polymorphic tag union payload layout in match expressions" {
         \\    }
         \\
         \\    err : [Ok({}), Err(I32)]
-        \\    err = Err(42i32)
+        \\    err = Err(42.I32)
         \\
         \\    result = transform_err(err, |_e| "hello")
         \\    match result {
@@ -2982,7 +2689,7 @@ test "match on tag union with different input/output sizes in proc" {
         \\        Ok(ok) => Ok(ok)
         \\    }
         \\
-        \\    result = transform(Err(42i32))
+        \\    result = transform(Err(42.I32))
         \\    match result {
         \\        Ok(_) => "got ok"
         \\        Err(msg) => msg
@@ -3000,7 +2707,7 @@ test "polymorphic tag transform with match (transform_err pattern)" {
         \\    }
         \\
         \\    err : [Ok({}), Err(I32)]
-        \\    err = Err(42i32)
+        \\    err = Err(42.I32)
         \\
         \\    result = transform_err(err)
         \\    match result {
@@ -3020,7 +2727,7 @@ test "proc with tag match returning non-tag type" {
         \\        Ok(_) => "was ok"
         \\    }
         \\
-        \\    check(Err(42i32))
+        \\    check(Err(42.I32))
         \\}
     , "was err", .no_trace);
 }
@@ -3031,7 +2738,7 @@ test "lambda with list param calling List.len (no allocation)" {
     try runExpectI64(
         \\{
         \\    get_len = |l| List.len(l)
-        \\    get_len([1i64, 2i64, 3i64])
+        \\    get_len([1.I64, 2.I64, 3.I64])
         \\}
     , 3, .no_trace);
 }
@@ -3041,8 +2748,8 @@ test "lambda with list param calling List.append (requires allocation)" {
     // This requires allocation, so it tests roc_ops passing for builtins
     try runExpectI64(
         \\{
-        \\    add_one = |l| List.len(List.append(l, 99i64))
-        \\    add_one([1i64, 2i64, 3i64])
+        \\    add_one = |l| List.len(List.append(l, 99.I64))
+        \\    add_one([1.I64, 2.I64, 3.I64])
         \\}
     , 4, .no_trace);
 }
@@ -3051,11 +2758,11 @@ test "lambda with list param and var declaration" {
     // Lambda with a mutable variable inside
     try runExpectI64(
         \\{
-        \\    test_fn = |l| {
-        \\        var $acc = [0i64]
+        \\    test_fn = |_l| {
+        \\        var $acc = [0.I64]
         \\        List.len($acc)
         \\    }
-        \\    test_fn([1i64, 2i64])
+        \\    test_fn([1.I64, 2.I64])
         \\}
     , 1, .no_trace);
 }
@@ -3064,11 +2771,11 @@ test "lambda with list param and list literal creation" {
     // Lambda that creates a list literal inside (requires allocation)
     try runExpectI64(
         \\{
-        \\    test_fn = |l| {
-        \\        var $acc = [0i64]
+        \\    test_fn = |_l| {
+        \\        var $acc = [0.I64]
         \\        List.len($acc)
         \\    }
-        \\    test_fn([10i64, 20i64])
+        \\    test_fn([10.I64, 20.I64])
         \\}
     , 1, .no_trace);
 }
@@ -3078,13 +2785,13 @@ test "lambda with list param, var, and for loop" {
     try runExpectI64(
         \\{
         \\    test_fn = |l| {
-        \\        var $total = 0i64
+        \\        var $total = 0.I64
         \\        for e in l {
         \\            $total = $total + e
         \\        }
         \\        $total
         \\    }
-        \\    test_fn([10i64, 20i64, 30i64])
+        \\    test_fn([10.I64, 20.I64, 30.I64])
         \\}
     , 60, .no_trace);
 }
@@ -3093,12 +2800,12 @@ test "lambda with list param, var, and List.append (no for loop)" {
     // Lambda with var and List.append but NO for loop
     try runExpectI64(
         \\{
-        \\    test_fn = |l| {
-        \\        var $acc = [0i64]
-        \\        $acc = List.append($acc, 42i64)
+        \\    test_fn = |_l| {
+        \\        var $acc = [0.I64]
+        \\        $acc = List.append($acc, 42.I64)
         \\        List.len($acc)
         \\    }
-        \\    test_fn([10i64, 20i64])
+        \\    test_fn([10.I64, 20.I64])
         \\}
     , 2, .no_trace);
 }
@@ -3108,13 +2815,13 @@ test "minimal lambda with list param and for loop (no allocation)" {
     try runExpectI64(
         \\{
         \\    test_fn = |l| {
-        \\        var $total = 0i64
+        \\        var $total = 0.I64
         \\        for e in l {
         \\            $total = $total + e
         \\        }
         \\        $total
         \\    }
-        \\    test_fn([1i64, 2i64])
+        \\    test_fn([1.I64, 2.I64])
         \\}
     , 3, .no_trace);
 }
@@ -3124,14 +2831,13 @@ test "lambda with list param, for loop, and allocation inside loop (list literal
     try runExpectI64(
         \\{
         \\    test_fn = |l| {
-        \\        var $total = 0i64
+        \\        var $total = 0.I64
         \\        for e in l {
-        \\            var $temp = [e]
-        \\            $total = $total + e
+        \\            $total = match List.last([e]) { Ok(last) => $total + last, Err(_) => $total }
         \\        }
         \\        $total
         \\    }
-        \\    test_fn([1i64, 2i64])
+        \\    test_fn([1.I64, 2.I64])
         \\}
     , 3, .no_trace);
 }
@@ -3140,14 +2846,14 @@ test "lambda with for loop over internal list, not param (scalar param)" {
     // Lambda with for loop over an internal list, scalar parameter
     try runExpectI64(
         \\{
-        \\    test_fn = |x| {
-        \\        var $total = 0i64
-        \\        for e in [1i64, 2i64, 3i64] {
+        \\    test_fn = |_x| {
+        \\        var $total = 0.I64
+        \\        for e in [1.I64, 2.I64, 3.I64] {
         \\            $total = $total + e
         \\        }
         \\        $total
         \\    }
-        \\    test_fn(42i64)
+        \\    test_fn(42.I64)
         \\}
     , 6, .no_trace);
 }
@@ -3156,15 +2862,14 @@ test "lambda with list param, for loop over internal list, allocation inside" {
     // Lambda with list param, but for loop over internal list, allocation inside
     try runExpectI64(
         \\{
-        \\    test_fn = |l| {
-        \\        var $total = 0i64
-        \\        for e in [1i64, 2i64] {
-        \\            var $temp = [e]
-        \\            $total = $total + e
+        \\    test_fn = |_l| {
+        \\        var $total = 0.I64
+        \\        for e in [1.I64, 2.I64] {
+        \\            $total = match List.last([e]) { Ok(last) => $total + last, Err(_) => $total }
         \\        }
         \\        $total
         \\    }
-        \\    test_fn([10i64, 20i64])
+        \\    test_fn([10.I64, 20.I64])
         \\}
     , 3, .no_trace);
 }
@@ -3174,7 +2879,7 @@ test "lambda with list param, for loop, but empty iteration" {
     try runExpectI64(
         \\{
         \\    test_fn = |l| {
-        \\        var $acc = [0i64]
+        \\        var $acc = [0.I64]
         \\        for e in l {
         \\            $acc = List.append($acc, e)
         \\        }
@@ -3190,13 +2895,13 @@ test "lambda with list param, for loop, and List.append in loop with single iter
     try runExpectI64(
         \\{
         \\    test_fn = |l| {
-        \\        var $acc = [0i64]
+        \\        var $acc = [0.I64]
         \\        for e in l {
         \\            $acc = List.append($acc, e)
         \\        }
         \\        List.len($acc)
         \\    }
-        \\    test_fn([10i64])
+        \\    test_fn([10.I64])
         \\}
     , 2, .no_trace);
 }
@@ -3206,13 +2911,13 @@ test "lambda with list param, var, for loop, and List.append" {
     try runExpectI64(
         \\{
         \\    test_fn = |l| {
-        \\        var $acc = [0i64]
+        \\        var $acc = [0.I64]
         \\        for e in l {
         \\            $acc = List.append($acc, e)
         \\        }
         \\        List.len($acc)
         \\    }
-        \\    test_fn([10i64, 20i64, 30i64])
+        \\    test_fn([10.I64, 20.I64, 30.I64])
         \\}
     , 4, .no_trace);
 }
@@ -3229,15 +2934,15 @@ test "issue 8899: closure decref index out of bounds in for loop" {
     try runExpectI64(
         \\{
         \\    sum_with_last = |l| {
-        \\        var $total = 0i64
-        \\        var $acc = [0i64]
+        \\        var $total = 0.I64
+        \\        var $acc = [0.I64]
         \\        for e in l {
         \\            $acc = List.append($acc, e)
         \\            $total = match List.last($acc) { Ok(last) => $total + last, Err(_) => $total }
         \\        }
         \\        $total
         \\    }
-        \\    sum_with_last([10i64, 20i64, 30i64])
+        \\    sum_with_last([10.I64, 20.I64, 30.I64])
         \\}
     , 60, .no_trace);
 }
@@ -3355,12 +3060,26 @@ test "issue 8978: incref alignment with recursive tag unions in tuples" {
         \\            Element(_tag, c) => c
         \\            Text(_) => []
         \\        }
-        \\        (children, 42i64)
+        \\        (children, 42.I64)
         \\    }
         \\    (_, n) = make_result()
         \\    n
         \\}
     , 42, .no_trace);
+}
+
+test "owned record wildcard field is cleaned up before codegen" {
+    try runExpectI64(
+        \\{
+        \\    make_record = || { ignored: [1.I64, 2.I64, 3.I64], kept: 7.I64 }
+        \\    { ignored: _, kept } = make_record()
+        \\    kept
+        \\}
+    , 7, .no_trace);
+}
+
+test "owned tag wildcard payload is cleaned up before codegen" {
+    try runExpectI64("match Ok([1.I64, 2.I64, 3.I64]) { Ok(_) => 9.I64, Err(_) => 0.I64 }", 9, .no_trace);
 }
 
 // ============ str_inspekt (Str.inspect) tests ============
@@ -3412,7 +3131,7 @@ test "higher-order function - simple apply" {
     try runExpectI64(
         \\{
         \\    apply = |f, x| f(x)
-        \\    apply(|n| n + 1i64, 5i64)
+        \\    apply(|n| n + 1.I64, 5.I64)
         \\}
     , 6, .no_trace);
 }
@@ -3420,9 +3139,9 @@ test "higher-order function - simple apply" {
 test "higher-order function - apply with closure" {
     try runExpectI64(
         \\{
-        \\    offset = 10i64
+        \\    offset = 10.I64
         \\    apply = |f, x| f(x)
-        \\    apply(|n| n + offset, 5i64)
+        \\    apply(|n| n + offset, 5.I64)
         \\}
     , 15, .no_trace);
 }
@@ -3431,7 +3150,7 @@ test "higher-order function - twice" {
     try runExpectI64(
         \\{
         \\    twice = |f, x| f(f(x))
-        \\    twice(|n| n * 2i64, 3i64)
+        \\    twice(|n| n * 2.I64, 3.I64)
         \\}
     , 12, .no_trace);
 }
@@ -3440,73 +3159,73 @@ test "higher-order function - twice" {
 
 test "int conversion: I8.to_i64 positive" {
     try runExpectI64(
-        \\{ 42i8.to_i64() }
+        \\{ 42.I8.to_i64() }
     , 42, .no_trace);
 }
 
 test "int conversion: I8.to_i64 negative" {
     try runExpectI64(
-        \\{ (-1i8).to_i64() }
+        \\{ (-1.I8).to_i64() }
     , -1, .no_trace);
 }
 
 test "int conversion: I16.to_i64 positive" {
     try runExpectI64(
-        \\{ 1000i16.to_i64() }
+        \\{ 1000.I16.to_i64() }
     , 1000, .no_trace);
 }
 
 test "int conversion: I16.to_i64 negative" {
     try runExpectI64(
-        \\{ (-500i16).to_i64() }
+        \\{ (-500.I16).to_i64() }
     , -500, .no_trace);
 }
 
 test "int conversion: I32.to_i64 positive" {
     try runExpectI64(
-        \\{ 100000i32.to_i64() }
+        \\{ 100000.I32.to_i64() }
     , 100000, .no_trace);
 }
 
 test "int conversion: I32.to_i64 negative" {
     try runExpectI64(
-        \\{ (-100000i32).to_i64() }
+        \\{ (-100000.I32).to_i64() }
     , -100000, .no_trace);
 }
 
 test "int conversion: U8.to_i64" {
     try runExpectI64(
-        \\{ 255u8.to_i64() }
+        \\{ 255.U8.to_i64() }
     , 255, .no_trace);
 }
 
 test "int conversion: U16.to_i64" {
     try runExpectI64(
-        \\{ 65535u16.to_i64() }
+        \\{ 65535.U16.to_i64() }
     , 65535, .no_trace);
 }
 
 test "int conversion: U32.to_i64" {
     try runExpectI64(
-        \\{ 4000000000u32.to_i64() }
+        \\{ 4000000000.U32.to_i64() }
     , 4000000000, .no_trace);
 }
 
 test "int conversion: I8.to_i32.to_i64" {
     try runExpectI64(
-        \\{ (-10i8).to_i32().to_i64() }
+        \\{ (-10.I8).to_i32().to_i64() }
     , -10, .no_trace);
 }
 
 test "int conversion: U8.to_u32.to_i64" {
     try runExpectI64(
-        \\{ 200u8.to_u32().to_i64() }
+        \\{ 200.U8.to_u32().to_i64() }
     , 200, .no_trace);
 }
 
 test "int conversion: U8.to_i16.to_i64" {
     try runExpectI64(
-        \\{ 128u8.to_i16().to_i64() }
+        \\{ 128.U8.to_i16().to_i64() }
     , 128, .no_trace);
 }
 
@@ -3567,12 +3286,12 @@ test "TODO RE-ENABLE: known compiler crash repro - polymorphic tag union payload
         \\{
         \\    second : [Left(a), Right(b)] -> b
         \\    second = |either| match either {
-        \\        Left(_) => 0i64
+        \\        Left(_) => 0.I64
         \\        Right(val) => val
         \\    }
         \\
         \\    input : [Left(I64), Right(I64)]
-        \\    input = Right(42i64)
+        \\    input = Right(42.I64)
         \\    second(input)
         \\}
     , 42, .no_trace);
@@ -3590,8 +3309,8 @@ test "polymorphic tag union payload substitution: extract payload" {
         \\    }
         \\
         \\    input : [Left(I64), Right(I64)]
-        \\    input = Right(42i64)
-        \\    second(input, 0i64)
+        \\    input = Right(42.I64)
+        \\    second(input, 0.I64)
         \\}
     , 42, .no_trace);
 }
@@ -3707,10 +3426,10 @@ test "polymorphic tag union payload substitution: wrap and unwrap" {
 test "Bool in record with mixed alignment fields - bug confirmation" {
     // Test Bool in a record with fields of different alignments
     // Similar to the bug report: { key: U64, childCount: U32, isElement: Bool }
-    try runExpectBool("{ key: 42u64, flag: Bool.True }.flag", true, .no_trace);
-    try runExpectBool("{ key: 42u64, flag: Bool.False }.flag", false, .no_trace);
-    try runExpectBool("{ key: 42u64, count: 1u32, flag: Bool.True }.flag", true, .no_trace);
-    try runExpectBool("{ key: 42u64, count: 1u32, flag: Bool.False }.flag", false, .no_trace);
+    try runExpectBool("{ key: 42.U64, flag: Bool.True }.flag", true, .no_trace);
+    try runExpectBool("{ key: 42.U64, flag: Bool.False }.flag", false, .no_trace);
+    try runExpectBool("{ key: 42.U64, count: 1.U32, flag: Bool.True }.flag", true, .no_trace);
+    try runExpectBool("{ key: 42.U64, count: 1.U32, flag: Bool.False }.flag", false, .no_trace);
 }
 
 // --- Bool.not runtime tests ---
@@ -3944,7 +3663,7 @@ test "dev: List.any always true predicate" {
 }
 
 test "dev: List.any with typed elements" {
-    try runDevOnlyExpectStr("List.any([1i64, 2i64, 3i64], |_x| True)", "True");
+    try runDevOnlyExpectStr("List.any([1.I64, 2.I64, 3.I64], |_x| True)", "True");
 }
 
 test "dev: polymorphic predicate with comparison in block" {
@@ -4294,7 +4013,7 @@ test "focused: nested list equality" {
 }
 
 test "focused: nested list equality i64 literals" {
-    try runExpectBool("[[1i64, 2i64]] == [[1i64, 2i64]]", true, .no_trace);
+    try runExpectBool("[[1.I64, 2.I64]] == [[1.I64, 2.I64]]", true, .no_trace);
 }
 
 test "focused: nested list equality multiple elements" {
@@ -4312,8 +4031,8 @@ test "focused: polymorphic additional specialization via List.append (non-eq)" {
         \\{
         \\    append_one = |acc, x| List.append(acc, x)
         \\    clone_via_fold = |xs| xs.fold(List.with_capacity(1), append_one)
-        \\    first_len = clone_via_fold([1i64, 2i64]).len()
-        \\    clone_via_fold([[1i64, 2i64], [3i64, 4i64]]).len()
+        \\    first_len = clone_via_fold([1.I64, 2.I64]).len()
+        \\    clone_via_fold([[1.I64, 2.I64], [3.I64, 4.I64]]).len()
         \\}
     , 2, .no_trace);
 }

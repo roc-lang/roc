@@ -1661,8 +1661,9 @@ pub const RcInsertPass = struct {
                 try self.countUsesInto(wl.cond, target);
                 try self.countUsesInto(wl.body, target);
             },
-            // RC ops themselves and terminals don't need counting
-            .incref, .decref, .free => {},
+            .incref => |inc| try self.countUsesInto(inc.value, target),
+            .decref => |dec| try self.countUsesInto(dec.value, target),
+            .free => |free| try self.countUsesInto(free.value, target),
             .i64_literal,
             .i128_literal,
             .f64_literal,
@@ -1904,10 +1905,10 @@ pub const RcInsertPass = struct {
                 try self.countConsumedValueInto(wl.cond, target);
                 try self.countConsumedUsesInto(wl.body, target);
             },
-            .lookup,
-            .incref,
-            .decref,
-            .free,
+            .lookup => {},
+            .incref => |inc| try self.countConsumedUsesInto(inc.value, target),
+            .decref => |dec| try self.countConsumedValueInto(dec.value, target),
+            .free => |free| try self.countConsumedValueInto(free.value, target),
             .i64_literal,
             .i128_literal,
             .f64_literal,
@@ -3237,10 +3238,6 @@ pub const RcInsertPass = struct {
         defer self.scratch_consumed_uses.clearRetainingCapacity();
         try self.countConsumedValueInto(expr_id, &self.scratch_consumed_uses);
         return (self.scratch_consumed_uses.get(key) orelse 0) > 0;
-    }
-
-    fn exprConsumesSymbol(self: *RcInsertPass, expr_id: LirExprId, symbol: Symbol) Allocator.Error!bool {
-        return self.exprConsumesKey(expr_id, @as(u64, @bitCast(symbol)));
     }
 
     /// Collect all symbols bound by patterns within an expression tree.

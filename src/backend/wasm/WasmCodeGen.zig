@@ -6236,7 +6236,6 @@ fn bindListPattern(self: *Self, ptr_local: u32, list_pat: anytype) Allocator.Err
             else => unreachable,
         }
     }
-
 }
 
 /// Generate a struct field access expression.
