@@ -7287,9 +7287,10 @@ pub const Interpreter = struct {
                     // even though the type says it's the recursive type directly.
                     const variant_layout = acc.getVariantLayout(tag_index);
 
-                    // For rigid type variables, the variant_layout may be incorrect (e.g., ZST)
-                    // because the layout was computed before type substitution. Check if we have
-                    // a substitution and use its layout instead.
+                    // The variant_layout may be incorrect (e.g., ZST) when the tag union was
+                    // compiled in a polymorphic context (e.g., List.get : List(a) -> Result a b)
+                    // where the payload type `a` was a rigid/flex var at layout-computation time.
+                    // When we have a concrete arg type at runtime, compute the correct layout.
                     const arg_resolved = self.runtime_types.resolveVar(arg_var);
                     const effective_layout = blk: {
                         if (arg_resolved.desc.content == .rigid) {
@@ -7336,6 +7337,18 @@ pub const Interpreter = struct {
                                     }
                                 }
                             }
+                        }
+                        // For concrete (structure/alias) types where variant_layout is ZST:
+                        // the tag union was compiled in a polymorphic context (e.g., List.get :
+                        // List(a) -> Result a b) where `a` was unknown, yielding a ZST payload.
+                        // At runtime, compute the correct layout from the concrete arg type.
+                        // Only apply when variant_layout is ZST to avoid disturbing correct layouts.
+                        if (variant_layout.tag == .zst and
+                            (arg_resolved.desc.content == .structure or arg_resolved.desc.content == .alias))
+                        {
+                            if (self.getRuntimeLayout(arg_var)) |computed_layout| {
+                                break :blk computed_layout;
+                            } else |_| {}
                         }
                         break :blk variant_layout;
                     };
