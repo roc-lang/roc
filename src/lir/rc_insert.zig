@@ -1866,7 +1866,7 @@ pub const RcInsertPass = struct {
             .dec_to_str => |d| try self.countConsumedUsesInto(d, target),
             .str_escape_and_quote => |s| try self.countConsumedUsesInto(s, target),
             .for_loop => |fl| {
-                try self.countConsumedUsesInto(fl.list_expr, target);
+                try self.countConsumedValueInto(fl.list_expr, target);
                 try self.registerPatternSymbolInto(fl.elem_pattern, target);
                 try self.countConsumedUsesInto(fl.body, target);
             },
@@ -3134,6 +3134,23 @@ pub const RcInsertPass = struct {
         try self.collectPatternSymbols(pat_id, &pattern_symbols);
         if (pattern_symbols.count() == 0) return false;
 
+        var shadowed = std.ArrayList(u64).empty;
+        defer shadowed.deinit(self.allocator);
+        var it_shadow = pattern_symbols.keyIterator();
+        while (it_shadow.next()) |key_ptr| {
+            var current = key_ptr.*;
+            while (self.keyInfo(current)) |info| {
+                if (info.shadowed_ref.isNone()) break;
+                current = @intFromEnum(info.shadowed_ref);
+                if (!pattern_symbols.contains(current)) {
+                    try shadowed.append(self.allocator, current);
+                }
+            }
+        }
+        for (shadowed.items) |shadow_key| {
+            try pattern_symbols.put(shadow_key, {});
+        }
+
         self.scratch_uses.clearRetainingCapacity();
         defer self.scratch_uses.clearRetainingCapacity();
         try self.countUsesInto(expr_id, &self.scratch_uses);
@@ -3144,6 +3161,22 @@ pub const RcInsertPass = struct {
             if (pattern_symbols.contains(entry.key_ptr.*)) return true;
         }
         return false;
+    }
+
+    fn exprNeedsTailCleanupKey(self: *RcInsertPass, expr_id: LirExprId, key: u64, symbol: Symbol) Allocator.Error!bool {
+        if (expr_id.isNone()) return false;
+
+        return switch (self.store.getExpr(expr_id)) {
+            .if_then_else => |ite| blk: {
+                for (self.store.getIfBranches(ite.branches)) |branch| {
+                    if (try self.exprUsesKey(branch.cond, key) or try self.exprUsesSymbol(branch.cond, symbol)) break :blk true;
+                }
+                break :blk false;
+            },
+            .match_expr => |m| (try self.exprUsesKey(m.value, key)) or (try self.exprUsesSymbol(m.value, symbol)),
+            .discriminant_switch => |ds| (try self.exprUsesKey(ds.value, key)) or (try self.exprUsesSymbol(ds.value, symbol)),
+            else => (try self.exprUsesKey(expr_id, key)) or (try self.exprUsesSymbol(expr_id, symbol)),
+        };
     }
 
     fn exprUsesKey(self: *RcInsertPass, expr_id: LirExprId, key: u64) Allocator.Error!bool {
@@ -3515,12 +3548,16 @@ pub const RcInsertPass = struct {
             stmts: *std.ArrayList(LirStmt),
             fn onBind(ctx: @This(), bind_pat_id: LirPatternId, symbol: Symbol, _: LayoutIdx, _: bool) Allocator.Error!void {
                 const key = ctx.pass.patternKey(bind_pat_id, symbol);
-                const previous_layout = ctx.prior_decl_layouts.get(key) orelse return;
+                const previous_key = if (ctx.pass.keyInfo(key)) |info|
+                    if (!info.shadowed_ref.isNone()) @intFromEnum(info.shadowed_ref) else key
+                else
+                    key;
+                const previous_layout = ctx.prior_decl_layouts.get(previous_key) orelse return;
                 // If prior statements already consumed this symbol, shadowing should not
                 // decref the old binding again.
-                if ((ctx.pass.block_consumed_uses.get(key) orelse 0) > 0) return;
+                if ((ctx.pass.block_consumed_uses.get(previous_key) orelse 0) > 0) return;
                 if (ctx.pass.layoutNeedsRc(previous_layout)) {
-                    try ctx.pass.emitDecrefInto(ctx.pass.keySymbol(key, symbol), previous_layout, ctx.region, ctx.stmts);
+                    try ctx.pass.emitDecrefInto(ctx.pass.keySymbol(previous_key, symbol), previous_layout, ctx.region, ctx.stmts);
                 }
             }
         };
@@ -3731,7 +3768,7 @@ pub const RcInsertPass = struct {
                 const resolved_reassignable = ctx.pass.keyReassignable(key, reassignable);
                 if (!ctx.pass.layoutNeedsRc(resolved_layout)) return;
                 if (!resolved_reassignable and try ctx.pass.hasLaterShadowingDecl(ctx.block_stmts, ctx.stmt_index, symbol)) return;
-                const final_reads_symbol = try ctx.pass.exprUsesKey(ctx.final_expr, key);
+                const final_reads_symbol = try ctx.pass.exprNeedsTailCleanupKey(ctx.final_expr, key, symbol);
                 if (!final_reads_symbol) return;
                 if (resolved_reassignable) {
                     if (try ctx.pass.exprConsumesKey(ctx.final_expr, key)) return;
