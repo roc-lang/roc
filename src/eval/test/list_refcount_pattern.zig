@@ -35,7 +35,7 @@ test "list refcount pattern - list rest pattern" {
 
 test "list refcount pattern - string list rest pattern" {
     try runExpectStr(
-        \\match ["a", "b", "c"] { [first, .. as rest] => match rest { [second, ..] => second, _ => "" }, _ => "" }
+        \\match ["a", "b", "c"] { [_first, .. as rest] => match rest { [second, ..] => second, _ => "" }, _ => "" }
     , "b", .no_trace);
 }
 

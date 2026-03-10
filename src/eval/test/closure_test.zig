@@ -157,7 +157,7 @@ test "closure: passing two different closures to same HOF returns first result" 
         \\    a = 10
         \\    b = 20
         \\    r1 = apply(|x| x + a, 5)
-        \\    r2 = apply(|x| x + b, 5)
+        \\    _r2 = apply(|x| x + b, 5)
         \\    r1
         \\}
     ;
@@ -170,7 +170,7 @@ test "closure: passing two different closures to same HOF returns second result"
         \\    apply = |f, x| f(x)
         \\    a = 10
         \\    b = 20
-        \\    r1 = apply(|x| x + a, 5)
+        \\    _r1 = apply(|x| x + a, 5)
         \\    r2 = apply(|x| x + b, 5)
         \\    r2
         \\}

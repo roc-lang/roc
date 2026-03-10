@@ -680,7 +680,7 @@ test "interpreter: match result tag payload" {
 }
 
 test "interpreter: match record destructures fields" {
-    const roc_src = "match { x: 1, y: 2 } { { x, y } => x + y, _ => 0 }";
+    const roc_src = "match { x: 1, y: 2 } { { x, y } => x + y }";
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
@@ -773,7 +773,7 @@ test "interpreter: match tuple payload tag" {
 }
 
 test "interpreter: match record payload tag" {
-    const roc_src = "match Err({ code: 1, msg: \"boom\" }) { Err({ code, msg }) => code, Ok(_) => 0 }";
+    const roc_src = "match Err({ code: 1, msg: \"boom\" }) { Err({ code, msg: _msg }) => code, Ok(_) => 0 }";
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 

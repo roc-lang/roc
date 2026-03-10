@@ -28,7 +28,7 @@ test "list refcount containers - multiple lists in tuple" {
         \\    x = [1, 2]
         \\    y = [3, 4]
         \\    t = (x, y)
-        \\    match t { (first, _) => match first { [a, b] => a + b, _ => 0 }, _ => 0 }
+        \\    match t { (first, _) => match first { [a, b] => a + b, _ => 0 } }
         \\}
     , 3, .no_trace);
 }
@@ -39,7 +39,7 @@ test "list refcount containers - same list twice in tuple" {
         \\{
         \\    x = [1, 2]
         \\    t = (x, x)
-        \\    match t { (first, _) => match first { [a, b] => a + b, _ => 0 }, _ => 0 }
+        \\    match t { (first, _) => match first { [a, b] => a + b, _ => 0 } }
         \\}
     , 3, .no_trace);
 }
@@ -49,7 +49,7 @@ test "list refcount containers - tuple with string list" {
         \\{
         \\    x = ["a", "b"]
         \\    t = (x, 42)
-        \\    match t { (lst, _) => match lst { [first, ..] => first, _ => "" }, _ => "" }
+        \\    match t { (lst, _) => match lst { [first, ..] => first, _ => "" } }
         \\}
     , "a", .no_trace);
 }
@@ -162,7 +162,7 @@ test "list refcount containers - tuple of records with lists" {
         \\    r1 = {items: lst1}
         \\    r2 = {items: lst2}
         \\    t = (r1, r2)
-        \\    match t { (first, _) => match first.items { [a, b] => a + b, _ => 0 }, _ => 0 }
+        \\    match t { (first, _) => match first.items { [a, b] => a + b, _ => 0 } }
         \\}
     , 3, .no_trace);
 }
@@ -173,7 +173,7 @@ test "list refcount containers - record of tuples with lists" {
         \\    lst = [5, 6]
         \\    t = (lst, 99)
         \\    r = {data: t}
-        \\    match r.data { (items, _) => match items { [a, b] => a + b, _ => 0 }, _ => 0 }
+        \\    match r.data { (items, _) => match items { [a, b] => a + b, _ => 0 } }
         \\}
     , 11, .no_trace);
 }
