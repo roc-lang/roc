@@ -1477,14 +1477,20 @@ pub const RcInsertPass = struct {
                 for (branches) |branch| {
                     local.clearRetainingCapacity();
                     try self.countUsesInto(branch.body, &local);
-                    var it = local.keyIterator();
-                    while (it.next()) |key| try symbols_in_any_branch.put(key.*, {});
+                    var it = local.iterator();
+                    while (it.next()) |entry| {
+                        if (entry.value_ptr.* == 0) continue;
+                        try symbols_in_any_branch.put(entry.key_ptr.*, {});
+                    }
                 }
                 {
                     local.clearRetainingCapacity();
                     try self.countUsesInto(ite.final_else, &local);
-                    var it = local.keyIterator();
-                    while (it.next()) |key| try symbols_in_any_branch.put(key.*, {});
+                    var it = local.iterator();
+                    while (it.next()) |entry| {
+                        if (entry.value_ptr.* == 0) continue;
+                        try symbols_in_any_branch.put(entry.key_ptr.*, {});
+                    }
                 }
                 var it = symbols_in_any_branch.keyIterator();
                 while (it.next()) |key| {
@@ -1506,8 +1512,11 @@ pub const RcInsertPass = struct {
                     local.clearRetainingCapacity();
                     try self.countUsesInto(branch.guard, &local);
                     try self.countUsesInto(branch.body, &local);
-                    var it = local.keyIterator();
-                    while (it.next()) |key| try symbols_in_any_branch.put(key.*, {});
+                    var it = local.iterator();
+                    while (it.next()) |entry| {
+                        if (entry.value_ptr.* == 0) continue;
+                        try symbols_in_any_branch.put(entry.key_ptr.*, {});
+                    }
                 }
                 var it = symbols_in_any_branch.keyIterator();
                 while (it.next()) |key| {
@@ -1533,6 +1542,7 @@ pub const RcInsertPass = struct {
                 while (it.next()) |entry| {
                     const key = entry.key_ptr.*;
                     if (target.contains(key)) {
+                        if (entry.value_ptr.* == 0) continue;
                         // Symbol exists in outer scope — it's a capture.
                         // Attribute exactly 1 use to the outer scope.
                         const gop = try target.getOrPut(key);
@@ -1627,8 +1637,11 @@ pub const RcInsertPass = struct {
                 for (branches) |br_id| {
                     local.clearRetainingCapacity();
                     try self.countUsesInto(br_id, &local);
-                    var it = local.keyIterator();
-                    while (it.next()) |key| try symbols_in_any_branch.put(key.*, {});
+                    var it = local.iterator();
+                    while (it.next()) |entry| {
+                        if (entry.value_ptr.* == 0) continue;
+                        try symbols_in_any_branch.put(entry.key_ptr.*, {});
+                    }
                 }
                 var it = symbols_in_any_branch.keyIterator();
                 while (it.next()) |key| {
@@ -1716,14 +1729,20 @@ pub const RcInsertPass = struct {
                     try self.countConsumedValueInto(branch.cond, target);
                     local.clearRetainingCapacity();
                     try self.countConsumedUsesInto(branch.body, &local);
-                    var it = local.keyIterator();
-                    while (it.next()) |key| try symbols_in_any_branch.put(key.*, {});
+                    var it = local.iterator();
+                    while (it.next()) |entry| {
+                        if (entry.value_ptr.* == 0) continue;
+                        try symbols_in_any_branch.put(entry.key_ptr.*, {});
+                    }
                 }
                 local.clearRetainingCapacity();
                 try self.countConsumedUsesInto(ite.final_else, &local);
                 {
-                    var it = local.keyIterator();
-                    while (it.next()) |key| try symbols_in_any_branch.put(key.*, {});
+                    var it = local.iterator();
+                    while (it.next()) |entry| {
+                        if (entry.value_ptr.* == 0) continue;
+                        try symbols_in_any_branch.put(entry.key_ptr.*, {});
+                    }
                 }
                 var it = symbols_in_any_branch.keyIterator();
                 while (it.next()) |key| try bumpUseCount(target, key.*);
@@ -1740,8 +1759,11 @@ pub const RcInsertPass = struct {
                     try self.registerPatternSymbolInto(branch.pattern, &local);
                     try self.countConsumedUsesInto(branch.guard, &local);
                     try self.countConsumedUsesInto(branch.body, &local);
-                    var it = local.keyIterator();
-                    while (it.next()) |key| try symbols_in_any_branch.put(key.*, {});
+                    var it = local.iterator();
+                    while (it.next()) |entry| {
+                        if (entry.value_ptr.* == 0) continue;
+                        try symbols_in_any_branch.put(entry.key_ptr.*, {});
+                    }
                 }
                 var it = symbols_in_any_branch.keyIterator();
                 while (it.next()) |key| try bumpUseCount(target, key.*);
@@ -1756,8 +1778,11 @@ pub const RcInsertPass = struct {
                 for (branches) |branch| {
                     local.clearRetainingCapacity();
                     try self.countConsumedUsesInto(branch, &local);
-                    var it = local.keyIterator();
-                    while (it.next()) |key| try symbols_in_any_branch.put(key.*, {});
+                    var it = local.iterator();
+                    while (it.next()) |entry| {
+                        if (entry.value_ptr.* == 0) continue;
+                        try symbols_in_any_branch.put(entry.key_ptr.*, {});
+                    }
                 }
                 var it = symbols_in_any_branch.keyIterator();
                 while (it.next()) |key| try bumpUseCount(target, key.*);
@@ -1782,6 +1807,7 @@ pub const RcInsertPass = struct {
                 while (it.next()) |entry| {
                     const key = entry.key_ptr.*;
                     if (target.contains(key)) {
+                        if (entry.value_ptr.* == 0) continue;
                         try bumpUseCount(target, key);
                     }
                     const global_gop = try self.symbol_consumed_counts.getOrPut(key);
@@ -1949,14 +1975,20 @@ pub const RcInsertPass = struct {
                     try self.countConsumedValueInto(branch.cond, target);
                     local.clearRetainingCapacity();
                     try self.countConsumedValueInto(branch.body, &local);
-                    var it = local.keyIterator();
-                    while (it.next()) |key| try symbols_in_any_branch.put(key.*, {});
+                    var it = local.iterator();
+                    while (it.next()) |entry| {
+                        if (entry.value_ptr.* == 0) continue;
+                        try symbols_in_any_branch.put(entry.key_ptr.*, {});
+                    }
                 }
                 local.clearRetainingCapacity();
                 try self.countConsumedValueInto(ite.final_else, &local);
                 {
-                    var it = local.keyIterator();
-                    while (it.next()) |key| try symbols_in_any_branch.put(key.*, {});
+                    var it = local.iterator();
+                    while (it.next()) |entry| {
+                        if (entry.value_ptr.* == 0) continue;
+                        try symbols_in_any_branch.put(entry.key_ptr.*, {});
+                    }
                 }
                 var it = symbols_in_any_branch.keyIterator();
                 while (it.next()) |key| try bumpUseCount(target, key.*);
@@ -1973,8 +2005,11 @@ pub const RcInsertPass = struct {
                     try self.registerPatternSymbolInto(branch.pattern, &local);
                     try self.countConsumedUsesInto(branch.guard, &local);
                     try self.countConsumedValueInto(branch.body, &local);
-                    var it = local.keyIterator();
-                    while (it.next()) |key| try symbols_in_any_branch.put(key.*, {});
+                    var it = local.iterator();
+                    while (it.next()) |entry| {
+                        if (entry.value_ptr.* == 0) continue;
+                        try symbols_in_any_branch.put(entry.key_ptr.*, {});
+                    }
                 }
                 var it = symbols_in_any_branch.keyIterator();
                 while (it.next()) |key| try bumpUseCount(target, key.*);
@@ -1989,8 +2024,11 @@ pub const RcInsertPass = struct {
                 for (branches) |branch| {
                     local.clearRetainingCapacity();
                     try self.countConsumedValueInto(branch, &local);
-                    var it = local.keyIterator();
-                    while (it.next()) |key| try symbols_in_any_branch.put(key.*, {});
+                    var it = local.iterator();
+                    while (it.next()) |entry| {
+                        if (entry.value_ptr.* == 0) continue;
+                        try symbols_in_any_branch.put(entry.key_ptr.*, {});
+                    }
                 }
                 var it = symbols_in_any_branch.keyIterator();
                 while (it.next()) |key| try bumpUseCount(target, key.*);
