@@ -3396,7 +3396,18 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
         }
     };
 
-    try std.testing.expect(Search.containsCallTo(&lir_store, any_lir_with_rc, predicate_member_sym));
+    var specialized_predicate_sym: ?lir.LIR.Symbol = null;
+    var specialization_it = translator.specialized_direct_callees.iterator();
+    while (specialization_it.next()) |entry| {
+        const callee_key = std.mem.bytesToValue(u64, entry.key_ptr.*[0..@sizeOf(u64)]);
+        if (callee_key == predicate_member_sym.raw()) {
+            specialized_predicate_sym = entry.value_ptr.symbol;
+            break;
+        }
+    }
+    try std.testing.expect(specialized_predicate_sym != null);
+    try std.testing.expect(Search.containsCallTo(&lir_store, any_lir_with_rc, specialized_predicate_sym.?));
+    try std.testing.expect(!Search.containsCallTo(&lir_store, any_lir_with_rc, predicate_member_sym));
     try std.testing.expect(Search.containsEarlyReturn(&lir_store, any_lir_with_rc));
     try std.testing.expectEqual(layout.Idx.bool, Search.firstEarlyReturnLayout(&lir_store, any_lir_with_rc).?);
 }
@@ -3583,7 +3594,18 @@ test "dev lowering: local any-style HOF directly calls passed predicate member" 
         }
     };
 
-    try std.testing.expect(Search.containsCallTo(&lir_store, any_lir_with_rc, predicate_member_sym));
+    var specialized_predicate_sym: ?lir.LIR.Symbol = null;
+    var specialization_it = translator.specialized_direct_callees.iterator();
+    while (specialization_it.next()) |entry| {
+        const callee_key = std.mem.bytesToValue(u64, entry.key_ptr.*[0..@sizeOf(u64)]);
+        if (callee_key == predicate_member_sym.raw()) {
+            specialized_predicate_sym = entry.value_ptr.symbol;
+            break;
+        }
+    }
+    try std.testing.expect(specialized_predicate_sym != null);
+    try std.testing.expect(Search.containsCallTo(&lir_store, any_lir_with_rc, specialized_predicate_sym.?));
+    try std.testing.expect(!Search.containsCallTo(&lir_store, any_lir_with_rc, predicate_member_sym));
 }
 
 test "dev lowering: list rest pattern emits two list decrefs" {
@@ -4943,7 +4965,16 @@ test "LIR lifted closure with function-valued captures keeps both capture slots"
 
     const lir_root_id = try translator.lower(mir_expr);
 
-    const lifted_def = lir_store.getSymbolDef(members[0].fn_symbol) orelse return error.TestUnexpectedResult;
+    var specialized_closure_sym: ?lir.LIR.Symbol = null;
+    var specialization_it = translator.specialized_direct_callees.iterator();
+    while (specialization_it.next()) |entry| {
+        const callee_key = std.mem.bytesToValue(u64, entry.key_ptr.*[0..@sizeOf(u64)]);
+        if (callee_key == members[0].fn_symbol.raw()) {
+            specialized_closure_sym = entry.value_ptr.symbol;
+            break;
+        }
+    }
+    const lifted_def = lir_store.getSymbolDef(specialized_closure_sym orelse return error.TestUnexpectedResult) orelse return error.TestUnexpectedResult;
     const lifted_lir = lir_store.getExpr(lifted_def);
     try std.testing.expect(lifted_lir == .lambda);
 

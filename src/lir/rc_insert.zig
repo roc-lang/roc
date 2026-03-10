@@ -4349,6 +4349,7 @@ fn countRcOps(store: *const LirExprStore, expr_id: LirExprId) RcOpCounts {
         .str_literal,
         .bool_literal,
         .lookup,
+        .cell_load,
         .empty_list,
         .zero_arg_tag,
         .break_expr,
