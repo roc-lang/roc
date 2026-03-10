@@ -31,7 +31,7 @@ test "list refcount basic - five elements" {
 test "list refcount basic - larger list with pattern" {
     // Use list rest pattern for larger lists
     try runExpectI64(
-        \\match [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] { [first, second, .. as rest] => first + second, _ => 0 }
+        \\match [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] { [first, second, ..] => first + second, _ => 0 }
     , 3, .no_trace);
 }
 
@@ -40,8 +40,8 @@ test "list refcount basic - sequential independent lists" {
     try runExpectI64(
         \\{
         \\    a = [1]
-        \\    b = [2, 3]
-        \\    c = [4, 5, 6]
+        \\    _b = [2, 3]
+        \\    _c = [4, 5, 6]
         \\    match a { [x] => x, _ => 0 }
         \\}
     , 1, .no_trace);
@@ -50,9 +50,9 @@ test "list refcount basic - sequential independent lists" {
 test "list refcount basic - return middle list" {
     try runExpectI64(
         \\{
-        \\    a = [1]
+        \\    _a = [1]
         \\    b = [2, 3]
-        \\    c = [4, 5, 6]
+        \\    _c = [4, 5, 6]
         \\    match b { [x, y] => x + y, _ => 0 }
         \\}
     , 5, .no_trace);
@@ -61,8 +61,8 @@ test "list refcount basic - return middle list" {
 test "list refcount basic - return last list" {
     try runExpectI64(
         \\{
-        \\    a = [1]
-        \\    b = [2, 3]
+        \\    _a = [1]
+        \\    _b = [2, 3]
         \\    c = [4, 5, 6]
         \\    match c { [x, y, z] => x + y + z, _ => 0 }
         \\}
@@ -72,9 +72,9 @@ test "list refcount basic - return last list" {
 test "list refcount basic - mix of empty and non-empty" {
     try runExpectI64(
         \\{
-        \\    x = []
+        \\    _x = []
         \\    y = [1, 2]
-        \\    z = []
+        \\    _z = []
         \\    match y { [a, b] => a + b, _ => 0 }
         \\}
     , 3, .no_trace);
@@ -84,8 +84,8 @@ test "list refcount basic - return empty from mix" {
     try runExpectI64(
         \\{
         \\    x = []
-        \\    y = [1, 2]
-        \\    z = []
+        \\    _y = [1, 2]
+        \\    _z = []
         \\    match x { [] => 42, _ => 0 }
         \\}
     , 42, .no_trace);

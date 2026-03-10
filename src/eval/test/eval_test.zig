@@ -3701,7 +3701,7 @@ test "dev: for loop early return exits enclosing function" {
     try runDevOnlyExpectStr(
         \\{
         \\    f = |list| {
-        \\        for item in list {
+        \\        for _item in list {
         \\            if True { return True }
         \\        }
         \\        False
@@ -4031,7 +4031,7 @@ test "focused: polymorphic additional specialization via List.append (non-eq)" {
         \\{
         \\    append_one = |acc, x| List.append(acc, x)
         \\    clone_via_fold = |xs| xs.fold(List.with_capacity(1), append_one)
-        \\    first_len = clone_via_fold([1.I64, 2.I64]).len()
+        \\    _first_len = clone_via_fold([1.I64, 2.I64]).len()
         \\    clone_via_fold([[1.I64, 2.I64], [3.I64, 4.I64]]).len()
         \\}
     , 2, .no_trace);
