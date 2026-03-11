@@ -1245,12 +1245,6 @@ fn emitLoadI32AtPtrOffset(self: *Self, ptr_local: u32, offset: i32, out_local: u
     try self.emitLocalSet(out_local);
 }
 
-fn emitStoreI32AtPtrOffset(self: *Self, ptr_local: u32, offset: i32, value_local: u32) Allocator.Error!void {
-    try self.emitPtrWithOffset(ptr_local, offset);
-    try self.emitLocalGet(value_local);
-    try self.emitStoreOp(.i32, 0);
-}
-
 fn emitCallRocDealloc(self: *Self, ptr_local: u32, alignment: u32) Allocator.Error!void {
     const dealloc_slot = try self.allocStackMemory(8, 4);
 

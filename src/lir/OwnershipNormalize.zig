@@ -34,6 +34,7 @@ pub const OwnerKind = union(enum) {
     retained: RefId,
 };
 
+/// Whether ordinary uses of a normalized ref consume an owner or borrow it.
 pub const UseMode = enum {
     consume,
     borrow,

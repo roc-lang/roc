@@ -14954,41 +14954,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitIncrefValueByLayout(self: *Self, value_loc: ValueLocation, layout_idx: layout.Idx) Allocator.Error!void {
-            const ls = self.layout_store;
-            const layout_val = ls.getLayout(layout_idx);
-            if (!ls.layoutContainsRefcounted(layout_val)) return;
-
-            switch (layout_val.tag) {
-                .list, .list_of_zst => {
-                    try self.emitListIncref(value_loc, 1);
-                },
-                .scalar => {
-                    if (layout_val.data.scalar.tag == .str) {
-                        try self.emitStrIncref(value_loc, 1);
-                    }
-                },
-                .box, .box_of_zst => {
-                    try self.emitBoxIncref(value_loc, 1);
-                },
-                .struct_, .tag_union => {
-                    const value_size = ls.layoutSizeAlign(layout_val).size;
-                    if (value_size == 0) return;
-                    const base_offset = try self.ensureValueOnStackForRc(value_loc, value_size);
-                    try self.emitIncrefAtStackOffset(base_offset, layout_idx);
-                },
-                .closure => {
-                    const captures_layout_idx = layout_val.data.closure.captures_layout_idx;
-                    const captures_layout = ls.getLayout(captures_layout_idx);
-                    const captures_size = ls.layoutSizeAlign(captures_layout).size;
-                    if (captures_size == 0) return;
-                    const base_offset = try self.ensureValueOnStackForRc(value_loc, captures_size);
-                    try self.emitIncrefAtStackOffset(base_offset, captures_layout_idx);
-                },
-                else => {},
-            }
-        }
-
         fn emitDecrefAtStackOffset(self: *Self, base_offset: i32, layout_idx: layout.Idx) Allocator.Error!void {
             const ls = self.layout_store;
             const layout_val = ls.getLayout(layout_idx);

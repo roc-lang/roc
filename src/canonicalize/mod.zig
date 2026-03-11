@@ -5,7 +5,6 @@ const base = @import("base");
 const parse = @import("parse");
 
 const Allocators = base.Allocators;
-const Ident = base.Ident;
 const AST = parse.AST;
 
 /// The canonicalizer (the thing that canonicalizes the AST).

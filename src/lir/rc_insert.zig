@@ -3018,28 +3018,6 @@ pub const RcInsertPass = struct {
         };
     }
 
-    fn processExprSpan(self: *RcInsertPass, span: LirExprSpan) Allocator.Error!struct { span: LirExprSpan, changed: bool } {
-        const exprs = self.store.getExprSpan(span);
-        if (exprs.len == 0) return .{ .span = span, .changed = false };
-
-        var new_exprs = std.ArrayList(LirExprId).empty;
-        defer new_exprs.deinit(self.allocator);
-
-        var changed = false;
-        for (exprs) |expr_id| {
-            const new_expr = try self.processExpr(expr_id);
-            if (new_expr != expr_id) changed = true;
-            try new_exprs.append(self.allocator, new_expr);
-        }
-
-        if (!changed) return .{ .span = span, .changed = false };
-
-        return .{
-            .span = try self.store.addExprSpan(new_exprs.items),
-            .changed = true,
-        };
-    }
-
     /// Temporarily add an expression's consumed uses into `block_consumed_uses`.
     /// Returns the exact per-symbol deltas so callers can roll them back.
     fn pushExprUsesToBlockConsumed(self: *RcInsertPass, expr_id: LirExprId) Allocator.Error!std.AutoHashMap(u64, u32) {
@@ -4731,37 +4709,6 @@ pub const RcInsertPass = struct {
         }
 
         return self.exprUsesKey(final_expr, key);
-    }
-
-    /// Recursively emit cleanup decrefs for borrowed temps bound in a block.
-    /// These bindings own exactly one original produced reference until block exit.
-    fn emitBlockBorrowDecrefsForPattern(
-        self: *RcInsertPass,
-        pat_id: LirPatternId,
-        region: Region,
-        stmts: *std.ArrayList(LirStmt),
-        _: []const LirStmt,
-        _: usize,
-        _: LirExprId,
-    ) Allocator.Error!void {
-        const Ctx = struct {
-            pass: *RcInsertPass,
-            region: Region,
-            stmts: *std.ArrayList(LirStmt),
-            fn onBind(ctx: @This(), bind_pat_id: LirPatternId, symbol: Symbol, layout_idx: LayoutIdx, _: bool) Allocator.Error!void {
-                const key = ctx.pass.patternKey(bind_pat_id, symbol);
-                const resolved_layout = ctx.pass.keyLayout(key, layout_idx);
-                if (!ctx.pass.keyIntroducesOwner(key)) return;
-                if (ctx.pass.layoutNeedsRc(resolved_layout)) {
-                    try ctx.pass.emitDecrefInto(ctx.pass.keySymbol(key, symbol), resolved_layout, ctx.region, ctx.stmts);
-                }
-            }
-        };
-        try walkPatternBinds(self.store, pat_id, Ctx{
-            .pass = self,
-            .region = region,
-            .stmts = stmts,
-        });
     }
 
     /// Recursively emit pre-body RC ops for all symbols bound by a pattern.

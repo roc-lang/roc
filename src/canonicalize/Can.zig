@@ -348,10 +348,6 @@ fn lookupAvailableModuleEnv(self: *const Self, ident: Ident.Idx) ?AutoImportedTy
     return self.lookupExplicitModuleEnv(ident) orelse self.builtin_auto_imported_types.get(ident);
 }
 
-fn hasExplicitModuleEnv(self: *const Self, ident: Ident.Idx) bool {
-    return self.lookupExplicitModuleEnv(ident) != null;
-}
-
 fn hasAvailableModuleEnv(self: *const Self, ident: Ident.Idx) bool {
     return self.lookupAvailableModuleEnv(ident) != null;
 }

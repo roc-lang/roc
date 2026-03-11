@@ -1,3 +1,4 @@
+//! Helpers for loading the compiled Builtin module in canonicalize tests.
 const std = @import("std");
 const base = @import("base");
 const collections = @import("collections");

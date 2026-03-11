@@ -367,6 +367,7 @@ fn backendToSemantic(backend_op: LIR.LirExpr.LowLevel) CIR.Expr.LowLevel {
     };
 }
 
+/// Returns the semantic ownership contract for a lowered backend low-level op.
 pub fn backendArgOwnership(backend_op: LIR.LirExpr.LowLevel) []const CIR.Expr.LowLevel.ArgOwnership {
     return switch (backend_op) {
         .list_set => &.{ .consume, .borrow, .borrow },
