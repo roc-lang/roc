@@ -15,7 +15,9 @@ platform ""
         RecordRepr,
         TagUnionRepr,
         TagVariant,
+        TargetLayout,
         TypeId,
+        TypeLayout,
         TypeRepr,
         Types,
     ]
@@ -46,6 +48,8 @@ import RecordField exposing [RecordField]
 import RecordRepr exposing [RecordRepr]
 import TagUnionRepr exposing [TagUnionRepr]
 import TagVariant exposing [TagVariant]
+import TargetLayout exposing [TargetLayout]
+import TypeLayout exposing [TypeLayout]
 import TypeRepr exposing [TypeRepr]
 import ProvidesEntry exposing [ProvidesEntry]
 

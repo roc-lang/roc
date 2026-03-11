@@ -1,3 +1,3 @@
 import RecordField exposing [RecordField]
 
-RecordRepr := { alignment : U64, fields : List(RecordField), name : Str, size : U64 }
+RecordRepr := { fields : List(RecordField), name : Str }

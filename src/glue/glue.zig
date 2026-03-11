@@ -404,11 +404,49 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         return error.CompilationFailed;
     };
 
+    // 5b. Compute per-target layouts
+    // Deduplicate by pointer width: compute once per unique width, share result
+    var per_target_layouts = gpa.alloc([]CollectedTypeLayout, platform_info.targets.len) catch {
+        return error.OutOfMemory;
+    };
+    defer {
+        // Free unique layouts only (avoid double-free for shared layouts)
+        var freed = std.AutoHashMap(usize, void).init(gpa);
+        defer freed.deinit();
+        for (per_target_layouts) |layouts| {
+            const ptr_val = @intFromPtr(layouts.ptr);
+            if (!freed.contains(ptr_val)) {
+                freed.put(ptr_val, {}) catch {};
+                freeComputedLayouts(gpa, layouts);
+            }
+        }
+        gpa.free(per_target_layouts);
+    }
+
+    // Track already-computed layouts by pointer width for dedup
+    var width_to_layouts = std.AutoHashMap(u16, []CollectedTypeLayout).init(gpa);
+    defer width_to_layouts.deinit();
+
+    for (platform_info.targets, 0..) |target_name, ti| {
+        const roc_tgt = roc_target.RocTarget.fromString(target_name) orelse RocTarget.detectNative();
+        const ptr_width = roc_tgt.ptrBitWidth();
+
+        if (width_to_layouts.get(ptr_width)) |existing| {
+            per_target_layouts[ti] = existing;
+        } else {
+            const layouts = computeLayoutsForTarget(gpa, type_table.entries.items, roc_tgt) catch {
+                return error.OutOfMemory;
+            };
+            per_target_layouts[ti] = layouts;
+            width_to_layouts.put(ptr_width, layouts) catch {};
+        }
+    }
+
     // 6. Construct List(Types) as C-ABI structs
     const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{};
     var roc_ops = echo_platform.makeDefaultRocOps(@constCast(&hosted_function_ptrs));
 
-    var types_list = constructTypesRocList(collected_modules.items, &platform_info, cir_provides_entries.items, &type_table, &entrypoint_type_ids, &provides_type_ids, &roc_ops);
+    var types_list = constructTypesRocList(collected_modules.items, &platform_info, cir_provides_entries.items, &type_table, &entrypoint_type_ids, &provides_type_ids, per_target_layouts, &roc_ops);
 
     // 7. Run glue spec via interpreter
     var result_buf: ResultListFileStr = undefined;
@@ -475,6 +513,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
 pub const PlatformHeaderInfo = struct {
     requires_entries: []RequiresEntry,
     type_aliases: [][]const u8,
+    targets: [][]const u8,
 
     pub const RequiresEntry = struct {
         name: []const u8,
@@ -498,6 +537,10 @@ pub const PlatformHeaderInfo = struct {
             gpa.free(alias_name);
         }
         gpa.free(self.type_aliases);
+        for (self.targets) |target_name| {
+            gpa.free(target_name);
+        }
+        gpa.free(self.targets);
     }
 };
 
@@ -607,9 +650,59 @@ fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8) !PlatformHeade
                 try type_aliases.append(gpa, key.*);
             }
 
+            // Extract target names from the targets section
+            var target_names = std.ArrayList([]const u8).empty;
+            errdefer {
+                for (target_names.items) |tn| gpa.free(tn);
+                target_names.deinit(gpa);
+            }
+            // Use a set to deduplicate target names across exe/static_lib
+            var target_dedup = std.StringHashMap(void).init(gpa);
+            defer target_dedup.deinit();
+
+            if (platform_header.targets) |targets_idx| {
+                const targets_section = parse_ast.store.getTargetsSection(targets_idx);
+
+                // Collect from exe targets
+                if (targets_section.exe) |exe_idx| {
+                    const exe_link = parse_ast.store.getTargetLinkType(exe_idx);
+                    const entries = parse_ast.store.targetEntrySlice(exe_link.entries);
+                    for (entries) |entry_idx| {
+                        const tentry = parse_ast.store.getTargetEntry(entry_idx);
+                        const tname = parse_ast.resolve(tentry.target);
+                        if (!target_dedup.contains(tname)) {
+                            const duped = try gpa.dupe(u8, tname);
+                            try target_dedup.put(duped, {});
+                            try target_names.append(gpa, duped);
+                        }
+                    }
+                }
+
+                // Collect from static_lib targets
+                if (targets_section.static_lib) |lib_idx| {
+                    const lib_link = parse_ast.store.getTargetLinkType(lib_idx);
+                    const entries = parse_ast.store.targetEntrySlice(lib_link.entries);
+                    for (entries) |entry_idx| {
+                        const tentry = parse_ast.store.getTargetEntry(entry_idx);
+                        const tname = parse_ast.resolve(tentry.target);
+                        if (!target_dedup.contains(tname)) {
+                            const duped = try gpa.dupe(u8, tname);
+                            try target_dedup.put(duped, {});
+                            try target_names.append(gpa, duped);
+                        }
+                    }
+                }
+            }
+
+            // Default to native target if no targets section
+            if (target_names.items.len == 0) {
+                try target_names.append(gpa, try gpa.dupe(u8, RocTarget.detectNative().toName()));
+            }
+
             return PlatformHeaderInfo{
                 .requires_entries = try requires_entries.toOwnedSlice(gpa),
                 .type_aliases = try type_aliases.toOwnedSlice(gpa),
+                .targets = try target_names.toOwnedSlice(gpa),
             };
         },
         else => return error.NotPlatformFile,
@@ -671,6 +764,9 @@ const CollectedModuleTypeInfo = struct {
 };
 
 /// Internal representation of a collected type for the type table.
+/// Contains only structural information (field names, type_ids, tag names).
+/// Layout information (sizes, alignments, field ordering) is computed separately
+/// per target via `computeLayoutsForTarget`.
 const CollectedTypeRepr = union(enum) {
     bool_,
     box: u64,
@@ -691,29 +787,41 @@ const CollectedTypeRepr = union(enum) {
     unit,
     list: u64,
     function: struct { arg_ids: []const u64, ret_id: u64 },
-    record: struct { name: []const u8, fields: []const CollectedRecordField, size: u64, alignment: u64 },
-    tag_union: struct { name: []const u8, tags: []const CollectedTagInfo, size: u64, alignment: u64 },
+    record: struct {
+        name: []const u8,
+        /// Fields stored in alphabetical order by name (canonical, target-independent).
+        fields: []const CollectedRecordField,
+    },
+    tag_union: struct { name: []const u8, tags: []const CollectedTagInfo },
     unknown: []const u8,
 };
 
 const CollectedRecordField = struct {
     name: []const u8,
     type_id: u64,
-    size: u64,
-    alignment: u64,
 };
 
 const CollectedTagInfo = struct {
     name: []const u8,
     payload_ids: []const u64,
-    payload_size: u64,
-    payload_alignment: u64,
+};
+
+/// Per-type layout information computed for a specific target.
+const CollectedTypeLayout = struct {
+    size: u64,
+    alignment: u64,
+    /// For records: permutation of field indices giving ABI ordering for this target.
+    /// Empty for non-records.
+    field_order: []const u64,
 };
 
 /// Builds a type table from compiler type vars, deduplicating entries.
+/// Contains only structural type information; layout is computed separately per target.
 const TypeTable = struct {
     entries: std.ArrayList(CollectedTypeRepr),
     var_map: std.AutoHashMap(@import("types").Var, u64),
+    /// Maps structural record signatures to existing type table indices for dedup.
+    record_dedup: std.StringHashMap(u64),
     gpa: std.mem.Allocator,
 
     const types = @import("types");
@@ -722,6 +830,7 @@ const TypeTable = struct {
         return .{
             .entries = std.ArrayList(CollectedTypeRepr).empty,
             .var_map = std.AutoHashMap(types.Var, u64).init(gpa),
+            .record_dedup = std.StringHashMap(u64).init(gpa),
             .gpa = gpa,
         };
     }
@@ -732,6 +841,12 @@ const TypeTable = struct {
         }
         self.entries.deinit(self.gpa);
         self.var_map.deinit();
+        // Free dedup keys
+        var dedup_iter = self.record_dedup.keyIterator();
+        while (dedup_iter.next()) |key| {
+            self.gpa.free(key.*);
+        }
+        self.record_dedup.deinit();
     }
 
     fn freeEntry(self: *TypeTable, entry: CollectedTypeRepr) void {
@@ -794,6 +909,7 @@ const TypeTable = struct {
     /// Get an existing type table index for a var, or insert a new entry.
     /// Pre-registers a placeholder before conversion to prevent infinite recursion
     /// on cyclic types (the placeholder is updated in-place after conversion).
+    /// Records are deduplicated by structural signature (field names + type_ids).
     fn getOrInsert(self: *TypeTable, env: *const ModuleEnv, type_var: types.Var) u64 {
         const resolved = env.types.resolveVar(type_var);
         const root_var = resolved.var_;
@@ -809,25 +925,56 @@ const TypeTable = struct {
 
         const repr = self.convertContent(env, resolved.desc.content);
 
-        // Update placeholder with actual representation
-        self.entries.items[@intCast(idx)] = repr;
-
-        // Assign synthetic names to anonymous records so glue generates struct defs
+        // For anonymous records, check for structural duplicates
         switch (repr) {
             .record => |rec| {
                 if (rec.name.len == 0) {
+                    // Build a dedup key from field names + type_ids
+                    if (self.buildRecordDedupKey(rec.fields)) |dedup_key| {
+                        if (self.record_dedup.get(dedup_key)) |existing_idx| {
+                            // Duplicate found — point this var at the existing entry
+                            // and discard the placeholder and the new repr
+                            self.var_map.put(root_var, existing_idx) catch {};
+                            self.freeEntry(repr);
+                            // Replace placeholder with unit (placeholder slot is wasted but harmless)
+                            self.entries.items[@intCast(idx)] = .unit;
+                            self.gpa.free(dedup_key);
+                            return existing_idx;
+                        }
+                        // New unique record — register it
+                        self.record_dedup.put(dedup_key, idx) catch {
+                            self.gpa.free(dedup_key);
+                        };
+                    }
+                    // Assign synthetic name
                     self.entries.items[@intCast(idx)] = .{ .record = .{
                         .name = std.fmt.allocPrint(self.gpa, "__AnonStruct{d}", .{idx}) catch "",
                         .fields = rec.fields,
-                        .size = rec.size,
-                        .alignment = rec.alignment,
                     } };
+                    return idx;
                 }
             },
             else => {},
         }
 
+        // Update placeholder with actual representation
+        self.entries.items[@intCast(idx)] = repr;
         return idx;
+    }
+
+    /// Build a dedup key for a record from its sorted fields (name + type_id pairs).
+    /// Returns null on allocation failure.
+    fn buildRecordDedupKey(self: *TypeTable, fields: []const CollectedRecordField) ?[]const u8 {
+        var buf = std.ArrayList(u8).empty;
+        for (fields) |field| {
+            buf.appendSlice(self.gpa, field.name) catch return null;
+            buf.append(self.gpa, ':') catch return null;
+            // Append type_id as fixed-width bytes for unambiguous separation
+            const id_bytes = std.mem.asBytes(&field.type_id);
+            buf.appendSlice(self.gpa, id_bytes) catch return null;
+            buf.append(self.gpa, ',') catch return null;
+        }
+        return buf.toOwnedSlice(self.gpa) catch null;
     }
 
     /// Insert a Unit type and return its index.
@@ -835,34 +982,6 @@ const TypeTable = struct {
         const idx: u64 = @intCast(self.entries.items.len);
         self.entries.append(self.gpa, .unit) catch return 0;
         return idx;
-    }
-
-    const SizeAlign = struct { size: u64, alignment: u64 };
-
-    /// Get the size and alignment for a type table entry by index.
-    fn getSizeAlign(self: *const TypeTable, type_id: u64) SizeAlign {
-        if (type_id >= self.entries.items.len) return .{ .size = 0, .alignment = 1 };
-        return getSizeAlignForRepr(self.entries.items[@intCast(type_id)]);
-    }
-
-    /// Get the size and alignment for a CollectedTypeRepr.
-    fn getSizeAlignForRepr(repr: CollectedTypeRepr) SizeAlign {
-        return switch (repr) {
-            .bool_ => .{ .size = 1, .alignment = 1 },
-            .box => .{ .size = 8, .alignment = 8 },
-            .u8_, .i8_ => .{ .size = 1, .alignment = 1 },
-            .u16_, .i16_ => .{ .size = 2, .alignment = 2 },
-            .u32_, .i32_, .f32_ => .{ .size = 4, .alignment = 4 },
-            .u64_, .i64_, .f64_, .dec => .{ .size = 8, .alignment = 8 },
-            .u128_, .i128_ => .{ .size = 16, .alignment = 16 },
-            .str_ => .{ .size = 24, .alignment = 8 },
-            .list => .{ .size = 24, .alignment = 8 },
-            .unit => .{ .size = 0, .alignment = 0 },
-            .record => |rec| .{ .size = rec.size, .alignment = rec.alignment },
-            .function => .{ .size = 0, .alignment = 1 },
-            .tag_union => |tu| .{ .size = tu.size, .alignment = tu.alignment },
-            .unknown => .{ .size = 0, .alignment = 1 },
-        };
     }
 
     fn convertContent(self: *TypeTable, env: *const ModuleEnv, content: types.Content) CollectedTypeRepr {
@@ -942,8 +1061,6 @@ const TypeTable = struct {
                         return .{ .record = .{
                             .name = self.gpa.dupe(u8, display_name) catch "",
                             .fields = rec.fields,
-                            .size = rec.size,
-                            .alignment = rec.alignment,
                         } };
                     },
                     else => return record_repr,
@@ -961,8 +1078,6 @@ const TypeTable = struct {
                         return .{ .tag_union = .{
                             .name = self.gpa.dupe(u8, display_name) catch "",
                             .tags = collected_tu.tags,
-                            .size = collected_tu.size,
-                            .alignment = collected_tu.alignment,
                         } };
                     },
                     else => return tu_repr,
@@ -978,91 +1093,85 @@ const TypeTable = struct {
 
     fn convertRecord(self: *TypeTable, env: *const ModuleEnv, record: types.Record) CollectedTypeRepr {
         const ident_store = env.getIdentStoreConst();
-        const fields_slice = env.types.getRecordFieldsSlice(record.fields);
-        const field_names = fields_slice.items(.name);
-        const field_vars = fields_slice.items(.var_);
 
-        if (field_names.len == 0) return .unit;
+        // Flatten record extension chain: a record type may be split across
+        // multiple linked records via the `ext` variable, e.g.:
+        //   { mouse_wheel: F32 | { frame_count: U64, keys: List(U8) | empty_record } }
+        // We must collect fields from all segments.
+        var all_names = std.ArrayList(base.Ident.Idx).empty;
+        defer all_names.deinit(self.gpa);
+        var all_vars = std.ArrayList(types.Var).empty;
+        defer all_vars.deinit(self.gpa);
+
+        var current = record;
+        var depth: usize = 0;
+        while (depth < 64) : (depth += 1) {
+            const slice = env.types.getRecordFieldsSlice(current.fields);
+            const names = slice.items(.name);
+            const vars = slice.items(.var_);
+            for (names, vars) |n, v| {
+                all_names.append(self.gpa, n) catch return self.oomUnknown("record");
+                all_vars.append(self.gpa, v) catch return self.oomUnknown("record");
+            }
+
+            // Follow the extension variable to the next record segment
+            const ext = env.types.resolveVar(current.ext);
+            switch (ext.desc.content) {
+                .structure => |ft| switch (ft) {
+                    .record => |r| {
+                        current = r;
+                        continue;
+                    },
+                    .empty_record => break,
+                    else => break,
+                },
+                else => break,
+            }
+        }
+
+        const field_count = all_names.items.len;
+        if (field_count == 0) return .unit;
 
         // First pass: getOrInsert all field type_ids so nested types are in the table
-        const field_type_ids = self.gpa.alloc(u64, field_names.len) catch return self.oomUnknown("record");
+        const field_type_ids = self.gpa.alloc(u64, field_count) catch return self.oomUnknown("record");
         defer self.gpa.free(field_type_ids);
-        for (0..field_names.len) |i| {
-            field_type_ids[i] = self.getOrInsert(env, field_vars[i]);
+        for (0..field_count) |i| {
+            field_type_ids[i] = self.getOrInsert(env, all_vars.items[i]);
         }
 
-        // Get size/alignment for each field
-        const field_sizes = self.gpa.alloc(SizeAlign, field_names.len) catch return self.oomUnknown("record");
-        defer self.gpa.free(field_sizes);
-        for (0..field_names.len) |i| {
-            field_sizes[i] = self.getSizeAlign(field_type_ids[i]);
-        }
-
-        // Build sortable array of field indices
-        var field_indices = self.gpa.alloc(usize, field_names.len) catch return self.oomUnknown("record");
+        // Build sortable array of field indices for alphabetical ordering
+        var field_indices = self.gpa.alloc(usize, field_count) catch return self.oomUnknown("record");
         defer self.gpa.free(field_indices);
-        for (0..field_names.len) |i| {
+        for (0..field_count) |i| {
             field_indices[i] = i;
         }
 
-        // Sort by alignment descending, then name ascending (matching store.zig ABI)
+        // Sort alphabetically by name (canonical, target-independent order)
         const SortCtx = struct {
             names: []const base.Ident.Idx,
             idents: *const base.Ident.Store,
-            sizes: []const SizeAlign,
 
             pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
-                const a_align = ctx.sizes[a].alignment;
-                const b_align = ctx.sizes[b].alignment;
-                if (a_align != b_align) {
-                    return a_align > b_align; // descending alignment
-                }
                 const a_text = ctx.idents.getText(ctx.names[a]);
                 const b_text = ctx.idents.getText(ctx.names[b]);
                 return std.mem.order(u8, a_text, b_text) == .lt;
             }
         };
-        std.mem.sort(usize, field_indices, SortCtx{ .names = field_names, .idents = ident_store, .sizes = field_sizes }, SortCtx.lessThan);
+        std.mem.sort(usize, field_indices, SortCtx{ .names = all_names.items, .idents = ident_store }, SortCtx.lessThan);
 
-        // Build collected fields in sorted order and compute record size
-        const collected_fields = self.gpa.alloc(CollectedRecordField, field_names.len) catch return self.oomUnknown("record");
-        var max_alignment: u64 = 0;
-        var current_offset: u64 = 0;
+        // Build collected fields in alphabetical order
+        const collected_fields = self.gpa.alloc(CollectedRecordField, field_count) catch return self.oomUnknown("record");
         for (field_indices, 0..) |src_idx, dst_idx| {
-            const name_text = ident_store.getText(field_names[src_idx]);
-            const f_size = field_sizes[src_idx].size;
-            const f_align = field_sizes[src_idx].alignment;
-
-            // Track max alignment for the record
-            if (f_align > max_alignment) max_alignment = f_align;
-
-            // Align current offset
-            if (f_align > 0) {
-                const rem = current_offset % f_align;
-                if (rem != 0) current_offset += f_align - rem;
-            }
-            current_offset += f_size;
-
+            const name_text = ident_store.getText(all_names.items[src_idx]);
             collected_fields[dst_idx] = .{
                 .name = self.gpa.dupe(u8, name_text) catch "",
                 .type_id = field_type_ids[src_idx],
-                .size = f_size,
-                .alignment = f_align,
             };
-        }
-
-        // Round total size up to max alignment
-        var record_size = current_offset;
-        if (max_alignment > 0) {
-            const rem = record_size % max_alignment;
-            if (rem != 0) record_size += max_alignment - rem;
         }
 
         return .{ .record = .{
             .name = "",
             .fields = collected_fields,
-            .size = record_size,
-            .alignment = max_alignment,
         } };
     }
 
@@ -1081,75 +1190,18 @@ const TypeTable = struct {
             field_type_ids[i] = self.getOrInsert(env, ev);
         }
 
-        const field_sizes = self.gpa.alloc(SizeAlign, elem_vars.len) catch return self.oomUnknown("tuple");
-        defer self.gpa.free(field_sizes);
-        for (0..elem_vars.len) |i| {
-            field_sizes[i] = self.getSizeAlign(field_type_ids[i]);
-        }
-
-        // Generate positional field names (_0, _1, ...) before sorting
-        const field_names = self.gpa.alloc([]const u8, elem_vars.len) catch return self.oomUnknown("tuple");
-        defer self.gpa.free(field_names);
-        for (0..elem_vars.len) |i| {
-            field_names[i] = std.fmt.allocPrint(self.gpa, "_{d}", .{i}) catch "";
-        }
-
-        // Sort by alignment descending, then name ascending (matching Roc ABI)
-        var field_indices = self.gpa.alloc(usize, elem_vars.len) catch return self.oomUnknown("tuple");
-        defer self.gpa.free(field_indices);
-        for (0..elem_vars.len) |i| {
-            field_indices[i] = i;
-        }
-
-        const SortCtx = struct {
-            sizes: []const SizeAlign,
-            names: []const []const u8,
-
-            pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
-                const a_align = ctx.sizes[a].alignment;
-                const b_align = ctx.sizes[b].alignment;
-                if (a_align != b_align) {
-                    return a_align > b_align; // descending alignment
-                }
-                return std.mem.order(u8, ctx.names[a], ctx.names[b]) == .lt;
-            }
-        };
-        std.mem.sort(usize, field_indices, SortCtx{ .sizes = field_sizes, .names = field_names }, SortCtx.lessThan);
-
+        // Generate positional field names (_0, _1, ...) — already alphabetical
         const collected_fields = self.gpa.alloc(CollectedRecordField, elem_vars.len) catch return self.oomUnknown("tuple");
-        var max_alignment: u64 = 0;
-        var current_offset: u64 = 0;
-        for (field_indices, 0..) |src_idx, dst_idx| {
-            const f_size = field_sizes[src_idx].size;
-            const f_align = field_sizes[src_idx].alignment;
-
-            if (f_align > max_alignment) max_alignment = f_align;
-
-            if (f_align > 0) {
-                const rem = current_offset % f_align;
-                if (rem != 0) current_offset += f_align - rem;
-            }
-            current_offset += f_size;
-
-            collected_fields[dst_idx] = .{
-                .name = field_names[src_idx],
-                .type_id = field_type_ids[src_idx],
-                .size = f_size,
-                .alignment = f_align,
+        for (0..elem_vars.len) |i| {
+            collected_fields[i] = .{
+                .name = std.fmt.allocPrint(self.gpa, "_{d}", .{i}) catch "",
+                .type_id = field_type_ids[i],
             };
-        }
-
-        var record_size = current_offset;
-        if (max_alignment > 0) {
-            const rem = record_size % max_alignment;
-            if (rem != 0) record_size += max_alignment - rem;
         }
 
         return .{ .record = .{
             .name = "",
             .fields = collected_fields,
-            .size = record_size,
-            .alignment = max_alignment,
         } };
     }
 
@@ -1181,10 +1233,8 @@ const TypeTable = struct {
         };
         std.mem.sort(usize, tag_indices, SortCtx{ .names = tag_names, .idents = ident_store }, SortCtx.lessThan);
 
-        // Collect tags and compute per-variant payload layout
+        // Collect tags with just name and payload type ids (no layout)
         const collected_tags = self.gpa.alloc(CollectedTagInfo, tag_names.len) catch return self.oomUnknown("tag_union");
-        var max_payload_size: u64 = 0;
-        var max_payload_alignment: u64 = 0;
 
         // Also build auto-generated name from variant names joined with "Or"
         var name_len: usize = 0;
@@ -1207,33 +1257,9 @@ const TypeTable = struct {
                 payload_ids[i] = self.getOrInsert(env, av);
             }
 
-            // Compute payload as a tuple: sequential fields with alignment padding
-            var payload_size: u64 = 0;
-            var payload_alignment: u64 = 0;
-            for (payload_ids) |pid| {
-                const sa = self.getSizeAlign(pid);
-                if (sa.alignment > payload_alignment) payload_alignment = sa.alignment;
-                // Align current offset
-                if (sa.alignment > 0) {
-                    const rem = payload_size % sa.alignment;
-                    if (rem != 0) payload_size += sa.alignment - rem;
-                }
-                payload_size += sa.size;
-            }
-            // Round up to payload alignment
-            if (payload_alignment > 0) {
-                const rem = payload_size % payload_alignment;
-                if (rem != 0) payload_size += payload_alignment - rem;
-            }
-
-            if (payload_size > max_payload_size) max_payload_size = payload_size;
-            if (payload_alignment > max_payload_alignment) max_payload_alignment = payload_alignment;
-
             collected_tags[dst_idx] = .{
                 .name = self.gpa.dupe(u8, name_text) catch "",
                 .payload_ids = payload_ids,
-                .payload_size = payload_size,
-                .payload_alignment = payload_alignment,
             };
 
             // Build auto-name
@@ -1252,34 +1278,21 @@ const TypeTable = struct {
             }
         }
 
-        // Compute discriminant size/alignment from tag count.
-        // Single-variant tag unions have no discriminant (ZigGlue unwraps them to payload).
-        const disc_size: u64 = if (tag_names.len <= 1) 0 else layout.TagUnionData.discriminantSize(tag_names.len);
-        const disc_align: u64 = disc_size;
-
-        // Compute overall tag union layout: payload at offset 0, discriminant at end
-        // disc_offset = alignForward(max_payload_size, disc_align)
-        var disc_offset = max_payload_size;
-        if (disc_align > 0) {
-            const rem = disc_offset % disc_align;
-            if (rem != 0) disc_offset += disc_align - rem;
+        // Use the type table index for disambiguation instead of size/alignment
+        // (we no longer have sizes at this point)
+        const idx: u64 = @intCast(self.entries.items.len);
+        const auto_name: []const u8 = std.fmt.allocPrint(
+            self.gpa,
+            "{s}_{d}",
+            .{ auto_name_buf[0..name_pos], idx },
+        ) catch auto_name_buf[0..name_pos];
+        if (auto_name.ptr != auto_name_buf.ptr) {
+            self.gpa.free(auto_name_buf);
         }
-
-        const total_align = @max(max_payload_alignment, disc_align);
-        // total_size = alignForward(disc_offset + disc_size, total_align)
-        var total_size = disc_offset + disc_size;
-        if (total_align > 0) {
-            const rem = total_size % total_align;
-            if (rem != 0) total_size += total_align - rem;
-        }
-
-        const auto_name: []const u8 = auto_name_buf[0..name_pos];
 
         return .{ .tag_union = .{
             .name = auto_name,
             .tags = collected_tags,
-            .size = total_size,
-            .alignment = total_align,
         } };
     }
 
@@ -1312,6 +1325,194 @@ const TypeTable = struct {
         return raw_name;
     }
 };
+
+/// Compute per-type layouts for a specific target.
+/// Returns one CollectedTypeLayout per type table entry (same index).
+///
+/// Uses recursive computation because the type table inserts parent placeholders
+/// before children (getOrInsert pattern), so a forward pass would read uncomputed
+/// child layouts. Each entry is computed at most once (tracked by `computed` flags).
+fn computeLayoutsForTarget(
+    gpa: std.mem.Allocator,
+    entries: []const CollectedTypeRepr,
+    target: RocTarget,
+) ![]CollectedTypeLayout {
+    const layouts = try gpa.alloc(CollectedTypeLayout, entries.len);
+    @memset(layouts, .{ .size = 0, .alignment = 0, .field_order = &.{} });
+    const computed = try gpa.alloc(bool, entries.len);
+    defer gpa.free(computed);
+    @memset(computed, false);
+    const ptr_size: u64 = target.ptrBitWidth() / 8;
+
+    for (0..entries.len) |i| {
+        try computeLayoutForEntry(gpa, entries, layouts, computed, i, ptr_size);
+    }
+
+    return layouts;
+}
+
+/// Recursively compute the layout for a single type table entry.
+/// Ensures all referenced child types are computed first.
+fn computeLayoutForEntry(
+    gpa: std.mem.Allocator,
+    entries: []const CollectedTypeRepr,
+    layouts: []CollectedTypeLayout,
+    computed: []bool,
+    i: usize,
+    ptr_size: u64,
+) !void {
+    if (computed[i]) return;
+    computed[i] = true;
+
+    layouts[i] = switch (entries[i]) {
+        .bool_ => .{ .size = 1, .alignment = 1, .field_order = &.{} },
+        .box => .{ .size = ptr_size, .alignment = ptr_size, .field_order = &.{} },
+        .u8_, .i8_ => .{ .size = 1, .alignment = 1, .field_order = &.{} },
+        .u16_, .i16_ => .{ .size = 2, .alignment = 2, .field_order = &.{} },
+        .u32_, .i32_, .f32_ => .{ .size = 4, .alignment = 4, .field_order = &.{} },
+        .u64_, .i64_, .f64_, .dec => .{ .size = 8, .alignment = 8, .field_order = &.{} },
+        .u128_, .i128_ => .{ .size = 16, .alignment = 16, .field_order = &.{} },
+        .str_ => .{ .size = ptr_size * 3, .alignment = ptr_size, .field_order = &.{} },
+        .list => .{ .size = ptr_size * 3, .alignment = ptr_size, .field_order = &.{} },
+        .unit => .{ .size = 0, .alignment = 0, .field_order = &.{} },
+        .function => .{ .size = 0, .alignment = 1, .field_order = &.{} },
+        .unknown => .{ .size = 0, .alignment = 1, .field_order = &.{} },
+        .record => |rec| blk: {
+            const field_count = rec.fields.len;
+            if (field_count == 0) break :blk .{ .size = 0, .alignment = 0, .field_order = &.{} };
+
+            // Recursively ensure all field types are computed first
+            for (rec.fields) |field| {
+                if (field.type_id < entries.len) {
+                    try computeLayoutForEntry(gpa, entries, layouts, computed, @intCast(field.type_id), ptr_size);
+                }
+            }
+
+            // Get size/alignment for each field from now-computed layouts
+            const field_sa = try gpa.alloc(SizeAlign, field_count);
+            defer gpa.free(field_sa);
+            for (rec.fields, 0..) |field, fi| {
+                if (field.type_id < entries.len) {
+                    field_sa[fi] = .{ .size = layouts[@intCast(field.type_id)].size, .alignment = layouts[@intCast(field.type_id)].alignment };
+                } else {
+                    field_sa[fi] = .{ .size = 0, .alignment = 1 };
+                }
+            }
+
+            // Build field indices and sort by alignment desc, then name asc (Roc ABI)
+            const field_indices = try gpa.alloc(usize, field_count);
+            defer gpa.free(field_indices);
+            for (0..field_count) |fi| {
+                field_indices[fi] = fi;
+            }
+
+            const RecordSortCtx = struct {
+                sa: []const SizeAlign,
+                flds: []const CollectedRecordField,
+
+                pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
+                    const a_align = ctx.sa[a].alignment;
+                    const b_align = ctx.sa[b].alignment;
+                    if (a_align != b_align) return a_align > b_align;
+                    return std.mem.order(u8, ctx.flds[a].name, ctx.flds[b].name) == .lt;
+                }
+            };
+            std.mem.sort(usize, field_indices, RecordSortCtx{ .sa = field_sa, .flds = rec.fields }, RecordSortCtx.lessThan);
+
+            // Compute padded offsets and total size
+            var max_alignment: u64 = 0;
+            var current_offset: u64 = 0;
+            for (field_indices) |src_idx| {
+                const f_align = field_sa[src_idx].alignment;
+                const f_size = field_sa[src_idx].size;
+                if (f_align > max_alignment) max_alignment = f_align;
+                if (f_align > 0) {
+                    const rem = current_offset % f_align;
+                    if (rem != 0) current_offset += f_align - rem;
+                }
+                current_offset += f_size;
+            }
+            if (max_alignment > 0) {
+                const rem = current_offset % max_alignment;
+                if (rem != 0) current_offset += max_alignment - rem;
+            }
+
+            // Store field_order as the ABI-sorted permutation
+            const field_order = try gpa.alloc(u64, field_count);
+            for (field_indices, 0..) |src_idx, dst_idx| {
+                field_order[dst_idx] = @intCast(src_idx);
+            }
+
+            break :blk .{ .size = current_offset, .alignment = max_alignment, .field_order = field_order };
+        },
+        .tag_union => |tu| blk: {
+            // Recursively ensure all payload types are computed first
+            for (tu.tags) |tag| {
+                for (tag.payload_ids) |pid| {
+                    if (pid < entries.len) {
+                        try computeLayoutForEntry(gpa, entries, layouts, computed, @intCast(pid), ptr_size);
+                    }
+                }
+            }
+
+            // Compute per-variant payload sizes from now-computed layouts
+            var max_payload_size: u64 = 0;
+            var max_payload_alignment: u64 = 0;
+
+            for (tu.tags) |tag| {
+                var payload_size: u64 = 0;
+                var payload_alignment: u64 = 0;
+                for (tag.payload_ids) |pid| {
+                    const sa: SizeAlign = if (pid < entries.len)
+                        .{ .size = layouts[@intCast(pid)].size, .alignment = layouts[@intCast(pid)].alignment }
+                    else
+                        .{ .size = 0, .alignment = 1 };
+                    if (sa.alignment > payload_alignment) payload_alignment = sa.alignment;
+                    if (sa.alignment > 0) {
+                        const rem = payload_size % sa.alignment;
+                        if (rem != 0) payload_size += sa.alignment - rem;
+                    }
+                    payload_size += sa.size;
+                }
+                if (payload_alignment > 0) {
+                    const rem = payload_size % payload_alignment;
+                    if (rem != 0) payload_size += payload_alignment - rem;
+                }
+                if (payload_size > max_payload_size) max_payload_size = payload_size;
+                if (payload_alignment > max_payload_alignment) max_payload_alignment = payload_alignment;
+            }
+
+            // Discriminant
+            const disc_size: u64 = if (tu.tags.len <= 1) 0 else layout.TagUnionData.discriminantSize(tu.tags.len);
+            const disc_align: u64 = disc_size;
+
+            var disc_offset = max_payload_size;
+            if (disc_align > 0) {
+                const rem = disc_offset % disc_align;
+                if (rem != 0) disc_offset += disc_align - rem;
+            }
+
+            const total_align = @max(max_payload_alignment, disc_align);
+            var total_size = disc_offset + disc_size;
+            if (total_align > 0) {
+                const rem = total_size % total_align;
+                if (rem != 0) total_size += total_align - rem;
+            }
+
+            break :blk .{ .size = total_size, .alignment = total_align, .field_order = &.{} };
+        },
+    };
+}
+
+const SizeAlign = struct { size: u64, alignment: u64 };
+
+/// Free computed layouts, including any allocated field_order slices.
+fn freeComputedLayouts(gpa: std.mem.Allocator, layouts: []CollectedTypeLayout) void {
+    for (layouts) |l| {
+        if (l.field_order.len > 0) gpa.free(l.field_order);
+    }
+    gpa.free(layouts);
+}
 
 // Roc C-ABI struct definitions for glue platform types.
 // Fields are ordered alphabetically to match Roc's C ABI layout.
@@ -1355,12 +1556,27 @@ const ProvidesEntryRoc = extern struct {
     type_id: u64,
 };
 
-/// Types := { entrypoints : List(EntryPoint), modules : List(ModuleTypeInfo), provides_entries : List(ProvidesEntry), type_table : List(TypeRepr) }
+/// TypeLayout := { alignment : U64, field_order : List(U64), size : U64 } — fields alphabetical
+const TypeLayoutRoc = extern struct {
+    alignment: u64,
+    field_order: RocList,
+    size: u64,
+};
+
+/// TargetLayout := { target : Str, type_layouts : List(TypeLayout) } — fields alphabetical
+const TargetLayoutRoc = extern struct {
+    target: RocStr,
+    type_layouts: RocList,
+};
+
+/// Types := { entrypoints : List(EntryPoint), layouts : List(TargetLayout), modules : List(ModuleTypeInfo), provides_entries : List(ProvidesEntry), target_names : List(Str), type_table : List(TypeRepr) }
 /// Fields ordered by alignment descending, then alphabetically
 const TypesInnerRoc = extern struct {
     entrypoints: RocList,
+    layouts: RocList,
     modules: RocList,
     provides_entries: RocList,
+    target_names: RocList,
     type_table: RocList,
 };
 
@@ -1419,19 +1635,15 @@ const FunctionPayload = extern struct {
     ret: u64,
 };
 
-/// RecordRepr := { alignment : U64, fields : List(RecordField), name : Str, size : U64 } — fields alphabetical
+/// RecordRepr := { fields : List(RecordField), name : Str } — fields alphabetical
 const RecordPayload = extern struct {
-    alignment: u64,
     fields: RocList,
     name: RocStr,
-    size: u64,
 };
 
-/// TagUnionRepr := { alignment : U64, name : Str, size : U64, tags : List(TagVariant) } — fields alphabetical
+/// TagUnionRepr := { name : Str, tags : List(TagVariant) } — fields alphabetical
 const TagUnionPayload = extern struct {
-    alignment: u64,
     name: RocStr,
-    size: u64,
     tags: RocList,
 };
 
@@ -1451,20 +1663,16 @@ const TypeReprRoc = extern struct {
     tag: TypeReprTag,
 };
 
-/// RecordField := { alignment : U64, name : Str, size : U64, type_id : U64 }
+/// RecordField := { name : Str, type_id : U64 } — fields alphabetical
 const RecordFieldTypeReprRoc = extern struct {
-    alignment: u64,
     name: RocStr,
-    size: u64,
     type_id: u64,
 };
 
-/// TagVariant := { name : Str, payload : List(U64), payload_alignment : U64, payload_size : U64 }
+/// TagVariant := { name : Str, payload : List(U64) } — fields alphabetical
 const TagVariantRoc = extern struct {
     name: RocStr,
     payload: RocList,
-    payload_alignment: u64,
-    payload_size: u64,
 };
 
 const SMALL_STRING_SIZE = @sizeOf(RocStr);
@@ -1601,9 +1809,7 @@ fn serializeTypeRepr(
                 const fptr: [*]RecordFieldTypeReprRoc = @ptrCast(@alignCast(fb));
                 for (rec.fields, 0..) |field, i| {
                     fptr[i] = .{
-                        .alignment = field.alignment,
                         .name = createBigRocStr(field.name, roc_ops),
-                        .size = field.size,
                         .type_id = field.type_id,
                     };
                 }
@@ -1615,10 +1821,8 @@ fn serializeTypeRepr(
             } else RocList.empty();
 
             result.payload.record = .{
-                .alignment = rec.alignment,
                 .fields = fields_list,
                 .name = createBigRocStr(rec.name, roc_ops),
-                .size = rec.size,
             };
         },
         .tag_union => |tu| {
@@ -1637,8 +1841,6 @@ fn serializeTypeRepr(
                     tptr[i] = .{
                         .name = createBigRocStr(tag.name, roc_ops),
                         .payload = buildU64RocList(tag.payload_ids, roc_ops),
-                        .payload_alignment = tag.payload_alignment,
-                        .payload_size = tag.payload_size,
                     };
                 }
                 break :tblk RocList{
@@ -1649,9 +1851,7 @@ fn serializeTypeRepr(
             } else RocList.empty();
 
             result.payload.tag_union = .{
-                .alignment = tu.alignment,
                 .name = createBigRocStr(tu.name, roc_ops),
-                .size = tu.size,
                 .tags = tags_list,
             };
         },
@@ -1690,6 +1890,86 @@ fn buildTypeTableRocList(
     };
 }
 
+/// Build a RocList of RocStr from a string slice.
+fn buildStrRocList(
+    strings: []const []const u8,
+    roc_ops: *builtins.host_abi.RocOps,
+) RocList {
+    if (strings.len == 0) return RocList.empty();
+
+    const data_size = strings.len * @sizeOf(RocStr);
+    const bytes = builtins.utils.allocateWithRefcount(
+        data_size,
+        @alignOf(RocStr),
+        true,
+        roc_ops,
+    );
+    const ptr: [*]RocStr = @ptrCast(@alignCast(bytes));
+    for (strings, 0..) |s, i| {
+        ptr[i] = createBigRocStr(s, roc_ops);
+    }
+    return RocList{
+        .bytes = bytes,
+        .length = strings.len,
+        .capacity_or_alloc_ptr = strings.len,
+    };
+}
+
+/// Build a RocList of TargetLayoutRoc from per-target layout data.
+fn buildLayoutsRocList(
+    target_names: []const []const u8,
+    per_target_layouts: []const []CollectedTypeLayout,
+    roc_ops: *builtins.host_abi.RocOps,
+) RocList {
+    if (target_names.len == 0) return RocList.empty();
+
+    const data_size = target_names.len * @sizeOf(TargetLayoutRoc);
+    const bytes = builtins.utils.allocateWithRefcount(
+        data_size,
+        @alignOf(TargetLayoutRoc),
+        true,
+        roc_ops,
+    );
+    const ptr: [*]TargetLayoutRoc = @ptrCast(@alignCast(bytes));
+
+    for (target_names, per_target_layouts, 0..) |tname, layouts, i| {
+        // Build type_layouts list for this target
+        const tl_list = if (layouts.len > 0) tblk: {
+            const tl_data_size = layouts.len * @sizeOf(TypeLayoutRoc);
+            const tl_bytes = builtins.utils.allocateWithRefcount(
+                tl_data_size,
+                @alignOf(TypeLayoutRoc),
+                true,
+                roc_ops,
+            );
+            const tl_ptr: [*]TypeLayoutRoc = @ptrCast(@alignCast(tl_bytes));
+            for (layouts, 0..) |l, j| {
+                tl_ptr[j] = TypeLayoutRoc{
+                    .alignment = l.alignment,
+                    .field_order = buildU64RocList(l.field_order, roc_ops),
+                    .size = l.size,
+                };
+            }
+            break :tblk RocList{
+                .bytes = tl_bytes,
+                .length = layouts.len,
+                .capacity_or_alloc_ptr = layouts.len,
+            };
+        } else RocList.empty();
+
+        ptr[i] = TargetLayoutRoc{
+            .target = createBigRocStr(tname, roc_ops),
+            .type_layouts = tl_list,
+        };
+    }
+
+    return RocList{
+        .bytes = bytes,
+        .length = target_names.len,
+        .capacity_or_alloc_ptr = target_names.len,
+    };
+}
+
 /// Construct the List(Types) Roc value from collected module type info.
 fn constructTypesRocList(
     collected_modules: []const CollectedModuleTypeInfo,
@@ -1698,6 +1978,7 @@ fn constructTypesRocList(
     type_table: *const TypeTable,
     entrypoint_type_ids: *const std.StringHashMap(u64),
     provides_type_ids: *const std.StringHashMap(u64),
+    per_target_layouts: []const []CollectedTypeLayout,
     roc_ops: *builtins.host_abi.RocOps,
 ) RocList {
     // Build modules list
@@ -1849,8 +2130,10 @@ fn constructTypesRocList(
     const types_inner_ptr: *TypesInnerRoc = @ptrCast(@alignCast(types_inner_bytes));
     types_inner_ptr.* = TypesInnerRoc{
         .entrypoints = entrypoints_list,
+        .layouts = buildLayoutsRocList(platform_info.targets, per_target_layouts, roc_ops),
         .modules = modules_list,
         .provides_entries = provides_list,
+        .target_names = buildStrRocList(platform_info.targets, roc_ops),
         .type_table = buildTypeTableRocList(type_table, roc_ops),
     };
 

@@ -7287,15 +7287,23 @@ pub const Interpreter = struct {
                     // even though the type says it's the recursive type directly.
                     const variant_layout = acc.getVariantLayout(tag_index);
 
-                    // For rigid type variables, the variant_layout may be incorrect (e.g., ZST)
-                    // because the layout was computed before type substitution. Check if we have
-                    // a substitution and use its layout instead.
+                    // The variant_layout may be incorrect (e.g., ZST) when the tag union was
+                    // compiled in a polymorphic context (e.g., List.get : List(a) -> Result a b)
+                    // where the payload type `a` was a rigid/flex var at layout-computation time.
+                    // When we have a concrete arg type at runtime, compute the correct layout.
                     const arg_resolved = self.runtime_types.resolveVar(arg_var);
                     const effective_layout = blk: {
                         if (arg_resolved.desc.content == .rigid) {
-                            if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
+                            // Check both rigid_subst (var-based) and rigid_name_subst
+                            // (name-based, from the platform's `for` clause). This must
+                            // mirror getRuntimeLayout's substitution logic — otherwise
+                            // payloads like Ok({}) in Try({}, I64) keep the inflated
+                            // shared-payload layout instead of resolving to ZST.
+                            const subst_var = self.rigid_subst.get(arg_resolved.var_) orelse
+                                self.rigid_name_subst.get(arg_resolved.desc.content.rigid.name.idx);
+                            if (subst_var) |sv| {
                                 // Use the substituted concrete type's layout
-                                break :blk self.getRuntimeLayout(subst_var) catch variant_layout;
+                                break :blk self.getRuntimeLayout(sv) catch variant_layout;
                             } else {
                                 // No substitution found. For polymorphic functions like List.get,
                                 // the rigid var wasn't properly substituted. As a workaround,
@@ -7336,6 +7344,19 @@ pub const Interpreter = struct {
                                     }
                                 }
                             }
+                        }
+                        // For concrete (structure/alias) types where variant_layout is wrong:
+                        // the tag union was compiled in a polymorphic context where the payload
+                        // type was unknown, yielding either a ZST payload (e.g., List.get) or
+                        // a box_of_zst payload (e.g., render_for_host! where the return type
+                        // Try(Box(Model), I64) leaks Box into the Ok variant layout).
+                        // At runtime, compute the correct layout from the concrete arg type.
+                        if ((variant_layout.tag == .zst or variant_layout.tag == .box_of_zst) and
+                            (arg_resolved.desc.content == .structure or arg_resolved.desc.content == .alias))
+                        {
+                            if (self.getRuntimeLayout(arg_var)) |computed_layout| {
+                                break :blk computed_layout;
+                            } else |_| {}
                         }
                         break :blk variant_layout;
                     };
@@ -7472,6 +7493,23 @@ pub const Interpreter = struct {
         roc_ops: *RocOps,
     ) !StackValue {
         traceDbg(roc_ops, "evalBoxIntrinsic: entering with arg_value.layout.tag={s}", .{@tagName(arg_value.layout.tag)});
+
+        // If the payload is ZST, always use box_of_zst regardless of what the
+        // polymorphic return type variable resolves to.
+        // Also handle the case where the payload has box_of_zst layout due to type
+        // variable contamination (e.g., render_for_host! where the return type
+        // Try(Box(Model), I64) causes the Ok variant's Model type to be resolved as
+        // Box(Model) instead of Model). In that case, the payload is conceptually
+        // ZST but has 8-byte box_of_zst layout. Boxing it should produce box_of_zst,
+        // not allocate a new box wrapping the null pointer.
+        const payload_size = self.runtime_layout_store.layoutSize(arg_value.layout);
+        if (payload_size == 0 or arg_value.layout.tag == .box_of_zst) {
+            traceDbg(roc_ops, "evalBoxIntrinsic: payload is ZST (size=0) or box_of_zst, using box_of_zst", .{});
+            const return_ct_var = can.ModuleEnv.varFrom(return_expr_idx);
+            const return_rt_var = try self.translateTypeVar(self.env, return_ct_var);
+            return try self.makeBoxValueFromLayout(layout.Layout.boxOfZst(), arg_value, roc_ops, return_rt_var);
+        }
+
         const return_ct_var = can.ModuleEnv.varFrom(return_expr_idx);
         traceDbg(roc_ops, "evalBoxIntrinsic: return_ct_var obtained", .{});
         const return_rt_var = try self.translateTypeVar(self.env, return_ct_var);
@@ -12824,31 +12862,36 @@ pub const Interpreter = struct {
                         break :blk self.resolved_module_envs[resolved_idx];
                     };
                     if (other_env) |builtin_env| {
-                        const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
-                        const target_def = builtin_env.store.getDef(target_def_idx);
-                        const target_pattern = builtin_env.store.getPattern(target_def.pattern);
-                        if (target_pattern == .assign) {
-                            const method_ident = target_pattern.assign.ident;
-                            const is_box_method = method_ident == builtin_env.idents.builtin_box_box;
-                            const is_unbox_method = method_ident == builtin_env.idents.builtin_box_unbox;
-                            // Check if this is Box.box
-                            if (is_box_method and arg_indices.len == 1) {
-                                const arg_expr = arg_indices[0];
-                                const arg_value = try self.evalWithExpectedType(arg_expr, roc_ops, null);
-                                defer arg_value.decref(&self.runtime_layout_store, roc_ops);
+                        // Guard: only attempt Box intrinsic detection if the target node is actually a def.
+                        // External lookups can point to type declaration statement nodes (not defs) for
+                        // type modules, so we must check before calling getDef.
+                        if (builtin_env.store.isDefNode(@intCast(lookup.target_node_idx))) {
+                            const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
+                            const target_def = builtin_env.store.getDef(target_def_idx);
+                            const target_pattern = builtin_env.store.getPattern(target_def.pattern);
+                            if (target_pattern == .assign) {
+                                const method_ident = target_pattern.assign.ident;
+                                const is_box_method = method_ident == builtin_env.idents.builtin_box_box;
+                                const is_unbox_method = method_ident == builtin_env.idents.builtin_box_unbox;
+                                // Check if this is Box.box
+                                if (is_box_method and arg_indices.len == 1) {
+                                    const arg_expr = arg_indices[0];
+                                    const arg_value = try self.evalWithExpectedType(arg_expr, roc_ops, null);
+                                    defer arg_value.decref(&self.runtime_layout_store, roc_ops);
 
-                                const result = try self.evalBoxIntrinsic(arg_value, expr_idx, roc_ops);
-                                try value_stack.push(result);
-                                return;
-                            }
-                            // Check if this is Box.unbox
-                            if (is_unbox_method and arg_indices.len == 1) {
-                                const arg_expr = arg_indices[0];
-                                const boxed_value = try self.evalWithExpectedType(arg_expr, roc_ops, null);
-                                defer boxed_value.decref(&self.runtime_layout_store, roc_ops);
+                                    const result = try self.evalBoxIntrinsic(arg_value, expr_idx, roc_ops);
+                                    try value_stack.push(result);
+                                    return;
+                                }
+                                // Check if this is Box.unbox
+                                if (is_unbox_method and arg_indices.len == 1) {
+                                    const arg_expr = arg_indices[0];
+                                    const boxed_value = try self.evalWithExpectedType(arg_expr, roc_ops, null);
+                                    defer boxed_value.decref(&self.runtime_layout_store, roc_ops);
 
-                                try self.evalUnboxIntrinsic(boxed_value, value_stack, roc_ops);
-                                return;
+                                    try self.evalUnboxIntrinsic(boxed_value, value_stack, roc_ops);
+                                    return;
+                                }
                             }
                         }
                     }
@@ -14532,20 +14575,22 @@ pub const Interpreter = struct {
         // backwards compatibility with unit tests that don't call resolveImports.
         //
         const other_env = blk: {
-            // Only use import_envs if self.env is the primary module or app_env,
-            // since import_envs only contains mappings from those modules.
-            if (self.env == self.root_env or (self.app_env != null and self.env == @constCast(self.app_env.?))) {
-                if (self.import_envs.get(lookup.module_idx)) |env| {
-                    traceDbg(roc_ops, "evalLookupExternal: \"{s}\" import[{d}] -> \"{s}\"", .{ self.env.module_name, @intFromEnum(lookup.module_idx), env.module_name });
-                    break :blk env;
-                }
-            }
-            // Fall back to resolved module indices + resolved_module_envs
-            // Note: resolved_idx is an index into the other_envs array passed to resolveImports,
-            // which is stored in resolved_module_envs (NOT all_module_envs which has env at [0])
+            // Always prefer the module's own resolved import table. Each module has its own
+            // import index space, so env.imports.resolved_modules is the only correct source
+            // of truth for the module currently being executed.
             if (self.env.imports.getResolvedModule(lookup.module_idx)) |resolved_idx| {
                 std.debug.assert(resolved_idx < self.resolved_module_envs.len);
-                break :blk self.resolved_module_envs[resolved_idx];
+                const found_env = self.resolved_module_envs[resolved_idx];
+                traceDbg(roc_ops, "evalLookupExternal: \"{s}\" import[{d}] -> \"{s}\"", .{ self.env.module_name, @intFromEnum(lookup.module_idx), found_env.module_name });
+                break :blk found_env;
+            }
+            // Fall back to import_envs for backwards compatibility with unit tests
+            // that construct the interpreter without calling resolveImports.
+            if (self.env == self.root_env or (self.app_env != null and self.env == @constCast(self.app_env.?))) {
+                if (self.import_envs.get(lookup.module_idx)) |env| {
+                    traceDbg(roc_ops, "evalLookupExternal: \"{s}\" import[{d}] -> \"{s}\" (import_envs fallback)", .{ self.env.module_name, @intFromEnum(lookup.module_idx), env.module_name });
+                    break :blk env;
+                }
             }
             traceDbg(roc_ops, "evalLookupExternal: UNRESOLVED import[{d}] in \"{s}\"", .{ @intFromEnum(lookup.module_idx), self.env.module_name });
             self.triggerCrash("e_lookup_external: unresolved import", false, roc_ops);
@@ -14554,6 +14599,18 @@ pub const Interpreter = struct {
 
         // The target_node_idx is a Def.Idx in the other module
         const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
+
+        // Guard: the target node must be a def. Non-def nodes (e.g. statement_nominal_decl
+        // for type modules) indicate the canonicalizer stored the wrong node index.
+        if (!other_env.store.isDefNode(@intCast(lookup.target_node_idx))) {
+            const ident_text = self.env.getIdent(lookup.ident_idx);
+            var buf: [256]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "evalLookupExternal: target node is not a def (node_idx={d}, ident=\"{s}\", target_module=\"{s}\", calling_module=\"{s}\")", .{
+                lookup.target_node_idx, ident_text, other_env.module_name, self.env.module_name,
+            }) catch "evalLookupExternal: target node is not a def";
+            self.triggerCrash(msg, false, roc_ops);
+            return error.Crash;
+        }
 
         const target_def = other_env.store.getDef(target_def_idx);
 
@@ -19056,12 +19113,12 @@ pub const Interpreter = struct {
                         all_args[1 + idx] = arg;
                     }
 
-                    // For hosted functions, translate the return type from the CALLEE's module
-                    // (self.env), not the caller's module (saved_env). The caller's type store
-                    // may have .err content for cross-module opaque types because the union-find
-                    // chain was lost during serialization.
-                    const return_ct_var = can.ModuleEnv.varFrom(closure_header.lambda_expr_idx);
-                    const return_rt_var = try self.translateTypeVar(self.env, return_ct_var);
+                    // Use the call-site return type (dac.expr_idx) from the caller's env.
+                    // dac.expr_idx is the e_dot_access expression whose CT var is the return type.
+                    // Do NOT use closure_header.lambda_expr_idx here — that gives the function
+                    // type itself (fn(Host, Str) => Try(Str, ...)), not its return type.
+                    const return_ct_var = can.ModuleEnv.varFrom(dac.expr_idx);
+                    const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
 
                     const result = try self.callHostedFunction(hosted.index, all_args, roc_ops, return_rt_var);
 
