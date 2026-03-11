@@ -11,6 +11,8 @@ import pf.TagUnionRepr exposing [TagUnionRepr]
 import pf.RecordField exposing [RecordField]
 import pf.TagVariant exposing [TagVariant]
 import pf.ProvidesEntry exposing [ProvidesEntry]
+import pf.TargetLayout exposing [TargetLayout]
+import pf.TypeLayout exposing [TypeLayout]
 
 make_glue : List(Types) -> Try(List(File), Str)
 make_glue = |types_list| {
@@ -18,10 +20,14 @@ make_glue = |types_list| {
 	var $hosted_functions = []
 	var $type_table = []
 	var $provides_entries = []
+	var $tgts = []
+	var $layouts = []
 
 	for types in types_list {
 		$type_table = types.type_table
 		$provides_entries = types.provides_entries
+		$tgts = types.target_names
+		$layouts = types.layouts
 
 		for mod in types.modules {
 			for func in mod.hosted_functions {
@@ -45,7 +51,7 @@ make_glue = |types_list| {
 	# Sort by index so array entries are in the correct order
 	sorted = List.sort_with($hosted_functions, compare_by_index)
 
-	zig_content = generate_zig_file(sorted, $type_table, $provides_entries)
+	zig_content = generate_zig_file(sorted, $type_table, $provides_entries, $tgts, $layouts)
 
 	Ok([{ name: "roc_platform_abi.zig", content: zig_content }])
 }
@@ -170,9 +176,9 @@ is_try_type = |tu| {
 }
 
 ## Get the Zig type for a Try variant's payload.
-## Returns "void" for empty/ZST payloads (the Try comptime function handles void -> [0]u8).
+## Returns "void" for empty payloads (the Try comptime function handles void -> [0]u8).
 try_variant_zig_type = |type_table, tag| {
-	if tag.payload_size == 0 {
+	if List.is_empty(tag.payload) {
 		"void"
 	} else {
 		match List.first(tag.payload) {
@@ -326,41 +332,168 @@ generate_roc_list_generic =
 	\\}
 	\\
 
+## Look up the TypeLayout for a given type_id from a TargetLayout.
+get_type_layout : TargetLayout, U64 -> TypeLayout
+get_type_layout = |target_layout, type_id| {
+	match List.get(target_layout.type_layouts, type_id) {
+		Ok(tl) => tl
+		Err(_) => { alignment: 0, field_order: [], size: 0 }
+	}
+}
+
+## Check if any target is 32-bit (pointer width 4)
+has_32bit_target : List(Str) -> Bool
+has_32bit_target = |tgts| {
+	List.any(tgts, |t| t == "wasm32" or t == "arm32linux" or t == "arm32musl")
+}
+
+## Check if any target is 64-bit (pointer width 8)
+has_64bit_target : List(Str) -> Bool
+has_64bit_target = |tgts| {
+	List.any(tgts, |t| !(t == "wasm32" or t == "arm32linux" or t == "arm32musl"))
+}
+
+## Get the first 64-bit target layout index (or 0)
+first_64bit_layout_idx : List(Str) -> U64
+first_64bit_layout_idx = |tgts| {
+	var $idx = 0
+	var $found = 0
+	for t in tgts {
+		if !(t == "wasm32" or t == "arm32linux" or t == "arm32musl") {
+			$found = $idx
+		}
+		$idx = $idx + 1
+	}
+	$found
+}
+
+## Get the first 32-bit target layout index (or 0)
+first_32bit_layout_idx : List(Str) -> U64
+first_32bit_layout_idx = |tgts| {
+	var $idx = 0
+	var $found = 0
+	for t in tgts {
+		if t == "wasm32" or t == "arm32linux" or t == "arm32musl" {
+			$found = $idx
+		}
+		$idx = $idx + 1
+	}
+	$found
+}
+
+## Emit fields in ABI order for a given target, using the layout's field_order permutation.
+emit_fields_in_order : List(RecordField), TypeLayout, List(TypeRepr) -> Str
+emit_fields_in_order = |fields, type_layout, type_table| {
+	var $field_strs = ""
+	if List.is_empty(type_layout.field_order) {
+		# No field_order => emit in canonical (alphabetical) order
+		for field in fields {
+			zig_type = type_id_to_zig(type_table, field.type_id)
+			$field_strs = Str.concat($field_strs, "    ${escape_zig_field_name(field.name)}: ${zig_type},\n")
+		}
+	} else {
+		for order_idx in type_layout.field_order {
+			match List.get(fields, order_idx) {
+				Ok(field) => {
+					zig_type = type_id_to_zig(type_table, field.type_id)
+					$field_strs = Str.concat($field_strs, "    ${escape_zig_field_name(field.name)}: ${zig_type},\n")
+				}
+				Err(_) => {}
+			}
+		}
+	}
+	$field_strs
+}
+
+## Check if two field_order lists are the same permutation.
+same_field_order : List(U64), List(U64) -> Bool
+same_field_order = |a, b| {
+	if List.len(a) != List.len(b) {
+		Bool.False
+	} else if List.is_empty(a) and List.is_empty(b) {
+		Bool.True
+	} else {
+		var $same = Bool.True
+		var $i = 0
+		for ai in a {
+			match List.get(b, $i) {
+				Ok(bi) => { if ai != bi { $same = Bool.False } }
+				Err(_) => { $same = Bool.False }
+			}
+			$i = $i + 1
+		}
+		$same
+	}
+}
+
 ## Generate extern structs for element types found in the type table.
 ## Scans for Record types and generates Zig extern structs for them.
-## Fields arrive pre-sorted by alignment descending from the compiler.
-generate_element_type_structs : List(TypeRepr) -> Str
-generate_element_type_structs = |type_table| {
+## Fields are emitted in ABI order using the per-target layout's field_order.
+generate_element_type_structs : List(TypeRepr), List(Str), List(TargetLayout) -> Str
+generate_element_type_structs = |type_table, tgts, layouts| {
 	var $structs = ""
 	var $seen_names = []
+	var $type_idx = 0
 
 	for type_repr in type_table {
+		cur_idx = $type_idx
+		$type_idx = $type_idx + 1
 		match type_repr {
 			RocRecord(rec) =>
 				if rec.name != "" and !(List.contains($seen_names, rec.name)) {
 					$seen_names = $seen_names.append(rec.name)
-
 					struct_name = name_to_struct_name(rec.name)
-					var $field_strs = ""
-					for field in rec.fields {
-						zig_type = type_id_to_zig(type_table, field.type_id)
-						$field_strs = Str.concat(
-							$field_strs,
-							"    ${escape_zig_field_name(field.name)}: ${zig_type},\n",
+
+					# Get layouts for this type from each target
+					# Check if all tgts agree on field_order
+					first_layout = match List.first(layouts) {
+						Ok(tl) => get_type_layout(tl, cur_idx)
+						Err(_) => { alignment: 0, field_order: [], size: 0 }
+					}
+
+					all_same_order = List.all(layouts, |tl|
+						same_field_order(get_type_layout(tl, cur_idx).field_order, first_layout.field_order)
+					)
+
+					if all_same_order {
+						# Single layout — emit fields in ABI order from first target
+						field_strs = emit_fields_in_order(rec.fields, first_layout, type_table)
+
+						assertions = generate_size_assertions(struct_name, tgts, layouts, cur_idx)
+
+						$structs = Str.concat(
+							$structs,
+							"/// Element type for ${rec.name}\npub const ${struct_name} = extern struct {\n${field_strs}};\n\n${assertions}",
+						)
+					} else {
+						# Divergent field orders — emit comptime conditional
+						idx_64 = first_64bit_layout_idx(tgts)
+						idx_32 = first_32bit_layout_idx(tgts)
+						layout_64 = match List.get(layouts, idx_64) {
+							Ok(tl) => get_type_layout(tl, cur_idx)
+							Err(_) => first_layout
+						}
+						layout_32 = match List.get(layouts, idx_32) {
+							Ok(tl) => get_type_layout(tl, cur_idx)
+							Err(_) => first_layout
+						}
+
+						fields_64 = emit_fields_in_order(rec.fields, layout_64, type_table)
+						fields_32 = emit_fields_in_order(rec.fields, layout_32, type_table)
+
+						assertions_64 = if layout_64.size > 0 {
+							"    if (@sizeOf(${struct_name}) != ${U64.to_str(layout_64.size)}) @compileError(\"${struct_name} size mismatch\");\n    if (@alignOf(${struct_name}) != ${U64.to_str(layout_64.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n"
+						} else { "" }
+
+						assertions_32 = if layout_32.size > 0 {
+							"    if (@sizeOf(${struct_name}) != ${U64.to_str(layout_32.size)}) @compileError(\"${struct_name} size mismatch\");\n    if (@alignOf(${struct_name}) != ${U64.to_str(layout_32.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n"
+						} else { "" }
+
+						$structs = Str.concat(
+							$structs,
+							"/// Element type for ${rec.name}\n/// Fields ordered by alignment descending (Roc ABI)\npub const ${struct_name} = if (@sizeOf(usize) == 8) extern struct {\n${fields_64}} else extern struct {\n${fields_32}};\n\ncomptime {\n    if (@sizeOf(usize) == 8) {\n${assertions_64}    }\n    if (@sizeOf(usize) == 4) {\n${assertions_32}    }\n}\n\n",
 						)
 					}
-
-					# Comptime size/alignment assertions (guarded by pointer width)
-					assertions = if rec.size > 0 {
-						"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(rec.size)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(rec.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n    }\n}\n\n"
-					} else {
-						""
-					}
-
-					$structs = Str.concat(
-						$structs,
-						"/// Element type for ${rec.name}\npub const ${struct_name} = extern struct {\n${$field_strs}};\n\n${assertions}",
-					)
 				}
 			RocBox(_) => {}
 			RocTagUnion(_) => {}
@@ -389,20 +522,53 @@ generate_element_type_structs = |type_table| {
 	$structs
 }
 
+## Generate comptime size/alignment assertions for all tgts.
+## Groups tgts by pointer width and emits guarded assertions.
+generate_size_assertions : Str, List(Str), List(TargetLayout), U64 -> Str
+generate_size_assertions = |struct_name, tgts, layouts, type_idx| {
+	has_64 = has_64bit_target(tgts)
+	has_32 = has_32bit_target(tgts)
+
+	idx_64 = first_64bit_layout_idx(tgts)
+	idx_32 = first_32bit_layout_idx(tgts)
+
+	layout_64 = match List.get(layouts, idx_64) {
+		Ok(tl) => get_type_layout(tl, type_idx)
+		Err(_) => { alignment: 0, field_order: [], size: 0 }
+	}
+	layout_32 = match List.get(layouts, idx_32) {
+		Ok(tl) => get_type_layout(tl, type_idx)
+		Err(_) => { alignment: 0, field_order: [], size: 0 }
+	}
+
+	if has_64 and has_32 and layout_64.size > 0 and layout_32.size > 0 {
+		"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(layout_64.size)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(layout_64.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n    }\n    if (@sizeOf(usize) == 4) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(layout_32.size)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(layout_32.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n    }\n}\n\n"
+	} else if has_64 and layout_64.size > 0 {
+		"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(layout_64.size)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(layout_64.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n    }\n}\n\n"
+	} else if has_32 and layout_32.size > 0 {
+		"comptime {\n    if (@sizeOf(usize) == 4) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(layout_32.size)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(layout_32.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n    }\n}\n\n"
+	} else {
+		""
+	}
+}
+
 ## Generate extern structs for tag union types found in the type table.
 ## Multi-variant tag unions get a tag enum, payload extern union, and wrapping extern struct.
 ## Pure enums (all variants have no payload) get just an enum.
-generate_tag_union_structs : List(TypeRepr) -> Str
-generate_tag_union_structs = |type_table| {
+generate_tag_union_structs : List(TypeRepr), List(Str), List(TargetLayout) -> Str
+generate_tag_union_structs = |type_table, tgts, layouts| {
 	var $structs = ""
 	var $seen_names = []
+	var $type_idx = 0
 
 	for type_repr in type_table {
+		cur_idx = $type_idx
+		$type_idx = $type_idx + 1
 		match type_repr {
 			RocTagUnion(tu) =>
 				if List.len(tu.tags) >= 2 and tu.name != "" and !(List.contains($seen_names, tu.name)) and !(is_try_type(tu)) {
 					$seen_names = $seen_names.append(tu.name)
-					$structs = Str.concat($structs, generate_single_tag_union(type_table, tu))
+					$structs = Str.concat($structs, generate_single_tag_union(type_table, tu, tgts, layouts, cur_idx))
 				}
 			RocBox(_) => {}
 			RocRecord(_) => {}
@@ -432,7 +598,7 @@ generate_tag_union_structs = |type_table| {
 }
 
 ## Generate Zig code for a single multi-variant tag union.
-generate_single_tag_union = |type_table, tu| {
+generate_single_tag_union = |type_table, tu, tgts, layouts, type_idx| {
 	struct_name = name_to_struct_name(tu.name)
 	tag_count = List.len(tu.tags)
 	disc_type = disc_type_for_count(tag_count)
@@ -495,12 +661,8 @@ generate_single_tag_union = |type_table, tu| {
 			}
 		}
 
-		# Comptime assertions
-		assertions = if tu.size > 0 {
-			"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(tu.size)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(tu.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n    }\n}\n\n"
-		} else {
-			""
-		}
+		# Comptime assertions using per-target layouts
+		assertions = generate_size_assertions(struct_name, tgts, layouts, type_idx)
 
 		"${$tuple_structs}/// Tag discriminant for ${tu.name}.\npub const ${struct_name}Tag = enum(${disc_type}) {\n${$enum_variants}};\n\n/// Tag union: ${tu.name}\npub const ${struct_name} = extern struct {\n    payload: extern union {\n${$union_fields}    },\n    tag: ${struct_name}Tag,\n};\n\n${assertions}"
 	}
@@ -704,11 +866,10 @@ expect lowercase_first("") == ""
 
 ## Look up a type_id in the type table and return record fields if it's a record.
 ## Follows single-variant tag unions (unwrapping to their payload).
-## Type annotation ensures the interpreter uses the full TypeRepr layout.
-RecordLookup : { found: Bool, fields: List(RecordField), size: U64, alignment: U64, alt_fields: List(RecordField), alt_size: U64, alt_alignment: U64 }
+RecordLookup : { found: Bool, fields: List(RecordField) }
 
 no_record : RecordLookup
-no_record = { found: Bool.False, fields: [], size: 0, alignment: 0, alt_fields: [], alt_size: 0, alt_alignment: 0 }
+no_record = { found: Bool.False, fields: [] }
 
 lookup_record_in_type_table : List(TypeRepr), U64 -> RecordLookup
 lookup_record_in_type_table = |type_table, type_id| {
@@ -719,13 +880,12 @@ lookup_record_in_type_table = |type_table, type_id| {
 }
 
 ## Match a TypeRepr and return record fields if it's a record.
-## Type annotation ensures the interpreter uses the full 21-variant TypeRepr layout.
 lookup_record_from_repr : List(TypeRepr), TypeRepr -> RecordLookup
 lookup_record_from_repr = |type_table, type_repr| {
 	match type_repr {
 		RocRecord(rec) =>
 			if List.len(rec.fields) > 0 {
-				{ found: Bool.True, fields: rec.fields, size: rec.size, alignment: rec.alignment, alt_fields: rec.alt_fields, alt_size: rec.alt_size, alt_alignment: rec.alt_alignment }
+				{ found: Bool.True, fields: rec.fields }
 			} else {
 				no_record
 			}
@@ -771,7 +931,7 @@ lookup_record_from_repr = |type_table, type_repr| {
 # =============================================================================
 
 ## Generate the complete Zig source file
-generate_zig_file = |hosted_functions, type_table, provides_list| {
+generate_zig_file = |hosted_functions, type_table, provides_list, tgts, layouts| {
 	file_header
 		.concat(generate_imports)
 		.concat("\n")
@@ -783,10 +943,10 @@ generate_zig_file = |hosted_functions, type_table, provides_list| {
 		.concat("\n")
 		.concat(generate_roc_list_generic)
 		.concat("\n")
-		.concat(generate_element_type_structs(type_table))
-		.concat(generate_tag_union_structs(type_table))
-		.concat(generate_all_record_structs(hosted_functions, type_table))
-		.concat(generate_all_args_structs(hosted_functions, type_table))
+		.concat(generate_element_type_structs(type_table, tgts, layouts))
+		.concat(generate_tag_union_structs(type_table, tgts, layouts))
+		.concat(generate_all_record_structs(hosted_functions, type_table, tgts, layouts))
+		.concat(generate_all_args_structs(hosted_functions, type_table, tgts, layouts))
 		.concat(generate_platform_fns_struct(hosted_functions, type_table))
 		.concat("\n")
 		.concat(generate_hosted_functions_helper(hosted_functions))
@@ -1024,7 +1184,7 @@ generate_roc_str =
 ## Generate extern structs for record return types using type table (correctly sorted by alignment).
 ## Only generates RetRecord structs when ret_type_id resolves to a record in the type table.
 ## Tag union return types (e.g., Try(Record, Str)) are not yet supported and are skipped.
-generate_all_record_structs = |hosted_functions, type_table| {
+generate_all_record_structs = |hosted_functions, type_table, tgts, layouts| {
 	var $structs = ""
 	for func in hosted_functions {
 		# Only generate RetRecord if the return type is actually a record
@@ -1036,7 +1196,7 @@ generate_all_record_structs = |hosted_functions, type_table| {
 
 			$structs = Str.concat(
 				$structs,
-				generate_record_struct_def(full_name, "Return type record for ${func.name}", type_table_result, type_table),
+				generate_record_struct_def(full_name, "Return type record for ${func.name}", type_table_result, type_table, func.ret_type_id, tgts, layouts),
 			)
 		}
 		# else: return type is not a record (tag union, primitive, etc.) — skip RetRecord generation
@@ -1045,17 +1205,17 @@ generate_all_record_structs = |hosted_functions, type_table| {
 }
 
 ## Generate all argument extern structs
-generate_all_args_structs = |hosted_functions, type_table| {
+generate_all_args_structs = |hosted_functions, type_table, tgts, layouts| {
 	var $structs = ""
 	for func in hosted_functions {
-		$structs = Str.concat($structs, generate_args_struct(func, type_table))
+		$structs = Str.concat($structs, generate_args_struct(func, type_table, tgts, layouts))
 	}
 	$structs
 }
 
 ## Generate a single argument extern struct (empty string if no args).
 ## Uses type table for single-record args; positional for multi-arg or primitive args.
-generate_args_struct = |func, type_table| {
+generate_args_struct = |func, type_table, tgts, layouts| {
 	if !(has_meaningful_args(func, type_table)) {
 		return ""
 	}
@@ -1074,7 +1234,11 @@ generate_args_struct = |func, type_table| {
 
 	if type_table_result.found {
 		full_name = "${struct_name}Args"
-		return generate_record_struct_def(full_name, "Arguments for ${func.name}\n/// Roc signature: ${func.type_str}", type_table_result, type_table)
+		arg_id = match List.first(func.arg_type_ids) {
+			Ok(id) => id
+			Err(_) => 0
+		}
+		return generate_record_struct_def(full_name, "Arguments for ${func.name}\n/// Roc signature: ${func.type_str}", type_table_result, type_table, arg_id, tgts, layouts)
 	}
 
 	# Multi-arg or primitive args: use positional fields from type table
@@ -1094,54 +1258,63 @@ generate_args_struct = |func, type_table| {
 	"${doc}pub const ${struct_name}Args = extern struct {\n${$positional_fields}};\n\n"
 }
 
-## Generate a record struct definition, with comptime conditional if alt layout differs.
-generate_record_struct_def = |name, doc_text, record_info, type_table| {
-	var $fields = ""
-	for field in record_info.fields {
-		zig_type = type_id_to_zig(type_table, field.type_id)
-		$fields = Str.concat(
-			$fields,
-			"    ${escape_zig_field_name(field.name)}: ${zig_type},\n",
-		)
+## Generate a record struct definition, using per-target layouts for field ordering.
+## If tgts have divergent field orderings, emits a comptime conditional struct.
+generate_record_struct_def = |name, doc_text, record_info, type_table, type_id, tgts, layouts| {
+	# If no layouts provided, emit fields in canonical (alphabetical) order without assertions
+	if List.is_empty(layouts) {
+		var $fields = ""
+		for field in record_info.fields {
+			zig_type = type_id_to_zig(type_table, field.type_id)
+			$fields = Str.concat($fields, "    ${escape_zig_field_name(field.name)}: ${zig_type},\n")
+		}
+		doc = "/// ${doc_text}\n/// Fields ordered by alignment descending (Roc ABI)\n"
+		return "${doc}pub const ${name} = extern struct {\n${$fields}};\n\n"
 	}
 
-	has_alt = List.len(record_info.alt_fields) > 0
+	# Get layout from first target
+	first_layout = match List.first(layouts) {
+		Ok(tl) => get_type_layout(tl, type_id)
+		Err(_) => { alignment: 0, field_order: [], size: 0 }
+	}
 
-	if has_alt {
-		# Emit comptime conditional struct for divergent 64-bit/32-bit layouts
-		var $alt_field_strs = ""
-		for alt_field in record_info.alt_fields {
-			zig_type = type_id_to_zig(type_table, alt_field.type_id)
-			$alt_field_strs = Str.concat(
-				$alt_field_strs,
-				"    ${escape_zig_field_name(alt_field.name)}: ${zig_type},\n",
-			)
-		}
+	# Check if all tgts agree on field_order
+	all_same_order = List.all(layouts, |tl|
+		same_field_order(get_type_layout(tl, type_id).field_order, first_layout.field_order)
+	)
 
-		assertions_64 = if record_info.size > 0 {
-			"    if (@sizeOf(${name}) != ${U64.to_str(record_info.size)}) @compileError(\"${name} size mismatch\");\n    if (@alignOf(${name}) != ${U64.to_str(record_info.alignment)}) @compileError(\"${name} alignment mismatch\");\n"
-		} else {
-			""
-		}
-
-		assertions_32 = if record_info.alt_size > 0 {
-			"    if (@sizeOf(${name}) != ${U64.to_str(record_info.alt_size)}) @compileError(\"${name} size mismatch\");\n    if (@alignOf(${name}) != ${U64.to_str(record_info.alt_alignment)}) @compileError(\"${name} alignment mismatch\");\n"
-		} else {
-			""
-		}
-
+	if all_same_order {
+		# Single layout — emit fields in ABI order from first target
+		field_strs = emit_fields_in_order(record_info.fields, first_layout, type_table)
+		assertions = generate_size_assertions(name, tgts, layouts, type_id)
 		doc = "/// ${doc_text}\n/// Fields ordered by alignment descending (Roc ABI)\n"
-		"${doc}pub const ${name} = if (@sizeOf(usize) == 8) extern struct {\n${$fields}} else extern struct {\n${$alt_field_strs}};\n\ncomptime {\n    if (@sizeOf(usize) == 8) {\n${assertions_64}    }\n    if (@sizeOf(usize) == 4) {\n${assertions_32}    }\n}\n\n"
+		"${doc}pub const ${name} = extern struct {\n${field_strs}};\n\n${assertions}"
 	} else {
-		# Single layout — same for both targets
-		assertions = if record_info.size > 0 {
-			"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${name}) != ${U64.to_str(record_info.size)}) @compileError(\"${name} size mismatch\");\n        if (@alignOf(${name}) != ${U64.to_str(record_info.alignment)}) @compileError(\"${name} alignment mismatch\");\n    }\n}\n\n"
-		} else {
-			""
+		# Divergent field orders — emit comptime conditional
+		idx_64 = first_64bit_layout_idx(tgts)
+		idx_32 = first_32bit_layout_idx(tgts)
+		layout_64 = match List.get(layouts, idx_64) {
+			Ok(tl) => get_type_layout(tl, type_id)
+			Err(_) => first_layout
+		}
+		layout_32 = match List.get(layouts, idx_32) {
+			Ok(tl) => get_type_layout(tl, type_id)
+			Err(_) => first_layout
 		}
 
+		fields_64 = emit_fields_in_order(record_info.fields, layout_64, type_table)
+		fields_32 = emit_fields_in_order(record_info.fields, layout_32, type_table)
+
+		assertions_64 = if layout_64.size > 0 {
+			"    if (@sizeOf(${name}) != ${U64.to_str(layout_64.size)}) @compileError(\"${name} size mismatch\");\n    if (@alignOf(${name}) != ${U64.to_str(layout_64.alignment)}) @compileError(\"${name} alignment mismatch\");\n"
+		} else { "" }
+
+		assertions_32 = if layout_32.size > 0 {
+			"    if (@sizeOf(${name}) != ${U64.to_str(layout_32.size)}) @compileError(\"${name} size mismatch\");\n    if (@alignOf(${name}) != ${U64.to_str(layout_32.alignment)}) @compileError(\"${name} alignment mismatch\");\n"
+		} else { "" }
+
 		doc = "/// ${doc_text}\n/// Fields ordered by alignment descending (Roc ABI)\n"
-		"${doc}pub const ${name} = extern struct {\n${$fields}};\n\n${assertions}"
+		"${doc}pub const ${name} = if (@sizeOf(usize) == 8) extern struct {\n${fields_64}} else extern struct {\n${fields_32}};\n\ncomptime {\n    if (@sizeOf(usize) == 8) {\n${assertions_64}    }\n    if (@sizeOf(usize) == 4) {\n${assertions_32}    }\n}\n\n"
 	}
 }
 

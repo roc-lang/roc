@@ -10,15 +10,19 @@ import pf.RecordRepr exposing [RecordRepr]
 import pf.TagUnionRepr exposing [TagUnionRepr]
 import pf.RecordField exposing [RecordField]
 import pf.TagVariant exposing [TagVariant]
+import pf.TargetLayout exposing [TargetLayout]
+import pf.TypeLayout exposing [TypeLayout]
 
 make_glue : List(Types) -> Try(List(File), Str)
 make_glue = |types_list| {
 	# Collect all hosted functions from all modules, with module name prefix
 	var $hosted_functions = []
 	var $type_table = []
+	var $layouts = []
 
 	for types in types_list {
 		$type_table = types.type_table
+		$layouts = types.layouts
 
 		for mod in types.modules {
 			for func in mod.hosted_functions {
@@ -42,7 +46,7 @@ make_glue = |types_list| {
 	# Sort by index so array entries are in the correct order
 	sorted = List.sort_with($hosted_functions, compare_by_index)
 
-	rust_content = generate_rust_file(sorted, $type_table)
+	rust_content = generate_rust_file(sorted, $type_table, $layouts)
 
 	Ok([{ name: "roc_platform_abi.rs", content: rust_content }])
 }
@@ -493,9 +497,9 @@ lookup_record_in_type_table = |type_table, type_id| {
 			match type_repr {
 				RocRecord(rec) =>
 					if List.len(rec.fields) > 0 {
-						{ found: Bool.True, fields: rec.fields, size: rec.size, alignment: rec.alignment }
+						{ found: Bool.True, fields: rec.fields }
 					} else {
-						{ found: Bool.False, fields: [], size: 0, alignment: 0 }
+						{ found: Bool.False, fields: [] }
 					}
 				RocTagUnion(tu) =>
 					# Follow single-variant tag unions to their payload
@@ -504,16 +508,16 @@ lookup_record_in_type_table = |type_table, type_id| {
 							Ok(tag) =>
 								match List.first(tag.payload) {
 									Ok(payload_id) => lookup_record_in_type_table(type_table, payload_id)
-									_ => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+									_ => { found: Bool.False, fields: [] }
 								}
-							_ => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+							_ => { found: Bool.False, fields: [] }
 						}
 					} else {
-						{ found: Bool.False, fields: [], size: 0, alignment: 0 }
+						{ found: Bool.False, fields: [] }
 					}
-				_ => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+				_ => { found: Bool.False, fields: [] }
 			}
-		Err(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+		Err(_) => { found: Bool.False, fields: [] }
 	}
 }
 
@@ -522,7 +526,7 @@ lookup_record_in_type_table = |type_table, type_id| {
 # =============================================================================
 
 ## Generate the complete Rust source file
-generate_rust_file = |hosted_functions, type_table| {
+generate_rust_file = |hosted_functions, type_table, layouts| {
 	count = List.len(hosted_functions)
 
 	generate_rust_file_header
@@ -536,10 +540,10 @@ generate_rust_file = |hosted_functions, type_table| {
 		.concat("\n")
 		.concat(generate_index_constants_rust(hosted_functions, count))
 		.concat("\n")
-		.concat(generate_element_type_structs_rust(type_table))
+		.concat(generate_element_type_structs_rust(type_table, layouts))
 		.concat(generate_tag_union_structs_rust(type_table))
-		.concat(generate_all_record_structs_rust(hosted_functions, type_table))
-		.concat(generate_all_args_structs_rust(hosted_functions, type_table))
+		.concat(generate_all_record_structs_rust(hosted_functions, type_table, layouts))
+		.concat(generate_all_args_structs_rust(hosted_functions, type_table, layouts))
 		.concat(generate_platform_fns_struct_rust(hosted_functions, type_table))
 		.concat("\n")
 		.concat(generate_hosted_functions_helper_rust(hosted_functions))
@@ -982,42 +986,66 @@ generate_index_constants_rust = |hosted_functions, count| {
 	$constants
 }
 
+## Get the layout for a type_id from the first target's layouts.
+get_first_layout = |layouts, type_id| {
+	match List.first(layouts) {
+		Ok(target_layout) => {
+			match List.get(target_layout.type_layouts, type_id) {
+				Ok(tl) => tl
+				Err(_) => { alignment: 0, field_order: [], size: 0 }
+			}
+		}
+		Err(_) => { alignment: 0, field_order: [], size: 0 }
+	}
+}
+
+## Emit record fields in ABI order using layout's field_order permutation.
+emit_fields_in_order_rust = |fields, type_layout, type_table| {
+	var $field_strs = ""
+	if List.is_empty(type_layout.field_order) {
+		for field in fields {
+			rust_type = type_id_to_rust(type_table, field.type_id)
+			$field_strs = Str.concat($field_strs, "    pub ${field.name}: ${rust_type},\n")
+		}
+	} else {
+		for order_idx in type_layout.field_order {
+			match List.get(fields, order_idx) {
+				Ok(field) => {
+					rust_type = type_id_to_rust(type_table, field.type_id)
+					$field_strs = Str.concat($field_strs, "    pub ${field.name}: ${rust_type},\n")
+				}
+				Err(_) => {}
+			}
+		}
+	}
+	$field_strs
+}
+
 ## Generate #[repr(C)] structs for element types found in the type table.
-generate_element_type_structs_rust : List(TypeRepr) -> Str
-generate_element_type_structs_rust = |type_table| {
+generate_element_type_structs_rust = |type_table, layouts| {
 	var $structs = ""
 	var $seen_names = []
+	var $cur_idx = 0
 
 	for type_repr in type_table {
 		match type_repr {
-			RocRecord(rec) =>
+			RocRecord(rec) => {
 				if rec.name != "" and !(List.contains($seen_names, rec.name)) {
 					$seen_names = $seen_names.append(rec.name)
 
 					struct_name = name_to_struct_name(rec.name)
-					var $field_strs = ""
-					for field in rec.fields {
-						rust_type = type_id_to_rust(type_table, field.type_id)
-						$field_strs = Str.concat(
-							$field_strs,
-							"    pub ${field.name}: ${rust_type},\n",
-						)
-					}
-
-					# Size/alignment assertions (guarded by pointer width)
-					assertions = if rec.size > 0 {
-						"const _: () = assert!(core::mem::size_of::<${struct_name}>() == ${U64.to_str(rec.size)}, \"${struct_name} size mismatch\");\nconst _: () = assert!(core::mem::align_of::<${struct_name}>() == ${U64.to_str(rec.alignment)}, \"${struct_name} alignment mismatch\");\n\n"
-					} else {
-						""
-					}
+					type_layout = get_first_layout(layouts, $cur_idx)
+					field_strs = emit_fields_in_order_rust(rec.fields, type_layout, type_table)
 
 					$structs = Str.concat(
 						$structs,
-						"/// Element type for ${rec.name}\n#[repr(C)]\npub struct ${struct_name} {\n${$field_strs}}\n\n${assertions}",
+						"/// Element type for ${rec.name}\n#[repr(C)]\npub struct ${struct_name} {\n${field_strs}}\n\n",
 					)
 				}
+			}
 			_ => {}
 		}
+		$cur_idx = $cur_idx + 1
 	}
 
 	$structs
@@ -1107,45 +1135,25 @@ generate_single_tag_union_rust = |type_table, tu| {
 			}
 		}
 
-		# Size/alignment assertions
-		assertions = if tu.size > 0 {
-			"const _: () = assert!(core::mem::size_of::<${struct_name}>() == ${U64.to_str(tu.size)}, \"${struct_name} size mismatch\");\nconst _: () = assert!(core::mem::align_of::<${struct_name}>() == ${U64.to_str(tu.alignment)}, \"${struct_name} alignment mismatch\");\n\n"
-		} else {
-			""
-		}
-
-		"${$tuple_structs}/// Tag discriminant for ${tu.name}.\n#[repr(${disc_type})]\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum ${struct_name}Tag {\n${$enum_variants}}\n\n/// Tag union: ${tu.name}\n#[repr(C)]\npub struct ${struct_name} {\n    pub payload: ${struct_name}Payload,\n    pub tag: ${struct_name}Tag,\n}\n\n#[repr(C)]\npub union ${struct_name}Payload {\n${$union_fields}}\n\n${assertions}"
+		"${$tuple_structs}/// Tag discriminant for ${tu.name}.\n#[repr(${disc_type})]\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum ${struct_name}Tag {\n${$enum_variants}}\n\n/// Tag union: ${tu.name}\n#[repr(C)]\npub struct ${struct_name} {\n    pub payload: ${struct_name}Payload,\n    pub tag: ${struct_name}Tag,\n}\n\n#[repr(C)]\npub union ${struct_name}Payload {\n${$union_fields}}\n\n"
 	}
 }
 
 ## Generate #[repr(C)] structs for record return types using type table.
-generate_all_record_structs_rust = |hosted_functions, type_table| {
+generate_all_record_structs_rust = |hosted_functions, type_table, layouts| {
 	var $structs = ""
 	for func in hosted_functions {
 		type_table_result = lookup_record_in_type_table(type_table, func.ret_type_id)
 
 		if type_table_result.found {
 			struct_name = name_to_struct_name(func.name)
+			type_layout = get_first_layout(layouts, func.ret_type_id)
+			fields = emit_fields_in_order_rust(type_table_result.fields, type_layout, type_table)
 
-			var $fields = ""
-			for field in type_table_result.fields {
-				rust_type = type_id_to_rust(type_table, field.type_id)
-				$fields = Str.concat(
-					$fields,
-					"    pub ${field.name}: ${rust_type},\n",
-				)
-			}
-
-			assertions = if type_table_result.size > 0 {
-				"const _: () = assert!(core::mem::size_of::<${struct_name}RetRecord>() == ${U64.to_str(type_table_result.size)}, \"${struct_name}RetRecord size mismatch\");\nconst _: () = assert!(core::mem::align_of::<${struct_name}RetRecord>() == ${U64.to_str(type_table_result.alignment)}, \"${struct_name}RetRecord alignment mismatch\");\n\n"
-			} else {
-				""
-			}
-
-			doc = "/// Return type record for ${func.name}\n/// Fields ordered by alignment descending (Roc ABI)\n"
+			doc = "/// Return type record for ${func.name}\n/// Fields ordered per Roc ABI layout\n"
 			$structs = Str.concat(
 				$structs,
-				"${doc}#[repr(C)]\npub struct ${struct_name}RetRecord {\n${$fields}}\n\n${assertions}",
+				"${doc}#[repr(C)]\npub struct ${struct_name}RetRecord {\n${fields}}\n\n",
 			)
 		}
 	}
@@ -1153,16 +1161,16 @@ generate_all_record_structs_rust = |hosted_functions, type_table| {
 }
 
 ## Generate all argument #[repr(C)] structs
-generate_all_args_structs_rust = |hosted_functions, type_table| {
+generate_all_args_structs_rust = |hosted_functions, type_table, layouts| {
 	var $structs = ""
 	for func in hosted_functions {
-		$structs = Str.concat($structs, generate_args_struct_rust(func, type_table))
+		$structs = Str.concat($structs, generate_args_struct_rust(func, type_table, layouts))
 	}
 	$structs
 }
 
 ## Generate a single argument struct (empty string if no args).
-generate_args_struct_rust = |func, type_table| {
+generate_args_struct_rust = |func, type_table, layouts| {
 	parsed = parse_type_str(func.type_str)
 
 	if List.is_empty(parsed.args) {
@@ -1175,30 +1183,22 @@ generate_args_struct_rust = |func, type_table| {
 	type_table_result = if List.len(func.arg_type_ids) == 1 {
 		match List.first(func.arg_type_ids) {
 			Ok(arg_id) => lookup_record_in_type_table(type_table, arg_id)
-			Err(_) => { found: Bool.False, fields: [], size: 0, alignment: 0 }
+			Err(_) => { found: Bool.False, fields: [] }
 		}
 	} else {
-		{ found: Bool.False, fields: [], size: 0, alignment: 0 }
+		{ found: Bool.False, fields: [] }
 	}
 
 	if type_table_result.found {
-		var $fields = ""
-		for field in type_table_result.fields {
-			rust_type = type_id_to_rust(type_table, field.type_id)
-			$fields = Str.concat(
-				$fields,
-				"    pub ${field.name}: ${rust_type},\n",
-			)
+		arg_id = match List.first(func.arg_type_ids) {
+			Ok(id) => id
+			Err(_) => 0
 		}
-
-		assertions = if type_table_result.size > 0 {
-			"const _: () = assert!(core::mem::size_of::<${struct_name}Args>() == ${U64.to_str(type_table_result.size)}, \"${struct_name}Args size mismatch\");\nconst _: () = assert!(core::mem::align_of::<${struct_name}Args>() == ${U64.to_str(type_table_result.alignment)}, \"${struct_name}Args alignment mismatch\");\n\n"
-		} else {
-			""
-		}
+		type_layout = get_first_layout(layouts, arg_id)
+		fields = emit_fields_in_order_rust(type_table_result.fields, type_layout, type_table)
 
 		doc = "/// Arguments for ${func.name}\n/// Roc signature: ${func.type_str}\n"
-		return "${doc}#[repr(C)]\npub struct ${struct_name}Args {\n${$fields}}\n\n${assertions}"
+		return "${doc}#[repr(C)]\npub struct ${struct_name}Args {\n${fields}}\n\n"
 	}
 
 	# Multi-arg or primitive args: use positional fields from type table

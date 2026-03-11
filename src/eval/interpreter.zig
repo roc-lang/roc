@@ -7294,9 +7294,16 @@ pub const Interpreter = struct {
                     const arg_resolved = self.runtime_types.resolveVar(arg_var);
                     const effective_layout = blk: {
                         if (arg_resolved.desc.content == .rigid) {
-                            if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
+                            // Check both rigid_subst (var-based) and rigid_name_subst
+                            // (name-based, from the platform's `for` clause). This must
+                            // mirror getRuntimeLayout's substitution logic — otherwise
+                            // payloads like Ok({}) in Try({}, I64) keep the inflated
+                            // shared-payload layout instead of resolving to ZST.
+                            const subst_var = self.rigid_subst.get(arg_resolved.var_) orelse
+                                self.rigid_name_subst.get(arg_resolved.desc.content.rigid.name.idx);
+                            if (subst_var) |sv| {
                                 // Use the substituted concrete type's layout
-                                break :blk self.getRuntimeLayout(subst_var) catch variant_layout;
+                                break :blk self.getRuntimeLayout(sv) catch variant_layout;
                             } else {
                                 // No substitution found. For polymorphic functions like List.get,
                                 // the rigid var wasn't properly substituted. As a workaround,
@@ -7338,12 +7345,13 @@ pub const Interpreter = struct {
                                 }
                             }
                         }
-                        // For concrete (structure/alias) types where variant_layout is ZST:
-                        // the tag union was compiled in a polymorphic context (e.g., List.get :
-                        // List(a) -> Result a b) where `a` was unknown, yielding a ZST payload.
+                        // For concrete (structure/alias) types where variant_layout is wrong:
+                        // the tag union was compiled in a polymorphic context where the payload
+                        // type was unknown, yielding either a ZST payload (e.g., List.get) or
+                        // a box_of_zst payload (e.g., render_for_host! where the return type
+                        // Try(Box(Model), I64) leaks Box into the Ok variant layout).
                         // At runtime, compute the correct layout from the concrete arg type.
-                        // Only apply when variant_layout is ZST to avoid disturbing correct layouts.
-                        if (variant_layout.tag == .zst and
+                        if ((variant_layout.tag == .zst or variant_layout.tag == .box_of_zst) and
                             (arg_resolved.desc.content == .structure or arg_resolved.desc.content == .alias))
                         {
                             if (self.getRuntimeLayout(arg_var)) |computed_layout| {
@@ -7485,6 +7493,23 @@ pub const Interpreter = struct {
         roc_ops: *RocOps,
     ) !StackValue {
         traceDbg(roc_ops, "evalBoxIntrinsic: entering with arg_value.layout.tag={s}", .{@tagName(arg_value.layout.tag)});
+
+        // If the payload is ZST, always use box_of_zst regardless of what the
+        // polymorphic return type variable resolves to.
+        // Also handle the case where the payload has box_of_zst layout due to type
+        // variable contamination (e.g., render_for_host! where the return type
+        // Try(Box(Model), I64) causes the Ok variant's Model type to be resolved as
+        // Box(Model) instead of Model). In that case, the payload is conceptually
+        // ZST but has 8-byte box_of_zst layout. Boxing it should produce box_of_zst,
+        // not allocate a new box wrapping the null pointer.
+        const payload_size = self.runtime_layout_store.layoutSize(arg_value.layout);
+        if (payload_size == 0 or arg_value.layout.tag == .box_of_zst) {
+            traceDbg(roc_ops, "evalBoxIntrinsic: payload is ZST (size=0) or box_of_zst, using box_of_zst", .{});
+            const return_ct_var = can.ModuleEnv.varFrom(return_expr_idx);
+            const return_rt_var = try self.translateTypeVar(self.env, return_ct_var);
+            return try self.makeBoxValueFromLayout(layout.Layout.boxOfZst(), arg_value, roc_ops, return_rt_var);
+        }
+
         const return_ct_var = can.ModuleEnv.varFrom(return_expr_idx);
         traceDbg(roc_ops, "evalBoxIntrinsic: return_ct_var obtained", .{});
         const return_rt_var = try self.translateTypeVar(self.env, return_ct_var);
