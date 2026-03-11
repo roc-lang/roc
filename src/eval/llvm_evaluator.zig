@@ -249,18 +249,12 @@ pub const LlvmEvaluator = struct {
         // Step 2: Initialize CIR and canonicalize
         module_env.initCIRFields("llvm_eval") catch return error.OutOfMemory;
 
-        // Set up module envs map for auto-imported builtins
-        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(self.allocator);
-        defer module_envs_map.deinit();
-
-        Can.populateModuleEnvs(
-            &module_envs_map,
-            &module_env,
-            self.builtin_module.env,
-            self.builtin_indices,
-        ) catch return error.OutOfMemory;
-
-        var czer = Can.init(&allocators, &module_env, parse_ast, &module_envs_map) catch {
+        var czer = Can.initModule(&allocators, &module_env, parse_ast, .{
+            .builtin_types = .{
+                .builtin_module_env = self.builtin_module.env,
+                .builtin_indices = self.builtin_indices,
+            },
+        }) catch {
             return error.CanonicalizeError;
         };
         defer czer.deinit();
@@ -291,7 +285,7 @@ pub const LlvmEvaluator = struct {
             &module_env.types,
             &module_env,
             &imported_modules,
-            &module_envs_map,
+            null,
             &module_env.store.regions,
             builtin_ctx,
         ) catch return error.OutOfMemory;

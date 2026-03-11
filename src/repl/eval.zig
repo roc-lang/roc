@@ -578,18 +578,12 @@ pub const Repl = struct {
         const cir = module_env;
         try cir.initCIRFields("repl");
 
-        // Populate all auto-imported builtin types using the shared helper to keep behavior consistent
-        var module_envs_map = std.AutoHashMap(base.Ident.Idx, can.Can.AutoImportedType).init(self.allocator);
-        defer module_envs_map.deinit();
-
-        try Can.populateModuleEnvs(
-            &module_envs_map,
-            module_env,
-            self.builtin_module.env,
-            self.builtin_indices,
-        );
-
-        var czer = Can.init(&allocators, cir, parse_ast, &module_envs_map) catch |err| {
+        var czer = Can.initModule(&allocators, cir, parse_ast, .{
+            .builtin_types = .{
+                .builtin_module_env = self.builtin_module.env,
+                .builtin_indices = self.builtin_indices,
+            },
+        }) catch |err| {
             return .{ .canonicalize_error = try std.fmt.allocPrint(self.allocator, "Canonicalize init error: {}", .{err}) };
         };
         defer czer.deinit();
@@ -639,7 +633,7 @@ pub const Repl = struct {
             &module_env.types,
             cir,
             &imported_modules,
-            &module_envs_map,
+            null,
             &cir.store.regions,
             builtin_ctx,
         ) catch |err| {

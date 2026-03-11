@@ -1640,8 +1640,7 @@ fn compileModule(
         gpa.destroy(can_result);
     }
 
-    // When compiling Builtin itself, pass null for module_envs so setupAutoImportedBuiltinTypes doesn't run
-    can_result.* = try Can.init(&allocators, module_env, parse_ast, null);
+    can_result.* = try Can.initBuiltin(&allocators, module_env, parse_ast);
 
     try can_result.canonicalizeFile();
     try can_result.validateForChecking();

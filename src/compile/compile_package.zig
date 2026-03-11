@@ -1073,16 +1073,14 @@ pub const PackageEnv = struct {
         imported_envs: []const *ModuleEnv,
         module_envs_out: *std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
     ) !Check {
-        // Populate module_envs with Bool, Try, Dict, Set using shared function
-        try Can.populateModuleEnvs(
-            module_envs_out,
-            env,
-            builtin_module_env,
-            builtin_indices,
-        );
-
         // Canonicalize
-        var czer = try Can.init(allocators, env, parse_ast, module_envs_out);
+        var czer = try Can.initModule(allocators, env, parse_ast, .{
+            .builtin_types = .{
+                .builtin_module_env = builtin_module_env,
+                .builtin_indices = builtin_indices,
+            },
+            .imported_modules = module_envs_out,
+        });
         try czer.canonicalizeFile();
         try czer.validateForChecking();
         czer.deinit();
@@ -1136,17 +1134,9 @@ pub const PackageEnv = struct {
     ) !void {
         const gpa = allocators.gpa;
 
-        // Create module_envs map for auto-importing builtin types
+        // Create module_envs map for explicit imported modules used during canonicalization
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
         defer module_envs_map.deinit();
-
-        // Populate module_envs with Bool, Try, Dict, Set using shared function
-        try Can.populateModuleEnvs(
-            &module_envs_map,
-            env,
-            builtin_module_env,
-            builtin_indices,
-        );
 
         // Add sibling modules - use placeholder-based approach for all paths.
         // In canonicalize-first mode, modules use placeholders during canonicalization.
@@ -1257,7 +1247,13 @@ pub const PackageEnv = struct {
             }
         }
 
-        var czer = try Can.init(allocators, env, parse_ast, &module_envs_map);
+        var czer = try Can.initModule(allocators, env, parse_ast, .{
+            .builtin_types = .{
+                .builtin_module_env = builtin_module_env,
+                .builtin_indices = builtin_indices,
+            },
+            .imported_modules = &module_envs_map,
+        });
         try czer.canonicalizeFile();
         try czer.validateForChecking();
         czer.deinit();
@@ -1284,17 +1280,9 @@ pub const PackageEnv = struct {
             .builtin_indices = builtin_indices,
         };
 
-        // Create module_envs map for auto-importing builtin types
+        // Create module_envs map for explicit imported modules used during canonicalization
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
         errdefer module_envs_map.deinit();
-
-        // Populate module_envs with Bool, Try, Dict, Set using shared function
-        try Can.populateModuleEnvs(
-            &module_envs_map,
-            env,
-            builtin_module_env,
-            builtin_indices,
-        );
 
         var checker = try Check.init(
             gpa,

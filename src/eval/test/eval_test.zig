@@ -476,6 +476,11 @@ test "integer type evaluation" {
     try runExpectI64("123.I64", 123, .no_trace);
 }
 
+test "runtime eval helper auto-imports builtin typed suffix types" {
+    try runExpectI64("0.I64 + 42.I64", 42, .no_trace);
+    try runExpectDec("3.14.Dec", 3_140_000_000_000_000_000, .no_trace);
+}
+
 test "decimal literal evaluation" {
     // Test basic decimal literals - these should be parsed and evaluated correctly
     try runExpectSuccess("1.5.Dec", .no_trace);
@@ -790,15 +795,12 @@ test "ModuleEnv serialization and interpreter evaluation" {
         .builtin_indices = builtin_indices,
     };
 
-    // Create module_envs map for canonicalization (enables qualified calls)
-    var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
-    defer module_envs_map.deinit();
-    const builtin_ident = try original_env.insertIdent(base.Ident.for_text("Builtin"));
-    const builtin_qualified_ident = try builtin_module.env.common.insertIdent(builtin_module.env.gpa, base.Ident.for_text("Builtin"));
-    try module_envs_map.put(builtin_ident, .{ .env = builtin_module.env, .qualified_type_ident = builtin_qualified_ident });
-
-    // Create canonicalizer with module_envs_map for qualified name resolution
-    var czer = try Can.init(&allocators, &original_env, parse_ast, &module_envs_map);
+    var czer = try Can.initModule(&allocators, &original_env, parse_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_module.env,
+            .builtin_indices = builtin_indices,
+        },
+    });
     defer czer.deinit();
 
     // Canonicalize the expression
@@ -813,7 +815,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
     // Resolve imports - map each import to its index in imported_envs
     original_env.imports.resolveImports(&original_env, &imported_envs);
 
-    var checker = try Check.init(gpa, &original_env.types, &original_env, &imported_envs, &module_envs_map, &original_env.store.regions, builtin_ctx);
+    var checker = try Check.init(gpa, &original_env.types, &original_env, &imported_envs, null, &original_env.store.regions, builtin_ctx);
     defer checker.deinit();
 
     _ = try checker.checkExprRepl(canonicalized_expr_idx.get_idx());
@@ -2329,6 +2331,21 @@ test "early return: ? in first argument of multi-arg call" {
         \\    match my_func(compute(Err({})), 42) { Ok(_) => 1, Err(_) => 0 }
         \\}
     , 0, .no_trace);
+}
+
+test "issue 8979 runtime: while (True) with conditional break evaluates" {
+    try runExpectI64(
+        \\{
+        \\    var $i = 0.I64
+        \\    while (True) {
+        \\        if $i >= 5 {
+        \\            break
+        \\        }
+        \\        $i = $i + 1
+        \\    }
+        \\    $i
+        \\}
+    , 5, .no_trace);
 }
 
 test "Decoder: create ok result - check result is Ok" {

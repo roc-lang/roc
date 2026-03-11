@@ -883,6 +883,133 @@ fn mkNumberTypeContent(self: *Self, type_name: []const u8, env: *Env) Allocator.
     );
 }
 
+fn builtinNumKindFromTypeName(self: *const Self, type_name: Ident.Idx) ?CIR.NumKind {
+    if (type_name.eql(self.cir.idents.u8)) return .u8;
+    if (type_name.eql(self.cir.idents.i8)) return .i8;
+    if (type_name.eql(self.cir.idents.u16)) return .u16;
+    if (type_name.eql(self.cir.idents.i16)) return .i16;
+    if (type_name.eql(self.cir.idents.u32)) return .u32;
+    if (type_name.eql(self.cir.idents.i32)) return .i32;
+    if (type_name.eql(self.cir.idents.u64)) return .u64;
+    if (type_name.eql(self.cir.idents.i64)) return .i64;
+    if (type_name.eql(self.cir.idents.u128)) return .u128;
+    if (type_name.eql(self.cir.idents.i128)) return .i128;
+    if (type_name.eql(self.cir.idents.f32)) return .f32;
+    if (type_name.eql(self.cir.idents.f64)) return .f64;
+    if (type_name.eql(self.cir.idents.dec)) return .dec;
+    return null;
+}
+
+fn mkBuiltinNumberTypeContentFromKind(
+    self: *Self,
+    num_kind: CIR.NumKind,
+    env: *Env,
+) Allocator.Error!Content {
+    return switch (num_kind) {
+        .u8 => try self.mkNumberTypeContent("U8", env),
+        .i8 => try self.mkNumberTypeContent("I8", env),
+        .u16 => try self.mkNumberTypeContent("U16", env),
+        .i16 => try self.mkNumberTypeContent("I16", env),
+        .u32 => try self.mkNumberTypeContent("U32", env),
+        .i32 => try self.mkNumberTypeContent("I32", env),
+        .u64 => try self.mkNumberTypeContent("U64", env),
+        .i64 => try self.mkNumberTypeContent("I64", env),
+        .u128 => try self.mkNumberTypeContent("U128", env),
+        .i128 => try self.mkNumberTypeContent("I128", env),
+        .f32 => try self.mkNumberTypeContent("F32", env),
+        .f64 => try self.mkNumberTypeContent("F64", env),
+        .dec => try self.mkNumberTypeContent("Dec", env),
+        else => unreachable,
+    };
+}
+
+fn findLocalTypedLiteralTypeDecl(
+    self: *const Self,
+    type_name: Ident.Idx,
+    expr_region: Region,
+) ?CIR.Statement.Idx {
+    const all_stmts = self.cir.store.sliceStatements(self.cir.all_statements);
+    var best_stmt: ?CIR.Statement.Idx = null;
+    var best_region: ?Region = null;
+
+    for (all_stmts) |stmt_idx| {
+        const stmt = self.cir.store.getStatement(stmt_idx);
+        const header_idx = switch (stmt) {
+            .s_alias_decl => |alias| alias.header,
+            .s_nominal_decl => |nominal| nominal.header,
+            else => continue,
+        };
+
+        const header = self.cir.store.getTypeHeader(header_idx);
+        if (!header.relative_name.eql(type_name)) continue;
+
+        const stmt_region = self.cir.store.getStatementRegion(stmt_idx);
+        if (stmt_region.start.offset > expr_region.start.offset or
+            stmt_region.end.offset < expr_region.end.offset)
+        {
+            continue;
+        }
+
+        if (best_region) |current_best| {
+            const is_more_specific = stmt_region.start.offset > current_best.start.offset or
+                (stmt_region.start.offset == current_best.start.offset and
+                    stmt_region.end.offset < current_best.end.offset);
+
+            if (!is_more_specific) continue;
+        }
+
+        best_stmt = stmt_idx;
+        best_region = stmt_region;
+    }
+
+    return best_stmt;
+}
+
+fn unifyTypedLiteralWithExplicitType(
+    self: *Self,
+    flex_var: Var,
+    type_name: Ident.Idx,
+    expr_region: Region,
+    env: *Env,
+) Allocator.Error!void {
+    if (self.builtinNumKindFromTypeName(type_name)) |num_kind| {
+        try self.unifyWith(flex_var, try self.mkBuiltinNumberTypeContentFromKind(num_kind, env), env);
+        return;
+    }
+
+    if (self.findLocalTypedLiteralTypeDecl(type_name, expr_region)) |stmt_idx| {
+        const local_decl_var = ModuleEnv.varFrom(stmt_idx);
+        const resolved_var = if (self.isForClauseAliasStatement(stmt_idx))
+            local_decl_var
+        else
+            try self.instantiateVar(local_decl_var, env, .{ .explicit = expr_region });
+
+        _ = try self.unify(flex_var, resolved_var, env);
+        return;
+    }
+
+    if (self.auto_imported_types) |auto_imported_types| {
+        if (auto_imported_types.get(type_name)) |auto_imported_type| {
+            if (auto_imported_type.statement_idx) |stmt_idx| {
+                const copied_var = try self.copyVar(
+                    ModuleEnv.varFrom(stmt_idx),
+                    auto_imported_type.env,
+                    expr_region,
+                );
+                const instantiated_var = try self.instantiateVar(
+                    copied_var,
+                    env,
+                    .{ .explicit = expr_region },
+                );
+                _ = try self.unify(flex_var, instantiated_var, env);
+                return;
+            }
+        }
+    }
+
+    try self.unifyWith(flex_var, .err, env);
+}
+
 /// Create a Dec nominal type content using the stored ident index rather than
 /// constructing the qualified name from a string literal.
 fn mkDecContent(self: *Self, env: *Env) Allocator.Error!Content {
@@ -3558,11 +3685,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const constraint_range = resolved.desc.content.flex.constraints;
             const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
 
-            // Look up the explicit type name and unify with it
-            const idents = self.cir.getIdentStoreConst();
-            const type_name = idents.getText(typed_num.type_name);
-            const type_content = try self.mkNumberTypeContent(type_name, env);
-            try self.unifyWith(flex_var, type_content, env);
+            try self.unifyTypedLiteralWithExplicitType(
+                flex_var,
+                typed_num.type_name,
+                expr_region,
+                env,
+            );
 
             // Unify expr_var with the flex_var (which is now constrained to the explicit type)
             _ = try self.unify(expr_var, flex_var, env);
@@ -3593,11 +3721,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const constraint_range = resolved.desc.content.flex.constraints;
             const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
 
-            // Look up the explicit type name and unify with it
-            const idents_frac = self.cir.getIdentStoreConst();
-            const type_name = idents_frac.getText(typed_num.type_name);
-            const type_content = try self.mkNumberTypeContent(type_name, env);
-            try self.unifyWith(flex_var, type_content, env);
+            try self.unifyTypedLiteralWithExplicitType(
+                flex_var,
+                typed_num.type_name,
+                expr_region,
+                env,
+            );
 
             // Unify expr_var with the flex_var (which is now constrained to the explicit type)
             _ = try self.unify(expr_var, flex_var, env);

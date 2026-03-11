@@ -13,6 +13,7 @@ const builtins = @import("builtins");
 const Can = @import("../Can.zig");
 const CIR = @import("../CIR.zig");
 const TestEnv = @import("TestEnv.zig").TestEnv;
+const BuiltinTestContext = @import("./BuiltinTestContext.zig").BuiltinTestContext;
 const ModuleEnv = @import("../ModuleEnv.zig");
 const Allocators = base.Allocators;
 const parseIntWithUnderscores = Can.parseIntWithUnderscores;
@@ -122,6 +123,62 @@ test "canonicalize small integers" {
         const value = try getIntValue(test_env.module_env, canonical_expr.get_idx());
         try testing.expectEqual(tc.expected, value);
     }
+}
+
+test "canonicalize builtin typed integer suffix without caller setup" {
+    var test_env = try TestEnv.init("0.I64");
+    defer test_env.deinit();
+
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
+
+    switch (expr) {
+        .e_typed_int => |typed| {
+            try testing.expectEqual(@as(i128, 0), typed.value.toI128());
+            try testing.expectEqualStrings("I64", test_env.getIdent(typed.type_name));
+        },
+        else => return error.NotATypedInteger,
+    }
+}
+
+test "canonicalize builtin typed fractional suffix without caller setup" {
+    var test_env = try TestEnv.init("3.14.Dec");
+    defer test_env.deinit();
+
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
+
+    switch (expr) {
+        .e_typed_frac => |typed| {
+            try testing.expectEqual(@as(i128, 3_140_000_000_000_000_000), typed.value.toI128());
+            try testing.expectEqualStrings("Dec", test_env.getIdent(typed.type_name));
+        },
+        else => return error.NotATypedFraction,
+    }
+}
+
+test "typed numeric suffix still uses ordinary scope lookup" {
+    var test_env = try TestEnv.init("123.UnknownType");
+    defer test_env.deinit();
+
+    _ = try test_env.canonicalizeExpr();
+
+    const diagnostics = try test_env.getDiagnostics();
+    defer testing.allocator.free(diagnostics);
+
+    var found_undeclared_type = false;
+    for (diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .undeclared_type => |data| {
+                if (std.mem.eql(u8, test_env.getIdent(data.name), "UnknownType")) {
+                    found_undeclared_type = true;
+                }
+            },
+            else => {},
+        }
+    }
+
+    try testing.expect(found_undeclared_type);
 }
 
 test "canonicalize integer literals with underscores" {
@@ -470,6 +527,8 @@ test "hexadecimal integer literals" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
+    var builtin_ctx = try BuiltinTestContext.init(gpa);
+    defer builtin_ctx.deinit();
 
     for (test_cases) |tc| {
         var env = try ModuleEnv.init(gpa, tc.literal);
@@ -484,7 +543,7 @@ test "hexadecimal integer literals" {
         const ast = try parse.parseExpr(&allocators, &env.common);
         defer ast.deinit();
 
-        var czer = try Can.init(&allocators, &env, ast, null);
+        var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
         defer czer.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -533,6 +592,8 @@ test "binary integer literals" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
+    var builtin_ctx = try BuiltinTestContext.init(gpa);
+    defer builtin_ctx.deinit();
 
     for (test_cases) |tc| {
         var env = try ModuleEnv.init(gpa, tc.literal);
@@ -547,7 +608,7 @@ test "binary integer literals" {
         const ast = try parse.parseExpr(&allocators, &env.common);
         defer ast.deinit();
 
-        var czer = try Can.init(&allocators, &env, ast, null);
+        var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
         defer czer.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -596,6 +657,8 @@ test "octal integer literals" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
+    var builtin_ctx = try BuiltinTestContext.init(gpa);
+    defer builtin_ctx.deinit();
 
     for (test_cases) |tc| {
         var env = try ModuleEnv.init(gpa, tc.literal);
@@ -610,7 +673,7 @@ test "octal integer literals" {
         const ast = try parse.parseExpr(&allocators, &env.common);
         defer ast.deinit();
 
-        var czer = try Can.init(&allocators, &env, ast, null);
+        var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
         defer czer.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -659,6 +722,8 @@ test "integer literals with uppercase base prefixes" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
+    var builtin_ctx = try BuiltinTestContext.init(gpa);
+    defer builtin_ctx.deinit();
 
     for (test_cases) |tc| {
         var env = try ModuleEnv.init(gpa, tc.literal);
@@ -673,7 +738,7 @@ test "integer literals with uppercase base prefixes" {
         const ast = try parse.parseExpr(&allocators, &env.common);
         defer ast.deinit();
 
-        var czer = try Can.init(&allocators, &env, ast, null);
+        var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
         defer czer.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);

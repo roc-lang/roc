@@ -70,19 +70,12 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
         .builtin_indices = builtin_indices,
     };
 
-    // Create module_envs map for canonicalization (enables qualified calls to Str, List, etc.)
-    var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
-    defer module_envs_map.deinit();
-
-    // Use shared function to populate ALL builtin types - ensures Builtin.roc is single source of truth
-    try Can.populateModuleEnvs(
-        &module_envs_map,
-        module_env,
-        builtin_module.env,
-        builtin_indices,
-    );
-
-    var czer = try Can.init(&allocators, module_env, parse_ast, &module_envs_map);
+    var czer = try Can.initModule(&allocators, module_env, parse_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_module.env,
+            .builtin_indices = builtin_indices,
+        },
+    });
     defer czer.deinit();
 
     try czer.canonicalizeFile();

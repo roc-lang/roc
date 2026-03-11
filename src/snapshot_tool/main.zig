@@ -1046,14 +1046,14 @@ fn processSnapshotContent(
         },
         .snippet, .mono => {
             // Snippet and mono tests are full modules
-            var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
-            defer module_envs.deinit();
+            const builtin_env = config.builtin_module orelse return error.MissingBuiltinModule;
 
-            if (config.builtin_module) |builtin_env| {
-                try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
-            }
-
-            var czer = try Can.init(&allocators, can_ir, parse_ast, &module_envs);
+            var czer = try Can.initModule(&allocators, can_ir, parse_ast, .{
+                .builtin_types = .{
+                    .builtin_module_env = builtin_env,
+                    .builtin_indices = config.builtin_indices,
+                },
+            });
             defer czer.deinit();
             try czer.canonicalizeFile();
         },
@@ -1062,15 +1062,14 @@ fn processSnapshotContent(
         },
         .expr, .statement => {
             // Expr and statement tests use different canonicalization methods
-            // Auto-inject builtin types (Bool, Try, List, Dict, Set, Str, and numeric types) as available imports
-            var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
-            defer module_envs.deinit();
+            const builtin_env = config.builtin_module orelse return error.MissingBuiltinModule;
 
-            if (config.builtin_module) |builtin_env| {
-                try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
-            }
-
-            var czer = try Can.init(&allocators, can_ir, parse_ast, &module_envs);
+            var czer = try Can.initModule(&allocators, can_ir, parse_ast, .{
+                .builtin_types = .{
+                    .builtin_module_env = builtin_env,
+                    .builtin_indices = config.builtin_indices,
+                },
+            });
             defer czer.deinit();
 
             switch (content.meta.node_type) {
@@ -2863,19 +2862,18 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
         return false;
     };
 
-    // Set up module_envs with builtin types if available
-    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
-    defer module_envs.deinit();
-
-    if (config.builtin_module) |builtin_env| {
-        Can.populateModuleEnvs(&module_envs, &validation_env, builtin_env, config.builtin_indices) catch |err| {
-            std.log.err("MONO VALIDATION ERROR in {s}: Failed to populate module envs: {}", .{ source_path, err });
-            return false;
-        };
-    }
+    const builtin_env = config.builtin_module orelse {
+        std.log.err("MONO VALIDATION ERROR in {s}: Missing builtin module context", .{source_path});
+        return false;
+    };
 
     // Canonicalize the parsed MONO output
-    var czer = Can.init(&allocators, &validation_env, validation_ast, &module_envs) catch |err| {
+    var czer = Can.initModule(&allocators, &validation_env, validation_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_env,
+            .builtin_indices = config.builtin_indices,
+        },
+    }) catch |err| {
         std.log.err("MONO VALIDATION ERROR in {s}: Failed to initialize canonicalizer: {}", .{ source_path, err });
         return false;
     };

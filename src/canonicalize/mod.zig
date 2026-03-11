@@ -42,14 +42,14 @@ pub const AutoImportedType = Can.AutoImportedType;
 /// - allocators: Caller provides and manages
 /// - module_env: Caller provides; results stored here
 /// - parse_ast: Caller provides and manages
-/// - module_envs: Optional map of imported module environments
+/// - context: Builtin type context plus optional explicit imported module environments
 pub fn canonicalizeModule(
     allocators: *Allocators,
     module_env: *ModuleEnv,
     parse_ast: *AST,
-    module_envs: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType),
+    context: Can.ModuleInitContext,
 ) std.mem.Allocator.Error!void {
-    var czer = try Can.init(allocators, module_env, parse_ast, module_envs);
+    var czer = try Can.initModule(allocators, module_env, parse_ast, context);
     defer czer.deinit();
     try czer.canonicalizeFile();
     try czer.validateForChecking();
@@ -64,14 +64,14 @@ pub fn canonicalizeModule(
 /// - allocators: Caller provides and manages
 /// - module_env: Caller provides; results stored here
 /// - parse_ast: Caller provides (root_node_idx should point to expression)
-/// - module_envs: Optional map of imported module environments
+/// - context: Builtin type context plus optional explicit imported module environments
 pub fn canonicalizeExpr(
     allocators: *Allocators,
     module_env: *ModuleEnv,
     parse_ast: *AST,
-    module_envs: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType),
+    context: Can.ModuleInitContext,
 ) std.mem.Allocator.Error!?Can.CanonicalizedExpr {
-    var czer = try Can.init(allocators, module_env, parse_ast, module_envs);
+    var czer = try Can.initModule(allocators, module_env, parse_ast, context);
     defer czer.deinit();
     const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
     return try czer.canonicalizeExpr(expr_idx);

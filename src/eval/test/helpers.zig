@@ -2923,17 +2923,13 @@ fn parseAndCanonicalizeExprInternal(
         .builtin_indices = builtin_indices,
     };
 
-    // Create module_envs map for canonicalization (enables qualified calls)
-    var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
-    defer module_envs_map.deinit();
-
-    // Use the shared populateModuleEnvs function to set up auto-imported types
-    // This ensures test and production code use identical module setup logic
-    try Can.populateModuleEnvs(&module_envs_map, module_env, builtin_module.env, builtin_indices);
-
-    // Create czer with module_envs_map for qualified name resolution (following REPL pattern)
     const czer = try allocator.create(Can);
-    czer.* = try Can.init(&allocators, module_env, parse_ast, &module_envs_map);
+    czer.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_module.env,
+            .builtin_indices = builtin_indices,
+        },
+    });
 
     // Canonicalize the expression (following REPL pattern)
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
@@ -2953,7 +2949,7 @@ fn parseAndCanonicalizeExprInternal(
         const imported_envs = [_]*const ModuleEnv{ builtin_module.env, module_env };
         // Resolve imports - map each import to its index in imported_envs
         module_env.imports.resolveImports(module_env, &imported_envs);
-        checker.* = try Check.init(allocator, &module_env.types, module_env, &imported_envs, &module_envs_map, &module_env.store.regions, builtin_ctx);
+        checker.* = try Check.init(allocator, &module_env.types, module_env, &imported_envs, null, &module_env.store.regions, builtin_ctx);
         const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
         return .{
             .module_env = module_env,
@@ -2987,7 +2983,7 @@ fn parseAndCanonicalizeExprInternal(
     module_env.imports.resolveImports(module_env, &imported_envs);
 
     const checker = try allocator.create(Check);
-    checker.* = try Check.init(allocator, &module_env.types, module_env, &imported_envs, &module_envs_map, &module_env.store.regions, builtin_ctx);
+    checker.* = try Check.init(allocator, &module_env.types, module_env, &imported_envs, null, &module_env.store.regions, builtin_ctx);
 
     // Type check the expression (including any defs from local type declarations)
     _ = try checker.checkExprReplWithDefs(canonical_expr_idx);

@@ -120,7 +120,7 @@ pub fn parseSingleModule(
 /// - allocators: Caller provides and manages
 /// - module_env: Caller provides; results stored here
 /// - parse_ast: Caller provides and manages
-/// - module_envs: Optional map of imported module environments
+/// - context: Builtin type context plus optional explicit imported module environments
 ///
 /// Example:
 /// ```zig
@@ -134,7 +134,7 @@ pub fn parseSingleModule(
 /// const ast = try parseSingleModule(&allocators, &module_env, .file, .{});
 /// defer ast.deinit();
 ///
-/// try canonicalizeSingleModule(&allocators, &module_env, ast, null);
+/// try canonicalizeSingleModule(&allocators, &module_env, ast, context);
 ///
 /// // Results are now in module_env
 /// ```
@@ -142,9 +142,9 @@ pub fn canonicalizeSingleModule(
     allocators: *Allocators,
     module_env: *ModuleEnv,
     parse_ast: *AST,
-    module_envs: ?*const std.AutoHashMap(base.Ident.Idx, AutoImportedType),
+    context: can.Can.ModuleInitContext,
 ) !void {
-    try can.canonicalizeModule(allocators, module_env, parse_ast, module_envs);
+    try can.canonicalizeModule(allocators, module_env, parse_ast, context);
 }
 
 // Tests

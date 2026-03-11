@@ -161,13 +161,6 @@ pub fn initFull(module_name: []const u8, source: []const u8) !MirTestEnv {
     module_env.qualified_module_ident = module_env.display_module_name_idx;
     try module_env.common.calcLineStarts(gpa);
 
-    try Can.populateModuleEnvs(
-        &module_envs,
-        module_env,
-        builtin_module.env,
-        builtin_indices,
-    );
-
     // Parse
     const parse_ast = try parse.parse(&allocators, &module_env.common);
     errdefer parse_ast.deinit();
@@ -176,7 +169,13 @@ pub fn initFull(module_name: []const u8, source: []const u8) !MirTestEnv {
     // Canonicalize
     try module_env.initCIRFields(module_name);
 
-    can_ptr.* = try Can.init(&allocators, module_env, parse_ast, &module_envs);
+    can_ptr.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_module.env,
+            .builtin_indices = builtin_indices,
+        },
+        .imported_modules = &module_envs,
+    });
     errdefer can_ptr.deinit();
 
     try can_ptr.canonicalizeFile();
@@ -351,13 +350,6 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         .qualified_type_ident = other_qualified_ident,
     });
 
-    try Can.populateModuleEnvs(
-        &module_envs,
-        module_env,
-        builtin_env,
-        builtin_indices,
-    );
-
     // Parse
     const parse_ast = try parse.parse(&allocators, &module_env.common);
     errdefer parse_ast.deinit();
@@ -366,7 +358,13 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     // Canonicalize
     try module_env.initCIRFields(module_name);
 
-    can_ptr.* = try Can.init(&allocators, module_env, parse_ast, &module_envs);
+    can_ptr.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_env,
+            .builtin_indices = builtin_indices,
+        },
+        .imported_modules = &module_envs,
+    });
     errdefer can_ptr.deinit();
 
     try can_ptr.canonicalizeFile();

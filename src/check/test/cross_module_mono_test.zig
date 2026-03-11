@@ -131,15 +131,19 @@ const MonoTestEnv = struct {
         module_env.qualified_module_ident = module_env.display_module_name_idx;
         try module_env.common.calcLineStarts(gpa);
 
-        try Can.populateModuleEnvs(&module_envs, module_env, builtin_module.env, builtin_indices);
-
         const parse_ast = try parse.parse(&allocators, &module_env.common);
         errdefer parse_ast.deinit();
         parse_ast.store.emptyScratch();
 
         try module_env.initCIRFields(module_name);
 
-        can_instance.* = try Can.init(&allocators, module_env, parse_ast, &module_envs);
+        can_instance.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+            .builtin_types = .{
+                .builtin_module_env = builtin_module.env,
+                .builtin_indices = builtin_indices,
+            },
+            .imported_modules = &module_envs,
+        });
         errdefer can_instance.deinit();
 
         try can_instance.canonicalizeFile();
@@ -234,15 +238,19 @@ const MonoTestEnv = struct {
             .qualified_type_ident = other_qualified_ident,
         });
 
-        try Can.populateModuleEnvs(&module_envs, module_env, builtin_env, builtin_indices);
-
         const parse_ast = try parse.parse(&allocators, &module_env.common);
         errdefer parse_ast.deinit();
         parse_ast.store.emptyScratch();
 
         try module_env.initCIRFields(module_name);
 
-        can_instance.* = try Can.init(&allocators, module_env, parse_ast, &module_envs);
+        can_instance.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+            .builtin_types = .{
+                .builtin_module_env = builtin_env,
+                .builtin_indices = builtin_indices,
+            },
+            .imported_modules = &module_envs,
+        });
         errdefer can_instance.deinit();
 
         try can_instance.canonicalizeFile();
@@ -349,15 +357,19 @@ const MonoTestEnv = struct {
             });
         }
 
-        try Can.populateModuleEnvs(&module_envs, module_env, builtin_env, builtin_indices);
-
         const parse_ast = try parse.parse(&allocators, &module_env.common);
         errdefer parse_ast.deinit();
         parse_ast.store.emptyScratch();
 
         try module_env.initCIRFields(module_name);
 
-        can_instance.* = try Can.init(&allocators, module_env, parse_ast, &module_envs);
+        can_instance.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+            .builtin_types = .{
+                .builtin_module_env = builtin_env,
+                .builtin_indices = builtin_indices,
+            },
+            .imported_modules = &module_envs,
+        });
         errdefer can_instance.deinit();
 
         try can_instance.canonicalizeFile();
@@ -595,15 +607,19 @@ test "type checker catches polymorphic recursion (infinite type)" {
     module_env.qualified_module_ident = module_env.display_module_name_idx;
     try module_env.common.calcLineStarts(gpa);
 
-    try Can.populateModuleEnvs(&module_envs, module_env, builtin_module.env, builtin_indices);
-
     const parse_ast = try parse.parse(&allocators, &module_env.common);
     defer parse_ast.deinit();
     parse_ast.store.emptyScratch();
 
     try module_env.initCIRFields("Test");
 
-    can_instance.* = try Can.init(&allocators, module_env, parse_ast, &module_envs);
+    can_instance.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_module.env,
+            .builtin_indices = builtin_indices,
+        },
+        .imported_modules = &module_envs,
+    });
     defer can_instance.deinit();
 
     try can_instance.canonicalizeFile();

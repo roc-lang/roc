@@ -73,7 +73,12 @@ fn parseCheckAndEvalModuleWithName(src: []const u8, module_name: []const u8) !Ev
     };
 
     // Create canonicalizer
-    var czer = try Can.init(&allocators, module_env, parse_ast, null);
+    var czer = try Can.initModule(&allocators, module_env, parse_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_module.env,
+            .builtin_indices = builtin_indices,
+        },
+    });
     defer czer.deinit();
 
     // Canonicalize the module
@@ -160,9 +165,6 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
     defer module_envs.deinit();
 
-    // Populate module_envs with builtin types (like production does)
-    try Can.populateModuleEnvs(&module_envs, module_env, builtin_module.env, builtin_indices);
-
     // Convert import name to Ident.Idx using the MODULE's ident store (not a temporary one!)
     // This is important because the canonicalizer will look up identifiers in this same store
     const import_ident = try module_env.insertIdent(base.Ident.for_text(import_name));
@@ -172,7 +174,13 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     try module_envs.put(import_ident, .{ .env = imported_module, .qualified_type_ident = import_qualified_ident });
 
     // Create canonicalizer with imports
-    var czer = try Can.init(&allocators, module_env, parse_ast, &module_envs);
+    var czer = try Can.initModule(&allocators, module_env, parse_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_module.env,
+            .builtin_indices = builtin_indices,
+        },
+        .imported_modules = &module_envs,
+    });
     defer czer.deinit();
 
     // Canonicalize the module
@@ -192,7 +200,7 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     module_env.imports.resolveImports(module_env, imported_envs.items);
 
     // Type check the module
-    var checker = try Check.init(gpa, &module_env.types, module_env, imported_envs.items, &module_envs, &module_env.store.regions, builtin_ctx);
+    var checker = try Check.init(gpa, &module_env.types, module_env, imported_envs.items, null, &module_env.store.regions, builtin_ctx);
     defer checker.deinit();
 
     try checker.checkFile();
@@ -251,6 +259,30 @@ fn cleanupEvalModuleWithImport(result: anytype) void {
     builtin_module_mut.deinit();
 }
 
+fn expectNoCanDiagnostics(module_env: *ModuleEnv) !void {
+    const diagnostics = try module_env.getDiagnostics();
+    defer test_allocator.free(diagnostics);
+
+    try testing.expectEqual(@as(usize, 0), diagnostics.len);
+}
+
+fn expectNoUndeclaredTypeDiagnostics(module_env: *ModuleEnv, forbidden_names: []const []const u8) !void {
+    const diagnostics = try module_env.getDiagnostics();
+    defer test_allocator.free(diagnostics);
+
+    for (diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .undeclared_type => |data| {
+                const type_name = module_env.getIdent(data.name);
+                for (forbidden_names) |forbidden_name| {
+                    try testing.expect(!std.mem.eql(u8, type_name, forbidden_name));
+                }
+            },
+            else => {},
+        }
+    }
+}
+
 test "comptime eval - simple constant" {
     const src = "x = 42";
 
@@ -262,6 +294,24 @@ test "comptime eval - simple constant" {
     // Should evaluate 1 declaration with no crashes
     try testing.expectEqual(@as(u32, 1), summary.evaluated);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval helper auto-imports builtin typed suffix types" {
+    const src =
+        \\typed = 0.I64
+        \\frac = 3.14.Dec
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    try expectNoCanDiagnostics(result.module_env);
+
+    const summary = try result.evaluator.evalAll();
+
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+    try testing.expectEqual(@as(usize, 0), result.problems.len());
 }
 
 test "comptime eval - crash in constant" {
@@ -403,6 +453,42 @@ test "comptime eval - cross-module constant works" {
     // The constant in module B should evaluate successfully using module A's value
     try testing.expectEqual(@as(u32, 1), summary_b.evaluated);
     try testing.expectEqual(@as(u32, 0), summary_b.crashed);
+}
+
+test "comptime imported-module helper auto-imports builtin typed suffix types" {
+    const src_a =
+        \\module [answer]
+        \\
+        \\answer = 41.I64
+    ;
+
+    var result_a = try parseCheckAndEvalModuleWithName(src_a, "A");
+    defer cleanupEvalModule(&result_a);
+
+    const summary_a = try result_a.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary_a.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary_a.crashed);
+
+    const src_b =
+        \\module []
+        \\
+        \\import A
+        \\
+        \\typed = 1.I64
+        \\frac = 3.14.Dec
+        \\combined = A.answer + typed
+    ;
+
+    var result_b = try parseCheckAndEvalModuleWithImport(src_b, "A", result_a.module_env);
+    defer cleanupEvalModuleWithImport(&result_b);
+
+    try expectNoUndeclaredTypeDiagnostics(result_b.module_env, &.{ "I64", "Dec" });
+
+    const summary_b = try result_b.evaluator.evalAll();
+
+    try testing.expectEqual(@as(u32, 3), summary_b.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary_b.crashed);
+    try testing.expectEqual(@as(usize, 0), result_b.problems.len());
 }
 
 test "comptime eval - cross-module crash is detected" {
