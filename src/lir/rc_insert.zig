@@ -27,7 +27,6 @@ const layout_mod = @import("layout");
 const base = @import("base");
 const LIR = @import("LIR.zig");
 const LirExprStore = @import("LirExprStore.zig");
-const LowLevelMap = @import("LowLevelMap.zig");
 const OwnershipNormalize = @import("OwnershipNormalize.zig");
 
 const LirExprId = LIR.LirExprId;
@@ -264,7 +263,6 @@ pub const RcInsertPass = struct {
                 try self.validateExprTreeIds(call.fn_expr);
                 for (self.store.getExprSpan(call.args)) |arg| try self.validateExprTreeIds(arg);
             },
-            .semantic_low_level => |ll| for (self.store.getExprSpan(ll.args)) |arg| try self.validateExprTreeIds(arg),
             .low_level => |ll| for (self.store.getExprSpan(ll.args)) |arg| try self.validateExprTreeIds(arg),
             .hosted_call => |hc| for (self.store.getExprSpan(hc.args)) |arg| try self.validateExprTreeIds(arg),
             .list => |list_expr| for (self.store.getExprSpan(list_expr.elems)) |elem| try self.validateExprTreeIds(elem),
@@ -516,14 +514,6 @@ pub const RcInsertPass = struct {
             .block => |block| self.exprAliasesManagedRef(block.final_expr, layout_idx),
             .dbg => |dbg_expr| self.exprAliasesManagedRef(dbg_expr.expr, layout_idx),
             .nominal => |nominal| self.exprAliasesManagedRef(nominal.backing_expr, layout_idx),
-            .semantic_low_level => |ll| switch (ll.op) {
-                .list_get_unsafe => blk: {
-                    const args = self.store.getExprSpan(ll.args);
-                    if (args.len == 0) break :blk false;
-                    break :blk self.exprAliasesManagedRef(args[0], layout_idx);
-                },
-                else => false,
-            },
             .low_level => |ll| switch (ll.op) {
                 .list_get_unsafe => blk: {
                     const args = self.store.getExprSpan(ll.args);
@@ -545,7 +535,6 @@ pub const RcInsertPass = struct {
             .dbg => |d| d.result_layout,
             .expect => |e| e.result_layout,
             .call => |c| c.ret_layout,
-            .semantic_low_level => |ll| ll.ret_layout,
             .low_level => |ll| ll.ret_layout,
             .early_return => |er| er.ret_layout,
             .lookup => |l| l.layout_idx,
@@ -997,18 +986,6 @@ pub const RcInsertPass = struct {
                 if (new_cond == e.cond and new_body == e.body and cond_prelude.items.len == 0) return expr_id;
                 return self.wrapPreludeAroundExpr(rebuilt, e.result_layout, region, cond_prelude.items);
             },
-            .semantic_low_level => |ll| {
-                var prelude = std.ArrayList(LirStmt).empty;
-                defer prelude.deinit(self.allocator);
-                const args_res = try self.materializeRcCellLoadSpan(ll.args, region, &prelude);
-                const rebuilt = try self.store.addExpr(.{ .semantic_low_level = .{
-                    .op = ll.op,
-                    .args = args_res.span,
-                    .ret_layout = ll.ret_layout,
-                } }, region);
-                if (!args_res.changed and prelude.items.len == 0) return expr_id;
-                return self.wrapPreludeAroundExpr(rebuilt, ll.ret_layout, region, prelude.items);
-            },
             .low_level => |ll| {
                 var prelude = std.ArrayList(LirStmt).empty;
                 defer prelude.deinit(self.allocator);
@@ -1376,15 +1353,6 @@ pub const RcInsertPass = struct {
                     .result_layout = e.result_layout,
                 } }, region);
             },
-            .semantic_low_level => |ll| {
-                const args_res = try self.normalizeBorrowedLoopSourceSpan(ll.args);
-                if (!args_res.changed) return expr_id;
-                return self.store.addExpr(.{ .semantic_low_level = .{
-                    .op = ll.op,
-                    .args = args_res.span,
-                    .ret_layout = ll.ret_layout,
-                } }, region);
-            },
             .low_level => |ll| {
                 const args_res = try self.normalizeBorrowedLoopSourceSpan(ll.args);
                 if (!args_res.changed) return expr_id;
@@ -1635,9 +1603,6 @@ pub const RcInsertPass = struct {
                 try self.uniquifyBindingPatterns(e.cond);
                 try self.uniquifyBindingPatterns(e.body);
             },
-            .semantic_low_level => |ll| {
-                for (self.store.getExprSpan(ll.args)) |arg| try self.uniquifyBindingPatterns(arg);
-            },
             .low_level => |ll| {
                 for (self.store.getExprSpan(ll.args)) |arg| try self.uniquifyBindingPatterns(arg);
             },
@@ -1836,12 +1801,6 @@ pub const RcInsertPass = struct {
             .expect => |e| {
                 try self.countUsesInto(e.cond, target);
                 try self.countUsesInto(e.body, target);
-            },
-            .semantic_low_level => |ll| {
-                const args = self.store.getExprSpan(ll.args);
-                for (args) |arg_id| {
-                    try self.countUsesInto(arg_id, target);
-                }
             },
             .low_level => |ll| {
                 const args = self.store.getExprSpan(ll.args);
@@ -2095,27 +2054,9 @@ pub const RcInsertPass = struct {
                 try self.countConsumedValueInto(e.cond, target);
                 try self.countConsumedUsesInto(e.body, target);
             },
-            .semantic_low_level => |ll| {
+            .low_level => |ll| {
                 const args = self.store.getExprSpan(ll.args);
                 const arg_ownership = ll.op.getArgOwnership();
-                if (builtin.mode == .Debug and arg_ownership.len != args.len) {
-                    std.debug.panic(
-                        "RC invariant violated: low-level {s} expected {d} ownership entries for {d} args",
-                        .{ @tagName(ll.op), arg_ownership.len, args.len },
-                    );
-                }
-
-                for (args, 0..) |arg_id, i| {
-                    const ownership = arg_ownership[i];
-                    switch (ownership) {
-                        .consume => try self.countConsumedValueInto(arg_id, target),
-                        .borrow => try self.countConsumedUsesInto(arg_id, target),
-                    }
-                }
-            },
-            .low_level => |ll| {
-                const arg_ownership = LowLevelMap.backendArgOwnership(ll.op);
-                const args = self.store.getExprSpan(ll.args);
                 if (builtin.mode == .Debug and arg_ownership.len != args.len) {
                     std.debug.panic(
                         "RC invariant violated: low-level {s} expected {d} ownership entries for {d} args",
@@ -2334,27 +2275,9 @@ pub const RcInsertPass = struct {
                 try self.countBorrowOwnerDemandValueInto(e.cond, target);
                 try self.countBorrowOwnerDemandUsesInto(e.body, target);
             },
-            .semantic_low_level => |ll| {
+            .low_level => |ll| {
                 const args = self.store.getExprSpan(ll.args);
                 const arg_ownership = ll.op.getArgOwnership();
-                if (builtin.mode == .Debug and arg_ownership.len != args.len) {
-                    std.debug.panic(
-                        "RC invariant violated: low-level {s} expected {d} ownership entries for {d} args",
-                        .{ @tagName(ll.op), arg_ownership.len, args.len },
-                    );
-                }
-
-                for (args, 0..) |arg_id, i| {
-                    const ownership = arg_ownership[i];
-                    switch (ownership) {
-                        .consume => try self.countBorrowOwnerDemandValueInto(arg_id, target),
-                        .borrow => try self.countBorrowOwnerDemandUsesInto(arg_id, target),
-                    }
-                }
-            },
-            .low_level => |ll| {
-                const arg_ownership = LowLevelMap.backendArgOwnership(ll.op);
-                const args = self.store.getExprSpan(ll.args);
                 if (builtin.mode == .Debug and arg_ownership.len != args.len) {
                     std.debug.panic(
                         "RC invariant violated: low-level {s} expected {d} ownership entries for {d} args",
@@ -2784,70 +2707,9 @@ pub const RcInsertPass = struct {
                     .args = args_res.span,
                 } }, region);
             },
-            .semantic_low_level => |ll| {
-                const args = self.store.getExprSpan(ll.args);
-                const arg_ownership = ll.op.getArgOwnership();
-                if (builtin.mode == .Debug and arg_ownership.len != args.len) {
-                    std.debug.panic(
-                        "RC invariant violated: semantic low-level {s} expected {d} ownership entries for {d} args",
-                        .{ @tagName(ll.op), arg_ownership.len, args.len },
-                    );
-                }
-
-                var new_args = std.ArrayList(LirExprId).empty;
-                defer new_args.deinit(self.allocator);
-
-                var added_maps = std.ArrayList(std.AutoHashMap(u64, u32)).empty;
-                defer {
-                    var i = added_maps.items.len;
-                    while (i > 0) {
-                        i -= 1;
-                        self.popExprUsesFromBlockConsumed(&added_maps.items[i]);
-                        added_maps.items[i].deinit();
-                    }
-                    added_maps.deinit(self.allocator);
-                }
-
-                var changed = false;
-                for (args, 0..) |arg_id, i| {
-                    const new_arg = try self.processExpr(arg_id);
-                    if (new_arg != arg_id) changed = true;
-                    try new_args.append(self.allocator, new_arg);
-
-                    if (i + 1 < args.len) {
-                        const ownership: ExprOwnership = switch (arg_ownership[i]) {
-                            .consume => .consume,
-                            .borrow => .borrow,
-                        };
-                        const added = try self.pushExprUsesForOwnership(arg_id, ownership);
-                        try added_maps.append(self.allocator, added);
-                    }
-                }
-
-                const backend_op = LowLevelMap.semanticToBackend(ll.op) orelse {
-                    if (builtin.mode == .Debug) {
-                        std.debug.panic("RC legalization invariant violated: semantic low-level {s} was not lowered earlier", .{@tagName(ll.op)});
-                    }
-                    unreachable;
-                };
-                if (!changed) {
-                    return self.store.addExpr(.{ .low_level = .{
-                        .op = backend_op,
-                        .args = ll.args,
-                        .ret_layout = ll.ret_layout,
-                    } }, region);
-                }
-
-                const new_args_span = try self.store.addExprSpan(new_args.items);
-                return self.store.addExpr(.{ .low_level = .{
-                    .op = backend_op,
-                    .args = new_args_span,
-                    .ret_layout = ll.ret_layout,
-                } }, region);
-            },
             .low_level => |ll| {
                 const args = self.store.getExprSpan(ll.args);
-                const arg_ownership = LowLevelMap.backendArgOwnership(ll.op);
+                const arg_ownership = ll.op.getArgOwnership();
                 if (builtin.mode == .Debug and arg_ownership.len != args.len) {
                     std.debug.panic(
                         "RC invariant violated: low-level {s} expected {d} ownership entries for {d} args",
@@ -4137,10 +3999,6 @@ pub const RcInsertPass = struct {
             .nominal => |n| try self.collectExprBoundSymbols(n.backing_expr, set),
             .early_return => |ret| try self.collectExprBoundSymbols(ret.expr, set),
             .dbg => |d| try self.collectExprBoundSymbols(d.expr, set),
-            .semantic_low_level => |ll| {
-                const args = self.store.getExprSpan(ll.args);
-                for (args) |arg_id| try self.collectExprBoundSymbols(arg_id, set);
-            },
             .low_level => |ll| {
                 const args = self.store.getExprSpan(ll.args);
                 for (args) |arg_id| try self.collectExprBoundSymbols(arg_id, set);
@@ -5141,14 +4999,6 @@ fn countRcOps(store: *const LirExprStore, expr_id: LirExprId) RcOpCounts {
                 decrefs += sub.decrefs;
             }
         },
-        .semantic_low_level => |ll| {
-            const args = store.getExprSpan(ll.args);
-            for (args) |arg_id| {
-                const sub = countRcOps(store, arg_id);
-                increfs += sub.increfs;
-                decrefs += sub.decrefs;
-            }
-        },
         .low_level => |ll| {
             const args = store.getExprSpan(ll.args);
             for (args) |arg_id| {
@@ -5314,13 +5164,6 @@ fn countDecrefsForSymbol(store: *const LirExprStore, expr_id: LirExprId, symbol:
         .call => |call| blk: {
             var total: u32 = countDecrefsForSymbol(store, call.fn_expr, symbol);
             for (store.getExprSpan(call.args)) |arg_id| {
-                total += countDecrefsForSymbol(store, arg_id, symbol);
-            }
-            break :blk total;
-        },
-        .semantic_low_level => |ll| blk: {
-            var total: u32 = 0;
-            for (store.getExprSpan(ll.args)) |arg_id| {
                 total += countDecrefsForSymbol(store, arg_id, symbol);
             }
             break :blk total;
@@ -5814,7 +5657,7 @@ test "RC mutable list binding tail-cleans borrowed final use" {
     } }, Region.zero());
     const lookup_acc = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_acc, .layout_idx = list_layout } }, Region.zero());
     const args = try env.lir_store.addExprSpan(&.{lookup_acc});
-    const len_expr = try env.lir_store.addExpr(.{ .semantic_low_level = .{
+    const len_expr = try env.lir_store.addExpr(.{ .low_level = .{
         .op = .list_len,
         .args = args,
         .ret_layout = i64_layout,
@@ -5866,8 +5709,8 @@ test "RC mutable list loop accumulator tail-cleans current binding after borrowe
     const lookup_acc_for_append = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_acc, .layout_idx = list_layout } }, Region.zero());
     const lookup_elem = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_elem, .layout_idx = i64_layout } }, Region.zero());
     const append_args = try env.lir_store.addExprSpan(&.{ lookup_acc_for_append, lookup_elem });
-    const append_expr = try env.lir_store.addExpr(.{ .semantic_low_level = .{
-        .op = .list_append,
+    const append_expr = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .list_append_unsafe,
         .args = append_args,
         .ret_layout = list_layout,
     } }, Region.zero());
@@ -5906,7 +5749,7 @@ test "RC mutable list loop accumulator tail-cleans current binding after borrowe
 
     const lookup_acc_for_len = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_acc, .layout_idx = list_layout } }, Region.zero());
     const len_args = try env.lir_store.addExprSpan(&.{lookup_acc_for_len});
-    const len_expr = try env.lir_store.addExpr(.{ .semantic_low_level = .{
+    const len_expr = try env.lir_store.addExpr(.{ .low_level = .{
         .op = .list_len,
         .args = len_args,
         .ret_layout = i64_layout,
@@ -6436,7 +6279,7 @@ test "RC shadowed list decl only cleans latest generation at block tail" {
     } }, Region.zero());
     const lookup_list = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_list, .layout_idx = list_layout } }, Region.zero());
     const len_args = try env.lir_store.addExprSpan(&.{lookup_list});
-    const len_expr = try env.lir_store.addExpr(.{ .semantic_low_level = .{
+    const len_expr = try env.lir_store.addExpr(.{ .low_level = .{
         .op = .list_len,
         .args = len_args,
         .ret_layout = i64_layout,

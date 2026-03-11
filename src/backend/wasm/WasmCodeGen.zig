@@ -939,12 +939,6 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
             self.body.append(self.allocator, Op.drop) catch return error.OutOfMemory;
             try self.generateExpr(e.body);
         },
-        .semantic_low_level => {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("wasm backend invariant violated: semantic_low_level must be removed before codegen", .{});
-            }
-            unreachable;
-        },
         .low_level => |ll| {
             try self.generateLowLevel(ll);
         },
@@ -2080,7 +2074,6 @@ fn exprLayoutIdx(self: *Self, expr_id: LirExprId) layout.Idx {
         .struct_access => |sa| sa.field_layout,
         .zero_arg_tag => |z| z.union_layout,
         .tag => |t| t.union_layout,
-        .semantic_low_level => |ll| ll.ret_layout,
         .low_level => |ll| ll.ret_layout,
         .dbg => |d| d.result_layout,
         .expect => |e| e.result_layout,
@@ -2140,7 +2133,6 @@ fn exprValType(self: *Self, expr_id: LirExprId) ValType {
         .struct_access => |sa| self.resolveValType(sa.field_layout),
         .zero_arg_tag => .i32, // discriminant or pointer
         .tag => .i32, // pointer to stack memory
-        .semantic_low_level => |ll| self.resolveValType(ll.ret_layout),
         .low_level => |ll| self.resolveValType(ll.ret_layout),
         .dbg => |d| self.resolveValType(d.result_layout),
         .expect => |e| self.resolveValType(e.result_layout),
@@ -2199,7 +2191,6 @@ fn isCompositeExpr(self: *const Self, expr_id: LirExprId) bool {
         .cell_load => |l| self.isCompositeLayout(l.layout_idx),
         .call => |c| self.isCompositeLayout(c.ret_layout),
         .struct_access => |sa| self.isCompositeLayout(sa.field_layout),
-        .semantic_low_level => |ll| self.isCompositeLayout(ll.ret_layout),
         .low_level => |ll| self.isCompositeLayout(ll.ret_layout),
         .dbg => |d| self.isCompositeLayout(d.result_layout),
         .expect => |e| self.isCompositeLayout(e.result_layout),
@@ -3014,9 +3005,9 @@ fn generateCompositeNumericOp(self: *Self, op: anytype, args: []const LirExprId,
         const rhs_local = try self.stabilizeCompositeResult(16);
 
         switch (op) {
-            .num_add => try self.emitI128Add(lhs_local, rhs_local),
-            .num_sub => try self.emitI128Sub(lhs_local, rhs_local),
-            .num_mul => {
+            .num_plus => try self.emitI128Add(lhs_local, rhs_local),
+            .num_minus => try self.emitI128Sub(lhs_local, rhs_local),
+            .num_times => {
                 if (operand_layout == .dec) {
                     const import_idx = self.dec_mul_import orelse unreachable;
                     const result_offset = try self.allocStackMemory(16, 8);
@@ -3038,7 +3029,7 @@ fn generateCompositeNumericOp(self: *Self, op: anytype, args: []const LirExprId,
                 }
                 try self.emitI128Mul(lhs_local, rhs_local);
             },
-            .num_div => {
+            .num_div_by => {
                 if (operand_layout == .dec) {
                     const import_idx = self.dec_div_import orelse unreachable;
                     try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx);
@@ -3048,7 +3039,7 @@ fn generateCompositeNumericOp(self: *Self, op: anytype, args: []const LirExprId,
                     try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx orelse unreachable);
                 }
             },
-            .num_div_trunc => {
+            .num_div_trunc_by => {
                 if (operand_layout == .dec) {
                     const import_idx = self.dec_div_trunc_import orelse unreachable;
                     try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx);
@@ -3058,12 +3049,12 @@ fn generateCompositeNumericOp(self: *Self, op: anytype, args: []const LirExprId,
                     try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx orelse unreachable);
                 }
             },
-            .num_rem => {
+            .num_rem_by => {
                 const is_signed = operand_layout == .i128 or operand_layout == .dec;
                 const import_idx = if (is_signed) self.i128_mod_s_import else self.u128_mod_import;
                 try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx orelse unreachable);
             },
-            .num_mod => {
+            .num_mod_by => {
                 const is_signed = operand_layout == .i128 or operand_layout == .dec;
                 const import_idx = if (is_signed) self.i128_mod_s_import else self.u128_mod_import;
                 try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx orelse unreachable);
@@ -3077,7 +3068,7 @@ fn generateCompositeNumericOp(self: *Self, op: anytype, args: []const LirExprId,
     } else {
         // Unary composite op (num_neg handled before calling this function)
         switch (op) {
-            .num_neg => try self.generateCompositeI128Negate(args[0], ret_layout),
+            .num_negate => try self.generateCompositeI128Negate(args[0], ret_layout),
             .num_abs => {
                 // TODO: Implement composite i128/dec num_abs for wasm.
                 @panic("TODO: wasm composite num_abs is not implemented");
@@ -6695,13 +6686,13 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
     switch (ll.op) {
         // Numeric operations (arithmetic, comparisons, shifts)
-        .num_add,
-        .num_sub,
-        .num_mul,
-        .num_div,
-        .num_div_trunc,
-        .num_rem,
-        .num_neg,
+        .num_plus,
+        .num_minus,
+        .num_times,
+        .num_div_by,
+        .num_div_trunc_by,
+        .num_rem_by,
+        .num_negate,
         .num_abs,
         .num_is_eq,
         .num_is_gt,
@@ -7066,7 +7057,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
 
         // Modulo (integer only — float mod not yet supported)
-        .num_mod => {
+        .num_mod_by => {
             return self.generateNumericLowLevel(ll.op, args, ll.ret_layout);
         },
 
@@ -7705,7 +7696,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
         },
 
-        .list_append => {
+        .list_append_unsafe => {
             // list_append(list, elem) -> new list with elem appended
             try self.generateLLListAppend(args, ll.ret_layout);
         },
@@ -7768,12 +7759,11 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                         .{sorted_fields.len},
                     );
                 }
-                const f0_name = ls.getFieldName(sorted_fields.get(0).name);
-                const f1_name = ls.getFieldName(sorted_fields.get(1).name);
-                if (!std.mem.eql(u8, f0_name, "len") or !std.mem.eql(u8, f1_name, "start")) {
+                const record_size = ls.getStructData(record_idx).size;
+                if (sorted_fields.get(0).layout != .u64 or sorted_fields.get(1).layout != .u64 or record_size != 16) {
                     std.debug.panic(
-                        "LIR/wasm invariant violated: list_sublist record expected sorted fields [len, start], got [{s}, {s}]",
-                        .{ f0_name, f1_name },
+                        "LIR/wasm invariant violated: list_sublist record expected two U64 fields in 16 bytes, got layouts [{}, {}] size {d}",
+                        .{ sorted_fields.get(0).layout, sorted_fields.get(1).layout, record_size },
                     );
                 }
             }
@@ -8080,9 +8070,9 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
             try self.emitFpOffset(result_offset);
         },
-        .str_split, .str_join_with => {
+        .str_split_on, .str_join_with => {
             const import_idx = switch (ll.op) {
-                .str_split => self.str_split_import orelse unreachable,
+                .str_split_on => self.str_split_import orelse unreachable,
                 .str_join_with => self.str_join_with_import orelse unreachable,
                 else => unreachable,
             };
@@ -8166,7 +8156,26 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitFpOffset(result_offset);
         },
 
-        .num_to_str, .num_from_str, .num_from_numeral => unreachable, // Resolved by MonoIR lowering
+        .str_inspekt,
+        .u8_to_str,
+        .i8_to_str,
+        .u16_to_str,
+        .i16_to_str,
+        .u32_to_str,
+        .i32_to_str,
+        .u64_to_str,
+        .i64_to_str,
+        .u128_to_str,
+        .i128_to_str,
+        .dec_to_str,
+        .f32_to_str,
+        .f64_to_str,
+        .num_is_negative,
+        .num_is_positive,
+        .num_to_str,
+        .num_from_str,
+        .num_from_numeral,
+        => unreachable, // Resolved before backend codegen
 
         // Box operations
         .box_box => {
@@ -9738,14 +9747,14 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LirExprId, re
     }
 
     // For neg, also check composite via ret_layout
-    if (op == .num_neg and self.isCompositeLayout(ret_layout)) {
+    if (op == .num_negate and self.isCompositeLayout(ret_layout)) {
         return self.generateCompositeI128Negate(args[0], ret_layout);
     }
 
     const vt = if (is_comparison) self.exprValType(args[0]) else self.resolveValType(ret_layout);
 
     switch (op) {
-        .num_add => {
+        .num_plus => {
             try self.generateExpr(args[0]);
             try self.generateExpr(args[1]);
             const wasm_op: u8 = switch (vt) {
@@ -9756,7 +9765,7 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LirExprId, re
             };
             self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
         },
-        .num_sub => {
+        .num_minus => {
             try self.generateExpr(args[0]);
             try self.generateExpr(args[1]);
             const wasm_op: u8 = switch (vt) {
@@ -9767,7 +9776,7 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LirExprId, re
             };
             self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
         },
-        .num_mul => {
+        .num_times => {
             try self.generateExpr(args[0]);
             try self.generateExpr(args[1]);
             const wasm_op: u8 = switch (vt) {
@@ -9778,7 +9787,7 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LirExprId, re
             };
             self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
         },
-        .num_div => {
+        .num_div_by => {
             try self.generateExpr(args[0]);
             try self.generateExpr(args[1]);
             const is_unsigned = isUnsignedLayout(ret_layout);
@@ -9790,7 +9799,7 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LirExprId, re
             };
             self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
         },
-        .num_div_trunc => {
+        .num_div_trunc_by => {
             try self.generateExpr(args[0]);
             try self.generateExpr(args[1]);
             const is_unsigned = isUnsignedLayout(ret_layout);
@@ -9802,7 +9811,7 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LirExprId, re
             };
             self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
         },
-        .num_rem => {
+        .num_rem_by => {
             try self.generateExpr(args[0]);
             try self.generateExpr(args[1]);
             const is_unsigned = isUnsignedLayout(ret_layout);
@@ -9812,7 +9821,7 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LirExprId, re
                 .f32, .f64 => try self.emitFloatMod(vt),
             }
         },
-        .num_neg => {
+        .num_negate => {
             switch (vt) {
                 .i32 => {
                     self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
@@ -9951,7 +9960,7 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LirExprId, re
                 },
             }
         },
-        .num_mod => {
+        .num_mod_by => {
             try self.generateExpr(args[0]);
             try self.generateExpr(args[1]);
             switch (vt) {

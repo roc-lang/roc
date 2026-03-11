@@ -1303,7 +1303,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .cell_load => |load| load.layout_idx,
                 .struct_access => |sa| sa.field_layout,
                 .call => |call| call.ret_layout,
-                .semantic_low_level => |ll| ll.ret_layout,
                 .low_level => |ll| ll.ret_layout,
                 .hosted_call => |hc| hc.ret_layout,
                 // Compound expressions with result layouts
@@ -1394,13 +1393,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 // Blocks
                 .block => |block| try self.generateBlock(block),
-                .semantic_low_level => {
-                    if (builtin.mode == .Debug) {
-                        std.debug.panic("dev backend invariant violated: semantic_low_level must be removed before codegen", .{});
-                    }
-                    unreachable;
-                },
-
                 // Function calls and lambdas
                 .call => |call| try self.generateCall(call),
                 // Lambda as first-class value.
@@ -1617,7 +1609,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         },
                     };
                 },
-                .list_append => {
+                .list_append_unsafe => {
                     // list_append(list, element) -> List
                     // Uses SAFE listAppendSafeC that reserves capacity if needed
                     if (args.len != 2) {
@@ -2895,7 +2887,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrTrimEnd), .str_trim_end, .str);
                 },
-                .str_split => {
+                .str_split_on => {
                     // str_split(str, delimiter) -> List(Str)
                     if (args.len != 2) unreachable;
                     const a_loc = try self.generateExpr(args[0]);
@@ -3333,13 +3325,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
 
                 // Numeric arithmetic and comparison ops — route to existing binop helpers
-                .num_add,
-                .num_sub,
-                .num_mul,
-                .num_div,
-                .num_div_trunc,
-                .num_rem,
-                .num_mod,
+                .num_plus,
+                .num_minus,
+                .num_times,
+                .num_div_by,
+                .num_div_trunc_by,
+                .num_rem_by,
+                .num_mod_by,
                 .num_shift_left_by,
                 .num_shift_right_by,
                 .num_shift_right_zf_by,
@@ -3400,7 +3392,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                 },
 
-                .num_neg => {
+                .num_negate => {
                     const inner_loc = try self.generateExpr(args[0]);
                     const is_float = ll.ret_layout == .f32 or ll.ret_layout == .f64;
                     const is_i128 = ll.ret_layout == .i128 or ll.ret_layout == .u128 or ll.ret_layout == .dec;
@@ -3469,8 +3461,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_floor,
                 .num_ceiling,
                 .num_to_str,
+                .str_inspekt,
+                .u8_to_str,
+                .i8_to_str,
+                .u16_to_str,
+                .i16_to_str,
+                .u32_to_str,
+                .i32_to_str,
+                .u64_to_str,
+                .i64_to_str,
+                .u128_to_str,
+                .i128_to_str,
+                .dec_to_str,
+                .f32_to_str,
+                .f64_to_str,
                 .num_from_numeral,
                 .num_is_zero,
+                .num_is_negative,
+                .num_is_positive,
                 .list_drop_at,
                 .compare,
                 => {
@@ -3921,12 +3929,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .{sorted_fields.len},
                     );
                 }
-                const f0_name = ls.getFieldName(sorted_fields.get(0).name);
-                const f1_name = ls.getFieldName(sorted_fields.get(1).name);
-                if (!std.mem.eql(u8, f0_name, "len") or !std.mem.eql(u8, f1_name, "start")) {
+                if (sorted_fields.get(0).layout != .u64 or sorted_fields.get(1).layout != .u64 or record_size != 16) {
                     std.debug.panic(
-                        "LIR/codegen invariant violated: list_sublist record expected sorted fields [len, start], got [{s}, {s}]",
-                        .{ f0_name, f1_name },
+                        "LIR/codegen invariant violated: list_sublist record expected two U64 fields in 16 bytes, got layouts [{}, {}] size {d}",
+                        .{ sorted_fields.get(0).layout, sorted_fields.get(1).layout, record_size },
                     );
                 }
             }
@@ -4850,10 +4856,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
 
             switch (op) {
-                .num_add => try self.codegen.emitAdd(.w64, result_reg, lhs_reg, rhs_reg),
-                .num_sub => try self.codegen.emitSub(.w64, result_reg, lhs_reg, rhs_reg),
-                .num_mul => try self.codegen.emitMul(.w64, result_reg, lhs_reg, rhs_reg),
-                .num_div, .num_div_trunc => {
+                .num_plus => try self.codegen.emitAdd(.w64, result_reg, lhs_reg, rhs_reg),
+                .num_minus => try self.codegen.emitSub(.w64, result_reg, lhs_reg, rhs_reg),
+                .num_times => try self.codegen.emitMul(.w64, result_reg, lhs_reg, rhs_reg),
+                .num_div_by, .num_div_trunc_by => {
                     // For integers, div and div_trunc are the same (integer division truncates)
                     if (is_unsigned) {
                         try self.codegen.emitUDiv(.w64, result_reg, lhs_reg, rhs_reg);
@@ -4861,14 +4867,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emitSDiv(.w64, result_reg, lhs_reg, rhs_reg);
                     }
                 },
-                .num_rem => {
+                .num_rem_by => {
                     if (is_unsigned) {
                         try self.codegen.emitUMod(.w64, result_reg, lhs_reg, rhs_reg);
                     } else {
                         try self.codegen.emitSMod(.w64, result_reg, lhs_reg, rhs_reg);
                     }
                 },
-                .num_mod => {
+                .num_mod_by => {
                     if (is_unsigned) {
                         try self.codegen.emitUMod(.w64, result_reg, lhs_reg, rhs_reg);
                     } else {
@@ -4997,7 +5003,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const is_unsigned = operand_layout == .u128;
 
             switch (op) {
-                .num_add => {
+                .num_plus => {
                     // 128-bit add: low = lhs_low + rhs_low, high = lhs_high + rhs_high + carry
                     if (comptime target.toCpuArch() == .aarch64) {
                         // ADDS sets carry flag, ADC adds with carry
@@ -5011,7 +5017,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emit.adcRegReg(.w64, result_high, rhs_parts.high);
                     }
                 },
-                .num_sub => {
+                .num_minus => {
                     // 128-bit sub: low = lhs_low - rhs_low, high = lhs_high - rhs_high - borrow
                     if (comptime target.toCpuArch() == .aarch64) {
                         // SUBS sets borrow flag, SBC subtracts with borrow
@@ -5025,7 +5031,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emit.sbbRegReg(.w64, result_high, rhs_parts.high);
                     }
                 },
-                .num_mul => {
+                .num_times => {
                     if (operand_layout == .dec) {
                         // Dec multiplication: call builtin function
                         // mulSaturatedC(RocDec, RocDec) -> RocDec
@@ -5134,7 +5140,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                     }
                 },
-                .num_div => {
+                .num_div_by => {
                     if (operand_layout == .dec) {
                         // Dec division: call builtin function
                         // divC(RocDec, RocDec, *RocOps) -> i128
@@ -5144,7 +5150,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.callI128DivRem(lhs_parts, rhs_parts, result_low, result_high, is_unsigned, false);
                     }
                 },
-                .num_div_trunc => {
+                .num_div_trunc_by => {
                     if (operand_layout == .dec) {
                         // Dec truncating division: divide and truncate to whole number
                         // divTruncC(RocDec, RocDec, *RocOps) -> i128
@@ -5154,7 +5160,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.callI128DivRem(lhs_parts, rhs_parts, result_low, result_high, is_unsigned, false);
                     }
                 },
-                .num_rem, .num_mod => {
+                .num_rem_by, .num_mod_by => {
                     // 128-bit integer remainder/modulo: call builtin function
                     try self.callI128DivRem(lhs_parts, rhs_parts, result_low, result_high, is_unsigned, true);
                 },
@@ -6753,10 +6759,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_reg = try self.codegen.allocFloatFor(0);
 
             switch (op) {
-                .num_add => try self.codegen.emitAddF64(result_reg, lhs_reg, rhs_reg),
-                .num_sub => try self.codegen.emitSubF64(result_reg, lhs_reg, rhs_reg),
-                .num_mul => try self.codegen.emitMulF64(result_reg, lhs_reg, rhs_reg),
-                .num_div, .num_div_trunc => try self.codegen.emitDivF64(result_reg, lhs_reg, rhs_reg),
+                .num_plus => try self.codegen.emitAddF64(result_reg, lhs_reg, rhs_reg),
+                .num_minus => try self.codegen.emitSubF64(result_reg, lhs_reg, rhs_reg),
+                .num_times => try self.codegen.emitMulF64(result_reg, lhs_reg, rhs_reg),
+                .num_div_by, .num_div_trunc_by => try self.codegen.emitDivF64(result_reg, lhs_reg, rhs_reg),
                 else => unreachable,
             }
 
@@ -16146,7 +16152,7 @@ test "generate addition" {
     const rhs_id = try store.addExpr(.{ .i64_literal = .{ .value = 2, .layout_idx = .i64 } }, base.Region.zero());
     const ll_args = try store.addExprSpan(&.{ lhs_id, rhs_id });
     const add_id = try store.addExpr(.{ .low_level = .{
-        .op = .num_add,
+        .op = .num_plus,
         .args = ll_args,
         .ret_layout = .i64,
     } }, base.Region.zero());
@@ -16254,7 +16260,7 @@ test "generate modulo" {
     const rhs = try store.addExpr(.{ .i64_literal = .{ .value = 3, .layout_idx = .i64 } }, base.Region.zero());
     const ll_args = try store.addExprSpan(&.{ lhs, rhs });
     const expr_id = try store.addExpr(.{ .low_level = .{
-        .op = .num_mod,
+        .op = .num_mod_by,
         .args = ll_args,
         .ret_layout = .i64,
     } }, base.Region.zero());
@@ -16373,7 +16379,7 @@ test "generate unary minus" {
     const inner = try store.addExpr(.{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, base.Region.zero());
     const neg_args = try store.addExprSpan(&.{inner});
     const neg = try store.addExpr(.{ .low_level = .{
-        .op = .num_neg,
+        .op = .num_negate,
         .args = neg_args,
         .ret_layout = .i64,
     } }, base.Region.zero());

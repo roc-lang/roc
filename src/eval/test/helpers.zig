@@ -3198,12 +3198,6 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
                     return false;
                 },
                 .early_return => |ret| return containsCallTo(store, ret.expr, target),
-                .semantic_low_level => |ll| {
-                    for (store.getExprSpan(ll.args)) |arg| {
-                        if (containsCallTo(store, arg, target)) return true;
-                    }
-                    return false;
-                },
                 .low_level => |ll| {
                     for (store.getExprSpan(ll.args)) |arg| {
                         if (containsCallTo(store, arg, target)) return true;
@@ -3302,12 +3296,6 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
                 .call => |call| {
                     if (containsEarlyReturn(store, call.fn_expr)) return true;
                     for (store.getExprSpan(call.args)) |arg| {
-                        if (containsEarlyReturn(store, arg)) return true;
-                    }
-                    return false;
-                },
-                .semantic_low_level => |ll| {
-                    for (store.getExprSpan(ll.args)) |arg| {
                         if (containsEarlyReturn(store, arg)) return true;
                     }
                     return false;
@@ -3412,12 +3400,6 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
                 .call => |call| {
                     if (firstEarlyReturnLayout(store, call.fn_expr)) |found| return found;
                     for (store.getExprSpan(call.args)) |arg| {
-                        if (firstEarlyReturnLayout(store, arg)) |found| return found;
-                    }
-                    return null;
-                },
-                .semantic_low_level => |ll| {
-                    for (store.getExprSpan(ll.args)) |arg| {
                         if (firstEarlyReturnLayout(store, arg)) |found| return found;
                     }
                     return null;
@@ -3655,12 +3637,6 @@ test "dev lowering: local any-style HOF directly calls passed predicate member" 
                     return false;
                 },
                 .early_return => |ret| return containsCallTo(store, ret.expr, target),
-                .semantic_low_level => |ll| {
-                    for (store.getExprSpan(ll.args)) |arg| {
-                        if (containsCallTo(store, arg, target)) return true;
-                    }
-                    return false;
-                },
                 .low_level => |ll| {
                     for (store.getExprSpan(ll.args)) |arg| {
                         if (containsCallTo(store, arg, target)) return true;
@@ -3806,7 +3782,6 @@ test "dev lowering: list rest pattern emits two list decrefs" {
                     walk(store, ls, call.fn_expr, counts);
                     for (store.getExprSpan(call.args)) |arg| walk(store, ls, arg, counts);
                 },
-                .semantic_low_level => |ll| for (store.getExprSpan(ll.args)) |arg| walk(store, ls, arg, counts),
                 .low_level => |ll| for (store.getExprSpan(ll.args)) |arg| walk(store, ls, arg, counts),
                 .list => |list_expr| for (store.getExprSpan(list_expr.elems)) |elem| walk(store, ls, elem, counts),
                 .struct_ => |s| for (store.getExprSpan(s.fields)) |field| walk(store, ls, field, counts),
@@ -3918,12 +3893,6 @@ test "dev lowering: list rest pattern emits two list decrefs" {
                     }
                     break :blk false;
                 },
-                .semantic_low_level => |ll| blk: {
-                    for (store.getExprSpan(ll.args)) |arg| {
-                        if (exprUsesSymbol(store, arg, symbol)) break :blk true;
-                    }
-                    break :blk false;
-                },
                 .low_level => |ll| blk: {
                     for (store.getExprSpan(ll.args)) |arg| {
                         if (exprUsesSymbol(store, arg, symbol)) break :blk true;
@@ -4023,11 +3992,6 @@ test "dev lowering: list rest pattern emits two list decrefs" {
                 .call => |call| blk: {
                     var total: u32 = countDecrefsForSymbol(store, call.fn_expr, symbol);
                     for (store.getExprSpan(call.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
-                    break :blk total;
-                },
-                .semantic_low_level => |ll| blk: {
-                    var total: u32 = 0;
-                    for (store.getExprSpan(ll.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
                     break :blk total;
                 },
                 .low_level => |ll| blk: {
@@ -4215,10 +4179,6 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
                     for (store.getExprSpan(call.args)) |arg| if (containsCellLoad(store, arg, symbol)) break :blk true;
                     break :blk false;
                 },
-                .semantic_low_level => |ll| blk: {
-                    for (store.getExprSpan(ll.args)) |arg| if (containsCellLoad(store, arg, symbol)) break :blk true;
-                    break :blk false;
-                },
                 .low_level => |ll| blk: {
                     for (store.getExprSpan(ll.args)) |arg| if (containsCellLoad(store, arg, symbol)) break :blk true;
                     break :blk false;
@@ -4306,11 +4266,6 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
                 .call => |call| blk: {
                     var total: u32 = countCellDrops(store, call.fn_expr, symbol);
                     for (store.getExprSpan(call.args)) |arg| total += countCellDrops(store, arg, symbol);
-                    break :blk total;
-                },
-                .semantic_low_level => |ll| blk: {
-                    var total: u32 = 0;
-                    for (store.getExprSpan(ll.args)) |arg| total += countCellDrops(store, arg, symbol);
                     break :blk total;
                 },
                 .low_level => |ll| blk: {
@@ -4403,11 +4358,6 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
                 .call => |call| blk: {
                     var total: u32 = countDecrefsForSymbol(store, call.fn_expr, symbol);
                     for (store.getExprSpan(call.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
-                    break :blk total;
-                },
-                .semantic_low_level => |ll| blk: {
-                    var total: u32 = 0;
-                    for (store.getExprSpan(ll.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
                     break :blk total;
                 },
                 .low_level => |ll| blk: {

@@ -188,7 +188,6 @@ fn lirExprResultLayout(store: *const LirExprStore, expr_id: lir.LirExprId) layou
         .dbg => |d| d.result_layout,
         .expect => |e| e.result_layout,
         .call => |c| c.ret_layout,
-        .semantic_low_level => |ll| ll.ret_layout,
         .low_level => |ll| ll.ret_layout,
         .early_return => |er| er.ret_layout,
         .lookup => |l| l.layout_idx,

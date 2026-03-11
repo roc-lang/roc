@@ -385,6 +385,7 @@ Builtin :: [].{
 		##     |> List.append(3)
 		## ```
 		append : List(a), a -> List(a)
+		append = |list, item| list_append_unsafe(list, item)
 
 		## Returns the first element in the list, or `ListWasEmpty` if it was empty.
 		## ```roc

@@ -290,14 +290,6 @@ const Analyzer = struct {
             .dbg => |dbg_expr| self.sourceRefForAliasedExpr(dbg_expr.expr),
             .nominal => |nominal| self.sourceRefForAliasedExpr(nominal.backing_expr),
             .incref => |inc| self.sourceRefForAliasedExpr(inc.value),
-            .semantic_low_level => |ll| switch (ll.op) {
-                .list_get_unsafe => blk: {
-                    const args = self.store.getExprSpan(ll.args);
-                    if (args.len == 0) break :blk RefId.none;
-                    break :blk self.sourceRefForAliasedExpr(args[0]);
-                },
-                else => RefId.none,
-            },
             .low_level => |ll| switch (ll.op) {
                 .list_get_unsafe => blk: {
                     const args = self.store.getExprSpan(ll.args);
@@ -419,9 +411,6 @@ const Analyzer = struct {
                 try self.analyzeExpr(block.final_expr);
             },
             .early_return => |ret| try self.analyzeExpr(ret.expr),
-            .semantic_low_level => |ll| {
-                for (self.store.getExprSpan(ll.args)) |arg| try self.analyzeExpr(arg);
-            },
             .low_level => |ll| {
                 for (self.store.getExprSpan(ll.args)) |arg| try self.analyzeExpr(arg);
             },

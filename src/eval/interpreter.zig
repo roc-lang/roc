@@ -2807,162 +2807,18 @@ pub const Interpreter = struct {
 
                 return out;
             },
-            .list_append => {
-                // List.append: List(a), a -> List(a)
-                std.debug.assert(args.len == 2); // low-level .list_append expects 2 arguments
-
-                const roc_list_arg = args[0];
-                const elt_arg = args[1];
-
-                std.debug.assert(roc_list_arg.ptr != null); // low-level .list_append expects non-null list pointer
-
-                // Extract element layout from List(a)
-                std.debug.assert((roc_list_arg.layout.tag == .list and elt_arg.ptr != null) or roc_list_arg.layout.tag == .list_of_zst); // low-level .list_append expects list layout
-
-                // Handle ZST lists: appending to a list of ZSTs doesn't actually store anything
-                // The list header tracks the length but elements are zero-sized.
-                if (roc_list_arg.layout.tag == .list_of_zst) {
-                    const roc_list = roc_list_arg.asRocList().?;
-
-                    // If the element is also ZST, just bump the length
-                    if (self.runtime_layout_store.isZeroSized(elt_arg.layout)) {
-                        var result_list = roc_list.*;
-                        result_list.length += 1;
-                        var out = try self.pushRaw(roc_list_arg.layout, 0, roc_list_arg.rt_var);
-                        out.is_initialized = false;
-                        out.setRocList(result_list);
-                        out.is_initialized = true;
-                        return out;
-                    }
-
-                    std.debug.assert(elt_arg.ptr != null); // non-ZST element must have non-null pointer
-
-                    // The list was inferred as list_of_zst (e.g., from List.with_capacity with unknown element type)
-                    // but we're appending a non-ZST element. We need to "upgrade" to a proper list layout.
-                    // The original list_of_zst should be empty (or contain only ZST elements that we can discard).
-                    // Create a new list with the element's layout and append to it.
-                    const elem_layout = elt_arg.layout;
-                    const elem_layout_idx = try self.runtime_layout_store.insertLayout(elem_layout);
-                    var new_list_layout = roc_list_arg.layout;
-                    new_list_layout.tag = .list;
-                    new_list_layout.data = .{ .list = elem_layout_idx };
-
-                    // Create new empty list with correct element layout
-                    const non_null_bytes: [*]u8 = @ptrCast(elt_arg.ptr.?);
-                    const append_elt: builtins.list.Opaque = non_null_bytes;
-                    const elem_size: u32 = self.runtime_layout_store.layoutSize(elem_layout);
-                    const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
-                    const elem_alignment_u32: u32 = @intCast(elem_alignment);
-
-                    // Set up refcount context
-                    var rc = try RefcountContext.init(&self.runtime_layout_store, elem_layout, self.runtime_types, roc_ops);
-
-                    const copy_fn = selectCopyFallbackFn(elem_layout);
-
-                    // Append to an empty list (ignoring the old list_of_zst content)
-                    const empty_list = builtins.list.RocList.empty();
-                    const result_list = builtins.list.listAppend(
-                        empty_list,
-                        elem_alignment_u32,
-                        append_elt,
-                        elem_size,
-                        rc.isRefcounted(),
-                        rc.incContext(),
-                        rc.incCallback(),
-                        builtins.utils.UpdateMode.Immutable,
-                        copy_fn,
-                        roc_ops,
-                    );
-
-                    // Decref the original list_of_zst (it may have capacity allocated)
-                    roc_list_arg.decref(&self.runtime_layout_store, roc_ops);
-
-                    // Push result with upgraded layout and runtime type.
-                    // When upgrading from list_of_zst, we need to update the runtime type
-                    // to reflect the element's actual type. This is critical for closures
-                    // that capture for-loop elements: without the correct runtime type,
-                    // the captured value's layout may be computed before all recursive fixups run
-                    // of the correct numeric layout. (fixes issue #8946)
-                    const upgraded_rt_var = try self.createListTypeWithElement(elt_arg.rt_var);
-                    var out = try self.pushRaw(new_list_layout, 0, upgraded_rt_var);
-                    out.is_initialized = false;
-                    out.setRocList(result_list);
-                    out.is_initialized = true;
-                    return out;
-                }
-
-                // Format arguments into proper types
-                const roc_list = roc_list_arg.asRocList().?;
-                const non_null_bytes: [*]u8 = @ptrCast(elt_arg.ptr.?);
-                const append_elt: builtins.list.Opaque = non_null_bytes;
-
-                // Get element layout from the list's stored layout
-                const stored_elem_layout_idx = roc_list_arg.layout.data.list;
-                const stored_elem_layout = self.runtime_layout_store.getLayout(stored_elem_layout_idx);
-
-                // Check if the stored element layout needs to be upgraded.
-                // This handles the case where the list was created with an unknown element type
-                // (e.g., List(List(?)) where the inner list type was inferred as list_of_zst),
-                // but we're now appending an element with a more specific layout.
-                // We should use the element's actual layout to ensure correct behavior.
-                const needs_element_layout_upgrade = stored_elem_layout.tag == .list_of_zst and
-                    elt_arg.layout.tag != .zst and elt_arg.layout.tag != .list_of_zst;
-
-                const elem_layout: Layout = if (needs_element_layout_upgrade) elt_arg.layout else stored_elem_layout;
-                const elem_layout_idx = if (needs_element_layout_upgrade)
-                    try self.runtime_layout_store.insertLayout(elt_arg.layout)
-                else
-                    stored_elem_layout_idx;
-
-                const elem_size: u32 = self.runtime_layout_store.layoutSize(elem_layout);
-                const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
-                const elem_alignment_u32: u32 = @intCast(elem_alignment);
-
-                // Determine if list can be mutated in place
-                const update_mode = if (roc_list.isUnique(roc_ops)) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
-
-                // Set up refcount context
-                var rc = try RefcountContext.init(&self.runtime_layout_store, elem_layout, self.runtime_types, roc_ops);
-
-                const copy_fn = selectCopyFallbackFn(elem_layout);
-
-                const result_list = builtins.list.listAppend(roc_list.*, elem_alignment_u32, append_elt, elem_size, rc.isRefcounted(), rc.incContext(), rc.incCallback(), update_mode, copy_fn, roc_ops);
-
-                // Allocate space for the result list
-                // If we upgraded the element layout, create a new list layout with the upgraded element
-                const result_layout: Layout = if (needs_element_layout_upgrade)
-                    Layout{ .tag = .list, .data = .{ .list = elem_layout_idx } }
-                else
-                    roc_list_arg.layout; // Same layout as input
-
-                // When upgrading element layout, also update runtime type to match.
-                // This ensures closures that capture for-loop elements get correct layouts.
-                // (fixes issue #8946)
-                const result_rt_var = if (needs_element_layout_upgrade)
-                    try self.createListTypeWithElement(elt_arg.rt_var)
-                else
-                    roc_list_arg.rt_var;
-                var out = try self.pushRaw(result_layout, 0, result_rt_var);
-                out.is_initialized = false;
-
-                // Copy the result list structure to the output
-                out.setRocList(result_list);
-
-                out.is_initialized = true;
-                return out;
-            },
             .list_append_unsafe => {
                 // List.append: List(a), a -> List(a)
-                std.debug.assert(args.len == 2); // low-level .list_append expects 2 arguments
+                std.debug.assert(args.len == 2); // low-level .list_append_unsafe expects 2 arguments
 
                 const roc_list_arg = args[0];
                 const elt_arg = args[1];
 
-                std.debug.assert(roc_list_arg.ptr != null); // low-level .list_append expects non-null list pointer
+                std.debug.assert(roc_list_arg.ptr != null); // low-level .list_append_unsafe expects non-null list pointer
 
                 // Extract element layout from List(a)
 
-                std.debug.assert((roc_list_arg.layout.tag == .list and elt_arg.ptr != null) or roc_list_arg.layout.tag == .list_of_zst); // low-level .list_append expects list layout
+                std.debug.assert((roc_list_arg.layout.tag == .list and elt_arg.ptr != null) or roc_list_arg.layout.tag == .list_of_zst); // low-level .list_append_unsafe expects list layout
                 // Handle ZST lists: appending to a list of ZSTs doesn't actually store anything
                 // The list header tracks the length but elements are zero-sized.
                 if (roc_list_arg.layout.tag == .list_of_zst) {
@@ -4767,6 +4623,7 @@ pub const Interpreter = struct {
             .dec_to_f32_wrap => return self.decToF32Wrap(args),
             .dec_to_f32_try_unsafe => return self.decToF32TryUnsafe(args),
             .dec_to_f64 => return self.decToF64(args),
+            else => debugUnreachable(roc_ops, "unsupported low-level op in interpreter", @src()),
         }
     }
 

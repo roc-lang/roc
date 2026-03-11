@@ -1848,7 +1848,6 @@ fn isAtomicExpr(expr: LirExpr) bool {
         .block,
         .early_return,
         .break_expr,
-        .semantic_low_level,
         .low_level,
         .dbg,
         .expect,
@@ -1890,7 +1889,6 @@ fn lirExprResultLayout(self: *const Self, expr_id: LirExprId) layout.Idx {
         .if_then_else => |ite| ite.result_layout,
         .match_expr => |match_expr| match_expr.result_layout,
         .call => |call| call.ret_layout,
-        .semantic_low_level => |ll| ll.ret_layout,
         .low_level => |ll| ll.ret_layout,
         .hosted_call => |hc| hc.ret_layout,
         .list => |list| list.list_layout,
@@ -1950,12 +1948,6 @@ fn exprResolvesToLookup(self: *const Self, expr_id: LirExprId) bool {
 fn lowLevelExprBorrowsFromLookup(self: *const Self, expr_id: LirExprId) bool {
     const expr = self.lir_store.getExpr(expr_id);
     return switch (expr) {
-        .semantic_low_level => |ll| blk: {
-            if (ll.op != .list_get_unsafe) break :blk false;
-            const args = self.lir_store.getExprSpan(ll.args);
-            if (args.len == 0) break :blk false;
-            break :blk self.exprResolvesToLookup(args[0]);
-        },
         .low_level => |ll| blk: {
             if (ll.op != .list_get_unsafe) break :blk false;
             const args = self.lir_store.getExprSpan(ll.args);
@@ -1976,7 +1968,7 @@ fn exprAliasesManagedRef(self: *const Self, expr_id: LirExprId, expr_layout: lay
     return switch (expr) {
         .lookup => self.symbol_binding_modes.get(expr.lookup.symbol.raw()) == .borrowed,
         .cell_load => true,
-        .semantic_low_level, .low_level => self.lowLevelExprBorrowsFromLookup(expr_id),
+        .low_level => self.lowLevelExprBorrowsFromLookup(expr_id),
         .block => |block| self.exprAliasesManagedRef(block.final_expr, expr_layout),
         .dbg => |dbg_expr| self.exprAliasesManagedRef(dbg_expr.expr, expr_layout),
         .nominal => |nominal| self.exprAliasesManagedRef(nominal.backing_expr, expr_layout),
@@ -4176,7 +4168,7 @@ fn lowerLowLevel(self: *Self, ll: anytype, mir_expr_id: MIR.ExprId, region: Regi
             break :blk try self.lir_store.addExpr(.{ .dec_to_str = args_slice[0] }, region);
         },
         else => blk: {
-            break :blk try self.lir_store.addExpr(.{ .semantic_low_level = .{
+            break :blk try self.lir_store.addExpr(.{ .low_level = .{
                 .op = ll.op,
                 .args = lir_args,
                 .ret_layout = low_level_ret_layout,
@@ -6262,7 +6254,7 @@ test "MIR break_expr lowers to LIR break_expr" {
     try testing.expect(lir_expr == .break_expr);
 }
 
-test "MIR num_plus low-level lowers to semantic low-level" {
+test "MIR num_plus low-level lowers to low-level" {
     const allocator = testing.allocator;
 
     var env = try testInit();
@@ -6291,8 +6283,8 @@ test "MIR num_plus low-level lowers to semantic low-level" {
     const lir_id = try translator.lower(ll_expr);
     const lir_expr = env.lir_store.getExpr(lir_id);
 
-    try testing.expect(lir_expr == .semantic_low_level);
-    try testing.expect(lir_expr.semantic_low_level.op == .num_plus);
+    try testing.expect(lir_expr == .low_level);
+    try testing.expect(lir_expr.low_level.op == .num_plus);
 }
 
 test "MIR num_is_zero with f64 operand emits f64 zero literal" {
@@ -6405,8 +6397,8 @@ test "borrowed low-level temp arg lowers through explicit block binding" {
     try testing.expectEqual(LirStmt.BindingSemantics.scoped_borrow, stmts[0].binding().semantics);
 
     const body = env.lir_store.getExpr(lir_expr.block.final_expr);
-    try testing.expect(body == .semantic_low_level);
-    try testing.expect(body.semantic_low_level.op == .list_get_unsafe);
+    try testing.expect(body == .low_level);
+    try testing.expect(body.low_level.op == .list_get_unsafe);
 }
 
 test "borrowed low-level large string literal lowers through explicit block binding" {
@@ -6442,8 +6434,8 @@ test "borrowed low-level large string literal lowers through explicit block bind
     try testing.expectEqual(LirStmt.BindingSemantics.scoped_borrow, stmts[0].binding().semantics);
 
     const body = env.lir_store.getExpr(lir_expr.block.final_expr);
-    try testing.expect(body == .semantic_low_level);
-    try testing.expect(body.semantic_low_level.op == .str_is_empty);
+    try testing.expect(body == .low_level);
+    try testing.expect(body.low_level.op == .str_is_empty);
 }
 
 test "borrow-only low-level lookup arg stays as plain low_level" {
@@ -6475,8 +6467,8 @@ test "borrow-only low-level lookup arg stays as plain low_level" {
     const lir_id = try translator.lower(ll_expr);
     const lir_expr = env.lir_store.getExpr(lir_id);
 
-    try testing.expect(lir_expr == .semantic_low_level);
-    try testing.expect(lir_expr.semantic_low_level.op == .list_get_unsafe);
+    try testing.expect(lir_expr == .low_level);
+    try testing.expect(lir_expr.low_level.op == .list_get_unsafe);
 }
 
 test "MIR large unsigned int (U64 max) lowers to LIR i128_literal" {
