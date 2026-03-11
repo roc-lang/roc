@@ -2859,11 +2859,6 @@ pub const Interpreter = struct {
 
                     const copy_fn = selectCopyFallbackFn(elem_layout);
 
-                    // Increment refcount of the element being appended
-                    if (rc.isRefcounted()) {
-                        elt_arg.incref(&self.runtime_layout_store, roc_ops);
-                    }
-
                     // Append to an empty list (ignoring the old list_of_zst content)
                     const empty_list = builtins.list.RocList.empty();
                     const result_list = builtins.list.listAppend(
@@ -2930,15 +2925,6 @@ pub const Interpreter = struct {
                 var rc = try RefcountContext.init(&self.runtime_layout_store, elem_layout, self.runtime_types, roc_ops);
 
                 const copy_fn = selectCopyFallbackFn(elem_layout);
-
-                // Increment refcount of the element being appended.
-                // The element is copied into the list, creating a second reference,
-                // so we need to increment its refcount before the copy.
-                // Without this, when the original element is freed, the list would
-                // hold a dangling reference (use-after-free bug).
-                if (rc.isRefcounted()) {
-                    elt_arg.incref(&self.runtime_layout_store, roc_ops);
-                }
 
                 const result_list = builtins.list.listAppend(roc_list.*, elem_alignment_u32, append_elt, elem_size, rc.isRefcounted(), rc.incContext(), rc.incCallback(), update_mode, copy_fn, roc_ops);
 
@@ -3017,11 +3003,6 @@ pub const Interpreter = struct {
 
                     const copy_fn = selectCopyFallbackFn(elem_layout);
 
-                    // Increment refcount of the element being appended
-                    if (rc.isRefcounted()) {
-                        elt_arg.incref(&self.runtime_layout_store, roc_ops);
-                    }
-
                     // Append to an empty list (ignoring the old list_of_zst content)
                     const empty_list = builtins.list.RocList.empty();
                     const result_list = builtins.list.listAppend(
@@ -3085,15 +3066,6 @@ pub const Interpreter = struct {
                 var rc = try RefcountContext.init(&self.runtime_layout_store, elem_layout, self.runtime_types, roc_ops);
 
                 const copy_fn = selectCopyFallbackFn(elem_layout);
-
-                // Increment refcount of the element being appended.
-                // The element is copied into the list, creating a second reference,
-                // so we need to increment its refcount before the copy.
-                // Without this, when the original element is freed, the list would
-                // hold a dangling reference (use-after-free bug).
-                if (rc.isRefcounted()) {
-                    elt_arg.incref(&self.runtime_layout_store, roc_ops);
-                }
 
                 const result_list = builtins.list.listAppend(roc_list.*, elem_alignment_u32, append_elt, elem_size, rc.isRefcounted(), rc.incContext(), rc.incCallback(), update_mode, copy_fn, roc_ops);
 

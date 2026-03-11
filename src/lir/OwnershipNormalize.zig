@@ -34,6 +34,11 @@ pub const OwnerKind = union(enum) {
     retained: RefId,
 };
 
+pub const UseMode = enum {
+    consume,
+    borrow,
+};
+
 /// RC-relevant metadata for one normalized binding/reference.
 pub const RefInfo = struct {
     symbol: Symbol,
@@ -41,6 +46,7 @@ pub const RefInfo = struct {
     reassignable: bool,
     is_local_bind: bool,
     owner_kind: OwnerKind,
+    use_mode: UseMode,
     shadowed_ref: RefId,
 };
 
@@ -48,6 +54,7 @@ pub const RefInfo = struct {
 pub const Result = struct {
     ref_infos: std.ArrayList(RefInfo),
     lookup_ref_ids: std.ArrayList(RefId),
+    cell_load_ref_ids: std.ArrayList(RefId),
     pattern_ref_ids: std.ArrayList(RefId),
     allocator: Allocator,
 
@@ -55,6 +62,7 @@ pub const Result = struct {
     pub fn deinit(self: *Result) void {
         self.ref_infos.deinit(self.allocator);
         self.lookup_ref_ids.deinit(self.allocator);
+        self.cell_load_ref_ids.deinit(self.allocator);
         self.pattern_ref_ids.deinit(self.allocator);
     }
 
@@ -63,6 +71,14 @@ pub const Result = struct {
         const idx = @intFromEnum(expr_id);
         if (idx >= self.lookup_ref_ids.items.len) return null;
         const ref_id = self.lookup_ref_ids.items[idx];
+        return if (ref_id.isNone()) null else ref_id;
+    }
+
+    /// Get the normalized reference identity for a cell_load expression, if any.
+    pub fn getCellLoadRef(self: *const Result, expr_id: LirExprId) ?RefId {
+        const idx = @intFromEnum(expr_id);
+        if (idx >= self.cell_load_ref_ids.items.len) return null;
+        const ref_id = self.cell_load_ref_ids.items[idx];
         return if (ref_id.isNone()) null else ref_id;
     }
 
@@ -98,11 +114,14 @@ const Analyzer = struct {
         var result = Result{
             .ref_infos = std.ArrayList(RefInfo).empty,
             .lookup_ref_ids = std.ArrayList(RefId).empty,
+            .cell_load_ref_ids = std.ArrayList(RefId).empty,
             .pattern_ref_ids = std.ArrayList(RefId).empty,
             .allocator = allocator,
         };
         try result.lookup_ref_ids.resize(allocator, store.exprs.items.len);
         @memset(result.lookup_ref_ids.items, RefId.none);
+        try result.cell_load_ref_ids.resize(allocator, store.exprs.items.len);
+        @memset(result.cell_load_ref_ids.items, RefId.none);
         try result.pattern_ref_ids.resize(allocator, store.patterns.items.len);
         @memset(result.pattern_ref_ids.items, RefId.none);
 
@@ -147,6 +166,7 @@ const Analyzer = struct {
         layout_idx: LayoutIdx,
         reassignable: bool,
         owner_kind: OwnerKind,
+        use_mode: UseMode,
     ) Allocator.Error!RefId {
         const ref_id: RefId = @enumFromInt(@as(u32, @intCast(self.result.ref_infos.items.len)));
         const symbol_key: u64 = @bitCast(symbol);
@@ -163,9 +183,21 @@ const Analyzer = struct {
             .reassignable = reassignable,
             .is_local_bind = true,
             .owner_kind = owner_kind,
+            .use_mode = use_mode,
             .shadowed_ref = previous orelse RefId.none,
         });
         return ref_id;
+    }
+
+    fn hideVisibleRef(self: *Analyzer, symbol: Symbol) Allocator.Error!void {
+        const symbol_key: u64 = @bitCast(symbol);
+        const previous = self.visible_refs.get(symbol_key);
+        try self.scope_changes.append(self.allocator, .{
+            .symbol_key = symbol_key,
+            .previous_ref = previous orelse RefId.none,
+            .had_previous = previous != null,
+        });
+        _ = self.visible_refs.remove(symbol_key);
     }
 
     fn getOrCreateExternalRef(
@@ -186,6 +218,7 @@ const Analyzer = struct {
             .reassignable = false,
             .is_local_bind = false,
             .owner_kind = .owned,
+            .use_mode = .consume,
             .shadowed_ref = RefId.none,
         });
         return ref_id;
@@ -204,101 +237,75 @@ const Analyzer = struct {
         self: *Analyzer,
         pat_id: LirPatternId,
         owner_kind: OwnerKind,
+        use_mode: UseMode,
     ) Allocator.Error!void {
         if (pat_id.isNone()) return;
 
         switch (self.store.getPattern(pat_id)) {
             .bind => |bind| {
                 if (bind.symbol.isNone()) return;
-                const ref_id = try self.addLocalRef(bind.symbol, bind.layout_idx, bind.reassignable, owner_kind);
+                const ref_id = try self.addLocalRef(bind.symbol, bind.layout_idx, bind.reassignable, owner_kind, use_mode);
                 self.result.pattern_ref_ids.items[@intFromEnum(pat_id)] = ref_id;
             },
             .as_pattern => |as_pat| {
                 if (!as_pat.symbol.isNone()) {
-                    const ref_id = try self.addLocalRef(as_pat.symbol, as_pat.layout_idx, as_pat.reassignable, owner_kind);
+                    const ref_id = try self.addLocalRef(as_pat.symbol, as_pat.layout_idx, as_pat.reassignable, owner_kind, use_mode);
                     self.result.pattern_ref_ids.items[@intFromEnum(pat_id)] = ref_id;
                 }
-                try self.registerPattern(as_pat.inner, owner_kind);
+                try self.registerPattern(as_pat.inner, owner_kind, use_mode);
             },
             .tag => |tag_pat| {
                 for (self.store.getPatternSpan(tag_pat.args)) |arg| {
-                    try self.registerPattern(arg, owner_kind);
+                    try self.registerPattern(arg, owner_kind, use_mode);
                 }
             },
             .struct_ => |struct_pat| {
                 for (self.store.getPatternSpan(struct_pat.fields)) |field| {
-                    try self.registerPattern(field, owner_kind);
+                    try self.registerPattern(field, owner_kind, use_mode);
                 }
             },
             .list => |list_pat| {
                 for (self.store.getPatternSpan(list_pat.prefix)) |prefix| {
-                    try self.registerPattern(prefix, owner_kind);
+                    try self.registerPattern(prefix, owner_kind, use_mode);
                 }
-                try self.registerPattern(list_pat.rest, owner_kind);
+                try self.registerPattern(list_pat.rest, owner_kind, use_mode);
                 for (self.store.getPatternSpan(list_pat.suffix)) |suffix| {
-                    try self.registerPattern(suffix, owner_kind);
+                    try self.registerPattern(suffix, owner_kind, use_mode);
                 }
             },
             .wildcard, .int_literal, .float_literal, .str_literal => {},
         }
     }
 
-    fn ownerKindForOwnedExpr(self: *Analyzer, expr_id: LirExprId) OwnerKind {
+    fn sourceRefForAliasedExpr(self: *Analyzer, expr_id: LirExprId) RefId {
         return switch (self.store.getExpr(expr_id)) {
-            .block => |block| self.ownerKindForOwnedExpr(block.final_expr),
-            .borrow_scope => |scope| self.ownerKindForOwnedExpr(scope.body),
-            .dbg => |dbg_expr| self.ownerKindForOwnedExpr(dbg_expr.expr),
-            .nominal => |nominal| self.ownerKindForOwnedExpr(nominal.backing_expr),
-            .incref => |inc| switch (self.store.getExpr(inc.value)) {
-                .lookup => blk: {
-                    const ref_id = self.result.lookup_ref_ids.items[@intFromEnum(inc.value)];
-                    break :blk if (ref_id.isNone()) .owned else OwnerKind{ .retained = ref_id };
-                },
-                else => .owned,
+            .lookup => self.result.lookup_ref_ids.items[@intFromEnum(expr_id)],
+            .cell_load => |load| blk: {
+                const cached = self.result.cell_load_ref_ids.items[@intFromEnum(expr_id)];
+                if (!cached.isNone()) break :blk cached;
+                break :blk self.visible_refs.get(@as(u64, @bitCast(load.cell))) orelse RefId.none;
             },
-            .struct_access => |sa| switch (self.store.getExpr(sa.struct_expr)) {
-                .lookup => blk: {
-                    const ref_id = self.result.lookup_ref_ids.items[@intFromEnum(sa.struct_expr)];
-                    break :blk if (ref_id.isNone()) .owned else OwnerKind{ .borrowed = ref_id };
-                },
-                else => .owned,
-            },
-            .tag_payload_access => |tpa| switch (self.store.getExpr(tpa.value)) {
-                .lookup => blk: {
-                    const ref_id = self.result.lookup_ref_ids.items[@intFromEnum(tpa.value)];
-                    break :blk if (ref_id.isNone()) .owned else OwnerKind{ .borrowed = ref_id };
-                },
-                else => .owned,
-            },
+            .block => |block| self.sourceRefForAliasedExpr(block.final_expr),
+            .dbg => |dbg_expr| self.sourceRefForAliasedExpr(dbg_expr.expr),
+            .nominal => |nominal| self.sourceRefForAliasedExpr(nominal.backing_expr),
+            .incref => |inc| self.sourceRefForAliasedExpr(inc.value),
             .semantic_low_level => |ll| switch (ll.op) {
                 .list_get_unsafe => blk: {
                     const args = self.store.getExprSpan(ll.args);
-                    if (args.len == 0) break :blk .owned;
-                    break :blk switch (self.store.getExpr(args[0])) {
-                        .lookup => blk2: {
-                            const ref_id = self.result.lookup_ref_ids.items[@intFromEnum(args[0])];
-                            break :blk2 if (ref_id.isNone()) .owned else OwnerKind{ .borrowed = ref_id };
-                        },
-                        else => .owned,
-                    };
+                    if (args.len == 0) break :blk RefId.none;
+                    break :blk self.sourceRefForAliasedExpr(args[0]);
                 },
-                else => .owned,
+                else => RefId.none,
             },
             .low_level => |ll| switch (ll.op) {
                 .list_get_unsafe => blk: {
                     const args = self.store.getExprSpan(ll.args);
-                    if (args.len == 0) break :blk .owned;
-                    break :blk switch (self.store.getExpr(args[0])) {
-                        .lookup => blk2: {
-                            const ref_id = self.result.lookup_ref_ids.items[@intFromEnum(args[0])];
-                            break :blk2 if (ref_id.isNone()) .owned else OwnerKind{ .borrowed = ref_id };
-                        },
-                        else => .owned,
-                    };
+                    if (args.len == 0) break :blk RefId.none;
+                    break :blk self.sourceRefForAliasedExpr(args[0]);
                 },
-                else => .owned,
+                else => RefId.none,
             },
-            else => .owned,
+            else => RefId.none,
         };
     }
 
@@ -306,43 +313,42 @@ const Analyzer = struct {
         switch (stmt) {
             .decl, .mutate => |binding| {
                 try self.analyzeExpr(binding.expr);
-                const owner_kind = self.ownerKindForOwnedExpr(binding.expr);
-                if (builtin.mode == .Debug) {
-                    switch (self.store.getPattern(binding.pattern)) {
-                        .bind => |bind| {
-                            const expr_tag = self.store.getExpr(binding.expr);
-                            const raw = bind.symbol.raw();
-                            if (raw == 4294967064 or raw == 4294967096 or raw == 4294967104) {
-                                std.debug.print(
-                                    "normalize bind symbol={d} layout={d} expr_tag={s} owner_kind={s}\n",
-                                    .{ bind.symbol.raw(), @intFromEnum(bind.layout_idx), @tagName(expr_tag), @tagName(owner_kind) },
-                                );
-                            }
-                        },
-                        else => {},
-                    }
-                }
-                try self.registerPattern(binding.pattern, owner_kind);
+                const owner_kind, const use_mode = switch (binding.semantics) {
+                    .owned => .{ OwnerKind.owned, UseMode.consume },
+                    .scoped_borrow => .{ OwnerKind.owned, UseMode.borrow },
+                    .borrow_alias => blk: {
+                        const source_ref = self.sourceRefForAliasedExpr(binding.expr);
+                        if (builtin.mode == .Debug and source_ref.isNone()) {
+                            std.debug.panic("borrow_alias binding must resolve to a managed source ref", .{});
+                        }
+                        break :blk .{ if (source_ref.isNone()) OwnerKind.unmanaged else OwnerKind{ .borrowed = source_ref }, UseMode.borrow };
+                    },
+                    .retained => blk: {
+                        const source_ref = self.sourceRefForAliasedExpr(binding.expr);
+                        const expr_is_cell_load = self.store.getExpr(binding.expr) == .cell_load;
+                        if (builtin.mode == .Debug and source_ref.isNone() and !expr_is_cell_load) {
+                            std.debug.panic(
+                                "retained binding must resolve to a managed source ref (expr tag {s})",
+                                .{@tagName(self.store.getExpr(binding.expr))},
+                            );
+                        }
+                        break :blk .{ if (source_ref.isNone()) OwnerKind.owned else OwnerKind{ .retained = source_ref }, UseMode.consume };
+                    },
+                };
+                try self.registerPattern(binding.pattern, owner_kind, use_mode);
             },
             .cell_init, .cell_store => |binding| {
                 try self.analyzeExpr(binding.expr);
+                _ = try self.addLocalRef(
+                    binding.cell,
+                    binding.layout_idx,
+                    true,
+                    .owned,
+                    .borrow,
+                );
             },
-            .cell_drop => {},
+            .cell_drop => |binding| try self.hideVisibleRef(binding.cell),
         }
-    }
-
-    fn analyzeBorrowBinding(self: *Analyzer, binding: lir.LirBorrowBinding) Allocator.Error!void {
-        try self.analyzeExpr(binding.expr);
-        const owner_kind = switch (self.store.getExpr(binding.expr)) {
-            .lookup => |lookup| blk: {
-                const ref_id = self.result.lookup_ref_ids.items[@intFromEnum(binding.expr)];
-                _ = lookup;
-                break :blk OwnerKind{ .borrowed = ref_id };
-            },
-            .cell_load => .owned,
-            else => .unmanaged,
-        };
-        try self.registerPattern(binding.pattern, owner_kind);
     }
 
     fn analyzeExpr(self: *Analyzer, expr_id: LirExprId) Allocator.Error!void {
@@ -354,7 +360,12 @@ const Analyzer = struct {
                     try self.resolveLookup(expr_id, lookup.symbol, lookup.layout_idx);
                 }
             },
-            .cell_load => {},
+            .cell_load => |load| {
+                const cell_key: u64 = @bitCast(load.cell);
+                if (self.visible_refs.get(cell_key)) |ref_id| {
+                    self.result.cell_load_ref_ids.items[@intFromEnum(expr_id)] = ref_id;
+                }
+            },
             .call => |call| {
                 try self.analyzeExpr(call.fn_expr);
                 for (self.store.getExprSpan(call.args)) |arg| try self.analyzeExpr(arg);
@@ -363,21 +374,7 @@ const Analyzer = struct {
                 const mark = self.pushScope();
                 defer self.popScope(mark);
                 for (self.store.getPatternSpan(lam.params)) |param| {
-                    if (builtin.mode == .Debug) {
-                        switch (self.store.getPattern(param)) {
-                            .bind => |bind| {
-                                const raw = bind.symbol.raw();
-                                if (raw == 4294967064 or raw == 4294967096 or raw == 4294967104) {
-                                    std.debug.print(
-                                        "normalize lambda param symbol={d} layout={d}\n",
-                                        .{ bind.symbol.raw(), @intFromEnum(bind.layout_idx) },
-                                    );
-                                }
-                            },
-                            else => {},
-                        }
-                    }
-                    try self.registerPattern(param, .owned);
+                    try self.registerPattern(param, .owned, .consume);
                 }
                 try self.analyzeExpr(lam.body);
             },
@@ -407,7 +404,7 @@ const Analyzer = struct {
                 for (self.store.getMatchBranches(match_expr.branches)) |branch| {
                     const mark = self.pushScope();
                     defer self.popScope(mark);
-                    try self.registerPattern(branch.pattern, if (scrutinee_ref) |ref_id| OwnerKind{ .borrowed = ref_id } else .unmanaged);
+                    try self.registerPattern(branch.pattern, if (scrutinee_ref) |ref_id| OwnerKind{ .borrowed = ref_id } else .unmanaged, .borrow);
                     try self.analyzeExpr(branch.guard);
                     try self.analyzeExpr(branch.body);
                 }
@@ -419,14 +416,6 @@ const Analyzer = struct {
                     try self.analyzeStmtOwned(stmt);
                 }
                 try self.analyzeExpr(block.final_expr);
-            },
-            .borrow_scope => |scope| {
-                const mark = self.pushScope();
-                defer self.popScope(mark);
-                for (self.store.getBorrowBindings(scope.bindings)) |binding| {
-                    try self.analyzeBorrowBinding(binding);
-                }
-                try self.analyzeExpr(scope.body);
             },
             .early_return => |ret| try self.analyzeExpr(ret.expr),
             .semantic_low_level => |ll| {
@@ -457,11 +446,12 @@ const Analyzer = struct {
                 try self.analyzeExpr(loop_expr.list_expr);
                 const mark = self.pushScope();
                 defer self.popScope(mark);
-                const owner_kind = if (self.result.getLookupRef(loop_expr.list_expr)) |ref_id|
-                    OwnerKind{ .borrowed = ref_id }
-                else
-                    .unmanaged;
-                try self.registerPattern(loop_expr.elem_pattern, owner_kind);
+                const list_ref = self.sourceRefForAliasedExpr(loop_expr.list_expr);
+                try self.registerPattern(
+                    loop_expr.elem_pattern,
+                    if (list_ref.isNone()) .unmanaged else OwnerKind{ .borrowed = list_ref },
+                    .borrow,
+                );
                 try self.analyzeExpr(loop_expr.body);
             },
             .while_loop => |wl| {

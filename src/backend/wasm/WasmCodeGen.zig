@@ -784,12 +784,6 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
             // Generate the final expression (the block's result)
             try self.generateExpr(b.final_expr);
         },
-        .borrow_scope => {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("wasm backend invariant violated: borrow_scope must be removed before codegen", .{});
-            }
-            unreachable;
-        },
         .lookup => |l| {
             const key: u64 = @bitCast(l.symbol);
             if (self.storage.locals.get(key)) |local_info| {
@@ -2083,7 +2077,6 @@ fn exprLayoutIdx(self: *Self, expr_id: LirExprId) layout.Idx {
     const expr = self.store.getExpr(expr_id);
     return switch (expr) {
         .block => |b| b.result_layout,
-        .borrow_scope => |b| b.result_layout,
         .lookup => |l| l.layout_idx,
         .if_then_else => |ite| ite.result_layout,
         .match_expr => |w| w.result_layout,
@@ -2141,7 +2134,6 @@ fn exprValType(self: *Self, expr_id: LirExprId) ValType {
         .bool_literal => .i32,
         .i128_literal, .dec_literal => .i32, // pointer to stack memory
         .block => |b| self.exprValType(b.final_expr),
-        .borrow_scope => |b| self.resolveValType(b.result_layout),
         .lookup => |l| self.resolveValType(l.layout_idx),
         .cell_load => |l| self.resolveValType(l.layout_idx),
         .if_then_else => |ite| self.resolveValType(ite.result_layout),
@@ -2207,7 +2199,6 @@ fn isCompositeExpr(self: *const Self, expr_id: LirExprId) bool {
         .zero_arg_tag => |z| self.isCompositeLayout(z.union_layout),
         .nominal => |nom| self.isCompositeExpr(nom.backing_expr),
         .block => |b| self.isCompositeExpr(b.final_expr),
-        .borrow_scope => |b| self.isCompositeLayout(b.result_layout),
         .if_then_else => |ite| self.isCompositeLayout(ite.result_layout),
         .match_expr => |w| self.isCompositeLayout(w.result_layout),
         .lookup => |l| self.isCompositeLayout(l.layout_idx),
@@ -2239,7 +2230,6 @@ fn exprNeedsCompositeCallStabilization(self: *const Self, expr_id: LirExprId) bo
         .call => true,
         .nominal => |nom| self.exprNeedsCompositeCallStabilization(nom.backing_expr),
         .block => |b| self.exprNeedsCompositeCallStabilization(b.final_expr),
-        .borrow_scope => |_| false,
         .incref => |inc| self.exprNeedsCompositeCallStabilization(inc.value),
         .decref => |dec| self.exprNeedsCompositeCallStabilization(dec.value),
         .free => |f| self.exprNeedsCompositeCallStabilization(f.value),

@@ -933,8 +933,8 @@ pub const Expr = union(enum) {
                 .list_concat => &.{ .consume, .consume },
                 .list_with_capacity => &.{.borrow}, // capacity is value type
                 .list_sort_with => &.{ .consume, .borrow }, // list consumed, comparator borrowed
-                .list_append_unsafe => &.{ .consume, .borrow }, // list consumed, element borrowed
-                .list_append => &.{ .consume, .borrow }, // list consumed, element borrowed
+                .list_append_unsafe => &.{ .consume, .consume }, // list consumed, element owner transferred into result
+                .list_append => &.{ .consume, .consume }, // list consumed, element owner transferred into result
                 .list_drop_at => &.{ .consume, .borrow }, // list consumed, index is value type
                 .list_sublist => &.{ .consume, .borrow }, // list consumed, {start, len} record is value type
 

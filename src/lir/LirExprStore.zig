@@ -32,8 +32,6 @@ const LirIfBranch = ir.LirIfBranch;
 const LirIfBranchSpan = ir.LirIfBranchSpan;
 const LirStmt = ir.LirStmt;
 const LirStmtSpan = ir.LirStmtSpan;
-const LirBorrowBinding = ir.LirBorrowBinding;
-const LirBorrowBindingSpan = ir.LirBorrowBindingSpan;
 const Symbol = ir.Symbol;
 
 // Control flow statement types (for tail recursion)
@@ -73,9 +71,6 @@ if_branches: std.ArrayList(LirIfBranch),
 /// Statements (let bindings in blocks)
 stmts: std.ArrayList(LirStmt),
 
-/// Borrow-scope bindings
-borrow_bindings: std.ArrayList(LirBorrowBinding),
-
 /// Captures (symbols captured by closures)
 captures: std.ArrayList(LirCapture),
 
@@ -113,7 +108,6 @@ pub fn init(allocator: Allocator) Self {
         .match_branches = std.ArrayList(LirMatchBranch).empty,
         .if_branches = std.ArrayList(LirIfBranch).empty,
         .stmts = std.ArrayList(LirStmt).empty,
-        .borrow_bindings = std.ArrayList(LirBorrowBinding).empty,
         .captures = std.ArrayList(LirCapture).empty,
         .cf_stmts = std.ArrayList(CFStmt).empty,
         .cf_switch_branches = std.ArrayList(CFSwitchBranch).empty,
@@ -147,7 +141,6 @@ pub fn deinit(self: *Self) void {
     self.match_branches.deinit(self.allocator);
     self.if_branches.deinit(self.allocator);
     self.stmts.deinit(self.allocator);
-    self.borrow_bindings.deinit(self.allocator);
     self.captures.deinit(self.allocator);
     self.cf_stmts.deinit(self.allocator);
     self.cf_switch_branches.deinit(self.allocator);
@@ -345,33 +338,6 @@ pub fn getStmts(self: *const Self, span: LirStmtSpan) []const LirStmt {
 pub fn getStmtsMut(self: *Self, span: LirStmtSpan) []LirStmt {
     if (span.len == 0) return &.{};
     return self.stmts.items[span.start..][0..span.len];
-}
-
-/// Add borrow bindings and return a span
-pub fn addBorrowBindings(self: *Self, bindings: []const LirBorrowBinding) Allocator.Error!LirBorrowBindingSpan {
-    if (bindings.len == 0) {
-        return LirBorrowBindingSpan.empty();
-    }
-
-    const start = @as(u32, @intCast(self.borrow_bindings.items.len));
-    try self.borrow_bindings.appendSlice(self.allocator, bindings);
-
-    return .{
-        .start = start,
-        .len = @intCast(bindings.len),
-    };
-}
-
-/// Get borrow bindings from a span
-pub fn getBorrowBindings(self: *const Self, span: LirBorrowBindingSpan) []const LirBorrowBinding {
-    if (span.len == 0) return &.{};
-    return self.borrow_bindings.items[span.start..][0..span.len];
-}
-
-/// Get mutable borrow bindings from a span.
-pub fn getBorrowBindingsMut(self: *Self, span: LirBorrowBindingSpan) []LirBorrowBinding {
-    if (span.len == 0) return &.{};
-    return self.borrow_bindings.items[span.start..][0..span.len];
 }
 
 /// Add captures and return a span

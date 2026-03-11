@@ -3201,12 +3201,6 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
                     }
                     return false;
                 },
-                .borrow_scope => |scope| {
-                    for (store.getBorrowBindings(scope.bindings)) |binding| {
-                        if (containsCallTo(store, binding.expr, target)) return true;
-                    }
-                    return containsCallTo(store, scope.body, target);
-                },
                 .early_return => |ret| return containsCallTo(store, ret.expr, target),
                 .semantic_low_level => |ll| {
                     for (store.getExprSpan(ll.args)) |arg| {
@@ -3308,12 +3302,6 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
                         if (containsEarlyReturn(store, branch.body)) return true;
                     }
                     return false;
-                },
-                .borrow_scope => |scope| {
-                    for (store.getBorrowBindings(scope.bindings)) |binding| {
-                        if (containsEarlyReturn(store, binding.expr)) return true;
-                    }
-                    return containsEarlyReturn(store, scope.body);
                 },
                 .call => |call| {
                     if (containsEarlyReturn(store, call.fn_expr)) return true;
@@ -3425,12 +3413,6 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
                     }
                     return null;
                 },
-                .borrow_scope => |scope| {
-                    for (store.getBorrowBindings(scope.bindings)) |binding| {
-                        if (firstEarlyReturnLayout(store, binding.expr)) |found| return found;
-                    }
-                    return firstEarlyReturnLayout(store, scope.body);
-                },
                 .call => |call| {
                     if (firstEarlyReturnLayout(store, call.fn_expr)) |found| return found;
                     for (store.getExprSpan(call.args)) |arg| {
@@ -3526,848 +3508,6 @@ test "dev lowering: imported List.any directly calls passed predicate member" {
     try std.testing.expect(!Search.containsCallTo(&lir_store, any_lir_with_rc, predicate_member_sym));
     try std.testing.expect(Search.containsEarlyReturn(&lir_store, any_lir_with_rc));
     try std.testing.expectEqual(layout.Idx.bool, Search.firstEarlyReturnLayout(&lir_store, any_lir_with_rc).?);
-}
-
-test "debug: nested contains predicate call shapes" {
-    const resources = try parseAndCanonicalizeExpr(test_allocator,
-        \\{
-        \\    out = ["a"]
-        \\    List.any(["a"], |item| out.contains(item))
-        \\}
-    );
-    defer cleanupParseAndCanonical(test_allocator, resources);
-
-    var mir_store = try MIR.Store.init(test_allocator);
-    defer mir_store.deinit(test_allocator);
-
-    const all_module_envs = [_]*ModuleEnv{
-        @constCast(resources.builtin_module.env),
-        resources.module_env,
-    };
-
-    var lower = try mir.Lower.init(
-        test_allocator,
-        &mir_store,
-        all_module_envs[0..],
-        &resources.module_env.types,
-        1,
-        null,
-    );
-    defer lower.deinit();
-
-    const mir_expr = try lower.lowerExpr(resources.expr_idx);
-
-    const FindCall = struct {
-        fn findCall(store: *const MIR.Store, expr_id: MIR.ExprId) ?MIR.ExprId {
-            return switch (store.getExpr(expr_id)) {
-                .call => expr_id,
-                .block => |block| findCall(store, block.final_expr),
-                .borrow_scope => |scope| findCall(store, scope.body),
-                .dbg_expr => |dbg| findCall(store, dbg.expr),
-                .expect => |expect| findCall(store, expect.body),
-                else => null,
-            };
-        }
-    };
-
-    const root_expr_id = FindCall.findCall(&mir_store, mir_expr) orelse return error.TestUnexpectedResult;
-    const root_expr = mir_store.getExpr(root_expr_id);
-    try std.testing.expect(root_expr == .call);
-
-    const root_args = mir_store.getExprSpan(root_expr.call.args);
-    try std.testing.expectEqual(@as(usize, 2), root_args.len);
-
-    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
-    defer lambda_set_store.deinit(test_allocator);
-
-    const arg_ls = lambda_set_store.getExprLambdaSet(root_args[1]) orelse return error.TestUnexpectedResult;
-    const arg_members = lambda_set_store.getMembers(lambda_set_store.getLambdaSet(arg_ls).members);
-    try std.testing.expectEqual(@as(usize, 1), arg_members.len);
-    const predicate_member_sym = arg_members[0].fn_symbol;
-
-    const root_callee = mir_store.getExpr(root_expr.call.func);
-    try std.testing.expect(root_callee == .lookup);
-    const any_sym = root_callee.lookup;
-    const any_def = mir_store.getSymbolDef(any_sym) orelse return error.TestUnexpectedResult;
-
-    var layout_store = try layout.Store.init(
-        all_module_envs[0..],
-        resources.builtin_module.env.idents.builtin_str,
-        test_allocator,
-        base.target.TargetUsize.native,
-    );
-    defer layout_store.deinit();
-
-    var lir_store = LirExprStore.init(test_allocator);
-    defer lir_store.deinit();
-
-    var translator = lir.MirToLir.init(
-        test_allocator,
-        &mir_store,
-        &lir_store,
-        &layout_store,
-        &lambda_set_store,
-        resources.module_env.idents.true_tag,
-    );
-    defer translator.deinit();
-
-    const root_lir = try translator.lower(mir_expr);
-    const any_lir = try translator.lower(any_def);
-    var rc_pass = try lir.RcInsert.RcInsertPass.init(test_allocator, &lir_store, &layout_store);
-    defer rc_pass.deinit();
-    const any_lir_with_rc = try rc_pass.insertRcOps(any_lir);
-    var root_rc_pass = try lir.RcInsert.RcInsertPass.init(test_allocator, &lir_store, &layout_store);
-    defer root_rc_pass.deinit();
-    const root_lir_with_rc = try root_rc_pass.insertRcOps(root_lir);
-
-    var specialized_predicate_sym: ?lir.LIR.Symbol = null;
-    var specialization_it = translator.specialized_direct_callees.iterator();
-    while (specialization_it.next()) |entry| {
-        const callee_key = std.mem.bytesToValue(u64, entry.key_ptr.*[0..@sizeOf(u64)]);
-        if (callee_key == predicate_member_sym.raw()) {
-            specialized_predicate_sym = entry.value_ptr.symbol;
-            break;
-        }
-    }
-    try std.testing.expect(specialized_predicate_sym != null);
-
-    const pred_def = lir_store.getSymbolDef(specialized_predicate_sym.?) orelse return error.TestUnexpectedResult;
-
-    const Dump = struct {
-        fn indent(depth: usize) void {
-            var i: usize = 0;
-            while (i < depth) : (i += 1) std.debug.print("  ", .{});
-        }
-
-        fn printPattern(store: *const LirExprStore, pat_id: lir.LIR.LirPatternId, depth: usize) void {
-            if (pat_id.isNone()) {
-                indent(depth);
-                std.debug.print("<none pattern>\n", .{});
-                return;
-            }
-
-            switch (store.getPattern(pat_id)) {
-                .bind => |bind| {
-                    indent(depth);
-                    std.debug.print("pattern bind sym={d} layout={d}\n", .{ bind.symbol.raw(), @intFromEnum(bind.layout_idx) });
-                },
-                .wildcard => |wildcard| {
-                    indent(depth);
-                    std.debug.print("pattern wildcard layout={d}\n", .{@intFromEnum(wildcard.layout_idx)});
-                },
-                else => {
-                    indent(depth);
-                    std.debug.print("pattern {s}\n", .{@tagName(store.getPattern(pat_id))});
-                },
-            }
-        }
-
-        fn printExpr(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, depth: usize) void {
-            if (expr_id.isNone()) {
-                indent(depth);
-                std.debug.print("<none>\n", .{});
-                return;
-            }
-
-            const expr = store.getExpr(expr_id);
-            switch (expr) {
-                .lambda => |lam| {
-                    indent(depth);
-                    std.debug.print("lambda\n", .{});
-                    for (store.getPatternSpan(lam.params)) |param| {
-                        printPattern(store, param, depth + 1);
-                    }
-                    printExpr(store, lam.body, depth + 1);
-                },
-                .lookup => |lookup| {
-                    indent(depth);
-                    std.debug.print("lookup sym={d} layout={d}\n", .{ lookup.symbol.raw(), @intFromEnum(lookup.layout_idx) });
-                    if (store.getSymbolDef(lookup.symbol)) |def_expr| {
-                        indent(depth + 1);
-                        std.debug.print("def:\n", .{});
-                        printExpr(store, def_expr, depth + 2);
-                    }
-                },
-                .incref => |inc| {
-                    indent(depth);
-                    std.debug.print("incref layout={d} count={d}\n", .{ @intFromEnum(inc.layout_idx), inc.count });
-                    printExpr(store, inc.value, depth + 1);
-                },
-                .struct_access => |sa| {
-                    indent(depth);
-                    std.debug.print("struct_access field={d} field_layout={d}\n", .{ sa.field_idx, @intFromEnum(sa.field_layout) });
-                    printExpr(store, sa.struct_expr, depth + 1);
-                },
-                .tag_payload_access => |tpa| {
-                    indent(depth);
-                    std.debug.print("tag_payload_access payload_layout={d}\n", .{@intFromEnum(tpa.payload_layout)});
-                    printExpr(store, tpa.value, depth + 1);
-                },
-                .block => |block| {
-                    indent(depth);
-                    std.debug.print("block result_layout={d}\n", .{@intFromEnum(block.result_layout)});
-                    for (store.getStmts(block.stmts)) |stmt| {
-                        switch (stmt) {
-                            .decl => |binding| {
-                                indent(depth + 1);
-                                std.debug.print("decl\n", .{});
-                                printPattern(store, binding.pattern, depth + 2);
-                                printExpr(store, binding.expr, depth + 2);
-                            },
-                            .mutate => |binding| {
-                                indent(depth + 1);
-                                std.debug.print("mutate\n", .{});
-                                printPattern(store, binding.pattern, depth + 2);
-                                printExpr(store, binding.expr, depth + 2);
-                            },
-                            .cell_init => |binding| {
-                                indent(depth + 1);
-                                std.debug.print("cell_init\n", .{});
-                                printExpr(store, binding.expr, depth + 2);
-                            },
-                            .cell_store => |binding| {
-                                indent(depth + 1);
-                                std.debug.print("cell_store\n", .{});
-                                printExpr(store, binding.expr, depth + 2);
-                            },
-                            .cell_drop => {},
-                        }
-                    }
-                    printExpr(store, block.final_expr, depth + 1);
-                },
-                .for_loop => |loop| {
-                    indent(depth);
-                    std.debug.print("for_loop elem_layout={d}\n", .{@intFromEnum(loop.elem_layout)});
-                    printExpr(store, loop.list_expr, depth + 1);
-                    printPattern(store, loop.elem_pattern, depth + 1);
-                    printExpr(store, loop.body, depth + 1);
-                },
-                .call => |call| {
-                    indent(depth);
-                    std.debug.print("call ret_layout={d}\n", .{@intFromEnum(call.ret_layout)});
-                    indent(depth + 1);
-                    std.debug.print("fn:\n", .{});
-                    printExpr(store, call.fn_expr, depth + 2);
-                    for (store.getExprSpan(call.args), 0..) |arg, i| {
-                        indent(depth + 1);
-                        std.debug.print("arg[{d}]:\n", .{i});
-                        printExpr(store, arg, depth + 2);
-                    }
-                },
-                .struct_ => |s| {
-                    indent(depth);
-                    std.debug.print("struct_ layout={d}\n", .{@intFromEnum(s.struct_layout)});
-                    for (store.getExprSpan(s.fields), 0..) |field, i| {
-                        indent(depth + 1);
-                        std.debug.print("field[{d}]:\n", .{i});
-                        printExpr(store, field, depth + 2);
-                    }
-                },
-                .decref => |dec| {
-                    indent(depth);
-                    std.debug.print("decref layout={d}\n", .{@intFromEnum(dec.layout_idx)});
-                    printExpr(store, dec.value, depth + 1);
-                },
-                .zero_arg_tag => |tag| {
-                    indent(depth);
-                    std.debug.print("zero_arg_tag discr={d} layout={d}\n", .{ tag.discriminant, @intFromEnum(tag.union_layout) });
-                },
-                .early_return => |ret| {
-                    indent(depth);
-                    std.debug.print("early_return layout={d}\n", .{@intFromEnum(ret.ret_layout)});
-                    printExpr(store, ret.expr, depth + 1);
-                },
-                .if_then_else => |ite| {
-                    indent(depth);
-                    std.debug.print("if_then_else result_layout={d}\n", .{@intFromEnum(ite.result_layout)});
-                    for (store.getIfBranches(ite.branches), 0..) |branch, i| {
-                        indent(depth + 1);
-                        std.debug.print("branch[{d}] cond:\n", .{i});
-                        printExpr(store, branch.cond, depth + 2);
-                        indent(depth + 1);
-                        std.debug.print("branch[{d}] body:\n", .{i});
-                        printExpr(store, branch.body, depth + 2);
-                    }
-                    indent(depth + 1);
-                    std.debug.print("else:\n", .{});
-                    printExpr(store, ite.final_else, depth + 2);
-                },
-                .match_expr => |match_expr| {
-                    indent(depth);
-                    std.debug.print("match_expr result_layout={d}\n", .{@intFromEnum(match_expr.result_layout)});
-                    indent(depth + 1);
-                    std.debug.print("value:\n", .{});
-                    printExpr(store, match_expr.value, depth + 2);
-                    for (store.getMatchBranches(match_expr.branches), 0..) |branch, i| {
-                        indent(depth + 1);
-                        std.debug.print("branch[{d}] pattern:\n", .{i});
-                        printPattern(store, branch.pattern, depth + 2);
-                        if (!branch.guard.isNone()) {
-                            indent(depth + 1);
-                            std.debug.print("branch[{d}] guard:\n", .{i});
-                            printExpr(store, branch.guard, depth + 2);
-                        }
-                        indent(depth + 1);
-                        std.debug.print("branch[{d}] body:\n", .{i});
-                        printExpr(store, branch.body, depth + 2);
-                    }
-                },
-                else => {
-                    indent(depth);
-                    std.debug.print("{s}\n", .{@tagName(expr)});
-                },
-            }
-        }
-
-        fn walkCalls(store: *const LirExprStore, expr_id: lir.LIR.LirExprId) void {
-            if (expr_id.isNone()) return;
-
-            const expr = store.getExpr(expr_id);
-            switch (expr) {
-                .call => |call| {
-                    const fn_expr = store.getExpr(call.fn_expr);
-                    std.debug.print("call fn_tag={s}", .{@tagName(fn_expr)});
-                    if (fn_expr == .lookup) {
-                        std.debug.print(" fn_sym={d}", .{fn_expr.lookup.symbol.raw()});
-                    }
-                    std.debug.print(" args={d}\n", .{store.getExprSpan(call.args).len});
-                    for (store.getExprSpan(call.args), 0..) |arg, i| {
-                        std.debug.print("  arg[{d}]\n", .{i});
-                        printExpr(store, arg, 2);
-                    }
-                    walkCalls(store, call.fn_expr);
-                    for (store.getExprSpan(call.args)) |arg| walkCalls(store, arg);
-                },
-                .lambda => |lam| walkCalls(store, lam.body),
-                .block => |block| {
-                    for (store.getStmts(block.stmts)) |stmt| {
-                        switch (stmt) {
-                            .decl, .mutate => |binding| walkCalls(store, binding.expr),
-                            .cell_init, .cell_store => |binding| walkCalls(store, binding.expr),
-                            .cell_drop => {},
-                        }
-                    }
-                    walkCalls(store, block.final_expr);
-                },
-                .if_then_else => |ite| {
-                    for (store.getIfBranches(ite.branches)) |branch| {
-                        walkCalls(store, branch.cond);
-                        walkCalls(store, branch.body);
-                    }
-                    walkCalls(store, ite.final_else);
-                },
-                .match_expr => |match_expr| {
-                    walkCalls(store, match_expr.value);
-                    for (store.getMatchBranches(match_expr.branches)) |branch| {
-                        walkCalls(store, branch.guard);
-                        walkCalls(store, branch.body);
-                    }
-                },
-                .borrow_scope => |scope| {
-                    for (store.getBorrowBindings(scope.bindings)) |binding| walkCalls(store, binding.expr);
-                    walkCalls(store, scope.body);
-                },
-                .early_return => |ret| walkCalls(store, ret.expr),
-                .semantic_low_level => |ll| for (store.getExprSpan(ll.args)) |arg| walkCalls(store, arg),
-                .low_level => |ll| for (store.getExprSpan(ll.args)) |arg| walkCalls(store, arg),
-                .dbg => |dbg| walkCalls(store, dbg.expr),
-                .expect => |expect| {
-                    walkCalls(store, expect.cond);
-                    walkCalls(store, expect.body);
-                },
-                .nominal => |nom| walkCalls(store, nom.backing_expr),
-                .struct_ => |s| for (store.getExprSpan(s.fields)) |field| walkCalls(store, field),
-                .struct_access => |sa| walkCalls(store, sa.struct_expr),
-                .tag => |tag| for (store.getExprSpan(tag.args)) |arg| walkCalls(store, arg),
-                .list => |list| for (store.getExprSpan(list.elems)) |elem| walkCalls(store, elem),
-                .str_concat => |parts| for (store.getExprSpan(parts)) |part| walkCalls(store, part),
-                .int_to_str => |its| walkCalls(store, its.value),
-                .float_to_str => |fts| walkCalls(store, fts.value),
-                .dec_to_str => |arg| walkCalls(store, arg),
-                .str_escape_and_quote => |arg| walkCalls(store, arg),
-                .discriminant_switch => |ds| {
-                    walkCalls(store, ds.value);
-                    for (store.getExprSpan(ds.branches)) |branch| walkCalls(store, branch);
-                },
-                .tag_payload_access => |tpa| walkCalls(store, tpa.value),
-                .for_loop => |loop| {
-                    walkCalls(store, loop.list_expr);
-                    walkCalls(store, loop.body);
-                },
-                .while_loop => |loop| {
-                    walkCalls(store, loop.cond);
-                    walkCalls(store, loop.body);
-                },
-                .hosted_call => |call| for (store.getExprSpan(call.args)) |arg| walkCalls(store, arg),
-                .incref => |rc| walkCalls(store, rc.value),
-                .decref => |rc| walkCalls(store, rc.value),
-                .free => |rc| walkCalls(store, rc.value),
-                else => {},
-            }
-        }
-    };
-
-    std.debug.print("specialized predicate sym={d}\n", .{specialized_predicate_sym.?.raw()});
-    std.debug.print("root lowered:\n", .{});
-    Dump.printExpr(&lir_store, root_lir, 0);
-    std.debug.print("root with rc:\n", .{});
-    Dump.printExpr(&lir_store, root_lir_with_rc, 0);
-    std.debug.print("any body with rc:\n", .{});
-    Dump.printExpr(&lir_store, any_lir_with_rc, 0);
-    std.debug.print("predicate def with rc:\n", .{});
-    Dump.printExpr(&lir_store, pred_def, 0);
-    Dump.walkCalls(&lir_store, pred_def);
-}
-
-test "debug: direct contains root decrefs for out binding" {
-    const resources = try parseAndCanonicalizeExpr(test_allocator,
-        \\{
-        \\    out = ["a"]
-        \\    out.contains("a")
-        \\}
-    );
-    defer cleanupParseAndCanonical(test_allocator, resources);
-
-    var mir_store = try MIR.Store.init(test_allocator);
-    defer mir_store.deinit(test_allocator);
-
-    const all_module_envs = [_]*ModuleEnv{
-        @constCast(resources.builtin_module.env),
-        resources.module_env,
-    };
-
-    var lower = try mir.Lower.init(
-        test_allocator,
-        &mir_store,
-        all_module_envs[0..],
-        &resources.module_env.types,
-        1,
-        null,
-    );
-    defer lower.deinit();
-
-    const mir_expr = try lower.lowerExpr(resources.expr_idx);
-
-    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
-    defer lambda_set_store.deinit(test_allocator);
-
-    var layout_store = try layout.Store.init(
-        all_module_envs[0..],
-        resources.builtin_module.env.idents.builtin_str,
-        test_allocator,
-        base.target.TargetUsize.native,
-    );
-    defer layout_store.deinit();
-
-    var lir_store = LirExprStore.init(test_allocator);
-    defer lir_store.deinit();
-
-    var translator = lir.MirToLir.init(
-        test_allocator,
-        &mir_store,
-        &lir_store,
-        &layout_store,
-        &lambda_set_store,
-        resources.module_env.idents.true_tag,
-    );
-    defer translator.deinit();
-
-    const root_lir = try translator.lower(mir_expr);
-    var rc_pass = try lir.RcInsert.RcInsertPass.init(test_allocator, &lir_store, &layout_store);
-    defer rc_pass.deinit();
-    const root_with_rc = try rc_pass.insertRcOps(root_lir);
-
-    const root_expr = lir_store.getExpr(root_with_rc);
-    try std.testing.expect(root_expr == .block);
-    const root_stmts = lir_store.getStmts(root_expr.block.stmts);
-    try std.testing.expect(root_stmts.len >= 1);
-    try std.testing.expect(root_stmts[0] == .decl);
-    const out_pattern = root_stmts[0].decl.pattern;
-    const out_pat = lir_store.getPattern(out_pattern);
-    try std.testing.expect(out_pat == .bind);
-    const out_sym = out_pat.bind.symbol;
-
-    const Count = struct {
-        fn walk(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) u32 {
-            if (expr_id.isNone()) return 0;
-
-            const key = symbol.raw();
-            const expr = store.getExpr(expr_id);
-            return switch (expr) {
-                .block => |block| blk: {
-                    var total: u32 = 0;
-                    for (store.getStmts(block.stmts)) |stmt| {
-                        switch (stmt) {
-                            .decl, .mutate => |binding| total += walk(store, binding.expr, symbol),
-                            .cell_init, .cell_store => |binding| total += walk(store, binding.expr, symbol),
-                            .cell_drop => {},
-                        }
-                    }
-                    total += walk(store, block.final_expr, symbol);
-                    break :blk total;
-                },
-                .borrow_scope => |scope| blk: {
-                    var total: u32 = 0;
-                    for (store.getBorrowBindings(scope.bindings)) |binding| total += walk(store, binding.expr, symbol);
-                    total += walk(store, scope.body, symbol);
-                    break :blk total;
-                },
-                .call => |call| blk: {
-                    var total = walk(store, call.fn_expr, symbol);
-                    for (store.getExprSpan(call.args)) |arg| total += walk(store, arg, symbol);
-                    break :blk total;
-                },
-                .if_then_else => |ite| blk: {
-                    var total: u32 = 0;
-                    for (store.getIfBranches(ite.branches)) |branch| {
-                        total += walk(store, branch.cond, symbol);
-                        total += walk(store, branch.body, symbol);
-                    }
-                    total += walk(store, ite.final_else, symbol);
-                    break :blk total;
-                },
-                .match_expr => |m| blk: {
-                    var total = walk(store, m.value, symbol);
-                    for (store.getMatchBranches(m.branches)) |branch| {
-                        total += walk(store, branch.guard, symbol);
-                        total += walk(store, branch.body, symbol);
-                    }
-                    break :blk total;
-                },
-                .lambda => |lam| walk(store, lam.body, symbol),
-                .for_loop => |loop| walk(store, loop.list_expr, symbol) + walk(store, loop.body, symbol),
-                .while_loop => |loop| walk(store, loop.cond, symbol) + walk(store, loop.body, symbol),
-                .discriminant_switch => |ds| blk: {
-                    var total = walk(store, ds.value, symbol);
-                    for (store.getExprSpan(ds.branches)) |branch| total += walk(store, branch, symbol);
-                    break :blk total;
-                },
-                .struct_ => |s| blk: {
-                    var total: u32 = 0;
-                    for (store.getExprSpan(s.fields)) |field| total += walk(store, field, symbol);
-                    break :blk total;
-                },
-                .list => |l| blk: {
-                    var total: u32 = 0;
-                    for (store.getExprSpan(l.elems)) |elem| total += walk(store, elem, symbol);
-                    break :blk total;
-                },
-                .tag => |t| blk: {
-                    var total: u32 = 0;
-                    for (store.getExprSpan(t.args)) |arg| total += walk(store, arg, symbol);
-                    break :blk total;
-                },
-                .semantic_low_level => |ll| blk: {
-                    var total: u32 = 0;
-                    for (store.getExprSpan(ll.args)) |arg| total += walk(store, arg, symbol);
-                    break :blk total;
-                },
-                .low_level => |ll| blk: {
-                    var total: u32 = 0;
-                    for (store.getExprSpan(ll.args)) |arg| total += walk(store, arg, symbol);
-                    break :blk total;
-                },
-                .hosted_call => |call| blk: {
-                    var total: u32 = 0;
-                    for (store.getExprSpan(call.args)) |arg| total += walk(store, arg, symbol);
-                    break :blk total;
-                },
-                .struct_access => |sa| walk(store, sa.struct_expr, symbol),
-                .tag_payload_access => |tpa| walk(store, tpa.value, symbol),
-                .nominal => |nom| walk(store, nom.backing_expr, symbol),
-                .early_return => |ret| walk(store, ret.expr, symbol),
-                .dbg => |dbg| walk(store, dbg.expr, symbol),
-                .expect => |expect| walk(store, expect.cond, symbol) + walk(store, expect.body, symbol),
-                .str_concat => |parts| blk: {
-                    var total: u32 = 0;
-                    for (store.getExprSpan(parts)) |part| total += walk(store, part, symbol);
-                    break :blk total;
-                },
-                .int_to_str => |its| walk(store, its.value, symbol),
-                .float_to_str => |fts| walk(store, fts.value, symbol),
-                .dec_to_str => |arg| walk(store, arg, symbol),
-                .str_escape_and_quote => |arg| walk(store, arg, symbol),
-                .decref => |dec| blk: {
-                    const inner = store.getExpr(dec.value);
-                    const is_target = inner == .lookup and inner.lookup.symbol.raw() == key;
-                    break :blk @as(u32, if (is_target) 1 else 0) + walk(store, dec.value, symbol);
-                },
-                .incref => |inc| walk(store, inc.value, symbol),
-                .free => |free_expr| walk(store, free_expr.value, symbol),
-                else => 0,
-            };
-        }
-    };
-
-    const decref_count = Count.walk(&lir_store, root_with_rc, out_sym);
-    std.debug.print("direct contains root out decrefs={d}\n", .{decref_count});
-
-    const root_block = lir_store.getExpr(root_with_rc).block;
-    const root_final = lir_store.getExpr(root_block.final_expr);
-    try std.testing.expect(root_final == .block or root_final == .call);
-    const final_call_expr = switch (root_final) {
-        .call => root_block.final_expr,
-        .block => blk: {
-            const nested_final = lir_store.getExpr(root_final.block.final_expr);
-            try std.testing.expect(nested_final == .call);
-            break :blk root_final.block.final_expr;
-        },
-        else => unreachable,
-    };
-    const final_call = lir_store.getExpr(final_call_expr).call;
-    const final_fn = lir_store.getExpr(final_call.fn_expr);
-    try std.testing.expect(final_fn == .lookup);
-    const contains_sym = final_fn.lookup.symbol;
-    const contains_def = lir_store.getSymbolDef(contains_sym) orelse return error.TestUnexpectedResult;
-    var contains_rc_pass = try lir.RcInsert.RcInsertPass.init(test_allocator, &lir_store, &layout_store);
-    defer contains_rc_pass.deinit();
-    const contains_def_with_rc = try contains_rc_pass.insertRcOps(contains_def);
-    const contains_expr = lir_store.getExpr(contains_def_with_rc);
-    try std.testing.expect(contains_expr == .lambda);
-    const contains_params = lir_store.getPatternSpan(contains_expr.lambda.params);
-    try std.testing.expect(contains_params.len >= 1);
-    const contains_list_pat = lir_store.getPattern(contains_params[0]);
-    try std.testing.expect(contains_list_pat == .bind);
-    const contains_list_sym = contains_list_pat.bind.symbol;
-    const contains_list_decrefs = Count.walk(&lir_store, contains_def_with_rc, contains_list_sym);
-    std.debug.print("direct contains def list param decrefs={d}\n", .{contains_list_decrefs});
-
-    try std.testing.expect(contains_params.len >= 2);
-    const contains_item_pat = lir_store.getPattern(contains_params[1]);
-    try std.testing.expect(contains_item_pat == .bind);
-    const contains_item_sym = contains_item_pat.bind.symbol;
-    const contains_item_decrefs = Count.walk(&lir_store, contains_def_with_rc, contains_item_sym);
-    std.debug.print("direct contains def item param decrefs={d}\n", .{contains_item_decrefs});
-
-    const Search = struct {
-        fn firstCalledSymbol(store: *const LirExprStore, expr_id: lir.LIR.LirExprId) ?lir.LIR.Symbol {
-            if (expr_id.isNone()) return null;
-
-            return switch (store.getExpr(expr_id)) {
-                .call => |call| blk: {
-                    const fn_expr = store.getExpr(call.fn_expr);
-                    if (fn_expr == .lookup) break :blk fn_expr.lookup.symbol;
-                    break :blk firstCalledSymbol(store, call.fn_expr);
-                },
-                .block => |block| blk: {
-                    for (store.getStmts(block.stmts)) |stmt| {
-                        const found = switch (stmt) {
-                            .decl, .mutate => |binding| firstCalledSymbol(store, binding.expr),
-                            .cell_init, .cell_store => |binding| firstCalledSymbol(store, binding.expr),
-                            .cell_drop => null,
-                        };
-                        if (found) |sym| break :blk sym;
-                    }
-                    break :blk firstCalledSymbol(store, block.final_expr);
-                },
-                .lambda => |lam| firstCalledSymbol(store, lam.body),
-                else => null,
-            };
-        }
-
-        fn firstCallExpr(store: *const LirExprStore, expr_id: lir.LIR.LirExprId) ?lir.LIR.LirExprId {
-            if (expr_id.isNone()) return null;
-
-            return switch (store.getExpr(expr_id)) {
-                .call => expr_id,
-                .block => |block| blk: {
-                    for (store.getStmts(block.stmts)) |stmt| {
-                        const found = switch (stmt) {
-                            .decl, .mutate => |binding| firstCallExpr(store, binding.expr),
-                            .cell_init, .cell_store => |binding| firstCallExpr(store, binding.expr),
-                            .cell_drop => null,
-                        };
-                        if (found) |call_expr| break :blk call_expr;
-                    }
-                    break :blk firstCallExpr(store, block.final_expr);
-                },
-                .lambda => |lam| firstCallExpr(store, lam.body),
-                else => null,
-            };
-        }
-    };
-
-    const any_sym = Search.firstCalledSymbol(&lir_store, contains_def_with_rc) orelse return error.TestUnexpectedResult;
-    const any_def = lir_store.getSymbolDef(any_sym) orelse return error.TestUnexpectedResult;
-    var any_rc_pass = try lir.RcInsert.RcInsertPass.init(test_allocator, &lir_store, &layout_store);
-    defer any_rc_pass.deinit();
-    const any_def_with_rc = try any_rc_pass.insertRcOps(any_def);
-    const any_expr = lir_store.getExpr(any_def_with_rc);
-    try std.testing.expect(any_expr == .lambda);
-    const any_params = lir_store.getPatternSpan(any_expr.lambda.params);
-    try std.testing.expect(any_params.len >= 2);
-    const any_list_pat = lir_store.getPattern(any_params[0]);
-    try std.testing.expect(any_list_pat == .bind);
-    const any_list_sym = any_list_pat.bind.symbol;
-    const any_list_decrefs = Count.walk(&lir_store, any_def_with_rc, any_list_sym);
-    std.debug.print("direct contains any def list param decrefs={d}\n", .{any_list_decrefs});
-    const any_captures_pat = lir_store.getPattern(any_params[1]);
-    try std.testing.expect(any_captures_pat == .bind);
-    const any_captures_sym = any_captures_pat.bind.symbol;
-    const any_captures_decrefs = Count.walk(&lir_store, any_def_with_rc, any_captures_sym);
-    std.debug.print("direct contains any def captures param decrefs={d}\n", .{any_captures_decrefs});
-    std.debug.print(
-        "direct contains any captures param layout={d}\n",
-        .{@intFromEnum(any_captures_pat.bind.layout_idx)},
-    );
-
-    const contains_call_expr = Search.firstCallExpr(&lir_store, contains_def_with_rc) orelse return error.TestUnexpectedResult;
-    const contains_call = lir_store.getExpr(contains_call_expr);
-    try std.testing.expect(contains_call == .call);
-    const any_call_args = lir_store.getExprSpan(contains_call.call.args);
-    try std.testing.expect(any_call_args.len >= 2);
-    const any_captures_arg = lir_store.getExpr(any_call_args[1]);
-    try std.testing.expect(any_captures_arg == .lookup);
-    std.debug.print(
-        "direct contains any captures arg layout={d}\n",
-        .{@intFromEnum(any_captures_arg.lookup.layout_idx)},
-    );
-    const LayoutDump = struct {
-        fn print(layouts: *const layout.Store, layout_idx: layout.Idx) void {
-            const layout_val = layouts.getLayout(layout_idx);
-            std.debug.print("  layout {d} tag={s}\n", .{ @intFromEnum(layout_idx), @tagName(layout_val.tag) });
-            if (layout_val.tag == .struct_) {
-                const fields = layouts.struct_fields.sliceRange(layouts.getStructData(layout_val.data.struct_.idx).getFields());
-                for (0..fields.len) |i| {
-                    std.debug.print("    field[{d}] idx={d}\n", .{ i, @intFromEnum(fields.get(i).layout) });
-                }
-            }
-        }
-    };
-    LayoutDump.print(&layout_store, any_captures_pat.bind.layout_idx);
-    LayoutDump.print(&layout_store, any_captures_arg.lookup.layout_idx);
-
-    const LookupLayouts = struct {
-        fn walk(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) void {
-            if (expr_id.isNone()) return;
-
-            switch (store.getExpr(expr_id)) {
-                .lookup => |lookup| {
-                    if (lookup.symbol.eql(symbol)) {
-                        std.debug.print("direct contains any lookup sym={d} layout={d}\n", .{
-                            symbol.raw(),
-                            @intFromEnum(lookup.layout_idx),
-                        });
-                    }
-                },
-                .block => |block| {
-                    for (store.getStmts(block.stmts)) |stmt| {
-                        switch (stmt) {
-                            .decl, .mutate => |binding| walk(store, binding.expr, symbol),
-                            .cell_init, .cell_store => |binding| walk(store, binding.expr, symbol),
-                            .cell_drop => {},
-                        }
-                    }
-                    walk(store, block.final_expr, symbol);
-                },
-                .borrow_scope => |scope| {
-                    for (store.getBorrowBindings(scope.bindings)) |binding| walk(store, binding.expr, symbol);
-                    walk(store, scope.body, symbol);
-                },
-                .if_then_else => |ite| {
-                    for (store.getIfBranches(ite.branches)) |branch| {
-                        walk(store, branch.cond, symbol);
-                        walk(store, branch.body, symbol);
-                    }
-                    walk(store, ite.final_else, symbol);
-                },
-                .match_expr => |match_expr| {
-                    walk(store, match_expr.value, symbol);
-                    for (store.getMatchBranches(match_expr.branches)) |branch| {
-                        walk(store, branch.guard, symbol);
-                        walk(store, branch.body, symbol);
-                    }
-                },
-                .lambda => |lam| walk(store, lam.body, symbol),
-                .call => |call| {
-                    walk(store, call.fn_expr, symbol);
-                    for (store.getExprSpan(call.args)) |arg| walk(store, arg, symbol);
-                },
-                .semantic_low_level => |ll| for (store.getExprSpan(ll.args)) |arg| walk(store, arg, symbol),
-                .low_level => |ll| for (store.getExprSpan(ll.args)) |arg| walk(store, arg, symbol),
-                .list => |list_expr| for (store.getExprSpan(list_expr.elems)) |elem| walk(store, elem, symbol),
-                .struct_ => |s| for (store.getExprSpan(s.fields)) |field| walk(store, field, symbol),
-                .tag => |tag_expr| for (store.getExprSpan(tag_expr.args)) |arg| walk(store, arg, symbol),
-                .struct_access => |sa| walk(store, sa.struct_expr, symbol),
-                .tag_payload_access => |tpa| walk(store, tpa.value, symbol),
-                .nominal => |nom| walk(store, nom.backing_expr, symbol),
-                .early_return => |ret| walk(store, ret.expr, symbol),
-                .dbg => |dbg| walk(store, dbg.expr, symbol),
-                .expect => |expect| {
-                    walk(store, expect.cond, symbol);
-                    walk(store, expect.body, symbol);
-                },
-                .str_concat => |parts| for (store.getExprSpan(parts)) |part| walk(store, part, symbol),
-                .int_to_str => |its| walk(store, its.value, symbol),
-                .float_to_str => |fts| walk(store, fts.value, symbol),
-                .dec_to_str => |arg| walk(store, arg, symbol),
-                .str_escape_and_quote => |arg| walk(store, arg, symbol),
-                .hosted_call => |hc| for (store.getExprSpan(hc.args)) |arg| walk(store, arg, symbol),
-                .discriminant_switch => |ds| {
-                    walk(store, ds.value, symbol);
-                    for (store.getExprSpan(ds.branches)) |branch| walk(store, branch, symbol);
-                },
-                .incref => |rc| walk(store, rc.value, symbol),
-                .decref => |rc| walk(store, rc.value, symbol),
-                .free => |rc| walk(store, rc.value, symbol),
-                else => {},
-            }
-        }
-    };
-    LookupLayouts.walk(&lir_store, any_def_with_rc, any_captures_sym);
-
-    const ListBinds = struct {
-        fn walk(store: *const LirExprStore, layouts: *const layout.Store, root_expr_id: lir.LIR.LirExprId, expr_id: lir.LIR.LirExprId) void {
-            if (expr_id.isNone()) return;
-
-            switch (store.getExpr(expr_id)) {
-                .block => |block| {
-                    for (store.getStmts(block.stmts)) |stmt| {
-                        switch (stmt) {
-                            .decl, .mutate => |binding| {
-                                const pat = store.getPattern(binding.pattern);
-                                if (pat == .bind) {
-                                    const layout_val = layouts.getLayout(pat.bind.layout_idx);
-                                    if (layout_val.tag == .list or layout_val.tag == .list_of_zst) {
-                                        const decrefs = Count.walk(store, root_expr_id, pat.bind.symbol);
-                                        std.debug.print(
-                                            "direct contains any list bind sym={d} layout={d} decrefs={d}\n",
-                                            .{ pat.bind.symbol.raw(), @intFromEnum(pat.bind.layout_idx), decrefs },
-                                        );
-                                    }
-                                }
-                                walk(store, layouts, root_expr_id, binding.expr);
-                            },
-                            .cell_init, .cell_store => |binding| walk(store, layouts, root_expr_id, binding.expr),
-                            .cell_drop => {},
-                        }
-                    }
-                    walk(store, layouts, root_expr_id, block.final_expr);
-                },
-                .borrow_scope => |scope| {
-                    for (store.getBorrowBindings(scope.bindings)) |binding| walk(store, layouts, root_expr_id, binding.expr);
-                    walk(store, layouts, root_expr_id, scope.body);
-                },
-                .if_then_else => |ite| {
-                    for (store.getIfBranches(ite.branches)) |branch| {
-                        walk(store, layouts, root_expr_id, branch.cond);
-                        walk(store, layouts, root_expr_id, branch.body);
-                    }
-                    walk(store, layouts, root_expr_id, ite.final_else);
-                },
-                .match_expr => |match_expr| {
-                    walk(store, layouts, root_expr_id, match_expr.value);
-                    for (store.getMatchBranches(match_expr.branches)) |branch| {
-                        walk(store, layouts, root_expr_id, branch.guard);
-                        walk(store, layouts, root_expr_id, branch.body);
-                    }
-                },
-                .lambda => |lam| walk(store, layouts, root_expr_id, lam.body),
-                else => {},
-            }
-        }
-    };
-    ListBinds.walk(&lir_store, &layout_store, any_def_with_rc, any_def_with_rc);
 }
 
 test "dev lowering: local any-style HOF directly calls passed predicate member" {
@@ -4518,12 +3658,6 @@ test "dev lowering: local any-style HOF directly calls passed predicate member" 
                     }
                     return false;
                 },
-                .borrow_scope => |scope| {
-                    for (store.getBorrowBindings(scope.bindings)) |binding| {
-                        if (containsCallTo(store, binding.expr, target)) return true;
-                    }
-                    return containsCallTo(store, scope.body, target);
-                },
                 .early_return => |ret| return containsCallTo(store, ret.expr, target),
                 .semantic_low_level => |ll| {
                     for (store.getExprSpan(ll.args)) |arg| {
@@ -4643,12 +3777,6 @@ test "dev lowering: list rest pattern emits two list decrefs" {
                     }
                     walk(store, ls, block.final_expr, counts);
                 },
-                .borrow_scope => |scope| {
-                    for (store.getBorrowBindings(scope.bindings)) |binding| {
-                        walk(store, ls, binding.expr, counts);
-                    }
-                    walk(store, ls, scope.body, counts);
-                },
                 .if_then_else => |ite| {
                     for (store.getIfBranches(ite.branches)) |branch| {
                         walk(store, ls, branch.cond, counts);
@@ -4764,12 +3892,6 @@ test "dev lowering: list rest pattern emits two list decrefs" {
                     }
                     break :blk exprUsesSymbol(store, block.final_expr, symbol);
                 },
-                .borrow_scope => |scope| blk: {
-                    for (store.getBorrowBindings(scope.bindings)) |binding| {
-                        if (exprUsesSymbol(store, binding.expr, symbol)) break :blk true;
-                    }
-                    break :blk exprUsesSymbol(store, scope.body, symbol);
-                },
                 .if_then_else => |ite| blk: {
                     for (store.getIfBranches(ite.branches)) |branch| {
                         if (exprUsesSymbol(store, branch.cond, symbol) or exprUsesSymbol(store, branch.body, symbol)) break :blk true;
@@ -4875,14 +3997,6 @@ test "dev lowering: list rest pattern emits two list decrefs" {
                         }
                     }
                     total += countDecrefsForSymbol(store, block.final_expr, symbol);
-                    break :blk total;
-                },
-                .borrow_scope => |scope| blk: {
-                    var total: u32 = 0;
-                    for (store.getBorrowBindings(scope.bindings)) |binding| {
-                        total += countDecrefsForSymbol(store, binding.expr, symbol);
-                    }
-                    total += countDecrefsForSymbol(store, scope.body, symbol);
                     break :blk total;
                 },
                 .if_then_else => |ite| blk: {
@@ -4997,12 +4111,6 @@ test "dev lowering: list rest pattern emits two list decrefs" {
                     }
                     try collectListBindSymbols(store, layout_store_, root_expr_id, block.final_expr, out);
                 },
-                .borrow_scope => |scope| {
-                    for (store.getBorrowBindings(scope.bindings)) |binding| {
-                        try collectListBindSymbols(store, layout_store_, root_expr_id, binding.expr, out);
-                    }
-                    try collectListBindSymbols(store, layout_store_, root_expr_id, scope.body, out);
-                },
                 .if_then_else => |ite| {
                     for (store.getIfBranches(ite.branches)) |branch| {
                         try collectListBindSymbols(store, layout_store_, root_expr_id, branch.cond, out);
@@ -5044,12 +4152,6 @@ test "dev lowering: list rest pattern emits two list decrefs" {
                         }
                     }
                     printBindingBlocks(store, block.final_expr, symbol);
-                },
-                .borrow_scope => |scope| {
-                    for (store.getBorrowBindings(scope.bindings)) |binding| {
-                        printBindingBlocks(store, binding.expr, symbol);
-                    }
-                    printBindingBlocks(store, scope.body, symbol);
                 },
                 .if_then_else => |ite| {
                     for (store.getIfBranches(ite.branches)) |branch| {
@@ -5095,12 +4197,6 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
                         }
                     }
                     break :blk containsCellLoad(store, block.final_expr, symbol);
-                },
-                .borrow_scope => |scope| blk: {
-                    for (store.getBorrowBindings(scope.bindings)) |binding| {
-                        if (containsCellLoad(store, binding.expr, symbol)) break :blk true;
-                    }
-                    break :blk containsCellLoad(store, scope.body, symbol);
                 },
                 .if_then_else => |ite| blk: {
                     for (store.getIfBranches(ite.branches)) |branch| {
@@ -5184,12 +4280,6 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
                         };
                     }
                     total += countCellDrops(store, block.final_expr, symbol);
-                    break :blk total;
-                },
-                .borrow_scope => |scope| blk: {
-                    var total: u32 = 0;
-                    for (store.getBorrowBindings(scope.bindings)) |binding| total += countCellDrops(store, binding.expr, symbol);
-                    total += countCellDrops(store, scope.body, symbol);
                     break :blk total;
                 },
                 .if_then_else => |ite| blk: {
@@ -5287,12 +4377,6 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
                         }
                     }
                     total += countDecrefsForSymbol(store, block.final_expr, symbol);
-                    break :blk total;
-                },
-                .borrow_scope => |scope| blk: {
-                    var total: u32 = 0;
-                    for (store.getBorrowBindings(scope.bindings)) |binding| total += countDecrefsForSymbol(store, binding.expr, symbol);
-                    total += countDecrefsForSymbol(store, scope.body, symbol);
                     break :blk total;
                 },
                 .if_then_else => |ite| blk: {
@@ -5466,7 +4550,7 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
                 if (layout_val.tag != .list and layout_val.tag != .list_of_zst) continue;
                 found_cell_result = true;
                 try std.testing.expect(Search.containsCellLoad(&lir_store, with_rc, cell.cell));
-                try std.testing.expectEqual(@as(u32, 0), Search.countCellDrops(&lir_store, with_rc, cell.cell));
+                try std.testing.expectEqual(@as(u32, 1), Search.countCellDrops(&lir_store, with_rc, cell.cell));
             },
             .cell_store, .cell_drop => {},
         }
@@ -5550,6 +4634,45 @@ test "lambda sets distinguish closure record fields with different captures" {
 }
 
 test "LIR record field closures keep distinct field indices and payload layouts" {
+    const findStructAccessExpr = struct {
+        fn go(store: *const LirExprStore, expr_id: lir.LIR.LirExprId) ?lir.LIR.LirExprId {
+            return goDepth(store, expr_id, 32);
+        }
+
+        fn goDepth(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, remaining: usize) ?lir.LIR.LirExprId {
+            if (remaining == 0) return null;
+
+            const expr = store.getExpr(expr_id);
+            switch (expr) {
+                .struct_access => return expr_id,
+                .block => {
+                    const stmts = store.getStmts(expr.block.stmts);
+                    for (stmts) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                if (goDepth(store, binding.expr, remaining - 1)) |found| return found;
+                            },
+                            .cell_init, .cell_store => |binding| {
+                                if (goDepth(store, binding.expr, remaining - 1)) |found| return found;
+                            },
+                            .cell_drop => {},
+                        }
+                    }
+                    return goDepth(store, expr.block.final_expr, remaining - 1);
+                },
+                .lookup => {
+                    if (store.getSymbolDef(expr.lookup.symbol)) |def_expr| {
+                        return goDepth(store, def_expr, remaining - 1);
+                    }
+                    return null;
+                },
+                .dbg => return goDepth(store, expr.dbg.expr, remaining - 1),
+                .nominal => return goDepth(store, expr.nominal.backing_expr, remaining - 1),
+                else => return null,
+            }
+        }
+    }.go;
+
     const resources = try parseAndCanonicalizeExpr(test_allocator,
         \\{
         \\    a = 10
@@ -5612,8 +4735,8 @@ test "LIR record field closures keep distinct field indices and payload layouts"
     const stmts = lir_store.getStmts(root.block.stmts);
     try std.testing.expect(stmts.len >= 5);
 
-    const add_a_expr = stmts[3].binding().expr;
-    const add_b_expr = stmts[4].binding().expr;
+    const add_a_expr = findStructAccessExpr(&lir_store, stmts[3].binding().expr) orelse return error.TestUnexpectedResult;
+    const add_b_expr = findStructAccessExpr(&lir_store, stmts[4].binding().expr) orelse return error.TestUnexpectedResult;
     const add_a_lir = lir_store.getExpr(add_a_expr);
     const add_b_lir = lir_store.getExpr(add_b_expr);
     try std.testing.expect(add_a_lir == .struct_access);
@@ -5656,6 +4779,45 @@ test "LIR record field closures keep distinct field indices and payload layouts"
 }
 
 test "LIR parenthesized record field closure call registers synthetic closure binding" {
+    const findStructAccessExpr = struct {
+        fn go(store: *const LirExprStore, expr_id: lir.LIR.LirExprId) ?lir.LIR.LirExprId {
+            return goDepth(store, expr_id, 32);
+        }
+
+        fn goDepth(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, remaining: usize) ?lir.LIR.LirExprId {
+            if (remaining == 0) return null;
+
+            const expr = store.getExpr(expr_id);
+            switch (expr) {
+                .struct_access => return expr_id,
+                .block => {
+                    const stmts = store.getStmts(expr.block.stmts);
+                    for (stmts) |stmt| {
+                        switch (stmt) {
+                            .decl, .mutate => |binding| {
+                                if (goDepth(store, binding.expr, remaining - 1)) |found| return found;
+                            },
+                            .cell_init, .cell_store => |binding| {
+                                if (goDepth(store, binding.expr, remaining - 1)) |found| return found;
+                            },
+                            .cell_drop => {},
+                        }
+                    }
+                    return goDepth(store, expr.block.final_expr, remaining - 1);
+                },
+                .lookup => {
+                    if (store.getSymbolDef(expr.lookup.symbol)) |def_expr| {
+                        return goDepth(store, def_expr, remaining - 1);
+                    }
+                    return null;
+                },
+                .dbg => return goDepth(store, expr.dbg.expr, remaining - 1),
+                .nominal => return goDepth(store, expr.nominal.backing_expr, remaining - 1),
+                else => return null,
+            }
+        }
+    }.go;
+
     const resources = try parseAndCanonicalizeExpr(test_allocator,
         \\{
         \\    a = 10
@@ -5719,7 +4881,7 @@ test "LIR parenthesized record field closure call registers synthetic closure bi
     const inner_stmts = lir_store.getStmts(outer_final.block.stmts);
     try std.testing.expectEqual(@as(usize, 1), inner_stmts.len);
 
-    const synthetic_def_expr = inner_stmts[0].binding().expr;
+    const synthetic_def_expr = findStructAccessExpr(&lir_store, inner_stmts[0].binding().expr) orelse return error.TestUnexpectedResult;
     const synthetic_def = lir_store.getExpr(synthetic_def_expr);
     try std.testing.expect(synthetic_def == .struct_access);
     try std.testing.expectEqual(@as(u16, 1), synthetic_def.struct_access.field_idx);

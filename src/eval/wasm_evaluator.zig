@@ -42,7 +42,6 @@ fn lirExprResultLayout(store: *const LirExprStore, expr_id: LirExprId) layout.Id
     const expr: LirExpr = store.getExpr(expr_id);
     return switch (expr) {
         .block => |b| b.result_layout,
-        .borrow_scope => |b| b.result_layout,
         .if_then_else => |ite| ite.result_layout,
         .match_expr => |w| w.result_layout,
         .dbg => |d| d.result_layout,

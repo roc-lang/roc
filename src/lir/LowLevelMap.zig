@@ -1,4 +1,5 @@
 //! Maps semantic CIR low-level operations to backend-facing LIR low-level ops.
+const std = @import("std");
 const CIR = @import("can").CIR;
 const LIR = @import("LIR.zig");
 
@@ -345,5 +346,39 @@ pub fn semanticToBackend(cir_op: CIR.Expr.LowLevel) ?LIR.LirExpr.LowLevel {
         .num_is_zero,
         .str_inspekt,
         => null,
+    };
+}
+
+fn backendToSemantic(backend_op: LIR.LirExpr.LowLevel) CIR.Expr.LowLevel {
+    return switch (backend_op) {
+        .str_split => .str_split_on,
+        .list_append => .list_append,
+        .num_add => .num_plus,
+        .num_sub => .num_minus,
+        .num_mul => .num_times,
+        .num_div => .num_div_by,
+        .num_div_trunc => .num_div_trunc_by,
+        .num_rem => .num_rem_by,
+        .num_mod => .num_mod_by,
+        .num_neg => .num_negate,
+        else => std.meta.stringToEnum(CIR.Expr.LowLevel, @tagName(backend_op)) orelse {
+            std.debug.panic("missing backend low-level ownership mapping for {s}", .{@tagName(backend_op)});
+        },
+    };
+}
+
+pub fn backendArgOwnership(backend_op: LIR.LirExpr.LowLevel) []const CIR.Expr.LowLevel.ArgOwnership {
+    return switch (backend_op) {
+        .list_set => &.{ .consume, .borrow, .borrow },
+        .list_prepend => &.{ .consume, .borrow },
+        .list_first, .list_last => &.{.borrow},
+        .list_drop_first, .list_drop_last, .list_take_first, .list_take_last => &.{ .consume, .borrow },
+        .list_contains => &.{ .borrow, .borrow },
+        .list_reverse => &.{.consume},
+        .list_reserve => &.{ .consume, .borrow },
+        .list_release_excess_capacity => &.{.consume},
+        .list_repeat => &.{ .borrow, .borrow },
+        .list_split_first, .list_split_last => &.{.consume},
+        else => backendToSemantic(backend_op).getArgOwnership(),
     };
 }

@@ -1310,7 +1310,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .if_then_else => |ite| ite.result_layout,
                 .match_expr => |w| w.result_layout,
                 .block => |b| b.result_layout,
-                .borrow_scope => |b| b.result_layout,
                 .dbg => |d| d.result_layout,
                 .expect => |e| e.result_layout,
                 .early_return => |er| er.ret_layout,
@@ -1395,12 +1394,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 // Blocks
                 .block => |block| try self.generateBlock(block),
-                .borrow_scope => {
-                    if (builtin.mode == .Debug) {
-                        std.debug.panic("dev backend invariant violated: borrow_scope must be removed before codegen", .{});
-                    }
-                    unreachable;
-                },
                 .semantic_low_level => {
                     if (builtin.mode == .Debug) {
                         std.debug.panic("dev backend invariant violated: semantic_low_level must be removed before codegen", .{});
@@ -7358,6 +7351,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const payload_layout_idx = variants.get(tag_pattern.discriminant).payload_layout;
                     const base_offset: i32 = switch (value_loc) {
                         .stack => |s| s.offset,
+                        .stack_i128 => |off| off,
                         .stack_str => |off| off,
                         else => unreachable,
                     };
@@ -8375,9 +8369,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         } };
                     }
                 }
-            }
-            if (field_size == 16) {
-                return .{ .stack_i128 = field_base };
             }
             return .{ .stack = .{ .offset = field_base, .size = ValueSize.fromByteCount(field_size) } };
         }
@@ -15239,6 +15230,29 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const init_reg = try self.allocTempGeneral();
             try self.emitLoad(.w64, init_reg, frame_ptr, base_offset + 8); // list length
             try self.emitStore(.w64, frame_ptr, count_slot, init_reg);
+            try self.emitLoad(.w64, init_reg, frame_ptr, base_offset + 16); // cap or encoded alloc ptr
+
+            // Seamless slices store the original allocation element count at -2 words
+            // from the allocation pointer so final decref can release all shared elements.
+            const non_slice_patch = blk: {
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.cmpRegImm12(.w64, init_reg, 0);
+                    const patch_loc = self.codegen.currentOffset();
+                    try self.codegen.emit.bcond(.pl, 0);
+                    break :blk patch_loc;
+                } else {
+                    try self.codegen.emit.testRegReg(.w64, init_reg, init_reg);
+                    break :blk try self.codegen.emitCondJump(.not_sign);
+                }
+            };
+
+            const alloc_count_reg = try self.allocTempGeneral();
+            try self.emitLoad(.w64, alloc_count_reg, frame_ptr, alloc_ptr_slot);
+            try self.emitLoad(.w64, init_reg, alloc_count_reg, -@as(i32, @intCast(2 * @sizeOf(usize))));
+            try self.emitStore(.w64, frame_ptr, count_slot, init_reg);
+            self.codegen.freeGeneral(alloc_count_reg);
+            self.codegen.patchJump(non_slice_patch, self.codegen.currentOffset());
+
             try self.codegen.emitLoadImm(init_reg, 0);
             try self.emitStore(.w64, frame_ptr, idx_slot, init_reg);
             self.codegen.freeGeneral(init_reg);
