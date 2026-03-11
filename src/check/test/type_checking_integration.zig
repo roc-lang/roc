@@ -1410,7 +1410,7 @@ test "check type - nominal w/ polymorphic function" {
 
 // nominal types //
 
-test "check type - nominal - local - fail" {
+test "check type - nominal - local record value - fail" {
     const source =
         \\main! = |_| {}
         \\
@@ -1419,7 +1419,40 @@ test "check type - nominal - local - fail" {
         \\    encode_str : Utf8Format, Str -> List(U8)
         \\    encode_str = |_fmt, s| Str.to_utf8(s)
         \\  }
-        \\  fmt = Utf8Format
+        \\  fmt = {}
+        \\  Str.encode("hi", fmt)
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**MISSING METHOD**
+        \\This **encode_str** method is being called on a value whose type doesn't have that method:
+        \\**test:9:3:9:13:**
+        \\```roc
+        \\  Str.encode("hi", fmt)
+        \\```
+        \\  ^^^^^^^^^^
+        \\
+        \\The value's type, which does not have a method named **encode_str**, is:
+        \\
+        \\    {}
+        \\
+        \\
+        ,
+    );
+}
+
+test "check type - nominal - local method type - fail" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = |{}| {
+        \\  Utf8Format := [Fmt].{
+        \\    encode_str : Utf8Format, Str -> List(U8)
+        \\    encode_str = |_fmt, s| Str.to_utf8(s)
+        \\  }
+        \\  fmt = Utf8Format.Fmt
         \\  Str.encode("hi", fmt)
         \\}
     ;

@@ -2803,7 +2803,7 @@ test "encode - custom format type with infallible encoding (empty error type)" {
         \\    encode_str = |_self, str| Ok(Str.to_utf8(str))
         \\}
         \\
-        \\fmt = Utf8
+        \\fmt = Utf8.Format
     ;
 
     var res = try parseCheckAndEvalModule(src);
