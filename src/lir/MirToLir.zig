@@ -4082,41 +4082,6 @@ fn lowerLowLevel(self: *Self, ll: anytype, mir_expr_id: MIR.ExprId, region: Regi
 
     const lir_args = try self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_expr_len..]);
 
-    // num_is_negative/num_is_positive → comparison with 0
-    if (ll.op == .num_is_negative or ll.op == .num_is_positive) {
-        const args_slice = self.lir_store.getExprSpan(lir_args);
-        const zero = try self.emitZeroLiteral(mir_args[0], region);
-        const lir_op: LirExpr.LowLevel = if (ll.op == .num_is_negative) .num_is_lt else .num_is_gt;
-        const new_args = try self.lir_store.addExprSpan(&.{ args_slice[0], zero });
-        const result = try self.lir_store.addExpr(.{ .low_level = .{
-            .op = lir_op,
-            .args = new_args,
-            .ret_layout = low_level_ret_layout,
-        } }, region);
-        const final_result = if (low_level_ret_layout == ret_layout)
-            result
-        else
-            try self.adaptValueLayout(result, self.mir_store.typeOf(mir_expr_id), low_level_ret_layout, ret_layout, region);
-        return acc.finish(final_result, ret_layout, region);
-    }
-
-    // num_is_zero → num_is_eq with 0
-    if (ll.op == .num_is_zero) {
-        const args_slice = self.lir_store.getExprSpan(lir_args);
-        const zero = try self.emitZeroLiteral(mir_args[0], region);
-        const new_args = try self.lir_store.addExprSpan(&.{ args_slice[0], zero });
-        const result = try self.lir_store.addExpr(.{ .low_level = .{
-            .op = .num_is_eq,
-            .args = new_args,
-            .ret_layout = low_level_ret_layout,
-        } }, region);
-        const final_result = if (low_level_ret_layout == ret_layout)
-            result
-        else
-            try self.adaptValueLayout(result, self.mir_store.typeOf(mir_expr_id), low_level_ret_layout, ret_layout, region);
-        return acc.finish(final_result, ret_layout, region);
-    }
-
     // str_inspekt should have been fully expanded during CIR->MIR lowering.
     // MIR uses an explicit `str_escape_and_quote` expression for string quoting.
     if (ll.op == .str_inspekt) {
@@ -4182,24 +4147,6 @@ fn lowerLowLevel(self: *Self, ll: anytype, mir_expr_id: MIR.ExprId, region: Regi
         try self.adaptValueLayout(final_result, self.mir_store.typeOf(mir_expr_id), low_level_ret_layout, ret_layout, region);
 
     return acc.finish(adapted_result, ret_layout, region);
-}
-
-/// Emit a zero literal matching the type of the given MIR expression.
-/// For float/dec/i128 types, emits the correct typed zero instead of i64.
-fn emitZeroLiteral(self: *Self, mir_expr: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
-    const arg_mono_idx = self.mir_store.typeOf(mir_expr);
-    const arg_layout_idx = try self.layoutFromMonotype(arg_mono_idx);
-    const arg_monotype = self.mir_store.monotype_store.getMonotype(arg_mono_idx);
-    return self.lir_store.addExpr(switch (arg_monotype) {
-        .prim => |p| switch (p) {
-            .f32 => LirExpr{ .f32_literal = 0.0 },
-            .f64 => LirExpr{ .f64_literal = 0.0 },
-            .dec => LirExpr{ .dec_literal = 0 },
-            .i128, .u128 => LirExpr{ .i128_literal = .{ .value = 0, .layout_idx = arg_layout_idx } },
-            .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64 => LirExpr{ .i64_literal = .{ .value = 0, .layout_idx = arg_layout_idx } },
-        },
-        .func, .tag_union, .record, .tuple, .list, .box, .unit, .recursive_placeholder => unreachable,
-    }, region);
 }
 
 fn lowerHosted(self: *Self, h: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
@@ -6287,75 +6234,6 @@ test "MIR num_plus low-level lowers to low-level" {
     try testing.expect(lir_expr.low_level.op == .num_plus);
 }
 
-test "MIR num_is_zero with f64 operand emits f64 zero literal" {
-    const allocator = testing.allocator;
-
-    var env = try testInit();
-    try testInitLayoutStore(&env);
-    defer testDeinit(&env);
-
-    const f64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.f64)];
-    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, env.module_env.idents);
-
-    // Build MIR: run_low_level(.num_is_zero, [3.14])
-    const arg0 = try env.mir_store.addExpr(allocator, .{ .frac_f64 = 3.14 }, f64_mono, Region.zero());
-    const args = try env.mir_store.addExprSpan(allocator, &.{arg0});
-    const ll_expr = try env.mir_store.addExpr(allocator, .{ .run_low_level = .{
-        .op = .num_is_zero,
-        .args = args,
-    } }, bool_mono, Region.zero());
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.lambda_set_store, env.module_env.idents.true_tag);
-    defer translator.deinit();
-
-    const lir_id = try translator.lower(ll_expr);
-    const lir_expr = env.lir_store.getExpr(lir_id);
-
-    // Should be a low_level num_is_eq comparing the f64 operand with a zero literal
-    try testing.expect(lir_expr == .low_level);
-    try testing.expect(lir_expr.low_level.op == .num_is_eq);
-
-    // The RHS (zero literal) should be an f64_literal, not i64_literal
-    const ll_args = env.lir_store.getExprSpan(lir_expr.low_level.args);
-    const rhs_expr = env.lir_store.getExpr(ll_args[1]);
-    try testing.expect(rhs_expr == .f64_literal);
-}
-
-test "MIR num_is_zero with i128 operand emits i128 zero literal" {
-    const allocator = testing.allocator;
-
-    var env = try testInit();
-    try testInitLayoutStore(&env);
-    defer testDeinit(&env);
-
-    const i128_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i128)];
-    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, env.module_env.idents);
-
-    // Build MIR: run_low_level(.num_is_zero, [42_i128])
-    const arg0 = try env.mir_store.addExpr(allocator, .{ .int = .{
-        .value = .{ .bytes = @bitCast(@as(u128, 42)), .kind = .i128 },
-    } }, i128_mono, Region.zero());
-    const args = try env.mir_store.addExprSpan(allocator, &.{arg0});
-    const ll_expr = try env.mir_store.addExpr(allocator, .{ .run_low_level = .{
-        .op = .num_is_zero,
-        .args = args,
-    } }, bool_mono, Region.zero());
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.lambda_set_store, env.module_env.idents.true_tag);
-    defer translator.deinit();
-
-    const lir_id = try translator.lower(ll_expr);
-    const lir_expr = env.lir_store.getExpr(lir_id);
-
-    // Should be a low_level num_is_eq comparing the i128 operand with a zero literal
-    try testing.expect(lir_expr == .low_level);
-    try testing.expect(lir_expr.low_level.op == .num_is_eq);
-
-    // The RHS (zero literal) should be an i128_literal, not i64_literal
-    const ll_args = env.lir_store.getExprSpan(lir_expr.low_level.args);
-    const rhs_expr = env.lir_store.getExpr(ll_args[1]);
-    try testing.expect(rhs_expr == .i128_literal);
-    try testing.expectEqual(layout.Idx.i128, rhs_expr.i128_literal.layout_idx);
-}
-
 test "borrowed low-level temp arg lowers through explicit block binding" {
     const allocator = testing.allocator;
 
@@ -6409,7 +6287,7 @@ test "borrowed low-level large string literal lowers through explicit block bind
     defer testDeinit(&env);
 
     const str_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.str)];
-    const bool_mono = try env.mir_store.monotype_store.addBoolTagUnion(allocator, env.module_env.idents);
+    const u64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.u64)];
 
     const large_text =
         "This string is deliberately longer than RocStr small-string storage";
@@ -6417,9 +6295,9 @@ test "borrowed low-level large string literal lowers through explicit block bind
     const str_expr = try env.mir_store.addExpr(allocator, .{ .str = str_idx }, str_mono, Region.zero());
     const args = try env.mir_store.addExprSpan(allocator, &.{str_expr});
     const ll_expr = try env.mir_store.addExpr(allocator, .{ .run_low_level = .{
-        .op = .str_is_empty,
+        .op = .str_count_utf8_bytes,
         .args = args,
-    } }, bool_mono, Region.zero());
+    } }, u64_mono, Region.zero());
 
     var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.lambda_set_store, env.module_env.idents.true_tag);
     defer translator.deinit();
@@ -6435,7 +6313,7 @@ test "borrowed low-level large string literal lowers through explicit block bind
 
     const body = env.lir_store.getExpr(lir_expr.block.final_expr);
     try testing.expect(body == .low_level);
-    try testing.expect(body.low_level.op == .str_is_empty);
+    try testing.expect(body.low_level.op == .str_count_utf8_bytes);
 }
 
 test "borrow-only low-level lookup arg stays as plain low_level" {

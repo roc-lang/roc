@@ -119,7 +119,6 @@ str_drop_prefix_import: ?u32 = null,
 str_drop_suffix_import: ?u32 = null,
 str_with_ascii_lowercased_import: ?u32 = null,
 str_with_ascii_uppercased_import: ?u32 = null,
-str_with_prefix_import: ?u32 = null,
 str_caseless_ascii_equals_import: ?u32 = null,
 str_from_utf8_import: ?u32 = null,
 /// Configurable wasm stack size in bytes (default 1MB).
@@ -290,7 +289,6 @@ fn registerHostImports(self: *Self) !void {
 
     // String ops: (arg1, arg2, result_ptr) -> void
     const str_binary_type = try self.module.addFuncType(&.{ .i32, .i32, .i32 }, &.{});
-    self.str_with_prefix_import = try self.module.addImport("env", "roc_str_with_prefix", str_binary_type);
     self.str_drop_prefix_import = try self.module.addImport("env", "roc_str_drop_prefix", str_binary_type);
     self.str_drop_suffix_import = try self.module.addImport("env", "roc_str_drop_suffix", str_binary_type);
     self.str_split_import = try self.module.addImport("env", "roc_str_split", str_binary_type);
@@ -6703,12 +6701,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             return self.generateNumericLowLevel(ll.op, args, ll.ret_layout);
         },
 
-        .bool_is_eq => {
-            try self.generateExpr(args[0]);
-            try self.generateExpr(args[1]);
-            self.body.append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
-        },
-
         .bool_not => {
             try self.generateExpr(args[0]);
             self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
@@ -7073,12 +7065,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 self.body.append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
             }
         },
-        .list_is_empty => {
-            // Load length from RocList struct (offset 4) and compare to 0
-            try self.generateExpr(args[0]);
-            try self.emitLoadOp(.i32, 4);
-            self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
-        },
         .list_get_unsafe => {
             // args[0] = list, args[1] = index
             // Returns bare element without bounds checking.
@@ -7142,79 +7128,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
 
         // String operations
-        .str_is_empty => {
-            // Check if string length is 0
-            // RocStr layout (12 bytes on wasm32):
-            //   SSO:  bytes[0..10] = inline data, byte 11 = len | 0x80
-            //   Heap: i32 ptr (offset 0), i32 len (offset 4), i32 cap (offset 8)
-            try self.generateExpr(args[0]);
-            const str_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitLocalSet(str_local);
-
-            // Load byte 11 to check SSO flag
-            try self.emitLocalGet(str_local);
-            self.body.append(self.allocator, Op.i32_load8_u) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory; // align
-            WasmModule.leb128WriteU32(self.allocator, &self.body, 11) catch return error.OutOfMemory; // offset
-
-            const byte11 = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitLocalSet(byte11);
-
-            // Check high bit (0x80) for SSO flag
-            try self.emitLocalGet(byte11);
-            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, &self.body, 0x80) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-
-            // if (SSO)
-            self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
-            self.body.append(self.allocator, @intFromEnum(ValType.i32)) catch return error.OutOfMemory;
-
-            // SSO: length = byte11 & 0x7F, check == 0
-            try self.emitLocalGet(byte11);
-            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, &self.body, 0x7F) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
-
-            self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
-
-            // Heap: load i32 length at offset 4, check == 0
-            try self.emitLocalGet(str_local);
-            try self.emitLoadOp(.i32, 4);
-            self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
-
-            self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
-        },
-
         // Bitwise operations
         .num_pow, .num_log => unreachable, // Resolved by MIR/LIR lowering
-
-        .num_is_zero => {
-            // num_is_zero(x) -> Bool: compare x == 0
-            try self.generateExpr(args[0]);
-            const arg_vt = self.exprValType(args[0]);
-            switch (arg_vt) {
-                .i32 => {
-                    self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
-                },
-                .i64 => {
-                    self.body.append(self.allocator, Op.i64_eqz) catch return error.OutOfMemory;
-                },
-                .f32 => {
-                    self.body.append(self.allocator, Op.f32_const) catch return error.OutOfMemory;
-                    const zero_bytes: [4]u8 = @bitCast(@as(f32, 0.0));
-                    self.body.appendSlice(self.allocator, &zero_bytes) catch return error.OutOfMemory;
-                    self.body.append(self.allocator, Op.f32_eq) catch return error.OutOfMemory;
-                },
-                .f64 => {
-                    self.body.append(self.allocator, Op.f64_const) catch return error.OutOfMemory;
-                    const zero_bytes: [8]u8 = @bitCast(@as(f64, 0.0));
-                    self.body.appendSlice(self.allocator, &zero_bytes) catch return error.OutOfMemory;
-                    self.body.append(self.allocator, Op.f64_eq) catch return error.OutOfMemory;
-                },
-            }
-        },
 
         .num_abs_diff => {
             // abs_diff(a, b) -> |a - b|
@@ -8049,9 +7964,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
             try self.emitFpOffset(result_offset);
         },
-        .str_with_prefix, .str_drop_prefix, .str_drop_suffix => {
+        .str_drop_prefix, .str_drop_suffix => {
             const import_idx = switch (ll.op) {
-                .str_with_prefix => self.str_with_prefix_import orelse unreachable,
                 .str_drop_prefix => self.str_drop_prefix_import orelse unreachable,
                 .str_drop_suffix => self.str_drop_suffix_import orelse unreachable,
                 else => unreachable,
@@ -8170,8 +8084,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .dec_to_str,
         .f32_to_str,
         .f64_to_str,
-        .num_is_negative,
-        .num_is_positive,
         .num_to_str,
         .num_from_str,
         .num_from_numeral,

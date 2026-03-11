@@ -122,7 +122,6 @@ pub const BuiltinFn = enum {
     str_contains,
     str_starts_with,
     str_ends_with,
-    str_is_empty,
     str_equal,
     str_count_utf8_bytes,
     str_caseless_ascii_equals,
@@ -139,7 +138,6 @@ pub const BuiltinFn = enum {
     str_drop_suffix,
     str_with_ascii_lowercased,
     str_with_ascii_uppercased,
-    str_with_prefix,
     str_from_utf8_lossy,
     str_from_utf8,
     str_escape_and_quote,
@@ -205,7 +203,6 @@ pub const BuiltinFn = enum {
             .str_contains => "roc_builtins_str_contains",
             .str_starts_with => "roc_builtins_str_starts_with",
             .str_ends_with => "roc_builtins_str_ends_with",
-            .str_is_empty => "roc_builtins_str_is_empty",
             .str_equal => "roc_builtins_str_equal",
             .str_count_utf8_bytes => "roc_builtins_str_count_utf8_bytes",
             .str_caseless_ascii_equals => "roc_builtins_str_caseless_ascii_equals",
@@ -222,7 +219,6 @@ pub const BuiltinFn = enum {
             .str_drop_suffix => "roc_builtins_str_drop_suffix",
             .str_with_ascii_lowercased => "roc_builtins_str_with_ascii_lowercased",
             .str_with_ascii_uppercased => "roc_builtins_str_with_ascii_uppercased",
-            .str_with_prefix => "roc_builtins_str_with_prefix",
             .str_from_utf8_lossy => "roc_builtins_str_from_utf8_lossy",
             .str_from_utf8 => "roc_builtins_str_from_utf8",
             .str_escape_and_quote => "roc_builtins_str_escape_and_quote",
@@ -337,12 +333,6 @@ fn wrapStrEndsWith(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8,
     const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
     const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
     return strEndsWith(a, b);
-}
-
-/// Wrapper: isEmpty(RocStr) -> bool
-fn wrapStrIsEmpty(str_bytes: ?[*]u8, str_len: usize, str_cap: usize) callconv(.c) bool {
-    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
-    return strIsEmpty(s);
 }
 
 /// Wrapper: strEqual(RocStr, RocStr) -> bool
@@ -506,15 +496,6 @@ fn wrapStrEscapeAndQuote(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_ca
         heap_ptr[pos] = '"';
         out.* = .{ .bytes = heap_ptr, .length = result_len, .capacity_or_alloc_ptr = result_len };
     }
-}
-
-/// Wrapper for str_with_prefix: strConcatC(prefix, string, *RocOps) -> RocStr
-/// str_with_prefix(string, prefix) = concat(prefix, string) — prefix goes first!
-fn wrapStrWithPrefix(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, pfx_bytes: ?[*]u8, pfx_len: usize, pfx_cap: usize, roc_ops: *RocOps) callconv(.c) void {
-    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
-    const pfx = RocStr{ .bytes = pfx_bytes, .length = pfx_len, .capacity_or_alloc_ptr = pfx_cap };
-    // with_prefix(string, prefix) is concat(prefix, string)
-    out.* = strConcatC(pfx, s, roc_ops);
 }
 
 /// Wrapper: listConcat(RocList, RocList, alignment, element_width, ..., *RocOps) -> RocList
@@ -1505,45 +1486,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const result_reg = try self.allocTempGeneral();
                     try self.emitLoad(.w64, result_reg, frame_ptr, base_offset + 8);
                     return .{ .general_reg = result_reg };
-                },
-                .list_is_empty => {
-                    // List is empty if length is 0
-                    std.debug.assert(args.len >= 1);
-                    const list_loc = try self.generateExpr(args[0]);
-
-                    const base_offset: i32 = switch (list_loc) {
-                        .stack => |s| s.offset,
-                        .list_stack => |ls_info| ls_info.struct_offset,
-                        .immediate_i64 => |val| {
-                            // Empty list - is_empty returns true (1)
-                            if (val == 0) {
-                                return .{ .immediate_i64 = 1 };
-                            }
-                            unreachable;
-                        },
-                        else => unreachable,
-                    };
-
-                    {
-                        // Length is at offset 8 - check if zero
-                        const len_reg = try self.allocTempGeneral();
-                        try self.emitLoad(.w64, len_reg, frame_ptr, base_offset + 8);
-                        // Compare with 0
-                        try self.emitCmpImm(len_reg, 0);
-                        // Set result to 1 if equal (empty), 0 otherwise
-                        const result_reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(result_reg, 0);
-                        const one_reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(one_reg, 1);
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.csel(.w64, result_reg, one_reg, result_reg, .eq);
-                        } else {
-                            try self.codegen.emit.cmovcc(.equal, .w64, result_reg, one_reg);
-                        }
-                        self.codegen.freeGeneral(one_reg);
-                        self.codegen.freeGeneral(len_reg);
-                        return .{ .general_reg = result_reg };
-                    }
                 },
                 .list_with_capacity => {
                     // listWithCapacity(capacity, alignment, elem_width, elements_refcounted,
@@ -2798,12 +2740,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrToUtf8), .str_to_utf8, .list);
                 },
-                .str_is_empty => {
-                    if (args.len != 1) unreachable;
-                    const str_loc = try self.generateExpr(args[0]);
-                    const str_off = try self.ensureOnStack(str_loc, roc_str_size);
-                    return try self.callStr1ToScalar(str_off, @intFromPtr(&wrapStrIsEmpty), .str_is_empty);
-                },
                 .str_is_eq => {
                     if (args.len != 2) unreachable;
                     const a_loc = try self.generateExpr(args[0]);
@@ -2967,15 +2903,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const str_loc = try self.generateExpr(args[0]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrWithAsciiUppercased), .str_with_ascii_uppercased, .str);
-                },
-                .str_with_prefix => {
-                    // str_with_prefix(string, prefix) -> Str  (= concat(prefix, string))
-                    if (args.len != 2) unreachable;
-                    const str_loc = try self.generateExpr(args[0]);
-                    const pfx_loc = try self.generateExpr(args[1]);
-                    const str_off = try self.ensureOnStack(str_loc, roc_str_size);
-                    const pfx_off = try self.ensureOnStack(pfx_loc, roc_str_size);
-                    return try self.callStr2RocOpsToResult(str_off, pfx_off, @intFromPtr(&wrapStrWithPrefix), .str_with_prefix, .str);
                 },
                 .str_from_utf8_lossy => {
                     // str_from_utf8_lossy(list) -> Str
@@ -3438,12 +3365,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                 },
 
-                .bool_is_eq => {
-                    const lhs_loc = try self.generateExpr(args[0]);
-                    const rhs_loc = try self.generateExpr(args[1]);
-                    return self.generateIntBinop(.num_is_eq, lhs_loc, rhs_loc, .i64);
-                },
-
                 .bool_not => {
                     const inner_loc = try self.generateExpr(args[0]);
                     const src_reg = try self.ensureInGeneralReg(inner_loc);
@@ -3476,9 +3397,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .f32_to_str,
                 .f64_to_str,
                 .num_from_numeral,
-                .num_is_zero,
-                .num_is_negative,
-                .num_is_positive,
                 .list_drop_at,
                 .compare,
                 => {
@@ -4920,7 +4838,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_shift_right_by => try self.emitAsrReg(.w64, result_reg, lhs_reg, rhs_reg),
                 .num_shift_right_zf_by => try self.emitLsrReg(.w64, result_reg, lhs_reg, rhs_reg),
                 // Comparison operations
-                .num_is_eq, .bool_is_eq => {
+                .num_is_eq => {
                     try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condEqual());
                 },
                 .num_is_lt => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, if (is_unsigned) condBelow() else condLess()),

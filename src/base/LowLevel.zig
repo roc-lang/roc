@@ -7,7 +7,6 @@
 /// Canonical primitive operations shared across canonicalization and LIR/codegen.
 pub const LowLevel = enum {
     // String operations
-    str_is_empty,
     str_is_eq,
     str_concat,
     str_contains,
@@ -20,7 +19,6 @@ pub const LowLevel = enum {
     str_starts_with,
     str_ends_with,
     str_repeat,
-    str_with_prefix,
     str_drop_prefix,
     str_drop_suffix,
     str_count_utf8_bytes,
@@ -51,7 +49,6 @@ pub const LowLevel = enum {
 
     // List operations
     list_len,
-    list_is_empty,
     list_get_unsafe,
     list_append_unsafe,
     list_concat,
@@ -76,13 +73,7 @@ pub const LowLevel = enum {
     list_split_last,
 
     // Bool operations
-    bool_is_eq,
     bool_not,
-
-    // Numeric type checking operations
-    num_is_zero,
-    num_is_negative,
-    num_is_positive,
 
     // Numeric comparison operations
     num_is_eq,
@@ -408,13 +399,12 @@ pub const LowLevel = enum {
 
     pub fn getArgOwnership(self: LowLevel) []const ArgOwnership {
         return switch (self) {
-            .str_is_empty, .str_count_utf8_bytes => &.{.borrow},
+            .str_count_utf8_bytes => &.{.borrow},
             .str_is_eq, .str_contains, .str_starts_with, .str_ends_with, .str_caseless_ascii_equals => &.{ .borrow, .borrow },
             .str_concat => &.{ .consume, .borrow },
             .str_trim, .str_trim_start, .str_trim_end => &.{.consume},
             .str_with_ascii_lowercased, .str_with_ascii_uppercased => &.{.consume},
             .str_repeat => &.{ .borrow, .borrow },
-            .str_with_prefix => &.{ .consume, .borrow },
             .str_with_capacity => &.{.borrow},
             .str_reserve => &.{ .consume, .borrow },
             .str_release_excess_capacity => &.{.consume},
@@ -427,7 +417,7 @@ pub const LowLevel = enum {
 
             .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str => &.{.borrow},
 
-            .list_len, .list_is_empty, .list_first, .list_last, .list_split_first, .list_split_last => &.{.borrow},
+            .list_len, .list_first, .list_last, .list_split_first, .list_split_last => &.{.borrow},
             .list_get_unsafe, .list_contains => &.{ .borrow, .borrow },
             .list_concat => &.{ .consume, .consume },
             .list_with_capacity => &.{.borrow},
@@ -439,10 +429,9 @@ pub const LowLevel = enum {
             .list_reverse, .list_release_excess_capacity => &.{.consume},
             .list_repeat => &.{ .borrow, .borrow },
 
-            .bool_is_eq => &.{ .borrow, .borrow },
             .bool_not => &.{.borrow},
 
-            .num_is_zero, .num_is_negative, .num_is_positive, .num_negate, .num_abs, .num_sqrt, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str => &.{.borrow},
+            .num_negate, .num_abs, .num_sqrt, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str => &.{.borrow},
             .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by, .num_abs_diff, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_pow => &.{ .borrow, .borrow },
             .num_from_numeral => &.{.borrow},
             .num_from_str => &.{.borrow},

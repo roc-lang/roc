@@ -102,12 +102,6 @@ pub fn roc_builtins_str_ends_with(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b
     return endsWith(a, b);
 }
 
-/// Wrapper: isEmpty(RocStr) -> bool
-pub fn roc_builtins_str_is_empty(str_bytes: ?[*]u8, str_len: usize, str_cap: usize) callconv(.c) bool {
-    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
-    return strIsEmpty(s);
-}
-
 /// Wrapper: strEqual(RocStr, RocStr) -> bool
 pub fn roc_builtins_str_equal(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize) callconv(.c) bool {
     const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
@@ -213,13 +207,6 @@ pub fn roc_builtins_str_with_ascii_uppercased(out: *RocStr, str_bytes: ?[*]u8, s
 pub fn roc_builtins_str_from_utf8_lossy(out: *RocStr, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, roc_ops: *RocOps) callconv(.c) void {
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     out.* = fromUtf8Lossy(l, roc_ops);
-}
-
-/// Wrapper for str_with_prefix: strConcatC(prefix, string, *RocOps) -> RocStr
-pub fn roc_builtins_str_with_prefix(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, pfx_bytes: ?[*]u8, pfx_len: usize, pfx_cap: usize, roc_ops: *RocOps) callconv(.c) void {
-    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
-    const pfx = RocStr{ .bytes = pfx_bytes, .length = pfx_len, .capacity_or_alloc_ptr = pfx_cap };
-    out.* = strConcatC(pfx, s, roc_ops);
 }
 
 /// Wrapper: escape special characters and wrap in double quotes for Str.inspect

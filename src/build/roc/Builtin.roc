@@ -12,6 +12,7 @@ Builtin :: [].{
 		}
 
 		is_empty : Str -> Bool
+		is_empty = |str| Str.count_utf8_bytes(str) == 0
 		## Concatenates two strings together.
 		## ```roc
 		## expect Str.concat("ab", "cd") == "abcd"
@@ -150,6 +151,7 @@ Builtin :: [].{
 		## expect Str.with_prefix("Awesome", "Roc") == "RocAwesome"
 		## ```
 		with_prefix : Str, Str -> Str
+		with_prefix = |string, prefix| Str.concat(prefix, string)
 		## Drops the given prefix [Str] from the start of a [Str]
 		## If the prefix is not found, returns the original string.
 		##
@@ -344,6 +346,7 @@ Builtin :: [].{
 		## List.is_empty([])
 		## ```
 		is_empty : List(_item) -> Bool
+		is_empty = |list| List.len(list) == 0
 		## Put two lists together.
 		## ```roc
 		## List.concat([1, 2, 3], [4, 5])
@@ -732,6 +735,16 @@ Builtin :: [].{
 		}
 
 		is_eq : Bool, Bool -> Bool
+		is_eq = |a, b| match a {
+			Bool.True => match b {
+				Bool.True => Bool.True
+				Bool.False => Bool.False
+			}
+			Bool.False => match b {
+				Bool.True => Bool.False
+				Bool.False => Bool.True
+			}
+		}
 
 		# Encode a bool using a format that provides encode_bool
 		encode : Bool, fmt -> Try(encoded, err)
@@ -902,6 +915,7 @@ Builtin :: [].{
 
 			to_str : U8 -> Str
 			is_zero : U8 -> Bool
+			is_zero = |self| self == 0
 			is_eq : U8, U8 -> Bool
 			is_gt : U8, U8 -> Bool
 			is_gte : U8, U8 -> Bool
@@ -977,8 +991,11 @@ Builtin :: [].{
 
 			to_str : I8 -> Str
 			is_zero : I8 -> Bool
+			is_zero = |self| self == 0
 			is_negative : I8 -> Bool
+			is_negative = |self| self < 0
 			is_positive : I8 -> Bool
+			is_positive = |self| self > 0
 			is_eq : I8, I8 -> Bool
 			is_gt : I8, I8 -> Bool
 			is_gte : I8, I8 -> Bool
@@ -1060,6 +1077,7 @@ Builtin :: [].{
 
 			to_str : U16 -> Str
 			is_zero : U16 -> Bool
+			is_zero = |self| self == 0
 			is_eq : U16, U16 -> Bool
 			is_gt : U16, U16 -> Bool
 			is_gte : U16, U16 -> Bool
@@ -1137,8 +1155,11 @@ Builtin :: [].{
 
 			to_str : I16 -> Str
 			is_zero : I16 -> Bool
+			is_zero = |self| self == 0
 			is_negative : I16 -> Bool
+			is_negative = |self| self < 0
 			is_positive : I16 -> Bool
+			is_positive = |self| self > 0
 			is_eq : I16, I16 -> Bool
 			is_gt : I16, I16 -> Bool
 			is_gte : I16, I16 -> Bool
@@ -1221,6 +1242,7 @@ Builtin :: [].{
 
 			to_str : U32 -> Str
 			is_zero : U32 -> Bool
+			is_zero = |self| self == 0
 			is_eq : U32, U32 -> Bool
 			is_gt : U32, U32 -> Bool
 			is_gte : U32, U32 -> Bool
@@ -1300,8 +1322,11 @@ Builtin :: [].{
 
 			to_str : I32 -> Str
 			is_zero : I32 -> Bool
+			is_zero = |self| self == 0
 			is_negative : I32 -> Bool
+			is_negative = |self| self < 0
 			is_positive : I32 -> Bool
+			is_positive = |self| self > 0
 			is_eq : I32, I32 -> Bool
 			is_gt : I32, I32 -> Bool
 			is_gte : I32, I32 -> Bool
@@ -1386,6 +1411,7 @@ Builtin :: [].{
 
 			to_str : U64 -> Str
 			is_zero : U64 -> Bool
+			is_zero = |self| self == 0
 			is_eq : U64, U64 -> Bool
 			is_gt : U64, U64 -> Bool
 			is_gte : U64, U64 -> Bool
@@ -1467,8 +1493,11 @@ Builtin :: [].{
 
 			to_str : I64 -> Str
 			is_zero : I64 -> Bool
+			is_zero = |self| self == 0
 			is_negative : I64 -> Bool
+			is_negative = |self| self < 0
 			is_positive : I64 -> Bool
+			is_positive = |self| self > 0
 			is_eq : I64, I64 -> Bool
 			is_gt : I64, I64 -> Bool
 			is_gte : I64, I64 -> Bool
@@ -1553,6 +1582,7 @@ Builtin :: [].{
 
 			to_str : U128 -> Str
 			is_zero : U128 -> Bool
+			is_zero = |self| self == 0
 			is_eq : U128, U128 -> Bool
 			is_gt : U128, U128 -> Bool
 			is_gte : U128, U128 -> Bool
@@ -1638,8 +1668,11 @@ Builtin :: [].{
 
 			to_str : I128 -> Str
 			is_zero : I128 -> Bool
+			is_zero = |self| self == 0
 			is_negative : I128 -> Bool
+			is_negative = |self| self < 0
 			is_positive : I128 -> Bool
+			is_positive = |self| self > 0
 			is_eq : I128, I128 -> Bool
 			is_gt : I128, I128 -> Bool
 			is_gte : I128, I128 -> Bool
@@ -1727,8 +1760,11 @@ Builtin :: [].{
 
 			to_str : Dec -> Str
 			is_zero : Dec -> Bool
+			is_zero = |self| self == 0
 			is_negative : Dec -> Bool
+			is_negative = |self| self < 0
 			is_positive : Dec -> Bool
+			is_positive = |self| self > 0
 			is_eq : Dec, Dec -> Bool
 			is_gt : Dec, Dec -> Bool
 			is_gte : Dec, Dec -> Bool
@@ -1812,8 +1848,11 @@ Builtin :: [].{
 
 			to_str : F32 -> Str
 			is_zero : F32 -> Bool
+			is_zero = |self| if self >= 0 { self <= 0 } else { False }
 			is_negative : F32 -> Bool
+			is_negative = |self| self < 0
 			is_positive : F32 -> Bool
+			is_positive = |self| self > 0
 			is_gt : F32, F32 -> Bool
 			is_gte : F32, F32 -> Bool
 			is_lt : F32, F32 -> Bool
@@ -1882,8 +1921,11 @@ Builtin :: [].{
 
 			to_str : F64 -> Str
 			is_zero : F64 -> Bool
+			is_zero = |self| if self >= 0 { self <= 0 } else { False }
 			is_negative : F64 -> Bool
+			is_negative = |self| self < 0
 			is_positive : F64 -> Bool
+			is_positive = |self| self > 0
 			is_gt : F64, F64 -> Bool
 			is_gte : F64, F64 -> Bool
 			is_lt : F64, F64 -> Bool

@@ -1587,15 +1587,6 @@ pub const Interpreter = struct {
         defer trace.end();
 
         switch (op) {
-            .str_is_empty => {
-                // Str.is_empty : Str -> Bool
-                std.debug.assert(args.len == 1); // low-level .str_is_empty expects 1 argument
-
-                const str_arg = args[0];
-                const roc_str = str_arg.asRocStr().?;
-
-                return try self.makeBoolValue(builtins.str.isEmpty(roc_str.*));
-            },
             .str_is_eq => {
                 // Str.is_eq : Str, Str -> Bool
                 std.debug.assert(args.len == 2); // low-level .str_is_eq expects 2 arguments
@@ -1813,31 +1804,6 @@ pub const Interpreter = struct {
 
                 // Call repeatC to repeat the string
                 const result_str = builtins.str.repeatC(string.*, count, roc_ops);
-
-                // Allocate space for the result string
-                const result_layout = string_arg.layout; // Str layout
-                var out = try self.pushRaw(result_layout, 0, string_arg.rt_var);
-                out.is_initialized = false;
-
-                // Copy the result string structure to the output
-                const result_ptr = out.asRocStr().?;
-                result_ptr.* = result_str;
-
-                out.is_initialized = true;
-                return out;
-            },
-            .str_with_prefix => {
-                // Str.with_prefix : Str, Str -> Str (prefix ++ string)
-                std.debug.assert(args.len == 2);
-
-                const string_arg = args[0];
-                const prefix_arg = args[1];
-
-                const string = string_arg.asRocStr().?;
-                const prefix = prefix_arg.asRocStr().?;
-
-                // with_prefix is just concat with args swapped: prefix ++ string
-                const result_str = builtins.str.strConcat(prefix.*, string.*, roc_ops);
 
                 // Allocate space for the result string
                 const result_layout = string_arg.layout; // Str layout
@@ -2463,18 +2429,6 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
-            .list_is_empty => {
-                // List.is_empty : List(a) -> Bool
-                std.debug.assert(args.len == 1); // low-level .list_is_empty expects 1 argument
-
-                const list_arg = args[0];
-                std.debug.assert(list_arg.ptr != null); // low-level .list_is_empty expects non-null list pointer
-
-                const roc_list = list_arg.asRocList().?;
-                const result = builtins.list.listIsEmpty(roc_list.*);
-
-                return try self.makeBoolValue(result);
-            },
             .list_with_capacity => {
                 // List.with_capacity : U64 -> List(a)
                 // Creates an empty list with preallocated capacity
@@ -3044,53 +2998,6 @@ pub const Interpreter = struct {
             //     self.triggerCrash("Set.is_empty not yet implemented", false, roc_ops);
             //     return error.Crash;
             // },
-            // Bool operations
-            .bool_is_eq => {
-                // Bool.is_eq : Bool, Bool -> Bool
-                std.debug.assert(args.len == 2); // low-level .bool_is_eq expects 2 arguments
-                const lhs = args[0].asBool();
-                const rhs = args[1].asBool();
-                const result = lhs == rhs;
-                return try self.makeBoolValue(result);
-            },
-            // Numeric type checking operations
-            .num_is_zero => {
-                // num.is_zero : num -> Bool
-                std.debug.assert(args.len == 1); // low-level .num_is_zero expects 1 argument
-                const num_val = try self.extractNumericValue(args[0]);
-                const result = switch (num_val) {
-                    .int => |i| i == 0,
-                    .f32 => |f| f == 0.0,
-                    .f64 => |f| f == 0.0,
-                    .dec => |d| d.num == 0,
-                };
-                return try self.makeBoolValue(result);
-            },
-            .num_is_negative => {
-                // num.is_negative : num -> Bool (signed types only)
-                std.debug.assert(args.len == 1); // low-level .num_is_negative expects 1 argument
-                const num_val = try self.extractNumericValue(args[0]);
-                const result = switch (num_val) {
-                    .int => |i| i < 0,
-                    .f32 => |f| f < 0.0,
-                    .f64 => |f| f < 0.0,
-                    .dec => |d| d.num < 0,
-                };
-                return try self.makeBoolValue(result);
-            },
-            .num_is_positive => {
-                // num.is_positive : num -> Bool (signed types only)
-                std.debug.assert(args.len == 1); // low-level .num_is_positive expects 1 argument
-                const num_val = try self.extractNumericValue(args[0]);
-                const result = switch (num_val) {
-                    .int => |i| i > 0,
-                    .f32 => |f| f > 0.0,
-                    .f64 => |f| f > 0.0,
-                    .dec => |d| d.num > 0,
-                };
-                return try self.makeBoolValue(result);
-            },
-
             // Numeric comparison operations
             .num_is_eq => {
                 // num.is_eq : num, num -> Bool (all integer types + Dec, NOT F32/F64)

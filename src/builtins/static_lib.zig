@@ -30,7 +30,6 @@ comptime {
     @export(&dw.roc_builtins_str_contains, .{ .name = "roc_builtins_str_contains" });
     @export(&dw.roc_builtins_str_starts_with, .{ .name = "roc_builtins_str_starts_with" });
     @export(&dw.roc_builtins_str_ends_with, .{ .name = "roc_builtins_str_ends_with" });
-    @export(&dw.roc_builtins_str_is_empty, .{ .name = "roc_builtins_str_is_empty" });
     @export(&dw.roc_builtins_str_equal, .{ .name = "roc_builtins_str_equal" });
     @export(&dw.roc_builtins_str_count_utf8_bytes, .{ .name = "roc_builtins_str_count_utf8_bytes" });
     @export(&dw.roc_builtins_str_caseless_ascii_equals, .{ .name = "roc_builtins_str_caseless_ascii_equals" });
@@ -47,7 +46,6 @@ comptime {
     @export(&dw.roc_builtins_str_drop_suffix, .{ .name = "roc_builtins_str_drop_suffix" });
     @export(&dw.roc_builtins_str_with_ascii_lowercased, .{ .name = "roc_builtins_str_with_ascii_lowercased" });
     @export(&dw.roc_builtins_str_with_ascii_uppercased, .{ .name = "roc_builtins_str_with_ascii_uppercased" });
-    @export(&dw.roc_builtins_str_with_prefix, .{ .name = "roc_builtins_str_with_prefix" });
     @export(&dw.roc_builtins_str_from_utf8_lossy, .{ .name = "roc_builtins_str_from_utf8_lossy" });
     @export(&dw.roc_builtins_str_escape_and_quote, .{ .name = "roc_builtins_str_escape_and_quote" });
     @export(&dw.roc_builtins_list_with_capacity, .{ .name = "roc_builtins_list_with_capacity" });

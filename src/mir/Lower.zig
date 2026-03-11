@@ -3017,7 +3017,7 @@ fn negBool(self: *Self, module_env: *const ModuleEnv, expr: MIR.ExprId, monotype
 // For structural types (records, tuples, anonymous tag unions, lists),
 // equality is decomposed into field-level/element-level primitive comparisons
 // during MIR lowering. This means backends only need to handle primitive
-// equality (num_is_eq, str_is_eq, bool_is_eq).
+// equality (num_is_eq, str_is_eq).
 
 /// Dispatch structural equality based on the operand's monotype.
 fn lowerStructuralEquality(
