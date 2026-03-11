@@ -1825,7 +1825,7 @@ fn retainBorrowedLookupIfNeeded(
     } }, region);
 }
 
-fn retainClosureCaptureArgIfNeeded(
+fn retainRcValueIfNeeded(
     self: *Self,
     expr_id: LirExprId,
     expr_layout: layout.Idx,
@@ -2028,7 +2028,7 @@ fn lowerList(self: *Self, list_data: anytype, mono_idx: Monotype.Idx, mir_expr_i
     for (mir_elems) |mir_elem| {
         const lowered = try self.lowerExpr(mir_elem);
         const elem_runtime_layout = try self.runtimeValueLayoutFromMirExpr(mir_elem);
-        const owned = try self.retainBorrowedLookupIfNeeded(lowered, elem_runtime_layout, region);
+        const owned = try self.retainRcValueIfNeeded(lowered, elem_runtime_layout, region);
         const ensured = try acc.ensureSymbol(owned, elem_runtime_layout, region);
         try self.scratch_lir_expr_ids.append(self.allocator, ensured);
     }
@@ -3071,7 +3071,7 @@ fn lowerClosureCall(
         const closure_val_raw = try self.lowerExpr(call_data.func);
         const closure_layout = try self.runtimeValueLayoutFromMirExpr(call_data.func);
         const closure_val = try acc.ensureSymbol(closure_val_raw, closure_layout, region);
-        const owned_captures_arg = try self.retainClosureCaptureArgIfNeeded(closure_val, closure_layout, region);
+        const owned_captures_arg = try self.retainRcValueIfNeeded(closure_val, closure_layout, region);
         const captures_arg = try acc.ensureSymbol(owned_captures_arg, closure_layout, region);
         try self.scratch_layout_idxs.append(self.allocator, closure_layout);
         const specialization = try self.ensureSpecializedDirectCallee(
@@ -3157,7 +3157,7 @@ fn lowerClosureCall(
                 .union_layout = closure_layout,
                 .payload_layout = captures_layout,
             } }, region);
-            const owned_payload = try self.retainClosureCaptureArgIfNeeded(payload_expr, captures_layout, region);
+            const owned_payload = try self.retainRcValueIfNeeded(payload_expr, captures_layout, region);
             const payload_arg = try branch_acc.ensureSymbol(owned_payload, captures_layout, region);
             try self.scratch_lir_expr_ids.append(self.allocator, payload_arg);
             try self.scratch_layout_idxs.append(self.allocator, captures_layout);

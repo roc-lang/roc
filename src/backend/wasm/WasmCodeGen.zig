@@ -1420,38 +1420,6 @@ fn emitDataPtrFree(self: *Self, data_ptr_local: u32, alignment: u32, elements_re
     self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
 }
 
-fn emitListStoreAllocCountIfNeeded(self: *Self, list_ptr_local: u32, alloc_ptr_local: u32, is_slice_local: u32) Allocator.Error!void {
-    const rc_val = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const list_len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-
-    self.body.append(self.allocator, Op.block) catch return error.OutOfMemory;
-    self.body.append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
-
-    try self.emitLocalGet(is_slice_local);
-    self.body.append(self.allocator, Op.br_if) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-
-    try self.emitLocalGet(alloc_ptr_local);
-    self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.br_if) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-
-    try self.emitLoadI32AtPtrOffset(alloc_ptr_local, -4, rc_val);
-    try self.emitLocalGet(rc_val);
-    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.i32_ne) catch return error.OutOfMemory;
-    self.body.append(self.allocator, Op.br_if) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-
-    try self.emitLocalGet(list_ptr_local);
-    try self.emitLoadOp(.i32, 4);
-    try self.emitLocalSet(list_len);
-    try self.emitStoreI32AtPtrOffset(alloc_ptr_local, -8, list_len);
-
-    self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
-}
-
 fn emitListElementDecrefsIfUnique(
     self: *Self,
     list_ptr_local: u32,
@@ -1560,9 +1528,6 @@ fn emitListRc(
 
     switch (kind) {
         .incref => {
-            if (elements_refcounted) {
-                try self.emitListStoreAllocCountIfNeeded(list_ptr_local, alloc_ptr_local, is_slice_local);
-            }
             try self.emitDataPtrIncref(alloc_ptr_local, inc_count);
         },
         .decref => {
@@ -7403,19 +7368,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const source_is_slice = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitDecodeListAllocPtr(list_local, source_alloc_ptr, source_is_slice);
 
-            const elements_refcounted = blk: {
-                const ls = self.getLayoutStore();
-                const list_layout = ls.getLayout(ll.ret_layout);
-                if (list_layout.tag == .list) {
-                    break :blk ls.layoutContainsRefcounted(ls.getLayout(list_layout.data.list));
-                }
-                break :blk false;
-            };
-
-            if (elements_refcounted) {
-                try self.emitListStoreAllocCountIfNeeded(list_local, source_alloc_ptr, source_is_slice);
-            }
-
             const encoded_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalGet(source_alloc_ptr);
             self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
@@ -7625,19 +7577,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const source_alloc_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             const source_is_slice = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitDecodeListAllocPtr(list_local, source_alloc_ptr, source_is_slice);
-
-            const elements_refcounted = blk: {
-                const ls = self.getLayoutStore();
-                const list_layout = ls.getLayout(ll.ret_layout);
-                if (list_layout.tag == .list) {
-                    break :blk ls.layoutContainsRefcounted(ls.getLayout(list_layout.data.list));
-                }
-                break :blk false;
-            };
-
-            if (elements_refcounted) {
-                try self.emitListStoreAllocCountIfNeeded(list_local, source_alloc_ptr, source_is_slice);
-            }
 
             const encoded_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalGet(source_alloc_ptr);
@@ -7969,18 +7908,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const source_alloc_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             const source_is_slice = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitDecodeListAllocPtr(list_local, source_alloc_ptr, source_is_slice);
-
-            const elements_refcounted = blk: {
-                const list_layout = ls.getLayout(ll.ret_layout);
-                if (list_layout.tag == .list) {
-                    break :blk ls.layoutContainsRefcounted(ls.getLayout(list_layout.data.list));
-                }
-                break :blk false;
-            };
-
-            if (elements_refcounted) {
-                try self.emitListStoreAllocCountIfNeeded(list_local, source_alloc_ptr, source_is_slice);
-            }
 
             const encoded_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalGet(source_alloc_ptr);
@@ -12627,16 +12554,6 @@ fn generateLLListSplitFirst(self: *Self, args: anytype, ret_layout: layout.Idx) 
     // We need to extract the element type and size
     const elem_size = self.getListElemSize(ret_layout);
     const elem_align = self.getListElemAlign(ret_layout);
-    const elements_refcounted = blk: {
-        const ls = self.getLayoutStore();
-        const list_layout_idx = self.exprLayoutIdx(args[0]);
-        const list_layout = ls.getLayout(list_layout_idx);
-        if (list_layout.tag == .list) {
-            break :blk ls.layoutContainsRefcounted(ls.getLayout(list_layout.data.list));
-        }
-        break :blk false;
-    };
-
     // Generate list arg
     try self.generateExpr(args[0]);
     const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -12706,10 +12623,6 @@ fn generateLLListSplitFirst(self: *Self, args: anytype, ret_layout: layout.Idx) 
     const source_alloc_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     const source_is_slice = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitDecodeListAllocPtr(list_ptr, source_alloc_ptr, source_is_slice);
-
-    if (elements_refcounted) {
-        try self.emitListStoreAllocCountIfNeeded(list_ptr, source_alloc_ptr, source_is_slice);
-    }
 
     const encoded_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalGet(source_alloc_ptr);

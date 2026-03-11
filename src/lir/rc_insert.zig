@@ -1882,7 +1882,7 @@ pub const RcInsertPass = struct {
             .list => |list| {
                 const elems = self.store.getExprSpan(list.elems);
                 for (elems) |elem_id| {
-                    try self.countConsumedUsesInto(elem_id, target);
+                    try self.countConsumedValueInto(elem_id, target);
                 }
             },
             .struct_ => |s| {
@@ -2189,7 +2189,7 @@ pub const RcInsertPass = struct {
                 } }, region);
             },
             .list => |list| {
-                const elems_res = try self.processExprSpanSequenced(list.elems, .borrow);
+                const elems_res = try self.processExprSpanSequenced(list.elems, .consume);
                 if (!elems_res.changed) return expr_id;
                 return self.store.addExpr(.{ .list = .{
                     .list_layout = list.list_layout,

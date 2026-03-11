@@ -739,9 +739,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Mutable variables need fixed slots so re-bindings can update the value at runtime
         mutable_var_slots: std.AutoHashMap(u64, MutableVarInfo),
 
-        /// Active mutable cells in lexical scope order.
-        active_cells: std.ArrayList(ActiveCell),
-
         /// Map from JoinPointId to code offset (for recursive closure jumps)
         join_points: std.AutoHashMap(u32, usize),
 
@@ -1023,7 +1020,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .static_interner = static_interner,
                 .symbol_locations = std.AutoHashMap(u64, ValueLocation).init(allocator),
                 .mutable_var_slots = std.AutoHashMap(u64, MutableVarInfo).init(allocator),
-                .active_cells = std.ArrayList(ActiveCell).empty,
                 .join_points = std.AutoHashMap(u32, usize).init(allocator),
                 .current_recursive_symbol = null,
                 .current_recursive_join_point = null,
@@ -1052,7 +1048,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.deinit();
             self.symbol_locations.deinit();
             self.mutable_var_slots.deinit();
-            self.active_cells.deinit(self.allocator);
             self.join_points.deinit();
             self.proc_registry.deinit();
             self.compiled_lambdas.deinit();
@@ -1081,7 +1076,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.reset();
             self.symbol_locations.clearRetainingCapacity();
             self.mutable_var_slots.clearRetainingCapacity();
-            self.active_cells.clearRetainingCapacity();
             self.join_points.clearRetainingCapacity();
             self.current_recursive_symbol = null;
             self.current_recursive_join_point = null;
@@ -1122,7 +1116,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Clear any leftover state from compileAllProcs
             self.symbol_locations.clearRetainingCapacity();
             self.mutable_var_slots.clearRetainingCapacity();
-            self.active_cells.clearRetainingCapacity();
             self.codegen.callee_saved_used = 0;
 
             // Initialize stack_offset to reserve space for callee-saved area
@@ -1895,10 +1888,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         } }
                     else
                         .{ .stack = .{ .offset = elem_slot } };
-
-                    if (ls.layoutContainsRefcounted(elem_layout_val)) {
-                        try self.emitIncrefValueByLayout(result_loc, elem_layout_idx);
-                    }
 
                     result_loc = try self.stabilize(result_loc);
                     return result_loc;
@@ -2838,11 +2827,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
                     const eq_loc = try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrEqual), .str_equal);
                     const eq_reg = try self.ensureInGeneralReg(eq_loc);
-                    const keep_slot = self.codegen.allocStackSlot(8);
-                    try self.codegen.emitStoreStack(.w64, keep_slot, eq_reg);
-                    try self.emitDecrefValueByLayout(a_loc, .str);
-                    try self.emitDecrefValueByLayout(b_loc, .str);
-                    try self.codegen.emitLoadStack(.w64, eq_reg, keep_slot);
                     return .{ .general_reg = eq_reg };
                 },
                 .str_concat => {
@@ -3405,11 +3389,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const b_off = try self.ensureOnStack(rhs_loc, roc_str_size);
                             const eq_loc = try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrEqual), .str_equal);
                             const eq_reg = try self.ensureInGeneralReg(eq_loc);
-                            const keep_slot = self.codegen.allocStackSlot(8);
-                            try self.codegen.emitStoreStack(.w64, keep_slot, eq_reg);
-                            try self.emitDecrefValueByLayout(lhs_loc, .str);
-                            try self.emitDecrefValueByLayout(rhs_loc, .str);
-                            try self.codegen.emitLoadStack(.w64, eq_reg, keep_slot);
                             return .{ .general_reg = eq_reg };
                         }
                     }
@@ -4176,10 +4155,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             else
                 .{ .stack = .{ .offset = elem_slot } };
 
-            if (ls.layoutContainsRefcounted(ret_layout_val)) {
-                try self.emitIncrefValueByLayout(result_loc, ret_layout_idx);
-            }
-
             result_loc = try self.stabilize(result_loc);
             return result_loc;
         }
@@ -4248,10 +4223,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .{ .list_stack = .{ .struct_offset = elem_slot, .data_offset = 0, .num_elements = 0 } }
             else
                 .{ .stack = .{ .offset = elem_slot } };
-
-            if (ls.layoutContainsRefcounted(ret_layout_val)) {
-                try self.emitIncrefValueByLayout(result_loc, ret_layout_idx);
-            }
 
             result_loc = try self.stabilize(result_loc);
             return result_loc;
@@ -6122,6 +6093,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             op: anytype,
             consume_inputs: bool,
         ) Allocator.Error!ValueLocation {
+            _ = consume_inputs;
             const ls = self.layout_store;
             const stored_layout = ls.getLayout(tu_layout_idx);
             if (stored_layout.tag != .tag_union) unreachable;
@@ -6250,14 +6222,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             if (op != .num_is_eq) {
                 try self.emitXorImm(.w64, result_reg, result_reg, 1);
-            }
-
-            if (consume_inputs) {
-                const keep_slot = self.codegen.allocStackSlot(8);
-                try self.codegen.emitStoreStack(.w64, keep_slot, result_reg);
-                try self.emitDecrefValueByLayout(lhs_loc, tu_layout_idx);
-                try self.emitDecrefValueByLayout(rhs_loc, tu_layout_idx);
-                try self.codegen.emitLoadStack(.w64, result_reg, keep_slot);
             }
 
             return .{ .general_reg = result_reg };
@@ -6450,6 +6414,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             op: anytype,
             consume_inputs: bool,
         ) Allocator.Error!ValueLocation {
+            _ = consume_inputs;
             const ls = self.layout_store;
             const stored_layout = ls.getLayout(struct_layout_idx);
             // Empty structs (ZST) have scalar layout, not struct_ — they're always equal
@@ -6515,14 +6480,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.freeGeneral(one_reg);
             }
 
-            if (consume_inputs) {
-                const keep_slot = self.codegen.allocStackSlot(8);
-                try self.codegen.emitStoreStack(.w64, keep_slot, result_reg);
-                try self.emitDecrefValueByLayout(lhs_loc, struct_layout_idx);
-                try self.emitDecrefValueByLayout(rhs_loc, struct_layout_idx);
-                try self.codegen.emitLoadStack(.w64, result_reg, keep_slot);
-            }
-
             return .{ .general_reg = result_reg };
         }
 
@@ -6559,6 +6516,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             op: anytype,
             consume_inputs: bool,
         ) Allocator.Error!ValueLocation {
+            _ = consume_inputs;
             const ls = self.layout_store;
             const list_layout = ls.getLayout(list_layout_idx);
             const elem_layout_idx: layout.Idx = list_layout.data.list;
@@ -6723,14 +6681,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             if (op != .num_is_eq) {
                 try self.emitXorImm(.w64, result_reg, result_reg, 1);
-            }
-
-            if (consume_inputs) {
-                const keep_slot = self.codegen.allocStackSlot(8);
-                try self.codegen.emitStoreStack(.w64, keep_slot, result_reg);
-                try self.emitDecrefValueByLayout(lhs_loc, list_layout_idx);
-                try self.emitDecrefValueByLayout(rhs_loc, list_layout_idx);
-                try self.codegen.emitLoadStack(.w64, result_reg, keep_slot);
             }
 
             return .{ .general_reg = result_reg };
@@ -8311,12 +8261,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.copyChunked(temp_reg, frame_ptr, elem_stack_offset, heap_ptr, elem_heap_offset, elem_size);
                 self.codegen.freeGeneral(temp_reg);
 
-                // List elements are conceptually borrowed; retain refcounted payloads
-                // so the new list owns one reference per stored element.
-                if (elements_refcounted) {
-                    try self.emitIncrefAtStackOffset(elem_stack_offset, list.elem_layout);
-                }
-
                 self.codegen.freeGeneral(heap_ptr);
             }
 
@@ -8467,7 +8411,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const field_size = ls.getStructFieldSize(struct_layout.data.struct_.idx, access.field_idx);
             const field_layout_idx = ls.getStructFieldLayout(struct_layout.data.struct_.idx, access.field_idx);
 
-            var field_loc: ValueLocation = switch (struct_loc) {
+            return switch (struct_loc) {
                 .stack_str => |sv| blk: {
                     const field_base = sv + @as(i32, @intCast(field_offset));
                     break :blk self.fieldLocationFromLayout(field_base, field_size, field_layout_idx);
@@ -8504,37 +8448,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 else => unreachable,
             };
-
-            const field_layout = ls.getLayout(field_layout_idx);
-            const field_is_borrowed_interior = switch (field_loc) {
-                .stack, .stack_i128, .stack_str, .list_stack => true,
-                else => false,
-            };
-            const field_needs_detach = field_is_borrowed_interior and field_size > 0 and switch (field_layout.tag) {
-                .scalar, .zst => false,
-                else => true,
-            };
-
-            // struct_access must return an independent value, not an alias into the
-            // parent aggregate's storage. Detach composite interior fields so later
-            // stack use or parent cleanup cannot corrupt the extracted value.
-            if (field_needs_detach or ls.layoutContainsRefcounted(struct_layout)) {
-                if (field_size > 0) {
-                    const detached_slot = self.codegen.allocStackSlot(field_size);
-                    try self.copyBytesToStackOffset(detached_slot, field_loc, field_size);
-                    field_loc = self.stackLocationForLayout(field_layout_idx, detached_slot);
-                }
-
-                if (field_size > 0 and ls.layoutContainsRefcounted(field_layout)) {
-                    try self.emitIncrefValueByLayout(field_loc, field_layout_idx);
-                }
-            }
-
-            if (ls.layoutContainsRefcounted(struct_layout)) {
-                try self.emitDecrefValueByLayout(struct_loc, access.struct_layout);
-            }
-
-            return field_loc;
         }
 
         /// Generate code for a zero-argument tag (just discriminant)
@@ -9720,13 +9633,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const return_loc = self.normalizeResultLocForLayout(value_loc, ret_layout);
             const preserved_return_loc = return_loc;
 
-            var cell_index = self.active_cells.items.len;
-            while (cell_index > 0) {
-                cell_index -= 1;
-                const cell = self.active_cells.items[cell_index];
-                try self.emitCellCleanup(cell.cell, cell.layout_idx);
-            }
-
             // Move the preserved value to the return register (or copy to return pointer)
             if (self.ret_ptr_slot) |ret_slot| {
                 try self.copyResultToReturnPointer(preserved_return_loc, ret_layout, ret_slot);
@@ -10194,18 +10100,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     else => unreachable,
                 };
                 const payload_loc = self.fieldLocationFromLayout(base_offset, payload_size, tpa.payload_layout);
-                if (payload_size == 0) return payload_loc;
-
-                // tag_payload_access is borrowed at the LIR level. Detach the payload
-                // from the union backing storage so later cleanup of the parent union
-                // cannot invalidate a refcounted payload that escapes this expression.
-                const dest_offset = self.codegen.allocStackSlot(payload_size);
-                try self.copyBytesToStackOffset(dest_offset, payload_loc, payload_size);
-                const detached_loc = self.stackLocationForLayout(tpa.payload_layout, dest_offset);
-                if (ls.layoutContainsRefcounted(payload_layout)) {
-                    try self.emitIncrefValueByLayout(detached_loc, tpa.payload_layout);
-                }
-                return detached_loc;
+                return payload_loc;
             } else if (union_layout.tag == .box) {
                 // Boxed tag union: dereference the pointer, then copy payload from heap
                 const inner_layout = ls.getLayout(union_layout.data.box);
@@ -10223,11 +10118,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         copied += 8;
                     }
                     self.codegen.freeGeneral(box_ptr_reg);
-                    const detached_loc = self.fieldLocationFromLayout(dest_offset, payload_size, tpa.payload_layout);
-                    if (payload_size > 0 and ls.layoutContainsRefcounted(payload_layout)) {
-                        try self.emitIncrefValueByLayout(detached_loc, tpa.payload_layout);
-                    }
-                    return detached_loc;
+                    return self.fieldLocationFromLayout(dest_offset, payload_size, tpa.payload_layout);
                 } else {
                     // Box of scalar/ZST — the value is the payload directly
                     return value_loc;
@@ -10340,8 +10231,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate code for a block
         fn generateBlock(self: *Self, block: anytype) Allocator.Error!ValueLocation {
             const stmts = self.store.getStmts(block.stmts);
-            const saved_active_cells_len = self.active_cells.items.len;
-
             // Process each statement
             for (stmts) |stmt| {
                 switch (stmt) {
@@ -10363,14 +10252,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Generate the final expression
             const final_loc = try self.generateExpr(block.final_expr);
-
-            var i = self.active_cells.items.len;
-            while (i > saved_active_cells_len) {
-                i -= 1;
-                const cell = self.active_cells.items[i];
-                try self.dropCell(cell.cell, cell.layout_idx);
-            }
-            self.active_cells.shrinkRetainingCapacity(saved_active_cells_len);
 
             return final_loc;
         }
@@ -10431,7 +10312,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const fixed_slot = self.codegen.allocStackSlot(size);
             try self.copyBytesToStackOffset(fixed_slot, normalized_value_loc, size);
             try self.mutable_var_slots.put(cell_key, .{ .slot = fixed_slot, .size = size });
-            try self.active_cells.append(self.allocator, .{ .cell = cell, .layout_idx = layout_idx });
         }
 
         fn storeCell(self: *Self, cell: Symbol, layout_idx: layout.Idx, value_loc: ValueLocation) Allocator.Error!void {
@@ -10442,19 +10322,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 unreachable;
             };
             const normalized_value_loc = self.coerceImmediateToLayout(value_loc, layout_idx);
-            try self.emitDecrefAtStackOffset(storage.slot, layout_idx);
             try self.copyBytesToStackOffset(storage.slot, normalized_value_loc, storage.size);
-        }
-
-        fn emitCellCleanup(self: *Self, cell: Symbol, layout_idx: layout.Idx) Allocator.Error!void {
-            const storage = self.resolveCellStorage(cell, layout_idx) orelse return;
-            try self.emitDecrefAtStackOffset(storage.slot, layout_idx);
         }
 
         fn dropCell(self: *Self, cell: Symbol, layout_idx: layout.Idx) Allocator.Error!void {
             const cell_key: u64 = @bitCast(cell);
             const storage = self.resolveCellStorage(cell, layout_idx) orelse return;
-            try self.emitDecrefAtStackOffset(storage.slot, layout_idx);
             if (storage.tracked_mutable_slot) {
                 _ = self.mutable_var_slots.remove(cell_key);
             }
@@ -10470,7 +10343,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const slot = self.codegen.allocStackSlot(storage.size);
             try self.copyBytesToStackOffset(slot, self.stackLocationForLayout(layout_idx, storage.slot), storage.size);
-            try self.emitIncrefAtStackOffset(slot, layout_idx);
             return self.stackLocationForLayout(layout_idx, slot);
         }
 
@@ -10699,19 +10571,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Get the variant's payload layout to determine element offsets
                     const variants = ls.getTagUnionVariants(tu_data);
                     const variant = variants.get(tag_pat.discriminant);
-                    const payload_layout = ls.getLayout(variant.payload_layout);
-                    const payload_size = ls.layoutSizeAlign(payload_layout).size;
                     const payload_loc_offset = base_offset + payload_offset;
 
-                    var payload_loc = self.stackLocationForLayout(variant.payload_layout, payload_loc_offset);
-                    if (payload_size > 0) {
-                        const detached_slot = self.codegen.allocStackSlot(payload_size);
-                        try self.copyBytesToStackOffset(detached_slot, payload_loc, payload_size);
-                        payload_loc = self.stackLocationForLayout(variant.payload_layout, detached_slot);
-                        if (ls.layoutContainsRefcounted(payload_layout)) {
-                            try self.emitIncrefValueByLayout(payload_loc, variant.payload_layout);
-                        }
-                    }
+                    const payload_layout = ls.getLayout(variant.payload_layout);
+                    const payload_loc = self.stackLocationForLayout(variant.payload_layout, payload_loc_offset);
 
                     // For tags with single arg, bind directly at payload offset
                     // For tags with multiple args (tuples), need to use tuple element offsets
@@ -16546,7 +16409,3 @@ test "generate unary minus" {
 
     try std.testing.expect(result.code.len > 0);
 }
-const ActiveCell = struct {
-    cell: Symbol,
-    layout_idx: layout.Idx,
-};
