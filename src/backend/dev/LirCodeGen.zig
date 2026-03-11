@@ -807,10 +807,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// body generation, patches all new entries to the loop exit offset.
         loop_break_patches: std.ArrayList(usize),
 
-        /// Stack of loop cleanups that must run before an early return jumps to
-        /// the enclosing procedure epilogue.
-        early_return_loop_cleanups: std.ArrayList(LoopCleanup),
-
         /// Stack slot where early return value is stored (for compileLambdaAsProc).
         /// Set by compileLambdaAsProc before generating the body.
         early_return_result_slot: ?i32 = null,
@@ -907,13 +903,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         pub const JumpRecord = struct {
             /// Offset of the jump instruction
             location: usize,
-        };
-
-        pub const LoopCleanup = struct {
-            value_loc: ValueLocation,
-            elem_alignment: u32,
-            elements_refcounted: bool,
-            elem_layout_idx: ?layout.Idx,
         };
 
         /// Byte width of a scalar value on the stack.
@@ -1051,7 +1040,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .internal_addr_patches = std.ArrayList(InternalAddrPatch).empty,
                 .early_return_patches = std.ArrayList(usize).empty,
                 .loop_break_patches = std.ArrayList(usize).empty,
-                .early_return_loop_cleanups = std.ArrayList(LoopCleanup).empty,
                 .scratch_arg_locs = try base.Scratch(ValueLocation).init(allocator),
                 .scratch_arg_infos = try base.Scratch(ArgInfo).init(allocator),
                 .scratch_pass_by_ptr = try base.Scratch(bool).init(allocator),
@@ -1082,7 +1070,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.internal_addr_patches.deinit(self.allocator);
             self.early_return_patches.deinit(self.allocator);
             self.loop_break_patches.deinit(self.allocator);
-            self.early_return_loop_cleanups.deinit(self.allocator);
             self.scratch_arg_locs.deinit();
             self.scratch_arg_infos.deinit();
             self.scratch_pass_by_ptr.deinit();
@@ -1116,7 +1103,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.internal_addr_patches.clearRetainingCapacity();
             self.early_return_patches.clearRetainingCapacity();
             self.loop_break_patches.clearRetainingCapacity();
-            self.early_return_loop_cleanups.clearRetainingCapacity();
         }
 
         /// Generate code for a LIR expression
@@ -9513,18 +9499,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             std.debug.assert(elem_size <= 1024 * 1024); // Sanity check: < 1MB
 
             const is_zst = elem_size == 0;
-            const elem_sa_for_dec = ls.layoutSizeAlign(elem_layout);
-            const elem_alignment_for_dec: u32 = @intCast(elem_sa_for_dec.alignment.toByteUnits());
-            const elems_refcounted_for_dec = ls.layoutContainsRefcounted(elem_layout);
-
-            const saved_cleanup_len = self.early_return_loop_cleanups.items.len;
-            defer self.early_return_loop_cleanups.shrinkRetainingCapacity(saved_cleanup_len);
-            try self.early_return_loop_cleanups.append(self.allocator, .{
-                .value_loc = list_loc,
-                .elem_alignment = elem_alignment_for_dec,
-                .elements_refcounted = elems_refcounted_for_dec,
-                .elem_layout_idx = for_loop.elem_layout,
-            });
 
             // CRITICAL: Store loop state on stack, not in registers!
             // The loop body may call C functions which clobber caller-saved registers.
@@ -9744,26 +9718,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // jump-to-epilogue infrastructure that compileLambdaAsProc sets up.
             const ret_layout = self.early_return_ret_layout orelse unreachable;
             const return_loc = self.normalizeResultLocForLayout(value_loc, ret_layout);
-            const preserved_return_loc = blk: {
-                if (self.early_return_loop_cleanups.items.len == 0) {
-                    break :blk return_loc;
-                }
-
-                const ret_size = self.getLayoutSize(ret_layout);
-                if (ret_size == 0) {
-                    break :blk return_loc;
-                }
-
-                const preserved_slot = self.codegen.allocStackSlot(ret_size);
-                try self.copyBytesToStackOffset(preserved_slot, return_loc, ret_size);
-                break :blk self.stackLocationForLayout(ret_layout, preserved_slot);
-            };
-
-            var i = self.early_return_loop_cleanups.items.len;
-            while (i > 0) : (i -= 1) {
-                const cleanup = self.early_return_loop_cleanups.items[i - 1];
-                try self.emitListDecref(cleanup.value_loc, cleanup.elem_alignment, cleanup.elements_refcounted, cleanup.elem_layout_idx);
-            }
+            const preserved_return_loc = return_loc;
 
             var cell_index = self.active_cells.items.len;
             while (cell_index > 0) {

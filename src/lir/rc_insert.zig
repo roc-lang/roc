@@ -110,11 +110,17 @@ pub const RcInsertPass = struct {
         symbol: Symbol,
         layout_idx: LayoutIdx,
         reassignable: bool,
+        owned_ref_count: u32,
     };
 
     const LiveCell = struct {
         cell: Symbol,
         layout_idx: LayoutIdx,
+    };
+
+    const ExprOwnership = enum {
+        consume,
+        borrow,
     };
 
     comptime {
@@ -248,6 +254,67 @@ pub const RcInsertPass = struct {
     fn keyReassignable(self: *const RcInsertPass, key: u64, fallback: bool) bool {
         if (self.keyInfo(key)) |info| return info.reassignable;
         return fallback;
+    }
+
+    fn liveOwnedRefCountFromUseCount(use_count: u32, reassignable: bool) u32 {
+        if (reassignable) return 1;
+        return if (use_count == 0) 1 else use_count;
+    }
+
+    fn consumedOwnerKey(self: *const RcInsertPass, key: u64) ?u64 {
+        var current = key;
+        while (self.keyInfo(current)) |info| {
+            switch (info.owner_kind) {
+                .borrowed => |owner_ref| current = @intFromEnum(owner_ref),
+                .owned, .retained => return current,
+                .unmanaged => return null,
+            }
+        }
+        return current;
+    }
+
+    fn ownerUseCountFromMap(self: *const RcInsertPass, uses: *const std.AutoHashMap(u64, u32), key: u64) u32 {
+        const owner_key = self.consumedOwnerKey(key) orelse return 0;
+        if (owner_key == key and self.keyInfo(key) == null) {
+            return uses.get(key) orelse 0;
+        }
+
+        var total: u32 = 0;
+        var it = uses.iterator();
+        while (it.next()) |entry| {
+            const entry_owner = self.consumedOwnerKey(entry.key_ptr.*) orelse continue;
+            if (entry_owner == owner_key) {
+                total += entry.value_ptr.*;
+            }
+        }
+        return total;
+    }
+
+    fn liveOwnedRefCountForKey(self: *const RcInsertPass, key: u64, reassignable: bool) u32 {
+        if (self.keyInfo(key)) |info| {
+            switch (info.owner_kind) {
+                .borrowed, .unmanaged => return 0,
+                .owned, .retained => {},
+            }
+        }
+        const use_count = self.ownerUseCountFromMap(&self.symbol_consumed_counts, key);
+        return liveOwnedRefCountFromUseCount(use_count, reassignable);
+    }
+
+    fn liveOwnedRefCountFromLocalUses(
+        self: *const RcInsertPass,
+        key: u64,
+        reassignable: bool,
+        local_uses: *const std.AutoHashMap(u64, u32),
+    ) u32 {
+        if (self.keyInfo(key)) |info| {
+            switch (info.owner_kind) {
+                .borrowed, .unmanaged => return 0,
+                .owned, .retained => {},
+            }
+        }
+        const use_count = self.ownerUseCountFromMap(local_uses, key);
+        return liveOwnedRefCountFromUseCount(use_count, reassignable);
     }
 
     fn freshSyntheticSymbol(self: *RcInsertPass) Symbol {
@@ -1525,10 +1592,11 @@ pub const RcInsertPass = struct {
                 }
             },
             .lambda => |lam| {
-                // Lambda bodies are a separate scope. Count uses locally, then
-                // attribute 1 use per captured symbol to the outer scope, and
-                // ensure body-local symbols are in self.symbol_use_counts so
-                // processBlock can emit RC ops for them.
+                // Lambda bodies are a separate scope. Count uses locally and
+                // register the body-local bindings globally so nested blocks
+                // can still emit RC ops for them, but do not attribute outer
+                // closure ownership here. Closure retains are represented
+                // explicitly in lowered capture construction.
                 var local = std.AutoHashMap(u64, u32).init(self.allocator);
                 defer local.deinit();
 
@@ -1541,15 +1609,6 @@ pub const RcInsertPass = struct {
                 var it = local.iterator();
                 while (it.next()) |entry| {
                     const key = entry.key_ptr.*;
-                    if (target.contains(key)) {
-                        if (entry.value_ptr.* == 0) continue;
-                        // Symbol exists in outer scope — it's a capture.
-                        // Attribute exactly 1 use to the outer scope.
-                        const gop = try target.getOrPut(key);
-                        if (gop.found_existing) gop.value_ptr.* += 1 else gop.value_ptr.* = 1;
-                    }
-                    // Always ensure body symbols are in self.symbol_use_counts
-                    // so processBlock can emit RC ops for body-local bindings.
                     const global_gop = try self.symbol_use_counts.getOrPut(key);
                     if (!global_gop.found_existing) {
                         global_gop.value_ptr.* = entry.value_ptr.*;
@@ -1807,10 +1866,6 @@ pub const RcInsertPass = struct {
                 var it = local.iterator();
                 while (it.next()) |entry| {
                     const key = entry.key_ptr.*;
-                    if (target.contains(key)) {
-                        if (entry.value_ptr.* == 0) continue;
-                        try bumpUseCount(target, key);
-                    }
                     const global_gop = try self.symbol_consumed_counts.getOrPut(key);
                     if (!global_gop.found_existing) {
                         global_gop.value_ptr.* = entry.value_ptr.*;
@@ -2118,7 +2173,12 @@ pub const RcInsertPass = struct {
             .cell_load => expr_id,
             .call => |call| {
                 const new_fn_expr = try self.processExpr(call.fn_expr);
-                const args_res = try self.processExprSpan(call.args);
+                var fn_added = try self.pushBorrowedExprUsesToBlockConsumed(call.fn_expr);
+                defer {
+                    self.popExprUsesFromBlockConsumed(&fn_added);
+                    fn_added.deinit();
+                }
+                const args_res = try self.processExprSpanSequenced(call.args, .consume);
                 if (new_fn_expr == call.fn_expr and !args_res.changed) return expr_id;
                 return self.store.addExpr(.{ .call = .{
                     .fn_expr = new_fn_expr,
@@ -2129,7 +2189,7 @@ pub const RcInsertPass = struct {
                 } }, region);
             },
             .list => |list| {
-                const elems_res = try self.processExprSpan(list.elems);
+                const elems_res = try self.processExprSpanSequenced(list.elems, .borrow);
                 if (!elems_res.changed) return expr_id;
                 return self.store.addExpr(.{ .list = .{
                     .list_layout = list.list_layout,
@@ -2138,7 +2198,7 @@ pub const RcInsertPass = struct {
                 } }, region);
             },
             .struct_ => |s| {
-                const fields_res = try self.processExprSpan(s.fields);
+                const fields_res = try self.processExprSpanSequenced(s.fields, .consume);
                 if (!fields_res.changed) return expr_id;
                 return self.store.addExpr(.{ .struct_ = .{
                     .struct_layout = s.struct_layout,
@@ -2156,7 +2216,7 @@ pub const RcInsertPass = struct {
                 } }, region);
             },
             .tag => |tag| {
-                const args_res = try self.processExprSpan(tag.args);
+                const args_res = try self.processExprSpanSequenced(tag.args, .consume);
                 if (!args_res.changed) return expr_id;
                 return self.store.addExpr(.{ .tag = .{
                     .discriminant = tag.discriminant,
@@ -2165,28 +2225,71 @@ pub const RcInsertPass = struct {
                 } }, region);
             },
             .semantic_low_level => |ll| {
-                const args_res = try self.processExprSpan(ll.args);
+                const args = self.store.getExprSpan(ll.args);
+                const arg_ownership = ll.op.getArgOwnership();
+                if (builtin.mode == .Debug and arg_ownership.len != args.len) {
+                    std.debug.panic(
+                        "RC invariant violated: semantic low-level {s} expected {d} ownership entries for {d} args",
+                        .{ @tagName(ll.op), arg_ownership.len, args.len },
+                    );
+                }
+
+                var new_args = std.ArrayList(LirExprId).empty;
+                defer new_args.deinit(self.allocator);
+
+                var added_maps = std.ArrayList(std.AutoHashMap(u64, u32)).empty;
+                defer {
+                    var i = added_maps.items.len;
+                    while (i > 0) {
+                        i -= 1;
+                        self.popExprUsesFromBlockConsumed(&added_maps.items[i]);
+                        added_maps.items[i].deinit();
+                    }
+                    added_maps.deinit(self.allocator);
+                }
+
+                var changed = false;
+                for (args, 0..) |arg_id, i| {
+                    const new_arg = try self.processExpr(arg_id);
+                    if (new_arg != arg_id) changed = true;
+                    try new_args.append(self.allocator, new_arg);
+
+                    if (i + 1 < args.len) {
+                        const ownership: ExprOwnership = switch (arg_ownership[i]) {
+                            .consume => .consume,
+                            .borrow => switch (ll.op) {
+                                .str_is_eq, .str_caseless_ascii_equals => .consume,
+                                else => .borrow,
+                            },
+                        };
+                        const added = try self.pushExprUsesForOwnership(arg_id, ownership);
+                        try added_maps.append(self.allocator, added);
+                    }
+                }
+
                 const backend_op = LowLevelMap.semanticToBackend(ll.op) orelse {
                     if (builtin.mode == .Debug) {
                         std.debug.panic("RC legalization invariant violated: semantic low-level {s} was not lowered earlier", .{@tagName(ll.op)});
                     }
                     unreachable;
                 };
-                if (!args_res.changed) {
+                if (!changed) {
                     return self.store.addExpr(.{ .low_level = .{
                         .op = backend_op,
                         .args = ll.args,
                         .ret_layout = ll.ret_layout,
                     } }, region);
                 }
+
+                const new_args_span = try self.store.addExprSpan(new_args.items);
                 return self.store.addExpr(.{ .low_level = .{
                     .op = backend_op,
-                    .args = args_res.span,
+                    .args = new_args_span,
                     .ret_layout = ll.ret_layout,
                 } }, region);
             },
             .low_level => |ll| {
-                const args_res = try self.processExprSpan(ll.args);
+                const args_res = try self.processExprSpanSequenced(ll.args, .consume);
                 if (!args_res.changed) return expr_id;
                 return self.store.addExpr(.{ .low_level = .{
                     .op = ll.op,
@@ -2204,6 +2307,11 @@ pub const RcInsertPass = struct {
             },
             .expect => |e| {
                 const new_cond = try self.processExpr(e.cond);
+                var cond_added = try self.pushExprUsesToBlockConsumed(e.cond);
+                defer {
+                    self.popExprUsesFromBlockConsumed(&cond_added);
+                    cond_added.deinit();
+                }
                 const new_body = try self.processExpr(e.body);
                 if (new_cond == e.cond and new_body == e.body) return expr_id;
                 return self.store.addExpr(.{ .expect = .{
@@ -2221,7 +2329,7 @@ pub const RcInsertPass = struct {
                 } }, region);
             },
             .str_concat => |parts| {
-                const parts_res = try self.processExprSpan(parts);
+                const parts_res = try self.processExprSpanSequenced(parts, .borrow);
                 if (!parts_res.changed) return expr_id;
                 return self.store.addExpr(.{ .str_concat = parts_res.span }, region);
             },
@@ -2261,7 +2369,7 @@ pub const RcInsertPass = struct {
                 } }, region);
             },
             .hosted_call => |hc| {
-                const args_res = try self.processExprSpan(hc.args);
+                const args_res = try self.processExprSpanSequenced(hc.args, .consume);
                 if (!args_res.changed) return expr_id;
                 return self.store.addExpr(.{ .hosted_call = .{
                     .index = hc.index,
@@ -2379,6 +2487,59 @@ pub const RcInsertPass = struct {
         }
     }
 
+    fn pushExprUsesForOwnership(
+        self: *RcInsertPass,
+        expr_id: LirExprId,
+        ownership: ExprOwnership,
+    ) Allocator.Error!std.AutoHashMap(u64, u32) {
+        return switch (ownership) {
+            .consume => self.pushExprUsesToBlockConsumed(expr_id),
+            .borrow => self.pushBorrowedExprUsesToBlockConsumed(expr_id),
+        };
+    }
+
+    fn processExprSpanSequenced(
+        self: *RcInsertPass,
+        span: LirExprSpan,
+        ownership: ExprOwnership,
+    ) Allocator.Error!struct { span: LirExprSpan, changed: bool } {
+        const exprs = self.store.getExprSpan(span);
+        if (exprs.len == 0) return .{ .span = span, .changed = false };
+
+        var new_exprs = std.ArrayList(LirExprId).empty;
+        defer new_exprs.deinit(self.allocator);
+
+        var added_maps = std.ArrayList(std.AutoHashMap(u64, u32)).empty;
+        defer {
+            var i = added_maps.items.len;
+            while (i > 0) {
+                i -= 1;
+                self.popExprUsesFromBlockConsumed(&added_maps.items[i]);
+                added_maps.items[i].deinit();
+            }
+            added_maps.deinit(self.allocator);
+        }
+
+        var changed = false;
+        for (exprs, 0..) |expr_id, i| {
+            const new_expr = try self.processExpr(expr_id);
+            if (new_expr != expr_id) changed = true;
+            try new_exprs.append(self.allocator, new_expr);
+
+            if (i + 1 < exprs.len) {
+                const added = try self.pushExprUsesForOwnership(expr_id, ownership);
+                try added_maps.append(self.allocator, added);
+            }
+        }
+
+        if (!changed) return .{ .span = span, .changed = false };
+
+        return .{
+            .span = try self.store.addExprSpan(new_exprs.items),
+            .changed = true,
+        };
+    }
+
     /// Process a block, inserting decrefs for symbols that go out of scope
     /// and increfs for multi-use symbols.
     fn processBlock(
@@ -2490,7 +2651,7 @@ pub const RcInsertPass = struct {
                         else => unreachable,
                     });
 
-                    try self.trackLiveRcSymbolsForPattern(b.pattern);
+                    try self.trackLiveRcSymbolsForPattern(b.pattern, null);
                     const before_len = stmt_buf.items.len;
                     switch (stmt) {
                         .decl => try self.emitBlockIncrefsForPattern(b.pattern, region, &stmt_buf, stmts, stmt_index, final_expr),
@@ -2638,6 +2799,17 @@ pub const RcInsertPass = struct {
         var stmt_buf = std.ArrayList(LirStmt).empty;
         defer stmt_buf.deinit(self.allocator);
 
+        var added_maps = std.ArrayList(std.AutoHashMap(u64, u32)).empty;
+        defer {
+            var i = added_maps.items.len;
+            while (i > 0) {
+                i -= 1;
+                self.popExprUsesFromBlockConsumed(&added_maps.items[i]);
+                added_maps.items[i].deinit();
+            }
+            added_maps.deinit(self.allocator);
+        }
+
         var borrow_consumed_uses = std.AutoHashMap(u64, u32).init(self.allocator);
         defer borrow_consumed_uses.deinit();
         try self.countConsumedValueInto(scope.body, &borrow_consumed_uses);
@@ -2653,6 +2825,8 @@ pub const RcInsertPass = struct {
                 .expr = new_expr,
             } });
             try self.emitBorrowRcOpsForPatternInto(binding.pattern, &borrow_consumed_uses, region, &stmt_buf);
+            const added = try self.pushExprUsesToBlockConsumed(binding.expr);
+            try added_maps.append(self.allocator, added);
         }
 
         const new_body = try self.processExpr(scope.body);
@@ -2971,25 +3145,40 @@ pub const RcInsertPass = struct {
             self.live_rc_symbols.shrinkRetainingCapacity(saved_live_len);
         }
 
+        var local_consumed_uses = std.AutoHashMap(u64, u32).init(self.allocator);
+        defer local_consumed_uses.deinit();
+        try self.countConsumedValueInto(lam.body, &local_consumed_uses);
+
         // Lambda parameters are live bindings for the whole body and must be
         // included in early_return cleanup.
         const params = self.store.getPatternSpan(lam.params);
         for (params) |pat_id| {
-            try self.trackLiveRcSymbolsForPattern(pat_id);
+            if (builtin.mode == .Debug) {
+                switch (self.store.getPattern(pat_id)) {
+                    .bind => |bind| {
+                        const raw = bind.symbol.raw();
+                        if (raw == 4294967096 or raw == 4294967104) {
+                            const key = self.patternKey(pat_id, bind.symbol);
+                            std.debug.print(
+                                "lambda param symbol={d} key={d} local_consumed={d}\n",
+                                .{ raw, key, self.ownerUseCountFromMap(&local_consumed_uses, key) },
+                            );
+                        }
+                    },
+                    else => {},
+                }
+            }
+            try self.trackLiveRcSymbolsForPattern(pat_id, &local_consumed_uses);
         }
 
         const new_body = try self.processExpr(lam.body);
-
-        // Count consumed uses locally within the lambda body.
-        self.scratch_consumed_uses.clearRetainingCapacity();
-        try self.countConsumedValueInto(lam.body, &self.scratch_consumed_uses);
 
         // Emit pre-body RC ops for lambda parameters.
         var rc_stmts = std.ArrayList(LirStmt).empty;
         defer rc_stmts.deinit(self.allocator);
 
         for (params) |pat_id| {
-            try self.emitRcOpsForPatternInto(pat_id, &self.scratch_consumed_uses, region, &rc_stmts);
+            try self.emitRcOpsForPatternInto(pat_id, &local_consumed_uses, region, &rc_stmts);
         }
 
         var final_body = new_body;
@@ -3007,7 +3196,7 @@ pub const RcInsertPass = struct {
         var tail_stmts = std.ArrayList(LirStmt).empty;
         defer tail_stmts.deinit(self.allocator);
         for (params) |pat_id| {
-            try self.emitTailDecrefsForPatternInto(pat_id, &self.scratch_consumed_uses, region, &tail_stmts);
+            try self.emitTailDecrefsForPatternInto(pat_id, &local_consumed_uses, region, &tail_stmts);
         }
         final_body = try self.wrapExprWithTailStmts(final_body, lam.ret_layout, tail_stmts.items, region);
 
@@ -3027,23 +3216,28 @@ pub const RcInsertPass = struct {
     /// The loop provides 1 reference per element. We emit body-local RC ops
     /// for the element binding similar to lambda params.
     fn processForLoop(self: *RcInsertPass, fl: anytype, region: Region, expr_id: LirExprId) Allocator.Error!LirExprId {
+        var local_consumed_uses = std.AutoHashMap(u64, u32).init(self.allocator);
+        defer local_consumed_uses.deinit();
+        try self.countConsumedValueInto(fl.body, &local_consumed_uses);
+
         // The loop element binding is live while processing the body and must
         // be considered by early_return cleanup.
         const saved_live_len = self.live_rc_symbols.items.len;
         defer self.live_rc_symbols.shrinkRetainingCapacity(saved_live_len);
-        try self.trackLiveRcSymbolsForPattern(fl.elem_pattern);
+        try self.trackLiveRcSymbolsForPattern(fl.elem_pattern, &local_consumed_uses);
 
+        var list_added = try self.pushBorrowedExprUsesToBlockConsumed(fl.list_expr);
+        defer {
+            self.popExprUsesFromBlockConsumed(&list_added);
+            list_added.deinit();
+        }
         const new_body = try self.processExpr(fl.body);
-
-        // Count uses locally within the loop body (using scratch_uses)
-        self.scratch_consumed_uses.clearRetainingCapacity();
-        try self.countConsumedValueInto(fl.body, &self.scratch_consumed_uses);
 
         // Emit pre-body RC ops for the elem_pattern.
         var rc_stmts = std.ArrayList(LirStmt).empty;
         defer rc_stmts.deinit(self.allocator);
 
-        try self.emitRcOpsForPatternInto(fl.elem_pattern, &self.scratch_consumed_uses, region, &rc_stmts);
+        try self.emitRcOpsForPatternInto(fl.elem_pattern, &local_consumed_uses, region, &rc_stmts);
 
         var final_body = new_body;
         if (rc_stmts.items.len > 0) {
@@ -3057,7 +3251,7 @@ pub const RcInsertPass = struct {
 
         var tail_stmts = std.ArrayList(LirStmt).empty;
         defer tail_stmts.deinit(self.allocator);
-        try self.emitTailDecrefsForPatternInto(fl.elem_pattern, &self.scratch_consumed_uses, region, &tail_stmts);
+        try self.emitTailDecrefsForPatternInto(fl.elem_pattern, &local_consumed_uses, region, &tail_stmts);
         final_body = try self.wrapExprWithTailStmts(final_body, .zst, tail_stmts.items, region);
 
         if (final_body != fl.body) {
@@ -3075,6 +3269,11 @@ pub const RcInsertPass = struct {
     /// While loops don't bind new symbols — just recurse into cond and body.
     fn processWhileLoop(self: *RcInsertPass, wl: anytype, region: Region, expr_id: LirExprId) Allocator.Error!LirExprId {
         const new_cond = try self.processExpr(wl.cond);
+        var cond_added = try self.pushExprUsesToBlockConsumed(wl.cond);
+        defer {
+            self.popExprUsesFromBlockConsumed(&cond_added);
+            cond_added.deinit();
+        }
         const new_body = try self.processExpr(wl.body);
         if (new_cond != wl.cond or new_body != wl.body) {
             return self.store.addExpr(.{ .while_loop = .{
@@ -3102,29 +3301,61 @@ pub const RcInsertPass = struct {
         defer cleanup_stmts.deinit(self.allocator);
 
         const live_syms = self.live_rc_symbols.items[self.early_return_scope_base..];
+        const trace_target = builtin.mode == .Debug and blk: {
+            for (live_syms) |live| {
+                const raw = live.symbol.raw();
+                if (raw == 4294967064 or raw == 4294967096 or raw == 4294967104) break :blk true;
+            }
+            break :blk false;
+        };
+        if (trace_target) {
+            std.debug.print("early_return expr={} ret_layout={d}\n", .{ @intFromEnum(expr_id), @intFromEnum(ret.ret_layout) });
+            if (@intFromEnum(expr_id) == 3193) {
+                for (live_syms) |live| {
+                    const owner_kind = if (self.keyInfo(live.key)) |info| info.owner_kind else OwnershipNormalize.OwnerKind.owned;
+                    std.debug.print(
+                        "  all-live symbol={d} key={d} layout={d} owner_kind={s} owned_ref_count={d}\n",
+                        .{ live.symbol.raw(), live.key, @intFromEnum(live.layout_idx), @tagName(owner_kind), live.owned_ref_count },
+                    );
+                }
+            }
+        }
         for (live_syms) |live| {
             const key = live.key;
-            const ret_use_count: u32 = self.scratch_consumed_uses.get(key) orelse 0;
-            // Total refs = global_use_count + pending branch RC adjustments.
+            const ret_use_count = self.ownerUseCountFromMap(&self.scratch_consumed_uses, key);
+            // Total refs = live owner refs for this binding + pending branch RC adjustments.
             // The branch wrapper will prepend RC ops that execute before
             // the early return: increfs (positive adj) add refs to clean up,
             // decrefs (negative adj) reduce refs since they're already handled.
-            const global_count = self.symbol_consumed_counts.get(key) orelse unreachable;
-            // Mutable bindings are re-bound over time; global symbol use counts
-            // over-approximate live refs for the current value at an early_return.
-            // Treat the current mutable binding as owning exactly one live ref.
-            const base_count: u32 = if (live.reassignable) 1 else global_count;
             const branch_adj: i32 = self.pending_branch_rc_adj.get(key) orelse 0;
-            const effective_signed: i32 = @as(i32, @intCast(base_count)) + branch_adj;
+            const effective_signed: i32 = @as(i32, @intCast(live.owned_ref_count)) + branch_adj;
             if (effective_signed <= 0) continue; // branch wrapper decrefs handle all refs
             const effective_count: u32 = @intCast(effective_signed);
             // Include uses consumed by outer enclosing blocks (cumulative)
             // plus uses consumed by the current inner block's prior statements.
-            const consumed_before = (self.cumulative_consumed_uses.get(key) orelse 0) +
-                (self.block_consumed_uses.get(key) orelse 0);
+            const consumed_before = self.ownerUseCountFromMap(&self.cumulative_consumed_uses, key) +
+                self.ownerUseCountFromMap(&self.block_consumed_uses, key);
             const total_consumed = consumed_before + ret_use_count;
+            if (trace_target and (live.symbol.raw() == 4294967064 or live.symbol.raw() == 4294967096 or live.symbol.raw() == 4294967104)) {
+                std.debug.print(
+                    "  live symbol={d} layout={d} owned={d} branch_adj={d} consumed_before={d} ret_use={d} total_consumed={d} effective={d}\n",
+                    .{
+                        live.symbol.raw(),
+                        @intFromEnum(live.layout_idx),
+                        live.owned_ref_count,
+                        branch_adj,
+                        consumed_before,
+                        ret_use_count,
+                        total_consumed,
+                        effective_count,
+                    },
+                );
+            }
             if (total_consumed >= effective_count) continue; // all refs accounted for
             const remaining = effective_count - total_consumed;
+            if (trace_target and (live.symbol.raw() == 4294967064 or live.symbol.raw() == 4294967096 or live.symbol.raw() == 4294967104)) {
+                std.debug.print("    cleanup remaining={d}\n", .{remaining});
+            }
             var i: u32 = 0;
             while (i < remaining) : (i += 1) {
                 try self.emitDecrefInto(live.symbol, live.layout_idx, region, &cleanup_stmts);
@@ -3674,18 +3905,28 @@ pub const RcInsertPass = struct {
     }
 
     /// Recursively track live RC symbols for early_return cleanup.
-    fn trackLiveRcSymbolsForPattern(self: *RcInsertPass, pat_id: LirPatternId) Allocator.Error!void {
+    fn trackLiveRcSymbolsForPattern(
+        self: *RcInsertPass,
+        pat_id: LirPatternId,
+        local_uses: ?*const std.AutoHashMap(u64, u32),
+    ) Allocator.Error!void {
         const Ctx = struct {
             pass: *RcInsertPass,
+            local_uses: ?*const std.AutoHashMap(u64, u32),
             fn onBind(ctx: @This(), bind_pat_id: LirPatternId, symbol: Symbol, layout_idx: LayoutIdx, reassignable: bool) Allocator.Error!void {
                 const key = ctx.pass.patternKey(bind_pat_id, symbol);
                 const resolved_layout = ctx.pass.keyLayout(key, layout_idx);
                 const resolved_reassignable = ctx.pass.keyReassignable(key, reassignable);
+                const owned_ref_count = if (ctx.local_uses) |uses|
+                    ctx.pass.liveOwnedRefCountFromLocalUses(key, resolved_reassignable, uses)
+                else
+                    ctx.pass.liveOwnedRefCountForKey(key, resolved_reassignable);
                 if (ctx.pass.layoutNeedsRc(resolved_layout)) {
                     for (ctx.pass.live_rc_symbols.items) |*live| {
                         if (live.key == key) {
                             live.layout_idx = resolved_layout;
                             live.reassignable = resolved_reassignable;
+                            live.owned_ref_count = owned_ref_count;
                             return;
                         }
                     }
@@ -3694,11 +3935,12 @@ pub const RcInsertPass = struct {
                         .symbol = ctx.pass.keySymbol(key, symbol),
                         .layout_idx = resolved_layout,
                         .reassignable = resolved_reassignable,
+                        .owned_ref_count = owned_ref_count,
                     });
                 }
             }
         };
-        try walkPatternBinds(self.store, pat_id, Ctx{ .pass = self });
+        try walkPatternBinds(self.store, pat_id, Ctx{ .pass = self, .local_uses = local_uses });
     }
 
     /// Recursively emit increfs for multi-consumed refcounted symbols bound by a pattern.
@@ -3722,7 +3964,7 @@ pub const RcInsertPass = struct {
                 const resolved_reassignable = ctx.pass.keyReassignable(key, reassignable);
                 if (ctx.pass.layoutNeedsRc(resolved_layout)) {
                     if (resolved_reassignable) return;
-                    const use_count = ctx.pass.symbol_consumed_counts.get(key) orelse 0;
+                    const use_count = ctx.pass.ownerUseCountFromMap(&ctx.pass.symbol_consumed_counts, key);
                     if (use_count > 1) {
                         try ctx.pass.emitIncrefInto(ctx.pass.keySymbol(key, symbol), resolved_layout, @intCast(use_count - 1), ctx.region, ctx.rc_stmts);
                     }
@@ -3767,7 +4009,7 @@ pub const RcInsertPass = struct {
                     return;
                 }
 
-                const use_count = ctx.pass.symbol_consumed_counts.get(key) orelse 0;
+                const use_count = ctx.pass.ownerUseCountFromMap(&ctx.pass.symbol_consumed_counts, key);
                 if (use_count == 0) {
                     const final_reads_symbol = try ctx.pass.exprUsesKey(ctx.final_expr, key);
                     if (final_reads_symbol) return;
@@ -3814,7 +4056,7 @@ pub const RcInsertPass = struct {
                     try ctx.pass.emitDecrefInto(ctx.pass.keySymbol(key, symbol), resolved_layout, ctx.region, ctx.stmts);
                     return;
                 }
-                const use_count = ctx.pass.symbol_consumed_counts.get(key) orelse 0;
+                const use_count = ctx.pass.ownerUseCountFromMap(&ctx.pass.symbol_consumed_counts, key);
                 if (use_count != 0) return;
                 try ctx.pass.emitDecrefInto(ctx.pass.keySymbol(key, symbol), resolved_layout, ctx.region, ctx.stmts);
             }
@@ -3932,7 +4174,7 @@ pub const RcInsertPass = struct {
                 const key = ctx.pass.patternKey(bind_pat_id, symbol);
                 const resolved_layout = ctx.pass.keyLayout(key, layout_idx);
                 if (ctx.pass.layoutNeedsRc(resolved_layout)) {
-                    const use_count = ctx.local_uses.get(key) orelse 0;
+                    const use_count = ctx.pass.ownerUseCountFromMap(ctx.local_uses, key);
                     if (use_count > 1) {
                         try ctx.pass.emitIncrefInto(ctx.pass.keySymbol(key, symbol), resolved_layout, @intCast(use_count - 1), ctx.region, ctx.rc_stmts);
                     }
@@ -3958,7 +4200,7 @@ pub const RcInsertPass = struct {
                 const key = ctx.pass.patternKey(bind_pat_id, symbol);
                 const resolved_layout = ctx.pass.keyLayout(key, layout_idx);
                 if (!ctx.pass.layoutNeedsRc(resolved_layout)) return;
-                const use_count = ctx.local_uses.get(key) orelse 0;
+                const use_count = ctx.pass.ownerUseCountFromMap(ctx.local_uses, key);
                 if (use_count == 0) {
                     try ctx.pass.emitDecrefInto(ctx.pass.keySymbol(key, symbol), resolved_layout, ctx.region, ctx.rc_stmts);
                 }

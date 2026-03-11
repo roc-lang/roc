@@ -3847,6 +3847,42 @@ test "polymorphic function with List.contains called with multiple types" {
     try runExpectI64(code, 5, .no_trace);
 }
 
+test "nested List.any true path with captured Str value" {
+    try runExpectBool(
+        \\{
+        \\    out = ["a"]
+        \\    List.any(["a"], |item| out.contains(item))
+        \\}
+    ,
+        true,
+        .no_trace,
+    );
+}
+
+test "nested List.any false path with captured Str value" {
+    try runExpectBool(
+        \\{
+        \\    out = ["a"]
+        \\    List.any(["b"], |item| out.contains(item))
+        \\}
+    ,
+        false,
+        .no_trace,
+    );
+}
+
+test "direct List.contains captured Str control" {
+    try runExpectBool(
+        \\{
+        \\    out = ["a"]
+        \\    out.contains("a")
+        \\}
+    ,
+        true,
+        .no_trace,
+    );
+}
+
 // Focused reproductions of the 10 known dev-backend failures.
 // Same expressions as the originals to ensure the bugs reproduce.
 

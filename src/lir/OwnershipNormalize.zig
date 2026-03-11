@@ -1,5 +1,6 @@
 //! Assigns stable RC reference identities to bindings, patterns, and lookups in LIR.
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const lir = @import("LIR.zig");
 const LirExprStore = @import("LirExprStore.zig");
@@ -242,11 +243,86 @@ const Analyzer = struct {
         }
     }
 
+    fn ownerKindForOwnedExpr(self: *Analyzer, expr_id: LirExprId) OwnerKind {
+        return switch (self.store.getExpr(expr_id)) {
+            .block => |block| self.ownerKindForOwnedExpr(block.final_expr),
+            .borrow_scope => |scope| self.ownerKindForOwnedExpr(scope.body),
+            .dbg => |dbg_expr| self.ownerKindForOwnedExpr(dbg_expr.expr),
+            .nominal => |nominal| self.ownerKindForOwnedExpr(nominal.backing_expr),
+            .incref => |inc| switch (self.store.getExpr(inc.value)) {
+                .lookup => blk: {
+                    const ref_id = self.result.lookup_ref_ids.items[@intFromEnum(inc.value)];
+                    break :blk if (ref_id.isNone()) .owned else OwnerKind{ .retained = ref_id };
+                },
+                else => .owned,
+            },
+            .struct_access => |sa| switch (self.store.getExpr(sa.struct_expr)) {
+                .lookup => blk: {
+                    const ref_id = self.result.lookup_ref_ids.items[@intFromEnum(sa.struct_expr)];
+                    break :blk if (ref_id.isNone()) .owned else OwnerKind{ .borrowed = ref_id };
+                },
+                else => .owned,
+            },
+            .tag_payload_access => |tpa| switch (self.store.getExpr(tpa.value)) {
+                .lookup => blk: {
+                    const ref_id = self.result.lookup_ref_ids.items[@intFromEnum(tpa.value)];
+                    break :blk if (ref_id.isNone()) .owned else OwnerKind{ .borrowed = ref_id };
+                },
+                else => .owned,
+            },
+            .semantic_low_level => |ll| switch (ll.op) {
+                .list_get_unsafe => blk: {
+                    const args = self.store.getExprSpan(ll.args);
+                    if (args.len == 0) break :blk .owned;
+                    break :blk switch (self.store.getExpr(args[0])) {
+                        .lookup => blk2: {
+                            const ref_id = self.result.lookup_ref_ids.items[@intFromEnum(args[0])];
+                            break :blk2 if (ref_id.isNone()) .owned else OwnerKind{ .borrowed = ref_id };
+                        },
+                        else => .owned,
+                    };
+                },
+                else => .owned,
+            },
+            .low_level => |ll| switch (ll.op) {
+                .list_get_unsafe => blk: {
+                    const args = self.store.getExprSpan(ll.args);
+                    if (args.len == 0) break :blk .owned;
+                    break :blk switch (self.store.getExpr(args[0])) {
+                        .lookup => blk2: {
+                            const ref_id = self.result.lookup_ref_ids.items[@intFromEnum(args[0])];
+                            break :blk2 if (ref_id.isNone()) .owned else OwnerKind{ .borrowed = ref_id };
+                        },
+                        else => .owned,
+                    };
+                },
+                else => .owned,
+            },
+            else => .owned,
+        };
+    }
+
     fn analyzeStmtOwned(self: *Analyzer, stmt: LirStmt) Allocator.Error!void {
         switch (stmt) {
             .decl, .mutate => |binding| {
                 try self.analyzeExpr(binding.expr);
-                try self.registerPattern(binding.pattern, .owned);
+                const owner_kind = self.ownerKindForOwnedExpr(binding.expr);
+                if (builtin.mode == .Debug) {
+                    switch (self.store.getPattern(binding.pattern)) {
+                        .bind => |bind| {
+                            const expr_tag = self.store.getExpr(binding.expr);
+                            const raw = bind.symbol.raw();
+                            if (raw == 4294967064 or raw == 4294967096 or raw == 4294967104) {
+                                std.debug.print(
+                                    "normalize bind symbol={d} layout={d} expr_tag={s} owner_kind={s}\n",
+                                    .{ bind.symbol.raw(), @intFromEnum(bind.layout_idx), @tagName(expr_tag), @tagName(owner_kind) },
+                                );
+                            }
+                        },
+                        else => {},
+                    }
+                }
+                try self.registerPattern(binding.pattern, owner_kind);
             },
             .cell_init, .cell_store => |binding| {
                 try self.analyzeExpr(binding.expr);
@@ -287,6 +363,20 @@ const Analyzer = struct {
                 const mark = self.pushScope();
                 defer self.popScope(mark);
                 for (self.store.getPatternSpan(lam.params)) |param| {
+                    if (builtin.mode == .Debug) {
+                        switch (self.store.getPattern(param)) {
+                            .bind => |bind| {
+                                const raw = bind.symbol.raw();
+                                if (raw == 4294967064 or raw == 4294967096 or raw == 4294967104) {
+                                    std.debug.print(
+                                        "normalize lambda param symbol={d} layout={d}\n",
+                                        .{ bind.symbol.raw(), @intFromEnum(bind.layout_idx) },
+                                    );
+                                }
+                            },
+                            else => {},
+                        }
+                    }
                     try self.registerPattern(param, .owned);
                 }
                 try self.analyzeExpr(lam.body);
