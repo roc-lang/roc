@@ -69,6 +69,7 @@ const BindingOwnershipMode = enum {
 
 const DirectCallSpecialization = struct {
     symbol: Symbol,
+    param_layouts: []const layout.Idx,
     ret_layout: layout.Idx,
 };
 
@@ -100,6 +101,9 @@ propagating_defs: std.AutoHashMap(u64, void),
 /// so captured variables can find their layout even when not in symbol_defs.
 symbol_layouts: std.AutoHashMap(u64, layout.Idx),
 
+/// Tracks whether the current binding for a symbol is owned or borrowed.
+symbol_binding_modes: std.AutoHashMap(u64, BindingOwnershipMode),
+
 /// Recursion guard for computing runtime lambda-set payload layouts.
 computing_lambda_set_layouts: std.AutoHashMap(u32, void),
 
@@ -109,9 +113,6 @@ specialized_direct_callees: std.StringHashMap(DirectCallSpecialization),
 
 /// Recursion guard for lowering specialized direct-call definitions.
 specializing_direct_callees: std.AutoHashMap(u64, void),
-
-/// Temporary runtime-layout overrides for specific MIR lambda exprs during specialization.
-specialized_lambda_param_layouts: std.AutoHashMap(u32, []const layout.Idx),
 
 /// Instantiated monotype -> runtime layout overrides active while lowering a
 /// specialized direct callee.
@@ -159,10 +160,10 @@ pub fn init(
         .layout_cache = std.AutoHashMap(u32, layout.Idx).init(allocator),
         .propagating_defs = std.AutoHashMap(u64, void).init(allocator),
         .symbol_layouts = std.AutoHashMap(u64, layout.Idx).init(allocator),
+        .symbol_binding_modes = std.AutoHashMap(u64, BindingOwnershipMode).init(allocator),
         .computing_lambda_set_layouts = std.AutoHashMap(u32, void).init(allocator),
         .specialized_direct_callees = std.StringHashMap(DirectCallSpecialization).init(allocator),
         .specializing_direct_callees = std.AutoHashMap(u64, void).init(allocator),
-        .specialized_lambda_param_layouts = std.AutoHashMap(u32, []const layout.Idx).init(allocator),
         .specialized_monotype_layouts = std.AutoHashMap(u32, layout.Idx).init(allocator),
         .specialized_layout_cache = std.AutoHashMap(u32, layout.Idx).init(allocator),
         .scratch_anf_stmts = std.ArrayList(LirStmt).empty,
@@ -184,18 +185,20 @@ pub fn deinit(self: *Self) void {
     self.layout_cache.deinit();
     self.propagating_defs.deinit();
     self.symbol_layouts.deinit();
+    self.symbol_binding_modes.deinit();
     self.computing_lambda_set_layouts.deinit();
+    {
+        var it_vals = self.specialized_direct_callees.valueIterator();
+        while (it_vals.next()) |value| {
+            self.allocator.free(value.param_layouts);
+        }
+    }
     {
         var it = self.specialized_direct_callees.keyIterator();
         while (it.next()) |key_ptr| self.allocator.free(key_ptr.*);
     }
     self.specialized_direct_callees.deinit();
     self.specializing_direct_callees.deinit();
-    {
-        var it = self.specialized_lambda_param_layouts.iterator();
-        while (it.next()) |entry| self.allocator.free(entry.value_ptr.*);
-    }
-    self.specialized_lambda_param_layouts.deinit();
     self.specialized_monotype_layouts.deinit();
     self.specialized_layout_cache.deinit();
     self.scratch_anf_stmts.deinit(self.allocator);
@@ -1164,10 +1167,13 @@ fn ensureSpecializedDirectCallee(
     if (specialization == null) {
         const owned_key = try self.allocator.dupe(u8, key_bytes);
         errdefer self.allocator.free(owned_key);
+        const owned_param_layouts = try self.allocator.dupe(layout.Idx, param_layouts);
+        errdefer self.allocator.free(owned_param_layouts);
 
         const fresh_symbol = self.freshSymbol();
         try self.specialized_direct_callees.put(owned_key, .{
             .symbol = fresh_symbol,
+            .param_layouts = owned_param_layouts,
             .ret_layout = .none,
         });
         specialization = self.specialized_direct_callees.get(owned_key).?;
@@ -1187,24 +1193,8 @@ fn ensureSpecializedDirectCallee(
         unreachable;
     };
 
-    const owned_param_layouts = try self.allocator.dupe(layout.Idx, param_layouts);
-    errdefer self.allocator.free(owned_param_layouts);
-
     try self.specializing_direct_callees.put(resolved_symbol.raw(), {});
     defer _ = self.specializing_direct_callees.remove(resolved_symbol.raw());
-
-    const lambda_key = @intFromEnum(lambda_expr_id);
-    if (builtin.mode == .Debug and self.specialized_lambda_param_layouts.contains(lambda_key)) {
-        std.debug.panic(
-            "MirToLir invariant violated: duplicate specialized lambda param layout override for expr {}",
-            .{@intFromEnum(lambda_expr_id)},
-        );
-    }
-    try self.specialized_lambda_param_layouts.put(lambda_key, owned_param_layouts);
-    defer {
-        const removed = self.specialized_lambda_param_layouts.fetchRemove(lambda_key) orelse unreachable;
-        self.allocator.free(removed.value);
-    }
 
     if (!original_fn_symbol.isNone()) {
         try self.prepareLiftedDefCaptureLayout(original_fn_symbol, lifted_def);
@@ -1212,7 +1202,7 @@ fn ensureSpecializedDirectCallee(
 
     const inferred_ret_layout = try self.runtimeLayoutForLambdaBodyWithParamLayouts(
         lifted_def,
-        param_layouts,
+        specialization.?.param_layouts,
     );
     if (builtin.mode == .Debug and inferred_ret_layout == null) {
         std.debug.panic(
@@ -1227,7 +1217,19 @@ fn ensureSpecializedDirectCallee(
         entry.ret_layout = specialization_ret_layout;
     } else unreachable;
 
-    const lir_def = try self.lowerExpr(lifted_def);
+    const lambda_expr = self.mir_store.getExpr(lambda_expr_id);
+    if (builtin.mode == .Debug and lambda_expr != .lambda) {
+        std.debug.panic(
+            "MirToLir invariant violated: resolved specialized direct-call expr {} is not lambda",
+            .{@intFromEnum(lambda_expr_id)},
+        );
+    }
+    const lir_def = try self.lowerLambdaWithParamLayouts(
+        lambda_expr.lambda,
+        self.mir_store.typeOf(lambda_expr_id),
+        specialization.?.param_layouts,
+        Region.zero(),
+    );
     try self.lir_store.registerSymbolDef(resolved_symbol, lir_def);
 
     const lowered = self.lir_store.getExpr(lir_def);
@@ -1751,6 +1753,30 @@ fn isBorrowAtomicExpr(self: *const Self, expr_id: LirExprId) bool {
     };
 }
 
+fn shouldRetainBorrowedLookup(self: *const Self, expr_id: LirExprId, expr_layout: layout.Idx) bool {
+    if (!self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(expr_layout))) return false;
+
+    const expr = self.lir_store.getExpr(expr_id);
+    if (expr != .lookup) return false;
+
+    return self.symbol_binding_modes.get(expr.lookup.symbol.raw()) == .borrowed;
+}
+
+fn retainBorrowedLookupIfNeeded(
+    self: *Self,
+    expr_id: LirExprId,
+    expr_layout: layout.Idx,
+    region: Region,
+) Allocator.Error!LirExprId {
+    if (!self.shouldRetainBorrowedLookup(expr_id, expr_layout)) return expr_id;
+
+    return self.lir_store.addExpr(.{ .incref = .{
+        .value = expr_id,
+        .layout_idx = expr_layout,
+        .count = 1,
+    } }, region);
+}
+
 /// Lower a span of MIR expressions, ensuring each is atomic (symbol/literal) via the accumulator.
 fn lowerAnfSpan(self: *Self, acc: *LetAccumulator, mir_expr_ids: []const MIR.ExprId, region: Region) Allocator.Error!LirExprSpan {
     const save_len = self.scratch_lir_expr_ids.items.len;
@@ -1758,7 +1784,8 @@ fn lowerAnfSpan(self: *Self, acc: *LetAccumulator, mir_expr_ids: []const MIR.Exp
     for (mir_expr_ids) |mir_id| {
         const lir_id = try self.lowerExpr(mir_id);
         const arg_layout = try self.runtimeValueLayoutFromMirExpr(mir_id);
-        const ensured = try acc.ensureSymbol(lir_id, arg_layout, region);
+        const owned = try self.retainBorrowedLookupIfNeeded(lir_id, arg_layout, region);
+        const ensured = try acc.ensureSymbol(owned, arg_layout, region);
         try self.scratch_lir_expr_ids.append(self.allocator, ensured);
     }
     return self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_len..]);
@@ -1893,7 +1920,16 @@ fn lowerList(self: *Self, list_data: anytype, mono_idx: Monotype.Idx, mir_expr_i
     }
 
     var acc = self.startLetAccumulator();
-    const lir_elems = try self.lowerAnfSpan(&acc, mir_elems, region);
+    const save_exprs = self.scratch_lir_expr_ids.items.len;
+    defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
+    for (mir_elems) |mir_elem| {
+        const lowered = try self.lowerExpr(mir_elem);
+        const elem_runtime_layout = try self.runtimeValueLayoutFromMirExpr(mir_elem);
+        const owned = try self.retainBorrowedLookupIfNeeded(lowered, elem_runtime_layout, region);
+        const ensured = try acc.ensureSymbol(owned, elem_runtime_layout, region);
+        try self.scratch_lir_expr_ids.append(self.allocator, ensured);
+    }
+    const lir_elems = try self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_exprs..]);
     const list_expr = try self.lir_store.addExpr(.{ .list = .{
         .list_layout = list_layout,
         .elem_layout = elem_layout,
@@ -1934,18 +1970,19 @@ fn lowerRecord(self: *Self, rec: anytype, _: Monotype.Idx, mir_expr_id: MIR.Expr
     const save_exprs = self.scratch_lir_expr_ids.items.len;
     defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
 
-    for (0..layout_fields.len) |li| {
-        const layout_field_name = layout_fields.get(li).name;
-        var found = false;
-        for (mir_field_names, 0..) |mir_name, mi| {
-            if (mir_name.eql(layout_field_name)) {
-                const lir_expr = try self.lowerExpr(mir_fields[mi]);
-                const field_layout = try self.runtimeValueLayoutFromMirExpr(mir_fields[mi]);
-                const ensured = try acc.ensureSymbol(lir_expr, field_layout, region);
-                try self.scratch_lir_expr_ids.append(self.allocator, ensured);
-                found = true;
-                break;
-            }
+        for (0..layout_fields.len) |li| {
+            const layout_field_name = layout_fields.get(li).name;
+            var found = false;
+            for (mir_field_names, 0..) |mir_name, mi| {
+                if (mir_name.eql(layout_field_name)) {
+                    const lir_expr = try self.lowerExpr(mir_fields[mi]);
+                    const field_layout = try self.runtimeValueLayoutFromMirExpr(mir_fields[mi]);
+                    const owned = try self.retainBorrowedLookupIfNeeded(lir_expr, field_layout, region);
+                    const ensured = try acc.ensureSymbol(owned, field_layout, region);
+                    try self.scratch_lir_expr_ids.append(self.allocator, ensured);
+                    found = true;
+                    break;
+                }
         }
         std.debug.assert(found);
     }
@@ -1971,47 +2008,54 @@ fn lowerTuple(self: *Self, tup: anytype, _: Monotype.Idx, mir_expr_id: MIR.ExprI
         const save_borrow_len = self.scratch_lir_borrow_bindings.items.len;
         defer self.scratch_lir_borrow_bindings.shrinkRetainingCapacity(save_borrow_len);
 
+        const appendCapture = struct {
+            fn append(
+                self_: *Self,
+                mir_elem: MIR.ExprId,
+                save_borrow_len_: usize,
+                region_: Region,
+            ) Allocator.Error!void {
+                const lir_expr = try self_.lowerExpr(mir_elem);
+                const elem_layout = try self_.runtimeValueLayoutFromMirExpr(mir_elem);
+                const source_expr = if (self_.isBorrowAtomicExpr(lir_expr))
+                    lir_expr
+                else blk: {
+                    const borrow_bind = try self_.freshBindPattern(elem_layout, false, region_);
+                    try self_.scratch_lir_borrow_bindings.append(self_.allocator, .{
+                        .pattern = borrow_bind.pattern,
+                        .expr = lir_expr,
+                    });
+                    break :blk try self_.lir_store.addExpr(.{ .lookup = .{
+                        .symbol = borrow_bind.symbol,
+                        .layout_idx = elem_layout,
+                    } }, region_);
+                };
+
+                const retained_expr = if (self_.layout_store.layoutContainsRefcounted(self_.layout_store.getLayout(elem_layout)))
+                    try self_.lir_store.addExpr(.{ .incref = .{
+                        .value = source_expr,
+                        .layout_idx = elem_layout,
+                        .count = 1,
+                    } }, region_)
+                else
+                    source_expr;
+
+                _ = save_borrow_len_;
+                try self_.scratch_lir_expr_ids.append(self_.allocator, retained_expr);
+            }
+        }.append;
+
         if (tuple_layout_val.tag == .struct_) {
             const struct_data = self.layout_store.getStructData(tuple_layout_val.data.struct_.idx);
             const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
 
             for (0..layout_fields.len) |li| {
                 const original_index = layout_fields.get(li).index;
-                const lir_expr = try self.lowerExpr(mir_elems[original_index]);
-                const elem_layout = try self.runtimeValueLayoutFromMirExpr(mir_elems[original_index]);
-                const ensured = if (self.isBorrowAtomicExpr(lir_expr))
-                    lir_expr
-                else blk: {
-                    const borrow_bind = try self.freshBindPattern(elem_layout, false, region);
-                    try self.scratch_lir_borrow_bindings.append(self.allocator, .{
-                        .pattern = borrow_bind.pattern,
-                        .expr = lir_expr,
-                    });
-                    break :blk try self.lir_store.addExpr(.{ .lookup = .{
-                        .symbol = borrow_bind.symbol,
-                        .layout_idx = elem_layout,
-                    } }, region);
-                };
-                try self.scratch_lir_expr_ids.append(self.allocator, ensured);
+                try appendCapture(self, mir_elems[original_index], save_borrow_len, region);
             }
         } else {
             for (mir_elems) |mir_elem| {
-                const lir_expr = try self.lowerExpr(mir_elem);
-                const elem_layout = try self.runtimeValueLayoutFromMirExpr(mir_elem);
-                const ensured = if (self.isBorrowAtomicExpr(lir_expr))
-                    lir_expr
-                else blk: {
-                    const borrow_bind = try self.freshBindPattern(elem_layout, false, region);
-                    try self.scratch_lir_borrow_bindings.append(self.allocator, .{
-                        .pattern = borrow_bind.pattern,
-                        .expr = lir_expr,
-                    });
-                    break :blk try self.lir_store.addExpr(.{ .lookup = .{
-                        .symbol = borrow_bind.symbol,
-                        .layout_idx = elem_layout,
-                    } }, region);
-                };
-                try self.scratch_lir_expr_ids.append(self.allocator, ensured);
+                try appendCapture(self, mir_elem, save_borrow_len, region);
             }
         }
 
@@ -2051,7 +2095,8 @@ fn lowerTuple(self: *Self, tup: anytype, _: Monotype.Idx, mir_expr_id: MIR.ExprI
             const original_index = layout_fields.get(li).index;
             const lir_expr = try self.lowerExpr(mir_elems[original_index]);
             const elem_layout = try self.runtimeValueLayoutFromMirExpr(mir_elems[original_index]);
-            const ensured = try acc.ensureSymbol(lir_expr, elem_layout, region);
+            const owned = try self.retainBorrowedLookupIfNeeded(lir_expr, elem_layout, region);
+            const ensured = try acc.ensureSymbol(owned, elem_layout, region);
             try self.scratch_lir_expr_ids.append(self.allocator, ensured);
         }
 
@@ -2093,7 +2138,16 @@ fn lowerTag(self: *Self, tag_data: anytype, mono_idx: Monotype.Idx, mir_expr_id:
             // Multiple payloads → layout is a struct, emit struct expression
             const struct_layout = try self.layoutFromMonotype(mono_idx);
             var acc = self.startLetAccumulator();
-            const lir_elems = try self.lowerAnfSpan(&acc, mir_args, region);
+            const save_exprs = self.scratch_lir_expr_ids.items.len;
+            defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
+            for (mir_args) |mir_arg| {
+                const lowered = try self.lowerExpr(mir_arg);
+                const arg_layout = try self.runtimeValueLayoutFromMirExpr(mir_arg);
+                const owned = try self.retainBorrowedLookupIfNeeded(lowered, arg_layout, region);
+                const ensured = try acc.ensureSymbol(owned, arg_layout, region);
+                try self.scratch_lir_expr_ids.append(self.allocator, ensured);
+            }
+            const lir_elems = try self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_exprs..]);
             const struct_expr = try self.lir_store.addExpr(.{ .struct_ = .{ .struct_layout = struct_layout, .fields = lir_elems } }, region);
             return acc.finish(struct_expr, struct_layout, region);
         }
@@ -2121,6 +2175,7 @@ fn lowerTag(self: *Self, tag_data: anytype, mono_idx: Monotype.Idx, mir_expr_id:
     for (mir_args, 0..) |mir_arg, arg_index| {
         const lowered_arg = try self.lowerExpr(mir_arg);
         const arg_layout = try self.runtimeValueLayoutFromMirExpr(mir_arg);
+        const owned_arg = try self.retainBorrowedLookupIfNeeded(lowered_arg, arg_layout, region);
         const target_arg_layout = blk: {
             if (variant_payload_layout == null) break :blk arg_layout;
             if (mir_args.len == 1) break :blk variant_payload_layout.?;
@@ -2128,7 +2183,7 @@ fn lowerTag(self: *Self, tag_data: anytype, mono_idx: Monotype.Idx, mir_expr_id:
             break :blk field.field_layout;
         };
         const adapted_arg = try self.adaptValueLayout(
-            lowered_arg,
+            owned_arg,
             self.mir_store.typeOf(mir_arg),
             arg_layout,
             target_arg_layout,
@@ -2284,11 +2339,7 @@ fn lowerMatch(self: *Self, match_data: anytype, mir_expr_id: MIR.ExprId, region:
     return acc.finish(match_expr, result_layout, region);
 }
 
-fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, mir_lambda_expr_id: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
-    if (self.specialized_lambda_param_layouts.get(@intFromEnum(mir_lambda_expr_id))) |param_layouts| {
-        return self.lowerLambdaWithParamLayouts(lam, mono_idx, param_layouts, region);
-    }
-
+fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, _: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
     const monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
     const func_args = switch (monotype) {
         .func => |f| self.mir_store.monotype_store.getIdxSpan(f.args),
@@ -2821,10 +2872,10 @@ fn lowerClosureCall(
                 .fn_expr = fn_expr,
                 .fn_layout = lifted_layout,
                 .args = call_user_args,
-                .ret_layout = ret_layout,
+                .ret_layout = specialization.ret_layout,
                 .called_via = .apply,
             } }, region);
-            return acc.finish(call_expr, ret_layout, region);
+            return acc.finish(call_expr, specialization.ret_layout, region);
         }
 
         // Has captures: lower closure val and append as extra arg
@@ -2859,10 +2910,10 @@ fn lowerClosureCall(
             .fn_expr = fn_expr,
             .fn_layout = lifted_layout,
             .args = all_args,
-            .ret_layout = ret_layout,
+            .ret_layout = specialization.ret_layout,
             .called_via = .apply,
         } }, region);
-        return acc.finish(call_expr, ret_layout, region);
+        return acc.finish(call_expr, specialization.ret_layout, region);
     }
 
     // Multi-member lambda set: discriminant_switch on the tag union closure value
@@ -2926,7 +2977,7 @@ fn lowerClosureCall(
             .fn_expr = fn_lookup,
             .fn_layout = lifted_layout,
             .args = branch_args,
-            .ret_layout = ret_layout,
+            .ret_layout = specialization.ret_layout,
             .called_via = .apply,
         } }, region);
 
@@ -4048,6 +4099,7 @@ fn lowerWildcardBindingPattern(
 
     const symbol = self.freshSymbol();
     try self.symbol_layouts.put(symbol.raw(), runtime_layout);
+    try self.symbol_binding_modes.put(symbol.raw(), .owned);
     try self.deferOwnedBindingCleanup(symbol, runtime_layout, region);
     return self.lir_store.addPattern(.{ .bind = .{
         .symbol = symbol,
@@ -4073,6 +4125,7 @@ fn lowerPatternInternal(
             const reassignable = self.mir_store.isSymbolReassignable(sym);
             const sym_key: u64 = @bitCast(sym);
             try self.symbol_layouts.put(sym_key, layout_idx);
+            try self.symbol_binding_modes.put(sym_key, ownership_mode);
             break :blk self.lir_store.addPattern(.{ .bind = .{
                 .symbol = sym,
                 .layout_idx = layout_idx,
@@ -4367,6 +4420,7 @@ fn lowerPatternInternal(
             const reassignable = self.mir_store.isSymbolReassignable(ap.symbol);
             const sym_key: u64 = @bitCast(ap.symbol);
             try self.symbol_layouts.put(sym_key, layout_idx);
+            try self.symbol_binding_modes.put(sym_key, ownership_mode);
             break :blk self.lir_store.addPattern(.{ .as_pattern = .{
                 .symbol = ap.symbol,
                 .layout_idx = layout_idx,
