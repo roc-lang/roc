@@ -55,16 +55,15 @@ pub const Relocation = union(enum) {
         };
     }
 
-    /// Adjust all offset fields by a given delta.
-    /// Used when prepending prologue code to shift relocations forward.
-    pub fn adjustOffset(self: *Relocation, delta: usize) void {
+    /// Adjust the offset of this relocation by the given amount
+    pub fn adjustOffset(self: *Relocation, delta: u64) void {
         switch (self.*) {
-            .local_data => |*ld| ld.offset += delta,
-            .linked_function => |*lf| lf.offset += delta,
-            .linked_data => |*ld| ld.offset += delta,
-            .jmp_to_return => |*jr| {
-                jr.inst_loc += delta;
-                jr.offset += delta;
+            .local_data => |*r| r.offset += delta,
+            .linked_function => |*r| r.offset += delta,
+            .linked_data => |*r| r.offset += delta,
+            .jmp_to_return => |*r| {
+                r.inst_loc += delta;
+                r.offset += delta;
             },
         }
     }

@@ -65,7 +65,7 @@ test "list refcount function - string list through function" {
 }
 
 test "list refcount function - function extracts from list" {
-    // Simplified: Inline match instead of function with match
+    // Simplified: Direct match instead of function with match
     try runExpectI64(
         \\{
         \\    x = [10, 20, 30]

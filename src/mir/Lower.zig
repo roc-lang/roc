@@ -43,9 +43,6 @@ all_module_envs: []const *ModuleEnv,
 /// Types store for resolving type variables
 types_store: *const types.Store,
 
-/// Builtin type indices for identifying primitives
-builtin_indices: CIR.BuiltinIndices,
-
 /// Current module being lowered
 current_module_idx: u32,
 
@@ -88,7 +85,6 @@ pub fn init(
     store: *MIR.Store,
     all_module_envs: []const *ModuleEnv,
     types_store: *const types.Store,
-    builtin_indices: CIR.BuiltinIndices,
     current_module_idx: u32,
     app_module_idx: ?u32,
 ) Allocator.Error!Self {
@@ -112,7 +108,6 @@ pub fn init(
         .store = store,
         .all_module_envs = all_module_envs,
         .types_store = types_store,
-        .builtin_indices = builtin_indices,
         .current_module_idx = current_module_idx,
         .app_module_idx = app_module_idx,
         .pattern_symbols = std.AutoHashMap(u64, MIR.Symbol).init(allocator),
@@ -275,6 +270,23 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
         // --- Lookups ---
         .e_lookup_local => |lookup| {
             const symbol = try self.patternToSymbol(lookup.pattern_idx);
+
+            // Ensure the local definition is lowered if it's a top-level def.
+            // This is needed so that cross-module lowering (via lowerExternalDef)
+            // properly registers all transitively-referenced definitions.
+            const symbol_key: u64 = @bitCast(symbol);
+            if (!self.lowered_symbols.contains(symbol_key) and !self.in_progress_defs.contains(symbol_key)) {
+                // Find the CIR def for this pattern in the current module
+                const defs = module_env.store.sliceDefs(module_env.all_defs);
+                for (defs) |def_idx| {
+                    const def = module_env.store.getDef(def_idx);
+                    if (def.pattern == lookup.pattern_idx) {
+                        _ = try self.lowerExternalDef(symbol, def.expr);
+                        break;
+                    }
+                }
+            }
+
             return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, monotype, region);
         },
         .e_lookup_external => |ext| {
@@ -286,6 +298,18 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                 .module_idx = target_module_idx,
                 .ident_idx = ext.ident_idx,
             };
+
+            // Ensure the external definition is lowered.
+            const symbol_key: u64 = @bitCast(symbol);
+            if (!self.lowered_symbols.contains(symbol_key) and !self.in_progress_defs.contains(symbol_key)) {
+                const target_env = self.all_module_envs[target_module_idx];
+                if (target_env.store.isDefNode(ext.target_node_idx)) {
+                    const def_idx: CIR.Def.Idx = @enumFromInt(ext.target_node_idx);
+                    const def = target_env.store.getDef(def_idx);
+                    _ = try self.lowerExternalDef(symbol, def.expr);
+                }
+            }
+
             return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, monotype, region);
         },
         .e_lookup_pending => {
@@ -462,10 +486,14 @@ fn resolveMonotype(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!Monotype
         self.allocator,
         self.types_store,
         type_var,
-        self.builtin_indices,
+        self.currentCommonIdents(),
         &self.type_var_seen,
         &self.mono_scratches,
     );
+}
+
+fn currentCommonIdents(self: *const Self) ModuleEnv.CommonIdents {
+    return self.all_module_envs[self.current_module_idx].idents;
 }
 
 /// Build a function monotype from argument types, return type, and effectfulness.
@@ -518,7 +546,7 @@ fn lowerPattern(self: *Self, module_env: *const ModuleEnv, pattern_idx: CIR.Patt
         self.allocator,
         self.types_store,
         type_var,
-        self.builtin_indices,
+        self.currentCommonIdents(),
         &self.type_var_seen,
         &self.mono_scratches,
     );
@@ -719,7 +747,21 @@ fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Clo
 }
 
 /// Lower `e_call` to MIR call.
+/// If the call target is an external lookup to a low-level builtin
+/// (e.g., List.concat, Str.concat), emit `run_low_level` instead of `call`.
 fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
+    // Check if the call target is an external low-level builtin.
+    const func_cir = module_env.store.getExpr(call.func);
+    if (func_cir == .e_lookup_external) {
+        if (self.getExternalLowLevelOp(module_env, func_cir.e_lookup_external)) |ll_op| {
+            const args = try self.lowerExprSpan(module_env, call.args);
+            return try self.store.addExpr(self.allocator, .{ .run_low_level = .{
+                .op = ll_op,
+                .args = args,
+            } }, monotype, region);
+        }
+    }
+
     const func = try self.lowerExpr(call.func);
     const args = try self.lowerExprSpan(module_env, call.args);
 
@@ -727,6 +769,23 @@ fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype:
         .func = func,
         .args = args,
     } }, monotype, region);
+}
+
+/// Check if an external definition is a low-level wrapper (e_lambda wrapping e_run_low_level).
+/// Returns the low-level op if found, null otherwise.
+fn getExternalLowLevelOp(self: *Self, caller_env: *const ModuleEnv, lookup: anytype) ?CIR.Expr.LowLevel {
+    const ext_module_idx = caller_env.imports.getResolvedModule(lookup.module_idx) orelse return null;
+    if (ext_module_idx >= self.all_module_envs.len) return null;
+    const ext_env = self.all_module_envs[ext_module_idx];
+    if (!ext_env.store.isDefNode(lookup.target_node_idx)) return null;
+    const def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
+    const def = ext_env.store.getDef(def_idx);
+    const def_expr = ext_env.store.getExpr(def.expr);
+    if (def_expr == .e_lambda) {
+        const body_expr = ext_env.store.getExpr(def_expr.e_lambda.body);
+        if (body_expr == .e_run_low_level) return body_expr.e_run_low_level.op;
+    }
+    return null;
 }
 
 /// Lower `e_block` to MIR block.
@@ -930,10 +989,8 @@ fn lowerBinop(self: *Self, binop: CIR.Expr.Binop, monotype: Monotype.Idx, region
                 return result;
             };
 
-            // Ensure the method body is lowered so codegen can find it
-            if (method_symbol.module_idx != self.current_module_idx) {
-                try self.ensureMethodLowered(method_symbol);
-            }
+            // Ensure the method body is lowered so codegen can find it.
+            try self.ensureMethodLowered(method_symbol);
 
             const lhs_monotype = try self.resolveMonotype(binop.lhs);
             const rhs_monotype = try self.resolveMonotype(binop.rhs);
@@ -1004,10 +1061,8 @@ fn lowerUnaryMinus(self: *Self, um: CIR.Expr.UnaryMinus, monotype: Monotype.Idx,
         } }, monotype, region);
     };
 
-    // Ensure the method body is lowered so codegen can find it
-    if (method_symbol.module_idx != self.current_module_idx) {
-        try self.ensureMethodLowered(method_symbol);
-    }
+    // Ensure the method body is lowered so codegen can find it.
+    try self.ensureMethodLowered(method_symbol);
 
     const inner_monotype = try self.resolveMonotype(um.expr);
     const func_monotype = try self.buildFuncMonotype(&.{inner_monotype}, monotype, false);
@@ -1089,10 +1144,8 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, da: anytype, monoty
             .ident_idx = da.field_name,
         };
 
-        // Ensure the method body is lowered so codegen can find it
-        if (method_symbol.module_idx != self.current_module_idx) {
-            try self.ensureMethodLowered(method_symbol);
-        }
+        // Ensure the method body is lowered so codegen can find it.
+        try self.ensureMethodLowered(method_symbol);
 
         // Build args as [receiver] ++ explicit_args
         // e.g. list.map(fn) → List.map(list, fn)
@@ -1175,10 +1228,8 @@ fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, tvd: anytype,
         .ident_idx = tvd.method_name,
     };
 
-    // Ensure the method body is lowered so codegen can find it
-    if (method_symbol.module_idx != self.current_module_idx) {
-        try self.ensureMethodLowered(method_symbol);
-    }
+    // Ensure the method body is lowered so codegen can find it.
+    try self.ensureMethodLowered(method_symbol);
 
     const cir_args = module_env.store.sliceExpr(tvd.args);
     const mono_top = self.mono_scratches.idxs.top();
@@ -1293,7 +1344,9 @@ fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol) Allocator.Error!void {
             else => {},
         }
     }
-    unreachable; // Method must exist — type checking should have caught this
+    // Method not found in target module's defs. This can happen for same-module
+    // methods where the definition is accessible through other means (e.g., via
+    // e_lookup_local processing when the call func expression is lowered).
 }
 
 /// Lower an external definition by symbol, caching the result.

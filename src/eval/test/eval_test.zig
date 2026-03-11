@@ -34,6 +34,7 @@ const runExpectRecord = helpers.runExpectRecord;
 const runExpectListI64 = helpers.runExpectListI64;
 const runExpectListZst = helpers.runExpectListZst;
 const runExpectDec = helpers.runExpectDec;
+const runExpectTypeMismatchAndCrash = helpers.runExpectTypeMismatchAndCrash;
 const ExpectedField = helpers.ExpectedField;
 
 const TraceWriterState = struct {
@@ -1815,6 +1816,22 @@ test "List.map - empty list" {
     );
 }
 
+test "List.map - conditionally chosen closure" {
+    // Test multi-member lambda set dispatch: the closure passed to List.map
+    // is chosen at runtime via an if-else, so the compiler must generate
+    // dispatch logic to call the correct one.
+    try runExpectListI64(
+        \\{
+        \\    n = 5.I64
+        \\    f = if n > 0.I64 |x| x + 1.I64 else |x| x * 2.I64
+        \\    List.map([10.I64, 20.I64, 30.I64], f)
+        \\}
+    ,
+        &[_]i64{ 11, 21, 31 },
+        .no_trace,
+    );
+}
+
 test "empty list with non-numeric type constraint should be list of zst" {
     // An empty list whose element type has a method_call constraint but no
     // from_numeral constraint should be List(ZST), not List(Dec).
@@ -3329,74 +3346,102 @@ test "higher-order function - twice" {
 
 test "int conversion: I8.to_i64 positive" {
     try runExpectI64(
-        \\{ 42i8.to_i64() }
+        \\{ 42.I8.to_i64() }
     , 42, .no_trace);
 }
 
 test "int conversion: I8.to_i64 negative" {
     try runExpectI64(
-        \\{ (-1i8).to_i64() }
+        \\{ -1.I8.to_i64() }
     , -1, .no_trace);
 }
 
 test "int conversion: I16.to_i64 positive" {
     try runExpectI64(
-        \\{ 1000i16.to_i64() }
+        \\{ 1000.I16.to_i64() }
     , 1000, .no_trace);
 }
 
 test "int conversion: I16.to_i64 negative" {
     try runExpectI64(
-        \\{ (-500i16).to_i64() }
+        \\{ -500.I16.to_i64() }
     , -500, .no_trace);
 }
 
 test "int conversion: I32.to_i64 positive" {
     try runExpectI64(
-        \\{ 100000i32.to_i64() }
+        \\{ 100000.I32.to_i64() }
     , 100000, .no_trace);
 }
 
 test "int conversion: I32.to_i64 negative" {
     try runExpectI64(
-        \\{ (-100000i32).to_i64() }
+        \\{ -100000.I32.to_i64() }
     , -100000, .no_trace);
 }
 
 test "int conversion: U8.to_i64" {
     try runExpectI64(
-        \\{ 255u8.to_i64() }
+        \\{ 255.U8.to_i64() }
     , 255, .no_trace);
 }
 
 test "int conversion: U16.to_i64" {
     try runExpectI64(
-        \\{ 65535u16.to_i64() }
+        \\{ 65535.U16.to_i64() }
     , 65535, .no_trace);
 }
 
 test "int conversion: U32.to_i64" {
     try runExpectI64(
-        \\{ 4000000000u32.to_i64() }
+        \\{ 4000000000.U32.to_i64() }
     , 4000000000, .no_trace);
 }
 
 test "int conversion: I8.to_i32.to_i64" {
     try runExpectI64(
-        \\{ (-10i8).to_i32().to_i64() }
+        \\{ -10.I8.to_i32().to_i64() }
     , -10, .no_trace);
 }
 
 test "int conversion: U8.to_u32.to_i64" {
     try runExpectI64(
-        \\{ 200u8.to_u32().to_i64() }
+        \\{ 200.U8.to_u32().to_i64() }
     , 200, .no_trace);
 }
 
 test "int conversion: U8.to_i16.to_i64" {
     try runExpectI64(
-        \\{ 128u8.to_i16().to_i64() }
+        \\{ 128.U8.to_i16().to_i64() }
     , 128, .no_trace);
+}
+
+test "int conversion: I8.to_u16_wrap negative" {
+    // Signed-to-unsigned widening wrap: -1.I8 (0xFF) sign-extends to 0xFFFF = 65535
+    try runExpectI64(
+        \\{ -1.I8.to_u16_wrap().to_i64() }
+    , 65535, .no_trace);
+}
+
+test "int conversion: I8.to_u32_wrap negative" {
+    // -1.I8 sign-extends to 0xFFFFFFFF = 4294967295
+    try runExpectI64(
+        \\{ -1.I8.to_u32_wrap().to_i64() }
+    , 4294967295, .no_trace);
+}
+
+test "int conversion: I16.to_u32_wrap negative" {
+    // -1.I16 sign-extends to 0xFFFFFFFF = 4294967295
+    try runExpectI64(
+        \\{ -1.I16.to_u32_wrap().to_i64() }
+    , 4294967295, .no_trace);
+}
+
+test "int conversion: I32.to_u64_wrap negative" {
+    // -1.I32 sign-extends to 0xFFFFFFFFFFFFFFFF, read as I64 via to_i64_wrap = -1
+    try runExpectI64(
+        \\{ -1.I32.to_u64_wrap().to_i64_wrap() }
+    , -1, .no_trace);
 }
 
 test "diag: match Ok extract payload" {
@@ -3480,6 +3525,60 @@ test "polymorphic tag union payload substitution: multiple type vars" {
     , "hello", .no_trace);
 }
 
+test "polymorphic tag union: erroneous match branch crashes at runtime" {
+    // The Ok branch returns "" (Str) but the return type requires `e` (I64 when called with Ok(I64)).
+    // The type checker marks this branch as erroneous. When the Ok branch is actually taken
+    // at runtime, the interpreter should crash.
+    try runExpectTypeMismatchAndCrash(
+        \\{
+        \\    get_err : [Ok(a), Err(e)] -> e
+        \\    get_err = |result| match result {
+        \\        Ok(_) => ""
+        \\        Err(e) => e
+        \\    }
+        \\
+        \\    val : [Ok(I64), Err(Str)]
+        \\    val = Ok(42)
+        \\    get_err(val)
+        \\}
+    );
+}
+
+test "polymorphic: erroneous if-else branch crashes at runtime" {
+    // The then-branch returns "" (Str) but the return type requires `e` (I64 when called).
+    // When the erroneous then-branch is taken at runtime, the interpreter should crash.
+    try runExpectTypeMismatchAndCrash(
+        \\{
+        \\    get_val : Bool, e -> e
+        \\    get_val = |flag, val| if (flag) "" else val
+        \\
+        \\    get_val(Bool.true, 42)
+        \\}
+    );
+}
+
+test "polymorphic tag union: erroneous match in block crashes at runtime" {
+    // The match is nested inside a block (the lambda body is a block whose
+    // final expression is a match). The erroneous branch detection should
+    // still work through blocks.
+    try runExpectTypeMismatchAndCrash(
+        \\{
+        \\    get_err : [Ok(a), Err(e)] -> e
+        \\    get_err = |result| {
+        \\        unused = 0
+        \\        match result {
+        \\            Ok(_) => ""
+        \\            Err(e) => e
+        \\        }
+        \\    }
+        \\
+        \\    val : [Ok(I64), Err(Str)]
+        \\    val = Ok(42)
+        \\    get_err(val)
+        \\}
+    );
+}
+
 test "polymorphic tag union payload substitution: wrap and unwrap" {
     // Tests that `a -> I64` is discovered from the return type's tag payload
     try runExpectI64(
@@ -3502,6 +3601,43 @@ test "Bool in record with mixed alignment fields - bug confirmation" {
     try runExpectBool("{ key: 42u64, flag: Bool.False }.flag", false, .no_trace);
     try runExpectBool("{ key: 42u64, count: 1u32, flag: Bool.True }.flag", true, .no_trace);
     try runExpectBool("{ key: 42u64, count: 1u32, flag: Bool.False }.flag", false, .no_trace);
+}
+
+test "tag union with True/False mixed among other tags uses correct discriminants" {
+    // Verifies that True and False tags in an anonymous tag union like
+    // [A, B, True, K, False, V] get their correct alphabetical discriminants
+    // (A=0, B=1, False=2, K=3, True=4, V=5) rather than being special-cased
+    // to Bool discriminants (False=0, True=1). The match expression dispatches
+    // based on the discriminant, so a wrong discriminant would cause the wrong
+    // branch to be taken.
+    try runExpectI64(
+        \\{
+        \\    x = True
+        \\    match x {
+        \\        A => 0i64
+        \\        B => 1i64
+        \\        False => 2i64
+        \\        K => 3i64
+        \\        True => 4i64
+        \\        V => 5i64
+        \\    }
+        \\}
+    , 4, .no_trace);
+
+    // Also verify False gets discriminant 2 (not 0)
+    try runExpectI64(
+        \\{
+        \\    x = False
+        \\    match x {
+        \\        A => 0i64
+        \\        B => 1i64
+        \\        False => 2i64
+        \\        K => 3i64
+        \\        True => 4i64
+        \\        V => 5i64
+        \\    }
+        \\}
+    , 2, .no_trace);
 }
 
 test "Str.trim" {

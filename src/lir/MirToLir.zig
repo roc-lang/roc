@@ -24,6 +24,7 @@ const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 const Region = base.Region;
 const StringLiteral = base.StringLiteral;
+const ModuleEnv = @import("can").ModuleEnv;
 const CIR = @import("can").CIR;
 
 const LirExpr = LIR.LirExpr;
@@ -43,11 +44,25 @@ mir_store: *const MIR.Store,
 lir_store: *LirExprStore,
 layout_store: *layout.Store,
 
+/// Source module env for looking up string literals from CIR
+source_env: *const ModuleEnv,
+
+/// All module envs for cross-module string literal lookup
+all_module_envs: []const *const ModuleEnv,
+
+/// Ident index for the `True` tag — needed to resolve Bool discriminants
+/// (Bool is `prim.bool`, not a `tag_union`, so we can't look up tags in the monotype).
+true_tag: Ident.Idx,
+
 /// Cache: Monotype.Idx → layout.Idx (avoid recomputation)
 layout_cache: std.AutoHashMap(u32, layout.Idx),
 
 /// Recursion guard for propagating symbol defs from MIR to LIR
 propagating_defs: std.AutoHashMap(u64, void),
+
+/// Maps symbol → layout for lambda parameters and let-bindings,
+/// so captured variables can find their layout even when not in symbol_defs.
+symbol_layouts: std.AutoHashMap(u64, layout.Idx),
 
 /// Scratch buffers for building spans
 scratch_lir_expr_ids: std.ArrayList(LirExprId),
@@ -66,14 +81,21 @@ pub fn init(
     mir_store: *const MIR.Store,
     lir_store: *LirExprStore,
     layout_store: *layout.Store,
+    source_env: *const ModuleEnv,
+    all_module_envs: []const *const ModuleEnv,
+    true_tag: Ident.Idx,
 ) Self {
     return .{
         .allocator = allocator,
         .mir_store = mir_store,
         .lir_store = lir_store,
         .layout_store = layout_store,
+        .source_env = source_env,
+        .all_module_envs = all_module_envs,
+        .true_tag = true_tag,
         .layout_cache = std.AutoHashMap(u32, layout.Idx).init(allocator),
         .propagating_defs = std.AutoHashMap(u64, void).init(allocator),
+        .symbol_layouts = std.AutoHashMap(u64, layout.Idx).init(allocator),
         .scratch_lir_expr_ids = std.ArrayList(LirExprId).empty,
         .scratch_lir_pattern_ids = std.ArrayList(LirPatternId).empty,
         .scratch_lir_stmts = std.ArrayList(LirStmt).empty,
@@ -88,6 +110,7 @@ pub fn init(
 pub fn deinit(self: *Self) void {
     self.layout_cache.deinit();
     self.propagating_defs.deinit();
+    self.symbol_layouts.deinit();
     self.scratch_lir_expr_ids.deinit(self.allocator);
     self.scratch_lir_pattern_ids.deinit(self.allocator);
     self.scratch_lir_stmts.deinit(self.allocator);
@@ -101,6 +124,36 @@ pub fn deinit(self: *Self) void {
 /// Lower a MIR expression to a LIR expression.
 pub fn lower(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
     return self.lowerExpr(mir_expr_id);
+}
+
+/// Copy a string literal from the source CIR module env to the LIR store.
+/// MIR crash/str expressions hold StringLiteral.Idx values that point into the
+/// CIR's string store. LIR has its own separate string store, so we must copy.
+/// Since each module has its own CommonEnv (and string store), cross-module
+/// symbol propagation may produce string indices from any module's store.
+/// We try the source_env first, then fall back to all_module_envs.
+fn copyStringToLir(self: *Self, cir_str_idx: StringLiteral.Idx) Allocator.Error!StringLiteral.Idx {
+    if (cir_str_idx == .none) return .none;
+    const idx_u32: u32 = @intCast(@intFromEnum(cir_str_idx));
+
+    // Try the source module env first (most common case)
+    // Use <= because an empty string's Idx equals the buffer length
+    // (the data region is zero bytes, starting right at the end of the buffer)
+    if (idx_u32 <= self.source_env.common.strings.buffer.len()) {
+        const str_bytes = self.source_env.getString(cir_str_idx);
+        return self.lir_store.strings.insert(self.allocator, str_bytes);
+    }
+
+    // Fall back to other module envs for cross-module string literals
+    for (self.all_module_envs) |env| {
+        if (idx_u32 <= env.common.strings.buffer.len()) {
+            const str_bytes = env.getString(cir_str_idx);
+            return self.lir_store.strings.insert(self.allocator, str_bytes);
+        }
+    }
+
+    // String index not found in any module — return none as fallback
+    return .none;
 }
 
 /// Convert a Monotype.Idx to a layout.Idx, using a cache.
@@ -143,7 +196,7 @@ fn layoutFromMonotypeInner(self: *Self, monotype: Monotype.Monotype) Allocator.E
             const inner_layout = try self.layoutFromMonotype(b.inner);
             break :blk try self.layout_store.insertBox(inner_layout);
         },
-        .func => layout.Idx.named_fn,
+        .func => layout.Idx.opaque_ptr,
         .record => |r| try self.layoutFromRecord(r),
         .tuple => |t| try self.layoutFromTuple(t),
         .tag_union => |tu| try self.layoutFromTagUnion(tu),
@@ -208,6 +261,13 @@ fn layoutFromTagUnion(self: *Self, tu: anytype) Allocator.Error!layout.Idx {
         return self.layout_store.putTuple(self.scratch_layouts.items[save_layouts..]);
     }
 
+    // Bool-like: exactly 2 tags, both zero-payload → bool layout
+    if (tags.len == 2) {
+        const p0 = self.mir_store.monotype_store.getIdxSpan(tags[0].payloads);
+        const p1 = self.mir_store.monotype_store.getIdxSpan(tags[1].payloads);
+        if (p0.len == 0 and p1.len == 0) return .bool;
+    }
+
     // Multi-tag union: build per-variant payload layouts
     const zst_idx = try self.layout_store.ensureZstLayout();
 
@@ -248,8 +308,24 @@ fn isSingleTagUnion(self: *const Self, mono_idx: Monotype.Idx) bool {
 fn tagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monotype.Idx) u16 {
     const monotype = self.mir_store.monotype_store.getMonotype(union_mono_idx);
     switch (monotype) {
+        .prim => |p| {
+            // Bool is a primitive, not a tag_union. Its discriminants are:
+            // False = 0, True = 1 (sorted alphabetically).
+            std.debug.assert(p == .bool);
+            return if (@as(u32, @bitCast(tag_name)) == @as(u32, @bitCast(self.true_tag))) 1 else 0;
+        },
         .tag_union => |tu| {
             const tags = self.mir_store.monotype_store.getTags(tu.tags);
+
+            // Bool-like tag_union: 2 tags, both zero-payload.
+            // Use the same convention as prim.bool: False=0, True=1.
+            if (tags.len == 2) {
+                const p0 = self.mir_store.monotype_store.getIdxSpan(tags[0].payloads);
+                const p1 = self.mir_store.monotype_store.getIdxSpan(tags[1].payloads);
+                if (p0.len == 0 and p1.len == 0) {
+                    return if (@as(u32, @bitCast(tag_name)) == @as(u32, @bitCast(self.true_tag))) 1 else 0;
+                }
+            }
 
             if (std.debug.runtime_safety) {
                 for (tags[0..tags.len -| 1], tags[1..]) |a, b| {
@@ -278,7 +354,10 @@ fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
         .frac_f32 => |v| self.lir_store.addExpr(.{ .f32_literal = v }, region),
         .frac_f64 => |v| self.lir_store.addExpr(.{ .f64_literal = v }, region),
         .dec => |v| self.lir_store.addExpr(.{ .dec_literal = v.num }, region),
-        .str => |s| self.lir_store.addExpr(.{ .str_literal = s }, region),
+        .str => |s| blk: {
+            const lir_str_idx = try self.copyStringToLir(s);
+            break :blk self.lir_store.addExpr(.{ .str_literal = lir_str_idx }, region);
+        },
         .list => |l| self.lowerList(l, mono_idx, region),
         .record => |r| self.lowerRecord(r, mono_idx, region),
         .tuple => |t| self.lowerTuple(t, mono_idx, region),
@@ -295,7 +374,10 @@ fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
         .runtime_err_can, .runtime_err_type, .runtime_err_ellipsis, .runtime_err_anno_only => {
             return self.lir_store.addExpr(.runtime_error, region);
         },
-        .crash => |s| self.lir_store.addExpr(.{ .crash = .{ .msg = s } }, region),
+        .crash => |s| blk: {
+            const lir_str_idx = try self.copyStringToLir(s);
+            break :blk self.lir_store.addExpr(.{ .crash = .{ .msg = lir_str_idx } }, region);
+        },
         .dbg_expr => |d| self.lowerDbg(d, mono_idx, region),
         .expect => |e| self.lowerExpect(e, mono_idx, region),
         .for_loop => |f| self.lowerForLoop(f, mono_idx, region),
@@ -311,7 +393,16 @@ fn lowerInt(self: *Self, int_data: anytype, mono_idx: Monotype.Idx, region: Regi
     // because getExprLayout uses the literal type to determine size, and emitting
     // i64_literal for a u128/i128 variable would cause wrong-sized allocations.
     const target_layout = try self.layoutFromMonotype(mono_idx);
-    const needs_128 = target_layout == .i128 or target_layout == .u128 or target_layout == .dec;
+
+    // Dec: integer literals with Dec type must be scaled by 10^18 (RocDec representation).
+    // The MIR stores the raw integer value; we convert to Dec here.
+    if (target_layout == .dec) {
+        const val = int_data.value.toI128();
+        const one_point_zero: i128 = 1_000_000_000_000_000_000;
+        return self.lir_store.addExpr(.{ .dec_literal = val * one_point_zero }, region);
+    }
+
+    const needs_128 = target_layout == .i128 or target_layout == .u128;
 
     switch (int_data.value.kind) {
         .u128 => {
@@ -536,9 +627,13 @@ fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, region: Region
         const save_captures_len = self.scratch_lir_captures.items.len;
         defer self.scratch_lir_captures.shrinkRetainingCapacity(save_captures_len);
         for (mir_captures) |cap| {
-            // Look up the captured symbol's type by searching symbol_defs
+            // Look up the captured symbol's layout. Try symbol_defs first (for
+            // let-bindings), then symbol_layouts (for lambda parameters from
+            // enclosing scopes that were registered during pattern lowering).
             const cap_layout = if (self.mir_store.getSymbolDef(cap.symbol)) |def_id|
                 try self.layoutFromMonotype(self.mir_store.typeOf(def_id))
+            else if (self.symbol_layouts.get(@bitCast(cap.symbol))) |cached_layout|
+                cached_layout
             else
                 unreachable;
 
@@ -1276,6 +1371,9 @@ fn lowerPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Error!LirPatte
     return switch (pat) {
         .bind => |sym| blk: {
             const layout_idx = try self.layoutFromMonotype(mono_idx);
+            // Register symbol → layout so captured variables can find their layout
+            const sym_key: u64 = @bitCast(sym);
+            try self.symbol_layouts.put(sym_key, layout_idx);
             break :blk self.lir_store.addPattern(.{ .bind = .{ .symbol = sym, .layout_idx = layout_idx } }, region);
         },
         .wildcard => blk: {
@@ -1319,7 +1417,10 @@ fn lowerPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Error!LirPatte
                 .layout_idx = layout_idx,
             } }, region);
         },
-        .str_literal => |s| self.lir_store.addPattern(.{ .str_literal = s }, region),
+        .str_literal => |s| blk: {
+            const lir_str_idx = try self.copyStringToLir(s);
+            break :blk self.lir_store.addPattern(.{ .str_literal = lir_str_idx }, region);
+        },
         .dec_literal => |d| blk: {
             const layout_idx = try self.layoutFromMonotype(mono_idx);
             // Represent decimal pattern as an int literal with Dec layout
@@ -1888,7 +1989,8 @@ test "lowerExprSpan re-entrancy: list of calls preserves all elements" {
     const list_expr = try env.mir_store.addExpr(allocator, .{ .list = .{ .elems = list_elems } }, list_mono, Region.zero());
 
     // Lower MIR -> LIR
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(list_expr);
@@ -1919,7 +2021,8 @@ test "MIR int literal lowers to LIR i64_literal" {
         .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
     } }, i64_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(int_expr);
@@ -1947,7 +2050,8 @@ test "MIR zero-arg tag lowers to LIR zero_arg_tag" {
         .args = MIR.ExprSpan.empty(),
     } }, union_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(tag_expr);
@@ -1970,7 +2074,8 @@ test "MIR empty list lowers to LIR empty_list" {
         .elems = MIR.ExprSpan.empty(),
     } }, list_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(list_expr);
@@ -1992,7 +2097,8 @@ test "MIR lookup lowers to LIR lookup" {
 
     const lookup_expr = try env.mir_store.addExpr(allocator, .{ .lookup = sym_x }, i64_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(lookup_expr);
@@ -2028,7 +2134,8 @@ test "MIR block lowers to LIR block" {
         .final_expr = lookup_x,
     } }, i64_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(block_expr);
@@ -2092,7 +2199,8 @@ test "MIR match with pattern alternatives lowers to multiple LIR match-branches"
         .branches = branches,
     } }, i64_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(match_expr);
@@ -2134,7 +2242,8 @@ test "MIR multi-tag union produces proper tag_union layout" {
     });
     const union_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .tag_union = .{ .tags = tag_span } });
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const layout_idx = try translator.layoutFromMonotype(union_mono);
@@ -2195,7 +2304,8 @@ test "MIR multi-tag union tags get correct discriminants" {
         .args = foo_args,
     } }, union_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     // Check Bar → discriminant 0
@@ -2247,7 +2357,8 @@ test "MIR lambda with single capture lowers to closure with unwrapped_capture" {
         .captures = captures,
     } }, func_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(lambda_expr);
@@ -2306,7 +2417,8 @@ test "MIR lambda with multiple captures lowers to closure with struct_captures" 
         .captures = captures,
     } }, func_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(lambda_expr);
@@ -2364,7 +2476,8 @@ test "MIR record access finds correct field index for non-first field" {
         .field_name = field_c,
     } }, i64_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(access_expr);
@@ -2410,7 +2523,8 @@ test "MIR tuple access preserves element index" {
         .elem_index = 2,
     } }, i64_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(access_expr);
@@ -2444,7 +2558,8 @@ test "MIR lookup propagates symbol def to LIR store" {
     // Lower a lookup to x
     const lookup_expr = try env.mir_store.addExpr(allocator, .{ .lookup = sym_x }, i64_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(lookup_expr);
@@ -2491,7 +2606,8 @@ test "MIR single-tag union with one payload emits payload directly (P0 fix)" {
         .args = ok_args,
     } }, union_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(tag_expr);
@@ -2526,7 +2642,8 @@ test "MIR single-tag union with zero args emits zero_arg_tag" {
         .args = empty_args,
     } }, union_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(tag_expr);
@@ -2568,7 +2685,8 @@ test "MIR single-tag union with multiple payloads emits tuple" {
         .args = pair_args,
     } }, union_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(tag_expr);
@@ -2606,7 +2724,8 @@ test "MIR single-tag union pattern with one arg emits payload pattern directly" 
         .args = pat_args,
     } }, union_mono);
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_pat_id = try translator.lowerPattern(tag_pat);
@@ -2657,7 +2776,8 @@ test "MIR hosted lambda lowers to LIR lambda wrapping hosted_call" {
         .body = crash_body,
     } }, func_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(hosted_expr);
@@ -2720,7 +2840,8 @@ test "MIR block with decl_var and mutate_var lowers to LIR decl and mutate" {
         .final_expr = lookup_s,
     } }, i64_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(block_expr);
@@ -2786,7 +2907,8 @@ test "MIR lambda with heterogeneous captures (I64 + Str) lowers to closure with 
         .captures = captures,
     } }, func_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(lambda_expr);
@@ -2831,7 +2953,8 @@ test "MIR for_loop lowers to LIR for_loop" {
         .body = body_expr,
     } }, unit_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(for_expr);
@@ -2868,7 +2991,8 @@ test "MIR while_loop lowers to LIR while_loop" {
         .body = body_expr,
     } }, unit_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(while_expr);
@@ -2895,7 +3019,8 @@ test "MIR dbg_expr lowers to LIR dbg" {
         .expr = inner_expr,
     } }, i64_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(dbg_expr);
@@ -2923,7 +3048,8 @@ test "MIR expect lowers to LIR expect" {
         .body = cond_expr,
     } }, unit_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(expect_expr);
@@ -2946,7 +3072,8 @@ test "MIR crash lowers to LIR crash" {
         .crash = StringLiteral.Idx.none,
     }, unit_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(crash_expr);
@@ -2973,7 +3100,8 @@ test "MIR return_expr lowers to LIR early_return" {
         .expr = inner_expr,
     } }, i64_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(return_expr);
@@ -2996,7 +3124,8 @@ test "MIR break_expr lowers to LIR break_expr" {
         .break_expr = {},
     }, unit_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(break_expr_id);
@@ -3029,7 +3158,8 @@ test "MIR num_plus low-level lowers to LIR binop add" {
         .args = args,
     } }, i64_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(ll_expr);
@@ -3057,7 +3187,8 @@ test "MIR num_is_zero with f64 operand emits f64 zero literal" {
         .args = args,
     } }, bool_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(ll_expr);
@@ -3092,7 +3223,8 @@ test "MIR num_is_zero with i128 operand emits i128 zero literal" {
         .args = args,
     } }, bool_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(ll_expr);
@@ -3122,7 +3254,8 @@ test "MIR large unsigned int (U64 max) lowers to LIR i128_literal" {
         .value = .{ .bytes = @bitCast(@as(u128, std.math.maxInt(u64))), .kind = .u128 },
     } }, u64_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(int_expr);
@@ -3178,7 +3311,8 @@ test "record access uses layout field order not monotype alphabetical order" {
         .field_name = field_age,
     } }, u8_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(access_expr);
@@ -3225,7 +3359,8 @@ test "record destructure wildcard gets actual field layout not zst" {
         .field_names = destruct_field_names,
     } }, record_mono);
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_pat_id = try translator.lowerPattern(destruct_pat);
@@ -3265,7 +3400,8 @@ test "MIR small i128 value emits i128_literal not i64_literal" {
         .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
     } }, i128_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(int_expr);
@@ -3290,7 +3426,8 @@ test "MIR small u128 value emits i128_literal not i64_literal" {
         .value = .{ .bytes = @bitCast(@as(u128, 7)), .kind = .u128 },
     } }, u128_mono, Region.zero());
 
-    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    const all_envs: []const *const ModuleEnv = &.{&env.module_env};
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.module_env, all_envs, env.module_env.idents.true_tag);
     defer translator.deinit();
 
     const lir_id = try translator.lower(int_expr);

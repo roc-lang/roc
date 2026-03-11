@@ -5,8 +5,8 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const mono = @import("mono");
-const Symbol = mono.MonoIR.Symbol;
+const lir = @import("lir");
+const Symbol = lir.LIR.Symbol;
 const WasmModule = @import("WasmModule.zig");
 const ValType = WasmModule.ValType;
 

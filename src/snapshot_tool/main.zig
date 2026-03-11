@@ -7,6 +7,7 @@
 //! the given Roc code snippet.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const parse = @import("parse");
 const can = @import("can");
@@ -20,6 +21,82 @@ const repl = @import("repl");
 const eval_mod = @import("eval");
 const docs_mod = @import("docs");
 const tracy = @import("tracy");
+const sljmp = @import("sljmp");
+
+/// Custom panic handler that enables catching Zig panics (e.g., `unreachable` in
+/// the dev backend) during snapshot testing. When `panic_jmp` is set, longjmps back
+/// to the saved point instead of aborting; otherwise falls through to the default handler.
+pub const panic = std.debug.FullPanic(panicHandler);
+
+threadlocal var panic_jmp: ?*sljmp.JmpBuf = null;
+threadlocal var panic_msg: ?[]const u8 = null;
+
+fn panicHandler(msg: []const u8, ret_addr: ?usize) noreturn {
+    if (panic_jmp) |jmp| {
+        panic_msg = msg;
+        if (verbose_log) {
+            std.debug.print("  PANIC TRACE: {s}\n", .{msg});
+            if (ret_addr) |addr| {
+                std.debug.print("  return address: 0x{x}\n", .{addr});
+            }
+            std.debug.dumpCurrentStackTrace(ret_addr);
+        }
+        panic_jmp = null; // prevent re-entry
+        sljmp.longjmp(jmp, 1);
+    }
+    // No protection active — use default behavior.
+    std.debug.defaultPanic(msg, @returnAddress());
+}
+
+/// Unix signal handler for catching segfaults and illegal instructions from
+/// generated code. Uses the same panic_jmp mechanism as the panic handler.
+/// Not available on Windows (no POSIX signals).
+fn crashSignalHandler(_: i32) callconv(.c) void {
+    if (panic_jmp) |jmp| {
+        panic_msg = "signal: segfault or illegal instruction in generated code";
+        panic_jmp = null;
+        sljmp.longjmp(jmp, 2);
+    }
+    if (comptime builtin.os.tag != .windows) {
+        // No protection active — reset to default handler and re-raise.
+        const dfl = std.posix.Sigaction{
+            .handler = .{ .handler = std.posix.SIG.DFL },
+            .mask = std.posix.sigemptyset(),
+            .flags = 0,
+        };
+        std.posix.sigaction(std.posix.SIG.SEGV, &dfl, null);
+        std.posix.sigaction(std.posix.SIG.BUS, &dfl, null);
+        std.posix.sigaction(std.posix.SIG.ILL, &dfl, null);
+    }
+}
+
+/// SIGALRM handler for catching infinite loops in generated code.
+fn alarmSignalHandler(_: i32) callconv(.c) void {
+    if (panic_jmp) |jmp| {
+        panic_msg = "timeout: dev backend execution exceeded time limit";
+        panic_jmp = null;
+        sljmp.longjmp(jmp, 3);
+    }
+}
+
+fn installCrashSignalHandlers() void {
+    if (comptime builtin.os.tag == .windows) return;
+    const sa = std.posix.Sigaction{
+        .handler = .{ .handler = &crashSignalHandler },
+        .mask = std.posix.sigemptyset(),
+        .flags = std.os.linux.SA.NODEFER,
+    };
+    std.posix.sigaction(std.posix.SIG.SEGV, &sa, null);
+    std.posix.sigaction(std.posix.SIG.BUS, &sa, null);
+    std.posix.sigaction(std.posix.SIG.ILL, &sa, null);
+
+    const alarm_sa = std.posix.Sigaction{
+        .handler = .{ .handler = &alarmSignalHandler },
+        .mask = std.posix.sigemptyset(),
+        .flags = std.os.linux.SA.NODEFER,
+    };
+    std.posix.sigaction(std.posix.SIG.ALRM, &alarm_sa, null);
+}
 
 const Repl = repl.Repl;
 const CrashContext = eval_mod.CrashContext;
@@ -4011,11 +4088,7 @@ fn processDevObjectSnapshot(
         }
     }
 
-    // 6. Process hosted functions
-    const mono = @import("mono");
-    var hosted_functions = mono.Lower.HostedFunctionMap.init(allocator);
-    defer hosted_functions.deinit();
-
+    // 6. Process hosted functions (write hosted_index into CIR node payloads)
     {
         const HostedCompiler = can.HostedCompiler;
         var all_hosted_fns = std.ArrayList(HostedCompiler.HostedFunctionInfo).empty;
@@ -4063,8 +4136,8 @@ fn processDevObjectSnapshot(
             }
             all_hosted_fns.shrinkRetainingCapacity(write_idx);
 
-            // Register hosted functions
-            for (modules, 0..) |mod, global_module_idx| {
+            // Write hosted_index into CIR node payloads (mir.Lower reads e_hosted_lambda.index directly)
+            for (modules) |mod| {
                 if (!mod.is_platform_sibling) continue;
                 const plat_env = mod.env;
 
@@ -4094,11 +4167,6 @@ fn processDevObjectSnapshot(
                                 payload.index = hosted_index;
                                 expr_node.setPayload(.{ .expr_hosted_lambda = payload });
                                 plat_env.store.nodes.set(expr_node_idx, expr_node);
-
-                                const mod_idx: u16 = @intCast(global_module_idx + 1);
-                                hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def_idx)), hosted_index) catch {};
-                                hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def.pattern)), hosted_index) catch {};
-                                hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def.expr)), hosted_index) catch {};
                                 break;
                             }
                         }
@@ -4122,7 +4190,11 @@ fn processDevObjectSnapshot(
     };
     defer layout_store.deinit();
 
-    // 8. Find app module index and lower to Mono IR
+    // 8. Find app module index and lower CIR → MIR → LIR
+    const mir_mod = @import("mir");
+    const MIR = mir_mod.MIR;
+    const lir_mod = @import("lir");
+
     var app_module_idx: ?u32 = null;
     for (modules, 0..) |mod, i| {
         if (mod.is_app) {
@@ -4131,15 +4203,30 @@ fn processDevObjectSnapshot(
         }
     }
 
-    var mono_store = mono.MonoExprStore.init(allocator);
-    defer mono_store.deinit();
+    const platform_module_idx: u32 = @intCast(platform_idx + 1);
+    const platform_types = &all_module_envs[platform_module_idx].types;
 
-    var lowerer = mono.Lower.init(allocator, &mono_store, all_module_envs, &lambda_inference, &layout_store, app_module_idx, &hosted_functions);
-    defer lowerer.deinit();
+    var mir_store = MIR.Store.init(allocator) catch {
+        std.log.err("Failed to create MIR store", .{});
+        return false;
+    };
+    defer mir_store.deinit(allocator);
+
+    var mir_lower = mir_mod.Lower.init(allocator, &mir_store, all_module_envs, platform_types, platform_module_idx, app_module_idx) catch {
+        std.log.err("Failed to create MIR lowerer", .{});
+        return false;
+    };
+    defer mir_lower.deinit();
+
+    var lir_store = lir_mod.LirExprStore.init(allocator);
+    defer lir_store.deinit();
+
+    var mir_to_lir = lir_mod.MirToLir.init(allocator, &mir_store, &lir_store, &layout_store, all_module_envs[platform_module_idx], all_module_envs, all_module_envs[0].idents.true_tag);
+    defer mir_to_lir.deinit();
 
     // Use provides entries from build pipeline (centralized in CompiledModuleInfo)
-    const backend = @import("backend");
-    var entrypoints = std.ArrayList(backend.Entrypoint).empty;
+    const backend_mod = @import("backend");
+    var entrypoints = std.ArrayList(backend_mod.Entrypoint).empty;
     defer {
         for (entrypoints.items) |ep| {
             allocator.free(ep.symbol_name);
@@ -4163,16 +4250,20 @@ fn processDevObjectSnapshot(
                 .assign => |assign| {
                     const ident_name = platform_module.env.getIdent(assign.ident);
                     if (std.mem.eql(u8, ident_name, entry.roc_ident)) {
-                        const mono_expr_id = lowerer.lowerExpr(@intCast(platform_idx + 1), def.expr) catch continue;
+                        // Lower CIR → MIR
+                        const mir_expr_id = mir_lower.lowerExpr(def.expr) catch continue;
+                        // Lower MIR → LIR
+                        const lir_expr_id = mir_to_lir.lower(mir_expr_id) catch continue;
+
                         const type_var = can.ModuleEnv.varFrom(def.expr);
                         var scope = types.TypeScope.init(allocator);
                         defer scope.deinit();
-                        const ret_layout = layout_store.fromTypeVar(@intCast(platform_idx + 1), type_var, &scope, null) catch continue;
+                        const ret_layout = layout_store.fromTypeVar(platform_module_idx, type_var, &scope, null) catch continue;
 
                         const symbol_name = std.fmt.allocPrint(allocator, "roc__{s}", .{entry.ffi_symbol}) catch continue;
                         entrypoints.append(allocator, .{
                             .symbol_name = symbol_name,
-                            .body_expr = mono_expr_id,
+                            .body_expr = lir_expr_id,
                             .arg_layouts = &[_]layout_mod.Idx{},
                             .ret_layout = ret_layout,
                         }) catch continue;
@@ -4190,14 +4281,17 @@ fn processDevObjectSnapshot(
     }
 
     // 9. RC insertion
-    var rc_pass = try mono.RcInsert.RcInsertPass.init(allocator, &mono_store, &layout_store);
+    var rc_pass = lir_mod.RcInsert.RcInsertPass.init(allocator, &lir_store, &layout_store) catch {
+        std.log.err("Failed to create RC insertion pass", .{});
+        return false;
+    };
     defer rc_pass.deinit();
 
     for (entrypoints.items) |*ep| {
         ep.body_expr = rc_pass.insertRcOps(ep.body_expr) catch ep.body_expr;
     }
 
-    const procs = mono_store.getProcs();
+    const procs = lir_store.getProcs();
 
     // 10. Cross-compile for all targets and hash
     const RocTarget = roc_target.RocTarget;
@@ -4206,7 +4300,7 @@ fn processDevObjectSnapshot(
 
     var hash_results: [roc_target_fields.len]TargetHashResult = undefined;
 
-    var object_compiler = backend.ObjectFileCompiler.init(allocator);
+    var object_compiler = backend_mod.ObjectFileCompiler.init(allocator);
 
     inline for (roc_target_fields, 0..) |field, i| {
         const target: RocTarget = @enumFromInt(field.value);
@@ -4215,7 +4309,7 @@ fn processDevObjectSnapshot(
         const arch = target.toCpuArch();
         if (arch == .x86_64 or arch == .aarch64 or arch == .aarch64_be) {
             if (object_compiler.compileToObjectFile(
-                &mono_store,
+                &lir_store,
                 &layout_store,
                 entrypoints.items,
                 procs,
@@ -4467,6 +4561,70 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
         try actual_outputs.append(repl_output);
     }
 
+    // Run dev backend for comparison with panic protection.
+    // The dev backend may hit `unreachable` or other panics for unimplemented
+    // features. The custom panic handler longjmps back here instead of aborting,
+    // so we can report the failure and continue with the next snapshot.
+    // Install signal handlers for SIGSEGV/SIGBUS/SIGILL from generated code.
+    installCrashSignalHandlers();
+    var dev_snapshot_ops = SnapshotOps.init(output.gpa);
+    defer dev_snapshot_ops.deinit();
+    if (Repl.initWithBackend(output.gpa, dev_snapshot_ops.get_ops(), dev_snapshot_ops.crashContextPtr(), .dev)) |dev_repl_val| {
+        var dev_repl = dev_repl_val;
+        defer dev_repl.deinit();
+
+        for (inputs.items, 0..) |input, i| {
+            // Set up panic protection via setjmp. If the dev backend panics,
+            // the custom panic handler longjmps back here with jmp_result != 0.
+            var jmp_buf: sljmp.JmpBuf = undefined;
+            const jmp_result = sljmp.setjmp(&jmp_buf);
+            if (jmp_result != 0) {
+                // Returned from a panic — report it and stop this snapshot's dev run.
+                // The dev_repl state is corrupted after a panic, so we can't continue.
+                const msg = panic_msg orelse "unknown";
+                std.debug.print("Dev REPL panic at input {d} in {s}: {s}\n", .{ i, snapshot_path, msg });
+                panic_msg = null;
+                break;
+            }
+            panic_jmp = &jmp_buf;
+            defer {
+                panic_jmp = null;
+            }
+
+            // Set a 10-second timeout to catch infinite loops in generated code.
+            _ = std.c.alarm(10);
+            defer _ = std.c.alarm(0);
+
+            const dev_output = dev_repl.step(input) catch |err| {
+                std.debug.print("Dev REPL error at input {d} in {s}: {}\n", .{ i, snapshot_path, err });
+                continue;
+            };
+            defer output.gpa.free(dev_output);
+
+            // Cap dev output to prevent flooding terminal with corrupted string data.
+            const max_output_len = 4096;
+            const dev_display = if (dev_output.len > max_output_len)
+                dev_output[0..max_output_len]
+            else
+                dev_output;
+
+            if (i < actual_outputs.items.len) {
+                const interp_output = actual_outputs.items[i];
+                if (!std.mem.eql(u8, interp_output, dev_output)) {
+                    if (!floatStringsWithinEpsilon(interp_output, dev_output)) {
+                        std.debug.print(
+                            "REPL backend mismatch at input {d} in {s}:\n  interpreter: '{s}'\n  dev:         '{s}'{s}\n",
+                            .{ i, snapshot_path, interp_output, dev_display, if (dev_output.len > max_output_len) "... (truncated)" else "" },
+                        );
+                        // Note: mismatches are diagnostic only — they don't fail the
+                        // snapshot check. Set success = false here once the dev backend
+                        // is mature enough that mismatches indicate regressions.
+                    }
+                }
+            }
+        }
+    } else |_| {} // Dev init failed — skip comparison
+
     switch (config.output_section_command) {
         .update => {
             try output.begin_section("OUTPUT");
@@ -4703,6 +4861,22 @@ test "TODO: cross-module function calls - string_ordering_unsupported" {}
 
 test "LambdaLifter" {
     std.testing.refAllDecls(LambdaLifter);
+}
+
+/// Check if two strings represent float values within a small epsilon.
+/// This tolerates small f32/f64 differences between interpreter and dev backend
+/// due to CPU instruction differences.
+fn floatStringsWithinEpsilon(a: []const u8, b: []const u8) bool {
+    const fa = std.fmt.parseFloat(f64, a) catch return false;
+    const fb = std.fmt.parseFloat(f64, b) catch return false;
+    // Only tolerate epsilon for actual float values (contain '.' or 'e')
+    const a_is_float = std.mem.indexOfScalar(u8, a, '.') != null or std.mem.indexOfScalar(u8, a, 'e') != null;
+    const b_is_float = std.mem.indexOfScalar(u8, b, '.') != null or std.mem.indexOfScalar(u8, b, 'e') != null;
+    if (!a_is_float and !b_is_float) return false;
+    const diff = @abs(fa - fb);
+    const magnitude = @max(@abs(fa), @abs(fb));
+    const epsilon: f64 = if (magnitude > 1.0) magnitude * 1e-10 else 1e-10;
+    return diff <= epsilon;
 }
 
 /// An implementation of RocOps for snapshot testing.

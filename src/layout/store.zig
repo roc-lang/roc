@@ -112,6 +112,12 @@ pub const Store = struct {
     // Cached Box ident to avoid repeated string lookups (null if Box doesn't exist in this env)
     box_ident: ?Ident.Idx,
 
+    // The builtin module's own environment, used for cross-module ident comparison.
+    // Nominal types from the builtin module store ident indices from the builtin module's
+    // own ident store, which differ from the user module's ident store indices.
+    // Null when the builtin module is not found in all_module_envs.
+    builtin_env: ?*const ModuleEnv,
+
     // Cached numeric type idents to avoid repeated string lookups
     u8_ident: ?Ident.Idx,
     i8_ident: ?Ident.Idx,
@@ -179,6 +185,16 @@ pub const Store = struct {
         allocator: std.mem.Allocator,
         target_usize: target.TargetUsize,
     ) std.mem.Allocator.Error!Self {
+        return initWithBuiltinEnv(all_module_envs, builtin_str_ident, null, allocator, target_usize);
+    }
+
+    pub fn initWithBuiltinEnv(
+        all_module_envs: []const *const ModuleEnv,
+        builtin_str_ident: ?Ident.Idx,
+        builtin_env: ?*const ModuleEnv,
+        allocator: std.mem.Allocator,
+        target_usize: target.TargetUsize,
+    ) std.mem.Allocator.Error!Self {
         // Use module 0's idents for builtin type identification
         const env = all_module_envs[0];
 
@@ -240,6 +256,7 @@ pub const Store = struct {
             .dec_ident = env.idents.dec_type,
             .bool_ident = env.idents.bool_type,
             .bool_plain_ident = env.idents.bool,
+            .builtin_env = builtin_env,
             .target_usize = target_usize,
         };
     }
@@ -294,17 +311,32 @@ pub const Store = struct {
         self.work.deinit(self.allocator);
     }
 
-    /// Check if a constraint range contains a from_numeral constraint.
-    /// This is used to determine if an unbound type variable represents
-    /// a numeric type (which should default to Dec) or a phantom type (which is a ZST).
+    /// Reset caches between evaluations (e.g., REPL sessions, test runs).
+    /// Module type stores get fresh type variables on each evaluation,
+    /// so cached layout mappings from old vars become stale.
+    /// Retains allocated capacity for reuse.
+    pub fn resetModuleCache(self: *Self, new_module_envs: []const *const ModuleEnv) void {
+        self.all_module_envs = new_module_envs;
+        self.layouts_by_module_var.clearRetainingCapacity();
+        self.recursive_boxed_layouts.clearRetainingCapacity();
+        self.raw_layout_placeholders.clearRetainingCapacity();
+        self.work.in_progress_vars.clearRetainingCapacity();
+        self.work.in_progress_nominals.clearRetainingCapacity();
+    }
+
+    /// Check if a constraint range contains a numeric constraint.
+    /// This includes from_numeral (numeric literals), desugared_binop (binary operators
+    /// like +, -, *), and desugared_unaryop (unary operators like negation).
+    /// All of these imply the type variable represents a numeric type which should
+    /// default to Dec rather than being treated as zero-sized.
     fn hasFromNumeralConstraint(self: *const Self, constraints: StaticDispatchConstraint.SafeList.Range) bool {
-        // Empty constraints can't contain from_numeral
         if (constraints.isEmpty()) {
             return false;
         }
         for (self.getTypesStore().sliceStaticDispatchConstraints(constraints)) |constraint| {
-            if (constraint.origin == .from_numeral) {
-                return true;
+            switch (constraint.origin) {
+                .from_numeral, .desugared_binop, .desugared_unaryop => return true,
+                .method_call, .where_clause => {},
             }
         }
         return false;
@@ -338,7 +370,7 @@ pub const Store = struct {
 
     pub fn putRecord(
         self: *Self,
-        env: *const ModuleEnv,
+        _: *const ModuleEnv,
         field_layouts: []const Layout,
         field_names: []const Ident.Idx,
     ) std.mem.Allocator.Error!Idx {
@@ -356,10 +388,11 @@ pub const Store = struct {
             });
         }
 
-        // Sort fields
+        // Sort fields by alignment (descending), then by name (ascending).
+        // Use getFieldName which resolves idents across all module envs,
+        // so cross-module record field names (e.g., from Builtin) are found.
         const AlignmentSortCtx = struct {
             store: *Self,
-            env: *const ModuleEnv,
             target_usize: target.TargetUsize,
             pub fn lessThan(ctx: @This(), lhs: RecordField, rhs: RecordField) bool {
                 const lhs_layout = ctx.store.getLayout(lhs.layout);
@@ -369,8 +402,8 @@ pub const Store = struct {
                 if (lhs_alignment.toByteUnits() != rhs_alignment.toByteUnits()) {
                     return lhs_alignment.toByteUnits() > rhs_alignment.toByteUnits();
                 }
-                const lhs_str = ctx.env.getIdent(lhs.name);
-                const rhs_str = ctx.env.getIdent(rhs.name);
+                const lhs_str = ctx.store.getFieldName(lhs.name);
+                const rhs_str = ctx.store.getFieldName(rhs.name);
                 return std.mem.order(u8, lhs_str, rhs_str) == .lt;
             }
         };
@@ -383,7 +416,7 @@ pub const Store = struct {
         std.mem.sort(
             RecordField,
             temp_fields.items,
-            AlignmentSortCtx{ .store = self, .env = env, .target_usize = self.targetUsize() },
+            AlignmentSortCtx{ .store = self, .target_usize = self.targetUsize() },
             AlignmentSortCtx.lessThan,
         );
 
@@ -895,6 +928,53 @@ pub const Store = struct {
             current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_size_align.alignment.toByteUnits()))));
 
             if (field.name == field_name_idx) {
+                return current_offset;
+            }
+
+            current_offset += field_size_align.size;
+        }
+
+        return null;
+    }
+
+    /// Get the field name text for an Ident.Idx.
+    /// Tries the current module first, then falls back to all module envs
+    /// for cross-module identifiers (e.g., record field names from Builtin).
+    pub fn getFieldName(self: *const Self, idx: Ident.Idx) []const u8 {
+        if (self.mutable_env) |env| {
+            return env.getIdent(idx);
+        }
+        const raw_idx: u32 = idx.idx;
+        // Try current module first
+        if (self.current_module_idx < self.all_module_envs.len) {
+            const env = self.all_module_envs[self.current_module_idx];
+            if (raw_idx < env.common.idents.interner.bytes.len())
+                return env.getIdent(idx);
+        }
+        // Fall back to all modules for cross-module idents
+        for (self.all_module_envs) |env| {
+            if (raw_idx < env.common.idents.interner.bytes.len())
+                return env.getIdent(idx);
+        }
+        return "?";
+    }
+
+    /// Get record field offset by string name (used by interpreter).
+    /// Compares field name text instead of Ident.Idx directly.
+    pub fn getRecordFieldOffsetByNameStr(self: *const Self, record_idx: RecordIdx, field_name: []const u8) ?u32 {
+        const record_data = self.getRecordData(record_idx);
+        const sorted_fields = self.record_fields.sliceRange(record_data.getFields());
+
+        var current_offset: u32 = 0;
+        var i: usize = 0;
+        while (i < sorted_fields.len) : (i += 1) {
+            const field = sorted_fields.get(i);
+            const field_layout = self.getLayout(field.layout);
+            const field_size_align = self.layoutSizeAlign(field_layout);
+
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_size_align.alignment.toByteUnits()))));
+
+            if (std.mem.eql(u8, self.getFieldName(field.name), field_name)) {
                 return current_offset;
             }
 
@@ -1894,6 +1974,10 @@ pub const Store = struct {
 
             // Declare layout outside the if so it's accessible in container finalization
             var layout: Layout = undefined;
+            // Track when we've identified a Bool nominal type. Layout.boolType() is
+            // Layout.int(.u8) which insertLayout would map to Idx.u8, losing the Bool
+            // distinction. This flag lets us map directly to Idx.bool instead.
+            var is_bool_layout = false;
 
             if (!skip_layout_computation) {
                 // Mark this var as in-progress before processing.
@@ -1920,6 +2004,10 @@ pub const Store = struct {
                                     if (self.builtin_str_plain_ident) |plain_str| {
                                         if (nominal_type.ident.ident_idx == plain_str) break :blk true;
                                     }
+                                    // Cross-module check: ident comes from the builtin module's store
+                                    if (self.builtin_env) |benv| {
+                                        if (nominal_type.ident.ident_idx == benv.idents.str) break :blk true;
+                                    }
                                 }
                                 break :blk false;
                             };
@@ -1938,20 +2026,34 @@ pub const Store = struct {
                                     if (self.bool_plain_ident) |plain_bool| {
                                         if (nominal_type.ident.ident_idx == plain_bool) break :blk true;
                                     }
+                                    // Cross-module check: the nominal type's ident comes from the
+                                    // builtin module's own ident store, so compare against it.
+                                    if (self.builtin_env) |benv| {
+                                        if (nominal_type.ident.ident_idx == benv.idents.bool) break :blk true;
+                                    }
                                 }
                                 break :blk false;
                             };
                             if (is_builtin_bool) {
-                                // This is Builtin.Bool - use bool layout (u8)
+                                // This is Builtin.Bool - use bool layout (u8).
+                                // Set flag so we map to Idx.bool instead of Idx.u8.
+                                is_bool_layout = true;
                                 break :flat_type Layout.boolType();
                             }
 
                             // Special handling for Builtin.Box
-                            const is_builtin_box = if (self.box_ident) |box_ident|
-                                nominal_type.origin_module == self.currentEnv().idents.builtin_module and
-                                    nominal_type.ident.ident_idx == box_ident
-                            else
-                                false;
+                            const is_builtin_box = blk: {
+                                if (nominal_type.origin_module == self.currentEnv().idents.builtin_module) {
+                                    if (self.box_ident) |box_ident| {
+                                        if (nominal_type.ident.ident_idx == box_ident) break :blk true;
+                                    }
+                                    // Cross-module check: ident comes from the builtin module's store
+                                    if (self.builtin_env) |benv| {
+                                        if (nominal_type.ident.ident_idx == benv.idents.box) break :blk true;
+                                    }
+                                }
+                                break :blk false;
+                            };
                             if (is_builtin_box) {
                                 // Extract the element type from the type arguments
                                 const type_args = self.getTypesStore().sliceNominalArgs(nominal_type);
@@ -1988,11 +2090,18 @@ pub const Store = struct {
                             }
 
                             // Special handling for Builtin.List
-                            const is_builtin_list = if (self.list_ident) |list_ident|
-                                nominal_type.origin_module == self.currentEnv().idents.builtin_module and
-                                    nominal_type.ident.ident_idx == list_ident
-                            else
-                                false;
+                            const is_builtin_list = blk: {
+                                if (nominal_type.origin_module == self.currentEnv().idents.builtin_module) {
+                                    if (self.list_ident) |list_ident| {
+                                        if (nominal_type.ident.ident_idx == list_ident) break :blk true;
+                                    }
+                                    // Cross-module check: ident comes from the builtin module's store
+                                    if (self.builtin_env) |benv| {
+                                        if (nominal_type.ident.ident_idx == benv.idents.list) break :blk true;
+                                    }
+                                }
+                                break :blk false;
+                            };
                             if (is_builtin_list) {
                                 // Extract the element type from the type arguments
                                 const type_args = self.getTypesStore().sliceNominalArgs(nominal_type);
@@ -2112,6 +2221,7 @@ pub const Store = struct {
                             // These have empty tag union backings but need scalar layouts
                             if (nominal_type.origin_module == self.currentEnv().idents.builtin_module) {
                                 const ident_idx = nominal_type.ident.ident_idx;
+                                // First try matching against this module's idents (qualified names)
                                 const num_layout: ?Layout = blk: {
                                     if (self.u8_ident) |u8_id| if (ident_idx == u8_id) break :blk Layout.int(types.Int.Precision.u8);
                                     if (self.i8_ident) |i8_id| if (ident_idx == i8_id) break :blk Layout.int(types.Int.Precision.i8);
@@ -2126,6 +2236,22 @@ pub const Store = struct {
                                     if (self.f32_ident) |f32_id| if (ident_idx == f32_id) break :blk Layout.frac(types.Frac.Precision.f32);
                                     if (self.f64_ident) |f64_id| if (ident_idx == f64_id) break :blk Layout.frac(types.Frac.Precision.f64);
                                     if (self.dec_ident) |dec_id| if (ident_idx == dec_id) break :blk Layout.frac(types.Frac.Precision.dec);
+                                    // Cross-module fallback: ident comes from the builtin module's store
+                                    if (self.builtin_env) |benv| {
+                                        if (ident_idx == benv.idents.u8) break :blk Layout.int(types.Int.Precision.u8);
+                                        if (ident_idx == benv.idents.i8) break :blk Layout.int(types.Int.Precision.i8);
+                                        if (ident_idx == benv.idents.u16) break :blk Layout.int(types.Int.Precision.u16);
+                                        if (ident_idx == benv.idents.i16) break :blk Layout.int(types.Int.Precision.i16);
+                                        if (ident_idx == benv.idents.u32) break :blk Layout.int(types.Int.Precision.u32);
+                                        if (ident_idx == benv.idents.i32) break :blk Layout.int(types.Int.Precision.i32);
+                                        if (ident_idx == benv.idents.u64) break :blk Layout.int(types.Int.Precision.u64);
+                                        if (ident_idx == benv.idents.i64) break :blk Layout.int(types.Int.Precision.i64);
+                                        if (ident_idx == benv.idents.u128) break :blk Layout.int(types.Int.Precision.u128);
+                                        if (ident_idx == benv.idents.i128) break :blk Layout.int(types.Int.Precision.i128);
+                                        if (ident_idx == benv.idents.f32) break :blk Layout.frac(types.Frac.Precision.f32);
+                                        if (ident_idx == benv.idents.f64) break :blk Layout.frac(types.Frac.Precision.f64);
+                                        if (ident_idx == benv.idents.dec) break :blk Layout.frac(types.Frac.Precision.dec);
+                                    }
                                     break :blk null;
                                 };
 
@@ -2599,7 +2725,9 @@ pub const Store = struct {
                 };
 
                 // We actually resolved a layout that wasn't zero-sized!
-                layout_idx = try self.insertLayout(layout);
+                // Bool needs special handling: Layout.boolType() is Layout.int(.u8),
+                // so insertLayout would produce Idx.u8 instead of Idx.bool.
+                layout_idx = if (is_bool_layout) .bool else try self.insertLayout(layout);
                 const layout_cache_key = ModuleVarKey{ .module_idx = self.current_module_idx, .var_ = current.var_ };
                 // Only cache if the layout doesn't depend on unresolved type parameters.
                 // Layouts that depend on unresolved params (like List(a) where 'a' has no mapping)

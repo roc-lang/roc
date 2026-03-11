@@ -83,31 +83,6 @@ pub const RocList = extern struct {
         return RocList{ .bytes = null, .length = 0, .capacity_or_alloc_ptr = 0 };
     }
 
-    pub fn eql(self: RocList, other: RocList) bool {
-        if (self.len() != other.len()) {
-            return false;
-        }
-
-        // Their lengths are the same, and one is empty; they're both empty!
-        if (self.isEmpty()) {
-            return true;
-        }
-
-        var index: usize = 0;
-        const self_bytes = self.bytes orelse unreachable;
-        const other_bytes = other.bytes orelse unreachable;
-
-        while (index < self.len()) {
-            if (self_bytes[index] != other_bytes[index]) {
-                return false;
-            }
-
-            index += 1;
-        }
-
-        return true;
-    }
-
     pub fn fromSlice(
         comptime T: type,
         slice: []const T,
@@ -1534,6 +1509,15 @@ pub fn listAllocationPtr(
 /// No-op reference counting function for non-refcounted types
 pub fn rcNone(_: ?*anyopaque, _: ?[*]u8) callconv(.c) void {}
 
+/// Test helper: compare two lists' raw bytes (only valid for flat scalar elements).
+fn testBytesEqual(a: RocList, b: RocList) bool {
+    if (a.len() != b.len()) return false;
+    if (a.isEmpty()) return true;
+    const a_bytes = a.bytes orelse return false;
+    const b_bytes = b.bytes orelse return false;
+    return std.mem.eql(u8, a_bytes[0..a.len()], b_bytes[0..b.len()]);
+}
+
 /// Append UTF-8 string bytes to list for efficient string-to-bytes conversion.
 pub fn listConcatUtf8(
     list: RocList,
@@ -1684,7 +1668,7 @@ test "listConcat: non-unique with unique overlapping" {
     var wanted = RocList.fromSlice(u8, ([_]u8{ 1, 2, 3, 4 })[0..], false, test_env.getOps());
     defer wanted.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
-    try std.testing.expect(concatted.eql(wanted));
+    try std.testing.expect(testBytesEqual(concatted, wanted));
 }
 
 test "listConcatUtf8" {
@@ -1700,7 +1684,7 @@ test "listConcatUtf8" {
     defer ret.decref(1, 1, false, null, &rcNone, test_env.getOps());
     const expected = RocList.fromSlice(u8, &[_]u8{ 1, 2, 3, 4, 240, 159, 144, 166 }, false, test_env.getOps());
     defer expected.decref(1, 1, false, null, &rcNone, test_env.getOps());
-    try std.testing.expect(ret.eql(expected));
+    try std.testing.expect(testBytesEqual(ret, expected));
 }
 
 test "RocList empty list creation" {
@@ -1775,19 +1759,19 @@ test "RocList equality operations" {
     defer list3.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Equal lists should be equal
-    try std.testing.expect(list1.eql(list2));
-    try std.testing.expect(list2.eql(list1));
+    try std.testing.expect(testBytesEqual(list1, list2));
+    try std.testing.expect(testBytesEqual(list2, list1));
 
     // Different lists should not be equal
-    try std.testing.expect(!list1.eql(list3));
-    try std.testing.expect(!list3.eql(list1));
+    try std.testing.expect(!testBytesEqual(list1, list3));
+    try std.testing.expect(!testBytesEqual(list3, list1));
 
     // Empty lists should be equal
     const empty1 = RocList.empty();
     defer empty1.decref(1, 1, false, null, rcNone, test_env.getOps());
     const empty2 = RocList.empty();
     defer empty2.decref(1, 1, false, null, rcNone, test_env.getOps());
-    try std.testing.expect(empty1.eql(empty2));
+    try std.testing.expect(testBytesEqual(empty1, empty2));
 }
 
 test "RocList uniqueness and cloning" {
@@ -1810,7 +1794,7 @@ test "RocList uniqueness and cloning" {
     defer cloned.decref(@alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
 
     // Both should be equal but different objects (since list was not unique)
-    try std.testing.expect(list.eql(cloned));
+    try std.testing.expect(testBytesEqual(list, cloned));
     try std.testing.expect(list.bytes != cloned.bytes);
 }
 
@@ -2567,8 +2551,8 @@ test "edge case: RocList equality with different capacities" {
     defer list2.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Should be equal despite different capacities
-    try std.testing.expect(list1.eql(list2));
-    try std.testing.expect(list2.eql(list1));
+    try std.testing.expect(testBytesEqual(list1, list2));
+    try std.testing.expect(testBytesEqual(list2, list1));
 }
 
 test "edge case: listAppendUnsafe multiple times" {
@@ -2723,7 +2707,7 @@ test "complex reference counting: makeUnique with shared list" {
     try std.testing.expect(unique_list.isUnique(test_env.getOps()));
 
     // But should have the same content
-    try std.testing.expect(unique_list.eql(original_list));
+    try std.testing.expect(testBytesEqual(unique_list, original_list));
 }
 
 test "complex reference counting: listIsUnique consistency" {
@@ -2760,7 +2744,7 @@ test "complex reference counting: clone behavior" {
 
     // Cloned list should be unique and have same content
     try std.testing.expect(cloned_list.isUnique(test_env.getOps()));
-    try std.testing.expect(cloned_list.eql(original_list));
+    try std.testing.expect(testBytesEqual(cloned_list, original_list));
 }
 
 test "complex reference counting: empty list operations" {
@@ -2924,7 +2908,7 @@ test "listReplaceInPlace vs listReplace comparison" {
     defer result2.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Both should produce the same result
-    try std.testing.expect(result1.eql(result2));
+    try std.testing.expect(testBytesEqual(result1, result2));
     try std.testing.expectEqual(out_element1, out_element2);
 }
 
@@ -3286,7 +3270,7 @@ test "memory management: clone with different update modes" {
     defer cloned.decref(@alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
 
     // Verify independence - they should have the same content but different memory
-    try std.testing.expect(cloned.eql(original));
+    try std.testing.expect(testBytesEqual(cloned, original));
     try std.testing.expect(cloned.isUnique(test_env.getOps()));
 
     // Verify they can be modified independently by testing capacity operations

@@ -18,8 +18,6 @@ pub const TestSpec = struct {
     io_spec: []const u8,
     /// Optional description of what the test verifies
     description: []const u8 = "",
-    /// If set, test is skipped with this reason
-    skip: []const u8 = "",
 };
 
 /// All fx platform tests that can be run with --test mode IO specs.
@@ -219,7 +217,6 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/list_map_fallible.roc",
         .io_spec = "1>done",
         .description = "Regression test: List.map with fallible function (U64.from_str)",
-        .skip = "dev backend does not yet support List.map with fallible functions",
     },
     .{
         .roc_file = "test/fx/list_append_stdin_uaf.roc",
@@ -368,6 +365,16 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/record_destructure.roc",
         .io_spec = "1>Bob 25 99",
         .description = "Regression test: Record destructuring with alignment-reordered fields",
+    },
+    .{
+        .roc_file = "test/fx/cross_module_recursive_nominal.roc",
+        .io_spec = "1>Div (correct)",
+        .description = "Cross-module recursive nominal types with pattern matching",
+    },
+    .{
+        .roc_file = "test/fx/test_no_dbg.roc",
+        .io_spec = "1>Text",
+        .description = "Recursive nominal type with List and pattern matching",
     },
 };
 

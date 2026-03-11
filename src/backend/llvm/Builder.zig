@@ -503,7 +503,7 @@ pub const Type = enum(u32) {
             .double, .i64, .x86_mmx => 64,
             .x86_fp80, .i80 => 80,
             .fp128, .ppc_fp128, .i128 => 128,
-            .ptr, .@"ptr addrspace(4)" => @panic("TODO: query data layout"),
+            .ptr, .@"ptr addrspace(4)" => unreachable, // pointers don't have scalar bits; use ptrtoint/addrspacecast instead
             _ => {
                 const item = builder.type_items.items[@intFromEnum(self)];
                 return switch (item.tag) {
@@ -512,7 +512,7 @@ pub const Type = enum(u32) {
                     .vararg_function,
                     => unreachable,
                     .integer => @intCast(item.data),
-                    .pointer => @panic("TODO: query data layout"),
+                    .pointer => unreachable, // pointers don't have scalar bits; use ptrtoint/addrspacecast instead
                     .target => unreachable,
                     .vector,
                     .scalable_vector,
@@ -677,7 +677,8 @@ pub const Type = enum(u32) {
     }
 
     pub fn targetLayoutType(_: Type, _: *const Builder) Type {
-        @panic("TODO: implement targetLayoutType");
+        // Roc does not use LLVM target extension types
+        unreachable;
     }
 
     pub fn isSized(self: Type, builder: *const Builder) Allocator.Error!bool {
@@ -1363,7 +1364,7 @@ pub const Attribute = union(Kind) {
         byref = 69,
         preallocated = 65,
         inalloca = 38,
-        sret = 29, // TODO: ?
+        sret = 29,
         elementtype = 77,
         @"align" = 1,
         @"noalias" = 9,
@@ -7555,37 +7556,47 @@ pub const Constant = enum(u32) {
 
     pub fn getBase(self: Constant, builder: *const Builder) Global.Index {
         var cur = self;
-        while (true) switch (cur.unwrap()) {
-            .constant => |constant| {
-                const item = builder.constant_items.get(constant);
-                switch (item.tag) {
-                    .ptrtoint,
-                    .inttoptr,
-                    .bitcast,
-                    => cur = builder.constantExtraData(Cast, item.data).val,
-                    .getelementptr => cur = builder.constantExtraData(GetElementPtr, item.data).base,
-                    .add => {
-                        const extra = builder.constantExtraData(Binary, item.data);
-                        const lhs_base = extra.lhs.getBase(builder);
-                        const rhs_base = extra.rhs.getBase(builder);
-                        return if (lhs_base != .none and rhs_base != .none)
-                            .none
-                        else if (lhs_base != .none) lhs_base else rhs_base;
-                    },
-                    .sub => {
-                        const extra = builder.constantExtraData(Binary, item.data);
-                        if (extra.rhs.getBase(builder) != .none) return .none;
-                        cur = extra.lhs;
-                    },
-                    else => return .none,
+        // Track iteration count in debug builds to detect cyclic constants
+        var debug_iteration: usize = 0;
+        while (true) {
+            if (@import("builtin").mode == .Debug) {
+                debug_iteration += 1;
+                if (debug_iteration > 10000) {
+                    @panic("getBase: excessive iterations, likely cyclic constants");
                 }
-            },
-            .global => |global| switch (global.ptrConst(builder).kind) {
-                .alias => |alias| cur = alias.ptrConst(builder).aliasee,
-                .variable, .function => return global,
-                .replaced => unreachable,
-            },
-        };
+            }
+            switch (cur.unwrap()) {
+                .constant => |constant| {
+                    const item = builder.constant_items.get(constant);
+                    switch (item.tag) {
+                        .ptrtoint,
+                        .inttoptr,
+                        .bitcast,
+                        => cur = builder.constantExtraData(Cast, item.data).val,
+                        .getelementptr => cur = builder.constantExtraData(GetElementPtr, item.data).base,
+                        .add => {
+                            const extra = builder.constantExtraData(Binary, item.data);
+                            const lhs_base = extra.lhs.getBase(builder);
+                            const rhs_base = extra.rhs.getBase(builder);
+                            return if (lhs_base != .none and rhs_base != .none)
+                                .none
+                            else if (lhs_base != .none) lhs_base else rhs_base;
+                        },
+                        .sub => {
+                            const extra = builder.constantExtraData(Binary, item.data);
+                            if (extra.rhs.getBase(builder) != .none) return .none;
+                            cur = extra.lhs;
+                        },
+                        else => return .none,
+                    }
+                },
+                .global => |global| switch (global.ptrConst(builder).kind) {
+                    .alias => |alias| cur = alias.ptrConst(builder).aliasee,
+                    .variable, .function => return global,
+                    .replaced => unreachable,
+                },
+            }
+        }
     }
 
     const FormatData = struct {
@@ -11551,6 +11562,9 @@ fn zeroInitConstAssumeCapacity(self: *Builder, ty: Type) Constant {
             .integer => {
                 var limbs: [std.math.big.int.calcLimbLen(0)]std.math.big.Limb = undefined;
                 const bigint = std.math.big.int.Mutable.init(&limbs, 0);
+                // SAFETY: bigIntConstAssumeCapacity uses a 64-byte stack-fallback allocator internally.
+                // For zero values, calcLimbLen(0) returns minimal limbs that always fit in the stack
+                // buffer, so the fallback to gpa (which could OOM) is never reached.
                 return self.bigIntConstAssumeCapacity(ty, bigint.toConst()) catch unreachable;
             },
             .pointer => return self.nullConstAssumeCapacity(ty),
@@ -13545,8 +13559,11 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                     try record.ensureUnusedCapacity(self.gpa, 2);
 
                     record.appendAssumeCapacity(attr_gop.index);
+                    // LLVM bitcode uses 0xFFFFFFFF for function attributes, 0 for return,
+                    // and 1-based indices for parameters. Our internal representation uses
+                    // i=0 for function, i=1 for return, i=2+ for params, so we map accordingly.
                     record.appendAssumeCapacity(switch (i) {
-                        0 => 0xffffffff,
+                        0 => std.math.maxInt(u32),
                         else => i - 1,
                     });
 

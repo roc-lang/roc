@@ -2760,28 +2760,6 @@ test "low_level - List.sort_with single element" {
     try testing.expectEqualStrings("Ok(42.0)", first_value);
 }
 
-test "low_level - List.sort_with with duplicates" {
-    // TODO: This test is skipped due to stack memory accumulation across eval() calls.
-    // The interpreter stores return values in stack memory, and bindings hold references
-    // to this memory. When evaluating multiple declarations (x, then first, then len),
-    // the stack grows without being freed, eventually causing overflow.
-    // See: https://github.com/roc-lang/roc/issues/XXXX (architectural issue)
-    if (true) return error.SkipZigTest;
-
-    const src =
-        \\x = List.sort_with([3, 1, 2, 1, 3], |a, b| if a < b LT else if a > b GT else EQ)
-        \\first = List.first(x)
-        \\len = List.len(x)
-    ;
-
-    const first_value = try evalModuleAndGetString(src, 1, test_allocator);
-    defer test_allocator.free(first_value);
-    try testing.expectEqualStrings("Ok(1.0)", first_value);
-
-    const len_value = try evalModuleAndGetInt(src, 2);
-    try testing.expectEqual(@as(i128, 5), len_value);
-}
-
 test "low_level - List.sort_with already sorted" {
     const src =
         \\x = List.sort_with([1, 2, 3, 4, 5], |a, b| if a < b LT else if a > b GT else EQ)

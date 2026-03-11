@@ -1395,7 +1395,7 @@ fn processAssociatedItemsSecondPass(
                 std.debug.assert(type_var_scope.idx == 0);
 
                 // Now canonicalize the annotation with type variables in scope
-                const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .inline_anno);
+                const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .local_anno);
 
                 // Canonicalize where clauses if present
                 const where_clauses = if (ta.where) |where_coll| blk: {
@@ -1403,7 +1403,7 @@ fn processAssociatedItemsSecondPass(
                     const where_start = self.env.store.scratchWhereClauseTop();
 
                     for (where_slice) |where_idx| {
-                        const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .inline_anno);
+                        const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .local_anno);
                         try self.env.store.addScratchWhereClause(canonicalized_where);
                     }
 
@@ -2122,14 +2122,14 @@ pub fn canonicalizeFile(
                     try self.extractTypeVarIdentsFromASTAnno(ta.anno, type_vars_top);
                     const type_var_scope = self.scopeEnterTypeVar();
                     defer self.scopeExitTypeVar(type_var_scope);
-                    const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .inline_anno);
+                    const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .local_anno);
 
                     // Canonicalize where clauses if present
                     const where_clauses = if (ta.where) |where_coll| blk: {
                         const where_slice = self.parse_ir.store.whereClauseSlice(.{ .span = self.parse_ir.store.getCollection(where_coll).span });
                         const where_start = self.env.store.scratchWhereClauseTop();
                         for (where_slice) |where_idx| {
-                            const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .inline_anno);
+                            const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .local_anno);
                             try self.env.store.addScratchWhereClause(canonicalized_where);
                         }
                         break :blk try self.env.store.whereClauseSpanFrom(where_start);
@@ -2607,7 +2607,7 @@ pub fn canonicalizeFile(
                 std.debug.assert(type_var_scope.idx == 0);
 
                 // Now canonicalize the annotation with type variables in scope
-                const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .inline_anno);
+                const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .local_anno);
 
                 // Canonicalize where clauses if present
                 const where_clauses = if (ta.where) |where_coll| blk: {
@@ -2615,7 +2615,7 @@ pub fn canonicalizeFile(
                     const where_start = self.env.store.scratchWhereClauseTop();
 
                     for (where_slice) |where_idx| {
-                        const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .inline_anno);
+                        const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .local_anno);
                         try self.env.store.addScratchWhereClause(canonicalized_where);
                     }
 
@@ -8171,6 +8171,15 @@ pub fn canonicalizePattern(
                 const current_scope = &self.scopes.items[self.scopes.items.len - 1];
                 const placeholder_exists = self.isPlaceholder(ident_idx);
 
+                // Check if a forward reference exists for this ident (from block hoisting).
+                // Reuse its pattern so that e_lookup_local nodes created during the
+                // forward-reference phase point to the same pattern as the def.
+                if (current_scope.forward_references.fetchRemove(ident_idx)) |kv| {
+                    var mut_regions = kv.value.reference_regions;
+                    mut_regions.deinit(self.env.gpa);
+                    return kv.value.pattern_idx;
+                }
+
                 // Create a Pattern node for our identifier
                 const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{
                     .ident = ident_idx,
@@ -9479,8 +9488,8 @@ const TypeAnnoCtx = struct {
         type_decl_anno,
         /// Platform requires for-clause - allows `_`-prefixed type vars (like `_others` in open unions)
         for_clause_anno,
-        /// Inline annotations - any type var can be introduced
-        inline_anno,
+        /// Local annotations - any type var can be introduced
+        local_anno,
     };
 
     pub fn init(typ: TypeAnnoCtxType) TypeAnnoCtx {
@@ -9496,7 +9505,7 @@ const TypeAnnoCtx = struct {
         return switch (self.type) {
             .type_decl_anno => false,
             .for_clause_anno => is_ignored,
-            .inline_anno => true,
+            .local_anno => true,
         };
     }
 };
@@ -9536,7 +9545,7 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
                     // Whether new type variables can be introduced depends on context:
                     // - type_decl_anno: no new vars allowed
                     // - for_clause_anno: only _-prefixed vars allowed (for open unions in platform requires)
-                    // - inline_anno: any new var allowed
+                    // - local_anno: any new var allowed
                     const can_introduce = type_anno_ctx.canIntroduceTypeVar(name_ident.attributes.ignored);
 
                     if (can_introduce) {
@@ -9594,7 +9603,7 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
                     // Whether new type variables can be introduced depends on context:
                     // - type_decl_anno: no new vars allowed
                     // - for_clause_anno: only _-prefixed vars allowed (for open unions in platform requires)
-                    // - inline_anno: any new var allowed
+                    // - local_anno: any new var allowed
                     const can_introduce = type_anno_ctx.canIntroduceTypeVar(name_ident.attributes.ignored);
 
                     if (can_introduce) {
@@ -10529,6 +10538,33 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
 
     // Canonicalize all statements in the block
     const ast_stmt_idxs = self.parse_ir.store.statementSlice(e.statements);
+
+    // Pre-pass: Create forward references for lambda declaration patterns.
+    // This enables mutual recursion between closures in the same block by
+    // making all lambda-bound names visible before any bodies are canonicalized.
+    for (ast_stmt_idxs) |ast_stmt_idx| {
+        const ast_stmt = self.parse_ir.store.getStatement(ast_stmt_idx);
+        if (ast_stmt != .decl) continue;
+        const d = ast_stmt.decl;
+        const ast_body_expr = self.parse_ir.store.getExpr(d.body);
+        if (ast_body_expr != .lambda) continue;
+        const ast_pattern = self.parse_ir.store.getPattern(d.pattern);
+        if (ast_pattern != .ident) continue;
+        const ident_idx = self.parse_ir.tokens.resolveIdentifier(ast_pattern.ident.ident_tok) orelse continue;
+        // Skip if already in scope (from outer scope or duplicate)
+        if (self.scopeLookup(.ident, ident_idx) == .found) continue;
+        const region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.ident.region);
+        const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{
+            .ident = ident_idx,
+        } }, region);
+        const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+        try current_scope.forward_references.put(self.env.gpa, ident_idx, .{
+            .pattern_idx = pattern_idx,
+            .reference_regions = std.ArrayList(Region){},
+        });
+        try current_scope.idents.put(self.env.gpa, ident_idx, pattern_idx);
+    }
+
     var last_expr: ?CanonicalizedExpr = null;
 
     var i: u32 = 0;
@@ -11038,7 +11074,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
             defer self.scopeExitTypeVar(type_var_scope);
 
             // Now canonicalize the annotation with type variables in scope
-            const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .inline_anno);
+            const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .local_anno);
 
             // Extract type variables from the AST annotation
             try self.extractTypeVarIdentsFromASTAnno(ta.anno, type_vars_top);
@@ -11053,7 +11089,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                 defer self.scopeExit(self.env.gpa) catch {}; // See above comment for why this is necessary
 
                 for (where_slice) |where_idx| {
-                    const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .inline_anno);
+                    const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .local_anno);
                     try self.env.store.addScratchWhereClause(canonicalized_where);
                 }
                 break :inner_blk try self.env.store.whereClauseSpanFrom(where_start);
@@ -12724,7 +12760,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
                         switch (type_anno_ctx) {
                             // If this is an inline anno, then we can introduce the variable
                             // into the scope
-                            .inline_anno => {
+                            .local_anno => {
                                 // Track this type variable for underscore validation
                                 try self.scratch_type_var_validation.append(var_ident);
 
@@ -12807,7 +12843,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
                         switch (type_anno_ctx) {
                             // If this is an inline anno, then we can introduce the variable
                             // into the scope
-                            .inline_anno => {
+                            .local_anno => {
                                 // Track this type variable for underscore validation
                                 try self.scratch_type_var_validation.append(var_ident);
 
