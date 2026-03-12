@@ -4145,15 +4145,61 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return result_loc;
         }
 
+        const HostedCallArg = struct {
+            loc: ValueLocation,
+            layout_idx: layout.Idx,
+        };
+
+        fn collectImplicitHostedCallArgs(self: *Self, out: *std.ArrayList(HostedCallArg)) Allocator.Error!void {
+            const lambda_expr_id = self.current_lambda_expr_id orelse return;
+            const lambda_expr = self.store.getExpr(lambda_expr_id);
+            if (lambda_expr != .lambda) return;
+
+            for (self.store.getPatternSpan(lambda_expr.lambda.params)) |pat_id| {
+                switch (self.store.getPattern(pat_id)) {
+                    .bind => |bind| {
+                        const symbol_key: u64 = @bitCast(bind.symbol);
+                        const loc = self.symbol_locations.get(symbol_key) orelse {
+                            if (builtin.mode == .Debug) {
+                                std.debug.panic(
+                                    "LIR/codegen invariant violated: missing location for implicit hosted arg symbol {d}",
+                                    .{bind.symbol.raw()},
+                                );
+                            }
+                            return error.OutOfMemory;
+                        };
+                        try out.append(self.allocator, .{
+                            .loc = loc,
+                            .layout_idx = bind.layout_idx,
+                        });
+                    },
+                    .wildcard => {},
+                    else => {
+                        if (builtin.mode == .Debug) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: implicit hosted arg fallback only supports bind/wildcard params, got {s}",
+                                .{@tagName(self.store.getPattern(pat_id))},
+                            );
+                        }
+                        return;
+                    },
+                }
+            }
+        }
+
         /// Generate code for hosted function calls (platform-provided effects).
         /// Hosted functions follow the RocCall ABI: fn(roc_ops, ret_ptr, args_ptr) -> void
         fn generateHostedCall(self: *Self, hc: anytype) Allocator.Error!ValueLocation {
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
             const ls = self.layout_store;
+            const explicit_args = self.store.getExprSpan(hc.args);
+            var fallback_args = std.ArrayList(HostedCallArg).empty;
+            defer fallback_args.deinit(self.allocator);
 
-            // Get the arguments
-            const args = self.store.getExprSpan(hc.args);
+            if (explicit_args.len == 0) {
+                try self.collectImplicitHostedCallArgs(&fallback_args);
+            }
 
             // Determine return value size
             const ret_layout = ls.getLayout(hc.ret_layout);
@@ -4168,16 +4214,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Marshal arguments into a contiguous buffer on the stack
             // First, calculate total size needed for all arguments
             var total_args_size: usize = 0;
-            var max_alignment: usize = 1;
-            for (args) |arg_id| {
-                const arg_layout_idx = self.exprLayout(arg_id);
-                const arg_layout = ls.getLayout(arg_layout_idx);
-                const arg_size = ls.layoutSize(arg_layout);
-                const arg_align = arg_layout.alignment(ls.targetUsize());
-                max_alignment = @max(max_alignment, arg_align.toByteUnits());
-                // Align to the argument's alignment
-                total_args_size = std.mem.alignForward(usize, total_args_size, arg_align.toByteUnits());
-                total_args_size += arg_size;
+            if (fallback_args.items.len > 0) {
+                for (fallback_args.items) |arg| {
+                    const arg_layout = ls.getLayout(arg.layout_idx);
+                    const arg_size = ls.layoutSize(arg_layout);
+                    const arg_align = arg_layout.alignment(ls.targetUsize());
+                    total_args_size = std.mem.alignForward(usize, total_args_size, arg_align.toByteUnits());
+                    total_args_size += arg_size;
+                }
+            } else {
+                for (explicit_args) |arg_id| {
+                    const arg_layout_idx = self.exprLayout(arg_id);
+                    const arg_layout = ls.getLayout(arg_layout_idx);
+                    const arg_size = ls.layoutSize(arg_layout);
+                    const arg_align = arg_layout.alignment(ls.targetUsize());
+                    // Align to the argument's alignment
+                    total_args_size = std.mem.alignForward(usize, total_args_size, arg_align.toByteUnits());
+                    total_args_size += arg_size;
+                }
             }
 
             // Allocate args buffer (at least 8 bytes for empty args case)
@@ -4185,21 +4239,36 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Copy each argument into the args buffer
             var offset: usize = 0;
-            for (args) |arg_id| {
-                const arg_loc = try self.generateExpr(arg_id);
-                const arg_layout_idx = self.exprLayout(arg_id);
-                const arg_layout = ls.getLayout(arg_layout_idx);
-                const arg_size = ls.layoutSize(arg_layout);
-                const arg_align = arg_layout.alignment(ls.targetUsize());
-                // Align offset
-                offset = std.mem.alignForward(usize, offset, arg_align.toByteUnits());
+            if (fallback_args.items.len > 0) {
+                for (fallback_args.items) |arg| {
+                    const arg_layout = ls.getLayout(arg.layout_idx);
+                    const arg_size = ls.layoutSize(arg_layout);
+                    const arg_align = arg_layout.alignment(ls.targetUsize());
+                    offset = std.mem.alignForward(usize, offset, arg_align.toByteUnits());
 
-                if (arg_size > 0) {
-                    // Copy argument to args buffer at current offset
-                    const dest_offset: i32 = args_slot + @as(i32, @intCast(offset));
-                    try self.copyValueToStack(arg_loc, dest_offset, arg_size);
+                    if (arg_size > 0) {
+                        const dest_offset: i32 = args_slot + @as(i32, @intCast(offset));
+                        try self.copyValueToStack(arg.loc, dest_offset, arg_size);
+                    }
+                    offset += arg_size;
                 }
-                offset += arg_size;
+            } else {
+                for (explicit_args) |arg_id| {
+                    const arg_loc = try self.generateExpr(arg_id);
+                    const arg_layout_idx = self.exprLayout(arg_id);
+                    const arg_layout = ls.getLayout(arg_layout_idx);
+                    const arg_size = ls.layoutSize(arg_layout);
+                    const arg_align = arg_layout.alignment(ls.targetUsize());
+                    // Align offset
+                    offset = std.mem.alignForward(usize, offset, arg_align.toByteUnits());
+
+                    if (arg_size > 0) {
+                        // Copy argument to args buffer at current offset
+                        const dest_offset: i32 = args_slot + @as(i32, @intCast(offset));
+                        try self.copyValueToStack(arg_loc, dest_offset, arg_size);
+                    }
+                    offset += arg_size;
+                }
             }
 
             // RocOps.hosted_fns is at offset 56 (7 pointers * 8 bytes)
@@ -15690,30 +15759,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 self.roc_ops_reg = .X19;
 
-                // Unpack arguments from args_ptr (X21) to argument registers
-                var args_offset: i32 = 0;
-                for (arg_layouts, 0..) |arg_layout, i| {
-                    const arg_size = self.getLayoutSize(arg_layout);
-                    const dest_reg = self.getArgumentRegister(@intCast(i));
-
-                    // Load from [X21 + args_offset]
-                    try self.codegen.emit.ldrRegMemSoff(.w64, dest_reg, .X21, args_offset);
-                    args_offset += @intCast(arg_size);
-                }
-
-                // Generate the body expression.
-                // In the new pipeline, MIR→LIR generates all closure dispatch as generic LIR
-                // constructs, so the result is always a plain value.
-                const final_result = try self.generateExpr(body_expr);
-                const actual_ret_layout = ret_layout;
-
-                // Store result to ret_ptr (X20) - but only if return type is non-zero-sized
-                // Per RocCall ABI: "If the Roc function returns a zero-sized type like `{}`,
-                // it will not write anything into this address."
-                const ret_size = self.getLayoutSize(actual_ret_layout);
-                if (ret_size > 0) {
-                    try self.storeResultToSavedPtr(final_result, actual_ret_layout, .X20, 1);
-                }
+                try self.generateEntrypointBody(body_expr, arg_layouts, ret_layout, .X20, .X21);
 
                 // Emit epilogue using DeferredFrameBuilder with actual stack usage
                 const body_epilogue_offset = self.codegen.currentOffset();
@@ -15803,25 +15849,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 self.roc_ops_reg = .R12;
 
-                // Unpack arguments from args_ptr (R13) to argument registers
-                var args_offset: i32 = 0;
-                for (arg_layouts, 0..) |arg_layout, i| {
-                    const arg_size = self.getLayoutSize(arg_layout);
-                    const dest_reg = self.getArgumentRegister(@intCast(i));
-                    try self.codegen.emit.movRegMem(.w64, dest_reg, .R13, args_offset);
-                    args_offset += @intCast(arg_size);
-                }
-
-                // Generate the body expression.
-                // In the new pipeline, MIR→LIR generates all closure dispatch as generic LIR
-                // constructs, so the result is always a plain value.
-                const final_result = try self.generateExpr(body_expr);
-                const actual_ret_layout = ret_layout;
-
-                const ret_size = self.getLayoutSize(actual_ret_layout);
-                if (ret_size > 0) {
-                    try self.storeResultToSavedPtr(final_result, actual_ret_layout, .RBX, 1);
-                }
+                try self.generateEntrypointBody(body_expr, arg_layouts, ret_layout, .RBX, .R13);
 
                 // Emit epilogue with actual stack usage
                 const body_epilogue_offset = self.codegen.currentOffset();
@@ -15882,6 +15910,299 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .stack_alloc = stack_alloc,
                 .uses_frame_pointer = true,
             };
+        }
+
+        const EntrypointArgOrder = struct {
+            index: usize,
+            alignment: u32,
+            size: u32,
+        };
+
+        fn computeEntrypointArgOffsets(self: *Self, arg_layouts: []const layout.Idx, offsets: []u32) Allocator.Error!void {
+            std.debug.assert(arg_layouts.len == offsets.len);
+
+            var ordered = try self.allocator.alloc(EntrypointArgOrder, arg_layouts.len);
+            defer self.allocator.free(ordered);
+
+            for (arg_layouts, 0..) |arg_layout, i| {
+                const size_align = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(arg_layout));
+                ordered[i] = .{
+                    .index = i,
+                    .alignment = @intCast(size_align.alignment.toByteUnits()),
+                    .size = size_align.size,
+                };
+            }
+
+            const SortCtx = struct {
+                fn lessThan(_: void, lhs: EntrypointArgOrder, rhs: EntrypointArgOrder) bool {
+                    if (lhs.alignment != rhs.alignment) {
+                        return lhs.alignment > rhs.alignment;
+                    }
+                    return lhs.index < rhs.index;
+                }
+            };
+
+            std.mem.sort(EntrypointArgOrder, ordered, {}, SortCtx.lessThan);
+
+            var current_offset: u32 = 0;
+            for (ordered) |arg| {
+                current_offset = std.mem.alignForward(u32, current_offset, arg.alignment);
+                offsets[arg.index] = current_offset;
+                current_offset += arg.size;
+            }
+        }
+
+        fn entrypointParamSlotSize(self: *Self, layout_idx: layout.Idx) u32 {
+            const size = self.getLayoutSize(layout_idx);
+            if (size == 0) return 0;
+
+            const abi_size = @as(u32, self.calcParamRegCount(layout_idx)) * 8;
+            return @max(size, abi_size);
+        }
+
+        fn copyBytesFromMemToStackOffset(
+            self: *Self,
+            src_base: GeneralReg,
+            src_offset: i32,
+            dest_offset: i32,
+            copy_size: u32,
+            slot_size: u32,
+        ) Allocator.Error!void {
+            if (slot_size == 0) return;
+
+            if (slot_size > copy_size) {
+                try self.zeroStackArea(dest_offset, slot_size);
+            }
+
+            if (copy_size == 0) return;
+
+            const temp_reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(temp_reg);
+
+            try self.copyChunked(temp_reg, src_base, src_offset, frame_ptr, dest_offset, copy_size);
+        }
+
+        fn bindEntrypointParamsFromArgsPtr(
+            self: *Self,
+            params: lir.LirPatternSpan,
+            arg_layouts: []const layout.Idx,
+            args_ptr_reg: GeneralReg,
+        ) Allocator.Error!void {
+            const pattern_ids = self.store.getPatternSpan(params);
+
+            if (pattern_ids.len != arg_layouts.len) {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "LIR/codegen invariant violated: entrypoint arg layout count {} did not match param count {}",
+                        .{ arg_layouts.len, pattern_ids.len },
+                    );
+                }
+                unreachable;
+            }
+
+            const arg_offsets = try self.allocator.alloc(u32, arg_layouts.len);
+            defer self.allocator.free(arg_offsets);
+            try self.computeEntrypointArgOffsets(arg_layouts, arg_offsets);
+
+            for (pattern_ids, 0..) |pattern_id, i| {
+                const arg_layout = arg_layouts[i];
+                const slot_size = self.entrypointParamSlotSize(arg_layout);
+                if (slot_size == 0) {
+                    try self.bindPattern(pattern_id, .{ .immediate_i64 = 0 });
+                    continue;
+                }
+
+                const slot_offset = self.codegen.allocStackSlot(@intCast(slot_size));
+                try self.copyBytesFromMemToStackOffset(
+                    args_ptr_reg,
+                    @intCast(arg_offsets[i]),
+                    slot_offset,
+                    self.getLayoutSize(arg_layout),
+                    slot_size,
+                );
+
+                try self.bindPattern(pattern_id, self.stackLocationForLayout(arg_layout, slot_offset));
+            }
+        }
+
+        fn materializeEntrypointArgInfos(
+            self: *Self,
+            arg_layouts: []const layout.Idx,
+            args_ptr_reg: GeneralReg,
+        ) Allocator.Error![]const ArgInfo {
+            const arg_infos_start = self.scratch_arg_infos.top();
+
+            const arg_offsets = try self.allocator.alloc(u32, arg_layouts.len);
+            defer self.allocator.free(arg_offsets);
+            try self.computeEntrypointArgOffsets(arg_layouts, arg_offsets);
+
+            for (arg_layouts, 0..) |arg_layout, i| {
+                const slot_size = self.entrypointParamSlotSize(arg_layout);
+                if (slot_size == 0) {
+                    try self.scratch_arg_infos.append(.{
+                        .loc = .{ .immediate_i64 = 0 },
+                        .layout_idx = arg_layout,
+                        .num_regs = 0,
+                    });
+                    continue;
+                }
+
+                const slot_offset = self.codegen.allocStackSlot(@intCast(slot_size));
+                try self.copyBytesFromMemToStackOffset(
+                    args_ptr_reg,
+                    @intCast(arg_offsets[i]),
+                    slot_offset,
+                    self.getLayoutSize(arg_layout),
+                    slot_size,
+                );
+
+                const loc = self.stackLocationForLayout(arg_layout, slot_offset);
+                try self.scratch_arg_infos.append(.{
+                    .loc = loc,
+                    .layout_idx = arg_layout,
+                    .num_regs = self.calcArgRegCount(loc, arg_layout),
+                });
+            }
+
+            return self.scratch_arg_infos.sliceFromStart(arg_infos_start);
+        }
+
+        fn callCompiledProcWithArgInfos(
+            self: *Self,
+            proc: CompiledProc,
+            arg_infos: []const ArgInfo,
+            ret_layout: layout.Idx,
+        ) Allocator.Error!ValueLocation {
+            const pbp_plan = try self.computePassByPtrPlan(arg_infos, 0, true);
+            defer self.scratch_pass_by_ptr.clearFrom(pbp_plan.start);
+
+            const stack_spill_size = try self.placeCallArguments(arg_infos, .{
+                .pass_by_ptr = pbp_plan.slice,
+                .emit_roc_ops = true,
+            });
+            try self.emitCallToOffset(proc.code_start);
+
+            if (stack_spill_size > 0) {
+                try self.emitAddStackPtr(stack_spill_size);
+            }
+
+            return self.saveCallReturnValue(ret_layout, false, 0);
+        }
+
+        fn callCompiledOffsetWithArgInfos(
+            self: *Self,
+            code_offset: usize,
+            arg_infos: []const ArgInfo,
+            ret_layout: layout.Idx,
+        ) Allocator.Error!ValueLocation {
+            const pbp_plan = try self.computePassByPtrPlan(arg_infos, 0, true);
+            defer self.scratch_pass_by_ptr.clearFrom(pbp_plan.start);
+
+            const stack_spill_size = try self.placeCallArguments(arg_infos, .{
+                .pass_by_ptr = pbp_plan.slice,
+                .emit_roc_ops = true,
+            });
+            try self.emitCallToOffset(code_offset);
+
+            if (stack_spill_size > 0) {
+                try self.emitAddStackPtr(stack_spill_size);
+            }
+
+            return self.saveCallReturnValue(ret_layout, false, 0);
+        }
+
+        fn generateEntrypointCallFromValue(
+            self: *Self,
+            fn_expr_id: LirExprId,
+            arg_layouts: []const layout.Idx,
+            ret_layout: layout.Idx,
+            args_ptr_reg: GeneralReg,
+        ) Allocator.Error!?ValueLocation {
+            const arg_infos_start = self.scratch_arg_infos.top();
+            defer self.scratch_arg_infos.clearFrom(arg_infos_start);
+
+            const arg_infos = try self.materializeEntrypointArgInfos(arg_layouts, args_ptr_reg);
+
+            switch (self.store.getExpr(fn_expr_id)) {
+                .lambda => |lambda| {
+                    const code_offset = try self.compileLambdaAsProc(fn_expr_id, lambda);
+                    return try self.callCompiledOffsetWithArgInfos(code_offset, arg_infos, ret_layout);
+                },
+                .lookup => |lookup| {
+                    const symbol_key: u64 = @bitCast(lookup.symbol);
+                    if (self.proc_registry.get(symbol_key)) |proc| {
+                        return try self.callCompiledProcWithArgInfos(proc, arg_infos, ret_layout);
+                    }
+
+                    if (try self.resolveLambdaCodeOffset(fn_expr_id)) |code_offset| {
+                        return try self.callCompiledOffsetWithArgInfos(code_offset, arg_infos, ret_layout);
+                    }
+
+                    return null;
+                },
+                .nominal => |nom| return try self.generateEntrypointCallFromValue(
+                    nom.backing_expr,
+                    arg_layouts,
+                    ret_layout,
+                    args_ptr_reg,
+                ),
+                else => {
+                    if (try self.resolveLambdaCodeOffset(fn_expr_id)) |code_offset| {
+                        return try self.callCompiledOffsetWithArgInfos(code_offset, arg_infos, ret_layout);
+                    }
+
+                    return null;
+                },
+            }
+        }
+
+        fn generateEntrypointBody(
+            self: *Self,
+            body_expr: LirExprId,
+            arg_layouts: []const layout.Idx,
+            ret_layout: layout.Idx,
+            ret_ptr_reg: GeneralReg,
+            args_ptr_reg: GeneralReg,
+        ) Allocator.Error!void {
+            switch (self.store.getExpr(body_expr)) {
+                .lambda => |lambda| {
+                    const saved_current_lambda_expr_id = self.current_lambda_expr_id;
+                    const saved_early_return_ret_layout = self.early_return_ret_layout;
+                    const saved_ret_ptr_slot = self.ret_ptr_slot;
+                    defer {
+                        self.current_lambda_expr_id = saved_current_lambda_expr_id;
+                        self.early_return_ret_layout = saved_early_return_ret_layout;
+                        self.ret_ptr_slot = saved_ret_ptr_slot;
+                    }
+
+                    self.current_lambda_expr_id = body_expr;
+                    self.early_return_ret_layout = lambda.ret_layout;
+                    self.ret_ptr_slot = self.codegen.allocStackSlot(8);
+                    try self.emitStore(.w64, frame_ptr, self.ret_ptr_slot.?, ret_ptr_reg);
+                    try self.bindEntrypointParamsFromArgsPtr(lambda.params, arg_layouts, args_ptr_reg);
+
+                    const result_loc = try self.generateExpr(lambda.body);
+                    if (self.getLayoutSize(lambda.ret_layout) > 0) {
+                        const normalized_result_loc = self.normalizeResultLocForLayout(result_loc, lambda.ret_layout);
+                        try self.copyResultToReturnPointer(normalized_result_loc, lambda.ret_layout, self.ret_ptr_slot.?);
+                    }
+                },
+                else => {
+                    if (arg_layouts.len > 0) {
+                        if (try self.generateEntrypointCallFromValue(body_expr, arg_layouts, ret_layout, args_ptr_reg)) |result_loc| {
+                            if (self.getLayoutSize(ret_layout) > 0) {
+                                try self.storeResultToSavedPtr(result_loc, ret_layout, ret_ptr_reg, 1);
+                            }
+                            return;
+                        }
+                    }
+
+                    const final_result = try self.generateExpr(body_expr);
+                    if (self.getLayoutSize(ret_layout) > 0) {
+                        try self.storeResultToSavedPtr(final_result, ret_layout, ret_ptr_reg, 1);
+                    }
+                },
+            }
         }
 
         /// Get the size of a layout in bytes for argument unpacking
@@ -16034,6 +16355,152 @@ test "generate bool literal" {
     defer allocator.free(result.code);
 
     try std.testing.expect(result.code.len > 0);
+}
+
+test "hosted call fallback reuses current lambda params when explicit args are empty" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirExprStore.init(allocator);
+    defer store.deinit();
+
+    const symbol = Symbol.fromRaw(1);
+    const param = try store.addPattern(.{ .bind = .{
+        .symbol = symbol,
+        .layout_idx = .str,
+    } }, base.Region.zero());
+    const params = try store.addPatternSpan(&.{param});
+
+    const hosted_body = try store.addExpr(.{ .hosted_call = .{
+        .index = 4,
+        .args = lir.LIR.LirExprSpan.empty(),
+        .ret_layout = .zst,
+    } }, base.Region.zero());
+    const lambda = try store.addExpr(.{ .lambda = .{
+        .fn_layout = .u64,
+        .params = params,
+        .body = hosted_body,
+        .ret_layout = .zst,
+    } }, base.Region.zero());
+
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, null);
+    defer codegen.deinit();
+
+    try codegen.symbol_locations.put(symbol.raw(), .{ .stack_str = 96 });
+    codegen.current_lambda_expr_id = lambda;
+
+    var args = std.ArrayList(HostLirCodeGen.HostedCallArg).empty;
+    defer args.deinit(allocator);
+
+    try codegen.collectImplicitHostedCallArgs(&args);
+
+    try std.testing.expectEqual(@as(usize, 1), args.items.len);
+    try std.testing.expectEqual(layout.Idx.str, args.items[0].layout_idx);
+    try std.testing.expect(args.items[0].loc == .stack_str);
+    try std.testing.expectEqual(@as(i32, 96), args.items[0].loc.stack_str);
+}
+
+test "entrypoint arg offsets preserve Roc alignment order" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirExprStore.init(allocator);
+    defer store.deinit();
+
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, null);
+    defer codegen.deinit();
+
+    var offsets: [2]u32 = undefined;
+    try codegen.computeEntrypointArgOffsets(&.{ .bool, .i64 }, offsets[0..]);
+
+    try std.testing.expectEqualSlices(u32, &.{ 8, 0 }, offsets[0..]);
+}
+
+test "entrypoint param slots round aggregates to ABI word width" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirExprStore.init(allocator);
+    defer store.deinit();
+
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const aggregate_layout = try test_state.layout_store.putTuple(&.{
+        test_state.layout_store.getLayout(.f32),
+        test_state.layout_store.getLayout(.f32),
+        test_state.layout_store.getLayout(.f32),
+    });
+
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, null);
+    defer codegen.deinit();
+
+    try std.testing.expectEqual(@as(u32, 16), codegen.entrypointParamSlotSize(aggregate_layout));
+    try std.testing.expectEqual(@as(u32, 24), codegen.entrypointParamSlotSize(.str));
+    try std.testing.expectEqual(@as(u32, 8), codegen.entrypointParamSlotSize(.bool));
+}
+
+test "entrypoint aliases with args call the underlying function value" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirExprStore.init(allocator);
+    defer store.deinit();
+
+    const param_symbol = Symbol.fromRaw(21);
+    const target_symbol = Symbol.fromRaw(22);
+
+    const param = try store.addPattern(.{ .bind = .{
+        .symbol = param_symbol,
+        .layout_idx = .bool,
+    } }, base.Region.zero());
+    const params = try store.addPatternSpan(&.{param});
+    const lambda_body = try store.addExpr(.{ .lookup = .{
+        .symbol = param_symbol,
+        .layout_idx = .bool,
+    } }, base.Region.zero());
+    const lambda = try store.addExpr(.{ .lambda = .{
+        .fn_layout = .u64,
+        .params = params,
+        .body = lambda_body,
+        .ret_layout = .bool,
+    } }, base.Region.zero());
+    try store.registerSymbolDef(target_symbol, lambda);
+
+    const alias_lookup = try store.addExpr(.{ .lookup = .{
+        .symbol = target_symbol,
+        .layout_idx = .u64,
+    } }, base.Region.zero());
+
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, null);
+    defer codegen.deinit();
+
+    if (comptime builtin.cpu.arch == .aarch64) {
+        codegen.codegen.stack_offset = 16 + HostLirCodeGen.CodeGen.CALLEE_SAVED_AREA_SIZE;
+        codegen.roc_ops_reg = .X19;
+        try codegen.generateEntrypointBody(alias_lookup, &.{.bool}, .bool, .X20, .X21);
+    } else {
+        codegen.codegen.stack_offset = -HostLirCodeGen.CodeGen.CALLEE_SAVED_AREA_SIZE;
+        codegen.roc_ops_reg = .R12;
+        try codegen.generateEntrypointBody(alias_lookup, &.{.bool}, .bool, .RBX, .R13);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), codegen.compiled_lambdas.count());
 }
 
 test "tag payload bind invariant rejects mismatched pattern layout" {

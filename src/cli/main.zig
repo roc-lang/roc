@@ -3716,21 +3716,17 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     };
     defer mir_lower.deinit();
 
-    // Run lambda set inference
-    var lambda_set_store = mir.LambdaSet.infer(ctx.gpa, &mir_store, all_module_envs) catch return error.OutOfMemory;
-    defer lambda_set_store.deinit(ctx.gpa);
-
-    var lir_store = lir.LirExprStore.init(ctx.gpa);
-    defer lir_store.deinit();
-
-    var mir_to_lir = lir.MirToLir.init(ctx.gpa, &mir_store, &lir_store, &layout_store, &lambda_set_store, all_module_envs[0].idents.true_tag);
-    defer mir_to_lir.deinit();
-
     // Find and lower entrypoint expressions from platform module
     // The platform's provides clause maps Roc identifiers to FFI symbols
     // e.g., provides { main_for_host!: "main" } means we look for main_for_host! in platform
-    var entrypoints = try std.ArrayList(backend.Entrypoint).initCapacity(ctx.gpa, provides_entries.len);
-    defer entrypoints.deinit(ctx.gpa);
+    const PendingEntrypoint = struct {
+        ffi_symbol: []const u8,
+        mir_expr_id: MIR.ExprId,
+        ret_type_var: @import("types").Var,
+        arg_layouts: []const layout.Idx,
+    };
+    var pending_entrypoints = try std.ArrayList(PendingEntrypoint).initCapacity(ctx.gpa, provides_entries.len);
+    defer pending_entrypoints.deinit(ctx.gpa);
 
     const platform_defs = platform_module.env.store.sliceDefs(platform_module.env.all_defs);
 
@@ -3753,31 +3749,54 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         }
 
         if (found_expr) |expr_idx| {
+            const expr_type_var = can.ModuleEnv.varFrom(expr_idx);
+            const resolved_expr_var = platform_types.resolveVar(expr_type_var);
+            const maybe_func = resolved_expr_var.desc.content.unwrapFunc();
+
+            var arg_layouts: []const layout.Idx = &.{};
+            var ret_type_var = expr_type_var;
+
+            if (maybe_func) |func| {
+                const arg_vars = platform_types.sliceVars(func.args);
+                if (arg_vars.len > 0) {
+                    var mutable_arg_layouts = try ctx.arena.alloc(layout.Idx, arg_vars.len);
+                    var arg_type_scope = @import("types").TypeScope.init(ctx.gpa);
+                    defer arg_type_scope.deinit();
+                    for (arg_vars, 0..) |arg_var, i| {
+                        mutable_arg_layouts[i] = try layout_store.fromTypeVar(platform_module_idx, arg_var, &arg_type_scope, null);
+                    }
+                    arg_layouts = mutable_arg_layouts;
+                }
+                ret_type_var = func.ret;
+            }
+
             // Lower CIR → MIR
-            const mir_expr_id = mir_lower.lowerExpr(expr_idx) catch |err| {
+            var mir_expr_id = mir_lower.lowerExpr(expr_idx) catch |err| {
                 std.log.err("Failed to lower expression for entrypoint {s} ({s}): {}", .{ entry.roc_ident, entry.ffi_symbol, err });
                 continue;
             };
-            // Lower MIR → LIR
-            const lir_expr_id = mir_to_lir.lower(mir_expr_id) catch |err| {
-                std.log.err("Failed to lower MIR to LIR for entrypoint {s} ({s}): {}", .{ entry.roc_ident, entry.ffi_symbol, err });
-                continue;
-            };
 
-            // Get layout for the expression
-            const type_var = can.ModuleEnv.varFrom(expr_idx);
-            var type_scope = @import("types").TypeScope.init(ctx.gpa);
-            defer type_scope.deinit();
-            const ret_layout = layout_store.fromTypeVar(platform_module_idx, type_var, &type_scope, null) catch {
-                std.log.err("Failed to get layout for entrypoint {s}", .{entry.roc_ident});
-                continue;
-            };
+            // Zero-arg platform entrypoints like `main! : () => {}` must be lowered
+            // as calls, not as first-class function values.
+            if (maybe_func) |func| {
+                const arg_vars = platform_types.sliceVars(func.args);
+                if (arg_vars.len == 0) {
+                    const func_mono_idx = mir_store.typeOf(mir_expr_id);
+                    const func_mono = mir_store.monotype_store.getMonotype(func_mono_idx);
+                    if (func_mono == .func) {
+                        mir_expr_id = try mir_store.addExpr(ctx.gpa, .{ .call = .{
+                            .func = mir_expr_id,
+                            .args = MIR.ExprSpan.empty(),
+                        } }, func_mono.func.ret, base.Region.zero());
+                    }
+                }
+            }
 
-            try entrypoints.append(ctx.gpa, .{
-                .symbol_name = try std.fmt.allocPrint(ctx.arena, "roc__{s}", .{entry.ffi_symbol}),
-                .body_expr = lir_expr_id,
-                .arg_layouts = &[_]layout.Idx{}, // Top-level constants have no args
-                .ret_layout = ret_layout,
+            try pending_entrypoints.append(ctx.gpa, .{
+                .ffi_symbol = entry.ffi_symbol,
+                .mir_expr_id = mir_expr_id,
+                .ret_type_var = ret_type_var,
+                .arg_layouts = arg_layouts,
             });
 
             std.log.debug("Found entrypoint: {s} -> roc__{s}", .{ entry.roc_ident, entry.ffi_symbol });
@@ -3786,8 +3805,47 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         }
     }
 
-    if (entrypoints.items.len == 0) {
+    if (pending_entrypoints.items.len == 0) {
         std.log.err("No entrypoints could be lowered", .{});
+        return error.NoEntrypointsLowered;
+    }
+
+    // Run lambda set inference after MIR lowering so the store sees the actual entrypoint graph.
+    var lambda_set_store = mir.LambdaSet.infer(ctx.gpa, &mir_store, all_module_envs) catch return error.OutOfMemory;
+    defer lambda_set_store.deinit(ctx.gpa);
+
+    var lir_store = lir.LirExprStore.init(ctx.gpa);
+    defer lir_store.deinit();
+
+    var mir_to_lir = lir.MirToLir.init(ctx.gpa, &mir_store, &lir_store, &layout_store, &lambda_set_store, all_module_envs[0].idents.true_tag);
+    defer mir_to_lir.deinit();
+
+    var entrypoints = try std.ArrayList(backend.Entrypoint).initCapacity(ctx.gpa, pending_entrypoints.items.len);
+    defer entrypoints.deinit(ctx.gpa);
+
+    for (pending_entrypoints.items) |pending| {
+        const lir_expr_id = mir_to_lir.lower(pending.mir_expr_id) catch |err| {
+            std.log.err("Failed to lower MIR to LIR for entrypoint {s}: {}", .{ pending.ffi_symbol, err });
+            continue;
+        };
+
+        var type_scope = @import("types").TypeScope.init(ctx.gpa);
+        defer type_scope.deinit();
+        const ret_layout = layout_store.fromTypeVar(platform_module_idx, pending.ret_type_var, &type_scope, null) catch {
+            std.log.err("Failed to get layout for entrypoint {s}", .{pending.ffi_symbol});
+            continue;
+        };
+
+        try entrypoints.append(ctx.gpa, .{
+            .symbol_name = try std.fmt.allocPrint(ctx.arena, "roc__{s}", .{pending.ffi_symbol}),
+            .body_expr = lir_expr_id,
+            .arg_layouts = pending.arg_layouts,
+            .ret_layout = ret_layout,
+        });
+    }
+
+    if (entrypoints.items.len == 0) {
+        std.log.err("No entrypoints could be lowered to LIR", .{});
         return error.NoEntrypointsLowered;
     }
 

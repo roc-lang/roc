@@ -937,9 +937,13 @@ fn lambdaSetForExpr(self: *Self, mir_expr_id: MIR.ExprId) ?LambdaSet.Idx {
 
     return switch (self.mir_store.getExpr(mir_expr_id)) {
         .lookup => |sym| self.lambda_set_store.getSymbolLambdaSet(sym),
-        .block => |block| self.lambda_set_store.getExprLambdaSet(block.final_expr),
+        .block => |block| self.lambdaSetForExpr(block.final_expr),
+        .borrow_scope => |scope| self.lambdaSetForExpr(scope.body),
         .record_access => |ra| self.lambdaSetForRecordField(ra.record, ra.field_name),
         .tuple_access => |ta| self.lambdaSetForTupleElem(ta.tuple, ta.elem_index),
+        .dbg_expr => |dbg_expr| self.lambdaSetForExpr(dbg_expr.expr),
+        .expect => |expect| self.lambdaSetForExpr(expect.body),
+        .return_expr => |ret| self.lambdaSetForExpr(ret.expr),
         else => null,
     };
 }
@@ -1084,6 +1088,9 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
                 if (self.symbol_layouts.get(sym.raw())) |layout_idx| {
                     return try self.runtimeLayoutForBindingSymbol(sym, mono_idx, layout_idx);
                 }
+                if (self.lambda_set_store.getSymbolLambdaSet(sym)) |ls_idx| {
+                    return self.closureValueLayoutFromLambdaSet(ls_idx);
+                }
                 if (self.mir_store.getSymbolDef(sym)) |def_expr_id| {
                     return self.runtimeValueLayoutFromMirExpr(def_expr_id);
                 }
@@ -1112,7 +1119,7 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
             .tuple_access => |ta| {
                 if (try self.runtimeLayoutForTupleElem(ta.tuple, ta.elem_index)) |layout_idx| return layout_idx;
             },
-            .lambda => return .zst,
+            .lambda, .hosted => return .zst,
             else => {},
         }
         if (std.debug.runtime_safety) {
@@ -2539,13 +2546,15 @@ fn lowerLookup(self: *Self, sym: Symbol, mono_idx: Monotype.Idx, _: MIR.ExprId, 
         if (self.symbol_layouts.get(sym.raw())) |binding_layout| {
             break :blk try self.runtimeLayoutForBindingSymbol(sym, mono_idx, binding_layout);
         }
-        if (self.mir_store.getSymbolDef(sym)) |mir_def_id| {
-            break :blk try self.runtimeValueLayoutFromMirExpr(mir_def_id);
-        }
         if (self.mir_store.monotype_store.getMonotype(mono_idx) == .func) {
             if (self.lambda_set_store.getSymbolLambdaSet(sym)) |ls_idx| {
                 break :blk try self.closureValueLayoutFromLambdaSet(ls_idx);
             }
+        }
+        if (self.mir_store.getSymbolDef(sym)) |mir_def_id| {
+            break :blk try self.runtimeValueLayoutFromMirExpr(mir_def_id);
+        }
+        if (self.mir_store.monotype_store.getMonotype(mono_idx) == .func) {
             break :blk try self.layoutFromMonotype(mono_idx);
         }
         break :blk try self.layoutFromMonotype(mono_idx);
@@ -5945,6 +5954,105 @@ test "MIR hosted lambda lowers to LIR lambda wrapping hosted_call" {
 
     // The hosted_call index should be preserved
     try testing.expectEqual(@as(u32, 7), body_expr.hosted_call.index);
+}
+
+test "lambdaSetForExpr unwraps dbg_expr wrapper" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+
+    const func_arg_span = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{i64_mono});
+    const func_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .func = .{
+        .args = func_arg_span,
+        .ret = i64_mono,
+        .effectful = false,
+    } });
+
+    const ident_arg = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
+    const sym_arg = try testMirSymbol(&env.mir_store, allocator, ident_arg);
+    const pat_arg = try env.mir_store.addPattern(allocator, .{ .bind = sym_arg }, i64_mono);
+    const params = try env.mir_store.addPatternSpan(allocator, &.{pat_arg});
+
+    const body = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
+    } }, i64_mono, Region.zero());
+    const lambda_expr = try env.mir_store.addExpr(allocator, .{ .lambda = .{
+        .params = params,
+        .body = body,
+        .captures = MIR.CaptureSpan.empty(),
+    } }, func_mono, Region.zero());
+    const dbg_expr = try env.mir_store.addExpr(allocator, .{ .dbg_expr = .{
+        .expr = lambda_expr,
+    } }, func_mono, Region.zero());
+
+    const members = try env.lambda_set_store.addMembers(allocator, &.{.{
+        .fn_symbol = Symbol.none,
+        .closure_member = .none,
+    }});
+    const ls_idx = try env.lambda_set_store.addLambdaSet(allocator, .{ .members = members });
+    try env.lambda_set_store.expr_lambda_sets.put(allocator, @intFromEnum(lambda_expr), ls_idx);
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.lambda_set_store, env.module_env.idents.true_tag);
+    defer translator.deinit();
+
+    try testing.expectEqual(ls_idx, translator.lambdaSetForExpr(dbg_expr).?);
+}
+
+test "MIR function lookup uses symbol lambda set before wrapper def layout" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+
+    const func_arg_span = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{i64_mono});
+    const func_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .func = .{
+        .args = func_arg_span,
+        .ret = i64_mono,
+        .effectful = false,
+    } });
+
+    const ident_arg = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
+    const sym_arg = try testMirSymbol(&env.mir_store, allocator, ident_arg);
+    const pat_arg = try env.mir_store.addPattern(allocator, .{ .bind = sym_arg }, i64_mono);
+    const params = try env.mir_store.addPatternSpan(allocator, &.{pat_arg});
+
+    const crash_body = try env.mir_store.addExpr(allocator, .runtime_err_ellipsis, i64_mono, Region.zero());
+    const hosted_name = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 2 };
+    const hosted_expr = try env.mir_store.addExpr(allocator, .{ .hosted = .{
+        .symbol_name = hosted_name,
+        .index = 42,
+        .params = params,
+        .body = crash_body,
+    } }, func_mono, Region.zero());
+
+    const ident_f = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 3 };
+    const sym_f = try testMirSymbol(&env.mir_store, allocator, ident_f);
+    try env.mir_store.registerSymbolDef(allocator, sym_f, hosted_expr);
+
+    const members = try env.lambda_set_store.addMembers(allocator, &.{.{
+        .fn_symbol = sym_f,
+        .closure_member = .none,
+    }});
+    const ls_idx = try env.lambda_set_store.addLambdaSet(allocator, .{ .members = members });
+    try env.lambda_set_store.symbol_lambda_sets.put(allocator, sym_f.raw(), ls_idx);
+
+    const lookup_expr = try env.mir_store.addExpr(allocator, .{ .lookup = sym_f }, func_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.lambda_set_store, env.module_env.idents.true_tag);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(lookup_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+
+    try testing.expect(lir_expr == .lookup);
+    try testing.expectEqual(layout.Idx.zst, lir_expr.lookup.layout_idx);
 }
 
 test "MIR block with decl_var and mutate_var lowers to LIR decl and mutate" {

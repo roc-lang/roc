@@ -1034,14 +1034,16 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) !c_int {
     };
 
     // Call the app's main! entrypoint
-    var ret: [0]u8 = undefined; // Result is {} which is zero-sized
-    var args: [0]u8 = undefined;
+    // Roc still eagerly dereferences zero-sized ret/arg pointers in this ABI path,
+    // so provide one byte of dummy storage instead of Zig's poisoned zero-sized address.
+    var ret_dummy: u8 = 0;
+    var args_dummy: u8 = 0;
     // Note: although this is a function with no args and a zero-sized return value,
     // we can't currently pass null pointers for either of these because Roc will
     // currently dereference both of these eagerly even though it won't use either,
     // causing a segfault if you pass null. This should be changed! Dereferencing
     // garbage memory is obviously pointless, and there's no reason we should do it.
-    roc__main(&roc_ops, @as(*anyopaque, @ptrCast(&ret)), @as(*anyopaque, @ptrCast(&args)));
+    roc__main(&roc_ops, @as(*anyopaque, @ptrCast(&ret_dummy)), @as(*anyopaque, @ptrCast(&args_dummy)));
 
     // Check test results if in test mode
     if (host_env.test_state.enabled) {
