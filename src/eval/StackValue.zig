@@ -1577,7 +1577,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
 
             if (comptime trace_refcount) {
                 traceRefcount("DECREF list ptr=0x{x} len={} elems_rc={} unique={}", .{
-                    @intFromPtr(list_value.getAllocationDataPtr()),
+                    @intFromPtr(list_value.getAllocationDataPtr(ops)),
                     list_value.len(),
                     @intFromBool(list_info.contains_refcounted),
                     @intFromBool(list_value.isUnique(ops)),

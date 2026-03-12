@@ -2844,12 +2844,31 @@ pub const Interpreter = struct {
 
                 // Format arguments into proper types
                 const roc_list = roc_list_arg.asRocList().?;
-                const non_null_bytes: [*]u8 = @ptrCast(elt_arg.ptr.?);
-                const append_elt: builtins.list.Opaque = non_null_bytes;
 
                 // Get element layout from the list's stored layout
                 const stored_elem_layout_idx = roc_list_arg.layout.data.list;
                 const stored_elem_layout = self.runtime_layout_store.getLayout(stored_elem_layout_idx);
+                var elt_value = elt_arg;
+
+                if (stored_elem_layout.tag != .list_of_zst) {
+                    const list_resolved = self.resolveAliasesOnly(roc_list_arg.rt_var);
+                    const elem_rt_var_opt: ?types.Var = if (list_resolved.desc.content == .structure and list_resolved.desc.content.structure == .nominal_type) blk: {
+                        const nominal_args = self.runtime_types.sliceNominalArgs(list_resolved.desc.content.structure.nominal_type);
+                        break :blk if (nominal_args.len > 0) nominal_args[0] else null;
+                    } else null;
+
+                    switch (stored_elem_layout.tag) {
+                        .struct_, .tag_union, .scalar, .zst, .box => {
+                            if (!stored_elem_layout.eql(elt_value.layout)) {
+                                elt_value = try self.normalizeTagValueToLayout(elt_value, stored_elem_layout, elem_rt_var_opt, roc_ops);
+                            }
+                        },
+                        else => {},
+                    }
+                }
+
+                const normalized_bytes: [*]u8 = @ptrCast(elt_value.ptr.?);
+                const append_elt: builtins.list.Opaque = normalized_bytes;
 
                 // Check if the stored element layout needs to be upgraded.
                 // This handles the case where the list was created with an unknown element type
@@ -2857,11 +2876,11 @@ pub const Interpreter = struct {
                 // but we're now appending an element with a more specific layout.
                 // We should use the element's actual layout to ensure correct behavior.
                 const needs_element_layout_upgrade = stored_elem_layout.tag == .list_of_zst and
-                    elt_arg.layout.tag != .zst and elt_arg.layout.tag != .list_of_zst;
+                    elt_value.layout.tag != .zst and elt_value.layout.tag != .list_of_zst;
 
-                const elem_layout: Layout = if (needs_element_layout_upgrade) elt_arg.layout else stored_elem_layout;
+                const elem_layout: Layout = if (needs_element_layout_upgrade) elt_value.layout else stored_elem_layout;
                 const elem_layout_idx = if (needs_element_layout_upgrade)
-                    try self.runtime_layout_store.insertLayout(elt_arg.layout)
+                    try self.runtime_layout_store.insertLayout(elt_value.layout)
                 else
                     stored_elem_layout_idx;
 
@@ -2889,7 +2908,7 @@ pub const Interpreter = struct {
                 // When upgrading element layout, also update runtime type to match.
                 // (fixes issue #8946)
                 const result_rt_var = if (needs_element_layout_upgrade)
-                    try self.createListTypeWithElement(elt_arg.rt_var)
+                    try self.createListTypeWithElement(elt_value.rt_var)
                 else
                     roc_list_arg.rt_var;
                 var out = try self.pushRaw(result_layout, 0, result_rt_var);
@@ -6783,6 +6802,11 @@ pub const Interpreter = struct {
 
                 // Get the element rt_var from the Box type's type argument
                 const elem_rt_var = blk: {
+                    const union_resolved = self.resolveBaseVar(union_rt_var);
+                    if (union_resolved.desc.content == .structure and union_resolved.desc.content.structure == .tag_union) {
+                        break :blk union_rt_var;
+                    }
+
                     const box_resolved = self.runtime_types.resolveVar(value.rt_var);
                     if (box_resolved.desc.content == .structure) {
                         const flat = box_resolved.desc.content.structure;
@@ -6797,6 +6821,18 @@ pub const Interpreter = struct {
                     // Fallback to union_rt_var
                     break :blk union_rt_var;
                 };
+
+                if (elem_layout.tag == .zst) {
+                    var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+                    defer tag_list.deinit();
+                    try self.appendUnionTags(elem_rt_var, &tag_list);
+
+                    if (tag_list.items.len == 1) {
+                        return .{ .index = 0, .payload = null };
+                    }
+
+                    return error.TypeMismatch;
+                }
 
                 // Get pointer to heap data from the box
                 const data_ptr: *anyopaque = @ptrCast(value.getBoxedData().?);
@@ -10292,7 +10328,9 @@ pub const Interpreter = struct {
         };
 
         /// Return the value on the stack as an early return.
-        pub const EarlyReturn = struct {};
+        pub const EarlyReturn = struct {
+            return_rt_var: types.Var,
+        };
 
         /// Wrap backing expression result with nominal type's rt_var.
         pub const NominalWrap = struct {
@@ -12078,7 +12116,13 @@ pub const Interpreter = struct {
                 // Schedule the early return continuation after evaluating the inner expression
                 const inner_ct_var = can.ModuleEnv.varFrom(ret.expr);
                 const inner_rt_var = try self.translateTypeVar(self.env, inner_ct_var);
-                try work_stack.push(.{ .apply_continuation = .{ .early_return = .{} } });
+                const return_rt_var = expected_rt_var orelse blk: {
+                    const return_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    break :blk try self.translateTypeVar(self.env, return_ct_var);
+                };
+                try work_stack.push(.{ .apply_continuation = .{ .early_return = .{
+                    .return_rt_var = return_rt_var,
+                } } });
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = ret.expr,
                     .expected_rt_var = inner_rt_var,
@@ -13500,6 +13544,241 @@ pub const Interpreter = struct {
         return error.Crash;
     }
 
+    fn buildTagValueFromPayload(
+        self: *Interpreter,
+        rt_var: types.Var,
+        layout_val: Layout,
+        tag_index: usize,
+        payload_opt: ?StackValue,
+        roc_ops: *RocOps,
+    ) Error!StackValue {
+        if (payload_opt == null) {
+            return self.finalizeTagNoPayload(rt_var, tag_index, layout_val, roc_ops);
+        }
+
+        const payload = payload_opt.?;
+
+        switch (layout_val.tag) {
+            .struct_ => {
+                if (isRecordStyleStruct(layout_val, &self.runtime_layout_store)) {
+                    var dest = try self.pushRaw(layout_val, 0, rt_var);
+                    var acc = try dest.asRecord(&self.runtime_layout_store);
+                    const tag_field_idx = acc.findFieldIndex(self.env.getIdent(self.env.idents.tag)) orelse {
+                        self.triggerCrash("tag value construction: tag field not found", false, roc_ops);
+                        return error.Crash;
+                    };
+
+                    const field_rt = try self.runtime_types.fresh();
+                    const tag_field = try acc.getFieldByIndex(tag_field_idx, field_rt);
+                    if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                        var tmp = tag_field;
+                        tmp.is_initialized = false;
+                        try tmp.setInt(@intCast(tag_index));
+                    }
+
+                    if (acc.findFieldIndex(self.env.getIdent(self.env.idents.payload))) |payload_field_idx| {
+                        const field_rt2 = try self.runtime_types.fresh();
+                        const payload_field = try acc.getFieldByIndex(payload_field_idx, field_rt2);
+                        if (payload_field.ptr) |payload_ptr| {
+                            try payload.copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                        }
+                    }
+
+                    dest.is_initialized = true;
+                    return dest;
+                }
+
+                var dest = try self.pushRaw(layout_val, 0, rt_var);
+                var tup_acc = try dest.asTuple(&self.runtime_layout_store);
+                const discriminant_rt_var = try self.runtime_types.fresh();
+                const tag_field = try tup_acc.getElement(1, discriminant_rt_var);
+                if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                    var tmp = tag_field;
+                    tmp.is_initialized = false;
+                    try tmp.setInt(@intCast(tag_index));
+                }
+                const payload_field = try tup_acc.getElement(0, payload.rt_var);
+                if (payload_field.ptr) |ptr| {
+                    try payload.copyToPtr(&self.runtime_layout_store, ptr, roc_ops);
+                }
+                dest.is_initialized = true;
+                return dest;
+            },
+            .tag_union => {
+                const tu_idx = layout_val.data.tag_union.idx;
+                const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
+
+                var dest = try self.pushRaw(layout_val, 0, rt_var);
+                const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
+                const payload_ptr: *anyopaque = @ptrCast(base_ptr);
+
+                const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+                const expected_payload_layout = self.runtime_layout_store.getLayout(variants.get(tag_index).payload_layout);
+
+                if (expected_payload_layout.tag == .box and payload.layout.tag != .box and payload.layout.tag != .box_of_zst) {
+                    const elem_layout = self.runtime_layout_store.getLayout(expected_payload_layout.data.box);
+                    const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+                    const target_usize = self.runtime_layout_store.targetUsize();
+                    const elem_align: u32 = @intCast(elem_layout.alignment(target_usize).toByteUnits());
+
+                    const data_ptr = builtins.utils.allocateWithRefcount(elem_size, elem_align, false, roc_ops);
+                    if (elem_size > 0 and payload.ptr != null) {
+                        try payload.copyToPtr(&self.runtime_layout_store, data_ptr, roc_ops);
+                    }
+
+                    const slot: *usize = @ptrCast(@alignCast(payload_ptr));
+                    slot.* = @intFromPtr(data_ptr);
+                } else if (payload.layout.tag == .box and expected_payload_layout.tag != .box) {
+                    const inner_layout = self.runtime_layout_store.getLayout(payload.layout.data.box);
+                    const data_ptr: *anyopaque = @ptrCast(payload.getBoxedData().?);
+                    const inner_value = StackValue{
+                        .layout = inner_layout,
+                        .ptr = data_ptr,
+                        .is_initialized = true,
+                        .rt_var = payload.rt_var,
+                    };
+                    try inner_value.copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                } else {
+                    try payload.copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                }
+
+                tu_data.writeDiscriminantToPtr(base_ptr + disc_offset, @intCast(tag_index));
+                dest.is_initialized = true;
+                return dest;
+            },
+            .box => {
+                const inner_layout = self.runtime_layout_store.getLayout(layout_val.data.box);
+                const inner_value = try self.buildTagValueFromPayload(rt_var, inner_layout, tag_index, payload_opt, roc_ops);
+                defer inner_value.decref(&self.runtime_layout_store, roc_ops);
+                return try self.makeBoxValueFromLayout(layout_val, inner_value, roc_ops, rt_var);
+            },
+            .zst => {
+                const dest = try self.pushRaw(layout_val, 0, rt_var);
+                return dest;
+            },
+            else => {
+                self.triggerCrash("tag value construction: unsupported layout", false, roc_ops);
+                return error.Crash;
+            },
+        }
+    }
+
+    fn normalizeReturnValue(
+        self: *Interpreter,
+        value: StackValue,
+        expected_rt_var_opt: ?types.Var,
+        roc_ops: *RocOps,
+    ) Error!StackValue {
+        const expected_rt_var = expected_rt_var_opt orelse return value;
+        const expected_layout = self.getRuntimeLayout(expected_rt_var) catch return value;
+
+        if (value.layout.eql(expected_layout)) {
+            return value;
+        }
+
+        const expected_resolved = self.resolveBaseVar(expected_rt_var);
+        if (!(expected_resolved.desc.content == .structure and expected_resolved.desc.content.structure == .tag_union)) {
+            return value;
+        }
+
+        var actual_tags = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+        defer actual_tags.deinit();
+        try self.appendUnionTags(value.rt_var, &actual_tags);
+
+        var expected_tags = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+        defer expected_tags.deinit();
+        try self.appendUnionTags(expected_rt_var, &expected_tags);
+
+        const tag_data = self.extractTagValue(value, value.rt_var) catch return value;
+        if (tag_data.index >= actual_tags.items.len) {
+            return value;
+        }
+
+        const actual_tag_name = actual_tags.items[tag_data.index].name;
+        var expected_tag_index: ?usize = null;
+        for (expected_tags.items, 0..) |tag_info, idx| {
+            if (tag_info.name.eql(actual_tag_name)) {
+                expected_tag_index = idx;
+                break;
+            }
+        }
+
+        const normalized_tag_index = expected_tag_index orelse return value;
+
+        var payload_copy_opt: ?StackValue = null;
+        defer if (payload_copy_opt) |payload_copy| {
+            payload_copy.decref(&self.runtime_layout_store, roc_ops);
+        };
+
+        if (tag_data.payload) |payload| {
+            payload_copy_opt = try self.pushCopy(payload, roc_ops);
+        }
+
+        const normalized = try self.buildTagValueFromPayload(
+            expected_rt_var,
+            expected_layout,
+            normalized_tag_index,
+            payload_copy_opt,
+            roc_ops,
+        );
+        value.decref(&self.runtime_layout_store, roc_ops);
+        return normalized;
+    }
+
+    fn normalizeTagValueToLayout(
+        self: *Interpreter,
+        value: StackValue,
+        target_layout: Layout,
+        semantic_rt_var_opt: ?types.Var,
+        roc_ops: *RocOps,
+    ) Error!StackValue {
+        if (value.layout.eql(target_layout)) {
+            return value;
+        }
+        const semantic_rt_var = semantic_rt_var_opt orelse value.rt_var;
+
+        const tag_data = self.extractTagValue(value, semantic_rt_var) catch {
+            if (value.layout.tag == .box) {
+                var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+                defer tag_list.deinit();
+                self.appendUnionTags(semantic_rt_var, &tag_list) catch return value;
+
+                if (tag_list.items.len == 1) {
+                    const normalized = try self.buildTagValueFromPayload(
+                        semantic_rt_var,
+                        target_layout,
+                        0,
+                        null,
+                        roc_ops,
+                    );
+                    value.decref(&self.runtime_layout_store, roc_ops);
+                    return normalized;
+                }
+            }
+            return value;
+        };
+
+        var payload_copy_opt: ?StackValue = null;
+        defer if (payload_copy_opt) |payload_copy| {
+            payload_copy.decref(&self.runtime_layout_store, roc_ops);
+        };
+
+        if (tag_data.payload) |payload| {
+            payload_copy_opt = try self.pushCopy(payload, roc_ops);
+        }
+
+        const normalized = try self.buildTagValueFromPayload(
+            semantic_rt_var,
+            target_layout,
+            tag_data.index,
+            payload_copy_opt,
+            roc_ops,
+        );
+        value.decref(&self.runtime_layout_store, roc_ops);
+        return normalized;
+    }
+
     // Helper functions for lambda/closure creation
 
     /// Evaluate a lambda expression (e_lambda) - creates a closure value with empty captures
@@ -14222,7 +14501,9 @@ pub const Interpreter = struct {
                 const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
 
                 // Push early_return continuation
-                try work_stack.push(.{ .apply_continuation = .{ .early_return = .{} } });
+                try work_stack.push(.{ .apply_continuation = .{ .early_return = .{
+                    .return_rt_var = expr_rt_var,
+                } } });
 
                 // Evaluate the return expression
                 try work_stack.push(.{ .eval_expr = .{
@@ -15161,11 +15442,12 @@ pub const Interpreter = struct {
                 }
                 return true;
             },
-            .early_return => {
+            .early_return => |er| {
                 const cont_trace = tracy.traceNamed(@src(), "cont.early_return");
                 defer cont_trace.end();
                 // Pop the evaluated value and signal early return
-                const return_value = value_stack.pop() orelse return error.Crash;
+                const return_value_in = value_stack.pop() orelse return error.Crash;
+                const return_value = try self.normalizeReturnValue(return_value_in, er.return_rt_var, roc_ops);
                 self.early_return_value = return_value;
 
                 // Drain work stack until we find call_cleanup (function boundary) or return_result (evaluation root)
@@ -15828,6 +16110,7 @@ pub const Interpreter = struct {
 
                                 // Box the inner value
                                 const boxed = try self.makeBoxValueFromLayout(layout_val, inner_dest, roc_ops, tc.rt_var);
+                                inner_dest.decref(&self.runtime_layout_store, roc_ops);
                                 for (values) |val| {
                                     val.decref(&self.runtime_layout_store, roc_ops);
                                 }
@@ -15867,6 +16150,7 @@ pub const Interpreter = struct {
 
                                 inner_dest.is_initialized = true;
                                 const boxed = try self.makeBoxValueFromLayout(layout_val, inner_dest, roc_ops, tc.rt_var);
+                                inner_dest.decref(&self.runtime_layout_store, roc_ops);
                                 for (values) |val| {
                                     val.decref(&self.runtime_layout_store, roc_ops);
                                 }
@@ -15890,6 +16174,7 @@ pub const Interpreter = struct {
                                 }
                                 inner_dest.is_initialized = true;
                                 const boxed = try self.makeBoxValueFromLayout(layout_val, inner_dest, roc_ops, tc.rt_var);
+                                inner_dest.decref(&self.runtime_layout_store, roc_ops);
                                 for (values) |val| {
                                     val.decref(&self.runtime_layout_store, roc_ops);
                                 }
@@ -15904,6 +16189,7 @@ pub const Interpreter = struct {
                                 inner_dest.is_initialized = true;
                             }
                             const boxed = try self.makeBoxValueFromLayout(layout_val, inner_dest, roc_ops, tc.rt_var);
+                            inner_dest.decref(&self.runtime_layout_store, roc_ops);
                             for (values) |val| {
                                 val.decref(&self.runtime_layout_store, roc_ops);
                             }
@@ -15915,6 +16201,7 @@ pub const Interpreter = struct {
                             var inner_dest = try self.pushRaw(backing_layout, 0, tc.rt_var);
                             inner_dest.is_initialized = true;
                             const boxed = try self.makeBoxValueFromLayout(layout_val, inner_dest, roc_ops, tc.rt_var);
+                            inner_dest.decref(&self.runtime_layout_store, roc_ops);
                             for (values) |val| {
                                 val.decref(&self.runtime_layout_store, roc_ops);
                             }
