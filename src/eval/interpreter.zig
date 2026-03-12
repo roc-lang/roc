@@ -13257,13 +13257,13 @@ pub const Interpreter = struct {
                 .frac => switch (layout_val.data.scalar.data.frac) {
                     .f32 => {
                         const ptr = builtins.utils.alignedPtrCast(*f32, value.ptr.?, @src());
-                        // Convert from scaled i128 (10^18) to f32
-                        ptr.* = i128h.i128_to_f32(scaled_value) / @as(f32, @floatFromInt(RocDec.one_point_zero_i128));
+                        // Convert from scaled i128 without losing the fractional
+                        // digits in the 10^18-scaled integer before the divide.
+                        ptr.* = @floatCast(scaledI128ToF64(scaled_value));
                     },
                     .f64 => {
                         const ptr = builtins.utils.alignedPtrCast(*f64, value.ptr.?, @src());
-                        // Convert from scaled i128 (10^18) to f64
-                        ptr.* = i128h.i128_to_f64(scaled_value) / @as(f64, @floatFromInt(RocDec.one_point_zero_i128));
+                        ptr.* = scaledI128ToF64(scaled_value);
                     },
                     .dec => {
                         const ptr = builtins.utils.alignedPtrCast(*RocDec, value.ptr.?, @src());
@@ -13283,6 +13283,15 @@ pub const Interpreter = struct {
         }
         value.is_initialized = true;
         return value;
+    }
+
+    fn scaledI128ToF64(scaled_value: i128) f64 {
+        const scale = RocDec.one_point_zero_i128;
+        const whole = i128h.divTrunc_i128(scaled_value, scale);
+        const remainder = i128h.rem_i128(scaled_value, scale);
+
+        return i128h.i128_to_f64(whole) +
+            (i128h.i128_to_f64(remainder) / @as(f64, @floatFromInt(scale)));
     }
 
     /// Evaluate a string segment literal (e_str_segment)

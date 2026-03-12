@@ -618,8 +618,7 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
                                     const vt2 = self.resolveValType(bind.layout_idx);
                                     // Load the scalar from the pointer (lower bytes on little-endian)
                                     try self.emitLoadOpSized(vt2, target_size, 0);
-                                    const local_idx = self.storage.getLocal(bind.symbol) orelse
-                                        (self.storage.allocLocal(bind.symbol, vt2) catch return error.OutOfMemory);
+                                    const local_idx = self.getOrAllocTypedLocal(bind.symbol, vt2) catch return error.OutOfMemory;
                                     self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
                                     WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
                                     continue;
@@ -664,8 +663,7 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
                                     // Bind pointer to the symbol's local
                                     self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                                     WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
-                                    const local_idx = self.storage.getLocal(bind.symbol) orelse
-                                        (self.storage.allocLocal(bind.symbol, .i32) catch return error.OutOfMemory);
+                                    const local_idx = self.getOrAllocTypedLocal(bind.symbol, .i32) catch return error.OutOfMemory;
                                     try self.emitLocalSet(local_idx);
                                     continue;
                                 }
@@ -690,8 +688,7 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
                                     WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(stack_offset)) catch return error.OutOfMemory;
                                     self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
                                 }
-                                const local_idx = self.storage.getLocal(bind.symbol) orelse
-                                    (self.storage.allocLocal(bind.symbol, .i32) catch return error.OutOfMemory);
+                                const local_idx = self.getOrAllocTypedLocal(bind.symbol, .i32) catch return error.OutOfMemory;
                                 try self.emitLocalSet(local_idx);
                                 continue;
                             }
@@ -722,8 +719,7 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
                             const expr_vt = self.exprValType(stmt.expr);
                             try self.emitConversion(expr_vt, vt);
                             // Allocate a local (or reuse existing one for mutable rebinding)
-                            const local_idx = self.storage.getLocal(bind.symbol) orelse
-                                (self.storage.allocLocal(bind.symbol, vt) catch return error.OutOfMemory);
+                            const local_idx = self.getOrAllocTypedLocal(bind.symbol, vt) catch return error.OutOfMemory;
                             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
                             WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
                         }
@@ -2052,8 +2048,7 @@ fn bindCellValue(self: *Self, cell: Symbol, layout_idx: layout.Idx, expr_id: Lir
             }
         }
 
-        const local_idx = self.storage.getLocal(cell) orelse
-            (self.storage.allocLocal(cell, .i32) catch return error.OutOfMemory);
+        const local_idx = self.getOrAllocTypedLocal(cell, .i32) catch return error.OutOfMemory;
         try self.emitLocalSet(local_idx);
         return;
     }
@@ -2062,8 +2057,7 @@ fn bindCellValue(self: *Self, cell: Symbol, layout_idx: layout.Idx, expr_id: Lir
     try self.generateExpr(expr_id);
     const expr_vt = self.exprValType(expr_id);
     try self.emitConversion(expr_vt, vt);
-    const local_idx = self.storage.getLocal(cell) orelse
-        (self.storage.allocLocal(cell, vt) catch return error.OutOfMemory);
+    const local_idx = self.getOrAllocTypedLocal(cell, vt) catch return error.OutOfMemory;
     try self.emitLocalSet(local_idx);
 }
 
@@ -2073,6 +2067,16 @@ fn isUnsignedLayout(layout_idx: layout.Idx) bool {
         .u8, .u16, .u32, .u64, .u128, .bool => true,
         else => false,
     };
+}
+
+fn getOrAllocTypedLocal(self: *Self, symbol: Symbol, val_type: ValType) Allocator.Error!u32 {
+    if (self.storage.getLocalInfo(symbol)) |info| {
+        if (info.val_type == val_type) {
+            return info.idx;
+        }
+    }
+
+    return self.storage.allocLocal(symbol, val_type);
 }
 
 /// Convert a ValType to the corresponding BlockType for structured control flow.
@@ -5524,8 +5528,7 @@ fn bindCFLetPattern(self: *Self, pat: LirPattern, value_expr: LirExprId) Allocat
                 const vt = self.resolveValType(bind.layout_idx);
                 const byte_size = self.layoutByteSize(bind.layout_idx);
                 try self.emitLoadOpSized(vt, byte_size, 0);
-                const local_idx = self.storage.getLocal(bind.symbol) orelse
-                    (self.storage.allocLocal(bind.symbol, vt) catch return error.OutOfMemory);
+                const local_idx = self.getOrAllocTypedLocal(bind.symbol, vt) catch return error.OutOfMemory;
                 try self.emitLocalSet(local_idx);
             } else if (!expr_is_composite and target_is_composite) {
                 // Scalar → composite: store scalar into stack memory
@@ -5544,8 +5547,7 @@ fn bindCFLetPattern(self: *Self, pat: LirPattern, value_expr: LirExprId) Allocat
                     WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(stack_offset)) catch return error.OutOfMemory;
                     self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
                 }
-                const local_idx = self.storage.getLocal(bind.symbol) orelse
-                    (self.storage.allocLocal(bind.symbol, .i32) catch return error.OutOfMemory);
+                const local_idx = self.getOrAllocTypedLocal(bind.symbol, .i32) catch return error.OutOfMemory;
                 try self.emitLocalSet(local_idx);
             } else {
                 // Composite values returned from calls point into the callee's stack
@@ -5567,8 +5569,7 @@ fn bindCFLetPattern(self: *Self, pat: LirPattern, value_expr: LirExprId) Allocat
                 const vt = self.resolveValType(bind.layout_idx);
                 const expr_vt = self.exprValType(value_expr);
                 try self.emitConversion(expr_vt, vt);
-                const local_idx = self.storage.getLocal(bind.symbol) orelse
-                    (self.storage.allocLocal(bind.symbol, vt) catch return error.OutOfMemory);
+                const local_idx = self.getOrAllocTypedLocal(bind.symbol, vt) catch return error.OutOfMemory;
                 try self.emitLocalSet(local_idx);
             }
         },

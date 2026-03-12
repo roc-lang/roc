@@ -67,6 +67,12 @@ pub fn getLocal(self: *const Self, symbol: Symbol) ?u32 {
     return null;
 }
 
+/// Look up the full local info for a previously-allocated symbol.
+pub fn getLocalInfo(self: *const Self, symbol: Symbol) ?LocalInfo {
+    const key: u64 = @bitCast(symbol);
+    return self.locals.get(key);
+}
+
 /// Reset for a new function scope (keeps allocated memory).
 pub fn reset(self: *Self) void {
     self.locals.clearRetainingCapacity();
