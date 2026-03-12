@@ -1207,32 +1207,6 @@ This type is referenced here:
     ^
 
 
-**MODULE NOT FOUND**
-The module `I1` was not found in this Roc project.
-
-You're attempting to use this module here:
-**everything.md:2:1:5:2:**
-```roc
-import I1 exposing [
-	I11,
-	I12
-]
-```
-
-
-**MODULE NOT FOUND**
-The module `I2` was not found in this Roc project.
-
-You're attempting to use this module here:
-**everything.md:6:1:9:2:**
-```roc
-import I2 exposing [
-	I21 as Ias1,
-	I22 as Ias2
-]
-```
-
-
 **UNUSED VARIABLE**
 Variable `b` is not used anywhere in your code.
 

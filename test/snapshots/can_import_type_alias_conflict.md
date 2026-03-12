@@ -15,24 +15,7 @@ main = 42
 # EXPECTED
 DUPLICATE DEFINITION - can_import_type_alias_conflict.md:1:1:1:38
 # PROBLEMS
-**DUPLICATE DEFINITION**
-The name `JsonValue` is being redeclared in this scope.
-
-The redeclaration is here:
-**can_import_type_alias_conflict.md:1:1:1:38:**
-```roc
-import json.Json exposing [JsonValue]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-But `JsonValue` was already defined here:
-**can_import_type_alias_conflict.md:1:1:1:1:**
-```roc
-import json.Json exposing [JsonValue]
-```
-^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,

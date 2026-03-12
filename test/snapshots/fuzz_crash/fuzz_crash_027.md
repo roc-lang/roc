@@ -505,18 +505,6 @@ Is there an `import` or `exposing` missing up-top?
 			  ^
 
 
-**UNUSED VARIABLE**
-Variable `lue` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_lue` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:64:11:64:14:**
-```roc
-	match a {lue | Red => {
-```
-	         ^^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `ment` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -1936,7 +1924,7 @@ expect {
 							(patterns
 								(pattern (degenerate false)
 									(p-assign (ident "lue")))
-								(pattern (degenerate false)
+								(pattern (degenerate true)
 									(p-applied-tag)))
 							(value
 								(e-block

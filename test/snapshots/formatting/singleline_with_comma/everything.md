@@ -74,28 +74,6 @@ B(b) : b where [b.b1 : (b, b,) -> Str, b.b2 : (b, b,) -> Str,]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**MODULE NOT FOUND**
-The module `I1` was not found in this Roc project.
-
-You're attempting to use this module here:
-**everything.md:2:1:2:31:**
-```roc
-import I1 exposing [I11, I12,]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**MODULE NOT FOUND**
-The module `I2` was not found in this Roc project.
-
-You're attempting to use this module here:
-**everything.md:3:1:3:47:**
-```roc
-import I2 exposing [I21 as Ias1, I22 as Ias2,]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 **UNUSED VARIABLE**
 Variable `b` is not used anywhere in your code.
 

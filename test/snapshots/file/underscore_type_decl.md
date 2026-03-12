@@ -326,17 +326,6 @@ Other valid examples:
 ^
 
 
-**MODULE NOT FOUND**
-The module `Module` was not found in this Roc project.
-
-You're attempting to use this module here:
-**underscore_type_decl.md:1:1:1:30:**
-```roc
-import Module exposing [Pair]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,

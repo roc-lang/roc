@@ -62,17 +62,6 @@ import "users.json" as data : Str
                     ^^
 
 
-**MODULE NOT FOUND**
-The module `Json` was not found in this Roc project.
-
-You're attempting to use this module here:
-**inline_ingested_file.md:2:1:2:12:**
-```roc
-import Json
-```
-^^^^^^^^^^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `parse` in this scope.
 Is there an `import` or `exposing` missing up-top?

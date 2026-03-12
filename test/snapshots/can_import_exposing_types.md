@@ -122,24 +122,6 @@ This type is referenced here:
                       ^^^^^^^^
 
 
-**DUPLICATE DEFINITION**
-The name `Try` is being redeclared in this scope.
-
-The redeclaration is here:
-**can_import_exposing_types.md:3:1:3:32:**
-```roc
-import utils.Try exposing [Try]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-But `Try` was already defined here:
-**can_import_exposing_types.md:1:1:1:1:**
-```roc
-import json.Json exposing [Value, Error, Config]
-```
-^
-
-
 **UNDECLARED TYPE**
 The type _Value_ is not declared in this scope.
 

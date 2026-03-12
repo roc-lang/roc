@@ -34,17 +34,6 @@ import Color.*
             ^^
 
 
-**MODULE NOT FOUND**
-The module `Color` was not found in this Roc project.
-
-You're attempting to use this module here:
-**nominal_import_wildcard.md:1:1:1:13:**
-```roc
-import Color.*
-```
-^^^^^^^^^^^^
-
-
 **UNDECLARED TYPE**
 The type _Color_ is not declared in this scope.
 

@@ -2931,12 +2931,20 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
         .builtin_indices = config.builtin_indices,
     };
 
+    var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+    defer module_envs_map.deinit();
+
+    Can.populateModuleEnvs(&module_envs_map, &validation_env, builtin_env, config.builtin_indices) catch |err| {
+        std.log.err("MONO VALIDATION ERROR in {s}: Failed to populate auto-imported types: {}", .{ source_path, err });
+        return false;
+    };
+
     var checker = Check.init(
         allocator,
         &validation_env.types,
         &validation_env,
         &.{}, // No imported modules
-        &module_envs,
+        &module_envs_map,
         &validation_env.store.regions,
         builtin_ctx,
     ) catch |err| {
