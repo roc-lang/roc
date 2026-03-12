@@ -9614,6 +9614,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // We must be inside a compileLambdaAsProc — early returns require the
             // jump-to-epilogue infrastructure that compileLambdaAsProc sets up.
             const ret_layout = self.early_return_ret_layout orelse unreachable;
+
+            // Zero-sized return: nothing to move, just jump to epilogue
+            if (self.getLayoutSize(ret_layout) == 0) {
+                const patch = try self.codegen.emitJump();
+                try self.early_return_patches.append(self.allocator, patch);
+                return .{ .immediate_i64 = 0 };
+            }
+
             const return_loc = self.normalizeResultLocForLayout(value_loc, ret_layout);
             const preserved_return_loc = return_loc;
 
@@ -16177,8 +16185,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     self.current_lambda_expr_id = body_expr;
                     self.early_return_ret_layout = lambda.ret_layout;
-                    self.ret_ptr_slot = self.codegen.allocStackSlot(8);
-                    try self.emitStore(.w64, frame_ptr, self.ret_ptr_slot.?, ret_ptr_reg);
+                    if (self.getLayoutSize(lambda.ret_layout) > 0) {
+                        self.ret_ptr_slot = self.codegen.allocStackSlot(8);
+                        try self.emitStore(.w64, frame_ptr, self.ret_ptr_slot.?, ret_ptr_reg);
+                    } else {
+                        self.ret_ptr_slot = null;
+                    }
                     try self.bindEntrypointParamsFromArgsPtr(lambda.params, arg_layouts, args_ptr_reg);
 
                     const result_loc = try self.generateExpr(lambda.body);
@@ -16491,11 +16503,11 @@ test "entrypoint aliases with args call the underlying function value" {
     defer codegen.deinit();
 
     if (comptime builtin.cpu.arch == .aarch64) {
-        codegen.codegen.stack_offset = 16 + HostLirCodeGen.CodeGen.CALLEE_SAVED_AREA_SIZE;
+        codegen.codegen.stack_offset = 16 + @TypeOf(codegen.codegen).CALLEE_SAVED_AREA_SIZE;
         codegen.roc_ops_reg = .X19;
         try codegen.generateEntrypointBody(alias_lookup, &.{.bool}, .bool, .X20, .X21);
     } else {
-        codegen.codegen.stack_offset = -HostLirCodeGen.CodeGen.CALLEE_SAVED_AREA_SIZE;
+        codegen.codegen.stack_offset = -@TypeOf(codegen.codegen).CALLEE_SAVED_AREA_SIZE;
         codegen.roc_ops_reg = .R12;
         try codegen.generateEntrypointBody(alias_lookup, &.{.bool}, .bool, .RBX, .R13);
     }

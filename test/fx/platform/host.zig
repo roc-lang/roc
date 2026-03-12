@@ -534,7 +534,7 @@ fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaqu
 
 // External symbols provided by the Roc runtime object file
 // Follows RocCall ABI: ops, ret_ptr, then argument pointers
-extern fn roc__main(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+extern fn roc__main(ops: *builtins.host_abi.RocOps, ret_ptr: ?*anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
 
 // OS-specific entry point handling
 comptime {
@@ -1034,16 +1034,9 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) !c_int {
     };
 
     // Call the app's main! entrypoint
-    // Roc still eagerly dereferences zero-sized ret/arg pointers in this ABI path,
-    // so provide one byte of dummy storage instead of Zig's poisoned zero-sized address.
-    var ret_dummy: u8 = 0;
-    var args_dummy: u8 = 0;
-    // Note: although this is a function with no args and a zero-sized return value,
-    // we can't currently pass null pointers for either of these because Roc will
-    // currently dereference both of these eagerly even though it won't use either,
-    // causing a segfault if you pass null. This should be changed! Dereferencing
-    // garbage memory is obviously pointless, and there's no reason we should do it.
-    roc__main(&roc_ops, @as(*anyopaque, @ptrCast(&ret_dummy)), @as(*anyopaque, @ptrCast(&args_dummy)));
+    // For zero-sized return/arg types, the generated code does not dereference
+    // these pointers, so null is safe.
+    roc__main(&roc_ops, null, null);
 
     // Check test results if in test mode
     if (host_env.test_state.enabled) {
