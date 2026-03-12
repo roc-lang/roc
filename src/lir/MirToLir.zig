@@ -748,7 +748,7 @@ fn runtimeRecordLayoutFromPattern(self: *Self, mono_idx: Monotype.Idx, rd: anyty
     for (all_fields) |field| {
         var field_layout_idx = try self.layoutFromMonotype(field.type_idx);
         for (mir_field_names, 0..) |mir_name, mi| {
-            if (mir_name.eql(field.name)) {
+            if (self.identsTextEqual(mir_name, field.name)) {
                 field_layout_idx = try self.runtimeLayoutFromPattern(mir_patterns[mi]);
                 break;
             }
@@ -2296,7 +2296,7 @@ fn lowerRecord(self: *Self, rec: anytype, _: Monotype.Idx, mir_expr_id: MIR.Expr
         const layout_field_name = layout_fields.get(li).name;
         var found = false;
         for (mir_field_names, 0..) |mir_name, mi| {
-            if (mir_name.eql(layout_field_name)) {
+            if (self.identsTextEqual(mir_name, layout_field_name)) {
                 const lir_expr = try self.lowerExpr(mir_fields[mi]);
                 const field_layout = try self.runtimeValueLayoutFromMirExpr(mir_fields[mi]);
                 const ensured = try acc.ensureSymbol(lir_expr, field_layout, region);

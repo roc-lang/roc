@@ -1004,3 +1004,40 @@ test "getRecordFieldOffsetByName - alignment overrides alphabetical order" {
     try testing.expectEqual(@as(u32, 0), lt.layout_store.getRecordFieldOffsetByName(rid, start_ident));
     try testing.expectEqual(@as(u32, 8), lt.layout_store.getRecordFieldOffsetByName(rid, len_ident));
 }
+
+test "record field names resolve correctly across module ident stores" {
+    var user_env = try ModuleEnv.init(testing.allocator, "");
+    defer user_env.deinit();
+
+    var builtin_env = try ModuleEnv.init(testing.allocator, "");
+    defer builtin_env.deinit();
+
+    const user_start = try user_env.insertIdent(Ident.for_text("validStartByte"));
+    const user_len = try user_env.insertIdent(Ident.for_text("lem"));
+    const builtin_start = try builtin_env.insertIdent(Ident.for_text("start"));
+    const builtin_len = try builtin_env.insertIdent(Ident.for_text("len"));
+
+    // Ensure both stores produce overlapping raw indices so this exercises the
+    // cross-module lookup path instead of succeeding accidentally.
+    try testing.expectEqual(user_start.idx, builtin_start.idx);
+    try testing.expectEqual(user_len.idx, builtin_len.idx);
+
+    var module_envs = [_]*const ModuleEnv{ &user_env, &builtin_env };
+    var layout_store = try Store.init(&module_envs, null, testing.allocator, base.target.TargetUsize.native);
+    defer layout_store.deinit();
+
+    try testing.expectEqualStrings("start", layout_store.getFieldName(builtin_start));
+    try testing.expectEqualStrings("len", layout_store.getFieldName(builtin_len));
+
+    const u64_layout = layout.Layout.int(.u64);
+    const record_idx = try layout_store.putRecord(
+        &builtin_env,
+        &.{ u64_layout, u64_layout },
+        &.{ builtin_start, builtin_len },
+    );
+    const record_layout = layout_store.getLayout(record_idx);
+    const rid = record_layout.data.struct_.idx;
+
+    try testing.expectEqual(@as(u32, 0), layout_store.getRecordFieldOffsetByName(rid, builtin_len));
+    try testing.expectEqual(@as(u32, 8), layout_store.getRecordFieldOffsetByName(rid, builtin_start));
+}

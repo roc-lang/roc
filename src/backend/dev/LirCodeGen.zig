@@ -3831,31 +3831,36 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 };
             };
 
-            // Look up field offsets structurally from the record layout.
-            // The record is { start : U64, len : U64 }. Sorted alphabetically: len=0, start=1.
             const record_layout = ls.getLayout(record_layout_idx orelse unreachable);
             const record_idx = record_layout.data.struct_.idx;
             const record_size = ls.getStructData(record_idx).size;
-            const len_sorted_idx: u32 = 0;
-            const start_sorted_idx: u32 = 1;
+            const start_field_off: i32 = @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 0));
+            const len_field_off: i32 = @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 1));
+
             if (builtin.mode == .Debug) {
-                const sd = ls.getStructData(record_idx);
-                const sorted_fields = ls.struct_fields.sliceRange(sd.getFields());
+                const sorted_fields = ls.struct_fields.sliceRange(ls.getStructData(record_idx).getFields());
                 if (sorted_fields.len != 2) {
                     std.debug.panic(
                         "LIR/codegen invariant violated: list_sublist record expected 2 fields, got {d}",
                         .{sorted_fields.len},
                     );
                 }
-                if (sorted_fields.get(0).layout != .u64 or sorted_fields.get(1).layout != .u64 or record_size != 16) {
+                if (record_size != 16 or
+                    ls.getStructFieldLayoutByOriginalIndex(record_idx, 0) != .u64 or
+                    ls.getStructFieldLayoutByOriginalIndex(record_idx, 1) != .u64 or
+                    ls.getStructFieldSizeByOriginalIndex(record_idx, 0) != 8 or
+                    ls.getStructFieldSizeByOriginalIndex(record_idx, 1) != 8)
+                {
                     std.debug.panic(
-                        "LIR/codegen invariant violated: list_sublist record expected two U64 fields in 16 bytes, got layouts [{}, {}] size {d}",
-                        .{ sorted_fields.get(0).layout, sorted_fields.get(1).layout, record_size },
+                        "LIR/codegen invariant violated: list_sublist record expected original fields start/len as two U64s in 16 bytes, got layouts [{}, {}] size {d}",
+                        .{
+                            ls.getStructFieldLayoutByOriginalIndex(record_idx, 0),
+                            ls.getStructFieldLayoutByOriginalIndex(record_idx, 1),
+                            record_size,
+                        },
                     );
                 }
             }
-            const start_field_off: i32 = @intCast(ls.getStructFieldOffset(record_idx, start_sorted_idx));
-            const len_field_off: i32 = @intCast(ls.getStructFieldOffset(record_idx, len_sorted_idx));
 
             const list_off = try self.ensureOnStack(list_loc, roc_list_size);
             const record_off = try self.ensureOnStack(record_loc, record_size);

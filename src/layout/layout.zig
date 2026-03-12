@@ -158,8 +158,29 @@ pub const StructField = struct {
     index: u16,
     /// The layout of the field's value
     layout: Idx,
-    /// Optional field name (set for records, unset for tuples).
-    /// Used by interpreter/evaluator for field-name-based lookup.
+    /// DEPRECATED: Optional field name (set for records, unset for tuples).
+    ///
+    /// This field is incorrect by construction. `Ident.Idx` is module-local, but
+    /// by the time we have lowered to layouts the notion of "which module this
+    /// came from" has intentionally been erased. There is no principled way to
+    /// recover the correct `Ident.Store` from layout data alone, so looking this
+    /// up can only work by accident in the special case where the caller both has
+    /// access to the right ident store and happens to choose it.
+    ///
+    /// The long-term direction is to delete this field entirely.
+    ///
+    /// Why it still exists today:
+    /// - legacy interpreter/runtime record field lookup
+    /// - legacy REPL/value rendering paths, including `RocValue`
+    /// - a few transitional layout/lowering helpers that still match record fields
+    ///   by name after layout construction
+    ///
+    /// Those runtime/display use cases are going away. Display of Roc values should
+    /// ultimately happen through `Str.inspect`, not by reading names out of layout
+    /// metadata. `RocValue` should go away, and the interpreter is also planned to
+    /// go away. Once the remaining transitional lowering/layout consumers are
+    /// removed or rewritten to use a non-name-based mechanism, this field should go
+    /// from deprecated to deleted.
     name: Ident.Idx = Ident.Idx.NONE,
 
     /// A SafeMultiList for storing struct fields
