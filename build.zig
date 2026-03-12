@@ -2113,7 +2113,7 @@ pub fn build(b: *std.Build) void {
     const serialization_size_step = b.step("test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
     const wasm_static_lib_test_step = b.step("test-wasm-static-lib", "Test WASM static library builds with bytebox");
     const test_cli_step = b.step("test-cli", "Test the roc CLI by running test programs");
-    const test_cli_dev_step = b.step("test-cli-dev", "Test the roc CLI with --backend=dev (informational, not in CI)");
+
     const test_platforms_step = b.step("test-platforms", "Build test platform host libraries");
     const coverage_step = b.step("coverage", "Run parser tests with kcov code coverage");
     const release_step = b.step("release", "Build optimized release binary for distribution");
@@ -2363,6 +2363,39 @@ pub fn build(b: *std.Build) void {
         run_str_tests.step.dependOn(test_platforms_step);
         test_cli_step.dependOn(&run_str_tests.step);
 
+        // Test int platform with dev backend
+        const run_int_dev_tests = b.addRunArtifact(test_runner_exe);
+        run_int_dev_tests.addArg("zig-out/bin/roc");
+        run_int_dev_tests.addArg("int");
+        run_int_dev_tests.addArg("--mode=native");
+        run_int_dev_tests.addArg("--backend=dev");
+        run_int_dev_tests.step.dependOn(&install.step);
+        run_int_dev_tests.step.dependOn(&install_runner.step);
+        run_int_dev_tests.step.dependOn(test_platforms_step);
+        test_cli_step.dependOn(&run_int_dev_tests.step);
+
+        // Test str platform with dev backend
+        const run_str_dev_tests = b.addRunArtifact(test_runner_exe);
+        run_str_dev_tests.addArg("zig-out/bin/roc");
+        run_str_dev_tests.addArg("str");
+        run_str_dev_tests.addArg("--mode=native");
+        run_str_dev_tests.addArg("--backend=dev");
+        run_str_dev_tests.step.dependOn(&install.step);
+        run_str_dev_tests.step.dependOn(&install_runner.step);
+        run_str_dev_tests.step.dependOn(test_platforms_step);
+        test_cli_step.dependOn(&run_str_dev_tests.step);
+
+        // Test fx platform with dev backend
+        const run_fx_dev_tests = b.addRunArtifact(test_runner_exe);
+        run_fx_dev_tests.addArg("zig-out/bin/roc");
+        run_fx_dev_tests.addArg("fx");
+        run_fx_dev_tests.addArg("--mode=native");
+        run_fx_dev_tests.addArg("--backend=dev");
+        run_fx_dev_tests.step.dependOn(&install.step);
+        run_fx_dev_tests.step.dependOn(&install_runner.step);
+        run_fx_dev_tests.step.dependOn(test_platforms_step);
+        test_cli_step.dependOn(&run_fx_dev_tests.step);
+
         // Roc subcommands integration test
         const roc_subcommands_test = b.addTest(.{
             .name = "roc_subcommands_test",
@@ -2400,16 +2433,6 @@ pub fn build(b: *std.Build) void {
         run_glue_test.step.dependOn(&install.step);
         run_glue_test_step = &run_glue_test.step;
         test_cli_step.dependOn(&run_glue_test.step);
-        // Tests fx platform with --backend=dev to track dev backend progress
-        const run_fx_dev_tests = b.addRunArtifact(test_runner_exe);
-        run_fx_dev_tests.addArg("zig-out/bin/roc");
-        run_fx_dev_tests.addArg("fx");
-        run_fx_dev_tests.addArg("--mode=native");
-        run_fx_dev_tests.addArg("--backend=dev");
-        run_fx_dev_tests.step.dependOn(&install.step);
-        run_fx_dev_tests.step.dependOn(&install_runner.step);
-        run_fx_dev_tests.step.dependOn(test_platforms_step);
-        test_cli_dev_step.dependOn(&run_fx_dev_tests.step);
     }
 
     // Manual rebuild command: zig build rebuild-builtins
