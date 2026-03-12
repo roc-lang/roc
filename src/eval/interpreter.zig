@@ -1002,7 +1002,7 @@ pub const Interpreter = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        if (arg_ptr) |args_ptr| {
+        {
             const func_val = try self.eval(expr_idx, roc_ops);
             defer func_val.decref(&self.runtime_layout_store, roc_ops);
 
@@ -1082,7 +1082,7 @@ pub const Interpreter = struct {
                 const tuple_layout = self.runtime_layout_store.getLayout(tuple_idx);
                 // Use first element's rt_var as placeholder - this tuple is internal-only,
                 // elements get their own rt_vars when extracted via getElement
-                args_tuple_value = StackValue{ .layout = tuple_layout, .ptr = args_ptr, .is_initialized = true, .rt_var = param_rt_vars[0] };
+                args_tuple_value = StackValue{ .layout = tuple_layout, .ptr = arg_ptr orelse unreachable, .is_initialized = true, .rt_var = param_rt_vars[0] };
                 args_accessor = args_tuple_value.asTuple(&self.runtime_layout_store) catch {
                     self.triggerCrash("Internal error: failed to access tuple in evaluateExpression", false, roc_ops);
                     return error.Crash;
