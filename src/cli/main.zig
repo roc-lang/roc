@@ -4886,6 +4886,46 @@ const TestCacheResultEntry = extern struct {
     }
 };
 
+/// Atomically appends a test cache entry and its failure report.
+/// If either append fails, neither is added and `report_text` is freed (if non-empty).
+fn appendTestCacheEntry(
+    cache_entries: *std.ArrayList(TestCacheResultEntry),
+    cache_failure_reports: *std.ArrayList([]const u8),
+    gpa: std.mem.Allocator,
+    passed: bool,
+    region: base.Region,
+    report_text: []const u8,
+) void {
+    cache_entries.append(gpa, .{
+        .passed = if (passed) 1 else 0,
+        .region_start = region.start.offset,
+        .region_end = region.end.offset,
+        .report_len = @intCast(report_text.len),
+    }) catch {
+        if (report_text.len > 0) gpa.free(report_text);
+        return;
+    };
+    cache_failure_reports.append(gpa, report_text) catch {
+        _ = cache_entries.pop();
+        if (report_text.len > 0) gpa.free(report_text);
+    };
+}
+
+/// Renders a failure report for caching using the test runner's createReport.
+/// Returns an empty string for passing tests or if rendering fails.
+/// Non-empty strings are allocated with `gpa` and ownership is transferred to the caller.
+fn renderTestFailureReport(test_runner: *const TestRunner, tr: anytype, path: []const u8, gpa: std.mem.Allocator) []const u8 {
+    if (tr.passed) return "";
+    var report = test_runner.createReport(tr, path) catch return "";
+    defer report.deinit();
+    var alloc_writer: std.Io.Writer.Allocating = .init(gpa);
+    defer alloc_writer.deinit();
+    const config = reporting.ReportingConfig.initColorTerminal();
+    const palette = reporting.ColorUtils.getPaletteForConfig(config);
+    reporting.renderReportToTerminal(&report, &alloc_writer.writer, palette, config) catch return "";
+    return alloc_writer.toOwnedSlice() catch "";
+}
+
 const TestCacheOutcome = enum(u32) {
     all_passed = 0,
     some_failed = 1,
@@ -5437,6 +5477,11 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                 total_failed += summary.failed;
 
                 const results = try ctx.gpa.dupe(TestResultItem, results_list.items);
+                for (results) |result| {
+                    // Dev backend: use error_msg as the cache report (no rendered report available)
+                    const report_text: []const u8 = if (result.error_msg) |msg| ctx.gpa.dupe(u8, msg) catch "" else "";
+                    appendTestCacheEntry(&cache_entries, &cache_failure_reports, ctx.gpa, result.result == .passed, result.region, report_text);
+                }
                 try module_results.append(.{
                     .env = root_env,
                     .path = args.path,
@@ -5479,6 +5524,11 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                         }
                     }
 
+                    for (results) |result| {
+                        const report_text: []const u8 = if (result.error_msg) |msg| ctx.gpa.dupe(u8, msg) catch "" else "";
+                        appendTestCacheEntry(&cache_entries, &cache_failure_reports, ctx.gpa, result.result == .passed, result.region, report_text);
+                    }
+
                     module_results.append(.{
                         .env = mod_env,
                         .path = mod_path,
@@ -5517,7 +5567,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                 total_passed += summary.passed;
                 total_failed += summary.failed;
 
-                // Copy test results for reporting
+                // Copy test results for reporting and build cache entries
                 var results = try ctx.gpa.alloc(TestResultItem, test_runner.test_results.items.len);
                 for (test_runner.test_results.items, 0..) |tr, i| {
                     results[i] = .{
@@ -5525,6 +5575,9 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                         .region = tr.region,
                         .error_msg = if (tr.error_msg) |msg| try ctx.gpa.dupe(u8, msg) else null,
                     };
+
+                    const report_text = renderTestFailureReport(&test_runner, tr, args.path, ctx.gpa);
+                    appendTestCacheEntry(&cache_entries, &cache_failure_reports, ctx.gpa, tr.passed, tr.region, report_text);
                 }
 
                 try module_results.append(.{
@@ -5568,15 +5621,8 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                 // Copy test results for reporting
                 if (test_runner.test_results.items.len > 0) {
                     var results = ctx.gpa.alloc(TestResultItem, test_runner.test_results.items.len) catch continue;
-                    for (test_runner.test_results.items, 0..) |tr, i| {
-                        results[i] = .{
-                            .result = if (tr.passed) .passed else .failed,
-                            .region = tr.region,
-                            .error_msg = if (tr.error_msg) |msg| ctx.gpa.dupe(u8, msg) catch null else null,
-                        };
-                    }
 
-                    // Find the module path from schedulers
+                    // Find the module path from schedulers (needed for report rendering)
                     var mod_path: []const u8 = "<unknown>";
                     var sched_iter2 = build_env.schedulers.iterator();
                     outer: while (sched_iter2.next()) |sched_entry| {
@@ -5589,6 +5635,17 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                                 }
                             }
                         }
+                    }
+
+                    for (test_runner.test_results.items, 0..) |tr, i| {
+                        results[i] = .{
+                            .result = if (tr.passed) .passed else .failed,
+                            .region = tr.region,
+                            .error_msg = if (tr.error_msg) |msg| ctx.gpa.dupe(u8, msg) catch null else null,
+                        };
+
+                        const report_text = renderTestFailureReport(&test_runner, tr, mod_path, ctx.gpa);
+                        appendTestCacheEntry(&cache_entries, &cache_failure_reports, ctx.gpa, tr.passed, tr.region, report_text);
                     }
 
                     module_results.append(.{
