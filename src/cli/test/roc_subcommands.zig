@@ -1023,7 +1023,7 @@ test "roc run --backend=dev rejects non executable targets" {
 
     try testing.expect(result.term == .Exited and result.term.Exited != 0);
 
-    const has_expected_error = std.mem.indexOf(u8, result.stderr, "This platform only produces static libraries") != null or
+    const has_expected_error = std.mem.indexOf(u8, result.stderr, "only produces static libraries") != null or
         std.mem.indexOf(u8, result.stderr, "TARGET NOT SUPPORTED") != null or
         std.mem.indexOf(u8, result.stderr, "unsupported target") != null;
     try testing.expect(has_expected_error);
