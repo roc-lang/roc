@@ -42,6 +42,7 @@ const ResolvedDispatchTarget = struct {
     origin: Ident.Idx,
     method_ident: Ident.Idx,
     fn_var: types.Var,
+    module_idx: ?u32 = null,
 };
 
 const SymbolMetadata = union(enum) {
@@ -316,13 +317,15 @@ fn remapIdentBetweenModules(
         // map that self-name directly to the target module's self-name.
         if (std.mem.eql(u8, ident_text, from_env.module_name)) {
             if (to_env.common.findIdent(to_env.module_name)) |target_self| return target_self;
-            return try to_env.insertIdent(Ident.for_text(to_env.module_name));
+            if (to_env.common.getIdentStore().lookup(Ident.for_text(to_env.module_name))) |target_self| return target_self;
+            return ident;
         }
 
         // Structural names (record fields, tag names) can be introduced by the
-        // caller module and legitimately absent in the callee module's ident store.
-        // Canonicalize them by interning into the target module.
-        return try to_env.insertIdent(Ident.for_text(ident_text));
+        // caller module and legitimately be absent in the target module's ident store.
+        // Keep using the source ident in that case and rely on structural text comparisons.
+        if (to_env.common.getIdentStore().lookup(Ident.for_text(ident_text))) |mapped| return mapped;
+        return ident;
     }
 
     if (std.debug.runtime_safety) {
@@ -3954,10 +3957,12 @@ fn resolveDispatchTargetForExpr(
         if (!constraint.resolved_target.isNone() and
             self.resolvedTargetIsUsable(module_env, method_name, constraint.resolved_target))
         {
+            const target_module_idx = self.findModuleForOriginMaybe(module_env, constraint.resolved_target.origin_module).?;
             break :blk ResolvedDispatchTarget{
                 .origin = constraint.resolved_target.origin_module,
                 .method_ident = constraint.resolved_target.method_ident,
                 .fn_var = constraint.fn_var,
+                .module_idx = target_module_idx,
             };
         }
         break :blk try self.resolveUnresolvedTypeVarDispatchTarget(module_env, method_name, constraint);
@@ -3995,10 +4000,12 @@ fn resolveDispatchTargetForDotCall(
             if (!constraint.resolved_target.isNone() and
                 self.resolvedTargetIsUsable(module_env, method_name, constraint.resolved_target))
             {
+                const target_module_idx = self.findModuleForOriginMaybe(module_env, constraint.resolved_target.origin_module).?;
                 break :blk ResolvedDispatchTarget{
                     .origin = constraint.resolved_target.origin_module,
                     .method_ident = constraint.resolved_target.method_ident,
                     .fn_var = constraint.fn_var,
+                    .module_idx = target_module_idx,
                 };
             }
             break :blk null;
@@ -4112,8 +4119,7 @@ fn resolveUnresolvedTypeVarDispatchTarget(
             if (!try self.monotypesStructurallyEqual(candidate_mono, desired_func_monotype)) continue;
 
             const candidate_origin_name = candidate_env.getIdent(candidate_env.qualified_module_ident);
-            const mapped_origin = module_env.common.findIdent(candidate_origin_name) orelse
-                try @constCast(module_env).insertIdent(Ident.for_text(candidate_origin_name));
+            const mapped_origin = module_env.common.findIdent(candidate_origin_name) orelse module_env.qualified_module_ident;
             const candidate_method_name = candidate_env.getIdent(method_ident);
             const mapped_method_ident = module_env.common.findIdent(candidate_method_name) orelse
                 try @constCast(module_env).insertIdent(Ident.for_text(candidate_method_name));
@@ -4122,9 +4128,13 @@ fn resolveUnresolvedTypeVarDispatchTarget(
                 .origin = mapped_origin,
                 .method_ident = mapped_method_ident,
                 .fn_var = constraint.fn_var,
+                .module_idx = candidate_module_idx,
             };
             if (found_target) |existing| {
-                if (std.debug.runtime_safety and (!existing.origin.eql(candidate_target.origin) or !existing.method_ident.eql(candidate_target.method_ident))) {
+                if (std.debug.runtime_safety and
+                    ((existing.module_idx orelse std.math.maxInt(u32)) != (candidate_target.module_idx orelse std.math.maxInt(u32)) or
+                        !existing.method_ident.eql(candidate_target.method_ident)))
+                {
                     std.debug.panic(
                         "resolveUnresolvedTypeVarDispatchTarget: ambiguous dispatch for method '{s}'",
                         .{method_name_text},
@@ -4174,7 +4184,7 @@ fn monotypeFromTypeVarInStore(
 }
 
 fn resolvedDispatchTargetToSymbol(self: *Self, source_env: *const ModuleEnv, target: ResolvedDispatchTarget) Allocator.Error!MIR.Symbol {
-    const target_module_idx = self.findModuleForOrigin(source_env, target.origin);
+    const target_module_idx = target.module_idx orelse self.findModuleForOrigin(source_env, target.origin);
     const target_env = self.all_module_envs[target_module_idx];
     const method_name = source_env.getIdent(target.method_ident);
 

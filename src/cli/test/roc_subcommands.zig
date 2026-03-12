@@ -642,6 +642,69 @@ test "roc build executable runs correctly" {
     try testing.expect(has_success);
 }
 
+test "roc build --backend=dev executable runs correctly for test/int/app.roc" {
+    // Skip on Windows - test/int platform doesn't have Windows host libraries
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const tmp_path = try tmp_dir.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(tmp_path);
+
+    const output_path = try std.fs.path.join(gpa, &.{ tmp_path, "test_app_dev" });
+    defer gpa.free(output_path);
+
+    const cache_path = try std.fs.path.join(gpa, &.{ tmp_path, "xdg-cache" });
+    defer gpa.free(cache_path);
+    try tmp_dir.dir.makePath("xdg-cache");
+
+    const output_arg = try std.fmt.allocPrint(gpa, "--output={s}", .{output_path});
+    defer gpa.free(output_arg);
+
+    var env_map = try std.process.getEnvMap(gpa);
+    defer env_map.deinit();
+    try env_map.put("ROC_CACHE_DIR", cache_path);
+
+    const build_result = try util.runRocWithEnv(
+        gpa,
+        &.{ "build", "--backend=dev", "--no-cache", output_arg },
+        "test/int/app.roc",
+        &env_map,
+    );
+    defer gpa.free(build_result.stdout);
+    defer gpa.free(build_result.stderr);
+
+    if (build_result.term != .Exited or build_result.term.Exited != 0) {
+        std.debug.print("roc build --backend=dev failed with exit code: {}\nstdout: {s}\nstderr: {s}\n", .{
+            build_result.term,
+            build_result.stdout,
+            build_result.stderr,
+        });
+    }
+    try testing.expect(build_result.term == .Exited and build_result.term.Exited == 0);
+
+    const stat = tmp_dir.dir.statFile("test_app_dev") catch |err| {
+        std.debug.print("Failed to stat dev backend output file: {}\nstderr: {s}\n", .{ err, build_result.stderr });
+        return err;
+    };
+    try testing.expect(stat.size > 0);
+
+    const run_result = try std.process.Child.run(.{
+        .allocator = gpa,
+        .argv = &.{output_path},
+        .max_output_bytes = 10 * 1024 * 1024,
+    });
+    defer gpa.free(run_result.stdout);
+    defer gpa.free(run_result.stderr);
+
+    try testing.expect(run_result.term == .Exited and run_result.term.Exited == 0);
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "ALL TESTS PASSED") != null);
+}
+
 test "roc build fails with file not found error" {
     const testing = std.testing;
     const gpa = testing.allocator;

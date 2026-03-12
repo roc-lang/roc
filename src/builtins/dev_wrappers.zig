@@ -34,7 +34,6 @@ const strConcatC = str.strConcatC;
 const strContains = str.strContains;
 const startsWith = str.startsWith;
 const endsWith = str.endsWith;
-const strIsEmpty = str.isEmpty;
 const strEqual = str.strEqual;
 const countUtf8Bytes = str.countUtf8Bytes;
 const strCaselessAsciiEquals = str.strCaselessAsciiEquals;

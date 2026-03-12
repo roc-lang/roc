@@ -6,6 +6,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
+const os_temp_dir = @import("os_temp_dir.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -44,6 +45,12 @@ pub const CacheConfig = struct {
     /// - Falls back to ~/.cache/roc on Unix and %APPDATA%\Roc on Windows
     /// - Uses "roc" on Unix and "Roc" on Windows as the cache dir name
     pub fn getDefaultCacheDir(allocator: Allocator) ![]u8 {
+        // ROC_CACHE_DIR overrides all platform defaults.
+        // Useful for test isolation and CI on any OS.
+        if (std.process.getEnvVarOwned(allocator, "ROC_CACHE_DIR")) |roc_dir| {
+            return roc_dir;
+        } else |_| {}
+
         // Respect XDG_CACHE_HOME if set
         if (std.process.getEnvVarOwned(allocator, "XDG_CACHE_HOME")) |xdg_cache| {
             defer allocator.free(xdg_cache);
@@ -126,13 +133,7 @@ pub const CacheConfig = struct {
     /// Get the temporary directory for runtime executables.
     /// This is in the system temp dir, not the persistent cache.
     pub fn getTempDir(allocator: Allocator) ![]u8 {
-        const temp_base = switch (builtin.target.os.tag) {
-            .windows => std.process.getEnvVarOwned(allocator, "TEMP") catch
-                std.process.getEnvVarOwned(allocator, "TMP") catch
-                try allocator.dupe(u8, "C:\\Windows\\Temp"),
-            else => std.process.getEnvVarOwned(allocator, "TMPDIR") catch
-                try allocator.dupe(u8, "/tmp"),
-        };
+        const temp_base = try os_temp_dir.getOsTempDir(allocator);
         defer allocator.free(temp_base);
 
         return std.fs.path.join(allocator, &[_][]const u8{ temp_base, "roc" });

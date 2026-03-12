@@ -5785,6 +5785,128 @@ test "RC mutable list loop accumulator tail-cleans current binding after borrowe
     try std.testing.expectEqual(@as(u32, 1), countDecrefsForSymbol(&env.lir_store, result, sym_acc));
 }
 
+test "RC while loop over borrowed list only tail-cleans lambda param once" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_layout: LayoutIdx = .i64;
+    const list_layout = try env.layout_store.insertLayout(layout_mod.Layout.list(i64_layout));
+    const fn_layout: LayoutIdx = .none;
+
+    const sym_list = makeSymbol(1);
+    const sym_state = makeSymbol(2);
+    const sym_index = makeSymbol(3);
+    const sym_item = makeSymbol(4);
+    const sym_step = makeSymbol(5);
+
+    const lookup_index_cond = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_index, .layout_idx = i64_layout } }, Region.zero());
+    const zero = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 0, .layout_idx = i64_layout } }, Region.zero());
+    const cond_args = try env.lir_store.addExprSpan(&.{ lookup_index_cond, zero });
+    const cond_expr = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .num_is_gt,
+        .args = cond_args,
+        .ret_layout = .bool,
+    } }, Region.zero());
+
+    const lookup_index_dec = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_index, .layout_idx = i64_layout } }, Region.zero());
+    const one = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 1, .layout_idx = i64_layout } }, Region.zero());
+    const minus_args = try env.lir_store.addExprSpan(&.{ lookup_index_dec, one });
+    const dec_index = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .num_minus,
+        .args = minus_args,
+        .ret_layout = i64_layout,
+    } }, Region.zero());
+
+    const pat_index = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_index,
+        .layout_idx = i64_layout,
+        .reassignable = true,
+    } }, Region.zero());
+
+    const lookup_list = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_list, .layout_idx = list_layout } }, Region.zero());
+    const lookup_index_get = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_index, .layout_idx = i64_layout } }, Region.zero());
+    const get_args = try env.lir_store.addExprSpan(&.{ lookup_list, lookup_index_get });
+    const get_item = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .list_get_unsafe,
+        .args = get_args,
+        .ret_layout = i64_layout,
+    } }, Region.zero());
+
+    const pat_item = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_item, .layout_idx = i64_layout } }, Region.zero());
+    const lookup_step = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_step, .layout_idx = fn_layout } }, Region.zero());
+    const lookup_item = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_item, .layout_idx = i64_layout } }, Region.zero());
+    const lookup_state = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_state, .layout_idx = i64_layout } }, Region.zero());
+    const step_args = try env.lir_store.addExprSpan(&.{ lookup_item, lookup_state });
+    const step_call = try env.lir_store.addExpr(.{ .call = .{
+        .fn_expr = lookup_step,
+        .fn_layout = fn_layout,
+        .args = step_args,
+        .ret_layout = i64_layout,
+        .called_via = .apply,
+    } }, Region.zero());
+
+    const pat_state = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_state,
+        .layout_idx = i64_layout,
+        .reassignable = true,
+    } }, Region.zero());
+
+    const unit = try env.lir_store.addExpr(.{ .struct_ = .{
+        .struct_layout = .none,
+        .fields = try env.lir_store.addExprSpan(&.{}),
+    } }, Region.zero());
+
+    const loop_body_stmts = try env.lir_store.addStmts(&.{
+        .{ .mutate = .{ .pattern = pat_index, .expr = dec_index } },
+        .{ .decl = .{ .pattern = pat_item, .expr = get_item } },
+        .{ .mutate = .{ .pattern = pat_state, .expr = step_call } },
+    });
+    const loop_body = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = loop_body_stmts,
+        .final_expr = unit,
+        .result_layout = .zst,
+    } }, Region.zero());
+
+    const while_expr = try env.lir_store.addExpr(.{ .while_loop = .{
+        .cond = cond_expr,
+        .body = loop_body,
+    } }, Region.zero());
+
+    const init_state = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 0, .layout_idx = i64_layout } }, Region.zero());
+    const init_index = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 3, .layout_idx = i64_layout } }, Region.zero());
+    const wild_zst = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = .zst } }, Region.zero());
+    const body_stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = pat_state, .expr = init_state } },
+        .{ .decl = .{ .pattern = pat_index, .expr = init_index } },
+        .{ .decl = .{ .pattern = wild_zst, .expr = while_expr } },
+    });
+    const body_block = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = body_stmts,
+        .final_expr = lookup_state,
+        .result_layout = i64_layout,
+    } }, Region.zero());
+
+    const pat_list = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_list, .layout_idx = list_layout } }, Region.zero());
+    const pat_step = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_step, .layout_idx = fn_layout } }, Region.zero());
+    const params = try env.lir_store.addPatternSpan(&.{ pat_list, pat_step });
+    const lam = try env.lir_store.addExpr(.{ .lambda = .{
+        .fn_layout = fn_layout,
+        .params = params,
+        .body = body_block,
+        .ret_layout = i64_layout,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(lam);
+
+    try std.testing.expectEqual(@as(u32, 1), countDecrefsForSymbol(&env.lir_store, result, sym_list));
+}
+
 test "RC branch-aware: symbol used in both match branches — no incref at binding" {
     // { s = "hello"; match cond is True -> s, False -> s }
     // s is used once in each branch => global count should be 1 (the match construct counts as 1)

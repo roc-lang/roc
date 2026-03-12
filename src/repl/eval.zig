@@ -766,8 +766,21 @@ pub const Repl = struct {
                     defer executable.deinit();
 
                     var result_buf: [512]u8 align(16) = @splat(0);
-                    dev_eval.callWithCrashProtection(&executable, @ptrCast(&result_buf)) catch |err| {
-                        return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Dev backend execution error: {s}", .{@errorName(err)}) };
+                    dev_eval.callWithCrashProtection(&executable, @ptrCast(&result_buf)) catch |err| switch (err) {
+                        error.RocCrashed => {
+                            if (dev_eval.getCrashMessage()) |msg| {
+                                return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Dev backend crash: {s}", .{msg}) };
+                            }
+                            if (self.crash_ctx) |ctx| {
+                                if (ctx.crashMessage()) |msg| {
+                                    return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Dev backend crash: {s}", .{msg}) };
+                                }
+                            }
+                            return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Dev backend execution error: {s}", .{@errorName(err)}) };
+                        },
+                        error.Segfault => {
+                            return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Dev backend execution error: {s}", .{@errorName(err)}) };
+                        },
                     };
 
                     const roc_str: *const RocStr = @ptrCast(@alignCast(&result_buf));

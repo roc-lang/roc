@@ -2330,6 +2330,13 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/cli/test/test_runner.zig"),
             .target = target,
             .optimize = optimize,
+            .imports = &.{
+                .{ .name = "os_temp_dir", .module = b.createModule(.{
+                    .root_source_file = b.path("src/compile/os_temp_dir.zig"),
+                    .target = target,
+                    .optimize = optimize,
+                }) },
+            },
         }),
     });
     b.installArtifact(test_runner_exe);

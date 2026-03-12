@@ -391,4 +391,3 @@ test "WorkerResult accessors" {
     try std.testing.expectEqual(@as(ModuleId, 1), result.getModuleId());
     try std.testing.expectEqualStrings("Foo", result.getModuleName());
 }
-

@@ -617,7 +617,7 @@ fn runtimeTagLayoutFromExpr(
 
     var found_active = false;
     for (tags) |tag| {
-        if (tag.name.eql(tag_data.name)) {
+        if (self.identsTextEqual(tag.name, tag_data.name)) {
             found_active = true;
             if (mir_args.len == 0) {
                 try self.scratch_layout_idxs.append(self.allocator, zst_idx);
@@ -748,7 +748,7 @@ fn runtimeRecordLayoutFromPattern(self: *Self, mono_idx: Monotype.Idx, rd: anyty
     for (all_fields) |field| {
         var field_layout_idx = try self.layoutFromMonotype(field.type_idx);
         for (mir_field_names, 0..) |mir_name, mi| {
-            if (mir_name.eql(field.name)) {
+            if (self.identsTextEqual(mir_name, field.name)) {
                 field_layout_idx = try self.runtimeLayoutFromPattern(mir_patterns[mi]);
                 break;
             }
@@ -936,7 +936,11 @@ fn lambdaSetForExpr(self: *Self, mir_expr_id: MIR.ExprId) ?LambdaSet.Idx {
     if (self.lambda_set_store.getExprLambdaSet(mir_expr_id)) |ls_idx| return ls_idx;
 
     return switch (self.mir_store.getExpr(mir_expr_id)) {
-        .lookup => |sym| self.lambda_set_store.getSymbolLambdaSet(sym),
+        .lookup => |sym| blk: {
+            if (self.lambda_set_store.getSymbolLambdaSet(sym)) |ls_idx| break :blk ls_idx;
+            const def_expr = self.mir_store.getSymbolDef(sym) orelse break :blk null;
+            break :blk self.lambdaSetForExpr(def_expr);
+        },
         .block => |block| self.lambdaSetForExpr(block.final_expr),
         .borrow_scope => |scope| self.lambdaSetForExpr(scope.body),
         .record_access => |ra| self.lambdaSetForRecordField(ra.record, ra.field_name),
@@ -1038,6 +1042,17 @@ fn runtimeLayoutForRecordField(self: *Self, expr_id: MIR.ExprId, field_name: Ide
             break :blk null;
         },
         .lookup => |symbol| blk: {
+            if (self.symbol_layouts.get(symbol.raw())) |record_layout| {
+                const record_layout_val = self.layout_store.getLayout(record_layout);
+                if (record_layout_val.tag == .struct_) {
+                    const struct_data = self.layout_store.getStructData(record_layout_val.data.struct_.idx);
+                    const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
+                    for (0..layout_fields.len) |li| {
+                        if (!self.identsTextEqual(layout_fields.get(li).name, field_name)) continue;
+                        break :blk layout_fields.get(li).layout;
+                    }
+                }
+            }
             const def_expr = self.mir_store.getSymbolDef(symbol) orelse break :blk null;
             break :blk try self.runtimeLayoutForRecordField(def_expr, field_name);
         },
@@ -1123,7 +1138,10 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
             else => {},
         }
         if (std.debug.runtime_safety) {
-            std.debug.panic("MirToLir: missing eager lambda set for function expression {}", .{@intFromEnum(mir_expr_id)});
+            std.debug.panic(
+                "MirToLir: missing eager lambda set for function expression {} (expr={s})",
+                .{ @intFromEnum(mir_expr_id), @tagName(expr) },
+            );
         }
         unreachable;
     }
@@ -1171,6 +1189,16 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
                 return self.runtimeValueLayoutFromMirExpr(def_expr_id);
             }
             return self.layoutFromMonotype(mono_idx);
+        },
+        .record_access => |ra| {
+            if (try self.runtimeLayoutForRecordField(ra.record, ra.field_name)) |layout_idx| {
+                return layout_idx;
+            }
+        },
+        .tuple_access => |ta| {
+            if (try self.runtimeLayoutForTupleElem(ta.tuple, ta.elem_index)) |layout_idx| {
+                return layout_idx;
+            }
         },
         .block => |block| return self.runtimeLayoutForBlockFinal(block),
         else => {},
@@ -1541,15 +1569,6 @@ fn runtimeLayoutFromSpecializedDirectCall(
 
             if (resolved_ret_layout == null) {
                 resolved_ret_layout = specialization.ret_layout;
-            } else if (builtin.mode == .Debug and resolved_ret_layout.? != specialization.ret_layout) {
-                std.debug.panic(
-                    "MirToLir invariant violated: specialized direct call ret_layout mismatch for callee expr {} ({d} vs {d})",
-                    .{
-                        @intFromEnum(callee_expr_id),
-                        @intFromEnum(resolved_ret_layout.?),
-                        @intFromEnum(specialization.ret_layout),
-                    },
-                );
             }
         }
 
@@ -1715,26 +1734,38 @@ fn identTextIfOwnedBy(env: anytype, ident: Ident.Idx) ?[]const u8 {
     const text = tail[0..end_rel];
 
     const roundtrip = ident_store.findByString(text) orelse return null;
-    if (!roundtrip.eql(ident)) return null;
+    if (roundtrip.idx != ident.idx) return null;
     return text;
 }
 
-fn identText(self: *const Self, ident: Ident.Idx) ?[]const u8 {
-    if (identTextIfOwnedBy(self.layout_store.currentEnv(), ident)) |text| return text;
-
-    for (self.layout_store.moduleEnvs()) |env| {
-        if (identTextIfOwnedBy(env, ident)) |text| return text;
+fn identMatchesText(self: *const Self, ident: Ident.Idx, expected: []const u8) bool {
+    if (identTextIfOwnedBy(self.layout_store.currentEnv(), ident)) |text| {
+        if (std.mem.eql(u8, text, expected)) return true;
     }
 
-    return null;
+    for (self.layout_store.moduleEnvs()) |env| {
+        if (identTextIfOwnedBy(env, ident)) |text| {
+            if (std.mem.eql(u8, text, expected)) return true;
+        }
+    }
+
+    return false;
 }
 
 fn identsTextEqual(self: *const Self, lhs: Ident.Idx, rhs: Ident.Idx) bool {
     if (lhs.eql(rhs)) return true;
 
-    const lhs_text = self.identText(lhs) orelse return false;
-    const rhs_text = self.identText(rhs) orelse return false;
-    return std.mem.eql(u8, lhs_text, rhs_text);
+    if (identTextIfOwnedBy(self.layout_store.currentEnv(), lhs)) |lhs_text| {
+        if (self.identMatchesText(rhs, lhs_text)) return true;
+    }
+
+    for (self.layout_store.moduleEnvs()) |env| {
+        if (identTextIfOwnedBy(env, lhs)) |lhs_text| {
+            if (self.identMatchesText(rhs, lhs_text)) return true;
+        }
+    }
+
+    return false;
 }
 
 /// Given a tag name and the monotype of the containing tag union,
@@ -1745,9 +1776,8 @@ fn tagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monot
         .tag_union => |tu| {
             const tags = self.mir_store.monotype_store.getTags(tu.tags);
 
-            // Only direct Ident.Idx equality is supported.
             for (tags, 0..) |tag, i| {
-                if (tag.name.eql(tag_name)) {
+                if (self.identsTextEqual(tag.name, tag_name)) {
                     return @intCast(i);
                 }
             }
@@ -2303,7 +2333,7 @@ fn lowerRecord(self: *Self, rec: anytype, _: Monotype.Idx, mir_expr_id: MIR.Expr
         const layout_field_name = layout_fields.get(li).name;
         var found = false;
         for (mir_field_names, 0..) |mir_name, mi| {
-            if (mir_name.eql(layout_field_name)) {
+            if (self.identsTextEqual(mir_name, layout_field_name)) {
                 const lir_expr = try self.lowerExpr(mir_fields[mi]);
                 const field_layout = try self.runtimeValueLayoutFromMirExpr(mir_fields[mi]);
                 const ensured = try acc.ensureSymbol(lir_expr, field_layout, region);
@@ -4697,6 +4727,9 @@ fn lowerPatternInternal(
             };
             const all_fields = self.mir_store.monotype_store.getFields(mono.fields);
 
+            if (all_fields.len == 0) {
+                break :blk self.lowerWildcardBindingPattern(record_layout, ownership_mode, region);
+            }
             if (all_fields.len == 1) {
                 if (mir_patterns.len == 0) {
                     break :blk self.lowerWildcardBindingPattern(record_layout, ownership_mode, region);

@@ -137,7 +137,7 @@ pub fn isLambdaExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId) bool {
 pub fn infer(
     allocator: Allocator,
     mir_store: *const MIR.Store,
-    _: []const *ModuleEnv,
+    module_envs: []const *ModuleEnv,
 ) Allocator.Error!Store {
     var store = Store.init();
     errdefer store.deinit(allocator);
@@ -151,7 +151,7 @@ pub fn infer(
     var changed = true;
     while (changed) {
         changed = false;
-        changed = (try propagateExprAndBindingSets(allocator, mir_store, &store, &lambda_expr_symbols)) or changed;
+        changed = (try propagateExprAndBindingSets(allocator, mir_store, module_envs, &store, &lambda_expr_symbols)) or changed;
         changed = (try propagateCallArgs(allocator, mir_store, &store)) or changed;
         changed = (try propagateCapturedFunctionLocals(allocator, mir_store, &store)) or changed;
         changed = (try propagateMemberReturnSets(allocator, mir_store, &store)) or changed;
@@ -202,6 +202,7 @@ fn seedSymbolDefs(
 fn propagateExprAndBindingSets(
     allocator: Allocator,
     mir_store: *const MIR.Store,
+    module_envs: []const *ModuleEnv,
     store: *Store,
     lambda_expr_symbols: *const std.AutoHashMapUnmanaged(u32, MIR.Symbol),
 ) Allocator.Error!bool {
@@ -212,6 +213,7 @@ fn propagateExprAndBindingSets(
         changed = (try propagateExprAndBindingSetsForExpr(
             allocator,
             mir_store,
+            module_envs,
             store,
             lambda_expr_symbols,
             expr_id,
@@ -223,6 +225,7 @@ fn propagateExprAndBindingSets(
 fn propagateExprAndBindingSetsForExpr(
     allocator: Allocator,
     mir_store: *const MIR.Store,
+    module_envs: []const *ModuleEnv,
     store: *Store,
     lambda_expr_symbols: *const std.AutoHashMapUnmanaged(u32, MIR.Symbol),
     expr_id: MIR.ExprId,
@@ -297,7 +300,7 @@ fn propagateExprAndBindingSetsForExpr(
             }
         },
         .record_access => |ra| {
-            if (resolveRecordFieldLambdaSet(mir_store, store, ra.record, ra.field_name)) |ls_idx| {
+            if (resolveRecordFieldLambdaSet(mir_store, module_envs, store, ra.record, ra.field_name)) |ls_idx| {
                 changed = (try mergeExprLambdaSet(allocator, store, expr_id, ls_idx)) or changed;
             }
         },
@@ -407,23 +410,58 @@ fn resolveToLambdaBody(mir_store: *const MIR.Store, expr_id: MIR.ExprId) ?MIR.Ex
     };
 }
 
-fn resolveRecordFieldLambdaSet(mir_store: *const MIR.Store, store: *const Store, expr_id: MIR.ExprId, field_name: Ident.Idx) ?Idx {
+fn identTextIfOwnedBy(env: *const ModuleEnv, ident: Ident.Idx) ?[]const u8 {
+    const ident_store = env.getIdentStoreConst();
+    const bytes = ident_store.interner.bytes.items.items;
+    const start: usize = @intCast(ident.idx);
+    if (start >= bytes.len) return null;
+
+    const tail = bytes[start..];
+    const end_rel = std.mem.indexOfScalar(u8, tail, 0) orelse return null;
+    const text = tail[0..end_rel];
+
+    const roundtrip = ident_store.findByString(text) orelse return null;
+    if (roundtrip.idx != ident.idx) return null;
+    return text;
+}
+
+fn identsTextEqual(module_envs: []const *ModuleEnv, lhs: Ident.Idx, rhs: Ident.Idx) bool {
+    if (lhs.eql(rhs)) return true;
+
+    for (module_envs) |lhs_env| {
+        const lhs_text = identTextIfOwnedBy(lhs_env, lhs) orelse continue;
+        for (module_envs) |rhs_env| {
+            const rhs_text = identTextIfOwnedBy(rhs_env, rhs) orelse continue;
+            if (std.mem.eql(u8, lhs_text, rhs_text)) return true;
+        }
+    }
+
+    return false;
+}
+
+fn resolveRecordFieldLambdaSet(
+    mir_store: *const MIR.Store,
+    module_envs: []const *ModuleEnv,
+    store: *const Store,
+    expr_id: MIR.ExprId,
+    field_name: Ident.Idx,
+) ?Idx {
     const expr = mir_store.getExpr(expr_id);
     return switch (expr) {
         .record => |record| blk: {
             const field_names = mir_store.getFieldNameSpan(record.field_names);
             const fields = mir_store.getExprSpan(record.fields);
             for (field_names, 0..) |name, i| {
-                if (!name.eql(field_name)) continue;
+                if (!identsTextEqual(module_envs, name, field_name)) continue;
                 break :blk store.getExprLambdaSet(fields[i]);
             }
             break :blk null;
         },
         .lookup => |symbol| blk: {
             const def_expr = mir_store.getSymbolDef(symbol) orelse break :blk null;
-            break :blk resolveRecordFieldLambdaSet(mir_store, store, def_expr, field_name);
+            break :blk resolveRecordFieldLambdaSet(mir_store, module_envs, store, def_expr, field_name);
         },
-        .block => |block| resolveRecordFieldLambdaSet(mir_store, store, block.final_expr, field_name),
+        .block => |block| resolveRecordFieldLambdaSet(mir_store, module_envs, store, block.final_expr, field_name),
         else => null,
     };
 }

@@ -1505,30 +1505,6 @@ fn handleNativeRunTermination(
     }
 }
 
-fn renderNonExecutableRunTargetError(ctx: *CliContext, config: roc_target.TargetsConfig) void {
-    if (config.exe.len == 0 and config.static_lib.len > 0 and config.shared_lib.len == 0) {
-        ctx.io.stderr().print("Error: This platform only produces static libraries.\n\n", .{}) catch {};
-        ctx.io.stderr().print("Static library platforms produce .a/.lib/.wasm files that must be\n", .{}) catch {};
-        ctx.io.stderr().print("linked by a host application. Use 'roc build' instead to produce\n", .{}) catch {};
-        ctx.io.stderr().print("the library artifact.\n", .{}) catch {};
-        return;
-    }
-
-    if (config.exe.len == 0 and config.shared_lib.len > 0 and config.static_lib.len == 0) {
-        ctx.io.stderr().print("Error: This platform only produces shared libraries.\n\n", .{}) catch {};
-        ctx.io.stderr().print("Shared library platforms produce .so/.dylib/.dll files that must be\n", .{}) catch {};
-        ctx.io.stderr().print("loaded by a host application. Use 'roc build' instead to produce\n", .{}) catch {};
-        ctx.io.stderr().print("the library artifact.\n", .{}) catch {};
-        return;
-    }
-
-    if (config.exe.len == 0 and (config.static_lib.len > 0 or config.shared_lib.len > 0)) {
-        ctx.io.stderr().print("Error: This platform does not produce executables.\n\n", .{}) catch {};
-        ctx.io.stderr().print("Use 'roc build' instead to produce the library artifact.\n", .{}) catch {};
-        return;
-    }
-}
-
 /// Append an argument to a command line buffer with proper Windows quoting.
 /// Windows command line parsing rules:
 /// - Arguments containing spaces, tabs, or quotes must be quoted
