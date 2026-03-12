@@ -62,12 +62,16 @@ roc_crashed_table_idx: u32 = 0,
 roc_ops_local: u32 = 0,
 /// CFStmt block nesting depth (for br targets in proc compilation).
 cf_depth: u32 = 0,
+/// Expression-level structured control depth (for break_expr branch depths).
+expr_control_depth: u32 = 0,
 /// Whether we're currently generating code inside a proc body.
 in_proc: bool = false,
 /// Map from JoinPointId → loop depth (for jump → br targeting).
 join_point_depths: std.AutoHashMap(u32, u32),
 /// Map from JoinPointId → param local indices.
 join_point_param_locals: std.AutoHashMap(u32, []u32),
+/// Stack of expression-level loop exit label depths for lowering break_expr.
+loop_break_target_depths: std.ArrayList(u32),
 /// Wasm function index for imported roc_dec_mul host function.
 dec_mul_import: ?u32 = null,
 /// Wasm function index for imported roc_dec_to_str host function.
@@ -140,6 +144,7 @@ pub fn init(allocator: Allocator, store: *const LirExprStore, layout_store: *con
         .registered_procs = std.AutoHashMap(u64, u32).init(allocator),
         .join_point_depths = std.AutoHashMap(u32, u32).init(allocator),
         .join_point_param_locals = std.AutoHashMap(u32, []u32).init(allocator),
+        .loop_break_target_depths = .empty,
     };
 }
 
@@ -156,6 +161,7 @@ pub fn deinit(self: *Self) void {
         self.allocator.free(entry.value_ptr.*);
     }
     self.join_point_param_locals.deinit();
+    self.loop_break_target_depths.deinit(self.allocator);
 }
 
 /// Register host function imports. Must be called before any addFunction calls
@@ -994,7 +1000,17 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
             // TODO: Implement hosted_call expression lowering for wasm.
             @panic("TODO: wasm hosted_call expression path is not implemented");
         },
-        .break_expr => unreachable,
+        .break_expr => {
+            const target_depth = self.currentLoopBreakDepth();
+            std.debug.assert(self.expr_control_depth >= target_depth);
+
+            self.body.append(self.allocator, Op.br) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(
+                self.allocator,
+                &self.body,
+                self.expr_control_depth - target_depth,
+            ) catch return error.OutOfMemory;
+        },
     }
 }
 
@@ -1574,6 +1590,8 @@ fn generateIfChain(self: *Self, branches: []const LIR.LirIfBranch, final_else: L
     // if (block_type)
     self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
     self.body.append(self.allocator, @intFromEnum(bt)) catch return error.OutOfMemory;
+    self.pushExprControlFrame();
+    defer self.popExprControlFrame();
     // then body
     try self.generateExpr(branches[0].body);
     // else
@@ -1666,6 +1684,8 @@ fn generateMatchBranches(self: *Self, branches: []const LIR.LirMatchBranch, valu
             // if match
             self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
             self.body.append(self.allocator, @intFromEnum(bt)) catch return error.OutOfMemory;
+            self.pushExprControlFrame();
+            defer self.popExprControlFrame();
             try self.generateExpr(branch.body);
             self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
             try self.generateMatchBranches(remaining, value_local, value_vt, bt);
@@ -1708,6 +1728,8 @@ fn generateMatchBranches(self: *Self, branches: []const LIR.LirMatchBranch, valu
 
             self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
             self.body.append(self.allocator, @intFromEnum(bt)) catch return error.OutOfMemory;
+            self.pushExprControlFrame();
+            defer self.popExprControlFrame();
 
             // Bind any sub-pattern arguments (load payload from memory)
             if (is_pointer and arg_patterns.len > 0) {
@@ -1891,6 +1913,8 @@ fn generateMatchBranches(self: *Self, branches: []const LIR.LirMatchBranch, valu
 
             self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
             self.body.append(self.allocator, @intFromEnum(bt)) catch return error.OutOfMemory;
+            self.pushExprControlFrame();
+            defer self.popExprControlFrame();
             try self.generateExpr(branch.body);
             self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
             try self.generateMatchBranches(remaining, value_local, value_vt, bt);
@@ -1914,6 +1938,8 @@ fn generateMatchBranches(self: *Self, branches: []const LIR.LirMatchBranch, valu
             // if match
             self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
             self.body.append(self.allocator, @intFromEnum(bt)) catch return error.OutOfMemory;
+            self.pushExprControlFrame();
+            defer self.popExprControlFrame();
             try self.generateExpr(branch.body);
             self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
             try self.generateMatchBranches(remaining, value_local, value_vt, bt);
@@ -1944,6 +1970,8 @@ fn generateMatchBranches(self: *Self, branches: []const LIR.LirMatchBranch, valu
 
             self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
             self.body.append(self.allocator, @intFromEnum(bt)) catch return error.OutOfMemory;
+            self.pushExprControlFrame();
+            defer self.popExprControlFrame();
 
             // Bind prefix elements
             if (prefix_count > 0) {
@@ -2054,6 +2082,24 @@ fn valTypeToBlockType(vt: ValType) BlockType {
         .i64 => .i64,
         .f32 => .f32,
         .f64 => .f64,
+    };
+}
+
+fn pushExprControlFrame(self: *Self) void {
+    self.expr_control_depth += 1;
+}
+
+fn popExprControlFrame(self: *Self) void {
+    std.debug.assert(self.expr_control_depth > 0);
+    self.expr_control_depth -= 1;
+}
+
+fn currentLoopBreakDepth(self: *Self) u32 {
+    return self.loop_break_target_depths.getLastOrNull() orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("WASM/codegen invariant violated: break_expr emitted outside an enclosing loop", .{});
+        }
+        unreachable;
     };
 }
 
@@ -6406,6 +6452,8 @@ fn generateDiscSwitchBranches(self: *Self, branches: []const LirExprId, disc_loc
     // if (disc == disc_value)
     self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
     self.body.append(self.allocator, @intFromEnum(bt)) catch return error.OutOfMemory;
+    self.pushExprControlFrame();
+    defer self.popExprControlFrame();
     try self.generateExpr(branches[0]);
     self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
     try self.generateDiscSwitchBranches(branches[1..], disc_local, bt, disc_value + 1);
@@ -6418,10 +6466,19 @@ fn generateWhileLoop(self: *Self, wl: anytype) Allocator.Error!void {
     // block (void) — exit target for br_if
     self.body.append(self.allocator, Op.block) catch return error.OutOfMemory;
     self.body.append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+    self.pushExprControlFrame();
+    const break_target_depth = self.expr_control_depth;
 
     // loop (void) — back-edge target for br
     self.body.append(self.allocator, Op.loop_) catch return error.OutOfMemory;
     self.body.append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+    self.pushExprControlFrame();
+    self.loop_break_target_depths.append(self.allocator, break_target_depth) catch return error.OutOfMemory;
+    defer {
+        _ = self.loop_break_target_depths.pop();
+        self.popExprControlFrame();
+        self.popExprControlFrame();
+    }
 
     // Generate condition
     try self.generateExpr(wl.cond);
@@ -6491,8 +6548,17 @@ fn generateForLoopExpr(self: *Self, fl: anytype) Allocator.Error!void {
     // block { loop {
     self.body.append(self.allocator, Op.block) catch return error.OutOfMemory;
     self.body.append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+    self.pushExprControlFrame();
+    const break_target_depth = self.expr_control_depth;
     self.body.append(self.allocator, Op.loop_) catch return error.OutOfMemory;
     self.body.append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+    self.pushExprControlFrame();
+    self.loop_break_target_depths.append(self.allocator, break_target_depth) catch return error.OutOfMemory;
+    defer {
+        _ = self.loop_break_target_depths.pop();
+        self.popExprControlFrame();
+        self.popExprControlFrame();
+    }
 
     // Check: if idx >= len, break
     self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
