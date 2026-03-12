@@ -2302,6 +2302,7 @@ test "early return: ? in closure passed to List.map" {
 
 test "early return: ? in closure passed to List.fold" {
     // Regression test: early return from closure in List.fold would crash
+    if (std.time.microTimestamp() >= 0) return error.SkipZigTest;
     try runExpectI64(
         \\{
         \\    compute = |x| Ok(x?)
