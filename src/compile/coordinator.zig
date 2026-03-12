@@ -82,10 +82,6 @@ const Mode = compile_package.Mode;
 /// Threading features aren't available when targeting WebAssembly
 const threads_available = builtin.target.cpu.arch != .wasm32;
 const Thread = if (threads_available) std.Thread else struct {};
-const Mutex = if (threads_available) std.Thread.Mutex else struct {
-    pub fn lock(_: *@This()) void {}
-    pub fn unlock(_: *@This()) void {}
-};
 
 /// Allocators for a worker thread. Each worker has its own instance.
 /// This ensures thread-safe allocations without contention.
@@ -399,18 +395,18 @@ pub const Coordinator = struct {
     /// Result channel from workers to coordinator
     result_channel: Channel(WorkerResult),
 
-    /// Task queue for workers (protected by mutex for multi-threaded)
-    task_queue: std.ArrayList(WorkerTask),
-    task_mutex: Mutex,
+    /// Task channel for workers (ring buffer with proper synchronization)
+    task_channel: Channel(WorkerTask),
 
     /// Worker threads
     workers: std.ArrayList(Thread),
 
-    /// Whether workers should continue running
-    running: bool,
-
     /// Number of tasks currently being processed by workers (atomic for thread safety)
     inflight: std.atomic.Value(usize),
+
+    /// Set by shutdown() to tell workers to stop promptly instead of draining
+    /// remaining tasks from the channel.
+    shutting_down: std.atomic.Value(bool),
 
     /// Total modules remaining across all packages
     total_remaining: usize,
@@ -483,9 +479,10 @@ pub const Coordinator = struct {
         compiler_version: []const u8,
         cache_manager: ?*CacheManager,
     ) !Coordinator {
-        // Pre-allocate task queue with page_allocator for thread safety.
-        // page_allocator is guaranteed thread-safe (uses OS mmap/munmap).
-        // This ensures task queue operations don't race with gpa allocations.
+        // Both channels use page_allocator in multi-threaded mode because their
+        // buffers may be grown (task_channel) or accessed from worker threads.
+        // page_allocator is guaranteed thread-safe (OS mmap/munmap).
+        const channel_allocator = if (threads_available) std.heap.page_allocator else gpa;
         const initial_task_capacity = 256;
         return .{
             .gpa = gpa,
@@ -493,12 +490,11 @@ pub const Coordinator = struct {
             .max_threads = max_threads,
             .target = target,
             .packages = std.StringHashMap(*PackageState).init(gpa),
-            .result_channel = try Channel(WorkerResult).init(gpa, channel.DEFAULT_CAPACITY),
-            .task_queue = try std.ArrayList(WorkerTask).initCapacity(std.heap.page_allocator, initial_task_capacity),
-            .task_mutex = .{},
+            .result_channel = try Channel(WorkerResult).init(channel_allocator, channel.DEFAULT_CAPACITY),
+            .task_channel = try Channel(WorkerTask).init(channel_allocator, initial_task_capacity),
             .workers = std.ArrayList(Thread).empty,
-            .running = false,
             .inflight = std.atomic.Value(usize).init(0),
+            .shutting_down = std.atomic.Value(bool).init(false),
             .total_remaining = 0,
             .builtin_modules = builtin_modules,
             .file_provider = FileProvider.filesystem,
@@ -560,11 +556,8 @@ pub const Coordinator = struct {
             std.debug.print("[COORD DEINIT] packages done\n", .{});
         }
 
-        // Free remaining tasks (task_queue uses page_allocator for thread safety)
-        for (self.task_queue.items) |*task| {
-            _ = task; // Tasks don't own memory, just references
-        }
-        self.task_queue.deinit(std.heap.page_allocator);
+        // Free task channel
+        self.task_channel.deinit();
 
         // Free cross-package dependents
         var cpd_it = self.cross_package_dependents.iterator();
@@ -629,14 +622,15 @@ pub const Coordinator = struct {
         return self.packages.get(name);
     }
 
-    /// Start the coordinator and spawn worker threads (for multi-threaded mode)
+    /// Start the coordinator and spawn worker threads (for multi-threaded mode).
+    /// max_threads <= 1 is treated as single-threaded (inline execution); callers
+    /// that want auto-detection should resolve 0 to the CPU count before init.
     pub fn start(self: *Coordinator) !void {
         if (!threads_available or self.mode == .single_threaded or self.max_threads <= 1) {
             return;
         }
 
-        self.running = true;
-        const n = if (self.max_threads == 0) (std.Thread.getCpuCount() catch 1) else self.max_threads;
+        const n = self.max_threads;
 
         try self.workers.ensureTotalCapacity(self.gpa, n);
         var i: usize = 0;
@@ -646,21 +640,20 @@ pub const Coordinator = struct {
         }
     }
 
-    /// Shutdown workers and wait for them to complete
+    /// Shutdown workers and wait for them to complete.
+    /// Workers stop promptly: they finish their current task but do not
+    /// pick up additional queued work.
     pub fn shutdown(self: *Coordinator) void {
         if (!threads_available) return;
 
-        // Close the result channel to wake any blocked workers
-        self.result_channel.close();
+        // Signal workers to stop before closing channels, so workers that
+        // are between recv() calls see the flag and exit instead of
+        // processing more buffered tasks.
+        self.shutting_down.store(true, .release);
 
-        // Set running = false and send shutdown tasks while holding the lock
-        self.task_mutex.lock();
-        self.running = false;
-        for (self.workers.items) |_| {
-            // Use page_allocator for task queue operations (thread-safe)
-            self.task_queue.append(std.heap.page_allocator, .{ .shutdown = {} }) catch {};
-        }
-        self.task_mutex.unlock();
+        // Close both channels to wake any workers blocked in recv()/send()
+        self.result_channel.close();
+        self.task_channel.close();
 
         // Wait for workers to finish
         for (self.workers.items) |w| {
@@ -671,20 +664,38 @@ pub const Coordinator = struct {
 
     /// Enqueue a task for processing
     pub fn enqueueTask(self: *Coordinator, task: WorkerTask) !void {
-        if (threads_available and self.mode == .multi_threaded) {
-            self.task_mutex.lock();
-            defer self.task_mutex.unlock();
-        }
         if (comptime trace_build) {
             switch (task) {
                 .parse => |t| std.debug.print("[COORD] ENQUEUE parse: pkg={s} module={s}\n", .{ t.package_name, t.module_name }),
                 .canonicalize => |t| std.debug.print("[COORD] ENQUEUE canonicalize: pkg={s} module={s}\n", .{ t.package_name, t.module_name }),
                 .type_check => |t| std.debug.print("[COORD] ENQUEUE type_check: pkg={s} module={s}\n", .{ t.package_name, t.module_name }),
-                .shutdown => std.debug.print("[COORD] ENQUEUE shutdown\n", .{}),
             }
         }
-        // Use page_allocator for task queue operations (thread-safe)
-        try self.task_queue.append(std.heap.page_allocator, task);
+        // Increment inflight BEFORE sending to the channel. This ensures there is
+        // no window where a worker could recv, execute, and the coordinator could
+        // process the result (decrementing inflight) before we increment here.
+        // Only do this when workers are actually running (same guard as start() and
+        // the multi-threaded branch in coordinatorLoop). When max_threads <= 1 the
+        // coordinator processes tasks inline and the single-threaded path never
+        // decrements inflight, so incrementing here would make isComplete() hang.
+        const has_workers = threads_available and self.mode == .multi_threaded and self.max_threads > 1;
+        if (has_workers) {
+            _ = self.inflight.fetchAdd(1, .monotonic);
+        }
+        self.task_channel.sendGrowable(task) catch |err| switch (err) {
+            error.Closed => {
+                if (has_workers) {
+                    _ = self.inflight.fetchSub(1, .monotonic);
+                }
+                return;
+            },
+            error.OutOfMemory => {
+                if (has_workers) {
+                    _ = self.inflight.fetchSub(1, .monotonic);
+                }
+                return error.OutOfMemory;
+            },
+        };
     }
 
     /// Enqueue a parse task for a module
@@ -725,7 +736,7 @@ pub const Coordinator = struct {
 
             if (!threads_available or self.mode == .single_threaded or self.max_threads <= 1) {
                 // Single-threaded: process tasks inline
-                if (self.task_queue.pop()) |task| {
+                if (self.task_channel.tryRecv()) |task| {
                     const result = self.executeTaskInline(task);
                     try self.handleResult(result);
                     made_progress = true;
@@ -734,7 +745,7 @@ pub const Coordinator = struct {
                 // Multi-threaded: receive from workers via channel
                 // Use blocking recv with timeout to avoid busy spinning
                 if (self.result_channel.recvTimeout(10_000_000)) |result| { // 10ms timeout
-                    _ = self.inflight.fetchSub(1, .release);
+                    _ = self.inflight.fetchSub(1, .monotonic);
                     try self.handleResult(result);
                     made_progress = true;
                 }
@@ -752,14 +763,7 @@ pub const Coordinator = struct {
             } else {
                 iterations_without_progress += 1;
                 if (iterations_without_progress > 1000) {
-                    // Lock mutex to safely read task_queue.items.len
-                    const task_count = blk: {
-                        if (threads_available and self.mode == .multi_threaded) {
-                            self.task_mutex.lock();
-                            defer self.task_mutex.unlock();
-                        }
-                        break :blk self.task_queue.items.len;
-                    };
+                    const task_count = self.task_channel.len();
                     std.debug.print("Coordinator stuck: remaining={}, tasks={}, inflight={}\n", .{
                         self.total_remaining,
                         task_count,
@@ -833,15 +837,16 @@ pub const Coordinator = struct {
         return any_unblocked;
     }
 
-    /// Check if all work is complete
+    /// Check if all work is complete.
+    ///
+    /// Thread-safety: This is only called from the coordinator thread.
+    /// `total_remaining` is only mutated by the coordinator, so it's always fresh.
+    /// `inflight` is incremented *before* a task enters the channel and decremented
+    /// only when the coordinator processes the result, so there is no window where
+    /// inflight is 0 while work is still pending. The `isEmpty` check is therefore
+    /// redundant but kept as a defensive invariant.
     pub fn isComplete(self: *Coordinator) bool {
-        // In multi-threaded mode, we need to hold the mutex to read task_queue.items.len
-        if (threads_available and self.mode == .multi_threaded) {
-            self.task_mutex.lock();
-            defer self.task_mutex.unlock();
-            return self.total_remaining == 0 and self.task_queue.items.len == 0 and self.inflight.load(.acquire) == 0;
-        }
-        return self.total_remaining == 0 and self.task_queue.items.len == 0 and self.inflight.load(.acquire) == 0;
+        return self.total_remaining == 0 and self.inflight.load(.acquire) == 0 and self.task_channel.isEmpty();
     }
 
     /// Execute a task inline (for single-threaded mode)
@@ -850,7 +855,6 @@ pub const Coordinator = struct {
             .parse => |t| self.executeParse(t),
             .canonicalize => |t| self.executeCanonicalize(t),
             .type_check => |t| self.executeTypeCheck(t),
-            .shutdown => unreachable,
         };
     }
 
@@ -2387,31 +2391,16 @@ pub const Coordinator = struct {
         defer worker_allocs.deinit();
 
         while (true) {
-            // Get next task
-            var task: ?WorkerTask = null;
+            // Check shutdown flag before blocking on the next task.
+            // This ensures workers exit promptly instead of draining
+            // remaining buffered tasks after shutdown() is called.
+            if (self.shutting_down.load(.acquire)) break;
 
-            if (threads_available) {
-                self.task_mutex.lock();
-                if (self.task_queue.items.len > 0) {
-                    task = self.task_queue.pop();
-                    _ = self.inflight.fetchAdd(1, .acquire);
-                }
-                const running = self.running;
-                self.task_mutex.unlock();
-
-                if (task == null and !running) break;
-                if (task == null) {
-                    // Wait for work or shutdown
-                    std.Thread.sleep(1_000_000); // 1ms
-                    continue;
-                }
-            }
-
-            const t = task.?;
-            if (t == .shutdown) break;
+            // Block until a task is available. Returns null when the channel
+            // is closed and drained.
+            const t = self.task_channel.recv() orelse break;
 
             // Execute task
-            // TODO: Pass worker_allocs to execute functions for arena usage
             const result = self.executeTaskInline(t);
 
             // Reset arena between tasks to reclaim temporary allocations
@@ -2439,7 +2428,7 @@ test "Coordinator basic initialization" {
     defer coord.deinit();
 
     try std.testing.expect(coord.total_remaining == 0);
-    try std.testing.expect(coord.task_queue.items.len == 0);
+    try std.testing.expect(coord.task_channel.isEmpty());
     try std.testing.expect(coord.isComplete());
 }
 
@@ -2524,10 +2513,10 @@ test "Coordinator task queue" {
         },
     });
 
-    try std.testing.expectEqual(@as(usize, 1), coord.task_queue.items.len);
+    try std.testing.expectEqual(@as(usize, 1), coord.task_channel.len());
 
-    // Pop the task
-    const task = coord.task_queue.pop();
+    // Receive the task
+    const task = coord.task_channel.tryRecv();
     try std.testing.expect(task != null);
     try std.testing.expect(task.? == .parse);
     try std.testing.expectEqualStrings("app", task.?.parse.package_name);
@@ -2568,13 +2557,149 @@ test "Coordinator isComplete logic" {
     try std.testing.expect(!coord.isComplete());
 
     // Clear task but add inflight
-    _ = coord.task_queue.pop();
+    _ = coord.task_channel.tryRecv();
     coord.inflight.store(1, .release);
     try std.testing.expect(!coord.isComplete());
 
     // All clear - should be complete
     coord.inflight.store(0, .release);
     try std.testing.expect(coord.isComplete());
+}
+
+test "Coordinator isComplete with multi_threaded max_threads=0 (inline fallback)" {
+    // max_threads == 0 with multi_threaded mode should fall back to inline
+    // execution (no workers). Inflight must NOT be incremented by enqueueTask
+    // in this configuration, otherwise isComplete() would never return true.
+    const allocator = std.testing.allocator;
+
+    var coord = try Coordinator.init(
+        allocator,
+        .multi_threaded,
+        0, // auto — but <= 1, so no workers spawned
+        roc_target.RocTarget.detectNative(),
+        undefined,
+        "test",
+        null, // cache_manager
+    );
+    defer coord.deinit();
+
+    try std.testing.expect(coord.isComplete());
+
+    // Enqueue a task — inflight must stay 0 since there are no workers
+    try coord.enqueueTask(.{
+        .parse = .{
+            .package_name = "test",
+            .module_id = 0,
+            .module_name = "Test",
+            .path = "/test.roc",
+            .depth = 0,
+        },
+    });
+    try std.testing.expectEqual(@as(usize, 0), coord.inflight.load(.monotonic));
+
+    // Drain the task — should be complete again
+    _ = coord.task_channel.tryRecv();
+    try std.testing.expect(coord.isComplete());
+}
+
+test "Coordinator shutdown does not drain buffered tasks" {
+    // When shutdown() is called with tasks still in the channel, workers
+    // must exit promptly instead of processing the remaining work.
+    if (builtin.target.cpu.arch == .wasm32) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+
+    var coord = try Coordinator.init(
+        allocator,
+        .multi_threaded,
+        2,
+        roc_target.RocTarget.detectNative(),
+        undefined,
+        "test",
+        null, // cache_manager
+    );
+
+    // Buffer several tasks BEFORE starting workers, so they are sitting
+    // in the channel when shutdown fires.
+    for (0..4) |i| {
+        try coord.enqueueTask(.{
+            .parse = .{
+                .package_name = "test",
+                .module_id = @intCast(i),
+                .module_name = "Mod",
+                .path = "/mod.roc",
+                .depth = 0,
+            },
+        });
+    }
+
+    // Verify tasks are buffered
+    try std.testing.expectEqual(@as(usize, 4), coord.task_channel.len());
+
+    // Shut down immediately — no workers were started, but exercise the
+    // flag + close path so we can verify the channel is NOT drained.
+    coord.shutdown();
+
+    // The shutting_down flag must be set
+    try std.testing.expect(coord.shutting_down.load(.acquire));
+
+    // Tasks should still be in the channel (not consumed by workers)
+    // because shutdown was called before any worker could run.
+    // Some may have been popped by close() waking a blocked recv,
+    // but with no workers started, all 4 must remain.
+    try std.testing.expectEqual(@as(usize, 4), coord.task_channel.len());
+
+    coord.deinit();
+}
+
+test "Coordinator shutdown stops spawned workers promptly" {
+    // With real workers running, shutdown must cause them to exit even
+    // though the task channel still has buffered items.
+    if (builtin.target.cpu.arch == .wasm32) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+
+    var coord = try Coordinator.init(
+        allocator,
+        .multi_threaded,
+        2,
+        roc_target.RocTarget.detectNative(),
+        undefined,
+        "test",
+        null, // cache_manager
+    );
+
+    // Buffer tasks before starting workers
+    for (0..8) |i| {
+        try coord.enqueueTask(.{
+            .parse = .{
+                .package_name = "test",
+                .module_id = @intCast(i),
+                .module_name = "Mod",
+                .path = "/mod.roc",
+                .depth = 0,
+            },
+        });
+    }
+
+    const buffered_before = coord.task_channel.len();
+    try std.testing.expectEqual(@as(usize, 8), buffered_before);
+
+    // Start workers then immediately shut down
+    try coord.start();
+    coord.shutdown(); // sets flag, closes channels, joins threads
+
+    // Workers may have consumed a few tasks before seeing the flag,
+    // but they should NOT have drained everything — at least some
+    // tasks must remain unconsumed.  With 8 buffered tasks and an
+    // immediate shutdown, workers process at most 1 each (the one
+    // they recv before the next loop-top flag check).
+    const remaining = coord.task_channel.len();
+    // Each of the 2 workers could have grabbed at most 1 task before
+    // seeing the shutdown flag on their next iteration.
+    try std.testing.expect(remaining >= buffered_before - 2);
+
+    coord.deinit();
 }
 
 test "Channel in coordinator context" {
@@ -2641,10 +2766,10 @@ test "Coordinator enqueueParseTask flow" {
     try coord.enqueueParseTask("app", module_id);
 
     // Verify task was queued
-    try std.testing.expectEqual(@as(usize, 1), coord.task_queue.items.len);
+    try std.testing.expectEqual(@as(usize, 1), coord.task_channel.len());
 
     // Verify it's a parse task for the right module
-    const task = coord.task_queue.items[0];
+    const task = coord.task_channel.tryRecv().?;
     try std.testing.expect(task == .parse);
     try std.testing.expectEqualStrings("app", task.parse.package_name);
     try std.testing.expectEqual(@as(ModuleId, 0), task.parse.module_id);
