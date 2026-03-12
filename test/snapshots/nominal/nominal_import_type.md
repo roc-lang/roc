@@ -11,7 +11,7 @@ red : Color.RGB
 red = Color.RGB.Red
 ~~~
 # EXPECTED
-MODULE NOT FOUND - nominal_import_type.md:1:1:1:13
+NIL
 # PROBLEMS
 NIL
 # TOKENS

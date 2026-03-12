@@ -12,7 +12,6 @@ decodeThings : List(List(U8)) -> List(a)
 decodeThings = ...
 ~~~
 # EXPECTED
-MODULE NOT FOUND - where_clauses_4.md:1:1:1:32
 UNSUPPORTED WHERE CLAUSE - where_clauses_4.md:4:9:4:17
 # PROBLEMS
 **UNSUPPORTED WHERE CLAUSE**

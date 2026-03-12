@@ -38,8 +38,6 @@ h = |x, y,| {
 # EXPECTED
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:6:1:6:63
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:7:1:7:63
-MODULE NOT FOUND - everything.md:2:1:2:31
-MODULE NOT FOUND - everything.md:3:1:3:47
 UNUSED VARIABLE - everything.md:24:10:24:11
 UNUSED VARIABLE - everything.md:25:9:25:10
 UNUSED VARIABLE - everything.md:26:11:26:12

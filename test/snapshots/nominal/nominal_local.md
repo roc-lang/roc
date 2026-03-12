@@ -17,7 +17,7 @@ test = |{}| {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - nominal_local.md:9:22:9:25
+MISSING METHOD - nominal_local.md:9:5:9:15
 # PROBLEMS
 **MISSING METHOD**
 This **encode_str** method is being called on a value whose type doesn't have that method:

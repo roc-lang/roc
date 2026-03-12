@@ -16,7 +16,6 @@ handleTry = |result| {
 }
 ~~~
 # EXPECTED
-MODULE NOT FOUND - nominal_external_fully_qualified.md:1:1:1:19
 UNUSED VARIABLE - nominal_external_fully_qualified.md:7:35:7:39
 # PROBLEMS
 **UNUSED VARIABLE**

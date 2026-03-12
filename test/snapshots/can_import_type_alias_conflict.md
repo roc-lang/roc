@@ -13,7 +13,7 @@ JsonValue : U64
 main = 42
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - can_import_type_alias_conflict.md:1:1:1:38
+NIL
 # PROBLEMS
 NIL
 # TOKENS

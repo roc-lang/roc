@@ -62,7 +62,6 @@ combineTrys = |jsonTry, httpStatus|
 UNDECLARED TYPE - can_import_exposing_types.md:29:18:29:24
 UNDECLARED TYPE - can_import_exposing_types.md:30:18:30:24
 UNDECLARED TYPE - can_import_exposing_types.md:31:23:31:31
-DUPLICATE DEFINITION - can_import_exposing_types.md:3:1:3:32
 UNDECLARED TYPE - can_import_exposing_types.md:6:24:6:29
 UNDECLARED TYPE - can_import_exposing_types.md:6:31:6:36
 UNDEFINED VARIABLE - can_import_exposing_types.md:7:21:7:31

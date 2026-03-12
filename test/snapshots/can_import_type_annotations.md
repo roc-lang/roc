@@ -44,7 +44,6 @@ combineTrys = |result1, result2|
     }
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - can_import_type_annotations.md:3:1:3:32
 UNDECLARED TYPE - can_import_type_annotations.md:5:18:5:25
 UNDECLARED TYPE - can_import_type_annotations.md:5:29:5:37
 UNDEFINED VARIABLE - can_import_type_annotations.md:6:24:6:44

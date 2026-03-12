@@ -15,7 +15,6 @@ main =
     expectsPerson("not a person")
 ~~~
 # EXPECTED
-MODULE NOT FOUND - nominal_type_origin_mismatch.md:1:1:1:30
 UNDECLARED TYPE - nominal_type_origin_mismatch.md:3:17:3:23
 UNUSED VARIABLE - nominal_type_origin_mismatch.md:4:18:4:19
 # PROBLEMS
