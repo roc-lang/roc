@@ -171,6 +171,8 @@ test "Repl - list operations" {
     try expectBoth("List.drop_if([1, 2, 3, 4, 5], |x| x > 2)", "[1.0, 2.0]");
     try expectBoth("List.keep_if([1, 2, 3, 4, 5], |x| x > 2)", "[3.0, 4.0, 5.0]");
     try expectBoth("List.keep_if([1, 2, 3], |_| Bool.False)", "[]");
+    try expectBoth("List.fold_rev([1.I64, 2.I64, 3.I64], 0.I64, |x, acc| acc * 10 + x)", "321");
+    try expectBoth("List.fold_rev([1], 0, |x, acc| acc * 10 + x)", "1.0");
     try expectBoth("List.fold_rev([1, 2, 3], 0, |x, acc| acc * 10 + x)", "321.0");
     try expectBoth("List.fold_rev([], 42, |x, acc| x + acc)", "42.0");
 }

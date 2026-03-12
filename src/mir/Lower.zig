@@ -2501,25 +2501,22 @@ fn ensureDeferredBlockLambdaLowered(
 }
 
 /// Lower `e_call` to MIR call.
-/// If the call target is an external lookup to a low-level builtin
+/// If the call target is a lookup to a low-level builtin wrapper
 /// (e.g., List.concat, Str.concat), emit `run_low_level` instead of `call`.
 fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
-    // Check if the call target is an external low-level builtin.
     const func_cir = module_env.store.getExpr(call.func);
-    if (func_cir == .e_lookup_external) {
-        if (self.getExternalLowLevelOp(module_env, func_cir.e_lookup_external)) |ll_op| {
-            if (ll_op == .str_inspekt) {
-                return try self.lowerStrInspekt(module_env, .{
-                    .op = ll_op,
-                    .args = call.args,
-                }, region);
-            }
-            const args = try self.lowerExprSpan(module_env, call.args);
-            return try self.store.addExpr(self.allocator, .{ .run_low_level = .{
+    if (self.getCallLowLevelOp(module_env, func_cir)) |ll_op| {
+        if (ll_op == .str_inspekt) {
+            return try self.lowerStrInspekt(module_env, .{
                 .op = ll_op,
-                .args = args,
-            } }, monotype, region);
+                .args = call.args,
+            }, region);
         }
+        const args = try self.lowerExprSpan(module_env, call.args);
+        return try self.store.addExpr(self.allocator, .{ .run_low_level = .{
+            .op = ll_op,
+            .args = args,
+        } }, monotype, region);
     }
 
     return self.lowerCallWithLoweredFunc(
@@ -2581,6 +2578,32 @@ fn lowerCallWithLoweredFunc(
         .func = func,
         .args = args,
     } }, monotype, region);
+}
+
+fn getCallLowLevelOp(self: *Self, caller_env: *const ModuleEnv, func_expr: CIR.Expr) ?CIR.Expr.LowLevel {
+    return switch (func_expr) {
+        .e_lookup_external => |lookup| self.getExternalLowLevelOp(caller_env, lookup),
+        .e_lookup_local => |lookup| self.getLocalLowLevelOp(caller_env, lookup.pattern_idx),
+        else => null,
+    };
+}
+
+fn getLocalLowLevelOp(self: *Self, module_env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?CIR.Expr.LowLevel {
+    const defs = module_env.store.sliceDefs(module_env.all_defs);
+    for (defs) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+        if (def.pattern != pattern_idx) continue;
+        const def_expr = module_env.store.getExpr(def.expr);
+        if (def_expr == .e_lambda) {
+            const body_expr = module_env.store.getExpr(def_expr.e_lambda.body);
+            if (body_expr == .e_run_low_level) return body_expr.e_run_low_level.op;
+        }
+        return null;
+    }
+
+    // Deferred block lambdas are not low-level wrappers.
+    _ = self;
+    return null;
 }
 
 /// Check if an external definition is a low-level wrapper (e_lambda wrapping e_run_low_level).

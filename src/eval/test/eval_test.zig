@@ -2349,6 +2349,10 @@ test "issue 8979 runtime: while (True) with conditional break evaluates" {
     , 5, .no_trace);
 }
 
+test "list fold_rev i64 dev regression" {
+    try runExpectI64("List.fold_rev([1.I64, 2.I64, 3.I64], 0.I64, |x, acc| acc * 10 + x)", 321, .no_trace);
+}
+
 test "Decoder: create ok result - check result is Ok" {
     // Test that we can create a decode result and it is an Ok
     try runExpectBool(

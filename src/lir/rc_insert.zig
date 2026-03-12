@@ -5477,7 +5477,6 @@ test "RC fold-style lambda body tail-cleans borrowed list param" {
     defer pass.deinit();
 
     const result = try pass.insertRcOps(lam);
-
     try std.testing.expectEqual(@as(u32, 1), countDecrefsForSymbol(&env.lir_store, result, sym_list));
 }
 
@@ -5634,6 +5633,319 @@ test "RC builtin-fold shape tail-cleans borrowed list param" {
 
     const result = try pass.insertRcOps(lam);
 
+    try std.testing.expectEqual(@as(u32, 1), countDecrefsForSymbol(&env.lir_store, result, sym_list));
+}
+
+test "RC while-loop borrowed list param tail-cleans once" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_layout: LayoutIdx = .i64;
+    const list_layout = try env.layout_store.insertLayout(layout_mod.Layout.list(i64_layout));
+    const fn_layout: LayoutIdx = .none;
+
+    const sym_list = makeSymbol(1);
+    const sym_index = makeSymbol(2);
+
+    const lookup_list = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_list, .layout_idx = list_layout } }, Region.zero());
+    const lookup_index = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_index, .layout_idx = i64_layout } }, Region.zero());
+    const zero = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 0, .layout_idx = i64_layout } }, Region.zero());
+    const one = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 1, .layout_idx = i64_layout } }, Region.zero());
+
+    const get_args = try env.lir_store.addExprSpan(&.{ lookup_list, zero });
+    const get_elem = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .list_get_unsafe,
+        .args = get_args,
+        .ret_layout = i64_layout,
+    } }, Region.zero());
+    const wild_i64 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = i64_layout } }, Region.zero());
+    const pat_index = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_index,
+        .layout_idx = i64_layout,
+        .reassignable = true,
+    } }, Region.zero());
+    const unit = try env.lir_store.addExpr(.{ .struct_ = .{
+        .struct_layout = .none,
+        .fields = try env.lir_store.addExprSpan(&.{}),
+    } }, Region.zero());
+    const body_stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = wild_i64, .expr = get_elem } },
+        .{ .mutate = .{ .pattern = pat_index, .expr = zero } },
+    });
+    const body = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = body_stmts,
+        .final_expr = unit,
+        .result_layout = .zst,
+    } }, Region.zero());
+
+    const cond_args = try env.lir_store.addExprSpan(&.{ lookup_index, zero });
+    const cond = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .num_is_gt,
+        .args = cond_args,
+        .ret_layout = .bool,
+    } }, Region.zero());
+    const while_expr = try env.lir_store.addExpr(.{ .while_loop = .{
+        .cond = cond,
+        .body = body,
+    } }, Region.zero());
+
+    const init_index = try env.lir_store.addStmts(&.{.{ .decl = .{
+        .pattern = pat_index,
+        .expr = one,
+    } }});
+    const lam_body = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = init_index,
+        .final_expr = while_expr,
+        .result_layout = .zst,
+    } }, Region.zero());
+
+    const pat_list = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_list,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const params = try env.lir_store.addPatternSpan(&.{pat_list});
+    const lam = try env.lir_store.addExpr(.{ .lambda = .{
+        .fn_layout = fn_layout,
+        .params = params,
+        .body = lam_body,
+        .ret_layout = .zst,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(lam);
+
+    const rc = countRcOps(&env.lir_store, result);
+    try std.testing.expectEqual(@as(u32, 0), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 1), countDecrefsForSymbol(&env.lir_store, result, sym_list));
+}
+
+test "RC while-loop borrowed list param across pre-loop and body borrows tail-cleans once" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_layout: LayoutIdx = .i64;
+    const list_layout = try env.layout_store.insertLayout(layout_mod.Layout.list(i64_layout));
+    const fn_layout: LayoutIdx = .none;
+
+    const sym_list = makeSymbol(11);
+    const sym_index = makeSymbol(12);
+
+    const lookup_list_for_len = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_list, .layout_idx = list_layout } }, Region.zero());
+    const len_args = try env.lir_store.addExprSpan(&.{lookup_list_for_len});
+    const len_expr = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .list_len,
+        .args = len_args,
+        .ret_layout = i64_layout,
+    } }, Region.zero());
+
+    const lookup_list = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_list, .layout_idx = list_layout } }, Region.zero());
+    const lookup_index = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_index, .layout_idx = i64_layout } }, Region.zero());
+    const zero = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 0, .layout_idx = i64_layout } }, Region.zero());
+
+    const get_args = try env.lir_store.addExprSpan(&.{ lookup_list, zero });
+    const get_elem = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .list_get_unsafe,
+        .args = get_args,
+        .ret_layout = i64_layout,
+    } }, Region.zero());
+    const wild_i64 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = i64_layout } }, Region.zero());
+    const pat_index = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_index,
+        .layout_idx = i64_layout,
+        .reassignable = true,
+    } }, Region.zero());
+    const unit = try env.lir_store.addExpr(.{ .struct_ = .{
+        .struct_layout = .none,
+        .fields = try env.lir_store.addExprSpan(&.{}),
+    } }, Region.zero());
+    const body_stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = wild_i64, .expr = get_elem } },
+        .{ .mutate = .{ .pattern = pat_index, .expr = zero } },
+    });
+    const body = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = body_stmts,
+        .final_expr = unit,
+        .result_layout = .zst,
+    } }, Region.zero());
+
+    const cond_args = try env.lir_store.addExprSpan(&.{ lookup_index, zero });
+    const cond = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .num_is_gt,
+        .args = cond_args,
+        .ret_layout = .bool,
+    } }, Region.zero());
+    const while_expr = try env.lir_store.addExpr(.{ .while_loop = .{
+        .cond = cond,
+        .body = body,
+    } }, Region.zero());
+
+    const init_index = try env.lir_store.addStmts(&.{.{ .decl = .{
+        .pattern = pat_index,
+        .expr = len_expr,
+    } }});
+    const lam_body = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = init_index,
+        .final_expr = while_expr,
+        .result_layout = .zst,
+    } }, Region.zero());
+
+    const pat_list = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_list,
+        .layout_idx = list_layout,
+    } }, Region.zero());
+    const params = try env.lir_store.addPatternSpan(&.{pat_list});
+    const lam = try env.lir_store.addExpr(.{ .lambda = .{
+        .fn_layout = fn_layout,
+        .params = params,
+        .body = lam_body,
+        .ret_layout = .zst,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(lam);
+    const rc = countRcOps(&env.lir_store, result);
+    try std.testing.expectEqual(@as(u32, 0), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 1), countDecrefsForSymbol(&env.lir_store, result, sym_list));
+}
+
+test "RC fold_rev-style while body does not pre-incref borrowed list param" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_layout: LayoutIdx = .i64;
+    const list_layout = try env.layout_store.insertLayout(layout_mod.Layout.list(i64_layout));
+    const fn_layout: LayoutIdx = .none;
+
+    const sym_list = makeSymbol(101);
+    const sym_init = makeSymbol(102);
+    const sym_step = makeSymbol(103);
+    const sym_state = makeSymbol(104);
+    const sym_index = makeSymbol(105);
+    const sym_item = makeSymbol(106);
+
+    const lookup_list_for_len = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_list, .layout_idx = list_layout } }, Region.zero());
+    const len_args = try env.lir_store.addExprSpan(&.{lookup_list_for_len});
+    const len_expr = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .list_len,
+        .args = len_args,
+        .ret_layout = i64_layout,
+    } }, Region.zero());
+
+    const lookup_list = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_list, .layout_idx = list_layout } }, Region.zero());
+    const lookup_index = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_index, .layout_idx = i64_layout } }, Region.zero());
+    const zero = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 0, .layout_idx = i64_layout } }, Region.zero());
+    const one = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 1, .layout_idx = i64_layout } }, Region.zero());
+
+    const cond_args = try env.lir_store.addExprSpan(&.{ lookup_index, zero });
+    const cond = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .num_is_gt,
+        .args = cond_args,
+        .ret_layout = .bool,
+    } }, Region.zero());
+
+    const dec_index_args = try env.lir_store.addExprSpan(&.{ lookup_index, one });
+    const dec_index = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .num_minus,
+        .args = dec_index_args,
+        .ret_layout = i64_layout,
+    } }, Region.zero());
+
+    const get_args = try env.lir_store.addExprSpan(&.{ lookup_list, lookup_index });
+    const get_elem = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .list_get_unsafe,
+        .args = get_args,
+        .ret_layout = i64_layout,
+    } }, Region.zero());
+
+    const lookup_state = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_state, .layout_idx = i64_layout } }, Region.zero());
+    const lookup_item = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_item, .layout_idx = i64_layout } }, Region.zero());
+    const lookup_step = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_step, .layout_idx = fn_layout } }, Region.zero());
+    const step_args = try env.lir_store.addExprSpan(&.{ lookup_item, lookup_state });
+    const step_call = try env.lir_store.addExpr(.{ .call = .{
+        .fn_expr = lookup_step,
+        .fn_layout = fn_layout,
+        .args = step_args,
+        .ret_layout = i64_layout,
+        .called_via = .apply,
+    } }, Region.zero());
+
+    const pat_index = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_index,
+        .layout_idx = i64_layout,
+        .reassignable = true,
+    } }, Region.zero());
+    const pat_state = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_state,
+        .layout_idx = i64_layout,
+        .reassignable = true,
+    } }, Region.zero());
+    const pat_item = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_item,
+        .layout_idx = i64_layout,
+    } }, Region.zero());
+
+    const unit = try env.lir_store.addExpr(.{ .struct_ = .{
+        .struct_layout = .none,
+        .fields = try env.lir_store.addExprSpan(&.{}),
+    } }, Region.zero());
+
+    const while_body_stmts = try env.lir_store.addStmts(&.{
+        .{ .mutate = .{ .pattern = pat_index, .expr = dec_index } },
+        .{ .decl = .{ .pattern = pat_item, .expr = get_elem } },
+        .{ .mutate = .{ .pattern = pat_state, .expr = step_call } },
+    });
+    const while_body = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = while_body_stmts,
+        .final_expr = unit,
+        .result_layout = .zst,
+    } }, Region.zero());
+
+    const while_expr = try env.lir_store.addExpr(.{ .while_loop = .{
+        .cond = cond,
+        .body = while_body,
+    } }, Region.zero());
+
+    const body_stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = pat_state, .expr = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_init, .layout_idx = i64_layout } }, Region.zero()) } },
+        .{ .decl = .{ .pattern = pat_index, .expr = len_expr } },
+    });
+    const body_block = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = body_stmts,
+        .final_expr = while_expr,
+        .result_layout = .zst,
+    } }, Region.zero());
+
+    const pat_list = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_list, .layout_idx = list_layout } }, Region.zero());
+    const pat_init = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_init, .layout_idx = i64_layout } }, Region.zero());
+    const pat_step = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_step, .layout_idx = fn_layout } }, Region.zero());
+    const params = try env.lir_store.addPatternSpan(&.{ pat_list, pat_init, pat_step });
+    const lam = try env.lir_store.addExpr(.{ .lambda = .{
+        .fn_layout = fn_layout,
+        .params = params,
+        .body = body_block,
+        .ret_layout = .zst,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(lam);
+    const rc = countRcOps(&env.lir_store, result);
+
+    try std.testing.expectEqual(@as(u32, 0), rc.increfs);
     try std.testing.expectEqual(@as(u32, 1), countDecrefsForSymbol(&env.lir_store, result, sym_list));
 }
 
