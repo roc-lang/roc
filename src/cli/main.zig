@@ -900,6 +900,11 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    switch (args.backend) {
+        .dev => return rocRunDev(ctx, args),
+        .interpreter => {},
+    }
+
     // Initialize cache - used to store our shim, and linked interpreter executables in cache
     const cache_config = CacheConfig{
         .enabled = !args.no_cache,
@@ -1260,6 +1265,267 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
     if (shm_result.warning_count > 0) {
         ctx.io.flush();
         std.process.exit(2);
+    }
+}
+
+/// Run using the dev backend: build to a temp directory, then execute the result.
+fn rocRunDev(ctx: *CliContext, args: cli_args.RunArgs) !void {
+    // Build to a temp path
+    const temp_dir_path = createUniqueTempDir(ctx) catch |err| {
+        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
+    };
+    // Clean up the temp directory on any error return. Success paths and std.process.exit
+    // paths handle cleanup explicitly before exiting.
+    errdefer compile.CacheCleanup.deleteTempDir(ctx.arena, temp_dir_path);
+
+    const exe_name = std.fs.path.stem(std.fs.path.basename(args.path));
+    const output_path = std.fs.path.join(ctx.arena, &.{ temp_dir_path, exe_name }) catch {
+        return error.OutOfMemory;
+    };
+
+    var warning_count: usize = 0;
+    const build_args = cli_args.BuildArgs{
+        .path = args.path,
+        .opt = args.opt,
+        .backend = .dev,
+        .target = args.target,
+        .output = output_path,
+        .no_cache = args.no_cache,
+        .allow_errors = args.allow_errors,
+        .exit_on_warnings = false,
+        .warning_count_out = &warning_count,
+        .require_executable_output = true,
+        .suppress_build_status = true,
+    };
+
+    try rocBuildNative(ctx, build_args);
+
+    // Flush I/O buffers before spawning the child process so the "Built..." message
+    // appears before the app's output and doesn't interfere with the child's stdout.
+    ctx.io.flush();
+
+    if (is_windows) {
+        // On Windows, use CreateProcessW directly to preserve the full DWORD exit code.
+        // std.process.Child.wait() truncates GetExitCodeProcess() into .Exited(u8),
+        // which loses NTSTATUS crash codes like 0xC0000005 (access violation).
+        try runDevChildWindows(ctx, output_path, args.app_args, warning_count, temp_dir_path);
+    } else {
+        // Run the built executable
+        var child_args = std.array_list.Managed([]const u8).initCapacity(ctx.arena, 1 + args.app_args.len) catch {
+            return error.OutOfMemory;
+        };
+        child_args.append(output_path) catch return error.OutOfMemory;
+        for (args.app_args) |app_arg| {
+            child_args.append(app_arg) catch return error.OutOfMemory;
+        }
+
+        var child = std.process.Child.init(child_args.items, ctx.arena);
+        child.stdin_behavior = .Inherit;
+        child.stdout_behavior = .Inherit;
+        child.stderr_behavior = .Inherit;
+        const term = child.spawnAndWait() catch |err| {
+            return ctx.fail(.{ .child_process_spawn_failed = .{
+                .command = output_path,
+                .err = err,
+            } });
+        };
+
+        // Clean up the temp directory now that the child has exited.
+        compile.CacheCleanup.deleteTempDir(ctx.arena, temp_dir_path);
+
+        try handleNativeRunTermination(ctx, output_path, term, warning_count);
+    }
+}
+
+/// Windows-specific child process execution that preserves full DWORD exit codes.
+/// This mirrors the interpreter's runWithWindowsHandleInheritance but without IPC setup.
+fn runDevChildWindows(ctx: *CliContext, exe_path: []const u8, app_args: []const []const u8, warning_count: usize, temp_dir_path: []const u8) !void {
+    // Convert exe path to wide string
+    const exe_path_w = std.unicode.utf8ToUtf16LeAllocZ(ctx.arena, exe_path) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidUtf8 => return ctx.fail(.{ .child_process_spawn_failed = .{
+            .command = exe_path,
+            .err = err,
+        } }),
+    };
+
+    const cwd = std.fs.cwd().realpathAlloc(ctx.arena, ".") catch {
+        return ctx.fail(.{ .directory_not_found = .{
+            .path = ".",
+        } });
+    };
+    const cwd_w = std.unicode.utf8ToUtf16LeAllocZ(ctx.arena, cwd) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidUtf8 => return ctx.fail(.{ .directory_not_found = .{
+            .path = cwd,
+        } }),
+    };
+
+    // Build command line with proper quoting
+    var cmd_builder = std.array_list.Managed(u8).initCapacity(ctx.gpa, 256) catch {
+        return error.OutOfMemory;
+    };
+    defer cmd_builder.deinit();
+    try appendWindowsQuotedArg(&cmd_builder, exe_path);
+    for (app_args) |arg| {
+        try cmd_builder.append(' ');
+        try appendWindowsQuotedArg(&cmd_builder, arg);
+    }
+    try cmd_builder.append(0);
+
+    const cmd_line = cmd_builder.items[0 .. cmd_builder.items.len - 1 :0];
+    const cmd_line_w = std.unicode.utf8ToUtf16LeAllocZ(ctx.arena, cmd_line) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidUtf8 => return ctx.fail(.{ .child_process_spawn_failed = .{
+            .command = exe_path,
+            .err = err,
+        } }),
+    };
+
+    var startup_info = std.mem.zeroes(windows.STARTUPINFOW);
+    startup_info.cb = @sizeOf(windows.STARTUPINFOW);
+    var process_info = std.mem.zeroes(windows.PROCESS_INFORMATION);
+
+    const success = windows.CreateProcessW(
+        exe_path_w.ptr,
+        cmd_line_w.ptr,
+        null,
+        null,
+        1, // bInheritHandles = TRUE (inherit parent's stdio for redirection/pipes)
+        0,
+        null,
+        cwd_w.ptr,
+        &startup_info,
+        &process_info,
+    );
+
+    if (success == 0) {
+        return ctx.fail(.{ .child_process_spawn_failed = .{
+            .command = exe_path,
+            .err = error.ProcessCreationFailed,
+        } });
+    }
+
+    // Wait for child to complete
+    const wait_result = windows.WaitForSingleObject(process_info.hProcess, windows.INFINITE);
+    if (wait_result != 0) {
+        _ = ipc.platform.windows.CloseHandle(process_info.hProcess);
+        _ = ipc.platform.windows.CloseHandle(process_info.hThread);
+        return ctx.fail(.{ .child_process_wait_failed = .{
+            .command = exe_path,
+            .err = error.ProcessWaitFailed,
+        } });
+    }
+
+    // Get the full exit code (not truncated to u8)
+    var exit_code: windows.DWORD = undefined;
+    if (windows.GetExitCodeProcess(process_info.hProcess, &exit_code) == 0) {
+        _ = ipc.platform.windows.CloseHandle(process_info.hProcess);
+        _ = ipc.platform.windows.CloseHandle(process_info.hThread);
+        return ctx.fail(.{ .child_process_wait_failed = .{
+            .command = exe_path,
+            .err = error.ProcessExitCodeFailed,
+        } });
+    }
+
+    _ = ipc.platform.windows.CloseHandle(process_info.hProcess);
+    _ = ipc.platform.windows.CloseHandle(process_info.hThread);
+
+    // Clean up the temp directory now that the child has exited.
+    compile.CacheCleanup.deleteTempDir(ctx.arena, temp_dir_path);
+
+    if (exit_code != 0) {
+        if (exit_code == 0xC0000005) {
+            const result = platform_validation.targets_validator.ValidationResult{
+                .process_crashed = .{ .exit_code = exit_code, .is_access_violation = true },
+            };
+            _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+        } else if (exit_code >= 0xC0000000) {
+            const result = platform_validation.targets_validator.ValidationResult{
+                .process_crashed = .{ .exit_code = exit_code, .is_access_violation = false },
+            };
+            _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+        }
+        std.process.exit(@truncate(exit_code));
+    } else if (warning_count > 0) {
+        std.process.exit(2);
+    }
+}
+
+const NativeRunTermination = union(enum) {
+    success,
+    exit_code: u8,
+    signal: u32,
+    stopped: u32,
+    unknown: u32,
+};
+
+fn classifyNativeRunTermination(term: std.process.Child.Term, warning_count: usize) NativeRunTermination {
+    return switch (term) {
+        .Exited => |code| if (code != 0)
+            .{ .exit_code = code }
+        else if (warning_count > 0)
+            .{ .exit_code = 2 }
+        else
+            .success,
+        .Signal => |signal| .{ .signal = signal },
+        .Stopped => |signal| .{ .stopped = signal },
+        .Unknown => |status| .{ .unknown = status },
+    };
+}
+
+fn handleNativeRunTermination(
+    ctx: *CliContext,
+    command: []const u8,
+    term: std.process.Child.Term,
+    warning_count: usize,
+) !void {
+    switch (classifyNativeRunTermination(term, warning_count)) {
+        .success => {},
+        .exit_code => |code| std.process.exit(code),
+        .signal => |signal| {
+            const result = platform_validation.targets_validator.ValidationResult{
+                .process_signaled = .{ .signal = signal },
+            };
+            _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            std.process.exit(128 +| @as(u8, @truncate(signal)));
+        },
+        .stopped => |signal| {
+            return ctx.fail(.{ .child_process_signaled = .{
+                .command = command,
+                .signal = signal,
+            } });
+        },
+        .unknown => |status| {
+            return ctx.fail(.{ .child_process_failed = .{
+                .command = command,
+                .exit_code = status,
+            } });
+        },
+    }
+}
+
+fn renderNonExecutableRunTargetError(ctx: *CliContext, config: roc_target.TargetsConfig) void {
+    if (config.exe.len == 0 and config.static_lib.len > 0 and config.shared_lib.len == 0) {
+        ctx.io.stderr().print("Error: This platform only produces static libraries.\n\n", .{}) catch {};
+        ctx.io.stderr().print("Static library platforms produce .a/.lib/.wasm files that must be\n", .{}) catch {};
+        ctx.io.stderr().print("linked by a host application. Use 'roc build' instead to produce\n", .{}) catch {};
+        ctx.io.stderr().print("the library artifact.\n", .{}) catch {};
+        return;
+    }
+
+    if (config.exe.len == 0 and config.shared_lib.len > 0 and config.static_lib.len == 0) {
+        ctx.io.stderr().print("Error: This platform only produces shared libraries.\n\n", .{}) catch {};
+        ctx.io.stderr().print("Shared library platforms produce .so/.dylib/.dll files that must be\n", .{}) catch {};
+        ctx.io.stderr().print("loaded by a host application. Use 'roc build' instead to produce\n", .{}) catch {};
+        ctx.io.stderr().print("the library artifact.\n", .{}) catch {};
+        return;
+    }
+
+    if (config.exe.len == 0 and (config.static_lib.len > 0 or config.shared_lib.len > 0)) {
+        ctx.io.stderr().print("Error: This platform does not produce executables.\n\n", .{}) catch {};
+        ctx.io.stderr().print("Use 'roc build' instead to produce the library artifact.\n", .{}) catch {};
+        return;
     }
 }
 
@@ -3445,6 +3711,26 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         break :blk .{ compatible.target, compatible.link_type };
     };
 
+    if (args.require_executable_output and link_type != .exe) {
+        const stderr = ctx.io.stderr();
+        switch (link_type) {
+            .static_lib => {
+                stderr.print("Error: The selected target only produces static libraries.\n\n", .{}) catch {};
+                stderr.print("Static library platforms produce .a/.lib/.wasm files that must be\n", .{}) catch {};
+                stderr.print("linked by a host application. Use 'roc build' instead to produce\n", .{}) catch {};
+                stderr.print("the library artifact.\n", .{}) catch {};
+            },
+            .shared_lib => {
+                stderr.print("Error: The selected target only produces shared libraries.\n\n", .{}) catch {};
+                stderr.print("Shared library platforms produce .so/.dylib/.dll files that must be\n", .{}) catch {};
+                stderr.print("loaded by a host application. Use 'roc build' instead to produce\n", .{}) catch {};
+                stderr.print("the library artifact.\n", .{}) catch {};
+            },
+            .exe => unreachable,
+        }
+        return error.UnsupportedTarget;
+    }
+
     std.log.debug("Target: {s}, Link type: {s}", .{ @tagName(target), @tagName(link_type) });
 
     // Check if dev backend supports this target architecture
@@ -3989,25 +4275,36 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     else
         0;
 
-    const stdout = ctx.io.stdout();
-    try stdout.print("Built {s} in {d:.1}ms", .{ final_output_path, elapsed_ms });
-    if (cache_stats.modules_total > 0 and cache_stats.cache_hits > 0) {
-        try stdout.print(" with {}% cache hit", .{cache_percent});
-    }
-    try stdout.writeAll(" (dev backend)\n");
+    if (!args.suppress_build_status) {
+        const stdout = ctx.io.stdout();
+        try stdout.print("Built {s} in {d:.1}ms", .{ final_output_path, elapsed_ms });
+        if (cache_stats.modules_total > 0 and cache_stats.cache_hits > 0) {
+            try stdout.print(" with {}% cache hit", .{cache_percent});
+        }
+        try stdout.writeAll(" (dev backend)\n");
 
-    // Print verbose stats if requested
-    if (args.verbose) {
-        try stdout.print("\n    Modules: {} total, {} cached, {} built\n", .{
-            cache_stats.modules_total,
-            cache_stats.cache_hits,
-            cache_stats.modules_compiled,
-        });
-        try stdout.print("    Cache Hit: {}%\n", .{cache_percent});
+        // Print verbose stats if requested
+        if (args.verbose) {
+            try stdout.print("\n    Modules: {} total, {} cached, {} built\n", .{
+                cache_stats.modules_total,
+                cache_stats.cache_hits,
+                cache_stats.modules_compiled,
+            });
+            try stdout.print("    Cache Hit: {}%\n", .{cache_percent});
+        }
+
+        if (total_warning_count > 0) {
+            try stdout.print("  {} warning(s)\n", .{total_warning_count});
+        }
     }
 
-    if (total_warning_count > 0) {
-        try stdout.print("  {} warning(s)\n", .{total_warning_count});
+    if (args.warning_count_out) |warning_count_out| {
+        warning_count_out.* = total_warning_count;
+    }
+
+    if (args.exit_on_warnings and total_warning_count > 0) {
+        ctx.io.flush();
+        std.process.exit(2);
     }
 }
 
@@ -4420,8 +4717,12 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         try stdout.print("    Cache Hit: {}%\n", .{cache_percent});
     }
 
+    if (args.warning_count_out) |warning_count_out| {
+        warning_count_out.* = total_warning_count;
+    }
+
     // Exit with code 2 if there were warnings (but no errors)
-    if (total_warning_count > 0) {
+    if (args.exit_on_warnings and total_warning_count > 0) {
         ctx.io.flush();
         std.process.exit(2);
     }
@@ -7710,4 +8011,22 @@ test "appendWindowsQuotedArg" {
 
     // Arg with multiple trailing backslashes (needs space to trigger quoting)
     try testQuote("has spaces\\\\", "\"has spaces\\\\\\\\\"");
+}
+
+test "classifyNativeRunTermination preserves warning exit code" {
+    const testing = std.testing;
+
+    const result = classifyNativeRunTermination(.{ .Exited = 0 }, 1);
+
+    try testing.expect(result == .exit_code);
+    try testing.expectEqual(@as(u8, 2), result.exit_code);
+}
+
+test "classifyNativeRunTermination preserves signal termination" {
+    const testing = std.testing;
+
+    const result = classifyNativeRunTermination(.{ .Signal = 11 }, 0);
+
+    try testing.expect(result == .signal);
+    try testing.expectEqual(@as(u32, 11), result.signal);
 }

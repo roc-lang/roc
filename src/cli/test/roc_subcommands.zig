@@ -998,6 +998,37 @@ test "roc run returns exit code 2 for warnings" {
     try testing.expect(has_warning);
 }
 
+test "roc run --backend=dev returns exit code 2 for warnings" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "--backend=dev", "--no-cache" }, "test/fx/run_warning_only.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try testing.expect(result.term == .Exited and result.term.Exited == 2);
+
+    const has_warning = std.mem.indexOf(u8, result.stderr, "UNUSED VARIABLE") != null or
+        std.mem.indexOf(u8, result.stderr, "warning") != null;
+    try testing.expect(has_warning);
+}
+
+test "roc run --backend=dev rejects non executable targets" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "--backend=dev", "--target=wasm32" }, "test/wasm/app.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try testing.expect(result.term == .Exited and result.term.Exited != 0);
+
+    const has_expected_error = std.mem.indexOf(u8, result.stderr, "This platform only produces static libraries") != null or
+        std.mem.indexOf(u8, result.stderr, "TARGET NOT SUPPORTED") != null or
+        std.mem.indexOf(u8, result.stderr, "unsupported target") != null;
+    try testing.expect(has_expected_error);
+}
+
 test "roc build returns exit code 2 for warnings" {
     const testing = std.testing;
     const gpa = testing.allocator;
