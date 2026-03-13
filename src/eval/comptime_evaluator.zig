@@ -33,7 +33,7 @@ const ProblemStore = check_mod.problem.Store;
 const EvalError = Interpreter.Error;
 const CrashContext = eval_mod.CrashContext;
 const BuiltinTypes = eval_mod.BuiltinTypes;
-const layout_mod = @import("layout");
+const layout_mod = @import("interpreter_layout");
 const roc_target = @import("roc_target");
 
 fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {

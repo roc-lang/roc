@@ -14,6 +14,9 @@ const backend = @import("backend");
 pub const ExecutableMemory = backend.ExecutableMemory;
 /// Layout module (re-exported for result type information)
 pub const layout = @import("layout");
+/// Interpreter-specific layout module, forked to keep runtime evaluation isolated
+/// from future dev-backend layout changes.
+pub const interpreter_layout = @import("interpreter_layout");
 /// Utilities for loading compiled builtin modules
 pub const builtin_loading = @import("builtin_loading.zig");
 /// Centralized loading and management of builtin modules

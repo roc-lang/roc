@@ -11,7 +11,7 @@ const types = @import("types");
 const builtins = @import("builtins");
 const base = @import("base");
 const Ident = base.Ident;
-const layout_mod = @import("layout");
+const layout_mod = @import("interpreter_layout");
 
 // Compile-time flag for refcount tracing - enabled via `zig build -Dtrace-refcount=true`
 const trace_refcount = if (@hasDecl(build_options, "trace_refcount")) build_options.trace_refcount else false;

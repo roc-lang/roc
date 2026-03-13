@@ -3,7 +3,8 @@
 const std = @import("std");
 const types = @import("types");
 const can = @import("can");
-const layout = @import("layout");
+const layout = @import("interpreter_layout");
+const interpreter_values = @import("interpreter_values");
 const builtins = @import("builtins");
 const StackValue = @import("StackValue.zig");
 const TypeScope = types.TypeScope;
@@ -715,7 +716,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
 }
 
 /// Render `value` using only its layout (without additional type information).
-/// Delegates to the shared `values.RocValue.format()` for canonical formatting.
+/// Delegates to the interpreter-specific `RocValue.format()` for canonical formatting.
 pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
     // Unit values can be represented as zero-sized structs in runtime layouts.
     // Render these consistently as `{}` for Roc-facing output.
@@ -725,12 +726,11 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
         return try ctx.allocator.dupe(u8, "{}");
     }
 
-    const values = @import("values");
-    const roc_val = values.RocValue{
+    const roc_val = interpreter_values.RocValue{
         .ptr = if (value.ptr) |p| @ptrCast(p) else null,
         .lay = value.layout,
     };
-    const fmt_ctx = values.RocValue.FormatContext{
+    const fmt_ctx = interpreter_values.RocValue.FormatContext{
         .layout_store = ctx.layout_store,
         .ident_store = ctx.env.getIdentStoreConst(),
     };

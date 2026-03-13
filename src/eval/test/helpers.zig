@@ -10,6 +10,8 @@ const builtins = @import("builtins");
 const compiled_builtins = @import("compiled_builtins");
 
 const layout = @import("layout");
+const interpreter_layout = @import("interpreter_layout");
+const interpreter_values = @import("interpreter_values");
 const mir = @import("mir");
 const lir = @import("lir");
 const roc_target = @import("roc_target");
@@ -26,7 +28,6 @@ const loadCompiledModule = builtin_loading_mod.loadCompiledModule;
 const backend = @import("backend");
 const bytebox = @import("bytebox");
 const WasmEvaluator = eval_mod.WasmEvaluator;
-const values = @import("values");
 
 const posix = std.posix;
 
@@ -43,7 +44,7 @@ const LambdaSet = mir.LambdaSet;
 const LirExprStore = lir.LirExprStore;
 
 /// Convert a StackValue to a RocValue for formatting.
-fn stackValueToRocValue(result: StackValue, layout_idx_hint: ?layout.Idx) values.RocValue {
+fn stackValueToRocValue(result: StackValue, layout_idx_hint: ?interpreter_layout.Idx) interpreter_values.RocValue {
     return .{
         .ptr = if (result.ptr) |p| @ptrCast(p) else null,
         .lay = result.layout,
@@ -52,7 +53,7 @@ fn stackValueToRocValue(result: StackValue, layout_idx_hint: ?layout.Idx) values
 }
 
 /// Build FormatContext from interpreter state.
-fn interpreterFormatCtx(layout_cache: *const layout.Store) values.RocValue.FormatContext {
+fn interpreterFormatCtx(layout_cache: *const interpreter_layout.Store) interpreter_values.RocValue.FormatContext {
     return .{
         .layout_store = layout_cache,
         .ident_store = layout_cache.getEnv().common.getIdentStore(),
@@ -2156,7 +2157,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     };
 
     // Compare with DevEvaluator using canonical RocValue.format()
-    const roc_val = stackValueToRocValue(result, layout.Idx.bool);
+    const roc_val = stackValueToRocValue(result, interpreter_layout.Idx.bool);
     const fmt_ctx = interpreterFormatCtx(&interpreter.runtime_layout_store);
     const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
     defer test_allocator.free(interpreter_str);
@@ -2566,7 +2567,7 @@ pub fn runExpectListZst(src: []const u8, expected_element_count: usize, should_t
     }
 
     // Use the ListAccessor to verify element count
-    const elem_layout = layout.Layout.zst();
+    const elem_layout = interpreter_layout.Layout.zst();
     const list_accessor = try result.asList(layout_cache, elem_layout, ops);
     try std.testing.expectEqual(expected_element_count, list_accessor.len());
 
@@ -2671,7 +2672,7 @@ pub fn runExpectEmptyListI64(src: []const u8, should_trace: enum { trace, no_tra
     }
 
     // Use the ListAccessor to verify the list is empty
-    const elem_layout = layout.Layout.zst();
+    const elem_layout = interpreter_layout.Layout.zst();
     const list_accessor = try result.asList(layout_cache, elem_layout, ops);
     try std.testing.expectEqual(@as(usize, 0), list_accessor.len());
 
