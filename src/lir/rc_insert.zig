@@ -2100,7 +2100,11 @@ pub const RcInsertPass = struct {
                 try self.countConsumedUsesInto(fl.body, target);
             },
             .while_loop => |wl| {
-                try self.countConsumedValueInto(wl.cond, target);
+                // Loop-carried outer bindings must survive across iterations.
+                // Any consuming use inside the condition/body should therefore
+                // be satisfied by per-iteration retained owners, not by
+                // consuming the original outer binding once at the loop site.
+                try self.countConsumedUsesInto(wl.cond, target);
                 try self.countConsumedUsesInto(wl.body, target);
             },
             .lookup => {},
@@ -2317,7 +2321,7 @@ pub const RcInsertPass = struct {
                 try self.countBorrowOwnerDemandUsesInto(fl.body, target);
             },
             .while_loop => |wl| {
-                try self.countBorrowOwnerDemandValueInto(wl.cond, target);
+                try self.countBorrowOwnerDemandUsesInto(wl.cond, target);
                 try self.countBorrowOwnerDemandUsesInto(wl.body, target);
             },
             .incref => |inc| try self.countBorrowOwnerDemandUsesInto(inc.value, target),
@@ -3751,13 +3755,28 @@ pub const RcInsertPass = struct {
     /// Process a while loop expression.
     /// While loops don't bind new symbols — just recurse into cond and body.
     fn processWhileLoop(self: *RcInsertPass, wl: anytype, region: Region, expr_id: LirExprId) Allocator.Error!LirExprId {
-        const new_cond = try self.processExpr(wl.cond);
-        var cond_added = try self.pushExprUsesToBlockConsumed(wl.cond);
+        var cond_demands = std.AutoHashMap(u64, u32).init(self.allocator);
+        defer cond_demands.deinit();
+        try self.countBorrowOwnerDemandUsesInto(wl.cond, &cond_demands);
+
+        var body_demands = std.AutoHashMap(u64, u32).init(self.allocator);
+        defer body_demands.deinit();
+        try self.countBorrowOwnerDemandUsesInto(wl.body, &body_demands);
+
+        const live_len = self.live_rc_symbols.items.len;
+
+        const processed_cond = try self.processExpr(wl.cond);
+        const new_cond = try self.wrapExprWithLiveBorrowRcOps(processed_cond, live_len, &cond_demands, self.exprResultLayout(wl.cond), region);
+
+        var cond_added = try self.pushBorrowedExprUsesToBlockConsumed(wl.cond);
         defer {
             self.popExprUsesFromBlockConsumed(&cond_added);
             cond_added.deinit();
         }
-        const new_body = try self.processExpr(wl.body);
+
+        const processed_body = try self.processExpr(wl.body);
+        const new_body = try self.wrapExprWithLiveBorrowRcOps(processed_body, live_len, &body_demands, self.exprResultLayout(wl.body), region);
+
         if (new_cond != wl.cond or new_body != wl.body) {
             return self.store.addExpr(.{ .while_loop = .{
                 .cond = new_cond,
@@ -4192,6 +4211,21 @@ pub const RcInsertPass = struct {
             .final_expr = expr,
             .result_layout = result_layout,
         } }, region);
+    }
+
+    fn wrapExprWithLiveBorrowRcOps(
+        self: *RcInsertPass,
+        expr: LirExprId,
+        live_len: usize,
+        local_demands: *const std.AutoHashMap(u64, u32),
+        result_layout: LayoutIdx,
+        region: Region,
+    ) Allocator.Error!LirExprId {
+        var rc_stmts = std.ArrayList(LirStmt).empty;
+        defer rc_stmts.deinit(self.allocator);
+
+        try self.emitBorrowRcOpsForLiveSymbolsInto(live_len, local_demands, region, &rc_stmts);
+        return self.wrapPreludeAroundExpr(expr, result_layout, region, rc_stmts.items);
     }
 
     fn wrapExprWithTailStmts(
@@ -4670,6 +4704,36 @@ pub const RcInsertPass = struct {
             .region = region,
             .rc_stmts = rc_stmts,
         });
+    }
+
+    fn emitBorrowRcOpsForLiveSymbolsInto(
+        self: *RcInsertPass,
+        live_len: usize,
+        local_uses: *const std.AutoHashMap(u64, u32),
+        region: Region,
+        rc_stmts: *std.ArrayList(LirStmt),
+    ) Allocator.Error!void {
+        const keys_start = self.scratch_keys.top();
+        defer self.scratch_keys.clearFrom(keys_start);
+
+        for (self.live_rc_symbols.items[0..live_len]) |live| {
+            if (self.ownerUseCountFromMap(local_uses, live.key) == 0) continue;
+            try self.scratch_keys.append(live.key);
+        }
+
+        const sorted_keys = self.scratch_keys.sliceFromStart(keys_start);
+        std.mem.sort(u64, sorted_keys, {}, std.sort.asc(u64));
+
+        for (sorted_keys) |key| {
+            const use_count = self.ownerUseCountFromMap(local_uses, key);
+            if (use_count == 0) continue;
+
+            for (self.live_rc_symbols.items[0..live_len]) |live| {
+                if (live.key != key) continue;
+                try self.emitIncrefInto(live.symbol, live.layout_idx, @intCast(use_count), region, rc_stmts);
+                break;
+            }
+        }
     }
 
     fn emitRetainedIncrefsForPattern(
@@ -6223,6 +6287,118 @@ test "RC while loop over borrowed list only tail-cleans lambda param once" {
     const result = try pass.insertRcOps(lam);
 
     try std.testing.expectEqual(@as(u32, 1), countDecrefsForSymbol(&env.lir_store, result, sym_list));
+}
+
+test "RC while loop: repeated append of borrowed str gets per-iteration incref" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const str_layout: LayoutIdx = .str;
+    const i64_layout: LayoutIdx = .i64;
+    const list_layout = try env.layout_store.insertLayout(layout_mod.Layout.list(str_layout));
+    const fn_layout: LayoutIdx = .none;
+
+    const sym_item = makeSymbol(1);
+    const sym_acc = makeSymbol(2);
+    const sym_count = makeSymbol(3);
+
+    const empty_list = try env.lir_store.addExpr(.{ .empty_list = .{
+        .elem_layout = str_layout,
+        .list_layout = list_layout,
+    } }, Region.zero());
+    const one = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 1, .layout_idx = i64_layout } }, Region.zero());
+    const zero = try env.lir_store.addExpr(.{ .i64_literal = .{ .value = 0, .layout_idx = i64_layout } }, Region.zero());
+
+    const pat_acc = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_acc,
+        .layout_idx = list_layout,
+        .reassignable = true,
+    } }, Region.zero());
+    const pat_count = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_count,
+        .layout_idx = i64_layout,
+        .reassignable = true,
+    } }, Region.zero());
+
+    const lookup_acc = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_acc, .layout_idx = list_layout } }, Region.zero());
+    const lookup_item = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_item, .layout_idx = str_layout } }, Region.zero());
+    const append_args = try env.lir_store.addExprSpan(&.{ lookup_acc, lookup_item });
+    const append_expr = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .list_append_unsafe,
+        .args = append_args,
+        .ret_layout = list_layout,
+    } }, Region.zero());
+
+    const loop_body_stmts = try env.lir_store.addStmts(&.{
+        .{ .mutate = .{ .pattern = pat_acc, .expr = append_expr } },
+        .{ .mutate = .{ .pattern = pat_count, .expr = zero } },
+    });
+    const unit = try env.lir_store.addExpr(.{ .struct_ = .{
+        .struct_layout = .none,
+        .fields = try env.lir_store.addExprSpan(&.{}),
+    } }, Region.zero());
+    const loop_body = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = loop_body_stmts,
+        .final_expr = unit,
+        .result_layout = .zst,
+    } }, Region.zero());
+
+    const lookup_count = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_count, .layout_idx = i64_layout } }, Region.zero());
+    const cond_args = try env.lir_store.addExprSpan(&.{ lookup_count, zero });
+    const cond = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .num_is_gt,
+        .args = cond_args,
+        .ret_layout = .bool,
+    } }, Region.zero());
+
+    const while_expr = try env.lir_store.addExpr(.{ .while_loop = .{
+        .cond = cond,
+        .body = loop_body,
+    } }, Region.zero());
+
+    const lookup_acc_for_len = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_acc, .layout_idx = list_layout } }, Region.zero());
+    const len_args = try env.lir_store.addExprSpan(&.{lookup_acc_for_len});
+    const len_expr = try env.lir_store.addExpr(.{ .low_level = .{
+        .op = .list_len,
+        .args = len_args,
+        .ret_layout = i64_layout,
+    } }, Region.zero());
+
+    const wild_zst = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = .zst } }, Region.zero());
+    const outer_stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = pat_acc, .expr = empty_list } },
+        .{ .decl = .{ .pattern = pat_count, .expr = one } },
+        .{ .decl = .{ .pattern = wild_zst, .expr = while_expr } },
+    });
+    const body_block = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = outer_stmts,
+        .final_expr = len_expr,
+        .result_layout = i64_layout,
+    } }, Region.zero());
+
+    const pat_item = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_item,
+        .layout_idx = str_layout,
+    } }, Region.zero());
+    const params = try env.lir_store.addPatternSpan(&.{pat_item});
+    const lam = try env.lir_store.addExpr(.{ .lambda = .{
+        .fn_layout = fn_layout,
+        .params = params,
+        .body = body_block,
+        .ret_layout = i64_layout,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(lam);
+    const rc = countRcOps(&env.lir_store, result);
+
+    try std.testing.expectEqual(@as(u32, 1), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 1), countDecrefsForSymbol(&env.lir_store, result, sym_item));
 }
 
 test "RC branch-aware: symbol used in both match branches — no incref at binding" {
