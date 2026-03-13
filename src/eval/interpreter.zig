@@ -541,46 +541,18 @@ pub const Interpreter = struct {
     /// Whether we allocated the all_module_envs slice (needs to be freed on deinit)
     owns_all_module_envs: bool = false,
 
-    fn importNameMatchesModule(source_env: *const can.ModuleEnv, import_idx: can.CIR.Import.Idx, module_env: *const can.ModuleEnv) bool {
-        const import_idx_int = @intFromEnum(import_idx);
-        if (import_idx_int >= source_env.imports.imports.items.items.len) return false;
-
-        const import_str_idx = source_env.imports.imports.items.items[import_idx_int];
-        const import_name = source_env.common.getString(import_str_idx);
-        const base_name = if (std.mem.lastIndexOf(u8, import_name, ".")) |dot_pos|
-            import_name[dot_pos + 1 ..]
-        else
-            import_name;
-
-        return std.mem.eql(u8, module_env.module_name, import_name) or
-            std.mem.eql(u8, module_env.module_name, base_name);
-    }
-
     fn resolveImportedModuleEnvInSlice(source_env: *const can.ModuleEnv, import_idx: can.CIR.Import.Idx, module_envs: []const *const can.ModuleEnv) ?*const can.ModuleEnv {
-        if (source_env.imports.getResolvedModule(import_idx)) |resolved_idx| {
-            if (resolved_idx < module_envs.len) {
-                const resolved_env = module_envs[resolved_idx];
-                if (importNameMatchesModule(source_env, import_idx, resolved_env)) {
-                    return resolved_env;
-                }
-            }
-        }
-
-        for (module_envs) |module_env| {
-            if (importNameMatchesModule(source_env, import_idx, module_env)) {
-                return module_env;
-            }
-        }
-
-        return null;
+        const mutable_source_env = @constCast(source_env);
+        mutable_source_env.imports.resolveImports(mutable_source_env, module_envs);
+        const resolved_idx = mutable_source_env.imports.getResolvedModule(import_idx) orelse return null;
+        if (resolved_idx >= module_envs.len) return null;
+        return module_envs[resolved_idx];
     }
 
     fn resolveImportedModuleEnv(self: *Interpreter, source_env: *const can.ModuleEnv, import_idx: can.CIR.Import.Idx) ?*const can.ModuleEnv {
         if (source_env == self.root_env or (self.app_env != null and source_env == self.app_env.?)) {
             if (self.import_envs.get(import_idx)) |env| {
-                if (importNameMatchesModule(source_env, import_idx, env)) {
-                    return env;
-                }
+                return env;
             }
         }
 
@@ -2974,11 +2946,13 @@ pub const Interpreter = struct {
 
                 // Access second argument as a record and extract its specific fields
                 const sublist_config = args[1].asRecord(&self.runtime_layout_store) catch debugUnreachable(roc_ops, "sublist config argument should be a valid record", @src());
-                // When fields are alphabetically sorted, 0 will be `len` and 1 will be `start`
+                // Use the record's original semantic field indices, not its sorted layout slots.
+                // The builtin contract is { start, len }, so original index 0 is `start`
+                // and original index 1 is `len` regardless of how the layout is sorted.
                 const field_rt = try self.runtime_types.fresh();
-                const sublist_start_stack = sublist_config.getFieldByIndex(1, field_rt) catch debugUnreachable(roc_ops, "sublist config should have start field at index 1", @src());
+                const sublist_start_stack = sublist_config.getFieldByOriginalIndex(0, field_rt) catch debugUnreachable(roc_ops, "sublist config should have start field at original index 0", @src());
                 const field_rt2 = try self.runtime_types.fresh();
-                const sublist_len_stack = sublist_config.getFieldByIndex(0, field_rt2) catch debugUnreachable(roc_ops, "sublist config should have len field at index 0", @src());
+                const sublist_len_stack = sublist_config.getFieldByOriginalIndex(1, field_rt2) catch debugUnreachable(roc_ops, "sublist config should have len field at original index 1", @src());
                 const sublist_start: u64 = @intCast(sublist_start_stack.asI128());
                 const sublist_len: u64 = @intCast(sublist_len_stack.asI128());
 

@@ -5028,7 +5028,7 @@ test "LIR lifted closure with function-valued captures keeps both capture slots"
     );
     defer translator.deinit();
 
-    const lir_root_id = try translator.lower(mir_expr);
+    _ = try translator.lower(mir_expr);
 
     var specialized_closure_sym: ?lir.LIR.Symbol = null;
     var specialization_it = translator.specialized_direct_callees.iterator();
@@ -5053,8 +5053,6 @@ test "LIR lifted closure with function-valued captures keeps both capture slots"
     try std.testing.expectEqual(@as(usize, 2), capture_fields.len);
     try std.testing.expect(capture_fields.get(0).layout != .zst);
     try std.testing.expect(capture_fields.get(1).layout != .zst);
-
-    _ = lir_root_id;
 }
 
 test "eval tag - already primitive" {

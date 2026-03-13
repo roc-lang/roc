@@ -7724,14 +7724,15 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         // list_sublist(list, {len: U64, start: U64}) -> list
         .list_sublist => {
-            // Look up field offsets structurally from the record layout.
-            // The record is { start : U64, len : U64 }. Sorted alphabetically: len=0, start=1.
+            // Look up field offsets from the record's original semantic indices.
+            // The builtin contract is { start : U64, len : U64 }, so original index 0
+            // is `start` and original index 1 is `len` regardless of sorted layout order.
             const ls = self.getLayoutStore();
             const record_layout_idx = self.exprLayoutIdx(args[1]);
             const record_layout = ls.getLayout(record_layout_idx);
             const record_idx = record_layout.data.struct_.idx;
-            const len_sorted_idx: u32 = 0;
-            const start_sorted_idx: u32 = 1;
+            const start_field_off = ls.getStructFieldOffsetByOriginalIndex(record_idx, 0);
+            const len_field_off = ls.getStructFieldOffsetByOriginalIndex(record_idx, 1);
             if (builtin.mode == .Debug) {
                 const sd = ls.getStructData(record_idx);
                 const sorted_fields = ls.struct_fields.sliceRange(sd.getFields());
@@ -7742,15 +7743,22 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     );
                 }
                 const record_size = ls.getStructData(record_idx).size;
-                if (sorted_fields.get(0).layout != .u64 or sorted_fields.get(1).layout != .u64 or record_size != 16) {
+                if (ls.getStructFieldLayoutByOriginalIndex(record_idx, 0) != .u64 or
+                    ls.getStructFieldLayoutByOriginalIndex(record_idx, 1) != .u64 or
+                    ls.getStructFieldSizeByOriginalIndex(record_idx, 0) != 8 or
+                    ls.getStructFieldSizeByOriginalIndex(record_idx, 1) != 8 or
+                    record_size != 16)
+                {
                     std.debug.panic(
-                        "LIR/wasm invariant violated: list_sublist record expected two U64 fields in 16 bytes, got layouts [{}, {}] size {d}",
-                        .{ sorted_fields.get(0).layout, sorted_fields.get(1).layout, record_size },
+                        "LIR/wasm invariant violated: list_sublist record expected original fields start/len as two U64s in 16 bytes, got layouts [{}, {}] size {d}",
+                        .{
+                            ls.getStructFieldLayoutByOriginalIndex(record_idx, 0),
+                            ls.getStructFieldLayoutByOriginalIndex(record_idx, 1),
+                            record_size,
+                        },
                     );
                 }
             }
-            const len_field_off = ls.getStructFieldOffset(record_idx, len_sorted_idx);
-            const start_field_off = ls.getStructFieldOffset(record_idx, start_sorted_idx);
 
             // Generate list arg (pointer to {data_ptr, len, capacity})
             try self.generateExpr(args[0]);
@@ -7758,13 +7766,13 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, list_local) catch return error.OutOfMemory;
 
-            // Generate record arg (pointer to {len: U64, start: U64})
+            // Generate record arg (pointer to the config record)
             try self.generateExpr(args[1]);
             const rec_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, rec_local) catch return error.OutOfMemory;
 
-            // Load "len" field from structural offset, wrap to i32
+            // Load "len" field by original semantic index, wrap to i32
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, rec_local) catch return error.OutOfMemory;
             try self.emitLoadOp(.i64, len_field_off);
@@ -7773,7 +7781,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, sub_len) catch return error.OutOfMemory;
 
-            // Load "start" field from structural offset, wrap to i32
+            // Load "start" field by original semantic index, wrap to i32
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, rec_local) catch return error.OutOfMemory;
             try self.emitLoadOp(.i64, start_field_off);

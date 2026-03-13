@@ -374,8 +374,7 @@ fn propagateMemberReturnSets(allocator: Allocator, mir_store: *const MIR.Store, 
     while (it.next()) |entry| {
         const fn_symbol = MIR.Symbol.fromRaw(entry.key_ptr.*);
         const def_expr_id = entry.value_ptr.*;
-        const params = resolveToLambdaParams(mir_store, def_expr_id) orelse continue;
-        _ = params;
+        if (resolveToLambdaParams(mir_store, def_expr_id) == null) continue;
         const body = resolveToLambdaBody(mir_store, def_expr_id) orelse continue;
         const body_ls = store.getExprLambdaSet(body) orelse continue;
         changed = (try mergeMemberReturnLambdaSet(allocator, store, fn_symbol, body_ls)) or changed;

@@ -160,7 +160,7 @@ const CIR = can.CIR;
 const LoadedModule = builtin_loading.LoadedModule;
 
 fn isBuiltinModuleEnv(env: *const ModuleEnv) bool {
-    return std.mem.eql(u8, env.module_name, "Builtin");
+    return env.display_module_name_idx.eql(env.idents.builtin_module);
 }
 
 // Host ABI types for RocOps

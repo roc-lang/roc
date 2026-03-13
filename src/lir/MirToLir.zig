@@ -510,9 +510,7 @@ fn verifyFunctionLayouts(self: *Self, _: LirExprId) void {
                     std.debug.panic("MirToLir invariant violated: non-callable lambda.fn_layout at expr {}", .{i});
                 }
             },
-            .lookup => |lk| {
-                _ = lk;
-            },
+            .lookup => {},
             else => {},
         }
     }
@@ -2110,7 +2108,7 @@ fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
             const lir_str_idx = try self.copyStringToLir(s);
             break :blk self.lir_store.addExpr(.{ .str_literal = lir_str_idx }, region);
         },
-        .list => |l| self.lowerList(l, mono_idx, mir_expr_id, region),
+        .list => |l| self.lowerList(l, mir_expr_id, region),
         .record => |r| self.lowerRecord(r, mono_idx, mir_expr_id, region),
         .tuple => |t| self.lowerTuple(t, mono_idx, mir_expr_id, region),
         .tag => |t| self.lowerTag(t, mono_idx, mir_expr_id, region),
@@ -2223,8 +2221,7 @@ fn lowerInt(self: *Self, int_data: anytype, mono_idx: Monotype.Idx, region: Regi
     }
 }
 
-fn lowerList(self: *Self, list_data: anytype, mono_idx: Monotype.Idx, mir_expr_id: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
-    _ = mono_idx;
+fn lowerList(self: *Self, list_data: anytype, mir_expr_id: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
     const list_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
     const list_layout_val = self.layout_store.getLayout(list_layout);
     const elem_layout = switch (list_layout_val.tag) {

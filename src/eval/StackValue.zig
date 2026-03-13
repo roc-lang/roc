@@ -1148,6 +1148,24 @@ pub const RecordAccessor = struct {
         return self.layout_cache.getLayout(field_layout_info.layout);
     }
 
+    /// Find the sorted field slot for a field's original semantic index.
+    pub fn findFieldIndexByOriginalIndex(self: RecordAccessor, original_index: u32) ?usize {
+        for (0..self.field_layouts.len) |idx| {
+            if (self.field_layouts.get(idx).index == original_index) {
+                return idx;
+            }
+        }
+        return null;
+    }
+
+    /// Get a field by its original semantic index rather than its sorted layout slot.
+    pub fn getFieldByOriginalIndex(self: RecordAccessor, original_index: u32, field_rt_var: types.Var) !StackValue {
+        const sorted_index = self.findFieldIndexByOriginalIndex(original_index) orelse {
+            return error.RecordIndexOutOfBounds;
+        };
+        return self.getFieldByIndex(sorted_index, field_rt_var);
+    }
+
     /// Find field index by comparing field name text.
     /// Uses string comparison because ident indices are module-local —
     /// the same field name from different modules has different Ident.Idx values.

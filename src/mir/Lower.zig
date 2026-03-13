@@ -2583,12 +2583,12 @@ fn lowerCallWithLoweredFunc(
 fn getCallLowLevelOp(self: *Self, caller_env: *const ModuleEnv, func_expr: CIR.Expr) ?CIR.Expr.LowLevel {
     return switch (func_expr) {
         .e_lookup_external => |lookup| self.getExternalLowLevelOp(caller_env, lookup),
-        .e_lookup_local => |lookup| self.getLocalLowLevelOp(caller_env, lookup.pattern_idx),
+        .e_lookup_local => |lookup| getLocalLowLevelOp(caller_env, lookup.pattern_idx),
         else => null,
     };
 }
 
-fn getLocalLowLevelOp(self: *Self, module_env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?CIR.Expr.LowLevel {
+fn getLocalLowLevelOp(module_env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?CIR.Expr.LowLevel {
     const defs = module_env.store.sliceDefs(module_env.all_defs);
     for (defs) |def_idx| {
         const def = module_env.store.getDef(def_idx);
@@ -2600,9 +2600,6 @@ fn getLocalLowLevelOp(self: *Self, module_env: *const ModuleEnv, pattern_idx: CI
         }
         return null;
     }
-
-    // Deferred block lambdas are not low-level wrappers.
-    _ = self;
     return null;
 }
 

@@ -1380,10 +1380,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // In the new pipeline, function values are represented by their closure payloads,
                 // not by executable code pointers. A .lambda that survives to codegen is a
                 // captures-free function value, whose runtime payload is zero-sized.
-                .lambda => |lambda| {
-                    _ = lambda;
-                    return .{ .immediate_i64 = 0 };
-                },
+                .lambda => .{ .immediate_i64 = 0 },
 
                 // Structs (records, tuples, empty records)
                 .struct_ => |s| try self.generateStruct(s),
@@ -3285,11 +3282,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const layout_idx = self.exprLayout(args[0]);
                             const stored_layout = ls.getLayout(layout_idx);
                             if (stored_layout.tag == .struct_)
-                                return self.generateStructComparisonByLayout(lhs_loc, rhs_loc, layout_idx, .num_is_eq, true);
+                                return self.generateStructComparisonByLayout(lhs_loc, rhs_loc, layout_idx, .num_is_eq);
                             if (stored_layout.tag == .list or stored_layout.tag == .list_of_zst)
-                                return self.generateListComparisonByLayout(lhs_loc, rhs_loc, layout_idx, .num_is_eq, true);
+                                return self.generateListComparisonByLayout(lhs_loc, rhs_loc, layout_idx, .num_is_eq);
                             if (stored_layout.tag == .tag_union)
-                                return self.generateTagUnionComparisonByLayout(lhs_loc, rhs_loc, layout_idx, .num_is_eq, true);
+                                return self.generateTagUnionComparisonByLayout(lhs_loc, rhs_loc, layout_idx, .num_is_eq);
                         }
                     }
 
@@ -6013,9 +6010,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             rhs_loc: ValueLocation,
             tu_layout_idx: layout.Idx,
             op: anytype,
-            consume_inputs: bool,
         ) Allocator.Error!ValueLocation {
-            _ = consume_inputs;
             const ls = self.layout_store;
             const stored_layout = ls.getLayout(tu_layout_idx);
             if (stored_layout.tag != .tag_union) unreachable;
@@ -6228,7 +6223,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .{ .stack = .{ .offset = rhs_off } },
                     field_layout_idx,
                     .num_is_eq,
-                    false,
                 );
                 const sub_reg = try self.ensureInGeneralReg(sub_loc);
                 try self.emitMovRegReg(result_reg, sub_reg);
@@ -6254,7 +6248,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .{ .stack = .{ .offset = rhs_off } },
                     field_layout_idx,
                     .num_is_eq,
-                    false,
                 );
                 const sub_reg = try self.ensureInGeneralReg(sub_loc);
                 try self.emitMovRegReg(result_reg, sub_reg);
@@ -6285,7 +6278,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .{ .stack = .{ .offset = rhs_off } },
                     field_layout_idx,
                     .num_is_eq,
-                    false,
                 );
                 const sub_reg = try self.ensureInGeneralReg(sub_loc);
                 try self.emitMovRegReg(result_reg, sub_reg);
@@ -6334,9 +6326,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             rhs_loc: ValueLocation,
             struct_layout_idx: layout.Idx,
             op: anytype,
-            consume_inputs: bool,
         ) Allocator.Error!ValueLocation {
-            _ = consume_inputs;
             const ls = self.layout_store;
             const stored_layout = ls.getLayout(struct_layout_idx);
             // Empty structs (ZST) have scalar layout, not struct_ — they're always equal
@@ -6436,9 +6426,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             rhs_loc: ValueLocation,
             list_layout_idx: layout.Idx,
             op: anytype,
-            consume_inputs: bool,
         ) Allocator.Error!ValueLocation {
-            _ = consume_inputs;
             const ls = self.layout_store;
             const list_layout = ls.getLayout(list_layout_idx);
             const elem_layout_idx: layout.Idx = list_layout.data.list;

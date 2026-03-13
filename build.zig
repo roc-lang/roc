@@ -245,7 +245,7 @@ const CheckTypeCheckerPatternsStep = struct {
         // Record field lookup by name in StackValue.zig requires string comparison
         // because ident indices are module-local — the same field name from different
         // modules has different Ident.Idx values, so we must compare the underlying strings
-        .{ .file = "StackValue.zig", .start = 1150, .end = 1165 },
+        .{ .file = "StackValue.zig", .start = 1150, .end = 1180 },
     };
 
     fn isInExcludedRange(file_path: []const u8, line_number: usize) bool {
