@@ -59,7 +59,6 @@ const strStartsWith = builtins.str.startsWith;
 const strEndsWith = builtins.str.endsWith;
 const strCountUtf8Bytes = builtins.str.countUtf8Bytes;
 const strCaselessAsciiEquals = builtins.str.strCaselessAsciiEquals;
-const strIsEmpty = builtins.str.isEmpty;
 const strEqual = builtins.str.strEqual;
 const strRepeatC = builtins.str.repeatC;
 const strTrim = builtins.str.strTrim;

@@ -1848,7 +1848,11 @@ Builtin :: [].{
 
 			to_str : F32 -> Str
 			is_zero : F32 -> Bool
-			is_zero = |self| if self >= 0 { self <= 0 } else { False }
+			is_zero = |self| if self >= 0 {
+				self <= 0
+			} else {
+				False
+			}
 			is_negative : F32 -> Bool
 			is_negative = |self| self < 0
 			is_positive : F32 -> Bool
@@ -1921,7 +1925,11 @@ Builtin :: [].{
 
 			to_str : F64 -> Str
 			is_zero : F64 -> Bool
-			is_zero = |self| if self >= 0 { self <= 0 } else { False }
+			is_zero = |self| if self >= 0 {
+				self <= 0
+			} else {
+				False
+			}
 			is_negative : F64 -> Bool
 			is_negative = |self| self < 0
 			is_positive : F64 -> Bool
