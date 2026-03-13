@@ -5,7 +5,6 @@
 //! the store directly; they must not recover closure identity by walking MIR.
 
 const std = @import("std");
-const base = @import("base");
 const can = @import("can");
 const MIR = @import("MIR.zig");
 
