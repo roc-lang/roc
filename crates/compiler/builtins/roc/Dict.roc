@@ -40,7 +40,7 @@ import Inspect exposing [Inspect, Inspector, InspectFormatter]
 ## A [dictionary](https://en.wikipedia.org/wiki/Associative_array) that lets you
 ## associate keys with values.
 ##
-## ## Inserting
+## ## [Inserting](#inserting) #{inserting}
 ##
 ## The most basic way to use a dictionary is to start with an empty one and
 ## then:
@@ -60,7 +60,7 @@ import Inspect exposing [Inspect, Inspector, InspectFormatter]
 ##     |> Dict.insert("Delhi", 16_787_941)
 ##     |> Dict.insert("Amsterdam", 872_680)
 ## ```
-## ## Accessing keys or values
+## ## [Accessing keys or values](#accessing-keys-or-values) #{accessing-keys-or-values}
 ##
 ## We can use [Dict.keys] and [Dict.values] functions to get only the keys or
 ## only the values.
@@ -69,7 +69,7 @@ import Inspect exposing [Inspect, Inspector, InspectFormatter]
 ## order. This will be true if all you ever do is [Dict.insert] and [Dict.get] operations
 ## on the dictionary, but [Dict.remove] operations can change this order.
 ##
-## ## Removing
+## ## [Removing](#removing) #{removing}
 ##
 ## We can remove an element from the dictionary, like so:
 ## ```roc
@@ -241,7 +241,7 @@ single = |k, v|
 ##     |> Bool.is_eq(Dict.from_list([(1, "One"), (2, "Two"), (3, "Three"), (4, "Four")]))
 ## ```
 ##
-## ## Performance Details
+## ## [Performance Details](#performance-details-from-list) #{performance-details-from-list}
 ##
 ## This will build up from an empty dictionary to minimize totally memory use.
 ## If the list has few duplicate keys, it would be faster to allocate a dictionary
@@ -346,7 +346,7 @@ walk = |@Dict({ data }), initial_state, transform|
 
 ## Same as [Dict.walk], except you can stop walking early.
 ##
-## ## Performance Details
+## ## [Performance Details](#performance-details-walk-until) #{performance-details-walk-until}
 ##
 ## Compared to [Dict.walk], this can potentially visit fewer elements (which can
 ## improve performance) at the cost of making each step take longer.
