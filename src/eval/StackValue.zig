@@ -1166,6 +1166,14 @@ pub const RecordAccessor = struct {
         return self.getFieldByIndex(sorted_index, field_rt_var);
     }
 
+    /// Get a field by its name text.
+    pub fn getFieldByName(self: RecordAccessor, field_name: []const u8, field_rt_var: types.Var) !StackValue {
+        const sorted_index = self.findFieldIndex(field_name) orelse {
+            return error.RecordIndexOutOfBounds;
+        };
+        return self.getFieldByIndex(sorted_index, field_rt_var);
+    }
+
     /// Find field index by comparing field name text.
     /// Uses string comparison because ident indices are module-local —
     /// the same field name from different modules has different Ident.Idx values.

@@ -2946,13 +2946,12 @@ pub const Interpreter = struct {
 
                 // Access second argument as a record and extract its specific fields
                 const sublist_config = args[1].asRecord(&self.runtime_layout_store) catch debugUnreachable(roc_ops, "sublist config argument should be a valid record", @src());
-                // Use the record's original semantic field indices, not its sorted layout slots.
-                // The builtin contract is { start, len }, so original index 0 is `start`
-                // and original index 1 is `len` regardless of how the layout is sorted.
+                // Interpreter record literals can preserve source field order, so builtins like
+                // List.take_first, which constructs { len, start }, must resolve these by name.
                 const field_rt = try self.runtime_types.fresh();
-                const sublist_start_stack = sublist_config.getFieldByOriginalIndex(0, field_rt) catch debugUnreachable(roc_ops, "sublist config should have start field at original index 0", @src());
+                const sublist_start_stack = sublist_config.getFieldByName("start", field_rt) catch debugUnreachable(roc_ops, "sublist config should have a start field", @src());
                 const field_rt2 = try self.runtime_types.fresh();
-                const sublist_len_stack = sublist_config.getFieldByOriginalIndex(1, field_rt2) catch debugUnreachable(roc_ops, "sublist config should have len field at original index 1", @src());
+                const sublist_len_stack = sublist_config.getFieldByName("len", field_rt2) catch debugUnreachable(roc_ops, "sublist config should have a len field", @src());
                 const sublist_start: u64 = @intCast(sublist_start_stack.asI128());
                 const sublist_len: u64 = @intCast(sublist_len_stack.asI128());
 
