@@ -265,6 +265,31 @@ fn strListElementDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void
     str_ptr.decref(roc_ops);
 }
 
+const FlatListElementDecrefContext = struct {
+    inner_alignment: u32,
+    inner_element_width: usize,
+    roc_ops: *RocOps,
+};
+
+fn flatListElementDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
+    if (element == null) return;
+    const ctx_ptr = context orelse unreachable;
+    const ctx: *const FlatListElementDecrefContext = utils.alignedPtrCast(
+        *const FlatListElementDecrefContext,
+        @as([*]u8, @ptrCast(ctx_ptr)),
+        @src(),
+    );
+    const inner_list: *RocList = utils.alignedPtrCast(*RocList, element.?, @src());
+    inner_list.decref(
+        ctx.inner_alignment,
+        ctx.inner_element_width,
+        false,
+        null,
+        &rcNone,
+        ctx.roc_ops,
+    );
+}
+
 /// Wrapper: listWithCapacity
 pub fn roc_builtins_list_with_capacity(out: *RocList, capacity: u64, alignment: u32, element_width: usize, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
     out.* = listWithCapacity(capacity, alignment, element_width, elements_refcounted, null, @ptrCast(&rcNone), roc_ops);
@@ -325,6 +350,59 @@ pub fn roc_builtins_list_decref_str(list_bytes: ?[*]u8, list_len: usize, list_ca
         &strListElementDecref,
         roc_ops,
     );
+}
+
+/// Wrapper: decref a List(List a) where the inner lists do not themselves contain refcounted elements.
+pub fn roc_builtins_list_decref_flat_list(
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    inner_alignment: u32,
+    inner_element_width: usize,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    var ctx = FlatListElementDecrefContext{
+        .inner_alignment = inner_alignment,
+        .inner_element_width = inner_element_width,
+        .roc_ops = roc_ops,
+    };
+    listDecref(
+        l,
+        @alignOf(RocList),
+        @sizeOf(RocList),
+        true,
+        @ptrCast(&ctx),
+        &flatListElementDecref,
+        roc_ops,
+    );
+}
+
+/// Wrapper: free a List(List a) where the inner lists do not themselves contain refcounted elements.
+pub fn roc_builtins_list_free_flat_list(
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    inner_alignment: u32,
+    inner_element_width: usize,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    var ctx = FlatListElementDecrefContext{
+        .inner_alignment = inner_alignment,
+        .inner_element_width = inner_element_width,
+        .roc_ops = roc_ops,
+    };
+
+    if (l.getAllocationDataPtr(roc_ops)) |source| {
+        const count = l.getAllocationElementCount(true, roc_ops);
+        var i: usize = 0;
+        while (i < count) : (i += 1) {
+            flatListElementDecref(@ptrCast(&ctx), source + i * @sizeOf(RocList));
+        }
+    }
+
+    freeDataPtrC(l.getAllocationDataPtr(roc_ops), @alignOf(RocList), true, roc_ops);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

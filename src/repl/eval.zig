@@ -1288,8 +1288,8 @@ fn formatBox(
 /// Format a record using type info for field names and recursive field formatting.
 /// Fields are displayed in type-field order (alphabetical), matching the user's
 /// mental model. The layout fields may be in a different order (sorted by
-/// alignment/size for memory efficiency), so we iterate type fields and look up
-/// the corresponding layout field by name to get the correct physical offset.
+/// alignment/size for memory efficiency), so we iterate canonical type fields
+/// and map them to layout slots by canonical field index.
 fn formatRecord(
     allocator: Allocator,
     ptr: ?[*]const u8,
@@ -1309,23 +1309,29 @@ fn formatRecord(
     errdefer out.deinit();
     try out.appendSlice("{ ");
 
-    const layout_fields = layout_store.struct_fields.sliceRange(rec_data.getFields());
     const type_fields = types_store.getRecordFieldsSlice(rec.fields);
-    const count = @min(layout_fields.len, type_fields.len);
+    const layout_fields = layout_store.struct_fields.sliceRange(rec_data.getFields());
+    var canonical_type_fields = try allocator.alloc(types.RecordField, type_fields.len);
+    defer allocator.free(canonical_type_fields);
+    for (type_fields, 0..) |field, i| canonical_type_fields[i] = field;
+    std.mem.sort(
+        types.RecordField,
+        canonical_type_fields,
+        module_env.getIdentStoreConst(),
+        types.RecordField.sortByNameAsc,
+    );
+    const count = @min(layout_fields.len, canonical_type_fields.len);
 
     // Iterate in type-field order (alphabetical) for display
     for (0..count) |ti| {
-        const t_fld = type_fields.get(ti);
-
-        // Find the matching layout field by name
+        const t_fld = canonical_type_fields[ti];
         const layout_idx = blk: {
             for (0..layout_fields.len) |li| {
-                if (layout_fields.get(li).name.eql(t_fld.name)) {
+                if (layout_fields.get(li).index == ti) {
                     break :blk li;
                 }
             }
-            // Fallback: if no match by name, use the same index
-            break :blk ti;
+            unreachable;
         };
         const l_fld = layout_fields.get(layout_idx);
 

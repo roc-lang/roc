@@ -521,20 +521,16 @@ fn layoutFromRecord(self: *Self, record: anytype) Allocator.Error!layout.Idx {
     if (fields.len == 0) return .zst;
     if (fields.len == 1) return self.layoutFromMonotype(fields[0].type_idx);
 
-    const env = self.layout_store.currentEnv();
     const save_layouts = self.scratch_layouts.items.len;
     defer self.scratch_layouts.shrinkRetainingCapacity(save_layouts);
-    var scratch_names = std.ArrayList(Ident.Idx).empty;
-    defer scratch_names.deinit(self.allocator);
 
     for (fields) |field| {
         const field_layout_idx = try self.layoutFromMonotype(field.type_idx);
         const field_layout = self.layout_store.getLayout(field_layout_idx);
         try self.scratch_layouts.append(self.allocator, field_layout);
-        try scratch_names.append(self.allocator, field.name);
     }
 
-    return self.layout_store.putRecord(env, self.scratch_layouts.items[save_layouts..], scratch_names.items);
+    return self.layout_store.putRecord(self.scratch_layouts.items[save_layouts..]);
 }
 
 fn layoutFromTuple(self: *Self, tup: anytype) Allocator.Error!layout.Idx {
@@ -580,6 +576,28 @@ fn runtimeListLayoutFromExprs(
     return self.layout_store.insertList(elem_layout_idx);
 }
 
+fn tagPayloadExprs(self: *Self, args: MIR.ExprSpan) []const MIR.ExprId {
+    const outer_args = self.mir_store.getExprSpan(args);
+    if (outer_args.len == 1) {
+        switch (self.mir_store.getExpr(outer_args[0])) {
+            .struct_ => |struct_| return self.mir_store.getExprSpan(struct_.fields),
+            else => {},
+        }
+    }
+    return outer_args;
+}
+
+fn tagPayloadPatterns(self: *Self, args: MIR.PatternSpan) []const MIR.PatternId {
+    const outer_args = self.mir_store.getPatternSpan(args);
+    if (outer_args.len == 1) {
+        switch (self.mir_store.getPattern(outer_args[0])) {
+            .struct_destructure => |struct_| return self.mir_store.getPatternSpan(struct_.fields),
+            else => {},
+        }
+    }
+    return outer_args;
+}
+
 fn runtimeTagLayoutFromExpr(
     self: *Self,
     tag_data: anytype,
@@ -593,7 +611,7 @@ fn runtimeTagLayoutFromExpr(
         .tag_union => |tu| self.mir_store.monotype_store.getTags(tu.tags),
         else => unreachable,
     };
-    const mir_args = self.mir_store.getExprSpan(tag_data.args);
+    const mir_args = self.tagPayloadExprs(tag_data.args);
 
     if (tags.len == 0) return .zst;
 
@@ -655,13 +673,11 @@ fn runtimeTagLayoutFromExpr(
 
 fn runtimeRecordLayoutFromExprs(
     self: *Self,
-    field_names: []const Ident.Idx,
     field_exprs: []const MIR.ExprId,
 ) Allocator.Error!layout.Idx {
     if (field_exprs.len == 0) return .zst;
     if (field_exprs.len == 1) return self.runtimeValueLayoutFromMirExpr(field_exprs[0]);
 
-    const env = self.layout_store.currentEnv();
     const save_layouts = self.scratch_layouts.items.len;
     defer self.scratch_layouts.shrinkRetainingCapacity(save_layouts);
 
@@ -670,7 +686,7 @@ fn runtimeRecordLayoutFromExprs(
         try self.scratch_layouts.append(self.allocator, self.layout_store.getLayout(field_layout_idx));
     }
 
-    return self.layout_store.putRecord(env, self.scratch_layouts.items[save_layouts..], field_names);
+    return self.layout_store.putRecord(self.scratch_layouts.items[save_layouts..]);
 }
 
 fn runtimeLayoutFromPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Error!layout.Idx {
@@ -696,8 +712,11 @@ fn runtimeLayoutFromPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Er
         .runtime_error,
         => self.layoutFromMonotype(mono_idx),
         .as_pattern => |ap| self.runtimeLayoutFromPattern(ap.pattern),
-        .tuple_destructure => |td| self.runtimeTupleLayoutFromPatternSpan(self.mir_store.getPatternSpan(td.elems)),
-        .record_destructure => |rd| self.runtimeRecordLayoutFromPattern(mono_idx, rd),
+        .struct_destructure => |sd| switch (self.mir_store.monotype_store.getMonotype(mono_idx)) {
+            .record => self.runtimeRecordLayoutFromPattern(mono_idx, self.mir_store.getPatternSpan(sd.fields)),
+            .tuple => self.runtimeTupleLayoutFromPatternSpan(self.mir_store.getPatternSpan(sd.fields)),
+            else => self.layoutFromMonotype(mono_idx),
+        },
         .tag,
         .list_destructure,
         => self.layoutFromMonotype(mono_idx),
@@ -718,7 +737,11 @@ fn runtimeTupleLayoutFromPatternSpan(self: *Self, mir_pat_ids: []const MIR.Patte
     return self.layout_store.putTuple(self.scratch_layouts.items[save_layouts..]);
 }
 
-fn runtimeRecordLayoutFromPattern(self: *Self, mono_idx: Monotype.Idx, rd: anytype) Allocator.Error!layout.Idx {
+fn runtimeRecordLayoutFromPattern(
+    self: *Self,
+    mono_idx: Monotype.Idx,
+    mir_patterns: []const MIR.PatternId,
+) Allocator.Error!layout.Idx {
     const mono = self.mir_store.monotype_store.getMonotype(mono_idx);
     const record = switch (mono) {
         .record => |r| r,
@@ -728,34 +751,23 @@ fn runtimeRecordLayoutFromPattern(self: *Self, mono_idx: Monotype.Idx, rd: anyty
     const all_fields = self.mir_store.monotype_store.getFields(record.fields);
     if (all_fields.len == 0) return try self.layout_store.getEmptyRecordLayout();
     if (all_fields.len == 1) {
-        const mir_patterns = self.mir_store.getPatternSpan(rd.destructs);
         if (mir_patterns.len == 0) {
             return self.layoutFromMonotype(all_fields[0].type_idx);
         }
         return self.runtimeLayoutFromPattern(mir_patterns[0]);
     }
 
-    const env = self.layout_store.currentEnv();
-    const mir_patterns = self.mir_store.getPatternSpan(rd.destructs);
-    const mir_field_names = self.mir_store.getFieldNameSpan(rd.field_names);
     const save_layouts = self.scratch_layouts.items.len;
     defer self.scratch_layouts.shrinkRetainingCapacity(save_layouts);
-    var scratch_names = std.ArrayList(Ident.Idx).empty;
-    defer scratch_names.deinit(self.allocator);
-
-    for (all_fields) |field| {
-        var field_layout_idx = try self.layoutFromMonotype(field.type_idx);
-        for (mir_field_names, 0..) |mir_name, mi| {
-            if (self.identsTextEqual(mir_name, field.name)) {
-                field_layout_idx = try self.runtimeLayoutFromPattern(mir_patterns[mi]);
-                break;
-            }
-        }
+    for (all_fields, 0..) |field, field_idx| {
+        const field_layout_idx = if (field_idx < mir_patterns.len)
+            try self.runtimeLayoutFromPattern(mir_patterns[field_idx])
+        else
+            try self.layoutFromMonotype(field.type_idx);
         try self.scratch_layouts.append(self.allocator, self.layout_store.getLayout(field_layout_idx));
-        try scratch_names.append(self.allocator, field.name);
     }
 
-    return self.layout_store.putRecord(env, self.scratch_layouts.items[save_layouts..], scratch_names.items);
+    return self.layout_store.putRecord(self.scratch_layouts.items[save_layouts..]);
 }
 
 fn capturesLayoutForMember(self: *Self, member: LambdaSet.Member) Allocator.Error!layout.Idx {
@@ -941,8 +953,7 @@ fn lambdaSetForExpr(self: *Self, mir_expr_id: MIR.ExprId) ?LambdaSet.Idx {
         },
         .block => |block| self.lambdaSetForExpr(block.final_expr),
         .borrow_scope => |scope| self.lambdaSetForExpr(scope.body),
-        .record_access => |ra| self.lambdaSetForRecordField(ra.record, ra.field_name),
-        .tuple_access => |ta| self.lambdaSetForTupleElem(ta.tuple, ta.elem_index),
+        .struct_access => |sa| self.lambdaSetForStructField(sa.struct_, sa.field_idx),
         .dbg_expr => |dbg_expr| self.lambdaSetForExpr(dbg_expr.expr),
         .expect => |expect| self.lambdaSetForExpr(expect.body),
         .return_expr => |ret| self.lambdaSetForExpr(ret.expr),
@@ -950,38 +961,18 @@ fn lambdaSetForExpr(self: *Self, mir_expr_id: MIR.ExprId) ?LambdaSet.Idx {
     };
 }
 
-fn lambdaSetForRecordField(self: *Self, expr_id: MIR.ExprId, field_name: Ident.Idx) ?LambdaSet.Idx {
+fn lambdaSetForStructField(self: *Self, expr_id: MIR.ExprId, field_idx: u32) ?LambdaSet.Idx {
     return switch (self.mir_store.getExpr(expr_id)) {
-        .record => |record| blk: {
-            const field_names = self.mir_store.getFieldNameSpan(record.field_names);
-            const fields = self.mir_store.getExprSpan(record.fields);
-            for (field_names, 0..) |name, i| {
-                if (!self.identsTextEqual(name, field_name)) continue;
-                break :blk self.lambdaSetForExpr(fields[i]);
-            }
-            break :blk null;
+        .struct_ => |struct_| blk: {
+            const fields = self.mir_store.getExprSpan(struct_.fields);
+            if (field_idx >= fields.len) break :blk null;
+            break :blk self.lambdaSetForExpr(fields[field_idx]);
         },
         .lookup => |symbol| blk: {
             const def_expr = self.mir_store.getSymbolDef(symbol) orelse break :blk null;
-            break :blk self.lambdaSetForRecordField(def_expr, field_name);
+            break :blk self.lambdaSetForStructField(def_expr, field_idx);
         },
-        .block => |block| self.lambdaSetForRecordField(block.final_expr, field_name),
-        else => null,
-    };
-}
-
-fn lambdaSetForTupleElem(self: *Self, expr_id: MIR.ExprId, elem_index: u32) ?LambdaSet.Idx {
-    return switch (self.mir_store.getExpr(expr_id)) {
-        .tuple => |tuple| blk: {
-            const elems = self.mir_store.getExprSpan(tuple.elems);
-            if (elem_index >= elems.len) break :blk null;
-            break :blk self.lambdaSetForExpr(elems[elem_index]);
-        },
-        .lookup => |symbol| blk: {
-            const def_expr = self.mir_store.getSymbolDef(symbol) orelse break :blk null;
-            break :blk self.lambdaSetForTupleElem(def_expr, elem_index);
-        },
-        .block => |block| self.lambdaSetForTupleElem(block.final_expr, elem_index),
+        .block => |block| self.lambdaSetForStructField(block.final_expr, field_idx),
         else => null,
     };
 }
@@ -1005,14 +996,8 @@ fn runtimeClosureDispatchLayoutForExpr(
             }
             break :blk try self.closureValueLayoutFromLambdaSet(ls_idx);
         },
-        .record_access => |ra| blk: {
-            if (try self.runtimeLayoutForRecordField(ra.record, ra.field_name)) |layout_idx| {
-                break :blk layout_idx;
-            }
-            break :blk try self.closureValueLayoutFromLambdaSet(ls_idx);
-        },
-        .tuple_access => |ta| blk: {
-            if (try self.runtimeLayoutForTupleElem(ta.tuple, ta.elem_index)) |layout_idx| {
+        .struct_access => |sa| blk: {
+            if (try self.runtimeLayoutForStructField(sa.struct_, sa.field_idx)) |layout_idx| {
                 break :blk layout_idx;
             }
             break :blk try self.closureValueLayoutFromLambdaSet(ls_idx);
@@ -1028,60 +1013,38 @@ fn runtimeClosureDispatchLayoutForExpr(
     return candidate;
 }
 
-fn runtimeLayoutForRecordField(self: *Self, expr_id: MIR.ExprId, field_name: Ident.Idx) Allocator.Error!?layout.Idx {
+fn runtimeLayoutForStructField(self: *Self, expr_id: MIR.ExprId, field_idx: u32) Allocator.Error!?layout.Idx {
     return switch (self.mir_store.getExpr(expr_id)) {
-        .record => |record| blk: {
-            const field_names = self.mir_store.getFieldNameSpan(record.field_names);
-            const fields = self.mir_store.getExprSpan(record.fields);
-            for (field_names, 0..) |name, i| {
-                if (!self.identsTextEqual(name, field_name)) continue;
-                break :blk try self.runtimeValueLayoutFromMirExpr(fields[i]);
-            }
-            break :blk null;
+        .struct_ => |struct_| blk: {
+            const fields = self.mir_store.getExprSpan(struct_.fields);
+            if (field_idx >= fields.len) break :blk null;
+            break :blk try self.runtimeValueLayoutFromMirExpr(fields[field_idx]);
         },
         .lookup => |symbol| blk: {
-            if (self.symbol_layouts.get(symbol.raw())) |record_layout| {
-                const record_layout_val = self.layout_store.getLayout(record_layout);
-                if (record_layout_val.tag == .struct_) {
-                    const struct_data = self.layout_store.getStructData(record_layout_val.data.struct_.idx);
-                    const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
-                    for (0..layout_fields.len) |li| {
-                        if (!self.identsTextEqual(layout_fields.get(li).name, field_name)) continue;
-                        break :blk layout_fields.get(li).layout;
-                    }
+            if (self.symbol_layouts.get(symbol.raw())) |struct_layout| {
+                const struct_mono = self.mir_store.monotype_store.getMonotype(self.mir_store.typeOf(expr_id));
+                switch (struct_mono) {
+                    .record => |record| {
+                        const fields = self.mir_store.monotype_store.getFields(record.fields);
+                        if (fields.len == 1 and field_idx == 0) break :blk struct_layout;
+                    },
+                    .tuple => |tuple| {
+                        const elems = self.mir_store.monotype_store.getIdxSpan(tuple.elems);
+                        if (elems.len == 1 and field_idx == 0) break :blk struct_layout;
+                    },
+                    else => {},
                 }
+                const struct_layout_val = self.layout_store.getLayout(struct_layout);
+                if (struct_layout_val.tag == .struct_) {
+                    const field_info = self.structFieldInfoByOriginalIndex(struct_layout, field_idx) orelse break :blk null;
+                    break :blk field_info.field_layout;
+                }
+                if (field_idx == 0) break :blk struct_layout;
             }
             const def_expr = self.mir_store.getSymbolDef(symbol) orelse break :blk null;
-            break :blk try self.runtimeLayoutForRecordField(def_expr, field_name);
+            break :blk try self.runtimeLayoutForStructField(def_expr, field_idx);
         },
-        .block => |block| try self.runtimeLayoutForRecordField(block.final_expr, field_name),
-        else => null,
-    };
-}
-
-fn runtimeLayoutForTupleElem(self: *Self, expr_id: MIR.ExprId, elem_index: u32) Allocator.Error!?layout.Idx {
-    return switch (self.mir_store.getExpr(expr_id)) {
-        .tuple => |tuple| blk: {
-            const elems = self.mir_store.getExprSpan(tuple.elems);
-            if (elem_index >= elems.len) break :blk null;
-            break :blk try self.runtimeValueLayoutFromMirExpr(elems[elem_index]);
-        },
-        .lookup => |symbol| blk: {
-            if (self.symbol_layouts.get(symbol.raw())) |tuple_layout| {
-                const tuple_layout_val = self.layout_store.getLayout(tuple_layout);
-                if (tuple_layout_val.tag == .struct_) {
-                    const struct_data = self.layout_store.getStructData(tuple_layout_val.data.struct_.idx);
-                    const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
-                    for (0..layout_fields.len) |li| {
-                        if (layout_fields.get(li).index != elem_index) continue;
-                        break :blk layout_fields.get(li).layout;
-                    }
-                }
-            }
-            const def_expr = self.mir_store.getSymbolDef(symbol) orelse break :blk null;
-            break :blk try self.runtimeLayoutForTupleElem(def_expr, elem_index);
-        },
-        .block => |block| try self.runtimeLayoutForTupleElem(block.final_expr, elem_index),
+        .block => |block| try self.runtimeLayoutForStructField(block.final_expr, field_idx),
         else => null,
     };
 }
@@ -1126,11 +1089,8 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
             return self.closureValueLayoutFromLambdaSet(ls_idx);
         }
         switch (self.mir_store.getExpr(mir_expr_id)) {
-            .record_access => |ra| {
-                if (try self.runtimeLayoutForRecordField(ra.record, ra.field_name)) |layout_idx| return layout_idx;
-            },
-            .tuple_access => |ta| {
-                if (try self.runtimeLayoutForTupleElem(ta.tuple, ta.elem_index)) |layout_idx| return layout_idx;
+            .struct_access => |sa| {
+                if (try self.runtimeLayoutForStructField(sa.struct_, sa.field_idx)) |layout_idx| return layout_idx;
             },
             .lambda, .hosted => return .zst,
             else => {},
@@ -1174,11 +1134,11 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
                 return self.runtimeListElemLayoutFromMirExpr(args[0]);
             }
         },
-        .tuple => |tup| return self.runtimeTupleLayoutFromExprs(self.mir_store.getExprSpan(tup.elems)),
-        .record => |rec| return self.runtimeRecordLayoutFromExprs(
-            self.mir_store.getFieldNameSpan(rec.field_names),
-            self.mir_store.getExprSpan(rec.fields),
-        ),
+        .struct_ => |struct_| switch (mono) {
+            .tuple => return self.runtimeTupleLayoutFromExprs(self.mir_store.getExprSpan(struct_.fields)),
+            .record => return self.runtimeRecordLayoutFromExprs(self.mir_store.getExprSpan(struct_.fields)),
+            else => {},
+        },
         .lookup => |sym| {
             if (self.symbol_layouts.get(sym.raw())) |layout_idx| {
                 return try self.runtimeLayoutForBindingSymbol(sym, mono_idx, layout_idx);
@@ -1188,13 +1148,8 @@ fn runtimeValueLayoutFromMirExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator
             }
             return self.layoutFromMonotype(mono_idx);
         },
-        .record_access => |ra| {
-            if (try self.runtimeLayoutForRecordField(ra.record, ra.field_name)) |layout_idx| {
-                return layout_idx;
-            }
-        },
-        .tuple_access => |ta| {
-            if (try self.runtimeLayoutForTupleElem(ta.tuple, ta.elem_index)) |layout_idx| {
+        .struct_access => |sa| {
+            if (try self.runtimeLayoutForStructField(sa.struct_, sa.field_idx)) |layout_idx| {
                 return layout_idx;
             }
         },
@@ -1238,14 +1193,9 @@ fn collectPatternBindingSymbolKeys(
                 try self.collectPatternBindingSymbolKeys(arg_pattern_id, out);
             }
         },
-        .record_destructure => |rd| {
-            for (self.mir_store.getPatternSpan(rd.destructs)) |field_pattern_id| {
+        .struct_destructure => |sd| {
+            for (self.mir_store.getPatternSpan(sd.fields)) |field_pattern_id| {
                 try self.collectPatternBindingSymbolKeys(field_pattern_id, out);
-            }
-        },
-        .tuple_destructure => |td| {
-            for (self.mir_store.getPatternSpan(td.elems)) |elem_pattern_id| {
-                try self.collectPatternBindingSymbolKeys(elem_pattern_id, out);
             }
         },
         .list_destructure => |ld| {
@@ -2146,8 +2096,20 @@ fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
             break :blk self.lir_store.addExpr(.{ .str_literal = lir_str_idx }, region);
         },
         .list => |l| self.lowerList(l, mir_expr_id, region),
-        .record => |r| self.lowerRecord(r, mono_idx, mir_expr_id, region),
-        .tuple => |t| self.lowerTuple(t, mono_idx, mir_expr_id, region),
+        .struct_ => |s| switch (self.mir_store.monotype_store.getMonotype(mono_idx)) {
+            .record => self.lowerRecord(s.fields, mono_idx, mir_expr_id, region),
+            .tuple => self.lowerTuple(s.fields, mono_idx, mir_expr_id, region),
+            .unit => self.lowerRecord(s.fields, mono_idx, mir_expr_id, region),
+            else => {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "MirToLir invariant violated: MIR struct_ has unexpected monotype {s} at expr {d}",
+                        .{ @tagName(self.mir_store.monotype_store.getMonotype(mono_idx)), @intFromEnum(mir_expr_id) },
+                    );
+                }
+                unreachable;
+            },
+        },
         .tag => |t| self.lowerTag(t, mono_idx, mir_expr_id, region),
         .lookup => |sym| self.lowerLookup(sym, mono_idx, mir_expr_id, region),
         .match_expr => |m| self.lowerMatch(m, mir_expr_id, region),
@@ -2155,8 +2117,11 @@ fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
         .call => |c| self.lowerCall(c, mir_expr_id, region),
         .block => |b| self.lowerBlock(b, mir_expr_id, region),
         .borrow_scope => |b| self.lowerBorrowScope(b, mir_expr_id, region),
-        .record_access => |ra| self.lowerRecordAccess(ra, mir_expr_id, region),
-        .tuple_access => |ta| self.lowerTupleAccess(ta, mir_expr_id, region),
+        .struct_access => |sa| switch (self.mir_store.monotype_store.getMonotype(self.mir_store.typeOf(sa.struct_))) {
+            .record => self.lowerRecordAccess(sa.struct_, sa.field_idx, mir_expr_id, region),
+            .tuple => self.lowerTupleAccess(sa.struct_, sa.field_idx, mir_expr_id, region),
+            else => unreachable,
+        },
         .str_escape_and_quote => |s| blk: {
             if (builtin.mode == .Debug) {
                 const arg_mono = self.mir_store.typeOf(s);
@@ -2294,8 +2259,8 @@ fn lowerList(self: *Self, list_data: anytype, mir_expr_id: MIR.ExprId, region: R
     return acc.finish(list_expr, list_layout, region);
 }
 
-fn lowerRecord(self: *Self, rec: anytype, _: Monotype.Idx, mir_expr_id: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
-    const mir_fields = self.mir_store.getExprSpan(rec.fields);
+fn lowerRecord(self: *Self, fields: MIR.ExprSpan, _: Monotype.Idx, mir_expr_id: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
+    const mir_fields = self.mir_store.getExprSpan(fields);
     if (mir_fields.len == 0) {
         // Empty record: zero-field struct
         const record_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
@@ -2311,7 +2276,6 @@ fn lowerRecord(self: *Self, rec: anytype, _: Monotype.Idx, mir_expr_id: MIR.Expr
     }
 
     const record_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
-    const mir_field_names = self.mir_store.getFieldNameSpan(rec.field_names);
     const record_layout_val = self.layout_store.getLayout(record_layout);
     std.debug.assert(record_layout_val.tag == .struct_);
 
@@ -2327,19 +2291,11 @@ fn lowerRecord(self: *Self, rec: anytype, _: Monotype.Idx, mir_expr_id: MIR.Expr
     defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
 
     for (0..layout_fields.len) |li| {
-        const layout_field_name = layout_fields.get(li).name;
-        var found = false;
-        for (mir_field_names, 0..) |mir_name, mi| {
-            if (self.identsTextEqual(mir_name, layout_field_name)) {
-                const lir_expr = try self.lowerExpr(mir_fields[mi]);
-                const field_layout = try self.runtimeValueLayoutFromMirExpr(mir_fields[mi]);
-                const ensured = try acc.ensureSymbol(lir_expr, field_layout, region);
-                try self.scratch_lir_expr_ids.append(self.allocator, ensured);
-                found = true;
-                break;
-            }
-        }
-        std.debug.assert(found);
+        const semantic_index = layout_fields.get(li).index;
+        const lir_expr = try self.lowerExpr(mir_fields[semantic_index]);
+        const field_layout = try self.runtimeValueLayoutFromMirExpr(mir_fields[semantic_index]);
+        const ensured = try acc.ensureSymbol(lir_expr, field_layout, region);
+        try self.scratch_lir_expr_ids.append(self.allocator, ensured);
     }
 
     const lir_fields = try self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_exprs..]);
@@ -2351,9 +2307,9 @@ fn lowerRecord(self: *Self, rec: anytype, _: Monotype.Idx, mir_expr_id: MIR.Expr
     return acc.finish(struct_expr, record_layout, region);
 }
 
-fn lowerTuple(self: *Self, tup: anytype, _: Monotype.Idx, mir_expr_id: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
+fn lowerTuple(self: *Self, fields: MIR.ExprSpan, _: Monotype.Idx, mir_expr_id: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
     const tuple_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
-    const mir_elems = self.mir_store.getExprSpan(tup.elems);
+    const mir_elems = self.mir_store.getExprSpan(fields);
     const tuple_layout_val = self.layout_store.getLayout(tuple_layout);
 
     if (self.mir_store.getExprClosureMember(mir_expr_id) != null) {
@@ -2407,28 +2363,37 @@ fn lowerTuple(self: *Self, tup: anytype, _: Monotype.Idx, mir_expr_id: MIR.ExprI
                 try appendCapture(self, mir_elems[original_index], region);
             }
         } else {
+            if (builtin.mode == .Debug and mir_elems.len != 1) {
+                std.debug.panic(
+                    "MirToLir invariant violated: non-struct closure captures layout must have exactly 1 field, found {d}",
+                    .{mir_elems.len},
+                );
+            }
             for (mir_elems) |mir_elem| {
                 try appendCapture(self, mir_elem, region);
             }
         }
 
-        const lir_fields = try self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_exprs..]);
-        const struct_expr = try self.lir_store.addExpr(.{ .struct_ = .{
-            .struct_layout = tuple_layout,
-            .fields = lir_fields,
-        } }, region);
-
-        const body_expr = if (self.scratch_lir_stmts.items.len == save_stmt_len)
-            struct_expr
-        else blk: {
-            const stmts = try self.lir_store.addStmts(self.scratch_lir_stmts.items[save_stmt_len..]);
-            break :blk try self.lir_store.addExpr(.{ .block = .{
-                .stmts = stmts,
-                .final_expr = struct_expr,
-                .result_layout = tuple_layout,
+        const final_expr = if (tuple_layout_val.tag == .struct_) blk: {
+            const lir_fields = try self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_exprs..]);
+            break :blk try self.lir_store.addExpr(.{ .struct_ = .{
+                .struct_layout = tuple_layout,
+                .fields = lir_fields,
             } }, region);
+        } else blk: {
+            break :blk self.scratch_lir_expr_ids.items[save_exprs];
         };
-        return body_expr;
+
+        if (self.scratch_lir_stmts.items.len == save_stmt_len) {
+            return final_expr;
+        }
+
+        const stmts = try self.lir_store.addStmts(self.scratch_lir_stmts.items[save_stmt_len..]);
+        return self.lir_store.addExpr(.{ .block = .{
+            .stmts = stmts,
+            .final_expr = final_expr,
+            .result_layout = tuple_layout,
+        } }, region);
     }
 
     var acc = self.startLetAccumulator();
@@ -2458,18 +2423,19 @@ fn lowerTuple(self: *Self, tup: anytype, _: Monotype.Idx, mir_expr_id: MIR.ExprI
         } }, region);
         return acc.finish(struct_expr, tuple_layout, region);
     } else {
-        // Non-struct layout (e.g. single-element optimization) — pass through directly
-        const lir_elems = try self.lowerAnfSpan(&acc, mir_elems, region);
-        const struct_expr = try self.lir_store.addExpr(.{ .struct_ = .{
-            .struct_layout = tuple_layout,
-            .fields = lir_elems,
-        } }, region);
-        return acc.finish(struct_expr, tuple_layout, region);
+        // Single-element tuples are layout-unwrapped. Emit the element directly.
+        if (builtin.mode == .Debug and mir_elems.len != 1) {
+            std.debug.panic(
+                "MirToLir invariant violated: non-struct tuple runtime layout must have exactly 1 element, found {d}",
+                .{mir_elems.len},
+            );
+        }
+        return self.lowerExpr(mir_elems[0]);
     }
 }
 
 fn lowerTag(self: *Self, tag_data: anytype, mono_idx: Monotype.Idx, mir_expr_id: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
-    const mir_args = self.mir_store.getExprSpan(tag_data.args);
+    const mir_args = self.tagPayloadExprs(tag_data.args);
 
     // Single-tag unions are optimized to just their payload layout (no discriminant),
     // so we must emit the payload directly instead of a .tag LIR node.
@@ -2799,6 +2765,17 @@ fn lowerLambdaWithParamLayouts(
         try self.scratch_lir_pattern_ids.append(self.allocator, if (rewrite) |rw| rw.source_pattern else lowered.pattern);
     }
     const lir_params = try self.lir_store.addPatternSpan(self.scratch_lir_pattern_ids.items[save_param_patterns..]);
+    if (builtin.mode == .Debug) {
+        for (self.lir_store.getPatternSpan(lir_params)) |pat_id| {
+            const pat_index = @intFromEnum(pat_id);
+            if (pat_index >= self.lir_store.patterns.items.len) {
+                std.debug.panic(
+                    "MirToLir invariant violated: lambda params contain invalid pattern id {d} (patterns_len={d}, mir_params={d}, layouts={d})",
+                    .{ pat_index, self.lir_store.patterns.items.len, mir_params.len, param_layouts.len },
+                );
+            }
+        }
+    }
     const ret_layout = switch (monotype) {
         .func => |f| blk: {
             const inferred = try self.runtimeValueLayoutFromMirExpr(lam.body);
@@ -3090,8 +3067,7 @@ fn functionParamSymbol(self: *Self, param_pat_id: MIR.PatternId) ?MIR.Symbol {
         .dec_literal,
         .frac_f32_literal,
         .frac_f64_literal,
-        .record_destructure,
-        .tuple_destructure,
+        .struct_destructure,
         .list_destructure,
         .runtime_error,
         => null,
@@ -3512,8 +3488,7 @@ fn lowerBlock(self: *Self, block_data: anytype, _: MIR.ExprId, region: Region) A
                     .dec_literal,
                     .frac_f32_literal,
                     .frac_f64_literal,
-                    .record_destructure,
-                    .tuple_destructure,
+                    .struct_destructure,
                     .list_destructure,
                     .runtime_error,
                     => {},
@@ -3648,73 +3623,65 @@ fn lowerBorrowScope(self: *Self, scope_data: anytype, _: MIR.ExprId, region: Reg
     } }, region);
 }
 
-fn lowerRecordAccess(self: *Self, ra: anytype, _: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
-    const struct_mono = self.mir_store.typeOf(ra.record);
+fn lowerRecordAccess(self: *Self, struct_expr: MIR.ExprId, field_idx: u32, _: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
+    const struct_mono = self.mir_store.typeOf(struct_expr);
     const struct_monotype = self.mir_store.monotype_store.getMonotype(struct_mono);
     if (struct_monotype == .record) {
         const fields = self.mir_store.monotype_store.getFields(struct_monotype.record.fields);
         if (fields.len == 1) {
             // 1-field records are layout-unwrapped: `record.field` is just `record`.
-            return self.lowerExpr(ra.record);
+            return self.lowerExpr(struct_expr);
         }
     }
 
     var acc = self.startLetAccumulator();
-    const lir_struct_raw = try self.lowerExpr(ra.record);
-    const struct_layout = try self.runtimeValueLayoutFromMirExpr(ra.record);
+    const lir_struct_raw = try self.lowerExpr(struct_expr);
+    const struct_layout = try self.runtimeValueLayoutFromMirExpr(struct_expr);
     const lir_struct = try acc.ensureSymbol(lir_struct_raw, struct_layout, region);
-    var field_layout: ?layout.Idx = null;
-    var field_idx: ?u16 = null;
-    const struct_layout_val = self.layout_store.getLayout(struct_layout);
-    if (struct_layout_val.tag == .struct_) {
-        const struct_data = self.layout_store.getStructData(struct_layout_val.data.struct_.idx);
-        const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
-        for (0..layout_fields.len) |li| {
-            if (self.identsTextEqual(layout_fields.get(li).name, ra.field_name)) {
-                field_idx = @intCast(li);
-                field_layout = layout_fields.get(li).layout;
-                break;
-            }
-        }
-    }
-    const resolved_field_idx = field_idx orelse {
+    const field_info = self.structFieldInfoByOriginalIndex(struct_layout, field_idx) orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic(
-                "MirToLir invariant violated: record_access field ident idx {d} missing from runtime layout {d} (tag={s})",
-                .{ ra.field_name.idx, @intFromEnum(struct_layout), @tagName(struct_layout_val.tag) },
+                "MirToLir invariant violated: record_access field index {d} missing from runtime layout {d}",
+                .{ field_idx, @intFromEnum(struct_layout) },
             );
         }
         unreachable;
     };
 
-    const resolved_field_layout = field_layout orelse unreachable;
-
     const access_expr = try self.lir_store.addExpr(.{ .struct_access = .{
         .struct_expr = lir_struct,
         .struct_layout = struct_layout,
-        .field_layout = resolved_field_layout,
-        .field_idx = resolved_field_idx,
+        .field_layout = field_info.field_layout,
+        .field_idx = field_info.field_idx,
     } }, region);
-    return acc.finish(access_expr, resolved_field_layout, region);
+    return acc.finish(access_expr, field_info.field_layout, region);
 }
 
-fn lowerTupleAccess(self: *Self, ta: anytype, mir_expr_id: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
+fn lowerTupleAccess(self: *Self, struct_expr: MIR.ExprId, field_idx: u32, mir_expr_id: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
+    const struct_mono = self.mir_store.monotype_store.getMonotype(self.mir_store.typeOf(struct_expr));
+    if (struct_mono == .tuple) {
+        const elems = self.mir_store.monotype_store.getIdxSpan(struct_mono.tuple.elems);
+        if (elems.len == 1) {
+            return self.lowerExpr(struct_expr);
+        }
+    }
+
     var acc = self.startLetAccumulator();
-    const lir_struct_raw = try self.lowerExpr(ta.tuple);
-    const struct_layout = try self.runtimeValueLayoutFromMirExpr(ta.tuple);
+    const lir_struct_raw = try self.lowerExpr(struct_expr);
+    const struct_layout = try self.runtimeValueLayoutFromMirExpr(struct_expr);
     const lir_struct = try acc.ensureSymbol(lir_struct_raw, struct_layout, region);
     var field_layout: layout.Idx = undefined;
     var field_layout_found = false;
 
     // Find the sorted field index for this tuple element's original index.
-    var field_idx: ?u16 = null;
+    var sorted_field_idx: ?u16 = null;
     const struct_layout_val = self.layout_store.getLayout(struct_layout);
     if (struct_layout_val.tag == .struct_) {
         const struct_data = self.layout_store.getStructData(struct_layout_val.data.struct_.idx);
         const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
         for (0..layout_fields.len) |li| {
-            if (layout_fields.get(li).index == ta.elem_index) {
-                field_idx = @intCast(li);
+            if (layout_fields.get(li).index == field_idx) {
+                sorted_field_idx = @intCast(li);
                 field_layout = layout_fields.get(li).layout;
                 field_layout_found = true;
                 break;
@@ -3722,7 +3689,7 @@ fn lowerTupleAccess(self: *Self, ta: anytype, mir_expr_id: MIR.ExprId, region: R
         }
     } else {
         // Single-element tuple optimized to non-struct layout; field_idx 0
-        field_idx = 0;
+        sorted_field_idx = 0;
         field_layout = struct_layout;
         field_layout_found = true;
     }
@@ -3734,7 +3701,7 @@ fn lowerTupleAccess(self: *Self, ta: anytype, mir_expr_id: MIR.ExprId, region: R
         .struct_expr = lir_struct,
         .struct_layout = struct_layout,
         .field_layout = field_layout,
-        .field_idx = field_idx orelse unreachable,
+        .field_idx = sorted_field_idx orelse unreachable,
     } }, region);
     return acc.finish(access_expr, field_layout, region);
 }
@@ -3984,7 +3951,45 @@ fn adaptRecordValueLayout(
     const source_value = try acc.ensureSymbol(value_expr, source_layout, region);
 
     const target_layout_val = self.layout_store.getLayout(target_layout);
-    std.debug.assert(target_layout_val.tag == .struct_);
+    if (target_layout_val.tag != .struct_) {
+        var live_index: ?usize = null;
+        var live_source_field: ?StructFieldInfo = null;
+
+        for (fields, 0..) |_, i| {
+            const source_field = self.structFieldInfoByOriginalIndex(source_layout, @intCast(i)) orelse continue;
+            if (self.layout_store.layoutSize(self.layout_store.getLayout(source_field.field_layout)) == 0) continue;
+            if (builtin.mode == .Debug and live_index != null) {
+                std.debug.panic(
+                    "adaptRecordValueLayout expected at most one live field for collapsed target layout, found multiple (target={d})",
+                    .{@intFromEnum(target_layout)},
+                );
+            }
+            live_index = i;
+            live_source_field = source_field;
+        }
+
+        if (live_index) |i| {
+            const source_field = live_source_field.?;
+            const field_expr = if (self.layout_store.getLayout(source_layout).tag == .struct_)
+                try self.lir_store.addExpr(.{ .struct_access = .{
+                    .struct_expr = source_value,
+                    .struct_layout = source_layout,
+                    .field_layout = source_field.field_layout,
+                    .field_idx = source_field.field_idx,
+                } }, region)
+            else
+                source_value;
+            return self.adaptValueLayout(
+                field_expr,
+                fields[i].type_idx,
+                source_field.field_layout,
+                target_layout,
+                region,
+            );
+        }
+
+        return value_expr;
+    }
     const target_struct_data = self.layout_store.getStructData(target_layout_val.data.struct_.idx);
     const target_fields = self.layout_store.struct_fields.sliceRange(target_struct_data.getFields());
 
@@ -4038,7 +4043,45 @@ fn adaptTupleValueLayout(
     const source_value = try acc.ensureSymbol(value_expr, source_layout, region);
 
     const target_layout_val = self.layout_store.getLayout(target_layout);
-    std.debug.assert(target_layout_val.tag == .struct_);
+    if (target_layout_val.tag != .struct_) {
+        var live_index: ?usize = null;
+        var live_source_field: ?StructFieldInfo = null;
+
+        for (elems, 0..) |_, i| {
+            const source_field = self.structFieldInfoByOriginalIndex(source_layout, @intCast(i)) orelse continue;
+            if (self.layout_store.layoutSize(self.layout_store.getLayout(source_field.field_layout)) == 0) continue;
+            if (builtin.mode == .Debug and live_index != null) {
+                std.debug.panic(
+                    "adaptTupleValueLayout expected at most one live field for collapsed target layout, found multiple (target={d})",
+                    .{@intFromEnum(target_layout)},
+                );
+            }
+            live_index = i;
+            live_source_field = source_field;
+        }
+
+        if (live_index) |i| {
+            const source_field = live_source_field.?;
+            const field_expr = if (self.layout_store.getLayout(source_layout).tag == .struct_)
+                try self.lir_store.addExpr(.{ .struct_access = .{
+                    .struct_expr = source_value,
+                    .struct_layout = source_layout,
+                    .field_layout = source_field.field_layout,
+                    .field_idx = source_field.field_idx,
+                } }, region)
+            else
+                source_value;
+            return self.adaptValueLayout(
+                field_expr,
+                elems[i],
+                source_field.field_layout,
+                target_layout,
+                region,
+            );
+        }
+
+        return value_expr;
+    }
     const target_struct_data = self.layout_store.getStructData(target_layout_val.data.struct_.idx);
     const target_fields = self.layout_store.struct_fields.sliceRange(target_struct_data.getFields());
 
@@ -4095,7 +4138,7 @@ fn lowerLowLevel(self: *Self, ll: anytype, mir_expr_id: MIR.ExprId, region: Regi
 
     for (mir_args, 0..) |mir_arg, i| {
         const lowered_arg = try self.lowerExpr(mir_arg);
-        const arg_layout = try self.layoutFromMonotype(self.mir_store.typeOf(mir_arg));
+        const arg_layout = try self.runtimeValueLayoutFromMirExpr(mir_arg);
         const ownership = arg_ownership[i];
 
         const ensured_arg = switch (ownership) {
@@ -4225,6 +4268,17 @@ fn lowerHosted(self: *Self, h: anytype, mono_idx: Monotype.Idx, region: Region) 
         try self.scratch_lir_pattern_ids.append(self.allocator, if (rewrite) |rw| rw.source_pattern else lowered.pattern);
     }
     const lir_params = try self.lir_store.addPatternSpan(self.scratch_lir_pattern_ids.items[save_param_patterns..]);
+    if (builtin.mode == .Debug) {
+        for (self.lir_store.getPatternSpan(lir_params)) |pat_id| {
+            const pat_index = @intFromEnum(pat_id);
+            if (pat_index >= self.lir_store.patterns.items.len) {
+                std.debug.panic(
+                    "MirToLir invariant violated: hosted params contain invalid pattern id {d} (patterns_len={d}, mir_params={d}, func_args={d})",
+                    .{ pat_index, self.lir_store.patterns.items.len, mir_params.len, func_args.len },
+                );
+            }
+        }
+    }
 
     const save_len = self.scratch_lir_expr_ids.items.len;
     defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_len);
@@ -4234,7 +4288,7 @@ fn lowerHosted(self: *Self, h: anytype, mono_idx: Monotype.Idx, region: Region) 
         const symbol = switch (mir_pat) {
             .bind => |sym| sym,
             .wildcard => continue, // unit () params are zero-sized, skip
-            .tag, .int_literal, .str_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .record_destructure, .tuple_destructure, .list_destructure, .as_pattern, .runtime_error => unreachable,
+            .tag, .int_literal, .str_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .struct_destructure, .list_destructure, .as_pattern, .runtime_error => unreachable,
         };
         const param_layout = if (i < func_args.len)
             try self.layoutFromMonotype(func_args[i])
@@ -4477,7 +4531,7 @@ fn registerBindingPatternSymbols(
             try self.registerBindingPatternSymbols(as_pat.pattern, runtime_layout);
         },
         .tag => |tag_pat| {
-            const arg_patterns = self.mir_store.getPatternSpan(tag_pat.args);
+            const arg_patterns = self.tagPayloadPatterns(tag_pat.args);
             for (arg_patterns, 0..) |arg_pattern_id, arg_index| {
                 const arg_runtime = try self.runtimeTagPayloadArgLayout(
                     mono_idx,
@@ -4489,49 +4543,44 @@ fn registerBindingPatternSymbols(
                 try self.registerBindingPatternSymbols(arg_pattern_id, arg_runtime);
             }
         },
-        .record_destructure => |rd| {
-            const mir_patterns = self.mir_store.getPatternSpan(rd.destructs);
-            const mir_field_names = self.mir_store.getFieldNameSpan(rd.field_names);
-            const mono = switch (self.mir_store.monotype_store.getMonotype(mono_idx)) {
-                .record => |r| r,
-                else => unreachable,
-            };
-            const all_fields = self.mir_store.monotype_store.getFields(mono.fields);
+        .struct_destructure => |sd| {
+            const mir_patterns = self.mir_store.getPatternSpan(sd.fields);
+            switch (self.mir_store.monotype_store.getMonotype(mono_idx)) {
+                .record => |record_mono| {
+                    const all_fields = self.mir_store.monotype_store.getFields(record_mono.fields);
 
-            if (all_fields.len == 1) {
-                if (mir_patterns.len != 0) {
-                    try self.registerBindingPatternSymbols(mir_patterns[0], runtime_layout);
-                }
-                return;
-            }
-
-            const record_layout_val = self.layout_store.getLayout(runtime_layout);
-            if (record_layout_val.tag == .struct_) {
-                const record_data = self.layout_store.getStructData(record_layout_val.data.struct_.idx);
-                const layout_fields = self.layout_store.struct_fields.sliceRange(record_data.getFields());
-
-                for (0..layout_fields.len) |li| {
-                    const layout_field_name = layout_fields.get(li).name;
-                    for (mir_field_names, 0..) |mi_name, mi| {
-                        if (!self.identsTextEqual(mi_name, layout_field_name)) continue;
-                        try self.registerBindingPatternSymbols(mir_patterns[mi], layout_fields.get(li).layout);
-                        break;
+                    if (all_fields.len == 1) {
+                        if (mir_patterns.len != 0) {
+                            try self.registerBindingPatternSymbols(mir_patterns[0], runtime_layout);
+                        }
+                        return;
                     }
-                }
-            }
-        },
-        .tuple_destructure => |td| {
-            const elem_patterns = self.mir_store.getPatternSpan(td.elems);
-            const tuple_layout_val = self.layout_store.getLayout(runtime_layout);
-            if (tuple_layout_val.tag == .struct_) {
-                const struct_data = self.layout_store.getStructData(tuple_layout_val.data.struct_.idx);
-                const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
-                for (0..layout_fields.len) |li| {
-                    const original_index = layout_fields.get(li).index;
-                    try self.registerBindingPatternSymbols(elem_patterns[original_index], layout_fields.get(li).layout);
-                }
-            } else if (elem_patterns.len == 1) {
-                try self.registerBindingPatternSymbols(elem_patterns[0], runtime_layout);
+
+                    const record_layout_val = self.layout_store.getLayout(runtime_layout);
+                    if (record_layout_val.tag == .struct_) {
+                        const record_data = self.layout_store.getStructData(record_layout_val.data.struct_.idx);
+                        const layout_fields = self.layout_store.struct_fields.sliceRange(record_data.getFields());
+
+                        for (0..layout_fields.len) |li| {
+                            const semantic_index = layout_fields.get(li).index;
+                            try self.registerBindingPatternSymbols(mir_patterns[semantic_index], layout_fields.get(li).layout);
+                        }
+                    }
+                },
+                .tuple => {
+                    const tuple_layout_val = self.layout_store.getLayout(runtime_layout);
+                    if (tuple_layout_val.tag == .struct_) {
+                        const struct_data = self.layout_store.getStructData(tuple_layout_val.data.struct_.idx);
+                        const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
+                        for (0..layout_fields.len) |li| {
+                            const original_index = layout_fields.get(li).index;
+                            try self.registerBindingPatternSymbols(mir_patterns[original_index], layout_fields.get(li).layout);
+                        }
+                    } else if (mir_patterns.len == 1) {
+                        try self.registerBindingPatternSymbols(mir_patterns[0], runtime_layout);
+                    }
+                },
+                else => unreachable,
             }
         },
         .list_destructure => |ld| {
@@ -4625,7 +4674,7 @@ fn lowerPatternInternal(
         },
         .wildcard => self.lowerWildcardBindingPattern(runtime_layout, ownership_mode, region),
         .tag => |t| blk: {
-            const mir_pat_args = self.mir_store.getPatternSpan(t.args);
+            const mir_pat_args = self.tagPayloadPatterns(t.args);
 
             if (self.isSingleTagUnion(mono_idx)) {
                 if (mir_pat_args.len == 0) {
@@ -4713,113 +4762,107 @@ fn lowerPatternInternal(
             .value = v,
             .layout_idx = runtime_layout,
         } }, region),
-        .record_destructure => |rd| blk: {
-            const record_layout = runtime_layout;
+        .struct_destructure => |sd| blk: {
+            const struct_layout = runtime_layout;
+            const mir_patterns = self.mir_store.getPatternSpan(sd.fields);
 
-            const mir_patterns = self.mir_store.getPatternSpan(rd.destructs);
-            const mir_field_names = self.mir_store.getFieldNameSpan(rd.field_names);
-            const mono = switch (self.mir_store.monotype_store.getMonotype(mono_idx)) {
-                .record => |r| r,
-                else => unreachable,
-            };
-            const all_fields = self.mir_store.monotype_store.getFields(mono.fields);
+            switch (self.mir_store.monotype_store.getMonotype(mono_idx)) {
+                .record => |record_mono| {
+                    const all_fields = self.mir_store.monotype_store.getFields(record_mono.fields);
 
-            if (all_fields.len == 0) {
-                break :blk self.lowerWildcardBindingPattern(record_layout, ownership_mode, region);
-            }
-            if (all_fields.len == 1) {
-                if (mir_patterns.len == 0) {
-                    break :blk self.lowerWildcardBindingPattern(record_layout, ownership_mode, region);
-                }
-                break :blk try self.lowerPatternInternal(
-                    mir_patterns[0],
-                    record_layout,
-                    collect_rest_bindings,
-                    ownership_mode,
-                    region,
-                );
-            }
+                    if (all_fields.len == 0) {
+                        break :blk self.lowerWildcardBindingPattern(struct_layout, ownership_mode, region);
+                    }
+                    if (all_fields.len == 1) {
+                        if (mir_patterns.len == 0) {
+                            break :blk self.lowerWildcardBindingPattern(struct_layout, ownership_mode, region);
+                        }
+                        break :blk try self.lowerPatternInternal(
+                            mir_patterns[0],
+                            struct_layout,
+                            collect_rest_bindings,
+                            ownership_mode,
+                            region,
+                        );
+                    }
 
-            const record_layout_val = self.layout_store.getLayout(record_layout);
+                    const record_layout_val = self.layout_store.getLayout(struct_layout);
 
-            if (record_layout_val.tag == .struct_) {
-                const record_data = self.layout_store.getStructData(record_layout_val.data.struct_.idx);
-                const layout_fields = self.layout_store.struct_fields.sliceRange(record_data.getFields());
-                const save_len = self.scratch_lir_pattern_ids.items.len;
-                defer self.scratch_lir_pattern_ids.shrinkRetainingCapacity(save_len);
+                    if (record_layout_val.tag == .struct_) {
+                        const record_data = self.layout_store.getStructData(record_layout_val.data.struct_.idx);
+                        const layout_fields = self.layout_store.struct_fields.sliceRange(record_data.getFields());
+                        const save_len = self.scratch_lir_pattern_ids.items.len;
+                        defer self.scratch_lir_pattern_ids.shrinkRetainingCapacity(save_len);
 
-                for (0..layout_fields.len) |li| {
-                    const layout_field_name = layout_fields.get(li).name;
-                    var found = false;
-                    for (mir_field_names, 0..) |mir_name, mi| {
-                        if (self.identsTextEqual(mir_name, layout_field_name)) {
+                        for (0..layout_fields.len) |li| {
+                            const semantic_index = layout_fields.get(li).index;
                             const lir_pat = try self.lowerPatternInternal(
-                                mir_patterns[mi],
+                                mir_patterns[semantic_index],
                                 layout_fields.get(li).layout,
                                 collect_rest_bindings,
                                 ownership_mode,
                                 region,
                             );
                             try self.scratch_lir_pattern_ids.append(self.allocator, lir_pat);
-                            found = true;
-                            break;
                         }
+
+                        const lir_fields = try self.lir_store.addPatternSpan(self.scratch_lir_pattern_ids.items[save_len..]);
+                        break :blk self.lir_store.addPattern(.{ .struct_ = .{
+                            .struct_layout = struct_layout,
+                            .fields = lir_fields,
+                        } }, region);
+                    } else {
+                        const lir_fields = try self.lowerPatternSpanInternal(mir_patterns, collect_rest_bindings, ownership_mode, region);
+                        break :blk self.lir_store.addPattern(.{ .struct_ = .{
+                            .struct_layout = struct_layout,
+                            .fields = lir_fields,
+                        } }, region);
                     }
-                    if (!found) {
-                        const field_layout_idx = layout_fields.get(li).layout;
-                        const lir_pat = try self.lowerWildcardBindingPattern(field_layout_idx, ownership_mode, region);
-                        try self.scratch_lir_pattern_ids.append(self.allocator, lir_pat);
+                },
+                .tuple => {
+                    const struct_layout_val = self.layout_store.getLayout(struct_layout);
+
+                    if (struct_layout_val.tag == .struct_) {
+                        const struct_data = self.layout_store.getStructData(struct_layout_val.data.struct_.idx);
+                        const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
+
+                        const save_len = self.scratch_lir_pattern_ids.items.len;
+                        defer self.scratch_lir_pattern_ids.shrinkRetainingCapacity(save_len);
+
+                        for (0..layout_fields.len) |li| {
+                            const original_index = layout_fields.get(li).index;
+                            const lir_pat = try self.lowerPatternInternal(
+                                mir_patterns[original_index],
+                                layout_fields.get(li).layout,
+                                collect_rest_bindings,
+                                ownership_mode,
+                                region,
+                            );
+                            try self.scratch_lir_pattern_ids.append(self.allocator, lir_pat);
+                        }
+
+                        const lir_fields = try self.lir_store.addPatternSpan(self.scratch_lir_pattern_ids.items[save_len..]);
+                        break :blk self.lir_store.addPattern(.{ .struct_ = .{
+                            .struct_layout = struct_layout,
+                            .fields = lir_fields,
+                        } }, region);
+                    } else {
+                        if (builtin.mode == .Debug and mir_patterns.len != 1) {
+                            std.debug.panic(
+                                "MirToLir invariant violated: non-struct tuple pattern runtime layout must have exactly 1 element, found {d}",
+                                .{mir_patterns.len},
+                            );
+                        }
+                        break :blk try self.lowerPatternInternal(
+                            mir_patterns[0],
+                            struct_layout,
+                            collect_rest_bindings,
+                            ownership_mode,
+                            region,
+                        );
                     }
-                }
-
-                const lir_fields = try self.lir_store.addPatternSpan(self.scratch_lir_pattern_ids.items[save_len..]);
-                break :blk self.lir_store.addPattern(.{ .struct_ = .{
-                    .struct_layout = record_layout,
-                    .fields = lir_fields,
-                } }, region);
-            } else {
-                const lir_fields = try self.lowerPatternSpanInternal(mir_patterns, collect_rest_bindings, ownership_mode, region);
-                break :blk self.lir_store.addPattern(.{ .struct_ = .{
-                    .struct_layout = record_layout,
-                    .fields = lir_fields,
-                } }, region);
-            }
-        },
-        .tuple_destructure => |td| blk: {
-            const struct_layout = runtime_layout;
-            const mir_patterns = self.mir_store.getPatternSpan(td.elems);
-            const struct_layout_val = self.layout_store.getLayout(struct_layout);
-
-            if (struct_layout_val.tag == .struct_) {
-                const struct_data = self.layout_store.getStructData(struct_layout_val.data.struct_.idx);
-                const layout_fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
-
-                const save_len = self.scratch_lir_pattern_ids.items.len;
-                defer self.scratch_lir_pattern_ids.shrinkRetainingCapacity(save_len);
-
-                for (0..layout_fields.len) |li| {
-                    const original_index = layout_fields.get(li).index;
-                    const lir_pat = try self.lowerPatternInternal(
-                        mir_patterns[original_index],
-                        layout_fields.get(li).layout,
-                        collect_rest_bindings,
-                        ownership_mode,
-                        region,
-                    );
-                    try self.scratch_lir_pattern_ids.append(self.allocator, lir_pat);
-                }
-
-                const lir_fields = try self.lir_store.addPatternSpan(self.scratch_lir_pattern_ids.items[save_len..]);
-                break :blk self.lir_store.addPattern(.{ .struct_ = .{
-                    .struct_layout = struct_layout,
-                    .fields = lir_fields,
-                } }, region);
-            } else {
-                const lir_elems = try self.lowerPatternSpanInternal(mir_patterns, collect_rest_bindings, ownership_mode, region);
-                break :blk self.lir_store.addPattern(.{ .struct_ = .{
-                    .struct_layout = struct_layout,
-                    .fields = lir_elems,
-                } }, region);
+                },
+                else => unreachable,
             }
         },
         .list_destructure => |ld| blk: {
@@ -5653,16 +5696,14 @@ test "MIR record access finds correct field index for non-first field" {
         .value = .{ .bytes = @bitCast(@as(i128, 3)), .kind = .i128 },
     } }, i64_mono, Region.zero());
     const field_exprs = try env.mir_store.addExprSpan(allocator, &.{ int_1, int_2, int_3 });
-    const field_names = try env.mir_store.addFieldNameSpan(allocator, &.{ field_a, field_b, field_c });
-    const record_expr = try env.mir_store.addExpr(allocator, .{ .record = .{
+    const record_expr = try env.mir_store.addExpr(allocator, .{ .struct_ = .{
         .fields = field_exprs,
-        .field_names = field_names,
     } }, record_mono, Region.zero());
 
     // Access field c (third field, index 2)
-    const access_expr = try env.mir_store.addExpr(allocator, .{ .record_access = .{
-        .record = record_expr,
-        .field_name = field_c,
+    const access_expr = try env.mir_store.addExpr(allocator, .{ .struct_access = .{
+        .struct_ = record_expr,
+        .field_idx = 2,
     } }, i64_mono, Region.zero());
     var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.lambda_set_store, env.module_env.idents.true_tag);
     defer translator.deinit();
@@ -5703,14 +5744,14 @@ test "MIR tuple access preserves element index" {
         .value = .{ .bytes = @bitCast(@as(i128, 2)), .kind = .i128 },
     } }, i64_mono, Region.zero());
     const elem_exprs = try env.mir_store.addExprSpan(allocator, &.{ int_1, bool_true, int_2 });
-    const tuple_expr = try env.mir_store.addExpr(allocator, .{ .tuple = .{
-        .elems = elem_exprs,
+    const tuple_expr = try env.mir_store.addExpr(allocator, .{ .struct_ = .{
+        .fields = elem_exprs,
     } }, tuple_mono, Region.zero());
 
     // Access element at index 2 (third element, I64)
-    const access_expr = try env.mir_store.addExpr(allocator, .{ .tuple_access = .{
-        .tuple = tuple_expr,
-        .elem_index = 2,
+    const access_expr = try env.mir_store.addExpr(allocator, .{ .struct_access = .{
+        .struct_ = tuple_expr,
+        .field_idx = 2,
     } }, i64_mono, Region.zero());
     var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.lambda_set_store, env.module_env.idents.true_tag);
     defer translator.deinit();
@@ -6545,17 +6586,15 @@ test "record access uses layout field order not monotype alphabetical order" {
         .value = .{ .bytes = @bitCast(@as(i128, 3)), .kind = .i128 },
     } }, i64_mono, Region.zero());
     const field_exprs = try env.mir_store.addExprSpan(allocator, &.{ int_1, int_2, int_3 });
-    const field_names_span = try env.mir_store.addFieldNameSpan(allocator, &.{ field_age, field_name, field_score });
-    const record_expr = try env.mir_store.addExpr(allocator, .{ .record = .{
+    const record_expr = try env.mir_store.addExpr(allocator, .{ .struct_ = .{
         .fields = field_exprs,
-        .field_names = field_names_span,
     } }, record_mono, Region.zero());
 
     // Access field "age" (U8) — alphabetically first but should be last in layout order
     // (I64 fields sorted before U8 by alignment)
-    const access_expr = try env.mir_store.addExpr(allocator, .{ .record_access = .{
-        .record = record_expr,
-        .field_name = field_age,
+    const access_expr = try env.mir_store.addExpr(allocator, .{ .struct_access = .{
+        .struct_ = record_expr,
+        .field_idx = 0,
     } }, u8_mono, Region.zero());
     var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.lambda_set_store, env.module_env.idents.true_tag);
     defer translator.deinit();
@@ -6593,18 +6632,17 @@ test "record destructure wildcard gets actual field layout not zst" {
     });
     const record_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .record = .{ .fields = record_fields } });
 
-    // Create a destructure pattern that only binds field "a" (U8).
-    // In MIR, field_names are alphabetical: [a].
-    // In layout order: [b, c, a]. So b and c should get wildcard patterns
-    // with I64 layout, NOT .zst.
+    // Create a full-arity canonical destructure pattern that only binds field "a" (U8).
+    // In canonical MIR order this is [a, b, c], but in layout order it becomes [b, c, a].
+    // The wildcard entries must still carry the correct I64 layouts.
     const ident_a = field_a;
     const sym_a = try testMirSymbol(&env.mir_store, allocator, ident_a);
     const bind_pat = try env.mir_store.addPattern(allocator, .{ .bind = sym_a }, u8_mono);
-    const destructs = try env.mir_store.addPatternSpan(allocator, &.{bind_pat});
-    const destruct_field_names = try env.mir_store.addFieldNameSpan(allocator, &.{field_a});
-    const destruct_pat = try env.mir_store.addPattern(allocator, .{ .record_destructure = .{
-        .destructs = destructs,
-        .field_names = destruct_field_names,
+    const wildcard_b = try env.mir_store.addPattern(allocator, .wildcard, i64_mono);
+    const wildcard_c = try env.mir_store.addPattern(allocator, .wildcard, i64_mono);
+    const destructs = try env.mir_store.addPatternSpan(allocator, &.{ bind_pat, wildcard_b, wildcard_c });
+    const destruct_pat = try env.mir_store.addPattern(allocator, .{ .struct_destructure = .{
+        .fields = destructs,
     } }, record_mono);
     var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.lambda_set_store, env.module_env.idents.true_tag);
     defer translator.deinit();

@@ -663,6 +663,11 @@ pub const DevEvaluator = struct {
             env.common.idents.interner.enableRuntimeInserts(env.gpa) catch return error.OutOfMemory;
         }
 
+        // Other evaluators may have resolved this module's imports against a
+        // different module ordering. Refresh them here so CIR external lookups
+        // line up with the slice we are about to hand to MIR lowering.
+        module_env.imports.resolveImports(module_env, all_module_envs);
+
         // Find the module index for this module
         var module_idx: u32 = 0;
         for (all_module_envs, 0..) |env, i| {

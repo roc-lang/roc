@@ -4506,6 +4506,383 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
     try std.testing.expect(found_mutable_result or found_cell_result);
 }
 
+test "dev lowering: mutable list reassignment keeps both decrefs on the reassigned symbol" {
+    const Search = struct {
+        fn countDecrefsForSymbol(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, symbol: lir.LIR.Symbol) u32 {
+            const expr = store.getExpr(expr_id);
+            return switch (expr) {
+                .block => |block| blk: {
+                    var total: u32 = 0;
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        total += switch (stmt) {
+                            .decl, .mutate => |binding| countDecrefsForSymbol(store, binding.expr, symbol),
+                            .cell_init, .cell_store => |binding| countDecrefsForSymbol(store, binding.expr, symbol),
+                            .cell_drop => 0,
+                        };
+                    }
+                    total += countDecrefsForSymbol(store, block.final_expr, symbol);
+                    break :blk total;
+                },
+                .if_then_else => |ite| blk: {
+                    var total: u32 = 0;
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        total += countDecrefsForSymbol(store, branch.cond, symbol);
+                        total += countDecrefsForSymbol(store, branch.body, symbol);
+                    }
+                    total += countDecrefsForSymbol(store, ite.final_else, symbol);
+                    break :blk total;
+                },
+                .match_expr => |m| blk: {
+                    var total: u32 = countDecrefsForSymbol(store, m.value, symbol);
+                    for (store.getMatchBranches(m.branches)) |branch| {
+                        total += countDecrefsForSymbol(store, branch.guard, symbol);
+                        total += countDecrefsForSymbol(store, branch.body, symbol);
+                    }
+                    break :blk total;
+                },
+                .lambda => |lam| countDecrefsForSymbol(store, lam.body, symbol),
+                .for_loop => |fl| countDecrefsForSymbol(store, fl.list_expr, symbol) + countDecrefsForSymbol(store, fl.body, symbol),
+                .while_loop => |wl| countDecrefsForSymbol(store, wl.cond, symbol) + countDecrefsForSymbol(store, wl.body, symbol),
+                .discriminant_switch => |ds| blk: {
+                    var total: u32 = countDecrefsForSymbol(store, ds.value, symbol);
+                    for (store.getExprSpan(ds.branches)) |branch_id| total += countDecrefsForSymbol(store, branch_id, symbol);
+                    break :blk total;
+                },
+                .call => |call| blk: {
+                    var total: u32 = countDecrefsForSymbol(store, call.fn_expr, symbol);
+                    for (store.getExprSpan(call.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .low_level => |ll| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(ll.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .list => |list_expr| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(list_expr.elems)) |elem| total += countDecrefsForSymbol(store, elem, symbol);
+                    break :blk total;
+                },
+                .struct_ => |s| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(s.fields)) |field| total += countDecrefsForSymbol(store, field, symbol);
+                    break :blk total;
+                },
+                .tag => |t| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(t.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .struct_access => |sa| countDecrefsForSymbol(store, sa.struct_expr, symbol),
+                .tag_payload_access => |tpa| countDecrefsForSymbol(store, tpa.value, symbol),
+                .nominal => |n| countDecrefsForSymbol(store, n.backing_expr, symbol),
+                .early_return => |ret| countDecrefsForSymbol(store, ret.expr, symbol),
+                .dbg => |d| countDecrefsForSymbol(store, d.expr, symbol),
+                .expect => |e| countDecrefsForSymbol(store, e.cond, symbol) + countDecrefsForSymbol(store, e.body, symbol),
+                .str_concat => |parts| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(parts)) |part| total += countDecrefsForSymbol(store, part, symbol);
+                    break :blk total;
+                },
+                .int_to_str => |its| countDecrefsForSymbol(store, its.value, symbol),
+                .float_to_str => |fts| countDecrefsForSymbol(store, fts.value, symbol),
+                .dec_to_str => |d| countDecrefsForSymbol(store, d, symbol),
+                .str_escape_and_quote => |s| countDecrefsForSymbol(store, s, symbol),
+                .hosted_call => |hc| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(hc.args)) |arg| total += countDecrefsForSymbol(store, arg, symbol);
+                    break :blk total;
+                },
+                .decref => |rc| blk: {
+                    const value = store.getExpr(rc.value);
+                    if (value == .lookup and value.lookup.symbol.eql(symbol)) break :blk 1;
+                    break :blk countDecrefsForSymbol(store, rc.value, symbol);
+                },
+                .incref => |rc| countDecrefsForSymbol(store, rc.value, symbol),
+                .free => |rc| countDecrefsForSymbol(store, rc.value, symbol),
+                else => 0,
+            };
+        }
+
+        fn countCellDecrefs(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, cell: lir.LIR.Symbol) u32 {
+            if (expr_id.isNone()) return 0;
+            const expr = store.getExpr(expr_id);
+            return switch (expr) {
+                .block => |block| blk: {
+                    var total: u32 = 0;
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        total += switch (stmt) {
+                            .decl, .mutate => |binding| countCellDecrefs(store, binding.expr, cell),
+                            .cell_init, .cell_store => |binding| countCellDecrefs(store, binding.expr, cell),
+                            .cell_drop => 0,
+                        };
+                    }
+                    total += countCellDecrefs(store, block.final_expr, cell);
+                    break :blk total;
+                },
+                .if_then_else => |ite| blk: {
+                    var total: u32 = 0;
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        total += countCellDecrefs(store, branch.cond, cell);
+                        total += countCellDecrefs(store, branch.body, cell);
+                    }
+                    total += countCellDecrefs(store, ite.final_else, cell);
+                    break :blk total;
+                },
+                .match_expr => |m| blk: {
+                    var total: u32 = countCellDecrefs(store, m.value, cell);
+                    for (store.getMatchBranches(m.branches)) |branch| {
+                        total += countCellDecrefs(store, branch.guard, cell);
+                        total += countCellDecrefs(store, branch.body, cell);
+                    }
+                    break :blk total;
+                },
+                .lambda => |lam| countCellDecrefs(store, lam.body, cell),
+                .for_loop => |fl| countCellDecrefs(store, fl.list_expr, cell) + countCellDecrefs(store, fl.body, cell),
+                .while_loop => |wl| countCellDecrefs(store, wl.cond, cell) + countCellDecrefs(store, wl.body, cell),
+                .discriminant_switch => |ds| blk: {
+                    var total: u32 = countCellDecrefs(store, ds.value, cell);
+                    for (store.getExprSpan(ds.branches)) |branch_id| total += countCellDecrefs(store, branch_id, cell);
+                    break :blk total;
+                },
+                .call => |call| blk: {
+                    var total: u32 = countCellDecrefs(store, call.fn_expr, cell);
+                    for (store.getExprSpan(call.args)) |arg| total += countCellDecrefs(store, arg, cell);
+                    break :blk total;
+                },
+                .low_level => |ll| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(ll.args)) |arg| total += countCellDecrefs(store, arg, cell);
+                    break :blk total;
+                },
+                .list => |list_expr| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(list_expr.elems)) |elem| total += countCellDecrefs(store, elem, cell);
+                    break :blk total;
+                },
+                .struct_ => |s| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(s.fields)) |field| total += countCellDecrefs(store, field, cell);
+                    break :blk total;
+                },
+                .tag => |t| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(t.args)) |arg| total += countCellDecrefs(store, arg, cell);
+                    break :blk total;
+                },
+                .struct_access => |sa| countCellDecrefs(store, sa.struct_expr, cell),
+                .tag_payload_access => |tpa| countCellDecrefs(store, tpa.value, cell),
+                .nominal => |n| countCellDecrefs(store, n.backing_expr, cell),
+                .early_return => |ret| countCellDecrefs(store, ret.expr, cell),
+                .dbg => |d| countCellDecrefs(store, d.expr, cell),
+                .expect => |e| countCellDecrefs(store, e.cond, cell) + countCellDecrefs(store, e.body, cell),
+                .str_concat => |parts| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(parts)) |part| total += countCellDecrefs(store, part, cell);
+                    break :blk total;
+                },
+                .int_to_str => |its| countCellDecrefs(store, its.value, cell),
+                .float_to_str => |fts| countCellDecrefs(store, fts.value, cell),
+                .dec_to_str => |d| countCellDecrefs(store, d, cell),
+                .str_escape_and_quote => |s| countCellDecrefs(store, s, cell),
+                .hosted_call => |hc| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(hc.args)) |arg| total += countCellDecrefs(store, arg, cell);
+                    break :blk total;
+                },
+                .decref => |rc| blk: {
+                    const value = store.getExpr(rc.value);
+                    if (value == .cell_load and value.cell_load.cell.eql(cell)) break :blk 1;
+                    break :blk countCellDecrefs(store, rc.value, cell);
+                },
+                .incref => |rc| countCellDecrefs(store, rc.value, cell),
+                .free => |rc| countCellDecrefs(store, rc.value, cell),
+                else => 0,
+            };
+        }
+
+        fn countCellDrops(store: *const LirExprStore, expr_id: lir.LIR.LirExprId, cell: lir.LIR.Symbol) u32 {
+            if (expr_id.isNone()) return 0;
+            const expr = store.getExpr(expr_id);
+            const key: u64 = @bitCast(cell);
+            return switch (expr) {
+                .block => |block| blk: {
+                    var total: u32 = 0;
+                    for (store.getStmts(block.stmts)) |stmt| {
+                        total += switch (stmt) {
+                            .decl, .mutate => |binding| countCellDrops(store, binding.expr, cell),
+                            .cell_init, .cell_store => |binding| countCellDrops(store, binding.expr, cell),
+                            .cell_drop => |drop| if (@as(u64, @bitCast(drop.cell)) == key) 1 else 0,
+                        };
+                    }
+                    total += countCellDrops(store, block.final_expr, cell);
+                    break :blk total;
+                },
+                .if_then_else => |ite| blk: {
+                    var total: u32 = 0;
+                    for (store.getIfBranches(ite.branches)) |branch| {
+                        total += countCellDrops(store, branch.cond, cell);
+                        total += countCellDrops(store, branch.body, cell);
+                    }
+                    total += countCellDrops(store, ite.final_else, cell);
+                    break :blk total;
+                },
+                .match_expr => |m| blk: {
+                    var total: u32 = countCellDrops(store, m.value, cell);
+                    for (store.getMatchBranches(m.branches)) |branch| {
+                        total += countCellDrops(store, branch.guard, cell);
+                        total += countCellDrops(store, branch.body, cell);
+                    }
+                    break :blk total;
+                },
+                .lambda => |lam| countCellDrops(store, lam.body, cell),
+                .for_loop => |fl| countCellDrops(store, fl.list_expr, cell) + countCellDrops(store, fl.body, cell),
+                .while_loop => |wl| countCellDrops(store, wl.cond, cell) + countCellDrops(store, wl.body, cell),
+                .discriminant_switch => |ds| blk: {
+                    var total: u32 = countCellDrops(store, ds.value, cell);
+                    for (store.getExprSpan(ds.branches)) |branch_id| total += countCellDrops(store, branch_id, cell);
+                    break :blk total;
+                },
+                .call => |call| blk: {
+                    var total: u32 = countCellDrops(store, call.fn_expr, cell);
+                    for (store.getExprSpan(call.args)) |arg| total += countCellDrops(store, arg, cell);
+                    break :blk total;
+                },
+                .low_level => |ll| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(ll.args)) |arg| total += countCellDrops(store, arg, cell);
+                    break :blk total;
+                },
+                .list => |list_expr| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(list_expr.elems)) |elem| total += countCellDrops(store, elem, cell);
+                    break :blk total;
+                },
+                .struct_ => |s| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(s.fields)) |field| total += countCellDrops(store, field, cell);
+                    break :blk total;
+                },
+                .tag => |t| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(t.args)) |arg| total += countCellDrops(store, arg, cell);
+                    break :blk total;
+                },
+                .struct_access => |sa| countCellDrops(store, sa.struct_expr, cell),
+                .tag_payload_access => |tpa| countCellDrops(store, tpa.value, cell),
+                .nominal => |n| countCellDrops(store, n.backing_expr, cell),
+                .early_return => |ret| countCellDrops(store, ret.expr, cell),
+                .dbg => |d| countCellDrops(store, d.expr, cell),
+                .expect => |e| countCellDrops(store, e.cond, cell) + countCellDrops(store, e.body, cell),
+                .str_concat => |parts| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(parts)) |part| total += countCellDrops(store, part, cell);
+                    break :blk total;
+                },
+                .int_to_str => |its| countCellDrops(store, its.value, cell),
+                .float_to_str => |fts| countCellDrops(store, fts.value, cell),
+                .dec_to_str => |d| countCellDrops(store, d, cell),
+                .str_escape_and_quote => |s| countCellDrops(store, s, cell),
+                .hosted_call => |hc| blk: {
+                    var total: u32 = 0;
+                    for (store.getExprSpan(hc.args)) |arg| total += countCellDrops(store, arg, cell);
+                    break :blk total;
+                },
+                else => 0,
+            };
+        }
+    };
+
+    const resources = try parseAndCanonicalizeExpr(test_allocator,
+        \\{
+        \\    var $x = [1, 2]
+        \\    $x = [3, 4]
+        \\    match $x { [a, b] => a + b, _ => 0 }
+        \\}
+    );
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var mir_store = try MIR.Store.init(test_allocator);
+    defer mir_store.deinit(test_allocator);
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(resources.builtin_module.env),
+        resources.module_env,
+    };
+
+    var lower = try mir.Lower.init(
+        test_allocator,
+        &mir_store,
+        all_module_envs[0..],
+        &resources.module_env.types,
+        1,
+        null,
+    );
+    defer lower.deinit();
+
+    const mir_expr = try lower.lowerExpr(resources.expr_idx);
+
+    var lambda_set_store = try LambdaSet.infer(test_allocator, &mir_store, all_module_envs[0..]);
+    defer lambda_set_store.deinit(test_allocator);
+
+    var layout_store = try layout.Store.init(
+        all_module_envs[0..],
+        resources.builtin_module.env.idents.builtin_str,
+        test_allocator,
+        base.target.TargetUsize.native,
+    );
+    defer layout_store.deinit();
+
+    var lir_store = LirExprStore.init(test_allocator);
+    defer lir_store.deinit();
+
+    var translator = lir.MirToLir.init(
+        test_allocator,
+        &mir_store,
+        &lir_store,
+        &layout_store,
+        &lambda_set_store,
+        resources.module_env.idents.true_tag,
+    );
+    defer translator.deinit();
+
+    const lowered = try translator.lower(mir_expr);
+    var rc_pass = try lir.RcInsert.RcInsertPass.init(test_allocator, &lir_store, &layout_store);
+    defer rc_pass.deinit();
+    const with_rc = try rc_pass.insertRcOps(lowered);
+
+    const root = lir_store.getExpr(with_rc);
+    try std.testing.expect(root == .block);
+
+    const stmts = lir_store.getStmts(root.block.stmts);
+    var found_reassignable_list = false;
+    var found_list_cell = false;
+    for (stmts) |stmt| {
+        switch (stmt) {
+            .decl, .mutate => |binding| {
+                const pat = lir_store.getPattern(binding.pattern);
+                if (pat != .bind or !pat.bind.reassignable) continue;
+                const layout_val = layout_store.getLayout(pat.bind.layout_idx);
+                if (layout_val.tag != .list and layout_val.tag != .list_of_zst) continue;
+
+                found_reassignable_list = true;
+                try std.testing.expectEqual(@as(u32, 2), Search.countDecrefsForSymbol(&lir_store, with_rc, pat.bind.symbol));
+            },
+            .cell_init => |cell| {
+                const layout_val = layout_store.getLayout(cell.layout_idx);
+                if (layout_val.tag != .list and layout_val.tag != .list_of_zst) continue;
+
+                found_list_cell = true;
+                try std.testing.expectEqual(@as(u32, 2), Search.countCellDecrefs(&lir_store, with_rc, cell.cell));
+                try std.testing.expectEqual(@as(u32, 1), Search.countCellDrops(&lir_store, with_rc, cell.cell));
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(found_reassignable_list or found_list_cell);
+}
+
 test "lambda sets distinguish closure record fields with different captures" {
     const resources = try parseAndCanonicalizeExpr(test_allocator,
         \\{
@@ -4898,20 +5275,20 @@ test "MIR record closure fields capture distinct outer symbols" {
         .decl_const, .decl_var, .mutate_var => |b| b,
     };
     const rec_expr = mir_store.getExpr(rec_binding.expr);
-    try std.testing.expect(rec_expr == .record);
+    try std.testing.expect(rec_expr == .struct_);
 
-    const rec_fields = mir_store.getExprSpan(rec_expr.record.fields);
+    const rec_fields = mir_store.getExprSpan(rec_expr.struct_.fields);
     try std.testing.expectEqual(@as(usize, 2), rec_fields.len);
     try std.testing.expect(mir_store.getExprClosureMember(rec_fields[0]) != null);
     try std.testing.expect(mir_store.getExprClosureMember(rec_fields[1]) != null);
 
     const add_a_tuple = mir_store.getExpr(rec_fields[0]);
     const add_b_tuple = mir_store.getExpr(rec_fields[1]);
-    try std.testing.expect(add_a_tuple == .tuple);
-    try std.testing.expect(add_b_tuple == .tuple);
+    try std.testing.expect(add_a_tuple == .struct_);
+    try std.testing.expect(add_b_tuple == .struct_);
 
-    const add_a_elems = mir_store.getExprSpan(add_a_tuple.tuple.elems);
-    const add_b_elems = mir_store.getExprSpan(add_b_tuple.tuple.elems);
+    const add_a_elems = mir_store.getExprSpan(add_a_tuple.struct_.fields);
+    const add_b_elems = mir_store.getExprSpan(add_b_tuple.struct_.fields);
     try std.testing.expectEqual(@as(usize, 1), add_a_elems.len);
     try std.testing.expectEqual(@as(usize, 1), add_b_elems.len);
 

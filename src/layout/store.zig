@@ -347,95 +347,10 @@ pub const Store = struct {
     pub const insertRecord = insertStruct;
     pub const insertTuple = insertStruct;
 
-    /// Insert a record layout from concrete field layouts and names.
-    /// Fields are sorted by alignment (descending), then by name (ascending).
-    pub fn putRecord(
-        self: *Self,
-        _: *const ModuleEnv,
-        field_layouts: []const Layout,
-        field_names: []const Ident.Idx,
-    ) std.mem.Allocator.Error!Idx {
-        const trace = tracy.traceNamed(@src(), "layoutStore.putRecord");
-        defer trace.end();
-
-        // Handle empty records specially to avoid NonEmptyRange with count=0
-        if (field_layouts.len == 0) {
-            return self.getEmptyStructLayout();
-        }
-
-        // Build temp_fields with sequential indices, then sort by alignment+name
-        const SortEntry = struct {
-            index: u16,
-            layout: Idx,
-            name: Ident.Idx,
-        };
-        var temp_entries = std.ArrayList(SortEntry).empty;
-        defer temp_entries.deinit(self.allocator);
-
-        for (field_layouts, field_names, 0..) |field_layout, field_name, i| {
-            const field_layout_idx = try self.insertLayout(field_layout);
-            try temp_entries.append(self.allocator, .{
-                .index = @intCast(i),
-                .layout = field_layout_idx,
-                .name = field_name,
-            });
-        }
-
-        // Sort by alignment (descending), then by name (ascending).
-        const AlignmentSortCtx = struct {
-            store: *Self,
-            target_usize: target.TargetUsize,
-            pub fn lessThan(ctx: @This(), lhs: SortEntry, rhs: SortEntry) bool {
-                const lhs_layout = ctx.store.getLayout(lhs.layout);
-                const rhs_layout = ctx.store.getLayout(rhs.layout);
-                const lhs_alignment = lhs_layout.alignment(ctx.target_usize);
-                const rhs_alignment = rhs_layout.alignment(ctx.target_usize);
-                if (lhs_alignment.toByteUnits() != rhs_alignment.toByteUnits()) {
-                    return lhs_alignment.toByteUnits() > rhs_alignment.toByteUnits();
-                }
-                const lhs_str = ctx.store.getFieldName(lhs.name);
-                const rhs_str = ctx.store.getFieldName(rhs.name);
-                return std.mem.order(u8, lhs_str, rhs_str) == .lt;
-            }
-        };
-
-        std.mem.sort(
-            SortEntry,
-            temp_entries.items,
-            AlignmentSortCtx{ .store = self, .target_usize = self.targetUsize() },
-            AlignmentSortCtx.lessThan,
-        );
-
-        // Store as StructFields (index = original position before sorting)
-        const fields_start = self.struct_fields.items.len;
-        for (temp_entries.items) |entry| {
-            _ = try self.struct_fields.append(self.allocator, .{
-                .index = entry.index,
-                .layout = entry.layout,
-                .name = entry.name,
-            });
-        }
-
-        var max_alignment: usize = 1;
-        var current_offset: u32 = 0;
-        for (temp_entries.items) |entry| {
-            const field_layout = self.getLayout(entry.layout);
-            const field_size_align = self.layoutSizeAlign(field_layout);
-            const field_alignment = field_size_align.alignment.toByteUnits();
-            max_alignment = @max(max_alignment, field_alignment);
-            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment))));
-            current_offset += field_size_align.size;
-        }
-
-        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment)))));
-        const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(temp_entries.items.len) };
-        const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
-        _ = try self.struct_data.append(self.allocator, .{
-            .size = total_size,
-            .fields = fields_range,
-        });
-
-        return try self.insertLayout(Layout.struct_(std.mem.Alignment.fromByteUnits(max_alignment), struct_idx));
+    /// Insert a record layout from field layouts in canonical record-field order.
+    /// Fields are sorted by alignment (descending), then by canonical index (ascending).
+    pub fn putRecord(self: *Self, field_layouts: []const Layout) std.mem.Allocator.Error!Idx {
+        return self.putTuple(field_layouts);
     }
 
     /// Insert a tuple layout from concrete element layouts.
@@ -443,6 +358,14 @@ pub const Store = struct {
     pub fn putTuple(self: *Self, element_layouts: []const Layout) std.mem.Allocator.Error!Idx {
         const trace = tracy.traceNamed(@src(), "layoutStore.putTuple");
         defer trace.end();
+
+        if (element_layouts.len == 0) {
+            return self.getEmptyStructLayout();
+        }
+
+        if (element_layouts.len == 1) {
+            return self.insertLayout(element_layouts[0]);
+        }
 
         // Collect fields with original indices
         var temp_fields = std.ArrayList(StructField).empty;
@@ -874,48 +797,6 @@ pub const Store = struct {
     pub const getRecordFieldLayout = getStructFieldLayout;
     pub const getTupleElementLayout = getStructFieldLayout;
 
-    /// Get the field name text for an Ident.Idx.
-    /// Tries the current module first, then falls back to all module envs
-    /// for cross-module identifiers (e.g., record field names from Builtin).
-    pub fn getFieldName(self: *const Self, idx: Ident.Idx) []const u8 {
-        if (self.mutable_env) |env| {
-            return env.getIdent(idx);
-        }
-        const raw_idx: u32 = idx.idx;
-        // Try current module first
-        if (self.current_module_idx < self.all_module_envs.len) {
-            const env = self.all_module_envs[self.current_module_idx];
-            if (raw_idx < env.common.idents.interner.bytes.len())
-                return env.getIdent(idx);
-        }
-        // Fall back to all modules for cross-module idents
-        for (self.all_module_envs) |env| {
-            if (raw_idx < env.common.idents.interner.bytes.len())
-                return env.getIdent(idx);
-        }
-        return "?";
-    }
-
-    /// Get the offset of a record field by its field name (Ident.Idx).
-    /// Iterates through sorted fields to find the one with a matching name.
-    pub fn getRecordFieldOffsetByName(self: *const Self, struct_idx: StructIdx, field_name: Ident.Idx) u32 {
-        const sd = self.getStructData(struct_idx);
-        const sorted_fields = self.struct_fields.sliceRange(sd.getFields());
-
-        var current_offset: u32 = 0;
-        for (0..sorted_fields.len) |i| {
-            const field = sorted_fields.get(@intCast(i));
-            const field_layout = self.getLayout(field.layout);
-            const field_size_align = self.layoutSizeAlign(field_layout);
-            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_size_align.alignment.toByteUnits()))));
-            if (std.meta.eql(field.name, field_name)) {
-                return current_offset;
-            }
-            current_offset += field_size_align.size;
-        }
-        unreachable; // field name not found
-    }
-
     /// Get the offset of a struct field by its ORIGINAL index (source order).
     /// This searches through the sorted fields to find the one with the matching original index.
     pub fn getStructFieldOffsetByOriginalIndex(self: *const Self, struct_idx: StructIdx, original_index: u32) u32 {
@@ -1228,20 +1109,43 @@ pub const Store = struct {
         return num_tags;
     }
 
+    fn appendPendingRecordFieldsCanonical(
+        self: *Self,
+        fields: []const types.RecordField,
+    ) std.mem.Allocator.Error!void {
+        const sorted_fields = try self.allocator.dupe(types.RecordField, fields);
+        defer self.allocator.free(sorted_fields);
+
+        std.mem.sort(
+            types.RecordField,
+            sorted_fields,
+            self.currentEnv().getIdentStoreConst(),
+            types.RecordField.sortByNameAsc,
+        );
+
+        for (sorted_fields, 0..) |field, index| {
+            try self.work.pending_record_fields.append(self.allocator, .{
+                .index = @intCast(index),
+                .var_ = field.var_,
+            });
+        }
+    }
+
     /// Add the record's fields to self.pending_record_fields,
     /// then add the record's extension fields too (recursively).
     fn gatherRecordFields(
         self: *Self,
         record_type: types.Record,
     ) std.mem.Allocator.Error!usize {
-        var num_fields = record_type.fields.len();
+        var gathered_fields = std.ArrayList(types.RecordField).empty;
+        defer gathered_fields.deinit(self.allocator);
 
         const field_slice = self.getTypesStore().getRecordFieldsSlice(record_type.fields);
         for (field_slice.items(.name), field_slice.items(.var_)) |name, var_| {
             // TODO is it possible that here we're encountering record fields with names
             // already in the list? Would type-checking have already deduped them?
             // We would certainly rather not spend time doing hashmap things if we can avoid it here.
-            try self.work.pending_record_fields.append(self.allocator, .{ .name = name, .var_ = var_ });
+            try gathered_fields.append(self.allocator, .{ .name = name, .var_ = var_ });
         }
 
         var current_ext = record_type.ext;
@@ -1252,14 +1156,13 @@ pub const Store = struct {
                     .empty_record => break,
                     .record => |ext_record| {
                         if (ext_record.fields.len() > 0) {
-                            num_fields += ext_record.fields.len();
                             const ext_field_slice = self.getTypesStore().getRecordFieldsSlice(ext_record.fields);
                             for (ext_field_slice.items(.name), ext_field_slice.items(.var_)) |name, var_| {
                                 // TODO is it possible that here we're adding fields with names
                                 // already in the list? Would type-checking have already collapsed these?
                                 // We would certainly rather not spend time doing hashmap things
                                 // if we can avoid it here.
-                                try self.work.pending_record_fields.append(self.allocator, .{ .name = name, .var_ = var_ });
+                                try gathered_fields.append(self.allocator, .{ .name = name, .var_ = var_ });
                             }
                             current_ext = ext_record.ext;
                         } else {
@@ -1268,14 +1171,13 @@ pub const Store = struct {
                     },
                     .record_unbound => |fields| {
                         if (fields.len() > 0) {
-                            num_fields += fields.len();
                             const unbound_field_slice = self.getTypesStore().getRecordFieldsSlice(fields);
                             for (unbound_field_slice.items(.name), unbound_field_slice.items(.var_)) |name, var_| {
                                 // TODO is it possible that here we're adding fields with names
                                 // already in the list? Would type-checking have already collapsed these?
                                 // We would certainly rather not spend time doing hashmap things
                                 // if we can avoid it here.
-                                try self.work.pending_record_fields.append(self.allocator, .{ .name = name, .var_ = var_ });
+                                try gathered_fields.append(self.allocator, .{ .name = name, .var_ = var_ });
                             }
                         }
                         // record_unbound has no extension, so stop here
@@ -1292,7 +1194,8 @@ pub const Store = struct {
             }
         }
 
-        return num_fields;
+        try self.appendPendingRecordFieldsCanonical(gathered_fields.items);
+        return gathered_fields.items.len;
     }
 
     /// Add the tuple's fields to self.pending_tuple_fields
@@ -1319,31 +1222,27 @@ pub const Store = struct {
         const fields_start = self.struct_fields.items.len;
 
         // Copy only this record's resolved fields to the struct_fields store
-        const field_names = self.work.resolved_record_fields.items(.field_name);
+        const field_indices = self.work.resolved_record_fields.items(.field_index);
         const field_idxs = self.work.resolved_record_fields.items(.field_idx);
 
-        // We need to sort by alignment+name, but store as StructField (index, layout).
-        // Use a temp struct that carries the name for sorting purposes.
+        // Sort by alignment desc and canonical field index asc.
         const SortEntry = struct {
             index: u16,
             layout_idx: Idx,
-            name: Ident.Idx,
         };
         var temp_entries = std.ArrayList(SortEntry).empty;
         defer temp_entries.deinit(self.allocator);
 
-        for (updated_record.resolved_fields_start..resolved_fields_end, 0..) |i, seq_idx| {
+        for (updated_record.resolved_fields_start..resolved_fields_end) |i| {
             try temp_entries.append(self.allocator, .{
-                .index = @intCast(seq_idx),
+                .index = field_indices[i],
                 .layout_idx = field_idxs[i],
-                .name = field_names[i],
             });
         }
 
-        // Sort fields by alignment (descending) first, then by name (ascending)
+        // Sort fields by alignment (descending) first, then by canonical index (ascending).
         const AlignmentSortCtx = struct {
             store: *Self,
-            env: *const ModuleEnv,
             target_usize: target.TargetUsize,
             pub fn lessThan(ctx: @This(), lhs: SortEntry, rhs: SortEntry) bool {
                 const lhs_layout = ctx.store.getLayout(lhs.layout_idx);
@@ -1355,17 +1254,14 @@ pub const Store = struct {
                 if (lhs_alignment.toByteUnits() != rhs_alignment.toByteUnits()) {
                     return lhs_alignment.toByteUnits() > rhs_alignment.toByteUnits();
                 }
-
-                const lhs_str = ctx.env.getIdent(lhs.name);
-                const rhs_str = ctx.env.getIdent(rhs.name);
-                return std.mem.order(u8, lhs_str, rhs_str) == .lt;
+                return lhs.index < rhs.index;
             }
         };
 
         std.mem.sort(
             SortEntry,
             temp_entries.items,
-            AlignmentSortCtx{ .store = self, .env = self.currentEnv(), .target_usize = self.targetUsize() },
+            AlignmentSortCtx{ .store = self, .target_usize = self.targetUsize() },
             AlignmentSortCtx.lessThan,
         );
 
@@ -1374,7 +1270,6 @@ pub const Store = struct {
             _ = try self.struct_fields.append(self.allocator, .{
                 .index = entry.index,
                 .layout = entry.layout_idx,
-                .name = entry.name,
             });
         }
 
@@ -2333,15 +2228,18 @@ pub const Store = struct {
                         },
                         .record_unbound => |fields| {
                             // For record_unbound, we need to gather fields directly since it has no Record struct
-                            var num_fields: usize = 0;
+                            var gathered_fields = std.ArrayList(types.RecordField).empty;
+                            defer gathered_fields.deinit(self.allocator);
 
                             if (fields.len() > 0) {
-                                num_fields = fields.len();
                                 const unbound_field_slice = self.getTypesStore().getRecordFieldsSlice(fields);
                                 for (unbound_field_slice.items(.name), unbound_field_slice.items(.var_)) |name, var_| {
-                                    try self.work.pending_record_fields.append(self.allocator, .{ .name = name, .var_ = var_ });
+                                    try gathered_fields.append(self.allocator, .{ .name = name, .var_ = var_ });
                                 }
                             }
+
+                            try self.appendPendingRecordFieldsCanonical(gathered_fields.items);
+                            const num_fields = gathered_fields.items.len;
 
                             if (num_fields == 0) {
                                 continue :flat_type .empty_record;
@@ -2658,7 +2556,7 @@ pub const Store = struct {
 
                         // Add to resolved fields
                         try self.work.resolved_record_fields.append(self.allocator, .{
-                            .field_name = pending_field.name,
+                            .field_index = pending_field.index,
                             .field_idx = layout_idx,
                         });
 

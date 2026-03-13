@@ -120,11 +120,9 @@ pub fn readList(self: RocValue) *const RocList {
     return @ptrCast(@alignCast(self.ptr.?));
 }
 
-/// Lightweight context for formatting values — carries only layout and ident stores.
+/// Lightweight context for formatting values — carries only layout metadata.
 pub const FormatContext = struct {
     layout_store: *const layout.Store,
-    /// For resolving record field names and tag names to strings.
-    /// When null, fields render as positional indices.
     ident_store: ?*const Ident.Store = null,
 };
 
@@ -193,64 +191,36 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
     if (self.lay.tag == .struct_) {
         const struct_data = ctx.layout_store.getStructData(self.lay.data.struct_.idx);
         const fields = ctx.layout_store.struct_fields.sliceRange(struct_data.getFields());
-        // Check if this is a record-style struct (has named fields) or tuple-style
-        const is_record_style = fields.len > 0 and !fields.get(0).name.eql(base.Ident.Idx.NONE);
-        if (is_record_style) {
-            // --- Records ---
-            var out = std.array_list.AlignedManaged(u8, null).init(allocator);
-            errdefer out.deinit();
-            if (struct_data.fields.count == 0) {
-                try out.appendSlice("{}");
-                return out.toOwnedSlice();
-            }
-            try out.appendSlice("{ ");
-            var i: usize = 0;
-            while (i < fields.len) : (i += 1) {
-                const fld = fields.get(i);
-                const name_text = if (ctx.ident_store) |idents| idents.getText(fld.name) else "?";
-                try out.appendSlice(name_text);
-                try out.appendSlice(": ");
-                const offset = ctx.layout_store.getStructFieldOffset(self.lay.data.struct_.idx, @intCast(i));
-                const field_layout = ctx.layout_store.getLayout(fld.layout);
-                const base_ptr = self.ptr.?;
-                const field_ptr = base_ptr + offset;
-                const field_val = RocValue{ .ptr = field_ptr, .lay = field_layout };
-                const rendered = try field_val.format(allocator, ctx);
-                defer allocator.free(rendered);
-                try out.appendSlice(rendered);
-                if (i + 1 < fields.len) try out.appendSlice(", ");
-            }
-            try out.appendSlice(" }");
-            return out.toOwnedSlice();
-        } else {
-            // --- Tuples ---
-            var out = std.array_list.AlignedManaged(u8, null).init(allocator);
-            errdefer out.deinit();
-            try out.append('(');
-            const count = fields.len;
-            // Iterate by original source index (0, 1, 2, ...) rather than sorted order
-            var original_idx: usize = 0;
-            while (original_idx < count) : (original_idx += 1) {
-                const sorted_idx = blk: {
-                    for (0..count) |si| {
-                        if (fields.get(si).index == original_idx) break :blk si;
-                    }
-                    unreachable;
-                };
-                const fld = fields.get(sorted_idx);
-                const elem_layout = ctx.layout_store.getLayout(fld.layout);
-                const elem_offset = ctx.layout_store.getStructFieldOffset(self.lay.data.struct_.idx, @intCast(sorted_idx));
-                const base_ptr = self.ptr.?;
-                const elem_ptr = base_ptr + elem_offset;
-                const elem_val = RocValue{ .ptr = elem_ptr, .lay = elem_layout };
-                const rendered = try elem_val.format(allocator, ctx);
-                defer allocator.free(rendered);
-                try out.appendSlice(rendered);
-                if (original_idx + 1 < count) try out.appendSlice(", ");
-            }
-            try out.append(')');
-            return out.toOwnedSlice();
+        if (struct_data.fields.count == 0) {
+            return try allocator.dupe(u8, "{}");
         }
+
+        var out = std.array_list.AlignedManaged(u8, null).init(allocator);
+        errdefer out.deinit();
+        try out.append('(');
+        const count = fields.len;
+        // Iterate by original semantic index rather than sorted layout order.
+        var original_idx: usize = 0;
+        while (original_idx < count) : (original_idx += 1) {
+            const sorted_idx = blk: {
+                for (0..count) |si| {
+                    if (fields.get(si).index == original_idx) break :blk si;
+                }
+                unreachable;
+            };
+            const fld = fields.get(sorted_idx);
+            const elem_layout = ctx.layout_store.getLayout(fld.layout);
+            const elem_offset = ctx.layout_store.getStructFieldOffset(self.lay.data.struct_.idx, @intCast(sorted_idx));
+            const base_ptr = self.ptr.?;
+            const elem_ptr = base_ptr + elem_offset;
+            const elem_val = RocValue{ .ptr = elem_ptr, .lay = elem_layout };
+            const rendered = try elem_val.format(allocator, ctx);
+            defer allocator.free(rendered);
+            try out.appendSlice(rendered);
+            if (original_idx + 1 < count) try out.appendSlice(", ");
+        }
+        try out.append(')');
+        return out.toOwnedSlice();
     }
 
     // --- Lists ---

@@ -152,6 +152,8 @@ pub const BuiltinFn = enum {
     list_reserve,
     list_release_excess_capacity,
     list_decref_str,
+    list_decref_flat_list,
+    list_free_flat_list,
     list_sort_with,
 
     // Numeric operations
@@ -233,6 +235,8 @@ pub const BuiltinFn = enum {
             .list_reserve => "roc_builtins_list_reserve",
             .list_release_excess_capacity => "roc_builtins_list_release_excess_capacity",
             .list_decref_str => "roc_builtins_list_decref_str",
+            .list_decref_flat_list => "roc_builtins_list_decref_flat_list",
+            .list_free_flat_list => "roc_builtins_list_free_flat_list",
             .list_sort_with => "roc_builtins_list_sort_with",
 
             // Numeric operations
@@ -1799,10 +1803,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(temp_reg);
                     self.codegen.freeGeneral(addr_reg);
 
-                    if (ls.layoutContainsRefcounted(elem_layout_val)) {
-                        try self.emitIncrefAtStackOffset(elem_slot, elem_layout_idx);
-                    }
-
+                    // list_get_unsafe aliases the source list element. RC insertion decides
+                    // when a retained owner is needed, so do not auto-incref here.
                     var result_loc: ValueLocation = if (elem_layout_idx == .i128 or elem_layout_idx == .u128 or elem_layout_idx == .dec)
                         .{ .stack_i128 = elem_slot }
                     else if (elem_layout_idx == .str)
@@ -7332,6 +7334,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self: *Self,
             tag_pattern: anytype,
             value_loc: ValueLocation,
+            value_layout_idx: layout.Idx,
             value_layout_val: anytype,
         ) Allocator.Error!void {
             const ls = self.layout_store;
@@ -7345,10 +7348,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (tag_pattern.discriminant >= variants.len) return;
 
                     const payload_layout_idx = variants.get(tag_pattern.discriminant).payload_layout;
-                    const base_offset: i32 = switch (value_loc) {
+                    const stable_value_loc = try self.materializeValueToStackForLayout(value_loc, value_layout_idx);
+                    const base_offset: i32 = switch (stable_value_loc) {
                         .stack => |s| s.offset,
                         .stack_i128 => |off| off,
                         .stack_str => |off| off,
+                        .list_stack => |ls_info| ls_info.struct_offset,
                         else => unreachable,
                     };
 
@@ -7934,7 +7939,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
 
                         // Bind tag payload fields
-                        try self.bindTagPayloadFields(tag_pattern, value_loc, value_layout_val);
+                        try self.bindTagPayloadFields(tag_pattern, value_loc, when_expr.value_layout, value_layout_val);
 
                         // Guard check (after bindings, since guard may reference bound vars)
                         const guard_patch = try self.emitGuardCheck(branch.guard);
@@ -10081,17 +10086,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const ls = self.layout_store;
 
             // Generate the tag union value
-            const value_loc = try self.generateExpr(tpa.value);
+            const raw_value_loc = try self.generateExpr(tpa.value);
 
             const union_layout = ls.getLayout(tpa.union_layout);
             const payload_layout = ls.getLayout(tpa.payload_layout);
             const payload_size = ls.layoutSizeAlign(payload_layout).size;
 
             if (union_layout.tag == .tag_union) {
+                const value_loc = try self.materializeValueToStackForLayout(raw_value_loc, tpa.union_layout);
                 // Payload is at offset 0 within the stack-allocated tag union
                 const base_offset: i32 = switch (value_loc) {
                     .stack => |s| s.offset,
+                    .stack_i128 => |off| off,
                     .stack_str => |off| off,
+                    .list_stack => |ls_info| ls_info.struct_offset,
                     else => unreachable,
                 };
                 const payload_loc = self.fieldLocationFromLayout(base_offset, payload_size, tpa.payload_layout);
@@ -10100,7 +10108,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Boxed tag union: dereference the pointer, then copy payload from heap
                 const inner_layout = ls.getLayout(union_layout.data.box);
                 if (inner_layout.tag == .tag_union) {
-                    const box_ptr_reg = try self.ensureInGeneralReg(value_loc);
+                    const box_ptr_reg = try self.ensureInGeneralReg(raw_value_loc);
 
                     // Copy payload from heap to stack
                     const dest_offset = self.codegen.allocStackSlot(payload_size);
@@ -10116,11 +10124,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return self.fieldLocationFromLayout(dest_offset, payload_size, tpa.payload_layout);
                 } else {
                     // Box of scalar/ZST — the value is the payload directly
-                    return value_loc;
+                    return raw_value_loc;
                 }
             } else if (union_layout.tag == .scalar or union_layout.tag == .zst) {
                 // Scalar/ZST unions: the value itself is the payload (no indirection)
-                return value_loc;
+                return raw_value_loc;
             } else {
                 unreachable;
             }
@@ -10338,9 +10346,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const slot = self.codegen.allocStackSlot(storage.size);
             try self.copyBytesToStackOffset(slot, self.stackLocationForLayout(layout_idx, storage.slot), storage.size);
-            if (self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(layout_idx))) {
-                try self.emitIncrefAtStackOffset(slot, layout_idx);
-            }
             return self.stackLocationForLayout(layout_idx, slot);
         }
 
@@ -10551,15 +10556,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Payload is always at offset 0, discriminant comes after
                     const payload_offset: i32 = 0;
 
+                    const stable_value_loc = try self.materializeValueToStackForLayout(value_loc, tag_pat.union_layout);
                     // Get the base offset
-                    const base_offset: i32 = switch (value_loc) {
+                    const base_offset: i32 = switch (stable_value_loc) {
                         .stack => |s| s.offset,
+                        .stack_i128 => |off| off,
                         .stack_str => |off| off,
+                        .list_stack => |ls_info| ls_info.struct_offset,
                         else => {
                             if (builtin.mode == .Debug) {
                                 std.debug.panic(
                                     "LIR/codegen invariant violated: bindPattern tag requires stack value location, got {s}",
-                                    .{@tagName(value_loc)},
+                                    .{@tagName(stable_value_loc)},
                                 );
                             }
                             unreachable;
@@ -11124,6 +11132,37 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate code for calling a looked-up function definition.
         /// In the new pipeline, MIR→LIR has already generated closure dispatch as generic
         /// LIR constructs. The backend just needs to find the function def and call it.
+        fn lowLevelWrapperParamSymbol(self: *Self, pat_id: lir.LirPatternId) ?Symbol {
+            return switch (self.store.getPattern(pat_id)) {
+                .bind => |bind| bind.symbol,
+                .as_pattern => |as_pat| as_pat.symbol,
+                else => null,
+            };
+        }
+
+        fn isDirectLowLevelWrapper(
+            self: *Self,
+            params: lir.LirPatternSpan,
+            body: anytype,
+        ) bool {
+            const lambda_params = self.store.getPatternSpan(params);
+            const body_args = self.store.getExprSpan(body.args);
+            if (lambda_params.len != body_args.len) return false;
+
+            for (lambda_params, body_args) |param_pat_id, body_arg_id| {
+                const param_symbol = self.lowLevelWrapperParamSymbol(param_pat_id) orelse return false;
+                const body_arg = self.store.getExpr(body_arg_id);
+                switch (body_arg) {
+                    .lookup => |lookup| {
+                        if (!lookup.symbol.eql(param_symbol)) return false;
+                    },
+                    else => return false,
+                }
+            }
+
+            return true;
+        }
+
         fn generateLookupCall(self: *Self, lookup: anytype, args_span: anytype, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
             const symbol_key: u64 = @bitCast(lookup.symbol);
 
@@ -11158,17 +11197,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 switch (def_expr) {
                     .lambda => |lambda| {
                         const body_expr = self.store.getExpr(lambda.body);
-                        if (body_expr == .low_level) {
-                            if (builtin.mode == .Debug) {
-                                const body_args = self.store.getExprSpan(body_expr.low_level.args);
-                                const call_args = self.store.getExprSpan(args_span);
-                                if (body_args.len != call_args.len) {
-                                    std.debug.panic(
-                                        "LIR/codegen invariant violated: low-level wrapper symbol {d} expected {d} args, got {d}",
-                                        .{ lookup.symbol.raw(), body_args.len, call_args.len },
-                                    );
-                                }
-                            }
+                        if (body_expr == .low_level and self.isDirectLowLevelWrapper(lambda.params, body_expr.low_level)) {
                             return self.generateLowLevel(.{
                                 .op = body_expr.low_level.op,
                                 .args = args_span,
@@ -11180,17 +11209,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const inner = self.store.getExpr(nom.backing_expr);
                         if (inner == .lambda) {
                             const body_expr = self.store.getExpr(inner.lambda.body);
-                            if (body_expr == .low_level) {
-                                if (builtin.mode == .Debug) {
-                                    const body_args = self.store.getExprSpan(body_expr.low_level.args);
-                                    const call_args = self.store.getExprSpan(args_span);
-                                    if (body_args.len != call_args.len) {
-                                        std.debug.panic(
-                                            "LIR/codegen invariant violated: low-level wrapper symbol {d} expected {d} args, got {d}",
-                                            .{ lookup.symbol.raw(), body_args.len, call_args.len },
-                                        );
-                                    }
-                                }
+                            if (body_expr == .low_level and self.isDirectLowLevelWrapper(inner.lambda.params, body_expr.low_level)) {
                                 return self.generateLowLevel(.{
                                     .op = body_expr.low_level.op,
                                     .args = args_span,
@@ -11493,6 +11512,28 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .noreturn => unreachable,
             }
+        }
+
+        fn materializeValueToStackForLayout(
+            self: *Self,
+            value_loc: ValueLocation,
+            layout_idx: layout.Idx,
+        ) Allocator.Error!ValueLocation {
+            const normalized_value_loc = self.coerceImmediateToLayout(value_loc, layout_idx);
+
+            return switch (normalized_value_loc) {
+                .stack, .stack_i128, .stack_str, .list_stack, .noreturn => normalized_value_loc,
+                else => blk: {
+                    const size = self.getLayoutSize(layout_idx);
+                    if (size == 0) {
+                        break :blk self.stackLocationForLayout(layout_idx, 0);
+                    }
+
+                    const slot = self.codegen.allocStackSlot(size);
+                    try self.copyBytesToStackOffset(slot, normalized_value_loc, size);
+                    break :blk self.stackLocationForLayout(layout_idx, slot);
+                },
+            };
         }
 
         /// Returns true when an immediate i128 cannot be represented as a sign-extended i64.
@@ -12533,8 +12574,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return self.compileLambdaAsProcWithOptions(lambda_expr_id, lambda, .{});
         }
 
-        fn lambdaCacheKey(self: *Self, lambda_expr_id: LirExprId) u64 {
-            _ = self;
+        fn lambdaCacheKey(lambda_expr_id: LirExprId) u64 {
             return @intFromEnum(lambda_expr_id);
         }
 
@@ -12544,7 +12584,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             lambda: anytype,
             opts: LambdaProcOptions,
         ) Allocator.Error!usize {
-            const key = self.lambdaCacheKey(lambda_expr_id);
+            const key = lambdaCacheKey(lambda_expr_id);
 
             // Check if already compiled
             if (opts.use_cache) {
@@ -14686,7 +14726,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
 
                         // Bind tag payload fields
-                        try self.bindTagPayloadFields(tag_pattern, value_loc, value_layout_val);
+                        try self.bindTagPayloadFields(tag_pattern, value_loc, ms.value_layout, value_layout_val);
 
                         // Guard check (after bindings, since guard may reference bound vars)
                         const guard_patch = try self.emitGuardCheck(branch.guard);
@@ -14792,11 +14832,30 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Patch all pending calls after all procedures are compiled
+        fn generateRcOperandValue(self: *Self, expr_id: LirExprId, layout_idx: layout.Idx) Allocator.Error!ValueLocation {
+            switch (self.store.getExpr(expr_id)) {
+                .cell_load => |load| {
+                    const storage = self.resolveCellStorage(load.cell, load.layout_idx) orelse {
+                        if (builtin.mode == .Debug) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: RC op on unknown cell {d}",
+                                .{@as(u64, @bitCast(load.cell))},
+                            );
+                        }
+                        unreachable;
+                    };
+
+                    return self.stackLocationForLayout(layout_idx, storage.slot);
+                },
+                else => return self.generateExpr(expr_id),
+            }
+        }
+
         /// Generate code for incref operation
         /// Increments the reference count of a heap-allocated value
         fn generateIncref(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
             // First generate the value expression
-            const value_loc = try self.generateExpr(rc_op.value);
+            const value_loc = try self.generateRcOperandValue(rc_op.value, rc_op.layout_idx);
 
             // Check if we have a layout store to determine the type
             const ls = self.layout_store;
@@ -14863,7 +14922,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Decrements the reference count and frees if it reaches zero
         fn generateDecref(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
             // First generate the value expression
-            const value_loc = try self.generateExpr(rc_op.value);
+            const value_loc = try self.generateRcOperandValue(rc_op.value, rc_op.layout_idx);
 
             const ls = self.layout_store;
             const layout_val = ls.getLayout(rc_op.layout_idx);
@@ -15155,7 +15214,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Directly frees memory without checking refcount
         fn generateFree(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
             // First generate the value expression
-            const value_loc = try self.generateExpr(rc_op.value);
+            const value_loc = try self.generateRcOperandValue(rc_op.value, rc_op.layout_idx);
 
             // Check if we have a layout store to determine the type
             const ls = self.layout_store;
@@ -15167,7 +15226,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             switch (layout_val.tag) {
                 .list, .list_of_zst => {
                     const list_info = ls.getListInfo(layout_val);
-                    try self.emitListFree(value_loc, list_info.elem_alignment, list_info.contains_refcounted);
+                    try self.emitListFree(
+                        value_loc,
+                        list_info.elem_alignment,
+                        list_info.contains_refcounted,
+                        if (layout_val.tag == .list) list_info.elem_layout_idx else null,
+                    );
                 },
                 .scalar => {
                     if (layout_val.data.scalar.tag == .str) {
@@ -15206,7 +15270,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.callBuiltin(&builder, fn_addr, .incref_data_ptr);
         }
 
-        fn emitListElementDecrefsIfUnique(self: *Self, value_loc: ValueLocation, elem_layout_idx: layout.Idx) Allocator.Error!void {
+        fn emitListElementDecrefs(self: *Self, value_loc: ValueLocation, elem_layout_idx: layout.Idx, require_unique: bool) Allocator.Error!void {
             const ls = self.layout_store;
             const elem_layout = ls.getLayout(elem_layout_idx);
             if (!ls.layoutContainsRefcounted(elem_layout)) return;
@@ -15226,19 +15290,29 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(zero_reg);
             const null_ptr_patch = try self.emitJumpIfEqual();
 
-            // Elements are decref'd only when the list allocation is unique.
-            const rc_reg = try self.allocTempGeneral();
-            try self.emitLoad(.w64, rc_reg, ptr_reg, -@as(i32, @intCast(@sizeOf(usize))));
-            try self.emitCmpImm(rc_reg, 1);
-            self.codegen.freeGeneral(rc_reg);
-            const skip_patch = try self.emitJumpIfNotEqual();
+            const tag_mask: u64 = if (@sizeOf(usize) == 8) 0b111 else 0b11;
+            const mask_reg = try self.allocTempGeneral();
+            try self.codegen.emitLoadImm(mask_reg, @bitCast(~tag_mask));
+            try self.emitAndRegs(.w64, ptr_reg, ptr_reg, mask_reg);
+            self.codegen.freeGeneral(mask_reg);
+
+            const skip_patch = if (require_unique) blk: {
+                // Elements are decref'd only when the list allocation is unique.
+                const rc_reg = try self.allocTempGeneral();
+                try self.emitLoad(.w64, rc_reg, ptr_reg, -@as(i32, @intCast(@sizeOf(usize))));
+                try self.emitCmpImm(rc_reg, 1);
+                self.codegen.freeGeneral(rc_reg);
+                break :blk try self.emitJumpIfNotEqual();
+            } else null;
 
             const base_offset: i32 = switch (value_loc) {
                 .stack => |s| s.offset,
                 .stack_str => |off| off,
                 .list_stack => |info| info.struct_offset,
                 else => {
-                    self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
+                    if (skip_patch) |patch| {
+                        self.codegen.patchJump(patch, self.codegen.currentOffset());
+                    }
                     return;
                 },
             };
@@ -15329,8 +15403,66 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const loop_end = self.codegen.currentOffset();
             self.codegen.patchJump(exit_patch, loop_end);
-            self.codegen.patchJump(skip_patch, loop_end);
+            if (skip_patch) |patch| {
+                self.codegen.patchJump(patch, loop_end);
+            }
             self.codegen.patchJump(null_ptr_patch, loop_end);
+        }
+
+        const FlatNestedListRcInfo = struct {
+            inner_alignment: u32,
+            inner_element_width: usize,
+        };
+
+        fn flatNestedListRcInfo(self: *Self, elem_layout_idx: ?layout.Idx) ?FlatNestedListRcInfo {
+            const elem_idx = elem_layout_idx orelse return null;
+            const ls = self.layout_store;
+            const elem_layout = ls.getLayout(elem_idx);
+            if (elem_layout.tag != .list) return null;
+
+            const inner_info = ls.getListInfo(elem_layout);
+            if (inner_info.contains_refcounted) return null;
+
+            return .{
+                .inner_alignment = inner_info.elem_alignment,
+                .inner_element_width = inner_info.elem_size,
+            };
+        }
+
+        fn emitFlatNestedListRcWrapper(
+            self: *Self,
+            value_loc: ValueLocation,
+            info: FlatNestedListRcInfo,
+            fn_addr: usize,
+            builtin_fn: BuiltinFn,
+        ) Allocator.Error!void {
+            const roc_ops_reg = self.roc_ops_reg orelse {
+                if (builtin.mode == .Debug) std.debug.panic("LIR/codegen invariant violated: emitFlatNestedListRcWrapper requires roc_ops_reg", .{});
+                unreachable;
+            };
+
+            const base_offset: i32 = switch (value_loc) {
+                .stack => |s| s.offset,
+                .list_stack => |list_info| list_info.struct_offset,
+                else => {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: flat nested list RC wrapper requires stack value location, got {s}",
+                            .{@tagName(value_loc)},
+                        );
+                    }
+                    unreachable;
+                },
+            };
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addMemArg(frame_ptr, base_offset);
+            try builder.addMemArg(frame_ptr, base_offset + 8);
+            try builder.addMemArg(frame_ptr, base_offset + 16);
+            try builder.addImmArg(info.inner_alignment);
+            try builder.addImmArg(@intCast(info.inner_element_width));
+            try builder.addRegArg(roc_ops_reg);
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
         }
 
         /// Emit decref for a list value
@@ -15341,8 +15473,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
 
             if (elements_refcounted) {
+                if (self.flatNestedListRcInfo(elem_layout_idx)) |info| {
+                    return self.emitFlatNestedListRcWrapper(
+                        value_loc,
+                        info,
+                        @intFromPtr(&dev_wrappers.roc_builtins_list_decref_flat_list),
+                        .list_decref_flat_list,
+                    );
+                }
+            }
+
+            if (elements_refcounted) {
                 if (elem_layout_idx) |elem_idx| {
-                    try self.emitListElementDecrefsIfUnique(value_loc, elem_idx);
+                    try self.emitListElementDecrefs(value_loc, elem_idx, true);
                 }
             }
 
@@ -15362,12 +15505,30 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Emit free for a list value
-        fn emitListFree(self: *Self, value_loc: ValueLocation, elem_alignment: u32, elements_refcounted: bool) Allocator.Error!void {
+        fn emitListFree(self: *Self, value_loc: ValueLocation, elem_alignment: u32, elements_refcounted: bool, elem_layout_idx: ?layout.Idx) Allocator.Error!void {
             const roc_ops_reg = self.roc_ops_reg orelse {
                 if (builtin.mode == .Debug) std.debug.panic("LIR/codegen invariant violated: emitListFree requires roc_ops_reg", .{});
                 unreachable;
             };
+
+            if (elements_refcounted) {
+                if (self.flatNestedListRcInfo(elem_layout_idx)) |info| {
+                    return self.emitFlatNestedListRcWrapper(
+                        value_loc,
+                        info,
+                        @intFromPtr(&dev_wrappers.roc_builtins_list_free_flat_list),
+                        .list_free_flat_list,
+                    );
+                }
+            }
+
             const fn_addr: usize = @intFromPtr(&freeDataPtrC);
+
+            if (elements_refcounted) {
+                if (elem_layout_idx) |elem_idx| {
+                    try self.emitListElementDecrefs(value_loc, elem_idx, false);
+                }
+            }
 
             const ptr_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(ptr_reg);
@@ -16629,17 +16790,12 @@ test "record equality uses layout-aware comparison" {
 
     const can = @import("can");
     const ModuleEnv = can.ModuleEnv;
-    const Ident = base.Ident;
     const Layout = layout.Layout;
     const allocator = std.testing.allocator;
 
     // Set up ModuleEnv for ident storage
     var module_env = try ModuleEnv.init(allocator, "");
     defer module_env.deinit();
-
-    // Insert field name identifiers
-    const field_a = try module_env.insertIdent(Ident.for_text("a"));
-    const field_b = try module_env.insertIdent(Ident.for_text("b"));
 
     // Create layout store with a record layout { a: Str, b: Str }
     var module_env_ptrs = [1]*const ModuleEnv{&module_env};
@@ -16651,11 +16807,7 @@ test "record equality uses layout-aware comparison" {
     );
     defer layout_store.deinit();
 
-    const record_layout_idx = try layout_store.putRecord(
-        &module_env,
-        &[_]Layout{ Layout.str(), Layout.str() },
-        &[_]Ident.Idx{ field_a, field_b },
-    );
+    const record_layout_idx = try layout_store.putRecord(&[_]Layout{ Layout.str(), Layout.str() });
 
     // Create LIR expressions: two record literals and an eq binop
     var store = LirExprStore.init(allocator);

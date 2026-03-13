@@ -1548,8 +1548,12 @@ pub const RcInsertPass = struct {
                 try self.uniquifyBindingPatterns(block.final_expr);
             },
             .lambda => |*lam| {
-                for (self.store.getPatternSpanMut(lam.params)) |*param| {
-                    param.* = try self.clonePatternTree(param.*);
+                const original_params = try self.allocator.dupe(LirPatternId, self.store.getPatternSpan(lam.params));
+                defer self.allocator.free(original_params);
+
+                for (original_params, 0..) |param_id, i| {
+                    const cloned = try self.clonePatternTree(param_id);
+                    self.store.getPatternSpanMut(lam.params)[i] = cloned;
                 }
                 try self.uniquifyBindingPatterns(lam.body);
             },
@@ -3640,7 +3644,9 @@ pub const RcInsertPass = struct {
 
         // Lambda parameters are live bindings for the whole body and must be
         // included in early_return cleanup.
-        const params = self.store.getPatternSpan(lam.params);
+        const params = try self.allocator.dupe(LirPatternId, self.store.getPatternSpan(lam.params));
+        defer self.allocator.free(params);
+
         for (params) |pat_id| {
             try self.trackLiveRcSymbolsForPattern(pat_id, &local_consumed_uses);
         }
@@ -6799,6 +6805,45 @@ test "RC mutation: reassigning refcounted var emits decref before mutation" {
         if (stmt == .mutate and found_decref) found_decref_before_mutate = true;
     }
     try std.testing.expect(found_decref_before_mutate);
+}
+
+test "RC mutation: final use of reassignable refcounted var emits tail decref" {
+    // { var s = "hello"; s = "world"; s }
+    // The old value should decref before mutation, and the final use of the
+    // latest value should still get a tail decref at block exit.
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const str_layout: LayoutIdx = .str;
+    const sym_s = makeSymbol(1);
+
+    const str_hello = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
+    const str_world = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
+    const pat_s_decl = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const pat_s_mut = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const lookup_s = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+
+    const stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = pat_s_decl, .expr = str_hello } },
+        .{ .mutate = .{ .pattern = pat_s_mut, .expr = str_world } },
+    });
+
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = lookup_s,
+        .result_layout = str_layout,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+    const rc = countRcOps(&env.lir_store, result);
+
+    try std.testing.expectEqual(@as(u32, 2), rc.decrefs);
 }
 
 test "RC for_loop: unused refcounted elem does not decref borrowed element" {

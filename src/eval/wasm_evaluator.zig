@@ -173,6 +173,11 @@ pub const WasmEvaluator = struct {
         expr_idx: CIR.Expr.Idx,
         all_module_envs: []const *ModuleEnv,
     ) Error!WasmCodeResult {
+        // Other evaluators may have resolved this module's imports against a
+        // different module ordering. Refresh them here so CIR external lookups
+        // line up with the slice we are about to hand to MIR lowering.
+        module_env.imports.resolveImports(module_env, all_module_envs);
+
         // Find module index
         var module_idx: u32 = 0;
         for (all_module_envs, 0..) |env, i| {

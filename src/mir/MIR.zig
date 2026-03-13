@@ -204,20 +204,6 @@ pub const CaptureBindingSpan = extern struct {
     }
 };
 
-/// Span of field names (Ident.Idx) stored in extra_data.
-pub const FieldNameSpan = extern struct {
-    start: u32,
-    len: u16,
-
-    pub fn empty() FieldNameSpan {
-        return .{ .start = 0, .len = 0 };
-    }
-
-    pub fn isEmpty(self: FieldNameSpan) bool {
-        return self.len == 0;
-    }
-};
-
 /// Span of borrow bindings stored in borrow_bindings array.
 pub const BorrowBindingSpan = extern struct {
     start: u32,
@@ -324,15 +310,11 @@ pub const Expr = union(enum) {
         elems: ExprSpan,
     },
 
-    /// Record literal (fields sorted by name)
-    record: struct {
+    /// Structural product literal.
+    /// For records, fields are in canonical closed-record order.
+    /// For tuples, fields are in element-index order.
+    struct_: struct {
         fields: ExprSpan,
-        field_names: FieldNameSpan,
-    },
-
-    /// Tuple literal
-    tuple: struct {
-        elems: ExprSpan,
     },
 
     /// Tag application (zero-arg tag is just len=0 args)
@@ -387,16 +369,12 @@ pub const Expr = union(enum) {
 
     // --- Access ---
 
-    /// Record field access (resolved to concrete field name)
-    record_access: struct {
-        record: ExprId,
-        field_name: Ident.Idx,
-    },
-
-    /// Tuple element access by index
-    tuple_access: struct {
-        tuple: ExprId,
-        elem_index: u32,
+    /// Structural product field access by semantic field index.
+    /// For records this is canonical closed-record field order.
+    /// For tuples this is the tuple element index.
+    struct_access: struct {
+        struct_: ExprId,
+        field_idx: u32,
     },
 
     // --- Low-level ---
@@ -504,15 +482,11 @@ pub const Pattern = union(enum) {
     /// Match a specific f64
     frac_f64_literal: f64,
 
-    /// Destructure a record (field-name-sorted order)
-    record_destructure: struct {
-        destructs: PatternSpan,
-        field_names: FieldNameSpan,
-    },
-
-    /// Destructure a tuple
-    tuple_destructure: struct {
-        elems: PatternSpan,
+    /// Structural product destructure.
+    /// Records use full canonical closed-record order.
+    /// Tuples use element-index order.
+    struct_destructure: struct {
+        fields: PatternSpan,
     },
 
     /// Destructure a list
@@ -722,23 +696,6 @@ pub const Store = struct {
 
     /// Retrieve PatternIds from a PatternSpan.
     pub fn getPatternSpan(self: *const Store, span: PatternSpan) []const PatternId {
-        if (span.len == 0) return &.{};
-        const raw = self.extra_data.items[span.start..][0..span.len];
-        return @ptrCast(raw);
-    }
-
-    /// Store field names (Ident.Idx) in extra_data and return a FieldNameSpan.
-    pub fn addFieldNameSpan(self: *Store, allocator: Allocator, names: []const Ident.Idx) !FieldNameSpan {
-        if (names.len == 0) return FieldNameSpan.empty();
-        const start: u32 = @intCast(self.extra_data.items.len);
-        for (names) |name| {
-            try self.extra_data.append(allocator, @bitCast(name));
-        }
-        return .{ .start = start, .len = @intCast(names.len) };
-    }
-
-    /// Retrieve field names from a FieldNameSpan.
-    pub fn getFieldNameSpan(self: *const Store, span: FieldNameSpan) []const Ident.Idx {
         if (span.len == 0) return &.{};
         const raw = self.extra_data.items[span.start..][0..span.len];
         return @ptrCast(raw);

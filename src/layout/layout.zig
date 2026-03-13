@@ -12,7 +12,6 @@ const CIR = @import("can").CIR;
 
 pub const store = @import("store.zig");
 
-const Ident = base.Ident;
 const target = base.target;
 
 /// Tag for Layout variants
@@ -150,38 +149,14 @@ pub const LayoutUnion = packed union {
 
 /// Unified struct field layout — used for both records and tuples at the layout level.
 /// At the LIR level, records and tuples are both just contiguous fields sorted by alignment.
-/// The `index` field stores the original source-level index:
-///   - For records: the sequential field position (0, 1, 2, ...)
+/// The `index` field stores the canonical semantic field index:
+///   - For records: alphabetical closed-record field order
 ///   - For tuples: the original tuple element index (e.g. .0, .1, .2)
 pub const StructField = struct {
-    /// The original index of this field (source-level index for tuples, sequential for records)
+    /// The canonical semantic index of this field before layout sorting.
     index: u16,
     /// The layout of the field's value
     layout: Idx,
-    /// DEPRECATED: Optional field name (set for records, unset for tuples).
-    ///
-    /// This field is incorrect by construction. `Ident.Idx` is module-local, but
-    /// by the time we have lowered to layouts the notion of "which module this
-    /// came from" has intentionally been erased. There is no principled way to
-    /// recover the correct `Ident.Store` from layout data alone, so looking this
-    /// up can only work by accident in the special case where the caller both has
-    /// access to the right ident store and happens to choose it.
-    ///
-    /// The long-term direction is to delete this field entirely.
-    ///
-    /// Why it still exists today:
-    /// - legacy interpreter/runtime record field lookup
-    /// - legacy REPL/value rendering paths, including `RocValue`
-    /// - a few transitional layout/lowering helpers that still match record fields
-    ///   by name after layout construction
-    ///
-    /// Those runtime/display use cases are going away. Display of Roc values should
-    /// ultimately happen through `Str.inspect`, not by reading names out of layout
-    /// metadata. `RocValue` should go away, and the interpreter is also planned to
-    /// go away. Once the remaining transitional lowering/layout consumers are
-    /// removed or rewritten to use a non-name-based mechanism, this field should go
-    /// from deprecated to deleted.
-    name: Ident.Idx = Ident.Idx.NONE,
 
     /// A SafeMultiList for storing struct fields
     pub const SafeMultiList = collections.SafeMultiList(StructField);

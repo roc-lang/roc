@@ -145,20 +145,6 @@ test "MIR Store: statements" {
     try testing.expectEqual(expr, stmts[0].decl_const.expr);
 }
 
-test "MIR Store: field name spans" {
-    var store = try MIR.Store.init(test_allocator);
-    defer store.deinit(test_allocator);
-
-    const name1 = Ident.Idx.NONE;
-    const name2 = Ident.Idx.NONE;
-
-    const span = try store.addFieldNameSpan(test_allocator, &.{ name1, name2 });
-    try testing.expectEqual(@as(u16, 2), span.len);
-
-    const retrieved = store.getFieldNameSpan(span);
-    try testing.expectEqual(@as(usize, 2), retrieved.len);
-}
-
 test "MIR Store: symbol def registration" {
     var store = try MIR.Store.init(test_allocator);
     defer store.deinit(test_allocator);
@@ -752,7 +738,7 @@ test "lambda set: closure extracted from record field keeps member defs stable" 
     for (stmts) |stmt| {
         if (stmt != .decl_const) continue;
         const stmt_expr = env.mir_store.getExpr(stmt.decl_const.expr);
-        if (stmt_expr != .record_access) continue;
+        if (stmt_expr != .struct_access) continue;
         const pat = env.mir_store.getPattern(stmt.decl_const.pattern);
         if (pat != .bind) continue;
         extracted_sym = pat.bind;
@@ -1444,7 +1430,7 @@ test "lowerExpr: tuple access" {
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
     try testing.expect(result == .block);
-    try testing.expect(env.mir_store.getExpr(result.block.final_expr) == .tuple_access);
+    try testing.expect(env.mir_store.getExpr(result.block.final_expr) == .struct_access);
 }
 
 test "lowerExpr: typed F64 fractional via dot syntax" {
