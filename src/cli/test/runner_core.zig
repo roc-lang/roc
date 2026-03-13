@@ -9,6 +9,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
+const os_temp_dir = @import("os_temp_dir");
 
 /// Result of a test execution
 pub const TestResult = enum {
@@ -35,6 +36,25 @@ pub const TestStats = struct {
         }
     }
 };
+
+fn runRocChild(allocator: Allocator, argv: []const []const u8) !std.process.Child.RunResult {
+    var env_map = try std.process.getEnvMap(allocator);
+    defer env_map.deinit();
+
+    // Test runs may execute inside a sandbox where the default cache dir is not writable.
+    // ROC_CACHE_DIR overrides Roc's cache location on all platforms (Linux, macOS, Windows).
+    const temp_base = try os_temp_dir.getOsTempDir(allocator);
+    defer allocator.free(temp_base);
+    const cache_dir = try std.fs.path.join(allocator, &.{ temp_base, "roc" });
+    defer allocator.free(cache_dir);
+    try env_map.put("ROC_CACHE_DIR", cache_dir);
+
+    return std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = argv,
+        .env_map = &env_map,
+    });
+}
 
 /// Cross-compile a Roc app to a specific target.
 /// Returns true if compilation succeeded.
@@ -72,10 +92,7 @@ pub fn crossCompile(
     argv_buf[argc] = roc_file;
     argc += 1;
 
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = argv_buf[0..argc],
-    }) catch |err| {
+    const result = runRocChild(allocator, argv_buf[0..argc]) catch |err| {
         std.debug.print("FAIL (spawn error: {})\n", .{err});
         return .failed;
     };
@@ -115,10 +132,7 @@ pub fn buildNative(
     argv_buf[argc] = roc_file;
     argc += 1;
 
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = argv_buf[0..argc],
-    }) catch |err| {
+    const result = runRocChild(allocator, argv_buf[0..argc]) catch |err| {
         std.debug.print("FAIL (spawn error: {})\n", .{err});
         return .failed;
     };
@@ -197,14 +211,11 @@ pub fn runWithIoSpec(
     const test_arg = try std.fmt.allocPrint(allocator, "--test={s}", .{io_spec});
     defer allocator.free(test_arg);
 
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{
-            roc_binary,
-            "run",
-            test_arg,
-            roc_file,
-        },
+    const result = runRocChild(allocator, &[_][]const u8{
+        roc_binary,
+        "run",
+        test_arg,
+        roc_file,
     }) catch |err| {
         std.debug.print("FAIL (spawn error: {})\n", .{err});
         return .failed;
@@ -329,14 +340,11 @@ pub fn runWithValgrind(
         return .skipped;
     }
 
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{
-            "./ci/custom_valgrind.sh",
-            roc_binary,
-            "--no-cache",
-            roc_file,
-        },
+    const result = runRocChild(allocator, &[_][]const u8{
+        "./ci/custom_valgrind.sh",
+        roc_binary,
+        "--no-cache",
+        roc_file,
     }) catch |err| {
         std.debug.print("FAIL (spawn error: {})\n", .{err});
         return .failed;

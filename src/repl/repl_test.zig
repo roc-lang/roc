@@ -40,7 +40,7 @@ fn expectBoth(expr: []const u8, expected: []const u8) !void {
     {
         var test_env = TestEnv.init(alloc);
         defer test_env.deinit();
-        var repl = try Repl.initWithBackend(alloc, test_env.get_ops(), null, .dev);
+        var repl = try Repl.initWithBackend(alloc, test_env.get_ops(), test_env.crashContextPtr(), .dev);
         defer repl.deinit();
         const result = try repl.step(expr);
         defer alloc.free(result);

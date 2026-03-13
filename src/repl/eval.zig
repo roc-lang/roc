@@ -769,16 +769,16 @@ pub const Repl = struct {
                     dev_eval.callWithCrashProtection(&executable, @ptrCast(&result_buf)) catch |err| switch (err) {
                         error.RocCrashed => {
                             if (dev_eval.getCrashMessage()) |msg| {
-                                return .{ .eval_error = try std.fmt.allocPrint(
-                                    self.allocator,
-                                    "Dev backend execution error: {s}: {s}",
-                                    .{ @errorName(err), msg },
-                                ) };
+                                return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Dev backend crash: {s}", .{msg}) };
                             }
-
+                            if (self.crash_ctx) |ctx| {
+                                if (ctx.crashMessage()) |msg| {
+                                    return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Dev backend crash: {s}", .{msg}) };
+                                }
+                            }
                             return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Dev backend execution error: {s}", .{@errorName(err)}) };
                         },
-                        else => {
+                        error.Segfault => {
                             return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Dev backend execution error: {s}", .{@errorName(err)}) };
                         },
                     };

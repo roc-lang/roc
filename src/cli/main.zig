@@ -149,30 +149,30 @@ const BuiltinsObjects = struct {
     const native = if (builtin.is_test)
         &[_]u8{}
     else if (builtin.os.tag == .windows)
-        @embedFile("roc_builtins.lib")
+        @embedFile("roc_builtins.obj")
     else
-        @embedFile("libroc_builtins.a");
+        @embedFile("roc_builtins.o");
 
     /// Cross-compilation target builtins (Linux musl targets)
-    const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/libroc_builtins.a");
-    const arm64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64musl/libroc_builtins.a");
+    const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/roc_builtins.o");
+    const arm64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64musl/roc_builtins.o");
 
     /// Cross-compilation target builtins (Linux glibc targets)
-    const x64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/libroc_builtins.a");
-    const arm64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64glibc/libroc_builtins.a");
+    const x64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/roc_builtins.o");
+    const arm64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64glibc/roc_builtins.o");
 
     /// WebAssembly target builtins (wasm32-freestanding) - not used by dev backend
-    const wasm32 = if (builtin.is_test) &[_]u8{} else @embedFile("targets/wasm32/libroc_builtins.a");
+    const wasm32 = if (builtin.is_test) &[_]u8{} else @embedFile("targets/wasm32/roc_builtins.o");
 
     /// Cross-compilation target builtins (Windows targets)
-    const x64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/roc_builtins.lib");
-    const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/roc_builtins.lib");
+    const x64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/roc_builtins.obj");
+    const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/roc_builtins.obj");
 
     /// Cross-compilation target builtins (macOS targets)
-    const x64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/libroc_builtins.a");
-    const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/libroc_builtins.a");
+    const x64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/roc_builtins.o");
+    const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/roc_builtins.o");
 
-    /// Get the appropriate builtins library bytes for the given target
+    /// Get the appropriate builtins object bytes for the given target
     pub fn forTarget(target: roc_target.RocTarget) []const u8 {
         return switch (target) {
             .x64musl => x64musl,
@@ -189,11 +189,11 @@ const BuiltinsObjects = struct {
         };
     }
 
-    /// Get the filename for builtins library on given target
+    /// Get the filename for builtins object on given target
     pub fn filename(target: roc_target.RocTarget) []const u8 {
         return switch (target.toOsTag()) {
-            .windows => "roc_builtins.lib",
-            else => "libroc_builtins.a",
+            .windows => "roc_builtins.obj",
+            else => "roc_builtins.o",
         };
     }
 };
@@ -900,6 +900,11 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    switch (args.backend) {
+        .dev => return rocRunDev(ctx, args),
+        .interpreter => {},
+    }
+
     // Initialize cache - used to store our shim, and linked interpreter executables in cache
     const cache_config = CacheConfig{
         .enabled = !args.no_cache,
@@ -1260,6 +1265,243 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
     if (shm_result.warning_count > 0) {
         ctx.io.flush();
         std.process.exit(2);
+    }
+}
+
+/// Run using the dev backend: build to a temp directory, then execute the result.
+fn rocRunDev(ctx: *CliContext, args: cli_args.RunArgs) !void {
+    // Build to a temp path
+    const temp_dir_path = createUniqueTempDir(ctx) catch |err| {
+        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
+    };
+    // Clean up the temp directory on any error return. Success paths and std.process.exit
+    // paths handle cleanup explicitly before exiting.
+    errdefer compile.CacheCleanup.deleteTempDir(ctx.arena, temp_dir_path);
+
+    const exe_name = std.fs.path.stem(std.fs.path.basename(args.path));
+    const output_path = std.fs.path.join(ctx.arena, &.{ temp_dir_path, exe_name }) catch {
+        return error.OutOfMemory;
+    };
+
+    var warning_count: usize = 0;
+    const build_args = cli_args.BuildArgs{
+        .path = args.path,
+        .opt = args.opt,
+        .backend = .dev,
+        .target = args.target,
+        .output = output_path,
+        .no_cache = args.no_cache,
+        .allow_errors = args.allow_errors,
+        .exit_on_warnings = false,
+        .warning_count_out = &warning_count,
+        .require_executable_output = true,
+        .suppress_build_status = true,
+    };
+
+    try rocBuildNative(ctx, build_args);
+
+    // Flush I/O buffers before spawning the child process so the "Built..." message
+    // appears before the app's output and doesn't interfere with the child's stdout.
+    ctx.io.flush();
+
+    if (is_windows) {
+        // On Windows, use CreateProcessW directly to preserve the full DWORD exit code.
+        // std.process.Child.wait() truncates GetExitCodeProcess() into .Exited(u8),
+        // which loses NTSTATUS crash codes like 0xC0000005 (access violation).
+        try runDevChildWindows(ctx, output_path, args.app_args, warning_count, temp_dir_path);
+    } else {
+        // Run the built executable
+        var child_args = std.array_list.Managed([]const u8).initCapacity(ctx.arena, 1 + args.app_args.len) catch {
+            return error.OutOfMemory;
+        };
+        child_args.append(output_path) catch return error.OutOfMemory;
+        for (args.app_args) |app_arg| {
+            child_args.append(app_arg) catch return error.OutOfMemory;
+        }
+
+        var child = std.process.Child.init(child_args.items, ctx.arena);
+        child.stdin_behavior = .Inherit;
+        child.stdout_behavior = .Inherit;
+        child.stderr_behavior = .Inherit;
+        const term = child.spawnAndWait() catch |err| {
+            return ctx.fail(.{ .child_process_spawn_failed = .{
+                .command = output_path,
+                .err = err,
+            } });
+        };
+
+        // Clean up the temp directory now that the child has exited.
+        compile.CacheCleanup.deleteTempDir(ctx.arena, temp_dir_path);
+
+        try handleNativeRunTermination(ctx, output_path, term, warning_count);
+    }
+}
+
+/// Windows-specific child process execution that preserves full DWORD exit codes.
+/// This mirrors the interpreter's runWithWindowsHandleInheritance but without IPC setup.
+fn runDevChildWindows(ctx: *CliContext, exe_path: []const u8, app_args: []const []const u8, warning_count: usize, temp_dir_path: []const u8) !void {
+    // Convert exe path to wide string
+    const exe_path_w = std.unicode.utf8ToUtf16LeAllocZ(ctx.arena, exe_path) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidUtf8 => return ctx.fail(.{ .child_process_spawn_failed = .{
+            .command = exe_path,
+            .err = err,
+        } }),
+    };
+
+    const cwd = std.fs.cwd().realpathAlloc(ctx.arena, ".") catch {
+        return ctx.fail(.{ .directory_not_found = .{
+            .path = ".",
+        } });
+    };
+    const cwd_w = std.unicode.utf8ToUtf16LeAllocZ(ctx.arena, cwd) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidUtf8 => return ctx.fail(.{ .directory_not_found = .{
+            .path = cwd,
+        } }),
+    };
+
+    // Build command line with proper quoting
+    var cmd_builder = std.array_list.Managed(u8).initCapacity(ctx.gpa, 256) catch {
+        return error.OutOfMemory;
+    };
+    defer cmd_builder.deinit();
+    try appendWindowsQuotedArg(&cmd_builder, exe_path);
+    for (app_args) |arg| {
+        try cmd_builder.append(' ');
+        try appendWindowsQuotedArg(&cmd_builder, arg);
+    }
+    try cmd_builder.append(0);
+
+    const cmd_line = cmd_builder.items[0 .. cmd_builder.items.len - 1 :0];
+    const cmd_line_w = std.unicode.utf8ToUtf16LeAllocZ(ctx.arena, cmd_line) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidUtf8 => return ctx.fail(.{ .child_process_spawn_failed = .{
+            .command = exe_path,
+            .err = err,
+        } }),
+    };
+
+    var startup_info = std.mem.zeroes(windows.STARTUPINFOW);
+    startup_info.cb = @sizeOf(windows.STARTUPINFOW);
+    var process_info = std.mem.zeroes(windows.PROCESS_INFORMATION);
+
+    const success = windows.CreateProcessW(
+        exe_path_w.ptr,
+        cmd_line_w.ptr,
+        null,
+        null,
+        1, // bInheritHandles = TRUE (inherit parent's stdio for redirection/pipes)
+        0,
+        null,
+        cwd_w.ptr,
+        &startup_info,
+        &process_info,
+    );
+
+    if (success == 0) {
+        return ctx.fail(.{ .child_process_spawn_failed = .{
+            .command = exe_path,
+            .err = error.ProcessCreationFailed,
+        } });
+    }
+
+    // Wait for child to complete
+    const wait_result = windows.WaitForSingleObject(process_info.hProcess, windows.INFINITE);
+    if (wait_result != 0) {
+        _ = ipc.platform.windows.CloseHandle(process_info.hProcess);
+        _ = ipc.platform.windows.CloseHandle(process_info.hThread);
+        return ctx.fail(.{ .child_process_wait_failed = .{
+            .command = exe_path,
+            .err = error.ProcessWaitFailed,
+        } });
+    }
+
+    // Get the full exit code (not truncated to u8)
+    var exit_code: windows.DWORD = undefined;
+    if (windows.GetExitCodeProcess(process_info.hProcess, &exit_code) == 0) {
+        _ = ipc.platform.windows.CloseHandle(process_info.hProcess);
+        _ = ipc.platform.windows.CloseHandle(process_info.hThread);
+        return ctx.fail(.{ .child_process_wait_failed = .{
+            .command = exe_path,
+            .err = error.ProcessExitCodeFailed,
+        } });
+    }
+
+    _ = ipc.platform.windows.CloseHandle(process_info.hProcess);
+    _ = ipc.platform.windows.CloseHandle(process_info.hThread);
+
+    // Clean up the temp directory now that the child has exited.
+    compile.CacheCleanup.deleteTempDir(ctx.arena, temp_dir_path);
+
+    if (exit_code != 0) {
+        if (exit_code == 0xC0000005) {
+            const result = platform_validation.targets_validator.ValidationResult{
+                .process_crashed = .{ .exit_code = exit_code, .is_access_violation = true },
+            };
+            _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+        } else if (exit_code >= 0xC0000000) {
+            const result = platform_validation.targets_validator.ValidationResult{
+                .process_crashed = .{ .exit_code = exit_code, .is_access_violation = false },
+            };
+            _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+        }
+        std.process.exit(@truncate(exit_code));
+    } else if (warning_count > 0) {
+        std.process.exit(2);
+    }
+}
+
+const NativeRunTermination = union(enum) {
+    success,
+    exit_code: u8,
+    signal: u32,
+    stopped: u32,
+    unknown: u32,
+};
+
+fn classifyNativeRunTermination(term: std.process.Child.Term, warning_count: usize) NativeRunTermination {
+    return switch (term) {
+        .Exited => |code| if (code != 0)
+            .{ .exit_code = code }
+        else if (warning_count > 0)
+            .{ .exit_code = 2 }
+        else
+            .success,
+        .Signal => |signal| .{ .signal = signal },
+        .Stopped => |signal| .{ .stopped = signal },
+        .Unknown => |status| .{ .unknown = status },
+    };
+}
+
+fn handleNativeRunTermination(
+    ctx: *CliContext,
+    command: []const u8,
+    term: std.process.Child.Term,
+    warning_count: usize,
+) !void {
+    switch (classifyNativeRunTermination(term, warning_count)) {
+        .success => {},
+        .exit_code => |code| std.process.exit(code),
+        .signal => |signal| {
+            const result = platform_validation.targets_validator.ValidationResult{
+                .process_signaled = .{ .signal = signal },
+            };
+            _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            std.process.exit(128 +| @as(u8, @truncate(signal)));
+        },
+        .stopped => |signal| {
+            return ctx.fail(.{ .child_process_signaled = .{
+                .command = command,
+                .signal = signal,
+            } });
+        },
+        .unknown => |status| {
+            return ctx.fail(.{ .child_process_failed = .{
+                .command = command,
+                .exit_code = status,
+            } });
+        },
     }
 }
 
@@ -3445,6 +3687,26 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         break :blk .{ compatible.target, compatible.link_type };
     };
 
+    if (args.require_executable_output and link_type != .exe) {
+        const stderr = ctx.io.stderr();
+        switch (link_type) {
+            .static_lib => {
+                stderr.print("Error: The selected target only produces static libraries.\n\n", .{}) catch {};
+                stderr.print("Static library platforms produce .a/.lib/.wasm files that must be\n", .{}) catch {};
+                stderr.print("linked by a host application. Use 'roc build' instead to produce\n", .{}) catch {};
+                stderr.print("the library artifact.\n", .{}) catch {};
+            },
+            .shared_lib => {
+                stderr.print("Error: The selected target only produces shared libraries.\n\n", .{}) catch {};
+                stderr.print("Shared library platforms produce .so/.dylib/.dll files that must be\n", .{}) catch {};
+                stderr.print("loaded by a host application. Use 'roc build' instead to produce\n", .{}) catch {};
+                stderr.print("the library artifact.\n", .{}) catch {};
+            },
+            .exe => unreachable,
+        }
+        return error.UnsupportedTarget;
+    }
+
     std.log.debug("Target: {s}, Link type: {s}", .{ @tagName(target), @tagName(link_type) });
 
     // Check if dev backend supports this target architecture
@@ -3716,21 +3978,17 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     };
     defer mir_lower.deinit();
 
-    // Run lambda set inference
-    var lambda_set_store = mir.LambdaSet.infer(ctx.gpa, &mir_store, all_module_envs) catch return error.OutOfMemory;
-    defer lambda_set_store.deinit(ctx.gpa);
-
-    var lir_store = lir.LirExprStore.init(ctx.gpa);
-    defer lir_store.deinit();
-
-    var mir_to_lir = lir.MirToLir.init(ctx.gpa, &mir_store, &lir_store, &layout_store, &lambda_set_store, all_module_envs[0].idents.true_tag);
-    defer mir_to_lir.deinit();
-
     // Find and lower entrypoint expressions from platform module
     // The platform's provides clause maps Roc identifiers to FFI symbols
     // e.g., provides { main_for_host!: "main" } means we look for main_for_host! in platform
-    var entrypoints = try std.ArrayList(backend.Entrypoint).initCapacity(ctx.gpa, provides_entries.len);
-    defer entrypoints.deinit(ctx.gpa);
+    const PendingEntrypoint = struct {
+        ffi_symbol: []const u8,
+        mir_expr_id: MIR.ExprId,
+        ret_type_var: @import("types").Var,
+        arg_layouts: []const layout.Idx,
+    };
+    var pending_entrypoints = try std.ArrayList(PendingEntrypoint).initCapacity(ctx.gpa, provides_entries.len);
+    defer pending_entrypoints.deinit(ctx.gpa);
 
     const platform_defs = platform_module.env.store.sliceDefs(platform_module.env.all_defs);
 
@@ -3753,31 +4011,54 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         }
 
         if (found_expr) |expr_idx| {
+            const expr_type_var = can.ModuleEnv.varFrom(expr_idx);
+            const resolved_expr_var = platform_types.resolveVar(expr_type_var);
+            const maybe_func = resolved_expr_var.desc.content.unwrapFunc();
+
+            var arg_layouts: []const layout.Idx = &.{};
+            var ret_type_var = expr_type_var;
+
+            if (maybe_func) |func| {
+                const arg_vars = platform_types.sliceVars(func.args);
+                if (arg_vars.len > 0) {
+                    var mutable_arg_layouts = try ctx.arena.alloc(layout.Idx, arg_vars.len);
+                    var arg_type_scope = @import("types").TypeScope.init(ctx.gpa);
+                    defer arg_type_scope.deinit();
+                    for (arg_vars, 0..) |arg_var, i| {
+                        mutable_arg_layouts[i] = try layout_store.fromTypeVar(platform_module_idx, arg_var, &arg_type_scope, null);
+                    }
+                    arg_layouts = mutable_arg_layouts;
+                }
+                ret_type_var = func.ret;
+            }
+
             // Lower CIR → MIR
-            const mir_expr_id = mir_lower.lowerExpr(expr_idx) catch |err| {
+            var mir_expr_id = mir_lower.lowerExpr(expr_idx) catch |err| {
                 std.log.err("Failed to lower expression for entrypoint {s} ({s}): {}", .{ entry.roc_ident, entry.ffi_symbol, err });
                 continue;
             };
-            // Lower MIR → LIR
-            const lir_expr_id = mir_to_lir.lower(mir_expr_id) catch |err| {
-                std.log.err("Failed to lower MIR to LIR for entrypoint {s} ({s}): {}", .{ entry.roc_ident, entry.ffi_symbol, err });
-                continue;
-            };
 
-            // Get layout for the expression
-            const type_var = can.ModuleEnv.varFrom(expr_idx);
-            var type_scope = @import("types").TypeScope.init(ctx.gpa);
-            defer type_scope.deinit();
-            const ret_layout = layout_store.fromTypeVar(platform_module_idx, type_var, &type_scope, null) catch {
-                std.log.err("Failed to get layout for entrypoint {s}", .{entry.roc_ident});
-                continue;
-            };
+            // Zero-arg platform entrypoints like `main! : () => {}` must be lowered
+            // as calls, not as first-class function values.
+            if (maybe_func) |func| {
+                const arg_vars = platform_types.sliceVars(func.args);
+                if (arg_vars.len == 0) {
+                    const func_mono_idx = mir_store.typeOf(mir_expr_id);
+                    const func_mono = mir_store.monotype_store.getMonotype(func_mono_idx);
+                    if (func_mono == .func) {
+                        mir_expr_id = try mir_store.addExpr(ctx.gpa, .{ .call = .{
+                            .func = mir_expr_id,
+                            .args = MIR.ExprSpan.empty(),
+                        } }, func_mono.func.ret, base.Region.zero());
+                    }
+                }
+            }
 
-            try entrypoints.append(ctx.gpa, .{
-                .symbol_name = try std.fmt.allocPrint(ctx.arena, "roc__{s}", .{entry.ffi_symbol}),
-                .body_expr = lir_expr_id,
-                .arg_layouts = &[_]layout.Idx{}, // Top-level constants have no args
-                .ret_layout = ret_layout,
+            try pending_entrypoints.append(ctx.gpa, .{
+                .ffi_symbol = entry.ffi_symbol,
+                .mir_expr_id = mir_expr_id,
+                .ret_type_var = ret_type_var,
+                .arg_layouts = arg_layouts,
             });
 
             std.log.debug("Found entrypoint: {s} -> roc__{s}", .{ entry.roc_ident, entry.ffi_symbol });
@@ -3786,8 +4067,47 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         }
     }
 
-    if (entrypoints.items.len == 0) {
+    if (pending_entrypoints.items.len == 0) {
         std.log.err("No entrypoints could be lowered", .{});
+        return error.NoEntrypointsLowered;
+    }
+
+    // Run lambda set inference after MIR lowering so the store sees the actual entrypoint graph.
+    var lambda_set_store = mir.LambdaSet.infer(ctx.gpa, &mir_store, all_module_envs) catch return error.OutOfMemory;
+    defer lambda_set_store.deinit(ctx.gpa);
+
+    var lir_store = lir.LirExprStore.init(ctx.gpa);
+    defer lir_store.deinit();
+
+    var mir_to_lir = lir.MirToLir.init(ctx.gpa, &mir_store, &lir_store, &layout_store, &lambda_set_store, all_module_envs[0].idents.true_tag);
+    defer mir_to_lir.deinit();
+
+    var entrypoints = try std.ArrayList(backend.Entrypoint).initCapacity(ctx.gpa, pending_entrypoints.items.len);
+    defer entrypoints.deinit(ctx.gpa);
+
+    for (pending_entrypoints.items) |pending| {
+        const lir_expr_id = mir_to_lir.lower(pending.mir_expr_id) catch |err| {
+            std.log.err("Failed to lower MIR to LIR for entrypoint {s}: {}", .{ pending.ffi_symbol, err });
+            continue;
+        };
+
+        var type_scope = @import("types").TypeScope.init(ctx.gpa);
+        defer type_scope.deinit();
+        const ret_layout = layout_store.fromTypeVar(platform_module_idx, pending.ret_type_var, &type_scope, null) catch {
+            std.log.err("Failed to get layout for entrypoint {s}", .{pending.ffi_symbol});
+            continue;
+        };
+
+        try entrypoints.append(ctx.gpa, .{
+            .symbol_name = try std.fmt.allocPrint(ctx.arena, "roc__{s}", .{pending.ffi_symbol}),
+            .body_expr = lir_expr_id,
+            .arg_layouts = pending.arg_layouts,
+            .ret_layout = ret_layout,
+        });
+    }
+
+    if (entrypoints.items.len == 0) {
+        std.log.err("No entrypoints could be lowered to LIR", .{});
         return error.NoEntrypointsLowered;
     }
 
@@ -3883,7 +4203,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     const builtins_filename = BuiltinsObjects.filename(target);
     const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, builtins_filename });
 
-    // Write builtins object to cache if not already there
+    // Write builtins object to cache
     std.fs.cwd().writeFile(.{
         .sub_path = builtins_path,
         .data = builtins_bytes,
@@ -3931,25 +4251,36 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     else
         0;
 
-    const stdout = ctx.io.stdout();
-    try stdout.print("Built {s} in {d:.1}ms", .{ final_output_path, elapsed_ms });
-    if (cache_stats.modules_total > 0 and cache_stats.cache_hits > 0) {
-        try stdout.print(" with {}% cache hit", .{cache_percent});
-    }
-    try stdout.writeAll(" (dev backend)\n");
+    if (!args.suppress_build_status) {
+        const stdout = ctx.io.stdout();
+        try stdout.print("Built {s} in {d:.1}ms", .{ final_output_path, elapsed_ms });
+        if (cache_stats.modules_total > 0 and cache_stats.cache_hits > 0) {
+            try stdout.print(" with {}% cache hit", .{cache_percent});
+        }
+        try stdout.writeAll(" (dev backend)\n");
 
-    // Print verbose stats if requested
-    if (args.verbose) {
-        try stdout.print("\n    Modules: {} total, {} cached, {} built\n", .{
-            cache_stats.modules_total,
-            cache_stats.cache_hits,
-            cache_stats.modules_compiled,
-        });
-        try stdout.print("    Cache Hit: {}%\n", .{cache_percent});
+        // Print verbose stats if requested
+        if (args.verbose) {
+            try stdout.print("\n    Modules: {} total, {} cached, {} built\n", .{
+                cache_stats.modules_total,
+                cache_stats.cache_hits,
+                cache_stats.modules_compiled,
+            });
+            try stdout.print("    Cache Hit: {}%\n", .{cache_percent});
+        }
+
+        if (total_warning_count > 0) {
+            try stdout.print("  {} warning(s)\n", .{total_warning_count});
+        }
     }
 
-    if (total_warning_count > 0) {
-        try stdout.print("  {} warning(s)\n", .{total_warning_count});
+    if (args.warning_count_out) |warning_count_out| {
+        warning_count_out.* = total_warning_count;
+    }
+
+    if (args.exit_on_warnings and total_warning_count > 0) {
+        ctx.io.flush();
+        std.process.exit(2);
     }
 }
 
@@ -4362,8 +4693,12 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         try stdout.print("    Cache Hit: {}%\n", .{cache_percent});
     }
 
+    if (args.warning_count_out) |warning_count_out| {
+        warning_count_out.* = total_warning_count;
+    }
+
     // Exit with code 2 if there were warnings (but no errors)
-    if (total_warning_count > 0) {
+    if (args.exit_on_warnings and total_warning_count > 0) {
         ctx.io.flush();
         std.process.exit(2);
     }
@@ -4526,6 +4861,46 @@ const TestCacheResultEntry = extern struct {
         std.debug.assert(@sizeOf(TestCacheResultEntry) == 16);
     }
 };
+
+/// Atomically appends a test cache entry and its failure report.
+/// If either append fails, neither is added and `report_text` is freed (if non-empty).
+fn appendTestCacheEntry(
+    cache_entries: *std.ArrayList(TestCacheResultEntry),
+    cache_failure_reports: *std.ArrayList([]const u8),
+    gpa: std.mem.Allocator,
+    passed: bool,
+    region: base.Region,
+    report_text: []const u8,
+) void {
+    cache_entries.append(gpa, .{
+        .passed = if (passed) 1 else 0,
+        .region_start = region.start.offset,
+        .region_end = region.end.offset,
+        .report_len = @intCast(report_text.len),
+    }) catch {
+        if (report_text.len > 0) gpa.free(report_text);
+        return;
+    };
+    cache_failure_reports.append(gpa, report_text) catch {
+        _ = cache_entries.pop();
+        if (report_text.len > 0) gpa.free(report_text);
+    };
+}
+
+/// Renders a failure report for caching using the test runner's createReport.
+/// Returns an empty string for passing tests or if rendering fails.
+/// Non-empty strings are allocated with `gpa` and ownership is transferred to the caller.
+fn renderTestFailureReport(test_runner: *const TestRunner, tr: anytype, path: []const u8, gpa: std.mem.Allocator) []const u8 {
+    if (tr.passed) return "";
+    var report = test_runner.createReport(tr, path) catch return "";
+    defer report.deinit();
+    var alloc_writer: std.Io.Writer.Allocating = .init(gpa);
+    defer alloc_writer.deinit();
+    const config = reporting.ReportingConfig.initColorTerminal();
+    const palette = reporting.ColorUtils.getPaletteForConfig(config);
+    reporting.renderReportToTerminal(&report, &alloc_writer.writer, palette, config) catch return "";
+    return alloc_writer.toOwnedSlice() catch "";
+}
 
 const TestCacheOutcome = enum(u32) {
     all_passed = 0,
@@ -5078,6 +5453,11 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                 total_failed += summary.failed;
 
                 const results = try ctx.gpa.dupe(TestResultItem, results_list.items);
+                for (results) |result| {
+                    // Dev backend: use error_msg as the cache report (no rendered report available)
+                    const report_text: []const u8 = if (result.error_msg) |msg| ctx.gpa.dupe(u8, msg) catch "" else "";
+                    appendTestCacheEntry(&cache_entries, &cache_failure_reports, ctx.gpa, result.result == .passed, result.region, report_text);
+                }
                 try module_results.append(.{
                     .env = root_env,
                     .path = args.path,
@@ -5120,6 +5500,11 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                         }
                     }
 
+                    for (results) |result| {
+                        const report_text: []const u8 = if (result.error_msg) |msg| ctx.gpa.dupe(u8, msg) catch "" else "";
+                        appendTestCacheEntry(&cache_entries, &cache_failure_reports, ctx.gpa, result.result == .passed, result.region, report_text);
+                    }
+
                     module_results.append(.{
                         .env = mod_env,
                         .path = mod_path,
@@ -5158,7 +5543,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                 total_passed += summary.passed;
                 total_failed += summary.failed;
 
-                // Copy test results for reporting
+                // Copy test results for reporting and build cache entries
                 var results = try ctx.gpa.alloc(TestResultItem, test_runner.test_results.items.len);
                 for (test_runner.test_results.items, 0..) |tr, i| {
                     results[i] = .{
@@ -5166,6 +5551,9 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                         .region = tr.region,
                         .error_msg = if (tr.error_msg) |msg| try ctx.gpa.dupe(u8, msg) else null,
                     };
+
+                    const report_text = renderTestFailureReport(&test_runner, tr, args.path, ctx.gpa);
+                    appendTestCacheEntry(&cache_entries, &cache_failure_reports, ctx.gpa, tr.passed, tr.region, report_text);
                 }
 
                 try module_results.append(.{
@@ -5209,15 +5597,8 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                 // Copy test results for reporting
                 if (test_runner.test_results.items.len > 0) {
                     var results = ctx.gpa.alloc(TestResultItem, test_runner.test_results.items.len) catch continue;
-                    for (test_runner.test_results.items, 0..) |tr, i| {
-                        results[i] = .{
-                            .result = if (tr.passed) .passed else .failed,
-                            .region = tr.region,
-                            .error_msg = if (tr.error_msg) |msg| ctx.gpa.dupe(u8, msg) catch null else null,
-                        };
-                    }
 
-                    // Find the module path from schedulers
+                    // Find the module path from schedulers (needed for report rendering)
                     var mod_path: []const u8 = "<unknown>";
                     var sched_iter2 = build_env.schedulers.iterator();
                     outer: while (sched_iter2.next()) |sched_entry| {
@@ -5230,6 +5611,17 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                                 }
                             }
                         }
+                    }
+
+                    for (test_runner.test_results.items, 0..) |tr, i| {
+                        results[i] = .{
+                            .result = if (tr.passed) .passed else .failed,
+                            .region = tr.region,
+                            .error_msg = if (tr.error_msg) |msg| ctx.gpa.dupe(u8, msg) catch null else null,
+                        };
+
+                        const report_text = renderTestFailureReport(&test_runner, tr, mod_path, ctx.gpa);
+                        appendTestCacheEntry(&cache_entries, &cache_failure_reports, ctx.gpa, tr.passed, tr.region, report_text);
                     }
 
                     module_results.append(.{
@@ -7652,4 +8044,22 @@ test "appendWindowsQuotedArg" {
 
     // Arg with multiple trailing backslashes (needs space to trigger quoting)
     try testQuote("has spaces\\\\", "\"has spaces\\\\\\\\\"");
+}
+
+test "classifyNativeRunTermination preserves warning exit code" {
+    const testing = std.testing;
+
+    const result = classifyNativeRunTermination(.{ .Exited = 0 }, 1);
+
+    try testing.expect(result == .exit_code);
+    try testing.expectEqual(@as(u8, 2), result.exit_code);
+}
+
+test "classifyNativeRunTermination preserves signal termination" {
+    const testing = std.testing;
+
+    const result = classifyNativeRunTermination(.{ .Signal = 11 }, 0);
+
+    try testing.expect(result == .signal);
+    try testing.expectEqual(@as(u32, 11), result.signal);
 }
