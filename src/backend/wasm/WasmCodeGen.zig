@@ -7724,15 +7724,14 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         // list_sublist(list, {len: U64, start: U64}) -> list
         .list_sublist => {
-            // Look up field offsets from the record's original semantic indices.
-            // The builtin contract is { start : U64, len : U64 }, so original index 0
-            // is `start` and original index 1 is `len` regardless of sorted layout order.
+            // Shared layout uses canonical alphabetical field indices for records.
+            // For { start : U64, len : U64 }, that means index 0 = len and index 1 = start.
             const ls = self.getLayoutStore();
             const record_layout_idx = self.exprLayoutIdx(args[1]);
             const record_layout = ls.getLayout(record_layout_idx);
             const record_idx = record_layout.data.struct_.idx;
-            const start_field_off = ls.getStructFieldOffsetByOriginalIndex(record_idx, 0);
-            const len_field_off = ls.getStructFieldOffsetByOriginalIndex(record_idx, 1);
+            const len_field_off = ls.getStructFieldOffsetByOriginalIndex(record_idx, 0);
+            const start_field_off = ls.getStructFieldOffsetByOriginalIndex(record_idx, 1);
             if (builtin.mode == .Debug) {
                 const sd = ls.getStructData(record_idx);
                 const sorted_fields = ls.struct_fields.sliceRange(sd.getFields());
@@ -7750,7 +7749,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     record_size != 16)
                 {
                     std.debug.panic(
-                        "LIR/wasm invariant violated: list_sublist record expected original fields start/len as two U64s in 16 bytes, got layouts [{}, {}] size {d}",
+                        "LIR/wasm invariant violated: list_sublist record expected canonical fields len/start as two U64s in 16 bytes, got layouts [{}, {}] size {d}",
                         .{
                             ls.getStructFieldLayoutByOriginalIndex(record_idx, 0),
                             ls.getStructFieldLayoutByOriginalIndex(record_idx, 1),

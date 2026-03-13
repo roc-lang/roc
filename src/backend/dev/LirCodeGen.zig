@@ -3846,8 +3846,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const record_layout = ls.getLayout(record_layout_idx orelse unreachable);
             const record_idx = record_layout.data.struct_.idx;
             const record_size = ls.getStructData(record_idx).size;
-            const start_field_off: i32 = @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 0));
-            const len_field_off: i32 = @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 1));
+            // In shared layout, record field indices are canonical alphabetical order.
+            // For { start : U64, len : U64 }, that means index 0 = len and index 1 = start.
+            const len_field_off: i32 = @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 0));
+            const start_field_off: i32 = @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 1));
             if (builtin.mode == .Debug) {
                 const sorted_fields = ls.struct_fields.sliceRange(ls.getStructData(record_idx).getFields());
                 if (sorted_fields.len != 2) {
@@ -3863,7 +3865,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     ls.getStructFieldSizeByOriginalIndex(record_idx, 1) != 8)
                 {
                     std.debug.panic(
-                        "LIR/codegen invariant violated: list_sublist record expected original fields start/len as two U64s in 16 bytes, got layouts [{}, {}] size {d}",
+                        "LIR/codegen invariant violated: list_sublist record expected canonical fields len/start as two U64s in 16 bytes, got layouts [{}, {}] size {d}",
                         .{
                             ls.getStructFieldLayoutByOriginalIndex(record_idx, 0),
                             ls.getStructFieldLayoutByOriginalIndex(record_idx, 1),
