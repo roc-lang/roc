@@ -62,6 +62,7 @@ const listWithCapacity = list.listWithCapacity;
 const listAppendUnsafe = list.listAppendUnsafe;
 const listAppendSafeC = list.listAppendSafeC;
 const listDecref = list.listDecref;
+const RcDropFn = *const fn (?[*]u8, *RocOps) callconv(.c) void;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // String Wrappers
@@ -271,6 +272,11 @@ const FlatListElementDecrefContext = struct {
     roc_ops: *RocOps,
 };
 
+const CallbackElementDecrefContext = struct {
+    callback: RcDropFn,
+    roc_ops: *RocOps,
+};
+
 fn flatListElementDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
     if (element == null) return;
     const ctx_ptr = context orelse unreachable;
@@ -288,6 +294,17 @@ fn flatListElementDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) voi
         &rcNone,
         ctx.roc_ops,
     );
+}
+
+fn callbackListElementDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
+    if (element == null) return;
+    const ctx_ptr = context orelse unreachable;
+    const ctx: *const CallbackElementDecrefContext = utils.alignedPtrCast(
+        *const CallbackElementDecrefContext,
+        @as([*]u8, @ptrCast(ctx_ptr)),
+        @src(),
+    );
+    ctx.callback(element, ctx.roc_ops);
 }
 
 /// Wrapper: listWithCapacity
@@ -378,6 +395,36 @@ pub fn roc_builtins_list_decref_flat_list(
     );
 }
 
+/// Decref a Roc list and optionally run an element decref callback when unique.
+pub fn roc_builtins_list_decref_with(
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    alignment: u32,
+    element_width: usize,
+    element_decref: ?RcDropFn,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    if (element_decref) |callback| {
+        var ctx = CallbackElementDecrefContext{
+            .callback = callback,
+            .roc_ops = roc_ops,
+        };
+        listDecref(
+            l,
+            alignment,
+            element_width,
+            true,
+            @ptrCast(&ctx),
+            &callbackListElementDecref,
+            roc_ops,
+        );
+    } else {
+        decrefDataPtrC(l.getAllocationDataPtr(roc_ops), alignment, false, roc_ops);
+    }
+}
+
 /// Wrapper: free a List(List a) where the inner lists do not themselves contain refcounted elements.
 pub fn roc_builtins_list_free_flat_list(
     list_bytes: ?[*]u8,
@@ -403,6 +450,68 @@ pub fn roc_builtins_list_free_flat_list(
     }
 
     freeDataPtrC(l.getAllocationDataPtr(roc_ops), @alignOf(RocList), true, roc_ops);
+}
+
+/// Free a Roc list and optionally run an element decref callback first.
+pub fn roc_builtins_list_free_with(
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    alignment: u32,
+    element_width: usize,
+    element_decref: ?RcDropFn,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+
+    if (element_decref) |callback| {
+        var ctx = CallbackElementDecrefContext{
+            .callback = callback,
+            .roc_ops = roc_ops,
+        };
+
+        if (l.getAllocationDataPtr(roc_ops)) |source| {
+            const count = l.getAllocationElementCount(true, roc_ops);
+            var i: usize = 0;
+            while (i < count) : (i += 1) {
+                callbackListElementDecref(@ptrCast(&ctx), source + i * element_width);
+            }
+        }
+
+        freeDataPtrC(l.getAllocationDataPtr(roc_ops), alignment, true, roc_ops);
+    } else {
+        freeDataPtrC(l.getAllocationDataPtr(roc_ops), alignment, false, roc_ops);
+    }
+}
+
+/// Decref a boxed payload and optionally run payload teardown when unique.
+pub fn roc_builtins_box_decref_with(
+    payload_ptr: ?[*]u8,
+    payload_alignment: u32,
+    payload_decref: ?RcDropFn,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    if (payload_decref) |callback| {
+        if (utils.isUnique(payload_ptr, roc_ops)) {
+            callback(payload_ptr, roc_ops);
+        }
+    }
+
+    decrefDataPtrC(payload_ptr, payload_alignment, false, roc_ops);
+}
+
+/// Free a boxed payload and optionally run payload teardown first.
+pub fn roc_builtins_box_free_with(
+    payload_ptr: ?[*]u8,
+    payload_alignment: u32,
+    payload_decref: ?RcDropFn,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    if (payload_decref) |callback| {
+        callback(payload_ptr, roc_ops);
+    }
+
+    freeDataPtrC(payload_ptr, payload_alignment, false, roc_ops);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

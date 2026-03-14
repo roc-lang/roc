@@ -58,7 +58,11 @@ comptime {
     @export(&dw.roc_builtins_list_release_excess_capacity, .{ .name = "roc_builtins_list_release_excess_capacity" });
     @export(&dw.roc_builtins_list_decref_str, .{ .name = "roc_builtins_list_decref_str" });
     @export(&dw.roc_builtins_list_decref_flat_list, .{ .name = "roc_builtins_list_decref_flat_list" });
+    @export(&dw.roc_builtins_list_decref_with, .{ .name = "roc_builtins_list_decref_with" });
     @export(&dw.roc_builtins_list_free_flat_list, .{ .name = "roc_builtins_list_free_flat_list" });
+    @export(&dw.roc_builtins_list_free_with, .{ .name = "roc_builtins_list_free_with" });
+    @export(&dw.roc_builtins_box_decref_with, .{ .name = "roc_builtins_box_decref_with" });
+    @export(&dw.roc_builtins_box_free_with, .{ .name = "roc_builtins_box_free_with" });
     @export(&dw.roc_builtins_allocate_with_refcount, .{ .name = "roc_builtins_allocate_with_refcount" });
     @export(&dw.roc_builtins_incref_data_ptr, .{ .name = "roc_builtins_incref_data_ptr" });
     @export(&dw.roc_builtins_decref_data_ptr, .{ .name = "roc_builtins_decref_data_ptr" });

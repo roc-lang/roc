@@ -7589,9 +7589,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const elem_byte_size: u32 = blk: {
                 const ls = self.getLayoutStore();
                 const list_layout_idx = self.exprLayoutIdx(args[0]);
-                const list_layout = ls.getLayout(list_layout_idx);
-                std.debug.assert(list_layout.tag == .list);
-                break :blk ls.layoutSize(ls.getLayout(list_layout.data.list));
+                const info = ls.getListInfo(ls.getLayout(list_layout_idx));
+                break :blk info.elem_size;
             };
 
             // result = 0 (not found)
@@ -11537,17 +11536,15 @@ fn emitFloatMod(self: *Self, vt: ValType) Allocator.Error!void {
 /// Get the element size for a list layout.
 fn getListElemSize(self: *const Self, list_layout: layout.Idx) u32 {
     const ls = self.getLayoutStore();
-    const l = ls.getLayout(list_layout);
-    std.debug.assert(l.tag == .list);
-    return ls.layoutSize(ls.getLayout(l.data.list));
+    const info = ls.getListInfo(ls.getLayout(list_layout));
+    return info.elem_size;
 }
 
 /// Get the element alignment for a list layout.
 fn getListElemAlign(self: *const Self, list_layout: layout.Idx) u32 {
     const ls = self.getLayoutStore();
-    const l = ls.getLayout(list_layout);
-    std.debug.assert(l.tag == .list);
-    return @intCast(ls.getLayout(l.data.list).alignment(ls.targetUsize()).toByteUnits());
+    const info = ls.getListInfo(ls.getLayout(list_layout));
+    return info.elem_alignment;
 }
 
 const StrSearchMode = enum { contains, starts_with, ends_with };

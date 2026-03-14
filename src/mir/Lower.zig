@@ -1358,7 +1358,10 @@ fn lowerStrInspektNominal(
                 region,
             );
 
-            return self.lowerStrInspektExpr(type_env, unboxed, type_args[0], region);
+            const inner_str = try self.lowerStrInspektExpr(type_env, unboxed, type_args[0], region);
+            const open = try self.emitMirStrLiteral("Box(", region);
+            const close = try self.emitMirStrLiteral(")", region);
+            return self.foldMirStrConcat(&.{ open, inner_str, close }, region);
         }
     }
 
@@ -5245,19 +5248,26 @@ fn resolveUnresolvedTypeVarDispatchTarget(
             const candidate_origin_name = candidate_env.getIdent(candidate_env.qualified_module_ident);
             const mapped_origin = module_env.common.findIdent(candidate_origin_name) orelse module_env.qualified_module_ident;
             const candidate_method_name = candidate_env.getIdent(method_ident);
-            const mapped_method_ident = module_env.common.findIdent(candidate_method_name) orelse
-                try @constCast(module_env).insertIdent(Ident.for_text(candidate_method_name));
 
             const candidate_target = ResolvedDispatchTarget{
                 .origin = mapped_origin,
-                .method_ident = mapped_method_ident,
+                .method_ident = method_ident,
                 .fn_var = constraint.fn_var,
                 .module_idx = candidate_module_idx,
             };
             if (found_target) |existing| {
+                const existing_method_text = dispatchTargetMethodText(self, module_env, existing) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "resolveUnresolvedTypeVarDispatchTarget: existing candidate method ident {d} unreadable",
+                            .{existing.method_ident.idx},
+                        );
+                    }
+                    unreachable;
+                };
                 if (std.debug.runtime_safety and
                     ((existing.module_idx orelse std.math.maxInt(u32)) != (candidate_target.module_idx orelse std.math.maxInt(u32)) or
-                        !existing.method_ident.eql(candidate_target.method_ident)))
+                        !std.mem.eql(u8, existing_method_text, candidate_method_name)))
                 {
                     std.debug.panic(
                         "resolveUnresolvedTypeVarDispatchTarget: ambiguous dispatch for method '{s}'",
@@ -5310,7 +5320,15 @@ fn monotypeFromTypeVarInStore(
 fn resolvedDispatchTargetToSymbol(self: *Self, source_env: *const ModuleEnv, target: ResolvedDispatchTarget) Allocator.Error!MIR.Symbol {
     const target_module_idx = target.module_idx orelse self.findModuleForOrigin(source_env, target.origin);
     const target_env = self.all_module_envs[target_module_idx];
-    const method_name = source_env.getIdent(target.method_ident);
+    const method_name = dispatchTargetMethodText(self, source_env, target) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "resolvedDispatchTargetToSymbol: method ident {d} not readable from source module {d} or target module {d}",
+                .{ target.method_ident.idx, self.current_module_idx, target_module_idx },
+            );
+        }
+        unreachable;
+    };
 
     const target_ident = target_env.common.findIdent(method_name) orelse {
         if (builtin.mode == .Debug) {
@@ -5340,6 +5358,21 @@ fn resolvedDispatchTargetToSymbol(self: *Self, source_env: *const ModuleEnv, tar
         unreachable;
     }
     return self.internExternalDefSymbol(target_module_idx, target_node_idx);
+}
+
+fn dispatchTargetMethodText(
+    self: *const Self,
+    source_env: *const ModuleEnv,
+    target: ResolvedDispatchTarget,
+) ?[]const u8 {
+    if (identTextIfOwnedBy(source_env, target.method_ident)) |text| return text;
+
+    if (target.module_idx) |target_module_idx| {
+        const target_env = self.all_module_envs[target_module_idx];
+        if (identTextIfOwnedBy(target_env, target.method_ident)) |text| return text;
+    }
+
+    return null;
 }
 
 fn findDefExprBySymbol(self: *Self, module_idx: u32, ident_idx: Ident.Idx) ?CIR.Expr.Idx {

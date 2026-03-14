@@ -89,8 +89,8 @@ true_tag: Ident.Idx,
 /// Counter for generating unique synthetic symbols (used by ANF let-binding).
 next_synthetic_id: u29 = 0,
 
-/// Cache: Monotype.Idx → layout.Idx (avoid recomputation)
-layout_cache: std.AutoHashMap(u32, layout.Idx),
+/// Canonical resolver for ordinary MIR monotype layouts.
+monotype_layout_resolver: layout.MirMonotypeLayoutResolver,
 
 /// Stable runtime captures payload layouts keyed by closure_member.
 capture_layout_cache: std.AutoHashMap(u32, layout.Idx),
@@ -121,10 +121,6 @@ specializing_direct_callees: std.AutoHashMap(u64, void),
 /// Instantiated monotype -> runtime layout overrides active while lowering a
 /// specialized direct callee.
 specialized_monotype_layouts: std.AutoHashMap(u32, layout.Idx),
-
-/// Cache for derived layoutFromMonotype results while a specialized monotype
-/// environment is active. This must not leak into the global cache.
-specialized_layout_cache: std.AutoHashMap(u32, layout.Idx),
 
 /// Specialized-environment variants of capture and closure layout caches.
 specialized_capture_layout_cache: std.AutoHashMap(u32, layout.Idx),
@@ -163,7 +159,7 @@ pub fn init(
         .layout_store = layout_store,
         .lambda_set_store = lambda_set_store,
         .true_tag = true_tag,
-        .layout_cache = std.AutoHashMap(u32, layout.Idx).init(allocator),
+        .monotype_layout_resolver = layout.MirMonotypeLayoutResolver.init(allocator, &mir_store.monotype_store, layout_store),
         .capture_layout_cache = std.AutoHashMap(u32, layout.Idx).init(allocator),
         .closure_value_layout_cache = std.AutoHashMap(u32, layout.Idx).init(allocator),
         .propagating_defs = std.AutoHashMap(u64, void).init(allocator),
@@ -173,7 +169,6 @@ pub fn init(
         .specialized_direct_callees = std.StringHashMap(DirectCallSpecialization).init(allocator),
         .specializing_direct_callees = std.AutoHashMap(u64, void).init(allocator),
         .specialized_monotype_layouts = std.AutoHashMap(u32, layout.Idx).init(allocator),
-        .specialized_layout_cache = std.AutoHashMap(u32, layout.Idx).init(allocator),
         .specialized_capture_layout_cache = std.AutoHashMap(u32, layout.Idx).init(allocator),
         .specialized_closure_value_layout_cache = std.AutoHashMap(u32, layout.Idx).init(allocator),
         .scratch_anf_stmts = std.ArrayList(LirStmt).empty,
@@ -190,7 +185,7 @@ pub fn init(
 }
 
 pub fn deinit(self: *Self) void {
-    self.layout_cache.deinit();
+    self.monotype_layout_resolver.deinit();
     self.capture_layout_cache.deinit();
     self.closure_value_layout_cache.deinit();
     self.propagating_defs.deinit();
@@ -210,7 +205,6 @@ pub fn deinit(self: *Self) void {
     self.specialized_direct_callees.deinit();
     self.specializing_direct_callees.deinit();
     self.specialized_monotype_layouts.deinit();
-    self.specialized_layout_cache.deinit();
     self.specialized_capture_layout_cache.deinit();
     self.specialized_closure_value_layout_cache.deinit();
     self.scratch_anf_stmts.deinit(self.allocator);
@@ -244,22 +238,10 @@ fn copyStringToLir(self: *Self, mir_str_idx: StringLiteral.Idx) Allocator.Error!
 
 /// Convert a Monotype.Idx to a layout.Idx, using a cache.
 fn layoutFromMonotype(self: *Self, mono_idx: Monotype.Idx) Allocator.Error!layout.Idx {
-    std.debug.assert(!mono_idx.isNone());
-    const key = @intFromEnum(mono_idx);
-    if (self.specialized_monotype_layouts.get(key)) |layout_idx| return layout_idx;
-    if (self.specialized_monotype_layouts.count() != 0) {
-        if (self.specialized_layout_cache.get(key)) |cached| return cached;
-    }
-    if (self.layout_cache.get(key)) |cached| return cached;
-
-    const monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
-    const result = try self.layoutFromMonotypeInner(monotype);
-    if (self.specialized_monotype_layouts.count() != 0) {
-        try self.specialized_layout_cache.put(key, result);
-    } else {
-        try self.layout_cache.put(key, result);
-    }
-    return result;
+    return self.monotype_layout_resolver.resolve(
+        mono_idx,
+        if (self.specialized_monotype_layouts.count() == 0) null else &self.specialized_monotype_layouts,
+    );
 }
 
 fn saveMonotypeOverrideIfNeeded(
@@ -288,7 +270,7 @@ fn restoreMonotypeOverrides(self: *Self, saved: []const SavedMonotypeLayout) voi
             _ = self.specialized_monotype_layouts.remove(entry.mono_key);
         }
     }
-    self.specialized_layout_cache.clearRetainingCapacity();
+    self.monotype_layout_resolver.clearOverrideCache();
     self.specialized_capture_layout_cache.clearRetainingCapacity();
     self.specialized_closure_value_layout_cache.clearRetainingCapacity();
 }
@@ -313,7 +295,7 @@ fn registerSpecializedMonotypeLayout(
     }
 
     try self.specialized_monotype_layouts.put(mono_key, layout_idx);
-    self.specialized_layout_cache.clearRetainingCapacity();
+    self.monotype_layout_resolver.clearOverrideCache();
     self.specialized_capture_layout_cache.clearRetainingCapacity();
     self.specialized_closure_value_layout_cache.clearRetainingCapacity();
 
@@ -428,45 +410,6 @@ fn registerSpecializedMonotypeLayout(
     }
 }
 
-fn layoutFromMonotypeInner(self: *Self, monotype: Monotype.Monotype) Allocator.Error!layout.Idx {
-    return switch (monotype) {
-        .recursive_placeholder => unreachable,
-        .unit => .zst,
-        .prim => |p| switch (p) {
-            .str => .str,
-            .u8 => .u8,
-            .i8 => .i8,
-            .u16 => .u16,
-            .i16 => .i16,
-            .u32 => .u32,
-            .i32 => .i32,
-            .u64 => .u64,
-            .i64 => .i64,
-            .u128 => .u128,
-            .i128 => .i128,
-            .f32 => .f32,
-            .f64 => .f64,
-            .dec => .dec,
-        },
-        .list => |l| blk: {
-            const elem_layout = try self.layoutFromMonotype(l.elem);
-            break :blk try self.layout_store.insertList(elem_layout);
-        },
-        .box => |b| blk: {
-            const inner_layout = try self.layoutFromMonotype(b.inner);
-            break :blk try self.layout_store.insertBox(inner_layout);
-        },
-        .func => blk: {
-            // Function values use closure layout semantics after MIR lowering.
-            const empty_captures = try self.layout_store.getEmptyRecordLayout();
-            break :blk try self.layout_store.insertLayout(layout.Layout.closure(empty_captures));
-        },
-        .record => |r| try self.layoutFromRecord(r),
-        .tuple => |t| try self.layoutFromTuple(t),
-        .tag_union => |tu| try self.layoutFromTagUnion(tu),
-    };
-}
-
 fn isFunctionLayout(self: *Self, layout_idx: layout.Idx) bool {
     if (layout_idx == layout.Idx.none) return false;
     if (layout_idx == layout.Idx.named_fn) return true;
@@ -514,39 +457,6 @@ fn verifyFunctionLayouts(self: *Self, _: LirExprId) void {
             else => {},
         }
     }
-}
-
-fn layoutFromRecord(self: *Self, record: anytype) Allocator.Error!layout.Idx {
-    const fields = self.mir_store.monotype_store.getFields(record.fields);
-    if (fields.len == 0) return .zst;
-    if (fields.len == 1) return self.layoutFromMonotype(fields[0].type_idx);
-
-    const save_layouts = self.scratch_layouts.items.len;
-    defer self.scratch_layouts.shrinkRetainingCapacity(save_layouts);
-
-    for (fields) |field| {
-        const field_layout_idx = try self.layoutFromMonotype(field.type_idx);
-        const field_layout = self.layout_store.getLayout(field_layout_idx);
-        try self.scratch_layouts.append(self.allocator, field_layout);
-    }
-
-    return self.layout_store.putRecord(self.scratch_layouts.items[save_layouts..]);
-}
-
-fn layoutFromTuple(self: *Self, tup: anytype) Allocator.Error!layout.Idx {
-    const elems = self.mir_store.monotype_store.getIdxSpan(tup.elems);
-    if (elems.len == 0) return .zst;
-
-    const save_layouts = self.scratch_layouts.items.len;
-    defer self.scratch_layouts.shrinkRetainingCapacity(save_layouts);
-
-    for (elems) |elem_mono_idx| {
-        const elem_layout_idx = try self.layoutFromMonotype(elem_mono_idx);
-        const elem_layout = self.layout_store.getLayout(elem_layout_idx);
-        try self.scratch_layouts.append(self.allocator, elem_layout);
-    }
-
-    return self.layout_store.putTuple(self.scratch_layouts.items[save_layouts..]);
 }
 
 fn runtimeTupleLayoutFromExprs(self: *Self, mir_expr_ids: []const MIR.ExprId) Allocator.Error!layout.Idx {
@@ -798,61 +708,6 @@ fn capturesLayoutForMember(self: *Self, member: LambdaSet.Member) Allocator.Erro
         try self.capture_layout_cache.put(cache_key, captures_layout);
     }
     return captures_layout;
-}
-
-fn layoutFromTagUnion(self: *Self, tu: anytype) Allocator.Error!layout.Idx {
-    const tags = self.mir_store.monotype_store.getTags(tu.tags);
-    if (tags.len == 0) return .zst;
-
-    // Single tag → no discriminant needed
-    if (tags.len == 1) {
-        const payloads = self.mir_store.monotype_store.getIdxSpan(tags[0].payloads);
-        if (payloads.len == 0) return .zst;
-        // Single tag with payload: return just the payload layout (no discriminant)
-        if (payloads.len == 1) {
-            return self.layoutFromMonotype(payloads[0]);
-        }
-        // Multiple payload fields: wrap in a tuple
-        const save_layouts = self.scratch_layouts.items.len;
-        defer self.scratch_layouts.shrinkRetainingCapacity(save_layouts);
-        for (payloads) |p| {
-            const p_idx = try self.layoutFromMonotype(p);
-            try self.scratch_layouts.append(self.allocator, self.layout_store.getLayout(p_idx));
-        }
-        return self.layout_store.putTuple(self.scratch_layouts.items[save_layouts..]);
-    }
-
-    // Bool-like: exactly 2 tags, both zero-payload → bool layout
-    if (tags.len == 2) {
-        const p0 = self.mir_store.monotype_store.getIdxSpan(tags[0].payloads);
-        const p1 = self.mir_store.monotype_store.getIdxSpan(tags[1].payloads);
-        if (p0.len == 0 and p1.len == 0) return .bool;
-    }
-
-    // Multi-tag union: build per-variant payload layouts
-    const zst_idx = try self.layout_store.ensureZstLayout();
-
-    const save_idxs = self.scratch_layout_idxs.items.len;
-    defer self.scratch_layout_idxs.shrinkRetainingCapacity(save_idxs);
-
-    for (tags) |tag| {
-        const payloads = self.mir_store.monotype_store.getIdxSpan(tag.payloads);
-        if (payloads.len == 0) {
-            try self.scratch_layout_idxs.append(self.allocator, zst_idx);
-        } else if (payloads.len == 1) {
-            try self.scratch_layout_idxs.append(self.allocator, try self.layoutFromMonotype(payloads[0]));
-        } else {
-            const save_layouts = self.scratch_layouts.items.len;
-            defer self.scratch_layouts.shrinkRetainingCapacity(save_layouts);
-            for (payloads) |p| {
-                const p_idx = try self.layoutFromMonotype(p);
-                try self.scratch_layouts.append(self.allocator, self.layout_store.getLayout(p_idx));
-            }
-            try self.scratch_layout_idxs.append(self.allocator, try self.layout_store.putTuple(self.scratch_layouts.items[save_layouts..]));
-        }
-    }
-
-    return self.layout_store.putTagUnion(self.scratch_layout_idxs.items[save_idxs..]);
 }
 
 /// Compute the runtime value layout for a lambda set.
@@ -2471,6 +2326,20 @@ fn lowerTag(self: *Self, tag_data: anytype, mono_idx: Monotype.Idx, mir_expr_id:
     const union_layout = try self.runtimeValueLayoutFromMirExpr(mir_expr_id);
     const discriminant = self.tagDiscriminant(tag_data.name, mono_idx);
     const union_layout_val = self.layout_store.getLayout(union_layout);
+    if (union_layout_val.tag == .scalar or union_layout_val.tag == .zst) {
+        var acc = self.startLetAccumulator();
+        for (mir_args) |mir_arg| {
+            const lowered_arg = try self.lowerExpr(mir_arg);
+            const arg_layout = try self.runtimeValueLayoutFromMirExpr(mir_arg);
+            _ = try acc.ensureSymbol(lowered_arg, arg_layout, region);
+        }
+        const zero_arg_tag = try self.lir_store.addExpr(.{ .zero_arg_tag = .{
+            .discriminant = discriminant,
+            .union_layout = union_layout,
+        } }, region);
+        return acc.finish(zero_arg_tag, union_layout, region);
+    }
+
     const variant_payload_layout: ?layout.Idx = if (union_layout_val.tag == .tag_union) blk: {
         const tu_data = self.layout_store.getTagUnionData(union_layout_val.data.tag_union.idx);
         const variants = self.layout_store.getTagUnionVariants(tu_data);
@@ -4429,14 +4298,7 @@ fn runtimeLayoutForBindingSymbol(
         false;
 
     if (mono == .func and !has_callable_def and existing_layout == null) {
-        const mono_key = @intFromEnum(mono_idx);
-        const generic_fn_layout = if (self.layout_cache.get(mono_key)) |cached|
-            cached
-        else blk: {
-            const computed = try self.layoutFromMonotypeInner(mono);
-            try self.layout_cache.put(mono_key, computed);
-            break :blk computed;
-        };
+        const generic_fn_layout = try self.monotype_layout_resolver.resolve(mono_idx, null);
         if (fallback_layout == generic_fn_layout) {
             if (self.lambda_set_store.getSymbolLambdaSet(sym)) |ls_idx| {
                 layout_idx = try self.closureValueLayoutFromLambdaSet(ls_idx);
@@ -4477,24 +4339,56 @@ fn runtimeTagPayloadArgLayout(
     }
 
     const union_layout = self.layout_store.getLayout(union_runtime_layout);
-    if (builtin.mode == .Debug and union_layout.tag != .tag_union) {
-        std.debug.panic(
-            "MirToLir invariant violated: tag-pattern runtime layout must be tag_union, got {s}",
-            .{@tagName(union_layout.tag)},
-        );
-    }
-
     const discriminant = self.tagDiscriminant(tag_name, mono_idx);
-    const tu_data = self.layout_store.getTagUnionData(union_layout.data.tag_union.idx);
-    const variants = self.layout_store.getTagUnionVariants(tu_data);
-    if (builtin.mode == .Debug and discriminant >= variants.len) {
-        std.debug.panic(
-            "MirToLir invariant violated: tag discriminant {d} out of bounds for runtime tag_union layout",
-            .{discriminant},
-        );
-    }
-
-    const payload_layout = variants.get(discriminant).payload_layout;
+    const payload_layout = switch (union_layout.tag) {
+        .tag_union => blk: {
+            const tu_data = self.layout_store.getTagUnionData(union_layout.data.tag_union.idx);
+            const variants = self.layout_store.getTagUnionVariants(tu_data);
+            if (builtin.mode == .Debug and discriminant >= variants.len) {
+                std.debug.panic(
+                    "MirToLir invariant violated: tag discriminant {d} out of bounds for runtime tag_union layout",
+                    .{discriminant},
+                );
+            }
+            break :blk variants.get(discriminant).payload_layout;
+        },
+        .box => blk: {
+            const inner_layout = self.layout_store.getLayout(union_layout.data.box);
+            if (builtin.mode == .Debug and inner_layout.tag != .tag_union) {
+                std.debug.panic(
+                    "MirToLir invariant violated: boxed tag-pattern runtime layout must wrap tag_union, got {s}",
+                    .{@tagName(inner_layout.tag)},
+                );
+            }
+            const tu_data = self.layout_store.getTagUnionData(inner_layout.data.tag_union.idx);
+            const variants = self.layout_store.getTagUnionVariants(tu_data);
+            if (builtin.mode == .Debug and discriminant >= variants.len) {
+                std.debug.panic(
+                    "MirToLir invariant violated: tag discriminant {d} out of bounds for boxed runtime tag_union layout",
+                    .{discriminant},
+                );
+            }
+            break :blk variants.get(discriminant).payload_layout;
+        },
+        .scalar, .zst => blk: {
+            if (builtin.mode == .Debug and arg_count != 1) {
+                std.debug.panic(
+                    "MirToLir invariant violated: scalar/zst tag-pattern runtime layout can only have a single ZST payload arg, found {d}",
+                    .{arg_count},
+                );
+            }
+            break :blk .zst;
+        },
+        else => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "MirToLir invariant violated: tag-pattern runtime layout must be tag_union/box/scalar/zst, got {s}",
+                    .{@tagName(union_layout.tag)},
+                );
+            }
+            unreachable;
+        },
+    };
     if (arg_count == 1) return payload_layout;
 
     const payload_layout_val = self.layout_store.getLayout(payload_layout);

@@ -8,6 +8,7 @@ const collections = @import("collections");
 const can = @import("can");
 
 const layout_mod = @import("layout.zig");
+const graph_mod = @import("./graph.zig");
 const work = @import("./work.zig");
 
 const ModuleEnv = can.ModuleEnv;
@@ -41,6 +42,9 @@ const BoxInfo = layout_mod.BoxInfo;
 const StructInfo = layout_mod.StructInfo;
 const TagUnionInfo = layout_mod.TagUnionInfo;
 const ScalarInfo = layout_mod.ScalarInfo;
+const LayoutGraph = graph_mod.Graph;
+const GraphNodeId = graph_mod.NodeId;
+const GraphRef = graph_mod.Ref;
 const Work = work.Work;
 
 /// Errors that can occur during layout computation
@@ -82,6 +86,7 @@ pub const Store = struct {
     // Structural interning cache for non-scalar layouts. Keys are canonical
     // binary encodings of layout shape.
     interned_layouts: std.StringHashMap(Idx),
+    interned_recursive_graphs: std.StringHashMap(Idx),
     scratch_intern_key: std.ArrayList(u8),
 
     // Cache for boxed layouts of recursive nominal types.
@@ -214,6 +219,7 @@ pub const Store = struct {
             .tag_union_data = try collections.SafeList(TagUnionData).initCapacity(allocator, 64),
             .layouts_by_module_var = std.AutoHashMap(ModuleVarKey, Idx).init(allocator),
             .interned_layouts = std.StringHashMap(Idx).init(allocator),
+            .interned_recursive_graphs = std.StringHashMap(Idx).init(allocator),
             .scratch_intern_key = .empty,
             .recursive_boxed_layouts = std.AutoHashMap(ModuleVarKey, Idx).init(allocator),
             .raw_layout_placeholders = std.AutoHashMap(ModuleVarKey, Idx).init(allocator),
@@ -294,6 +300,11 @@ pub const Store = struct {
             self.allocator.free(key_ptr.*);
         }
         self.interned_layouts.deinit();
+        var recursive_keys = self.interned_recursive_graphs.keyIterator();
+        while (recursive_keys.next()) |key_ptr| {
+            self.allocator.free(key_ptr.*);
+        }
+        self.interned_recursive_graphs.deinit();
         self.scratch_intern_key.deinit(self.allocator);
         self.recursive_boxed_layouts.deinit();
         self.raw_layout_placeholders.deinit();
@@ -547,30 +558,24 @@ pub const Store = struct {
         return self.putTuple(field_layouts);
     }
 
-    /// Insert a tuple layout from concrete element layouts.
-    /// Fields are sorted by alignment (descending), then by original index (ascending).
-    pub fn putTuple(self: *Self, element_layouts: []const Layout) std.mem.Allocator.Error!Idx {
-        const trace = tracy.traceNamed(@src(), "layoutStore.putTuple");
+    /// Insert a struct layout from semantic fields.
+    /// `fields[i].index` is the canonical semantic field index before layout sorting.
+    pub fn putStructFields(self: *Self, fields: []const StructField) std.mem.Allocator.Error!Idx {
+        const trace = tracy.traceNamed(@src(), "layoutStore.putStructFields");
         defer trace.end();
 
-        if (element_layouts.len == 0) {
+        if (fields.len == 0) {
             return self.getEmptyStructLayout();
         }
 
-        if (element_layouts.len == 1) {
-            return self.insertLayout(element_layouts[0]);
+        if (fields.len == 1) {
+            return fields[0].layout;
         }
 
-        // Collect fields with original indices
         var temp_fields = std.ArrayList(StructField).empty;
         defer temp_fields.deinit(self.allocator);
+        try temp_fields.appendSlice(self.allocator, fields);
 
-        for (element_layouts, 0..) |elem_layout, i| {
-            const elem_idx = try self.insertLayout(elem_layout);
-            try temp_fields.append(self.allocator, .{ .index = @intCast(i), .layout = elem_idx });
-        }
-
-        // Sort by alignment desc, then by original index asc
         const AlignmentSortCtx = struct {
             store: *Self,
             target_usize: target.TargetUsize,
@@ -593,11 +598,10 @@ pub const Store = struct {
             AlignmentSortCtx.lessThan,
         );
 
-        // Compute size and alignment
         var max_alignment: usize = 1;
         var current_offset: u32 = 0;
-        for (temp_fields.items) |tf| {
-            const field_layout = self.getLayout(tf.layout);
+        for (temp_fields.items) |field| {
+            const field_layout = self.getLayout(field.layout);
             const field_size_align = self.layoutSizeAlign(field_layout);
             const field_alignment = field_size_align.alignment.toByteUnits();
             max_alignment = @max(max_alignment, field_alignment);
@@ -611,6 +615,20 @@ pub const Store = struct {
             total_size,
             temp_fields.items,
         );
+    }
+
+    /// Insert a tuple layout from concrete element layouts.
+    /// Fields are sorted by alignment (descending), then by original index (ascending).
+    pub fn putTuple(self: *Self, element_layouts: []const Layout) std.mem.Allocator.Error!Idx {
+        var temp_fields = std.ArrayList(StructField).empty;
+        defer temp_fields.deinit(self.allocator);
+
+        for (element_layouts, 0..) |elem_layout, i| {
+            const elem_idx = try self.insertLayout(elem_layout);
+            try temp_fields.append(self.allocator, .{ .index = @intCast(i), .layout = elem_idx });
+        }
+
+        return self.putStructFields(temp_fields.items);
     }
 
     /// Create a tag union layout from pre-computed variant payload layouts.
@@ -652,6 +670,383 @@ pub const Store = struct {
             discriminant_size,
             variant_layouts,
         );
+    }
+
+    fn buildUninternedStructLayout(self: *Self, input_fields: []const StructField) std.mem.Allocator.Error!Layout {
+        std.debug.assert(input_fields.len >= 2);
+
+        var temp_fields = std.ArrayList(StructField).empty;
+        defer temp_fields.deinit(self.allocator);
+        try temp_fields.appendSlice(self.allocator, input_fields);
+
+        const AlignmentSortCtx = struct {
+            store: *Self,
+            target_usize: target.TargetUsize,
+            pub fn lessThan(ctx: @This(), lhs: StructField, rhs: StructField) bool {
+                const lhs_layout = ctx.store.getLayout(lhs.layout);
+                const rhs_layout = ctx.store.getLayout(rhs.layout);
+                const lhs_alignment = lhs_layout.alignment(ctx.target_usize);
+                const rhs_alignment = rhs_layout.alignment(ctx.target_usize);
+                if (lhs_alignment.toByteUnits() != rhs_alignment.toByteUnits()) {
+                    return lhs_alignment.toByteUnits() > rhs_alignment.toByteUnits();
+                }
+                return lhs.index < rhs.index;
+            }
+        };
+
+        std.mem.sort(
+            StructField,
+            temp_fields.items,
+            AlignmentSortCtx{ .store = self, .target_usize = self.targetUsize() },
+            AlignmentSortCtx.lessThan,
+        );
+
+        var max_alignment: usize = 1;
+        var current_offset: u32 = 0;
+        for (temp_fields.items) |field| {
+            const field_layout = self.getLayout(field.layout);
+            const field_size_align = self.layoutSizeAlign(field_layout);
+            const field_alignment = field_size_align.alignment.toByteUnits();
+            max_alignment = @max(max_alignment, field_alignment);
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment))));
+            current_offset += field_size_align.size;
+        }
+
+        const fields_start = self.struct_fields.items.len;
+        for (temp_fields.items) |field| {
+            _ = try self.struct_fields.append(self.allocator, field);
+        }
+
+        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment)))));
+        const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
+        _ = try self.struct_data.append(self.allocator, .{
+            .size = total_size,
+            .fields = .{
+                .start = @intCast(fields_start),
+                .count = @intCast(temp_fields.items.len),
+            },
+        });
+
+        return Layout.struct_(std.mem.Alignment.fromByteUnits(max_alignment), struct_idx);
+    }
+
+    fn buildUninternedTagUnionLayout(self: *Self, variant_layouts: []const Idx) std.mem.Allocator.Error!Layout {
+        std.debug.assert(variant_layouts.len >= 2);
+
+        var max_payload_size: u32 = 0;
+        var max_payload_alignment: std.mem.Alignment = .@"1";
+
+        for (variant_layouts) |variant_layout_idx| {
+            const variant_layout = self.getLayout(variant_layout_idx);
+            const variant_size = self.layoutSize(variant_layout);
+            const variant_alignment = variant_layout.alignment(self.targetUsize());
+            if (variant_size > max_payload_size) max_payload_size = variant_size;
+            max_payload_alignment = max_payload_alignment.max(variant_alignment);
+        }
+
+        const discriminant_size: u8 = if (variant_layouts.len <= 256) 1 else if (variant_layouts.len <= 65536) 2 else if (variant_layouts.len <= (1 << 32)) 4 else 8;
+        const disc_align = TagUnionData.alignmentForDiscriminantSize(discriminant_size);
+        const discriminant_offset: u16 = @intCast(
+            std.mem.alignForward(u32, max_payload_size, @intCast(disc_align.toByteUnits())),
+        );
+        const tag_union_alignment = max_payload_alignment.max(disc_align);
+        const total_size = std.mem.alignForward(
+            u32,
+            discriminant_offset + discriminant_size,
+            @intCast(tag_union_alignment.toByteUnits()),
+        );
+
+        const variants_start: u32 = @intCast(self.tag_union_variants.len());
+        for (variant_layouts) |variant_layout_idx| {
+            _ = try self.tag_union_variants.append(self.allocator, .{
+                .payload_layout = variant_layout_idx,
+            });
+        }
+
+        const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
+        _ = try self.tag_union_data.append(self.allocator, .{
+            .size = total_size,
+            .discriminant_offset = discriminant_offset,
+            .discriminant_size = discriminant_size,
+            .variants = .{
+                .start = variants_start,
+                .count = @intCast(variant_layouts.len),
+            },
+        });
+
+        return Layout.tagUnion(tag_union_alignment, .{ .int_idx = @intCast(tag_union_data_idx) });
+    }
+
+    /// Canonically intern a whole temporary layout graph.
+    /// This handles recursive ordinary-data layout graphs in one step, so the
+    /// resulting root layout idx depends only on graph shape, not source ids.
+    pub fn internGraph(self: *Self, graph: *const LayoutGraph, root: GraphRef) std.mem.Allocator.Error!Idx {
+        switch (root) {
+            .canonical => |layout_idx| return layout_idx,
+            .local => {},
+        }
+
+        const KeyVisitState = enum(u8) { unseen, active, done };
+        const key_states = try self.allocator.alloc(KeyVisitState, graph.nodes.items.len);
+        defer self.allocator.free(key_states);
+        @memset(key_states, .unseen);
+
+        const binder_ids = try self.allocator.alloc(u32, graph.nodes.items.len);
+        defer self.allocator.free(binder_ids);
+        @memset(binder_ids, 0);
+
+        const KeyBuilder = struct {
+            store: *Self,
+            graph: *const LayoutGraph,
+            states: []KeyVisitState,
+            binder_ids: []u32,
+            next_binder: u32 = 0,
+
+            fn build(self_key: *@This(), root_ref: GraphRef) std.mem.Allocator.Error!void {
+                self_key.store.scratch_intern_key.clearRetainingCapacity();
+                try self_key.store.scratch_intern_key.appendSlice(self_key.store.allocator, "RGL");
+                try self_key.serializeRef(root_ref);
+            }
+
+            fn serializeRef(self_key: *@This(), ref: GraphRef) std.mem.Allocator.Error!void {
+                switch (ref) {
+                    .canonical => |layout_idx| {
+                        try self_key.store.appendInternKeyValue(@as(u8, 0));
+                        try self_key.store.appendInternKeyIdx(layout_idx);
+                    },
+                    .local => |node_id| try self_key.serializeNode(node_id),
+                }
+            }
+
+            fn serializeNode(self_key: *@This(), node_id: GraphNodeId) std.mem.Allocator.Error!void {
+                const index = @intFromEnum(node_id);
+                switch (self_key.states[index]) {
+                    .active, .done => {
+                        try self_key.store.appendInternKeyValue(@as(u8, 1));
+                        try self_key.store.appendInternKeyValue(self_key.binder_ids[index]);
+                        return;
+                    },
+                    .unseen => {},
+                }
+
+                self_key.states[index] = .active;
+                self_key.binder_ids[index] = self_key.next_binder;
+                self_key.next_binder += 1;
+
+                try self_key.store.appendInternKeyValue(@as(u8, 2));
+                const node = self_key.graph.getNode(node_id);
+                switch (node) {
+                    .pending => unreachable,
+                    .box => |child| {
+                        try self_key.store.appendInternKeyValue(@as(u8, 10));
+                        try self_key.serializeRef(child);
+                    },
+                    .list => |child| {
+                        try self_key.store.appendInternKeyValue(@as(u8, 11));
+                        try self_key.serializeRef(child);
+                    },
+                    .closure => |child| {
+                        try self_key.store.appendInternKeyValue(@as(u8, 12));
+                        try self_key.serializeRef(child);
+                    },
+                    .struct_ => |span| {
+                        const fields = self_key.graph.getFields(span);
+                        try self_key.store.appendInternKeyValue(@as(u8, 13));
+                        try self_key.store.appendInternKeyValue(@as(u32, @intCast(fields.len)));
+                        for (fields) |field| {
+                            try self_key.store.appendInternKeyValue(field.index);
+                            try self_key.serializeRef(field.child);
+                        }
+                    },
+                    .tag_union => |span| {
+                        const refs = self_key.graph.getRefs(span);
+                        try self_key.store.appendInternKeyValue(@as(u8, 14));
+                        try self_key.store.appendInternKeyValue(@as(u32, @intCast(refs.len)));
+                        for (refs) |child| {
+                            try self_key.serializeRef(child);
+                        }
+                    },
+                }
+
+                self_key.states[index] = .done;
+            }
+        };
+
+        var root_key_builder = KeyBuilder{
+            .store = self,
+            .graph = graph,
+            .states = key_states,
+            .binder_ids = binder_ids,
+        };
+        try root_key_builder.build(root);
+        if (self.interned_recursive_graphs.get(self.scratch_intern_key.items)) |existing| {
+            return existing;
+        }
+
+        const MaterializeState = enum(u8) { unseen, materializing, done };
+        const materialize_states = try self.allocator.alloc(MaterializeState, graph.nodes.items.len);
+        defer self.allocator.free(materialize_states);
+        @memset(materialize_states, .unseen);
+
+        const materialized = try self.allocator.alloc(Idx, graph.nodes.items.len);
+        defer self.allocator.free(materialized);
+        for (materialized) |*slot| slot.* = Idx.none;
+
+        const placeholders = try self.allocator.alloc(Idx, graph.nodes.items.len);
+        defer self.allocator.free(placeholders);
+        for (placeholders) |*slot| slot.* = Idx.none;
+
+        const Materializer = struct {
+            store: *Self,
+            graph: *const LayoutGraph,
+            states: []MaterializeState,
+            materialized: []Idx,
+            placeholders: []Idx,
+
+            fn materializeRef(self_mat: *@This(), ref: GraphRef) std.mem.Allocator.Error!Idx {
+                return switch (ref) {
+                    .canonical => |layout_idx| layout_idx,
+                    .local => |node_id| try self_mat.materializeNode(node_id),
+                };
+            }
+
+            fn materializeNode(self_mat: *@This(), node_id: GraphNodeId) std.mem.Allocator.Error!Idx {
+                const index = @intFromEnum(node_id);
+                if (self_mat.materialized[index] != Idx.none) {
+                    return self_mat.materialized[index];
+                }
+
+                switch (self_mat.states[index]) {
+                    .done => return self_mat.materialized[index],
+                    .materializing => {
+                        if (self_mat.placeholders[index] == Idx.none) {
+                            self_mat.placeholders[index] = try self_mat.store.reserveLayout(Layout.box(.zst));
+                        }
+                        return self_mat.placeholders[index];
+                    },
+                    .unseen => {},
+                }
+
+                self_mat.states[index] = .materializing;
+                defer self_mat.states[index] = .done;
+
+                const node = self_mat.graph.getNode(node_id);
+                const result = switch (node) {
+                    .pending => unreachable,
+                    .box => |child| blk: {
+                        const child_idx = try self_mat.materializeRef(child);
+                        if (self_mat.placeholders[index] != Idx.none) {
+                            const raw_layout = if (child_idx == .zst) Layout.boxOfZst() else Layout.box(child_idx);
+                            self_mat.store.updateLayout(self_mat.placeholders[index], raw_layout);
+                            break :blk self_mat.placeholders[index];
+                        }
+                        break :blk if (child_idx == .zst)
+                            try self_mat.store.insertLayout(Layout.boxOfZst())
+                        else
+                            try self_mat.store.insertBox(child_idx);
+                    },
+                    .list => |child| blk: {
+                        const child_idx = try self_mat.materializeRef(child);
+                        if (self_mat.placeholders[index] != Idx.none) {
+                            const raw_layout = if (child_idx == .zst) Layout.listOfZst() else Layout.list(child_idx);
+                            self_mat.store.updateLayout(self_mat.placeholders[index], raw_layout);
+                            break :blk self_mat.placeholders[index];
+                        }
+                        break :blk if (child_idx == .zst)
+                            try self_mat.store.insertLayout(Layout.listOfZst())
+                        else
+                            try self_mat.store.insertList(child_idx);
+                    },
+                    .closure => |child| blk: {
+                        const child_idx = try self_mat.materializeRef(child);
+                        if (self_mat.placeholders[index] != Idx.none) {
+                            self_mat.store.updateLayout(self_mat.placeholders[index], Layout.closure(child_idx));
+                            break :blk self_mat.placeholders[index];
+                        }
+                        break :blk try self_mat.store.insertLayout(Layout.closure(child_idx));
+                    },
+                    .struct_ => |span| blk: {
+                        const graph_fields = self_mat.graph.getFields(span);
+                        if (graph_fields.len == 0) break :blk try self_mat.store.getEmptyStructLayout();
+
+                        var fields = std.ArrayList(StructField).empty;
+                        defer fields.deinit(self_mat.store.allocator);
+                        try fields.ensureTotalCapacity(self_mat.store.allocator, graph_fields.len);
+                        for (graph_fields) |field| {
+                            fields.appendAssumeCapacity(.{
+                                .index = field.index,
+                                .layout = try self_mat.materializeRef(field.child),
+                            });
+                        }
+
+                        if (fields.items.len == 1) break :blk fields.items[0].layout;
+
+                        if (self_mat.placeholders[index] != Idx.none) {
+                            const raw_layout = try self_mat.store.buildUninternedStructLayout(fields.items);
+                            self_mat.store.updateLayout(self_mat.placeholders[index], raw_layout);
+                            break :blk self_mat.placeholders[index];
+                        }
+
+                        break :blk try self_mat.store.putStructFields(fields.items);
+                    },
+                    .tag_union => |span| blk: {
+                        const graph_refs = self_mat.graph.getRefs(span);
+                        if (graph_refs.len == 0) break :blk .zst;
+
+                        var variants = std.ArrayList(Idx).empty;
+                        defer variants.deinit(self_mat.store.allocator);
+                        try variants.ensureTotalCapacity(self_mat.store.allocator, graph_refs.len);
+                        for (graph_refs) |variant_ref| {
+                            variants.appendAssumeCapacity(try self_mat.materializeRef(variant_ref));
+                        }
+
+                        if (variants.items.len == 1) break :blk variants.items[0];
+                        if (variants.items.len == 2 and variants.items[0] == .zst and variants.items[1] == .zst) break :blk .bool;
+
+                        if (self_mat.placeholders[index] != Idx.none) {
+                            const raw_layout = try self_mat.store.buildUninternedTagUnionLayout(variants.items);
+                            self_mat.store.updateLayout(self_mat.placeholders[index], raw_layout);
+                            break :blk self_mat.placeholders[index];
+                        }
+
+                        break :blk try self_mat.store.putTagUnion(variants.items);
+                    },
+                };
+
+                self_mat.materialized[index] = result;
+                return result;
+            }
+        };
+
+        var materializer = Materializer{
+            .store = self,
+            .graph = graph,
+            .states = materialize_states,
+            .materialized = materialized,
+            .placeholders = placeholders,
+        };
+        const root_idx = try materializer.materializeRef(root);
+
+        for (graph.nodes.items, 0..) |_, i| {
+            if (materialized[i] == Idx.none) continue;
+
+            @memset(key_states, .unseen);
+            @memset(binder_ids, 0);
+            var subgraph_key_builder = KeyBuilder{
+                .store = self,
+                .graph = graph,
+                .states = key_states,
+                .binder_ids = binder_ids,
+            };
+            try subgraph_key_builder.build(.{ .local = @enumFromInt(i) });
+            if (self.interned_recursive_graphs.get(self.scratch_intern_key.items) == null) {
+                const owned_key = try self.allocator.dupe(u8, self.scratch_intern_key.items);
+                errdefer self.allocator.free(owned_key);
+                try self.interned_recursive_graphs.put(owned_key, materialized[i]);
+            }
+        }
+
+        return root_idx;
     }
 
     /// Create a struct layout representing the sequential layout of closure captures.
@@ -738,7 +1133,11 @@ pub const Store = struct {
     /// Get bundled information about a list layout's element
     pub fn getListInfo(self: *const Self, layout: Layout) ListInfo {
         std.debug.assert(layout.tag == .list or layout.tag == .list_of_zst);
-        const elem_layout_idx = layout.data.list;
+        const elem_layout_idx: Idx = switch (layout.tag) {
+            .list => layout.data.list,
+            .list_of_zst => .zst,
+            else => unreachable,
+        };
         const elem_layout = self.getLayout(elem_layout_idx);
         return ListInfo{
             .elem_layout_idx = elem_layout_idx,
@@ -752,7 +1151,11 @@ pub const Store = struct {
     /// Get bundled information about a box layout's element
     pub fn getBoxInfo(self: *const Self, layout: Layout) BoxInfo {
         std.debug.assert(layout.tag == .box or layout.tag == .box_of_zst);
-        const elem_layout_idx = layout.data.box;
+        const elem_layout_idx: Idx = switch (layout.tag) {
+            .box => layout.data.box,
+            .box_of_zst => .zst,
+            else => unreachable,
+        };
         const elem_layout = self.getLayout(elem_layout_idx);
         return BoxInfo{
             .elem_layout_idx = elem_layout_idx,

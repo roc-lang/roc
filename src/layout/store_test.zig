@@ -4,8 +4,12 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
+const mir = @import("mir");
 const layout = @import("layout.zig");
+const layout_graph_ = @import("graph.zig");
 const layout_store_ = @import("store.zig");
+const type_layout_resolver_ = @import("type_layout_resolver.zig");
+const mir_monotype_resolver_ = @import("mir_monotype_resolver.zig");
 const ModuleEnv = @import("can").ModuleEnv;
 
 const types_store = types.store;
@@ -79,6 +83,42 @@ const LayoutTest = struct {
         return try self.type_store.freshFromContent(box_content);
     }
 };
+
+fn expectTypeAndMonotypeResolversAgree(
+    allocator: std.mem.Allocator,
+    lt: *LayoutTest,
+    type_var: types.Var,
+) !void {
+    var type_layout_resolver = type_layout_resolver_.Resolver.init(&lt.layout_store);
+    const type_layout_idx = try type_layout_resolver.resolve(0, type_var, &lt.type_scope, null);
+
+    var mono_store = try mir.Monotype.Store.init(allocator);
+    defer mono_store.deinit(allocator);
+
+    var scratches = try mir.Monotype.Store.Scratches.init(allocator);
+    defer scratches.deinit();
+
+    var specializations = std.AutoHashMap(types.Var, mir.Monotype.Idx).init(allocator);
+    defer specializations.deinit();
+    var nominal_cycle_breakers = std.AutoHashMap(types.Var, mir.Monotype.Idx).init(allocator);
+    defer nominal_cycle_breakers.deinit();
+
+    const mono_idx = try mono_store.fromTypeVar(
+        allocator,
+        &lt.type_store,
+        type_var,
+        lt.module_env.idents,
+        &specializations,
+        &nominal_cycle_breakers,
+        &scratches,
+    );
+
+    var mir_layout_resolver = mir_monotype_resolver_.Resolver.init(allocator, &mono_store, &lt.layout_store);
+    defer mir_layout_resolver.deinit();
+    const mono_layout_idx = try mir_layout_resolver.resolve(mono_idx, null);
+
+    try testing.expectEqual(type_layout_idx, mono_layout_idx);
+}
 
 test "fromTypeVar - bool type" {
     var lt = try LayoutTest.init(testing.allocator);
@@ -1004,4 +1044,207 @@ test "putTagUnion interns identical variant payload shapes to the same layout id
     const tag_union_2 = try lt.layout_store.putTagUnion(&.{ .zst, tuple_payload });
 
     try testing.expectEqual(tag_union_1, tag_union_2);
+}
+
+test "internGraph interns identical recursive tag unions regardless of construction order" {
+    var lt = try LayoutTest.init(testing.allocator);
+    try lt.initLayoutStore();
+    defer lt.deinit();
+
+    var graph_1: layout_graph_.Graph = .{};
+    defer graph_1.deinit(testing.allocator);
+
+    const tag_union_1 = try graph_1.reserveNode(testing.allocator);
+    const list_1 = try graph_1.reserveNode(testing.allocator);
+    graph_1.setNode(list_1, .{ .list = .{ .local = tag_union_1 } });
+    const variants_1 = try graph_1.appendRefs(testing.allocator, &[_]layout_graph_.Ref{
+        .{ .canonical = layout.Idx.zst },
+        .{ .local = list_1 },
+    });
+    graph_1.setNode(tag_union_1, .{ .tag_union = variants_1 });
+
+    var graph_2: layout_graph_.Graph = .{};
+    defer graph_2.deinit(testing.allocator);
+
+    const list_2 = try graph_2.reserveNode(testing.allocator);
+    const tag_union_2 = try graph_2.reserveNode(testing.allocator);
+    graph_2.setNode(list_2, .{ .list = .{ .local = tag_union_2 } });
+    const variants_2 = try graph_2.appendRefs(testing.allocator, &[_]layout_graph_.Ref{
+        .{ .canonical = layout.Idx.zst },
+        .{ .local = list_2 },
+    });
+    graph_2.setNode(tag_union_2, .{ .tag_union = variants_2 });
+
+    const idx_1 = try lt.layout_store.internGraph(&graph_1, .{ .local = tag_union_1 });
+    const idx_2 = try lt.layout_store.internGraph(&graph_2, .{ .local = tag_union_2 });
+
+    try testing.expectEqual(idx_1, idx_2);
+}
+
+test "internGraph interns identical recursive tuple-list graphs regardless of construction order" {
+    var lt = try LayoutTest.init(testing.allocator);
+    try lt.initLayoutStore();
+    defer lt.deinit();
+
+    var graph_1: layout_graph_.Graph = .{};
+    defer graph_1.deinit(testing.allocator);
+
+    const tuple_1 = try graph_1.reserveNode(testing.allocator);
+    const list_1 = try graph_1.reserveNode(testing.allocator);
+    graph_1.setNode(list_1, .{ .list = .{ .local = tuple_1 } });
+    const fields_1 = try graph_1.appendFields(testing.allocator, &[_]layout_graph_.Field{
+        .{ .index = 0, .child = .{ .canonical = layout.Idx.u64 } },
+        .{ .index = 1, .child = .{ .local = list_1 } },
+    });
+    graph_1.setNode(tuple_1, .{ .struct_ = fields_1 });
+
+    var graph_2: layout_graph_.Graph = .{};
+    defer graph_2.deinit(testing.allocator);
+
+    const list_2 = try graph_2.reserveNode(testing.allocator);
+    const tuple_2 = try graph_2.reserveNode(testing.allocator);
+    graph_2.setNode(list_2, .{ .list = .{ .local = tuple_2 } });
+    const fields_2 = try graph_2.appendFields(testing.allocator, &[_]layout_graph_.Field{
+        .{ .index = 0, .child = .{ .canonical = layout.Idx.u64 } },
+        .{ .index = 1, .child = .{ .local = list_2 } },
+    });
+    graph_2.setNode(tuple_2, .{ .struct_ = fields_2 });
+
+    const idx_1 = try lt.layout_store.internGraph(&graph_1, .{ .local = tuple_1 });
+    const idx_2 = try lt.layout_store.internGraph(&graph_2, .{ .local = tuple_2 });
+
+    try testing.expectEqual(idx_1, idx_2);
+}
+
+test "internGraph handles mixed canonical children with local recursive refs" {
+    var lt = try LayoutTest.init(testing.allocator);
+    try lt.initLayoutStore();
+    defer lt.deinit();
+
+    var graph_1: layout_graph_.Graph = .{};
+    defer graph_1.deinit(testing.allocator);
+
+    const record_1 = try graph_1.reserveNode(testing.allocator);
+    const list_1 = try graph_1.reserveNode(testing.allocator);
+    graph_1.setNode(list_1, .{ .list = .{ .local = record_1 } });
+    const fields_1 = try graph_1.appendFields(testing.allocator, &[_]layout_graph_.Field{
+        .{ .index = 0, .child = .{ .canonical = layout.Idx.str } },
+        .{ .index = 1, .child = .{ .local = list_1 } },
+    });
+    graph_1.setNode(record_1, .{ .struct_ = fields_1 });
+
+    var graph_2: layout_graph_.Graph = .{};
+    defer graph_2.deinit(testing.allocator);
+
+    const list_2 = try graph_2.reserveNode(testing.allocator);
+    const record_2 = try graph_2.reserveNode(testing.allocator);
+    graph_2.setNode(list_2, .{ .list = .{ .local = record_2 } });
+    const fields_2 = try graph_2.appendFields(testing.allocator, &[_]layout_graph_.Field{
+        .{ .index = 0, .child = .{ .canonical = layout.Idx.str } },
+        .{ .index = 1, .child = .{ .local = list_2 } },
+    });
+    graph_2.setNode(record_2, .{ .struct_ = fields_2 });
+
+    const idx_1 = try lt.layout_store.internGraph(&graph_1, .{ .local = record_1 });
+    const idx_2 = try lt.layout_store.internGraph(&graph_2, .{ .local = record_2 });
+
+    try testing.expectEqual(idx_1, idx_2);
+}
+
+test "type and monotype layout resolvers agree for nested ordinary data layouts" {
+    var lt = try LayoutTest.initWithIdents(testing.allocator);
+    defer lt.deinit();
+
+    const list_ident_idx = try lt.module_env.insertIdent(base.Ident.for_text("List"));
+    const box_ident_idx = try lt.module_env.insertIdent(base.Ident.for_text("Box"));
+    const builtin_module_idx = try lt.module_env.insertIdent(base.Ident.for_text("Builtin"));
+    lt.module_env.idents.builtin_module = builtin_module_idx;
+    try lt.initLayoutStore();
+
+    const unit_var = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
+    const u64_var = try lt.type_store.freshFromContent(try lt.type_store.mkNominal(
+        .{ .ident_idx = lt.module_env.idents.u64_type },
+        unit_var,
+        &[_]types.Var{},
+        builtin_module_idx,
+        false,
+    ));
+    const u8_var = try lt.type_store.freshFromContent(try lt.type_store.mkNominal(
+        .{ .ident_idx = lt.module_env.idents.u8_type },
+        unit_var,
+        &[_]types.Var{},
+        builtin_module_idx,
+        false,
+    ));
+    const str_var = try lt.type_store.freshFromContent(try lt.type_store.mkNominal(
+        .{ .ident_idx = lt.module_env.idents.str },
+        unit_var,
+        &[_]types.Var{},
+        builtin_module_idx,
+        false,
+    ));
+
+    const tuple_vars = try lt.type_store.appendVars(&[_]types.Var{ u8_var, str_var });
+    const tuple_var = try lt.type_store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = tuple_vars } } });
+
+    const box_tuple_var = try lt.mkBoxType(tuple_var, box_ident_idx, builtin_module_idx);
+
+    const list_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = list_ident_idx },
+        u64_var,
+        &[_]types.Var{u64_var},
+        builtin_module_idx,
+        false,
+    );
+    const list_u64_var = try lt.type_store.freshFromContent(list_content);
+
+    const fields = try lt.type_store.record_fields.appendSlice(testing.allocator, &[_]types.RecordField{
+        .{ .name = try lt.module_env.insertIdent(Ident.for_text("a")), .var_ = list_u64_var },
+        .{ .name = try lt.module_env.insertIdent(Ident.for_text("b")), .var_ = box_tuple_var },
+    });
+    const record_var = try lt.type_store.freshFromContent(.{
+        .structure = .{ .record = .{ .fields = fields, .ext = try lt.type_store.freshFromContent(.{ .structure = .empty_record }) } },
+    });
+
+    try expectTypeAndMonotypeResolversAgree(testing.allocator, &lt, record_var);
+}
+
+test "type and monotype layout resolvers agree for recursive nominal layouts" {
+    var lt = try LayoutTest.initWithIdents(testing.allocator);
+    defer lt.deinit();
+
+    const box_ident_idx = try lt.module_env.insertIdent(base.Ident.for_text("Box"));
+    const builtin_module_idx = try lt.module_env.insertIdent(base.Ident.for_text("Builtin"));
+    lt.module_env.idents.builtin_module = builtin_module_idx;
+    try lt.initLayoutStore();
+
+    const nat_ident = try lt.module_env.insertIdent(Ident.for_text("Nat"));
+    const recursive_var = try lt.type_store.freshFromContent(.{ .flex = types.Flex.init() });
+    const box_recursive_var = try lt.mkBoxType(recursive_var, box_ident_idx, builtin_module_idx);
+
+    const zero_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("Zero")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{}),
+    };
+    const suc_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("Suc")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{box_recursive_var}),
+    };
+    const tags_range = try lt.type_store.appendTags(&[_]types.Tag{ zero_tag, suc_tag });
+    const tag_union = types.TagUnion{
+        .tags = tags_range,
+        .ext = try lt.type_store.freshFromContent(.{ .structure = .empty_tag_union }),
+    };
+    const tag_union_var = try lt.type_store.freshFromContent(.{ .structure = .{ .tag_union = tag_union } });
+
+    const nat_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = nat_ident },
+        tag_union_var,
+        &[_]types.Var{},
+        builtin_module_idx,
+        false,
+    );
+    try lt.type_store.setVarContent(recursive_var, nat_content);
+    const nat_var = try lt.type_store.freshFromContent(nat_content);
+    try expectTypeAndMonotypeResolversAgree(testing.allocator, &lt, nat_var);
 }
