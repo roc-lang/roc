@@ -861,11 +861,12 @@ fn lowerStrInspekt(self: *Self, module_env: *const ModuleEnv, run_ll: anytype, r
     const arg_cir_expr = args[0];
     const lowered_arg = try self.lowerExpr(arg_cir_expr);
     const arg_mono = self.store.typeOf(lowered_arg);
+    const arg_type_var = ModuleEnv.varFrom(arg_cir_expr);
 
     // Evaluate the argument once, then inspect the bound lookup.
     const arg_bind = try self.makeSyntheticBind(arg_mono, false);
     const arg_lookup = try self.emitMirLookup(arg_bind.symbol, arg_mono, region);
-    const inspected = try self.lowerStrInspektExpr(module_env, arg_lookup, arg_mono, region);
+    const inspected = try self.lowerStrInspektExpr(module_env, arg_lookup, arg_type_var, region);
     try self.registerBoundSymbolDefIfNeeded(arg_bind.pattern, lowered_arg);
 
     const stmts = try self.store.addStmts(self.allocator, &.{MIR.Stmt{
@@ -884,6 +885,951 @@ fn lowerStrInspekt(self: *Self, module_env: *const ModuleEnv, run_ll: anytype, r
 }
 
 fn lowerStrInspektExpr(
+    self: *Self,
+    type_env: *const ModuleEnv,
+    value_expr: MIR.ExprId,
+    type_var: types.Var,
+    region: Region,
+) Allocator.Error!MIR.ExprId {
+    const resolved = type_env.types.resolveVar(type_var);
+    return switch (resolved.desc.content) {
+        .alias => |alias| self.lowerStrInspektExpr(type_env, value_expr, type_env.types.getAliasBackingVar(alias), region),
+        .structure => |flat_type| switch (flat_type) {
+            .nominal_type => |nominal| self.lowerStrInspektNominal(type_env, value_expr, type_var, nominal, region),
+            .record => |record| self.lowerStrInspektRecord(type_env, value_expr, record, region),
+            .record_unbound => |fields_range| self.lowerStrInspektRecordUnbound(type_env, value_expr, fields_range, region),
+            .tuple => |tup| self.lowerStrInspektTuple(type_env, value_expr, tup, region),
+            .tag_union => |tu| self.lowerStrInspektTagUnion(type_env, value_expr, type_var, tu, region),
+            .empty_record => self.emitMirStrLiteral("{}", region),
+            .empty_tag_union => self.emitMirStrLiteral("<empty_tag_union>", region),
+            .fn_pure, .fn_effectful, .fn_unbound => self.emitMirStrLiteral("<function>", region),
+        },
+        .flex, .rigid => {
+            const mono_idx = try self.monotypeFromTypeVarInEnv(type_env, type_var);
+            return self.lowerStrInspektExprByMonotype(type_env, value_expr, mono_idx, region);
+        },
+        .err => try self.store.addExpr(
+            self.allocator,
+            .{ .runtime_err_type = {} },
+            self.store.monotype_store.primIdx(.str),
+            region,
+        ),
+    };
+}
+
+fn monotypeFromTypeVarInEnv(
+    self: *Self,
+    type_env: *const ModuleEnv,
+    type_var: types.Var,
+) Allocator.Error!Monotype.Idx {
+    const module_idx = self.moduleIndexForEnv(type_env) orelse {
+        if (std.debug.runtime_safety) {
+            std.debug.panic("monotypeFromTypeVarInEnv: module env not found", .{});
+        }
+        unreachable;
+    };
+
+    return self.monotypeFromTypeVarInStore(module_idx, &type_env.types, type_var);
+}
+
+fn monotypeFromTypeVarInStoreWithBindings(
+    self: *Self,
+    module_idx: u32,
+    store_types: *const types.Store,
+    var_: types.Var,
+    bindings: *const std.AutoHashMap(types.Var, Monotype.Idx),
+) Allocator.Error!Monotype.Idx {
+    var local_cycles = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+    defer local_cycles.deinit();
+
+    const saved_ident_store = self.mono_scratches.ident_store;
+    self.mono_scratches.ident_store = self.all_module_envs[module_idx].getIdentStoreConst();
+    defer self.mono_scratches.ident_store = saved_ident_store;
+
+    return self.store.monotype_store.fromTypeVar(
+        self.allocator,
+        store_types,
+        var_,
+        ModuleEnv.CommonIdents.find(&self.all_module_envs[module_idx].common),
+        bindings,
+        &local_cycles,
+        &self.mono_scratches,
+    );
+}
+
+fn resolveFuncTypeInStore(types_store: *const types.Store, type_var: types.Var) ?struct { func: types.Func, effectful: bool } {
+    var resolved = types_store.resolveVar(type_var);
+    while (resolved.desc.content == .alias) {
+        resolved = types_store.resolveVar(types_store.getAliasBackingVar(resolved.desc.content.alias));
+    }
+
+    if (resolved.desc.content != .structure) return null;
+    return switch (resolved.desc.content.structure) {
+        .fn_pure => |func| .{ .func = func, .effectful = false },
+        .fn_effectful => |func| .{ .func = func, .effectful = true },
+        .fn_unbound => |func| .{ .func = func, .effectful = false },
+        else => null,
+    };
+}
+
+fn lookupAssociatedMethodSymbol(
+    self: *Self,
+    source_env: *const ModuleEnv,
+    nominal: types.NominalType,
+    method_ident: Ident.Idx,
+) Allocator.Error!?struct {
+    target_env: *const ModuleEnv,
+    module_idx: u32,
+    symbol: MIR.Symbol,
+    type_var: types.Var,
+} {
+    const target_module_idx = self.findModuleForOriginMaybe(source_env, nominal.origin_module) orelse return null;
+    const target_env = self.all_module_envs[target_module_idx];
+    const qualified_method_ident = target_env.lookupMethodIdentFromEnvConst(
+        source_env,
+        nominal.ident.ident_idx,
+        method_ident,
+    ) orelse return null;
+    const node_idx = target_env.getExposedNodeIndexById(qualified_method_ident) orelse return null;
+    if (!target_env.store.isDefNode(node_idx)) return null;
+
+    const def_idx: CIR.Def.Idx = @enumFromInt(node_idx);
+    return .{
+        .target_env = target_env,
+        .module_idx = target_module_idx,
+        .symbol = try self.internExternalDefSymbol(target_module_idx, node_idx),
+        .type_var = ModuleEnv.varFrom(target_env.store.getDef(def_idx).expr),
+    };
+}
+
+fn bindTypeVarMonotypesInStore(
+    self: *Self,
+    store_types: *const types.Store,
+    common_idents: ModuleEnv.CommonIdents,
+    bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
+    type_var: types.Var,
+    monotype: Monotype.Idx,
+) Allocator.Error!void {
+    if (monotype.isNone()) return;
+
+    const resolved = store_types.resolveVar(type_var);
+    if (bindings.get(resolved.var_)) |existing| {
+        if (!(try self.monotypesStructurallyEqual(existing, monotype))) {
+            typeBindingInvariant(
+                "bindTypeVarMonotypesInStore: conflicting monotype binding for type var root {d} (existing={d}, new={d})",
+                .{ @intFromEnum(resolved.var_), @intFromEnum(existing), @intFromEnum(monotype) },
+            );
+        }
+        return;
+    }
+
+    switch (resolved.desc.content) {
+        .flex, .rigid => try bindings.put(resolved.var_, monotype),
+        .alias => |alias| try self.bindTypeVarMonotypesInStore(
+            store_types,
+            common_idents,
+            bindings,
+            store_types.getAliasBackingVar(alias),
+            monotype,
+        ),
+        .structure => |flat_type| {
+            try bindings.put(resolved.var_, monotype);
+            try self.bindFlatTypeMonotypesInStore(store_types, common_idents, bindings, flat_type, monotype);
+        },
+        .err => {},
+    }
+}
+
+fn bindFlatTypeMonotypesInStore(
+    self: *Self,
+    store_types: *const types.Store,
+    common_idents: ModuleEnv.CommonIdents,
+    bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
+    flat_type: types.FlatType,
+    monotype: Monotype.Idx,
+) Allocator.Error!void {
+    if (monotype.isNone()) return;
+
+    const mono = self.store.monotype_store.getMonotype(monotype);
+    switch (flat_type) {
+        .fn_pure, .fn_effectful, .fn_unbound => |func| {
+            const mfunc = switch (mono) {
+                .func => |mfunc| mfunc,
+                else => typeBindingInvariant(
+                    "bindFlatTypeMonotypesInStore(fn): expected function monotype, found '{s}'",
+                    .{@tagName(mono)},
+                ),
+            };
+
+            const type_args = store_types.sliceVars(func.args);
+            const mono_args = self.store.monotype_store.getIdxSpan(mfunc.args);
+            if (type_args.len != mono_args.len) {
+                typeBindingInvariant(
+                    "bindFlatTypeMonotypesInStore(fn): arity mismatch (type={d}, monotype={d})",
+                    .{ type_args.len, mono_args.len },
+                );
+            }
+            for (type_args, 0..) |arg_var, i| {
+                try self.bindTypeVarMonotypesInStore(store_types, common_idents, bindings, arg_var, mono_args[i]);
+            }
+            try self.bindTypeVarMonotypesInStore(store_types, common_idents, bindings, func.ret, mfunc.ret);
+        },
+        .nominal_type => |nominal| {
+            const ident = nominal.ident.ident_idx;
+            const origin = nominal.origin_module;
+
+            if (origin.eql(common_idents.builtin_module) and ident.eql(common_idents.list)) {
+                const mlist = switch (mono) {
+                    .list => |mlist| mlist,
+                    else => typeBindingInvariant(
+                        "bindFlatTypeMonotypesInStore(nominal List): expected list monotype, found '{s}'",
+                        .{@tagName(mono)},
+                    ),
+                };
+                const type_args = store_types.sliceNominalArgs(nominal);
+                if (type_args.len != 1) {
+                    typeBindingInvariant(
+                        "bindFlatTypeMonotypesInStore(nominal List): expected 1 arg, found {d}",
+                        .{type_args.len},
+                    );
+                }
+                try self.bindTypeVarMonotypesInStore(store_types, common_idents, bindings, type_args[0], mlist.elem);
+                return;
+            }
+
+            if (origin.eql(common_idents.builtin_module) and ident.eql(common_idents.box)) {
+                const mbox = switch (mono) {
+                    .box => |mbox| mbox,
+                    else => typeBindingInvariant(
+                        "bindFlatTypeMonotypesInStore(nominal Box): expected box monotype, found '{s}'",
+                        .{@tagName(mono)},
+                    ),
+                };
+                const type_args = store_types.sliceNominalArgs(nominal);
+                if (type_args.len != 1) {
+                    typeBindingInvariant(
+                        "bindFlatTypeMonotypesInStore(nominal Box): expected 1 arg, found {d}",
+                        .{type_args.len},
+                    );
+                }
+                try self.bindTypeVarMonotypesInStore(store_types, common_idents, bindings, type_args[0], mbox.inner);
+                return;
+            }
+
+            if (origin.eql(common_idents.builtin_module) and builtinPrimForNominal(ident, common_idents) != null) {
+                switch (mono) {
+                    .prim => {},
+                    else => typeBindingInvariant(
+                        "bindFlatTypeMonotypesInStore(nominal prim): expected prim monotype, found '{s}'",
+                        .{@tagName(mono)},
+                    ),
+                }
+                return;
+            }
+
+            try self.bindTypeVarMonotypesInStore(
+                store_types,
+                common_idents,
+                bindings,
+                store_types.getNominalBackingVar(nominal),
+                monotype,
+            );
+        },
+        .record => |record| {
+            const mrec = switch (mono) {
+                .record => |mrec| mrec,
+                else => typeBindingInvariant(
+                    "bindFlatTypeMonotypesInStore(record): expected record monotype, found '{s}'",
+                    .{@tagName(mono)},
+                ),
+            };
+            const mono_fields = self.store.monotype_store.getFields(mrec.fields);
+
+            var current_row = record;
+            rows: while (true) {
+                const fields_slice = store_types.getRecordFieldsSlice(current_row.fields);
+                const field_names = fields_slice.items(.name);
+                const field_vars = fields_slice.items(.var_);
+                for (field_names, field_vars) |field_name, field_var| {
+                    const field_idx = self.recordFieldIndexByName(field_name, mono_fields);
+                    try self.bindTypeVarMonotypesInStore(store_types, common_idents, bindings, field_var, mono_fields[field_idx].type_idx);
+                }
+
+                var ext_var = current_row.ext;
+                while (true) {
+                    const ext_resolved = store_types.resolveVar(ext_var);
+                    switch (ext_resolved.desc.content) {
+                        .alias => |alias| {
+                            ext_var = store_types.getAliasBackingVar(alias);
+                            continue;
+                        },
+                        .structure => |ext_flat| switch (ext_flat) {
+                            .record => |next_row| {
+                                current_row = next_row;
+                                continue :rows;
+                            },
+                            .record_unbound => |fields_range| {
+                                const ext_fields = store_types.getRecordFieldsSlice(fields_range);
+                                const ext_names = ext_fields.items(.name);
+                                const ext_vars = ext_fields.items(.var_);
+                                for (ext_names, ext_vars) |field_name, field_var| {
+                                    const field_idx = self.recordFieldIndexByName(field_name, mono_fields);
+                                    try self.bindTypeVarMonotypesInStore(store_types, common_idents, bindings, field_var, mono_fields[field_idx].type_idx);
+                                }
+                                break :rows;
+                            },
+                            .empty_record => break :rows,
+                            else => typeBindingInvariant(
+                                "bindFlatTypeMonotypesInStore(record): unexpected row extension '{s}'",
+                                .{@tagName(ext_flat)},
+                            ),
+                        },
+                        .flex, .rigid => break :rows,
+                        .err => unreachable,
+                    }
+                }
+            }
+        },
+        .record_unbound => |fields_range| {
+            const mrec = switch (mono) {
+                .record => |mrec| mrec,
+                else => typeBindingInvariant(
+                    "bindFlatTypeMonotypesInStore(record_unbound): expected record monotype, found '{s}'",
+                    .{@tagName(mono)},
+                ),
+            };
+            const mono_fields = self.store.monotype_store.getFields(mrec.fields);
+            const fields_slice = store_types.getRecordFieldsSlice(fields_range);
+            const field_names = fields_slice.items(.name);
+            const field_vars = fields_slice.items(.var_);
+            for (field_names, field_vars) |field_name, field_var| {
+                const field_idx = self.recordFieldIndexByName(field_name, mono_fields);
+                try self.bindTypeVarMonotypesInStore(store_types, common_idents, bindings, field_var, mono_fields[field_idx].type_idx);
+            }
+        },
+        .tuple => |tuple| {
+            const mtup = switch (mono) {
+                .tuple => |mtup| mtup,
+                else => typeBindingInvariant(
+                    "bindFlatTypeMonotypesInStore(tuple): expected tuple monotype, found '{s}'",
+                    .{@tagName(mono)},
+                ),
+            };
+            const elem_vars = store_types.sliceVars(tuple.elems);
+            const elem_monos = self.store.monotype_store.getIdxSpan(mtup.elems);
+            if (elem_vars.len != elem_monos.len) {
+                typeBindingInvariant(
+                    "bindFlatTypeMonotypesInStore(tuple): arity mismatch (type={d}, monotype={d})",
+                    .{ elem_vars.len, elem_monos.len },
+                );
+            }
+            for (elem_vars, 0..) |elem_var, i| {
+                try self.bindTypeVarMonotypesInStore(store_types, common_idents, bindings, elem_var, elem_monos[i]);
+            }
+        },
+        .tag_union => |tag_union| {
+            const mtag = switch (mono) {
+                .tag_union => |mtag| mtag,
+                else => typeBindingInvariant(
+                    "bindFlatTypeMonotypesInStore(tag_union): expected tag union monotype, found '{s}'",
+                    .{@tagName(mono)},
+                ),
+            };
+            const mono_tags = self.store.monotype_store.getTags(mtag.tags);
+
+            var current_row = tag_union;
+            rows: while (true) {
+                const type_tags = store_types.getTagsSlice(current_row.tags);
+                const tag_names = type_tags.items(.name);
+                const tag_args = type_tags.items(.args);
+                for (tag_names, tag_args) |tag_name, args_range| {
+                    const payload_vars = store_types.sliceVars(args_range);
+                    try self.bindTagPayloadsByName(tag_name, payload_vars, mono_tags);
+                }
+
+                var ext_var = current_row.ext;
+                while (true) {
+                    const ext_resolved = store_types.resolveVar(ext_var);
+                    switch (ext_resolved.desc.content) {
+                        .alias => |alias| {
+                            ext_var = store_types.getAliasBackingVar(alias);
+                            continue;
+                        },
+                        .structure => |ext_flat| switch (ext_flat) {
+                            .tag_union => |next_row| {
+                                current_row = next_row;
+                                continue :rows;
+                            },
+                            .empty_tag_union => break :rows,
+                            else => typeBindingInvariant(
+                                "bindFlatTypeMonotypesInStore(tag_union): unexpected row extension '{s}'",
+                                .{@tagName(ext_flat)},
+                            ),
+                        },
+                        .flex, .rigid => break :rows,
+                        .err => unreachable,
+                    }
+                }
+            }
+        },
+        .empty_record => switch (mono) {
+            .unit => {},
+            else => typeBindingInvariant(
+                "bindFlatTypeMonotypesInStore(empty_record): expected unit monotype, found '{s}'",
+                .{@tagName(mono)},
+            ),
+        },
+        .empty_tag_union => switch (mono) {
+            .tag_union => {},
+            else => typeBindingInvariant(
+                "bindFlatTypeMonotypesInStore(empty_tag_union): expected tag union monotype, found '{s}'",
+                .{@tagName(mono)},
+            ),
+        },
+    }
+}
+
+fn lowerStrInspektNominal(
+    self: *Self,
+    type_env: *const ModuleEnv,
+    value_expr: MIR.ExprId,
+    type_var: types.Var,
+    nominal: types.NominalType,
+    region: Region,
+) Allocator.Error!MIR.ExprId {
+    const common = ModuleEnv.CommonIdents.find(&type_env.common);
+    const ident = nominal.ident.ident_idx;
+
+    if (nominal.origin_module.eql(common.builtin_module)) {
+        if (builtinPrimForNominal(ident, common)) |prim| {
+            return self.lowerStrInspektExprByMonotype(
+                type_env,
+                value_expr,
+                self.store.monotype_store.primIdx(prim),
+                region,
+            );
+        }
+        if (ident.eql(common.bool)) {
+            return self.lowerStrInspektExpr(type_env, value_expr, type_env.types.getNominalBackingVar(nominal), region);
+        }
+        if (ident.eql(common.list)) {
+            const type_args = type_env.types.sliceNominalArgs(nominal);
+            if (type_args.len != 1) {
+                typeBindingInvariant("lowerStrInspektNominal(List): expected 1 arg, found {d}", .{type_args.len});
+            }
+            return self.lowerStrInspektList(type_env, value_expr, type_args[0], region);
+        }
+        if (ident.eql(common.box)) {
+            const type_args = type_env.types.sliceNominalArgs(nominal);
+            if (type_args.len != 1) {
+                typeBindingInvariant("lowerStrInspektNominal(Box): expected 1 arg, found {d}", .{type_args.len});
+            }
+
+            const outer_mono = try self.monotypeFromTypeVarInEnv(type_env, type_var);
+            const box_mono = self.store.monotype_store.getMonotype(outer_mono);
+            const box_data = switch (box_mono) {
+                .box => |box| box,
+                else => typeBindingInvariant(
+                    "lowerStrInspektNominal(Box): expected box monotype, found '{s}'",
+                    .{@tagName(box_mono)},
+                ),
+            };
+
+            const unbox_fn_mono = try self.buildFuncMonotype(&.{outer_mono}, box_data.inner, false);
+            const unbox_target: ResolvedDispatchTarget = .{
+                .origin = common.builtin_module,
+                .method_ident = common.builtin_box_unbox,
+                .fn_var = undefined,
+            };
+
+            const method_symbol = try self.resolvedDispatchTargetToSymbol(type_env, unbox_target);
+            const lowered_method_symbol = try self.specializeMethod(method_symbol, unbox_fn_mono);
+            const func_expr = try self.store.addExpr(
+                self.allocator,
+                .{ .lookup = lowered_method_symbol },
+                unbox_fn_mono,
+                region,
+            );
+            const unbox_args = try self.store.addExprSpan(self.allocator, &.{value_expr});
+            const unboxed = try self.store.addExpr(
+                self.allocator,
+                .{ .call = .{ .func = func_expr, .args = unbox_args } },
+                box_data.inner,
+                region,
+            );
+
+            return self.lowerStrInspektExpr(type_env, unboxed, type_args[0], region);
+        }
+    }
+
+    if (try self.lookupAssociatedMethodSymbol(type_env, nominal, type_env.idents.to_inspect)) |method_info| {
+        const resolved_func = resolveFuncTypeInStore(&method_info.target_env.types, method_info.type_var) orelse
+            return self.lowerStrInspektExpr(type_env, value_expr, type_env.types.getNominalBackingVar(nominal), region);
+        if (resolved_func.effectful) {
+            return self.lowerStrInspektExpr(type_env, value_expr, type_env.types.getNominalBackingVar(nominal), region);
+        }
+
+        const param_vars = method_info.target_env.types.sliceVars(resolved_func.func.args);
+        if (param_vars.len != 1) {
+            return self.lowerStrInspektExpr(type_env, value_expr, type_env.types.getNominalBackingVar(nominal), region);
+        }
+
+        var type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+        defer type_var_seen.deinit();
+
+        const arg_mono = try self.monotypeFromTypeVarInEnv(type_env, type_var);
+        try self.bindTypeVarMonotypesInStore(
+            &method_info.target_env.types,
+            ModuleEnv.CommonIdents.find(&method_info.target_env.common),
+            &type_var_seen,
+            param_vars[0],
+            arg_mono,
+        );
+
+        const method_func_mono = try self.monotypeFromTypeVarInStoreWithBindings(
+            method_info.module_idx,
+            &method_info.target_env.types,
+            method_info.type_var,
+            &type_var_seen,
+        );
+        if (method_func_mono.isNone()) {
+            return self.lowerStrInspektExpr(type_env, value_expr, type_env.types.getNominalBackingVar(nominal), region);
+        }
+
+        const method_func = switch (self.store.monotype_store.getMonotype(method_func_mono)) {
+            .func => |func| func,
+            else => typeBindingInvariant(
+                "lowerStrInspektNominal: expected function monotype for to_inspect, found '{s}'",
+                .{@tagName(self.store.monotype_store.getMonotype(method_func_mono))},
+            ),
+        };
+
+        const lowered_method_symbol = try self.specializeMethod(method_info.symbol, method_func_mono);
+        const func_expr = try self.store.addExpr(
+            self.allocator,
+            .{ .lookup = lowered_method_symbol },
+            method_func_mono,
+            region,
+        );
+        const call_args = try self.store.addExprSpan(self.allocator, &.{value_expr});
+        const call_expr = try self.store.addExpr(
+            self.allocator,
+            .{ .call = .{ .func = func_expr, .args = call_args } },
+            method_func.ret,
+            region,
+        );
+
+        const ret_mono = self.store.monotype_store.getMonotype(method_func.ret);
+        if (ret_mono == .prim and ret_mono.prim == .str) {
+            return call_expr;
+        }
+
+        return self.lowerStrInspektExpr(method_info.target_env, call_expr, resolved_func.func.ret, region);
+    }
+
+    return self.lowerStrInspektExpr(type_env, value_expr, type_env.types.getNominalBackingVar(nominal), region);
+}
+
+fn lowerStrInspektRecord(
+    self: *Self,
+    type_env: *const ModuleEnv,
+    value_expr: MIR.ExprId,
+    record: types.Record,
+    region: Region,
+) Allocator.Error!MIR.ExprId {
+    var collected = std.ArrayList(types.RecordField).empty;
+    defer collected.deinit(self.allocator);
+
+    var current_row = record;
+    rows: while (true) {
+        const fields_slice = type_env.types.getRecordFieldsSlice(current_row.fields);
+        const field_names = fields_slice.items(.name);
+        const field_vars = fields_slice.items(.var_);
+
+        for (field_names, field_vars) |field_name, field_var| {
+            var seen_name = false;
+            for (collected.items) |existing| {
+                if (existing.name.eql(field_name)) {
+                    seen_name = true;
+                    break;
+                }
+            }
+            if (!seen_name) {
+                try collected.append(self.allocator, .{ .name = field_name, .var_ = field_var });
+            }
+        }
+
+        var ext_var = current_row.ext;
+        while (true) {
+            const ext_resolved = type_env.types.resolveVar(ext_var);
+            switch (ext_resolved.desc.content) {
+                .alias => |alias| {
+                    ext_var = type_env.types.getAliasBackingVar(alias);
+                    continue;
+                },
+                .structure => |ext_flat| switch (ext_flat) {
+                    .record => |next_row| {
+                        current_row = next_row;
+                        continue :rows;
+                    },
+                    .record_unbound => |fields_range| {
+                        const ext_fields = type_env.types.getRecordFieldsSlice(fields_range);
+                        const ext_names = ext_fields.items(.name);
+                        const ext_vars = ext_fields.items(.var_);
+                        for (ext_names, ext_vars) |field_name, field_var| {
+                            var seen_name = false;
+                            for (collected.items) |existing| {
+                                if (existing.name.eql(field_name)) {
+                                    seen_name = true;
+                                    break;
+                                }
+                            }
+                            if (!seen_name) {
+                                try collected.append(self.allocator, .{ .name = field_name, .var_ = field_var });
+                            }
+                        }
+                        break :rows;
+                    },
+                    .empty_record => break :rows,
+                    else => typeBindingInvariant(
+                        "lowerStrInspektRecord: unexpected row extension '{s}'",
+                        .{@tagName(ext_flat)},
+                    ),
+                },
+                .flex, .rigid => break :rows,
+                .err => unreachable,
+            }
+        }
+    }
+
+    if (collected.items.len == 0) return self.emitMirStrLiteral("{}", region);
+
+    std.mem.sort(types.RecordField, collected.items, type_env.getIdentStoreConst(), types.RecordField.sortByNameAsc);
+
+    const save_exprs = self.scratch_expr_ids.top();
+    defer self.scratch_expr_ids.clearFrom(save_exprs);
+
+    if (collected.items.len == 1) {
+        const field = collected.items[0];
+        const field_name = type_env.getIdent(field.name);
+        const field_mono = try self.monotypeFromTypeVarInEnv(type_env, field.var_);
+        const field_expr = try self.emitMirStructAccess(value_expr, 0, field_mono, region);
+        const open = try std.fmt.allocPrint(self.allocator, "{{ {s}: ", .{field_name});
+        defer self.allocator.free(open);
+        try self.scratch_expr_ids.append(try self.emitMirStrLiteral(open, region));
+        try self.scratch_expr_ids.append(try self.lowerStrInspektExpr(type_env, field_expr, field.var_, region));
+        try self.scratch_expr_ids.append(try self.emitMirStrLiteral(" }", region));
+        return self.foldMirStrConcat(self.scratch_expr_ids.sliceFromStart(save_exprs), region);
+    }
+
+    try self.scratch_expr_ids.append(try self.emitMirStrLiteral("{ ", region));
+    for (collected.items, 0..) |field, i| {
+        if (i > 0) {
+            try self.scratch_expr_ids.append(try self.emitMirStrLiteral(", ", region));
+        }
+        const field_name = type_env.getIdent(field.name);
+        const label = try std.fmt.allocPrint(self.allocator, "{s}: ", .{field_name});
+        defer self.allocator.free(label);
+        try self.scratch_expr_ids.append(try self.emitMirStrLiteral(label, region));
+
+        const field_mono = try self.monotypeFromTypeVarInEnv(type_env, field.var_);
+        const field_expr = try self.emitMirStructAccess(value_expr, @intCast(i), field_mono, region);
+        try self.scratch_expr_ids.append(try self.lowerStrInspektExpr(type_env, field_expr, field.var_, region));
+    }
+    try self.scratch_expr_ids.append(try self.emitMirStrLiteral(" }", region));
+    return self.foldMirStrConcat(self.scratch_expr_ids.sliceFromStart(save_exprs), region);
+}
+
+fn lowerStrInspektRecordUnbound(
+    self: *Self,
+    type_env: *const ModuleEnv,
+    value_expr: MIR.ExprId,
+    fields_range: types.RecordField.SafeMultiList.Range,
+    region: Region,
+) Allocator.Error!MIR.ExprId {
+    const fields_slice = type_env.types.getRecordFieldsSlice(fields_range);
+    var collected = std.ArrayList(types.RecordField).empty;
+    defer collected.deinit(self.allocator);
+
+    const field_names = fields_slice.items(.name);
+    const field_vars = fields_slice.items(.var_);
+    try collected.ensureTotalCapacity(self.allocator, field_names.len);
+    for (field_names, field_vars) |field_name, field_var| {
+        collected.appendAssumeCapacity(.{ .name = field_name, .var_ = field_var });
+    }
+
+    if (collected.items.len == 0) return self.emitMirStrLiteral("{}", region);
+
+    std.mem.sort(types.RecordField, collected.items, type_env.getIdentStoreConst(), types.RecordField.sortByNameAsc);
+
+    const save_exprs = self.scratch_expr_ids.top();
+    defer self.scratch_expr_ids.clearFrom(save_exprs);
+
+    if (collected.items.len == 1) {
+        const field = collected.items[0];
+        const field_name = type_env.getIdent(field.name);
+        const field_mono = try self.monotypeFromTypeVarInEnv(type_env, field.var_);
+        const field_expr = try self.emitMirStructAccess(value_expr, 0, field_mono, region);
+        const open = try std.fmt.allocPrint(self.allocator, "{{ {s}: ", .{field_name});
+        defer self.allocator.free(open);
+        try self.scratch_expr_ids.append(try self.emitMirStrLiteral(open, region));
+        try self.scratch_expr_ids.append(try self.lowerStrInspektExpr(type_env, field_expr, field.var_, region));
+        try self.scratch_expr_ids.append(try self.emitMirStrLiteral(" }", region));
+        return self.foldMirStrConcat(self.scratch_expr_ids.sliceFromStart(save_exprs), region);
+    }
+
+    try self.scratch_expr_ids.append(try self.emitMirStrLiteral("{ ", region));
+    for (collected.items, 0..) |field, i| {
+        if (i > 0) {
+            try self.scratch_expr_ids.append(try self.emitMirStrLiteral(", ", region));
+        }
+        const field_name = type_env.getIdent(field.name);
+        const label = try std.fmt.allocPrint(self.allocator, "{s}: ", .{field_name});
+        defer self.allocator.free(label);
+        try self.scratch_expr_ids.append(try self.emitMirStrLiteral(label, region));
+
+        const field_mono = try self.monotypeFromTypeVarInEnv(type_env, field.var_);
+        const field_expr = try self.emitMirStructAccess(value_expr, @intCast(i), field_mono, region);
+        try self.scratch_expr_ids.append(try self.lowerStrInspektExpr(type_env, field_expr, field.var_, region));
+    }
+    try self.scratch_expr_ids.append(try self.emitMirStrLiteral(" }", region));
+    return self.foldMirStrConcat(self.scratch_expr_ids.sliceFromStart(save_exprs), region);
+}
+
+fn lowerStrInspektTuple(
+    self: *Self,
+    type_env: *const ModuleEnv,
+    value_expr: MIR.ExprId,
+    tup: types.Tuple,
+    region: Region,
+) Allocator.Error!MIR.ExprId {
+    const elems = type_env.types.sliceVars(tup.elems);
+    if (elems.len == 0) return self.emitMirStrLiteral("()", region);
+
+    const save_exprs = self.scratch_expr_ids.top();
+    defer self.scratch_expr_ids.clearFrom(save_exprs);
+
+    try self.scratch_expr_ids.append(try self.emitMirStrLiteral("(", region));
+    for (elems, 0..) |elem_var, i| {
+        if (i > 0) {
+            try self.scratch_expr_ids.append(try self.emitMirStrLiteral(", ", region));
+        }
+        const elem_mono = try self.monotypeFromTypeVarInEnv(type_env, elem_var);
+        const elem_expr = try self.emitMirStructAccess(value_expr, @intCast(i), elem_mono, region);
+        try self.scratch_expr_ids.append(try self.lowerStrInspektExpr(type_env, elem_expr, elem_var, region));
+    }
+    try self.scratch_expr_ids.append(try self.emitMirStrLiteral(")", region));
+
+    return self.foldMirStrConcat(self.scratch_expr_ids.sliceFromStart(save_exprs), region);
+}
+
+fn lowerStrInspektTagUnion(
+    self: *Self,
+    type_env: *const ModuleEnv,
+    value_expr: MIR.ExprId,
+    type_var: types.Var,
+    tu: types.TagUnion,
+    region: Region,
+) Allocator.Error!MIR.ExprId {
+    var collected = std.ArrayList(types.Tag).empty;
+    defer collected.deinit(self.allocator);
+
+    var current_row = tu;
+    rows: while (true) {
+        const tags_slice = type_env.types.getTagsSlice(current_row.tags);
+        const tag_names = tags_slice.items(.name);
+        const tag_args = tags_slice.items(.args);
+
+        try collected.ensureTotalCapacity(self.allocator, collected.items.len + tag_names.len);
+        for (tag_names, tag_args) |tag_name, args| {
+            collected.appendAssumeCapacity(.{ .name = tag_name, .args = args });
+        }
+
+        var ext_var = current_row.ext;
+        while (true) {
+            const ext_resolved = type_env.types.resolveVar(ext_var);
+            switch (ext_resolved.desc.content) {
+                .alias => |alias| {
+                    ext_var = type_env.types.getAliasBackingVar(alias);
+                    continue;
+                },
+                .structure => |ext_flat| switch (ext_flat) {
+                    .tag_union => |next_row| {
+                        current_row = next_row;
+                        continue :rows;
+                    },
+                    .empty_tag_union => break :rows,
+                    else => typeBindingInvariant(
+                        "lowerStrInspektTagUnion: unexpected row extension '{s}'",
+                        .{@tagName(ext_flat)},
+                    ),
+                },
+                .flex, .rigid => break :rows,
+                .err => unreachable,
+            }
+        }
+    }
+
+    if (collected.items.len == 0) return self.emitMirStrLiteral("<empty_tag_union>", region);
+
+    std.mem.sort(types.Tag, collected.items, type_env.getIdentStoreConst(), types.Tag.sortByNameAsc);
+
+    const union_mono = try self.monotypeFromTypeVarInEnv(type_env, type_var);
+    const save_branches = self.scratch_branches.top();
+    defer self.scratch_branches.clearFrom(save_branches);
+
+    for (collected.items) |tag| {
+        const payload_vars = type_env.types.sliceVars(tag.args);
+
+        const save_payload_patterns = self.scratch_pattern_ids.top();
+        defer self.scratch_pattern_ids.clearFrom(save_payload_patterns);
+        const save_payload_symbols = self.scratch_captures.top();
+        defer self.scratch_captures.clearFrom(save_payload_symbols);
+
+        for (payload_vars) |payload_var| {
+            const payload_mono = try self.monotypeFromTypeVarInEnv(type_env, payload_var);
+            const bind = try self.makeSyntheticBind(payload_mono, false);
+            try self.scratch_pattern_ids.append(bind.pattern);
+            try self.scratch_captures.append(.{ .symbol = bind.symbol });
+        }
+
+        const payload_pattern_span = try self.store.addPatternSpan(
+            self.allocator,
+            self.scratch_pattern_ids.sliceFromStart(save_payload_patterns),
+        );
+        const tag_args = try self.wrapMultiPayloadTagPatterns(tag.name, union_mono, payload_pattern_span);
+        const tag_pattern = try self.store.addPattern(
+            self.allocator,
+            .{ .tag = .{ .name = tag.name, .args = tag_args } },
+            union_mono,
+        );
+        const branch_patterns = try self.store.addBranchPatterns(self.allocator, &.{MIR.BranchPattern{
+            .pattern = tag_pattern,
+            .degenerate = false,
+        }});
+
+        const body = if (payload_vars.len == 0) blk: {
+            break :blk try self.emitMirStrLiteral(type_env.getIdent(tag.name), region);
+        } else blk: {
+            const save_parts = self.scratch_expr_ids.top();
+            defer self.scratch_expr_ids.clearFrom(save_parts);
+
+            const tag_open = try std.fmt.allocPrint(self.allocator, "{s}(", .{type_env.getIdent(tag.name)});
+            defer self.allocator.free(tag_open);
+            try self.scratch_expr_ids.append(try self.emitMirStrLiteral(tag_open, region));
+
+            const payload_symbols = self.scratch_captures.sliceFromStart(save_payload_symbols);
+            for (payload_vars, 0..) |payload_var, i| {
+                if (i > 0) {
+                    try self.scratch_expr_ids.append(try self.emitMirStrLiteral(", ", region));
+                }
+                const payload_mono = try self.monotypeFromTypeVarInEnv(type_env, payload_var);
+                const payload_lookup = try self.emitMirLookup(payload_symbols[i].symbol, payload_mono, region);
+                try self.scratch_expr_ids.append(try self.lowerStrInspektExpr(type_env, payload_lookup, payload_var, region));
+            }
+            try self.scratch_expr_ids.append(try self.emitMirStrLiteral(")", region));
+            break :blk try self.foldMirStrConcat(self.scratch_expr_ids.sliceFromStart(save_parts), region);
+        };
+
+        try self.scratch_branches.append(.{
+            .patterns = branch_patterns,
+            .body = body,
+            .guard = MIR.ExprId.none,
+        });
+    }
+
+    const branches = try self.store.addBranches(self.allocator, self.scratch_branches.sliceFromStart(save_branches));
+    return try self.store.addExpr(
+        self.allocator,
+        .{ .match_expr = .{
+            .cond = value_expr,
+            .branches = branches,
+        } },
+        self.store.monotype_store.primIdx(.str),
+        region,
+    );
+}
+
+fn lowerStrInspektList(
+    self: *Self,
+    type_env: *const ModuleEnv,
+    value_expr: MIR.ExprId,
+    elem_var: types.Var,
+    region: Region,
+) Allocator.Error!MIR.ExprId {
+    const str_mono = self.store.monotype_store.primIdx(.str);
+    const bool_mono = try self.store.monotype_store.addBoolTagUnion(self.allocator, self.currentCommonIdents());
+    const unit_mono = self.store.monotype_store.unit_idx;
+    const elem_mono = try self.monotypeFromTypeVarInEnv(type_env, elem_var);
+    const current_env = self.all_module_envs[self.current_module_idx];
+
+    const acc_bind = try self.makeSyntheticBind(str_mono, true);
+    const first_bind = try self.makeSyntheticBind(bool_mono, true);
+    const elem_bind = try self.makeSyntheticBind(elem_mono, false);
+
+    const open_bracket = try self.emitMirStrLiteral("[", region);
+    const close_bracket = try self.emitMirStrLiteral("]", region);
+    const comma = try self.emitMirStrLiteral(", ", region);
+    const empty = try self.emitMirStrLiteral("", region);
+    const first_true = try self.emitMirBoolLiteral(current_env, true, region);
+    const first_false = try self.emitMirBoolLiteral(current_env, false, region);
+
+    const first_lookup = try self.emitMirLookup(first_bind.symbol, bool_mono, region);
+    const prefix = try self.createBoolMatch(current_env, first_lookup, empty, comma, str_mono, region);
+    const elem_lookup = try self.emitMirLookup(elem_bind.symbol, elem_mono, region);
+    const elem_inspected = try self.lowerStrInspektExpr(type_env, elem_lookup, elem_var, region);
+    const prefixed_elem = try self.emitMirStrConcat(prefix, elem_inspected, region);
+    const acc_lookup = try self.emitMirLookup(acc_bind.symbol, str_mono, region);
+    const new_acc = try self.emitMirStrConcat(acc_lookup, prefixed_elem, region);
+
+    const unit_expr = try self.emitMirUnitExpr(region);
+    const body_stmts = try self.store.addStmts(self.allocator, &.{
+        MIR.Stmt{ .mutate_var = .{ .pattern = acc_bind.pattern, .expr = new_acc } },
+        MIR.Stmt{ .mutate_var = .{ .pattern = first_bind.pattern, .expr = first_false } },
+    });
+    const body_expr = try self.store.addExpr(
+        self.allocator,
+        .{ .block = .{
+            .stmts = body_stmts,
+            .final_expr = unit_expr,
+        } },
+        unit_mono,
+        region,
+    );
+
+    const for_expr = try self.store.addExpr(
+        self.allocator,
+        .{ .for_loop = .{
+            .list = value_expr,
+            .elem_pattern = elem_bind.pattern,
+            .body = body_expr,
+        } },
+        unit_mono,
+        region,
+    );
+    const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_mono);
+    const loop_stmt: MIR.Stmt = .{ .decl_const = .{ .pattern = wildcard, .expr = for_expr } };
+
+    const final_acc_lookup = try self.emitMirLookup(acc_bind.symbol, str_mono, region);
+    const final_expr = try self.emitMirStrConcat(final_acc_lookup, close_bracket, region);
+
+    const outer_stmts = try self.store.addStmts(self.allocator, &.{
+        MIR.Stmt{ .decl_var = .{ .pattern = acc_bind.pattern, .expr = open_bracket } },
+        MIR.Stmt{ .decl_var = .{ .pattern = first_bind.pattern, .expr = first_true } },
+        loop_stmt,
+    });
+    return try self.store.addExpr(
+        self.allocator,
+        .{ .block = .{
+            .stmts = outer_stmts,
+            .final_expr = final_expr,
+        } },
+        str_mono,
+        region,
+    );
+}
+
+fn lowerStrInspektExprByMonotype(
     self: *Self,
     module_env: *const ModuleEnv,
     value_expr: MIR.ExprId,
@@ -912,10 +1858,10 @@ fn lowerStrInspektExpr(
                 );
             },
         },
-        .record => |record| self.lowerStrInspektRecord(module_env, value_expr, record, region),
-        .tuple => |tup| self.lowerStrInspektTuple(module_env, value_expr, tup, region),
-        .tag_union => |tu| self.lowerStrInspektTagUnion(module_env, value_expr, tu, mono_idx, region),
-        .list => |list_data| self.lowerStrInspektList(module_env, value_expr, list_data, region),
+        .record => |record| self.lowerStrInspektRecordByMonotype(module_env, value_expr, record, region),
+        .tuple => |tup| self.lowerStrInspektTupleByMonotype(module_env, value_expr, tup, region),
+        .tag_union => |tu| self.lowerStrInspektTagUnionByMonotype(module_env, value_expr, tu, mono_idx, region),
+        .list => |list_data| self.lowerStrInspektListByMonotype(module_env, value_expr, list_data, region),
         .unit => self.emitMirStrLiteral("{}", region),
         .box => |box_data| blk: {
             const common = self.currentCommonIdents();
@@ -943,7 +1889,7 @@ fn lowerStrInspektExpr(
                 region,
             );
 
-            const inner_str = try self.lowerStrInspektExpr(module_env, unboxed, box_data.inner, region);
+            const inner_str = try self.lowerStrInspektExprByMonotype(module_env, unboxed, box_data.inner, region);
             const open = try self.emitMirStrLiteral("Box(", region);
             const close = try self.emitMirStrLiteral(")", region);
             break :blk self.foldMirStrConcat(&.{ open, inner_str, close }, region);
@@ -958,7 +1904,7 @@ fn lowerStrInspektExpr(
     };
 }
 
-fn lowerStrInspektRecord(
+fn lowerStrInspektRecordByMonotype(
     self: *Self,
     module_env: *const ModuleEnv,
     value_expr: MIR.ExprId,
@@ -977,7 +1923,7 @@ fn lowerStrInspektRecord(
         const open = try std.fmt.allocPrint(self.allocator, "{{ {s}: ", .{field_name});
         defer self.allocator.free(open);
         try self.scratch_expr_ids.append(try self.emitMirStrLiteral(open, region));
-        try self.scratch_expr_ids.append(try self.lowerStrInspektExpr(module_env, value_expr, fields[0].type_idx, region));
+        try self.scratch_expr_ids.append(try self.lowerStrInspektExprByMonotype(module_env, value_expr, fields[0].type_idx, region));
         try self.scratch_expr_ids.append(try self.emitMirStrLiteral(" }", region));
         return self.foldMirStrConcat(self.scratch_expr_ids.sliceFromStart(save_exprs), region);
     }
@@ -995,13 +1941,13 @@ fn lowerStrInspektRecord(
         try self.scratch_expr_ids.append(try self.emitMirStrLiteral(label, region));
 
         const field_expr = try self.emitMirStructAccess(value_expr, @intCast(i), field.type_idx, region);
-        try self.scratch_expr_ids.append(try self.lowerStrInspektExpr(module_env, field_expr, field.type_idx, region));
+        try self.scratch_expr_ids.append(try self.lowerStrInspektExprByMonotype(module_env, field_expr, field.type_idx, region));
     }
     try self.scratch_expr_ids.append(try self.emitMirStrLiteral(" }", region));
     return self.foldMirStrConcat(self.scratch_expr_ids.sliceFromStart(save_exprs), region);
 }
 
-fn lowerStrInspektTuple(
+fn lowerStrInspektTupleByMonotype(
     self: *Self,
     module_env: *const ModuleEnv,
     value_expr: MIR.ExprId,
@@ -1023,14 +1969,14 @@ fn lowerStrInspektTuple(
             try self.scratch_expr_ids.append(try self.emitMirStrLiteral(", ", region));
         }
         const elem_expr = try self.emitMirStructAccess(value_expr, @intCast(i), elem_mono, region);
-        try self.scratch_expr_ids.append(try self.lowerStrInspektExpr(module_env, elem_expr, elem_mono, region));
+        try self.scratch_expr_ids.append(try self.lowerStrInspektExprByMonotype(module_env, elem_expr, elem_mono, region));
     }
     try self.scratch_expr_ids.append(try self.emitMirStrLiteral(")", region));
 
     return self.foldMirStrConcat(self.scratch_expr_ids.sliceFromStart(save_exprs), region);
 }
 
-fn lowerStrInspektTagUnion(
+fn lowerStrInspektTagUnionByMonotype(
     self: *Self,
     module_env: *const ModuleEnv,
     value_expr: MIR.ExprId,
@@ -1092,7 +2038,7 @@ fn lowerStrInspektTagUnion(
                     try self.scratch_expr_ids.append(try self.emitMirStrLiteral(", ", region));
                 }
                 const payload_lookup = try self.emitMirLookup(payload_capture.symbol, payload_mono, region);
-                try self.scratch_expr_ids.append(try self.lowerStrInspektExpr(module_env, payload_lookup, payload_mono, region));
+                try self.scratch_expr_ids.append(try self.lowerStrInspektExprByMonotype(module_env, payload_lookup, payload_mono, region));
             }
             try self.scratch_expr_ids.append(try self.emitMirStrLiteral(")", region));
             break :blk try self.foldMirStrConcat(self.scratch_expr_ids.sliceFromStart(save_parts), region);
@@ -1117,7 +2063,7 @@ fn lowerStrInspektTagUnion(
     );
 }
 
-fn lowerStrInspektList(
+fn lowerStrInspektListByMonotype(
     self: *Self,
     module_env: *const ModuleEnv,
     value_expr: MIR.ExprId,
@@ -1146,7 +2092,7 @@ fn lowerStrInspektList(
     const first_lookup = try self.emitMirLookup(first_bind.symbol, bool_mono, region);
     const prefix = try self.createBoolMatch(module_env, first_lookup, empty, comma, str_mono, region);
     const elem_lookup = try self.emitMirLookup(elem_bind.symbol, list_data.elem, region);
-    const elem_inspected = try self.lowerStrInspektExpr(module_env, elem_lookup, list_data.elem, region);
+    const elem_inspected = try self.lowerStrInspektExprByMonotype(module_env, elem_lookup, list_data.elem, region);
     const prefixed_elem = try self.emitMirStrConcat(prefix, elem_inspected, region);
     const acc_lookup = try self.emitMirLookup(acc_bind.symbol, str_mono, region);
     const new_acc = try self.emitMirStrConcat(acc_lookup, prefixed_elem, region);
