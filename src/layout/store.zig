@@ -65,10 +65,6 @@ pub const Store = struct {
     /// Current module index during fromTypeVar processing
     current_module_idx: u32 = 0,
 
-    /// Optional override types store (used by interpreter for runtime types).
-    /// When set, this is used instead of all_module_envs[module_idx].types.
-    override_types_store: ?*const types_store.Store = null,
-
     /// Optional mutable env reference (used by interpreter for runtime identifier insertion).
     /// When set, getMutableEnv() returns this instead of null.
     mutable_env: ?*ModuleEnv = null,
@@ -247,22 +243,13 @@ pub const Store = struct {
         };
     }
 
-    /// Get the types store for the current module being processed.
-    /// If an override types store is set, it takes precedence (used by interpreter).
     fn getTypesStore(self: *const Self) *const types_store.Store {
-        if (self.override_types_store) |override| return override;
         return &self.all_module_envs[self.current_module_idx].types;
     }
 
     /// Get the current module environment
     pub fn currentEnv(self: *const Self) *const ModuleEnv {
         return self.all_module_envs[self.current_module_idx];
-    }
-
-    /// Set an override types store for runtime type resolution (used by interpreter).
-    /// When set, fromTypeVar will use this store instead of all_module_envs[module_idx].types.
-    pub fn setOverrideTypesStore(self: *Self, override: *const types_store.Store) void {
-        self.override_types_store = override;
     }
 
     /// Get the primary module environment (module at index 0) as const.
@@ -311,17 +298,10 @@ pub const Store = struct {
         self.work.deinit(self.allocator);
     }
 
-    /// Reset caches between evaluations (e.g., REPL sessions, test runs).
-    /// Module type stores get fresh type variables on each evaluation,
-    /// so cached layout mappings from old vars become stale.
-    /// Retains allocated capacity for reuse.
-    pub fn resetModuleCache(self: *Self, new_module_envs: []const *const ModuleEnv) void {
+    /// Update the module env slice used for shared layout queries without
+    /// touching source-specific type-resolution caches.
+    pub fn setModuleEnvs(self: *Self, new_module_envs: []const *const ModuleEnv) void {
         self.all_module_envs = new_module_envs;
-        self.layouts_by_module_var.clearRetainingCapacity();
-        self.recursive_boxed_layouts.clearRetainingCapacity();
-        self.raw_layout_placeholders.clearRetainingCapacity();
-        self.work.in_progress_vars.clearRetainingCapacity();
-        self.work.in_progress_nominals.clearRetainingCapacity();
     }
 
     /// Check if a constraint range contains a numeric constraint.
@@ -449,7 +429,7 @@ pub const Store = struct {
         }
     }
 
-    fn reserveLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {
+    pub fn reserveLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {
         const safe_list_idx = try self.layouts.append(self.allocator, layout);
         return @enumFromInt(@intFromEnum(safe_list_idx));
     }
@@ -568,10 +548,6 @@ pub const Store = struct {
             return self.getEmptyStructLayout();
         }
 
-        if (fields.len == 1) {
-            return fields[0].layout;
-        }
-
         var temp_fields = std.ArrayList(StructField).empty;
         defer temp_fields.deinit(self.allocator);
         try temp_fields.appendSlice(self.allocator, fields);
@@ -673,7 +649,7 @@ pub const Store = struct {
     }
 
     fn buildUninternedStructLayout(self: *Self, input_fields: []const StructField) std.mem.Allocator.Error!Layout {
-        std.debug.assert(input_fields.len >= 2);
+        std.debug.assert(input_fields.len >= 1);
 
         var temp_fields = std.ArrayList(StructField).empty;
         defer temp_fields.deinit(self.allocator);
@@ -731,7 +707,7 @@ pub const Store = struct {
     }
 
     fn buildUninternedTagUnionLayout(self: *Self, variant_layouts: []const Idx) std.mem.Allocator.Error!Layout {
-        std.debug.assert(variant_layouts.len >= 2);
+        std.debug.assert(variant_layouts.len >= 1);
 
         var max_payload_size: u32 = 0;
         var max_payload_alignment: std.mem.Alignment = .@"1";
@@ -935,24 +911,26 @@ pub const Store = struct {
                     .pending => unreachable,
                     .box => |child| blk: {
                         const child_idx = try self_mat.materializeRef(child);
+                        const child_is_zst = self_mat.store.isZeroSized(self_mat.store.getLayout(child_idx));
                         if (self_mat.placeholders[index] != Idx.none) {
-                            const raw_layout = if (child_idx == .zst) Layout.boxOfZst() else Layout.box(child_idx);
+                            const raw_layout = if (child_is_zst) Layout.boxOfZst() else Layout.box(child_idx);
                             self_mat.store.updateLayout(self_mat.placeholders[index], raw_layout);
                             break :blk self_mat.placeholders[index];
                         }
-                        break :blk if (child_idx == .zst)
+                        break :blk if (child_is_zst)
                             try self_mat.store.insertLayout(Layout.boxOfZst())
                         else
                             try self_mat.store.insertBox(child_idx);
                     },
                     .list => |child| blk: {
                         const child_idx = try self_mat.materializeRef(child);
+                        const child_is_zst = self_mat.store.isZeroSized(self_mat.store.getLayout(child_idx));
                         if (self_mat.placeholders[index] != Idx.none) {
-                            const raw_layout = if (child_idx == .zst) Layout.listOfZst() else Layout.list(child_idx);
+                            const raw_layout = if (child_is_zst) Layout.listOfZst() else Layout.list(child_idx);
                             self_mat.store.updateLayout(self_mat.placeholders[index], raw_layout);
                             break :blk self_mat.placeholders[index];
                         }
-                        break :blk if (child_idx == .zst)
+                        break :blk if (child_is_zst)
                             try self_mat.store.insertLayout(Layout.listOfZst())
                         else
                             try self_mat.store.insertList(child_idx);
@@ -979,8 +957,6 @@ pub const Store = struct {
                             });
                         }
 
-                        if (fields.items.len == 1) break :blk fields.items[0].layout;
-
                         if (self_mat.placeholders[index] != Idx.none) {
                             const raw_layout = try self_mat.store.buildUninternedStructLayout(fields.items);
                             self_mat.store.updateLayout(self_mat.placeholders[index], raw_layout);
@@ -999,9 +975,6 @@ pub const Store = struct {
                         for (graph_refs) |variant_ref| {
                             variants.appendAssumeCapacity(try self_mat.materializeRef(variant_ref));
                         }
-
-                        if (variants.items.len == 1) break :blk variants.items[0];
-                        if (variants.items.len == 2 and variants.items[0] == .zst and variants.items[1] == .zst) break :blk .bool;
 
                         if (self_mat.placeholders[index] != Idx.none) {
                             const raw_layout = try self_mat.store.buildUninternedTagUnionLayout(variants.items);
@@ -1438,45 +1411,6 @@ pub const Store = struct {
 
     pub fn ensureEmptyRecordLayout(self: *Self) !Idx {
         return self.getEmptyStructLayout();
-    }
-
-    /// Get the boxed layout for a recursive nominal type, if it exists.
-    /// This is used for list elements where the element type is a recursive nominal.
-    /// Returns null if the type is not a recursive nominal.
-    pub fn getRecursiveBoxedLayout(self: *const Self, module_idx: u32, type_var: Var) ?Layout {
-        const key = ModuleVarKey{ .module_idx = module_idx, .var_ = type_var };
-        if (self.recursive_boxed_layouts.get(key)) |boxed_idx| {
-            return self.getLayout(boxed_idx);
-        }
-        return null;
-    }
-
-    /// Check if a nominal type (by identity) is recursive and return its boxed layout.
-    /// This is needed because different vars can represent the same nominal type,
-    /// and the boxed layout might have been stored under a different var.
-    pub fn getRecursiveBoxedLayoutByNominalKey(self: *const Self, nominal_key: work.NominalKey) ?Layout {
-        // Iterate through recursive_boxed_layouts to find an entry whose var
-        // resolves to this nominal type identity.
-        var iter = self.recursive_boxed_layouts.iterator();
-        while (iter.next()) |entry| {
-            const cache_key = entry.key_ptr.*;
-            const boxed_idx = entry.value_ptr.*;
-            if (boxed_idx == Idx.none) continue;
-            const module_env = self.all_module_envs[cache_key.module_idx];
-            const resolved = module_env.types.resolveVar(cache_key.var_);
-            if (resolved.desc.content == .structure) {
-                const flat_type = resolved.desc.content.structure;
-                if (flat_type == .nominal_type) {
-                    const nom = flat_type.nominal_type;
-                    if (nom.ident.ident_idx.eql(nominal_key.ident_idx) and
-                        nom.origin_module.eql(nominal_key.origin_module))
-                    {
-                        return self.getLayout(boxed_idx);
-                    }
-                }
-            }
-        }
-        return null;
     }
 
     /// Get or create a zero-sized type layout
@@ -2016,6 +1950,17 @@ pub const Store = struct {
         type_scope: *const TypeScope,
         caller_module_idx: ?u32,
     ) std.mem.Allocator.Error!Idx {
+        // Shared ordinary-data layout resolution now lives in TypeLayoutResolver.
+        // Keep the legacy store-owned implementation below only as transitional
+        // dead code until the remaining store-owned state is fully removed.
+        if (self.layouts.len() >= num_primitives) {
+            const TypeLayoutResolver = @import("type_layout_resolver.zig").Resolver;
+
+            var resolver = TypeLayoutResolver.init(self);
+            defer resolver.deinit();
+            return resolver.resolve(module_idx, unresolved_var, type_scope, caller_module_idx);
+        }
+
         // Set the current module for this computation
         self.current_module_idx = module_idx;
 
@@ -3308,51 +3253,5 @@ pub const Store = struct {
     pub fn updateLayout(self: *Self, idx: Idx, layout: Layout) void {
         const ptr = self.layouts.get(@enumFromInt(@intFromEnum(idx)));
         ptr.* = layout;
-    }
-
-    /// Compute a List layout from a list expression.
-    /// This handles cases where the list expression's type var is a flex (due to unresolved
-    /// numerics) but we need to compute a proper List layout based on the expression structure.
-    pub fn computeListLayout(
-        self: *Self,
-        module_idx: u32,
-        module_env: *ModuleEnv,
-        list_elem_span: can.CIR.Expr.Span,
-        type_scope: *const TypeScope,
-        caller_module_idx: ?u32,
-    ) !Idx {
-        const elems = module_env.store.exprSlice(list_elem_span);
-
-        if (elems.len == 0) {
-            // Empty list - use list of ZST
-            return self.insertLayout(Layout.listOfZst());
-        }
-
-        // Get the first element's type var and compute its layout
-        const first_elem_idx = elems[0];
-        const first_elem = module_env.store.getExpr(first_elem_idx);
-
-        // Check if the first element is also a list (for nested list handling)
-        if (first_elem == .e_list) {
-            // Recursively compute the nested list's layout
-            const nested_list_layout_idx = try self.computeListLayout(
-                module_idx,
-                module_env,
-                first_elem.e_list.elems,
-                type_scope,
-                caller_module_idx,
-            );
-            // Return List(nested_list_layout)
-            const list_layout = Layout.list(nested_list_layout_idx);
-            return self.insertLayout(list_layout);
-        }
-
-        // For non-list elements, try to compute layout from the type var
-        const elem_type_var = ModuleEnv.varFrom(first_elem_idx);
-        const elem_layout_idx = try self.fromTypeVar(module_idx, elem_type_var, type_scope, caller_module_idx);
-
-        // Return List(element_layout)
-        const list_layout = Layout.list(elem_layout_idx);
-        return self.insertLayout(list_layout);
     }
 };

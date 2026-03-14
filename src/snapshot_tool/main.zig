@@ -3852,6 +3852,9 @@ fn processDevObjectSnapshot(
     var pending_entrypoints = std.ArrayList(PendingEntrypoint).empty;
     defer pending_entrypoints.deinit(allocator);
 
+    var type_layout_resolver = layout_mod.TypeLayoutResolver.init(&layout_store);
+    defer type_layout_resolver.deinit();
+
     // Match provides entries to platform defs and lower them
     const platform_defs = platform_module.env.store.sliceDefs(platform_module.env.all_defs);
     for (provides_entries) |entry| {
@@ -3868,7 +3871,7 @@ fn processDevObjectSnapshot(
                         const type_var = can.ModuleEnv.varFrom(def.expr);
                         var scope = types.TypeScope.init(allocator);
                         defer scope.deinit();
-                        const ret_layout = layout_store.fromTypeVar(platform_module_idx, type_var, &scope, null) catch continue;
+                        const ret_layout = type_layout_resolver.resolve(platform_module_idx, type_var, &scope, null) catch continue;
 
                         pending_entrypoints.append(allocator, .{
                             .ffi_symbol = entry.ffi_symbol,

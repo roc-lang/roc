@@ -57,10 +57,6 @@ const LayoutTest = struct {
         // struct is moved when returned.
         self.module_env_ptr[0] = &self.module_env;
         self.layout_store = try Store.init(&self.module_env_ptr, null, self.gpa, base.target.TargetUsize.native);
-        // The layout store uses all_module_envs[module_idx].types by default, but our test
-        // creates types in self.type_store (a separate store). Set the override so the
-        // layout store uses our test's type store when resolving type variables.
-        self.layout_store.setOverrideTypesStore(&self.type_store);
     }
 
     fn deinit(self: *LayoutTest) void {
@@ -90,6 +86,8 @@ fn expectTypeAndMonotypeResolversAgree(
     type_var: types.Var,
 ) !void {
     var type_layout_resolver = type_layout_resolver_.Resolver.init(&lt.layout_store);
+    defer type_layout_resolver.deinit();
+    type_layout_resolver.setOverrideTypesStore(&lt.type_store);
     const type_layout_idx = try type_layout_resolver.resolve(0, type_var, &lt.type_scope, null);
 
     var mono_store = try mir.Monotype.Store.init(allocator);
@@ -97,6 +95,7 @@ fn expectTypeAndMonotypeResolversAgree(
 
     var scratches = try mir.Monotype.Store.Scratches.init(allocator);
     defer scratches.deinit();
+    scratches.ident_store = lt.module_env.getIdentStoreConst();
 
     var specializations = std.AutoHashMap(types.Var, mir.Monotype.Idx).init(allocator);
     defer specializations.deinit();
@@ -118,6 +117,13 @@ fn expectTypeAndMonotypeResolversAgree(
     const mono_layout_idx = try mir_layout_resolver.resolve(mono_idx, null);
 
     try testing.expectEqual(type_layout_idx, mono_layout_idx);
+}
+
+fn resolveTypeVar(lt: *LayoutTest, type_var: types.Var) !layout.Idx {
+    var type_layout_resolver = type_layout_resolver_.Resolver.init(&lt.layout_store);
+    defer type_layout_resolver.deinit();
+    type_layout_resolver.setOverrideTypesStore(&lt.type_store);
+    return type_layout_resolver.resolve(0, type_var, &lt.type_scope, null);
 }
 
 test "fromTypeVar - bool type" {
@@ -149,7 +155,7 @@ test "fromTypeVar - unresolved boxed type vars use box_of_zst" {
     // Box of flex_var
     const flex_var = try lt.type_store.freshFromContent(.{ .flex = types.Flex.init() });
     const box_flex_var = try lt.mkBoxType(flex_var, box_ident_idx, builtin_module_idx);
-    const box_flex_idx = try lt.layout_store.fromTypeVar(0, box_flex_var, &lt.type_scope, null);
+    const box_flex_idx = try resolveTypeVar(&lt, box_flex_var);
     const box_flex_layout = lt.layout_store.getLayout(box_flex_idx);
     try testing.expect(box_flex_layout.tag == .box_of_zst);
 
@@ -157,7 +163,7 @@ test "fromTypeVar - unresolved boxed type vars use box_of_zst" {
     const ident_idx = try lt.module_env.insertIdent(base.Ident.for_text("a"));
     const rigid_var = try lt.type_store.freshFromContent(.{ .rigid = types.Rigid.init(ident_idx) });
     const box_rigid_var = try lt.mkBoxType(rigid_var, box_ident_idx, builtin_module_idx);
-    const box_rigid_idx = try lt.layout_store.fromTypeVar(0, box_rigid_var, &lt.type_scope, null);
+    const box_rigid_idx = try resolveTypeVar(&lt, box_rigid_var);
     const box_rigid_layout = lt.layout_store.getLayout(box_rigid_idx);
     try testing.expect(box_rigid_layout.tag == .box_of_zst);
 }
@@ -177,7 +183,6 @@ test "fromTypeVar - zero-sized types (ZST)" {
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
-    lt.layout_store.setOverrideTypesStore(&lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -185,14 +190,14 @@ test "fromTypeVar - zero-sized types (ZST)" {
     const empty_tag_union_var = try lt.type_store.freshFromContent(.{ .structure = .empty_tag_union });
 
     // Bare ZSTs should return .zst layout
-    const empty_record_idx = try lt.layout_store.fromTypeVar(0, empty_record_var, &lt.type_scope, null);
+    const empty_record_idx = try resolveTypeVar(&lt, empty_record_var);
     try testing.expect(lt.layout_store.getLayout(empty_record_idx).tag == .zst);
-    const empty_tag_union_idx = try lt.layout_store.fromTypeVar(0, empty_tag_union_var, &lt.type_scope, null);
+    const empty_tag_union_idx = try resolveTypeVar(&lt, empty_tag_union_var);
     try testing.expect(lt.layout_store.getLayout(empty_tag_union_idx).tag == .zst);
 
     // ZSTs inside containers should use optimized layouts
     const box_zst_var = try lt.mkBoxType(empty_record_var, box_ident_idx, builtin_module_idx);
-    const box_zst_idx = try lt.layout_store.fromTypeVar(0, box_zst_var, &lt.type_scope, null);
+    const box_zst_idx = try resolveTypeVar(&lt, box_zst_var);
     try testing.expect(lt.layout_store.getLayout(box_zst_idx).tag == .box_of_zst);
 
     const list_zst_content = try lt.type_store.mkNominal(
@@ -203,7 +208,7 @@ test "fromTypeVar - zero-sized types (ZST)" {
         false,
     );
     const list_zst_var = try lt.type_store.freshFromContent(list_zst_content);
-    const list_zst_idx = try lt.layout_store.fromTypeVar(0, list_zst_var, &lt.type_scope, null);
+    const list_zst_idx = try resolveTypeVar(&lt, list_zst_var);
     try testing.expect(lt.layout_store.getLayout(list_zst_idx).tag == .list_of_zst);
 }
 
@@ -220,7 +225,6 @@ test "fromTypeVar - record with only zero-sized fields" {
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
-    lt.layout_store.setOverrideTypesStore(&lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -232,7 +236,7 @@ test "fromTypeVar - record with only zero-sized fields" {
     const record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = empty_record_var } } });
 
     // Bare record with only ZST fields should create a record with ZST fields
-    const record_idx = try lt.layout_store.fromTypeVar(0, record_var, &lt.type_scope, null);
+    const record_idx = try resolveTypeVar(&lt, record_var);
     const record_layout = lt.layout_store.getLayout(record_idx);
     try testing.expect(record_layout.tag == .struct_);
     const field_slice = lt.layout_store.struct_fields.sliceRange(lt.layout_store.getStructData(record_layout.data.struct_.idx).getFields());
@@ -240,7 +244,7 @@ test "fromTypeVar - record with only zero-sized fields" {
 
     // Box of such a record should be box_of_zst since the record only contains ZST fields
     const box_record_var = try lt.mkBoxType(record_var, box_ident_idx, builtin_module_idx);
-    const box_idx = try lt.layout_store.fromTypeVar(0, box_record_var, &lt.type_scope, null);
+    const box_idx = try resolveTypeVar(&lt, box_record_var);
     try testing.expect(lt.layout_store.getLayout(box_idx).tag == .box_of_zst);
 }
 
@@ -251,7 +255,6 @@ test "record extension with empty_record succeeds" {
     lt.type_store = try types_store.Store.init(lt.gpa);
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
-    lt.layout_store.setOverrideTypesStore(&lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -260,7 +263,7 @@ test "record extension with empty_record succeeds" {
 
     // Extending empty_record is valid - creates a record with ZST fields
     const record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = zst_var } } });
-    const record_idx = try lt.layout_store.fromTypeVar(0, record_var, &lt.type_scope, null);
+    const record_idx = try resolveTypeVar(&lt, record_var);
     const record_layout = lt.layout_store.getLayout(record_idx);
     try testing.expect(record_layout.tag == .struct_);
 }
@@ -282,7 +285,6 @@ test "deeply nested containers with inner ZST" {
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
-    lt.layout_store.setOverrideTypesStore(&lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -307,7 +309,7 @@ test "deeply nested containers with inner ZST" {
     );
     const outer_list_var = try lt.type_store.freshFromContent(outer_list_content);
 
-    const result_idx = try lt.layout_store.fromTypeVar(0, outer_list_var, &lt.type_scope, null);
+    const result_idx = try resolveTypeVar(&lt, outer_list_var);
     const outer_list_layout = lt.layout_store.getLayout(result_idx);
     try testing.expect(outer_list_layout.tag == .list);
 
@@ -338,7 +340,6 @@ test "nested ZST detection - List of record with ZST field" {
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
-    lt.layout_store.setOverrideTypesStore(&lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -351,7 +352,7 @@ test "nested ZST detection - List of record with ZST field" {
     // List of this record should be list_of_zst since the record only has ZST fields
     const list_content = try lt.type_store.mkNominal(.{ .ident_idx = list_ident_idx }, record_var, &[_]types.Var{record_var}, builtin_module_idx, false);
     const list_var = try lt.type_store.freshFromContent(list_content);
-    const list_idx = try lt.layout_store.fromTypeVar(0, list_var, &lt.type_scope, null);
+    const list_idx = try resolveTypeVar(&lt, list_var);
     try testing.expect(lt.layout_store.getLayout(list_idx).tag == .list_of_zst);
 }
 
@@ -369,7 +370,6 @@ test "nested ZST detection - Box of tuple with ZST elements" {
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
-    lt.layout_store.setOverrideTypesStore(&lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -379,13 +379,13 @@ test "nested ZST detection - Box of tuple with ZST elements" {
     const tuple_var = try lt.type_store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = tuple_elems } } });
 
     // The tuple should be ZST since both elements are ZST
-    const tuple_idx = try lt.layout_store.fromTypeVar(0, tuple_var, &lt.type_scope, null);
+    const tuple_idx = try resolveTypeVar(&lt, tuple_var);
     const tuple_layout = lt.layout_store.getLayout(tuple_idx);
     try testing.expect(lt.layout_store.layoutSize(tuple_layout) == 0);
 
     // Box of it should be box_of_zst
     const box_var = try lt.mkBoxType(tuple_var, box_ident_idx, builtin_module_idx);
-    const box_idx = try lt.layout_store.fromTypeVar(0, box_var, &lt.type_scope, null);
+    const box_idx = try resolveTypeVar(&lt, box_var);
     try testing.expect(lt.layout_store.getLayout(box_idx).tag == .box_of_zst);
 }
 
@@ -405,7 +405,6 @@ test "nested ZST detection - deeply nested" {
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
-    lt.layout_store.setOverrideTypesStore(&lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -431,7 +430,7 @@ test "nested ZST detection - deeply nested" {
     // List({ field: ({ field2: {} }, ()) })
     const list_content = try lt.type_store.mkNominal(.{ .ident_idx = list_ident_idx }, outer_record_var, &[_]types.Var{outer_record_var}, builtin_module_idx, false);
     const list_var = try lt.type_store.freshFromContent(list_content);
-    const list_idx = try lt.layout_store.fromTypeVar(0, list_var, &lt.type_scope, null);
+    const list_idx = try resolveTypeVar(&lt, list_var);
 
     // Since the entire nested structure is ZST, the list should be list_of_zst
     try testing.expect(lt.layout_store.getLayout(list_idx).tag == .list_of_zst);
@@ -462,7 +461,6 @@ test "fromTypeVar - flex var with method constraint returning open tag union" {
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
-    lt.layout_store.setOverrideTypesStore(&lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -541,7 +539,7 @@ test "fromTypeVar - flex var with method constraint returning open tag union" {
     const outer_list_var = try lt.type_store.freshFromContent(outer_list_content);
 
     // This should NOT cause an infinite loop - should handle the open tag union extension properly
-    const result_idx = try lt.layout_store.fromTypeVar(0, outer_list_var, &lt.type_scope, null);
+    const result_idx = try resolveTypeVar(&lt, outer_list_var);
     const result_layout = lt.layout_store.getLayout(result_idx);
 
     // The list should have a valid layout - either list or list_of_zst
@@ -550,7 +548,7 @@ test "fromTypeVar - flex var with method constraint returning open tag union" {
 
     // Also test computing layout of the Try return type directly
     // This is what would happen when evaluating the result of list.first()
-    const try_result_idx = try lt.layout_store.fromTypeVar(0, try_var, &lt.type_scope, null);
+    const try_result_idx = try resolveTypeVar(&lt, try_var);
     const try_result_layout = lt.layout_store.getLayout(try_result_idx);
     // Try should be a tag_union
     try testing.expect(try_result_layout.tag == .tag_union);
@@ -581,7 +579,6 @@ test "fromTypeVar - type alias inside Try nominal (issue #8708)" {
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
-    lt.layout_store.setOverrideTypesStore(&lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -637,7 +634,7 @@ test "fromTypeVar - type alias inside Try nominal (issue #8708)" {
 
     // This should succeed without TypeContainedMismatch error.
     // Before the fix, this would fail because the alias was incorrectly detected as a cycle.
-    const result_idx = try lt.layout_store.fromTypeVar(0, try_var, &lt.type_scope, null);
+    const result_idx = try resolveTypeVar(&lt, try_var);
     const result_layout = lt.layout_store.getLayout(result_idx);
 
     // Try should have a tag_union layout
@@ -671,7 +668,6 @@ test "fromTypeVar - recursive nominal type with nested Box at depth 2+ (issue #8
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
-    lt.layout_store.setOverrideTypesStore(&lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -728,7 +724,7 @@ test "fromTypeVar - recursive nominal type with nested Box at depth 2+ (issue #8
 
     // This should succeed without segfault.
     // Before the fix, this would fail when computing the layout for depth 2+ nesting.
-    const result_idx = try lt.layout_store.fromTypeVar(0, rich_doc_var, &lt.type_scope, null);
+    const result_idx = try resolveTypeVar(&lt, rich_doc_var);
     const result_layout = lt.layout_store.getLayout(result_idx);
 
     // RichDoc should have a tag_union layout (since the nominal wraps a tag union)
@@ -767,7 +763,6 @@ test "layoutSizeAlign - recursive nominal type with record containing List (issu
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
-    lt.layout_store.setOverrideTypesStore(&lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -842,7 +837,7 @@ test "layoutSizeAlign - recursive nominal type with record containing List (issu
 
     // This should succeed without infinite recursion.
     // Before the fix, layoutSizeAlign would infinitely recurse when computing the size.
-    const result_idx = try lt.layout_store.fromTypeVar(0, statement_var, &lt.type_scope, null);
+    const result_idx = try resolveTypeVar(&lt, statement_var);
     const result_layout = lt.layout_store.getLayout(result_idx);
 
     // Statement should have a tag_union layout (since the nominal wraps a tag union)
@@ -879,7 +874,6 @@ test "fromTypeVar - recursive nominal with Box has no double-boxing (issue #8916
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
-    lt.layout_store.setOverrideTypesStore(&lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -930,7 +924,7 @@ test "fromTypeVar - recursive nominal with Box has no double-boxing (issue #8916
     const nat_var = try lt.type_store.freshFromContent(nat_content);
 
     // Compute the layout
-    const nat_layout_idx = try lt.layout_store.fromTypeVar(0, nat_var, &lt.type_scope, null);
+    const nat_layout_idx = try resolveTypeVar(&lt, nat_var);
     const nat_layout = lt.layout_store.getLayout(nat_layout_idx);
 
     // Nat should have a tag_union layout
@@ -1112,6 +1106,41 @@ test "internGraph interns identical recursive tuple-list graphs regardless of co
 
     const idx_1 = try lt.layout_store.internGraph(&graph_1, .{ .local = tuple_1 });
     const idx_2 = try lt.layout_store.internGraph(&graph_2, .{ .local = tuple_2 });
+
+    try testing.expectEqual(idx_1, idx_2);
+}
+
+test "internGraph interns identical recursive tag unions with boxes regardless of construction order" {
+    var lt = try LayoutTest.init(testing.allocator);
+    try lt.initLayoutStore();
+    defer lt.deinit();
+
+    var graph_1: layout_graph_.Graph = .{};
+    defer graph_1.deinit(testing.allocator);
+
+    const tag_union_1 = try graph_1.reserveNode(testing.allocator);
+    const box_1 = try graph_1.reserveNode(testing.allocator);
+    graph_1.setNode(box_1, .{ .box = .{ .local = tag_union_1 } });
+    const variants_1 = try graph_1.appendRefs(testing.allocator, &[_]layout_graph_.Ref{
+        .{ .local = box_1 },
+        .{ .canonical = layout.Idx.zst },
+    });
+    graph_1.setNode(tag_union_1, .{ .tag_union = variants_1 });
+
+    var graph_2: layout_graph_.Graph = .{};
+    defer graph_2.deinit(testing.allocator);
+
+    const box_2 = try graph_2.reserveNode(testing.allocator);
+    const tag_union_2 = try graph_2.reserveNode(testing.allocator);
+    graph_2.setNode(box_2, .{ .box = .{ .local = tag_union_2 } });
+    const variants_2 = try graph_2.appendRefs(testing.allocator, &[_]layout_graph_.Ref{
+        .{ .local = box_2 },
+        .{ .canonical = layout.Idx.zst },
+    });
+    graph_2.setNode(tag_union_2, .{ .tag_union = variants_2 });
+
+    const idx_1 = try lt.layout_store.internGraph(&graph_1, .{ .local = tag_union_1 });
+    const idx_2 = try lt.layout_store.internGraph(&graph_2, .{ .local = tag_union_2 });
 
     try testing.expectEqual(idx_1, idx_2);
 }

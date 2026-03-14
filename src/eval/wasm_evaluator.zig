@@ -106,6 +106,7 @@ pub const WasmEvaluator = struct {
     builtin_module: LoadedModule,
     builtin_indices: CIR.BuiltinIndices,
     global_layout_store: ?*layout.Store = null,
+    global_type_layout_resolver: ?*layout.TypeLayoutResolver = null,
     /// Configurable wasm stack size in bytes (default 1MB).
     wasm_stack_bytes: u32 = 1024 * 1024,
 
@@ -137,6 +138,10 @@ pub const WasmEvaluator = struct {
     }
 
     pub fn deinit(self: *WasmEvaluator) void {
+        if (self.global_type_layout_resolver) |resolver| {
+            resolver.deinit();
+            self.allocator.destroy(resolver);
+        }
         if (self.global_layout_store) |ls| {
             ls.deinit();
             self.allocator.destroy(ls);
@@ -166,6 +171,16 @@ pub const WasmEvaluator = struct {
         return ls;
     }
 
+    fn ensureGlobalTypeLayoutResolver(self: *WasmEvaluator, all_module_envs: []const *ModuleEnv) Error!*layout.TypeLayoutResolver {
+        if (self.global_type_layout_resolver) |resolver| return resolver;
+
+        const layout_store = try self.ensureGlobalLayoutStore(all_module_envs);
+        const resolver = self.allocator.create(layout.TypeLayoutResolver) catch return error.OutOfMemory;
+        resolver.* = layout.TypeLayoutResolver.init(layout_store);
+        self.global_type_layout_resolver = resolver;
+        return resolver;
+    }
+
     /// Generate wasm bytes for a CIR expression.
     pub fn generateWasm(
         self: *WasmEvaluator,
@@ -189,10 +204,12 @@ pub const WasmEvaluator = struct {
 
         // Get layout store (wasm32 target)
         const layout_store_ptr = try self.ensureGlobalLayoutStore(all_module_envs);
+        layout_store_ptr.setModuleEnvs(all_module_envs);
+        const type_layout_resolver_ptr = try self.ensureGlobalTypeLayoutResolver(all_module_envs);
 
         // In REPL sessions, module type stores get fresh type variables on each evaluation,
-        // but the global layout store persists. Clear stale cached layouts.
-        layout_store_ptr.resetModuleCache(all_module_envs);
+        // but the shared type-layout resolver persists. Clear stale type-side caches.
+        type_layout_resolver_ptr.resetModuleCache(all_module_envs);
 
         // Lower CIR -> MIR
         var mir_store = MIR.Store.init(self.allocator) catch return error.OutOfMemory;

@@ -82,7 +82,13 @@ pub const Resolver = struct {
         var refs_by_mono = std.AutoHashMap(u32, GraphRef).init(self.allocator);
         defer refs_by_mono.deinit();
 
-        const root = try self.buildRefForMonotype(mono_idx, overrides, &graph, &refs_by_mono);
+        var root = try self.buildRefForMonotype(mono_idx, overrides, &graph, &refs_by_mono);
+        if (root == .local) {
+            if (try findEquivalentRootNode(self.allocator, &graph, root.local)) |equivalent_root| {
+                root = .{ .local = equivalent_root };
+            }
+        }
+
         return self.layout_store.internGraph(&graph, root);
     }
 
@@ -98,6 +104,9 @@ pub const Resolver = struct {
             if (override_map.get(mono_key)) |layout_idx| {
                 return .{ .canonical = layout_idx };
             }
+        }
+        if (!self.monotype_store.bool_tag_union_idx.isNone() and mono_idx == self.monotype_store.bool_tag_union_idx) {
+            return .{ .canonical = .bool };
         }
         if (refs_by_mono.get(mono_key)) |cached| return cached;
 
@@ -146,6 +155,11 @@ pub const Resolver = struct {
             .tag_union => |tu| try self.buildTagUnionRef(self.monotype_store.getTags(tu.tags), overrides, graph, refs_by_mono),
         };
 
+        if (findEquivalentMonotypeRef(self.monotype_store, mono_idx, refs_by_mono, mono_key)) |equivalent| {
+            try refs_by_mono.put(mono_key, equivalent);
+            return equivalent;
+        }
+
         try refs_by_mono.put(mono_key, resolved_ref);
         return resolved_ref;
     }
@@ -158,7 +172,6 @@ pub const Resolver = struct {
         refs_by_mono: *std.AutoHashMap(u32, GraphRef),
     ) Allocator.Error!GraphRef {
         if (elems.len == 0) return .{ .canonical = .zst };
-        if (elems.len == 1) return self.buildRefForMonotype(elems[0], overrides, graph, refs_by_mono);
 
         var fields = std.ArrayList(GraphField).empty;
         defer fields.deinit(self.allocator);
@@ -180,7 +193,6 @@ pub const Resolver = struct {
         refs_by_mono: *std.AutoHashMap(u32, GraphRef),
     ) Allocator.Error!GraphRef {
         if (fields_slice.len == 0) return .{ .canonical = .zst };
-        if (fields_slice.len == 1) return self.buildRefForMonotype(fields_slice[0].type_idx, overrides, graph, refs_by_mono);
 
         var fields = std.ArrayList(GraphField).empty;
         defer fields.deinit(self.allocator);
@@ -200,7 +212,6 @@ pub const Resolver = struct {
         graph: *LayoutGraph,
     ) Allocator.Error!GraphRef {
         if (fields.len == 0) return .{ .canonical = .zst };
-        if (fields.len == 1) return fields[0].child;
 
         const node_id = try graph.reserveNode(self.allocator);
         const span = try graph.appendFields(self.allocator, fields);
@@ -216,21 +227,6 @@ pub const Resolver = struct {
         refs_by_mono: *std.AutoHashMap(u32, GraphRef),
     ) Allocator.Error!GraphRef {
         if (tags.len == 0) return .{ .canonical = .zst };
-
-        if (tags.len == 1) {
-            return self.buildPayloadRef(
-                self.monotype_store.getIdxSpan(tags[0].payloads),
-                overrides,
-                graph,
-                refs_by_mono,
-            );
-        }
-
-        if (tags.len == 2) {
-            const p0 = self.monotype_store.getIdxSpan(tags[0].payloads);
-            const p1 = self.monotype_store.getIdxSpan(tags[1].payloads);
-            if (p0.len == 0 and p1.len == 0) return .{ .canonical = .bool };
-        }
 
         var variants = std.ArrayList(GraphRef).empty;
         defer variants.deinit(self.allocator);
@@ -262,3 +258,104 @@ pub const Resolver = struct {
         return self.buildStructFromElems(payloads, overrides, graph, refs_by_mono);
     }
 };
+
+fn findEquivalentMonotypeRef(
+    monotype_store: *const Monotype.Store,
+    mono_idx: Monotype.Idx,
+    refs_by_mono: *const std.AutoHashMap(u32, GraphRef),
+    mono_key: u32,
+) ?GraphRef {
+    const mono = monotype_store.getMonotype(mono_idx);
+
+    var iter = refs_by_mono.iterator();
+    while (iter.next()) |entry| {
+        if (entry.key_ptr.* == mono_key) continue;
+        const other_idx: Monotype.Idx = @enumFromInt(entry.key_ptr.*);
+        if (std.meta.eql(monotype_store.getMonotype(other_idx), mono)) {
+            return entry.value_ptr.*;
+        }
+    }
+
+    return null;
+}
+
+fn findEquivalentRootNode(
+    allocator: Allocator,
+    graph: *const LayoutGraph,
+    root: graph_mod.NodeId,
+) Allocator.Error!?graph_mod.NodeId {
+    if (graph.nodes.items.len <= 1) return null;
+
+    var visited_pairs = std.AutoHashMap(u64, void).init(allocator);
+    defer visited_pairs.deinit();
+
+    for (graph.nodes.items, 0..) |_, i| {
+        const candidate: graph_mod.NodeId = @enumFromInt(i);
+        if (candidate == root) continue;
+        if (try localNodesEquivalent(graph, root, candidate, &visited_pairs)) {
+            return candidate;
+        }
+        visited_pairs.clearRetainingCapacity();
+    }
+
+    return null;
+}
+
+fn localNodesEquivalent(
+    graph: *const LayoutGraph,
+    a: graph_mod.NodeId,
+    b: graph_mod.NodeId,
+    visited_pairs: *std.AutoHashMap(u64, void),
+) Allocator.Error!bool {
+    const pair_key = (@as(u64, @intFromEnum(a)) << 32) | @as(u64, @intFromEnum(b));
+    if (visited_pairs.contains(pair_key)) return true;
+    try visited_pairs.put(pair_key, {});
+
+    const node_a = graph.getNode(a);
+    const node_b = graph.getNode(b);
+    if (@intFromEnum(node_a) != @intFromEnum(node_b)) return false;
+
+    return switch (node_a) {
+        .pending => false,
+        .box => |child_a| refsEquivalent(graph, child_a, node_b.box, visited_pairs),
+        .list => |child_a| refsEquivalent(graph, child_a, node_b.list, visited_pairs),
+        .closure => |child_a| refsEquivalent(graph, child_a, node_b.closure, visited_pairs),
+        .struct_ => |span_a| blk: {
+            const fields_a = graph.getFields(span_a);
+            const fields_b = graph.getFields(node_b.struct_);
+            if (fields_a.len != fields_b.len) break :blk false;
+            for (fields_a, fields_b) |field_a, field_b| {
+                if (field_a.index != field_b.index) break :blk false;
+                if (!try refsEquivalent(graph, field_a.child, field_b.child, visited_pairs)) break :blk false;
+            }
+            break :blk true;
+        },
+        .tag_union => |span_a| blk: {
+            const refs_a = graph.getRefs(span_a);
+            const refs_b = graph.getRefs(node_b.tag_union);
+            if (refs_a.len != refs_b.len) break :blk false;
+            for (refs_a, refs_b) |ref_a, ref_b| {
+                if (!try refsEquivalent(graph, ref_a, ref_b, visited_pairs)) break :blk false;
+            }
+            break :blk true;
+        },
+    };
+}
+
+fn refsEquivalent(
+    graph: *const LayoutGraph,
+    a: GraphRef,
+    b: GraphRef,
+    visited_pairs: *std.AutoHashMap(u64, void),
+) Allocator.Error!bool {
+    return switch (a) {
+        .canonical => |layout_idx_a| switch (b) {
+            .canonical => |layout_idx_b| layout_idx_a == layout_idx_b,
+            .local => false,
+        },
+        .local => |node_id_a| switch (b) {
+            .canonical => false,
+            .local => |node_id_b| try localNodesEquivalent(graph, node_id_a, node_id_b, visited_pairs),
+        },
+    };
+}

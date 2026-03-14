@@ -460,6 +460,9 @@ pub const DevEvaluator = struct {
     /// This ensures layout indices are consistent across cross-module calls.
     global_layout_store: ?*layout.Store = null,
 
+    /// Shared type-side resolver layered on top of the global layout store.
+    global_type_layout_resolver: ?*layout.TypeLayoutResolver = null,
+
     /// Cached all_module_envs slice for layout store initialization.
     /// Set during generateCode and used by ensureGlobalLayoutStore.
     cached_module_envs: ?[]const *ModuleEnv = null,
@@ -530,6 +533,7 @@ pub const DevEvaluator = struct {
             .roc_env = roc_env,
             .roc_ops = roc_ops,
             .global_layout_store = null,
+            .global_type_layout_resolver = null,
             .cached_module_envs = null,
         };
     }
@@ -558,6 +562,16 @@ pub const DevEvaluator = struct {
         self.global_layout_store = ls;
         self.cached_module_envs = all_module_envs;
         return ls;
+    }
+
+    fn ensureGlobalTypeLayoutResolver(self: *DevEvaluator, all_module_envs: []const *ModuleEnv) Error!*layout.TypeLayoutResolver {
+        if (self.global_type_layout_resolver) |resolver| return resolver;
+
+        const layout_store = try self.ensureGlobalLayoutStore(all_module_envs);
+        const resolver = self.allocator.create(layout.TypeLayoutResolver) catch return error.OutOfMemory;
+        resolver.* = layout.TypeLayoutResolver.init(layout_store);
+        self.global_type_layout_resolver = resolver;
+        return resolver;
     }
 
     /// Returns the crash message if roc_crashed was called during execution.
@@ -598,6 +612,10 @@ pub const DevEvaluator = struct {
 
     /// Clean up resources
     pub fn deinit(self: *DevEvaluator) void {
+        if (self.global_type_layout_resolver) |resolver| {
+            resolver.deinit();
+            self.allocator.destroy(resolver);
+        }
         // Clean up the global layout store if it exists
         if (self.global_layout_store) |ls| {
             ls.deinit();
@@ -680,10 +698,12 @@ pub const DevEvaluator = struct {
         // Get or create the global layout store for resolving layouts of composite types
         // This is a single store shared across all modules for cross-module correctness
         const layout_store_ptr = try self.ensureGlobalLayoutStore(all_module_envs);
+        layout_store_ptr.setModuleEnvs(all_module_envs);
+        const type_layout_resolver_ptr = try self.ensureGlobalTypeLayoutResolver(all_module_envs);
 
         // In REPL sessions, module type stores get fresh type variables on each evaluation,
-        // but the global layout store persists. Clear stale cached layouts.
-        layout_store_ptr.resetModuleCache(all_module_envs);
+        // but the shared type-layout resolver persists. Clear stale type-side caches.
+        type_layout_resolver_ptr.resetModuleCache(all_module_envs);
 
         // Lower CIR to MIR
         var mir_store = MIR.Store.init(self.allocator) catch return error.OutOfMemory;

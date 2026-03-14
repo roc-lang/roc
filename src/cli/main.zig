@@ -3990,6 +3990,9 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     var pending_entrypoints = try std.ArrayList(PendingEntrypoint).initCapacity(ctx.gpa, provides_entries.len);
     defer pending_entrypoints.deinit(ctx.gpa);
 
+    var type_layout_resolver = layout.TypeLayoutResolver.init(&layout_store);
+    defer type_layout_resolver.deinit();
+
     const platform_defs = platform_module.env.store.sliceDefs(platform_module.env.all_defs);
 
     for (provides_entries) |entry| {
@@ -4025,7 +4028,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                     var arg_type_scope = @import("types").TypeScope.init(ctx.gpa);
                     defer arg_type_scope.deinit();
                     for (arg_vars, 0..) |arg_var, i| {
-                        mutable_arg_layouts[i] = try layout_store.fromTypeVar(platform_module_idx, arg_var, &arg_type_scope, null);
+                        mutable_arg_layouts[i] = try type_layout_resolver.resolve(platform_module_idx, arg_var, &arg_type_scope, null);
                     }
                     arg_layouts = mutable_arg_layouts;
                 }
@@ -4093,7 +4096,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
         var type_scope = @import("types").TypeScope.init(ctx.gpa);
         defer type_scope.deinit();
-        const ret_layout = layout_store.fromTypeVar(platform_module_idx, pending.ret_type_var, &type_scope, null) catch {
+        const ret_layout = type_layout_resolver.resolve(platform_module_idx, pending.ret_type_var, &type_scope, null) catch {
             std.log.err("Failed to get layout for entrypoint {s}", .{pending.ffi_symbol});
             continue;
         };

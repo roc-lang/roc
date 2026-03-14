@@ -5383,21 +5383,31 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.zeroStackArea(result_offset, tu_data.size);
             const disc_offset: u32 = tu_data.discriminant_offset;
 
-            // Find the Ok variant's payload layout to determine the target numeric type.
-            // The Ok variant has the numeric payload; the Err variant has ZST.
+            // Find the Ok variant's numeric payload layout. The Err payload can now be a
+            // real single-tag union rather than ZST, so we cannot guess by "first non-zst".
             const variants = ls.getTagUnionVariants(tu_data);
-            var payload_idx: layout.Idx = .zst;
+            var payload_idx: ?layout.Idx = null;
             for (0..variants.len) |i| {
                 const v_payload = variants.get(@intCast(i)).payload_layout;
-                if (v_payload != .zst) {
+                const payload_layout = ls.getLayout(v_payload);
+                switch (payload_layout.tag) {
+                    .scalar => {
+                        payload_idx = v_payload;
+                        break;
+                    },
+                    else => {},
+                }
+                if (v_payload == .dec) {
                     payload_idx = v_payload;
                     break;
                 }
             }
+            const ok_payload_idx = payload_idx orelse
+                std.debug.panic("generateNumFromStr: missing numeric payload in return layout {}", .{@intFromEnum(ll.ret_layout)});
 
             const base_reg = frame_ptr;
 
-            if (payload_idx == .dec) {
+            if (ok_payload_idx == .dec) {
                 const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_dec_from_str);
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 try builder.addLeaArg(base_reg, result_offset);
@@ -5406,8 +5416,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addMemArg(base_reg, str_off + 16);
                 try builder.addImmArg(@intCast(disc_offset));
                 try self.callBuiltin(&builder, fn_addr, .dec_from_str);
-            } else if (payload_idx == .f32 or payload_idx == .f64) {
-                const float_width: u8 = if (payload_idx == .f32) 4 else 8;
+            } else if (ok_payload_idx == .f32 or ok_payload_idx == .f64) {
+                const float_width: u8 = if (ok_payload_idx == .f32) 4 else 8;
                 const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_float_from_str);
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 try builder.addLeaArg(base_reg, result_offset);
@@ -5418,7 +5428,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addImmArg(@intCast(disc_offset));
                 try self.callBuiltin(&builder, fn_addr, .float_from_str);
             } else {
-                const int_width: u8 = switch (payload_idx) {
+                const int_width: u8 = switch (ok_payload_idx) {
                     .u8, .i8 => 1,
                     .u16, .i16 => 2,
                     .u32, .i32 => 4,
@@ -5426,7 +5436,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .u128, .i128 => 16,
                     else => unreachable,
                 };
-                const is_signed: bool = switch (payload_idx) {
+                const is_signed: bool = switch (ok_payload_idx) {
                     .i8, .i16, .i32, .i64, .i128 => true,
                     .u8, .u16, .u32, .u64, .u128 => false,
                     else => unreachable,

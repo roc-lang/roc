@@ -1786,6 +1786,30 @@ fn generateMatchBranches(self: *Self, branches: []const LIR.LirMatchBranch, valu
                             try self.bindStructPattern(field_ptr, inner_struct);
                             payload_offset += field_byte_size;
                         },
+                        .tag => |inner_tag| {
+                            if (builtin.mode == .Debug and !self.tagPatternIsIrrefutable(inner_tag)) {
+                                std.debug.panic(
+                                    "WasmCodeGen invariant violated: nested tag payload patterns must be irrefutable single-tag unions",
+                                    .{},
+                                );
+                            }
+
+                            const field_byte_size = self.layoutByteSize(inner_tag.union_layout);
+                            if (self.store.getPatternSpan(inner_tag.args).len != 0) {
+                                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                                WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
+                                if (payload_offset > 0) {
+                                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                                    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(payload_offset)) catch return error.OutOfMemory;
+                                    self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                                }
+                                const field_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                                self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                                WasmModule.leb128WriteU32(self.allocator, &self.body, field_ptr) catch return error.OutOfMemory;
+                                try self.bindTagPattern(field_ptr, inner_tag);
+                            }
+                            payload_offset += field_byte_size;
+                        },
                         else => unreachable,
                     }
                 }
@@ -6095,9 +6119,49 @@ fn bindStructPattern(self: *Self, ptr_local: u32, s: anytype) Allocator.Error!vo
                 WasmModule.leb128WriteU32(self.allocator, &self.body, field_ptr) catch return error.OutOfMemory;
                 try self.bindStructPattern(field_ptr, inner_struct);
             },
+            .tag => |inner_tag| {
+                if (builtin.mode == .Debug and !self.tagPatternIsIrrefutable(inner_tag)) {
+                    std.debug.panic(
+                        "WasmCodeGen invariant violated: nested struct field tag patterns must be irrefutable single-tag unions",
+                        .{},
+                    );
+                }
+                if (self.store.getPatternSpan(inner_tag.args).len == 0) continue;
+
+                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, ptr_local) catch return error.OutOfMemory;
+                if (field_offset > 0) {
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(field_offset)) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                }
+                const field_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, field_ptr) catch return error.OutOfMemory;
+                try self.bindTagPattern(field_ptr, inner_tag);
+            },
             else => unreachable,
         }
     }
+}
+
+fn tagPatternIsIrrefutable(self: *Self, tag: anytype) bool {
+    const ls = self.getLayoutStore();
+    const union_layout = ls.getLayout(tag.union_layout);
+    return switch (union_layout.tag) {
+        .tag_union => blk: {
+            const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
+            break :blk ls.getTagUnionVariants(tu_data).len == 1;
+        },
+        .box => blk: {
+            const inner_layout = ls.getLayout(union_layout.data.box);
+            if (inner_layout.tag != .tag_union) break :blk false;
+            const tu_data = ls.getTagUnionData(inner_layout.data.tag_union.idx);
+            break :blk ls.getTagUnionVariants(tu_data).len == 1;
+        },
+        .scalar, .zst => true,
+        else => false,
+    };
 }
 
 /// Bind a tag union destructuring pattern: extract payload fields from a tag pointer.
@@ -6162,6 +6226,29 @@ fn bindTagPattern(self: *Self, ptr_local: u32, tag: anytype) Allocator.Error!voi
                 self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
                 WasmModule.leb128WriteU32(self.allocator, &self.body, field_ptr) catch return error.OutOfMemory;
                 try self.bindStructPattern(field_ptr, inner_struct);
+                payload_offset += field_byte_size;
+            },
+            .tag => |inner_tag| {
+                if (builtin.mode == .Debug and !self.tagPatternIsIrrefutable(inner_tag)) {
+                    std.debug.panic(
+                        "WasmCodeGen invariant violated: nested tag payload bindings must be irrefutable single-tag unions",
+                        .{},
+                    );
+                }
+                const field_byte_size = self.layoutByteSize(inner_tag.union_layout);
+                if (self.store.getPatternSpan(inner_tag.args).len != 0) {
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, ptr_local) catch return error.OutOfMemory;
+                    if (payload_offset > 0) {
+                        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                        WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(payload_offset)) catch return error.OutOfMemory;
+                        self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                    }
+                    const field_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, field_ptr) catch return error.OutOfMemory;
+                    try self.bindTagPattern(field_ptr, inner_tag);
+                }
                 payload_offset += field_byte_size;
             },
             else => unreachable,

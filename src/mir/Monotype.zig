@@ -719,6 +719,11 @@ pub const Store = struct {
         // `nominal_cycle_breakers` (separate from the specialization map) to
         // break these cycles: register a placeholder before recursing, then
         // overwrite it in-place with the real value.
+        if (nominal_cycle_breakers.get(nominal_var)) |cached| return cached;
+        if (findEquivalentNominalCycleBreaker(types_store, nominal, nominal_cycle_breakers)) |cached| {
+            return cached;
+        }
+
         const placeholder_idx = try self.addMonotype(allocator, .recursive_placeholder);
         try nominal_cycle_breakers.put(nominal_var, placeholder_idx);
 
@@ -736,3 +741,39 @@ pub const Store = struct {
         return placeholder_idx;
     }
 };
+
+fn findEquivalentNominalCycleBreaker(
+    types_store: *const types.Store,
+    nominal: types.NominalType,
+    nominal_cycle_breakers: *const std.AutoHashMap(types.Var, Idx),
+) ?Idx {
+    var iter = nominal_cycle_breakers.iterator();
+    while (iter.next()) |entry| {
+        const resolved = types_store.resolveVar(entry.key_ptr.*);
+        if (resolved.desc.content != .structure) continue;
+        const flat = resolved.desc.content.structure;
+        if (flat != .nominal_type) continue;
+        const other_nominal = flat.nominal_type;
+
+        if (!nominal.origin_module.eql(other_nominal.origin_module)) continue;
+        if (!nominal.ident.ident_idx.eql(other_nominal.ident.ident_idx)) continue;
+
+        const lhs_args = types_store.sliceNominalArgs(nominal);
+        const rhs_args = types_store.sliceNominalArgs(other_nominal);
+        if (lhs_args.len != rhs_args.len) continue;
+
+        var args_match = true;
+        for (lhs_args, rhs_args) |lhs_arg, rhs_arg| {
+            const lhs_resolved = types_store.resolveVar(lhs_arg);
+            const rhs_resolved = types_store.resolveVar(rhs_arg);
+            if (lhs_resolved.var_ != rhs_resolved.var_) {
+                args_match = false;
+                break;
+            }
+        }
+
+        if (args_match) return entry.value_ptr.*;
+    }
+
+    return null;
+}
