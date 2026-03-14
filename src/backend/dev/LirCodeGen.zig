@@ -4312,10 +4312,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.callReg(fn_ptr_reg);
             }
 
-            for (hosted_args.items) |arg| {
-                try self.emitDecrefValueByLayout(arg.loc, arg.layout_idx);
-            }
-
             // Return the result location based on return type
             if (ret_size == 0) {
                 // ZST - return unit/empty record

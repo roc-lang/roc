@@ -711,30 +711,7 @@ pub const RcInsertPass = struct {
                     .ret_layout = ll.ret_layout,
                 } }, region);
             },
-            .hosted_call => |hc| blk: {
-                const args = self.store.getExprSpan(hc.args);
-                var new_args = std.ArrayList(LirExprId).empty;
-                defer new_args.deinit(self.allocator);
-
-                var changed = false;
-                for (args) |arg_id| {
-                    const retained_arg = try self.retainOperandIfNeededForLaterBorrowDemand(
-                        arg_id,
-                        later_demands,
-                        region,
-                        &prelude,
-                    );
-                    if (retained_arg != arg_id) changed = true;
-                    try new_args.append(self.allocator, retained_arg);
-                }
-
-                if (!changed) break :blk expr_id;
-                break :blk try self.store.addExpr(.{ .hosted_call = .{
-                    .index = hc.index,
-                    .args = try self.store.addExprSpan(new_args.items),
-                    .ret_layout = hc.ret_layout,
-                } }, region);
-            },
+            .hosted_call => |_| expr_id,
             else => expr_id,
         };
 
@@ -2200,7 +2177,7 @@ pub const RcInsertPass = struct {
             .hosted_call => |hc| {
                 const args = self.store.getExprSpan(hc.args);
                 for (args) |arg_id| {
-                    try self.countConsumedValueInto(arg_id, target);
+                    try self.countConsumedUsesInto(arg_id, target);
                 }
             },
             .str_concat => |span| {
@@ -2431,7 +2408,7 @@ pub const RcInsertPass = struct {
             .hosted_call => |hc| {
                 const args = self.store.getExprSpan(hc.args);
                 for (args) |arg_id| {
-                    try self.countBorrowOwnerDemandValueInto(arg_id, target);
+                    try self.countBorrowOwnerDemandUsesInto(arg_id, target);
                 }
             },
             .str_concat => |span| {
@@ -2996,7 +2973,7 @@ pub const RcInsertPass = struct {
                 } }, region);
             },
             .hosted_call => |hc| {
-                const args_res = try self.processExprSpanSequenced(hc.args, .consume);
+                const args_res = try self.processExprSpanSequenced(hc.args, .borrow);
                 if (!args_res.changed) return expr_id;
                 return self.store.addExpr(.{ .hosted_call = .{
                     .index = hc.index,
@@ -6069,6 +6046,47 @@ test "RC borrowed string expression releases original temporary binding" {
 
     try std.testing.expectEqual(@as(u32, 0), rc.increfs);
     try std.testing.expectEqual(@as(u32, 1), rc.decrefs);
+}
+
+test "RC hosted_call borrows string arg and tail-cleans original owner" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const str_layout: LayoutIdx = .str;
+    const fn_layout: LayoutIdx = .none;
+    const sym_msg = makeSymbol(1);
+
+    const lookup_msg = try env.lir_store.addExpr(.{ .lookup = .{
+        .symbol = sym_msg,
+        .layout_idx = str_layout,
+    } }, Region.zero());
+    const hosted = try env.lir_store.addExpr(.{ .hosted_call = .{
+        .index = 0,
+        .args = try env.lir_store.addExprSpan(&.{lookup_msg}),
+        .ret_layout = .zst,
+    } }, Region.zero());
+    const pat_msg = try env.lir_store.addPattern(.{ .bind = .{
+        .symbol = sym_msg,
+        .layout_idx = str_layout,
+    } }, Region.zero());
+    const params = try env.lir_store.addPatternSpan(&.{pat_msg});
+    const lam = try env.lir_store.addExpr(.{ .lambda = .{
+        .fn_layout = fn_layout,
+        .params = params,
+        .body = hosted,
+        .ret_layout = .zst,
+    } }, Region.zero());
+
+    var pass = try RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(lam);
+
+    try std.testing.expectEqual(@as(u32, 0), countIncrefsForSymbol(&env.lir_store, result, sym_msg));
+    try std.testing.expectEqual(@as(u32, 1), countDecrefsForSymbol(&env.lir_store, result, sym_msg));
 }
 
 test "RC explicit retained list element keeps outer binding cleanup" {
