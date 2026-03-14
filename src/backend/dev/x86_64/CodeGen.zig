@@ -7,6 +7,7 @@
 //! Use CodeGen(target) to get a specialized type for a specific target.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const RocTarget = @import("roc_target").RocTarget;
 
@@ -198,37 +199,33 @@ pub fn CodeGen(comptime target: RocTarget) type {
         }
 
         /// Spill a register to make room and allocate it for the given local.
+        ///
+        /// WARNING: This function is fundamentally unsafe for LirCodeGen's usage pattern.
+        /// LirCodeGen holds raw register references (e.g., in I128Parts, ValueLocation)
+        /// and does not consult the `locals` map after allocation. When a register is
+        /// spilled here, the value is saved to the stack and `locals` is updated, but
+        /// any raw register reference in LirCodeGen becomes stale — it now points to a
+        /// register holding a different value. This causes silent data corruption.
+        ///
+        /// The correct fix is to ensure callers never exhaust the register pool.
+        /// This panic catches register pressure bugs during development.
         fn spillAndAllocGeneral(self: *Self, local: u32) !GeneralReg {
-            // Find a register to spill - prefer lowest-numbered for consistency
-            // Skip RSP and RBP as they're special
-            var victim: ?GeneralReg = null;
-            for (0..NUM_GENERAL_REGS) |i| {
-                const reg: GeneralReg = @enumFromInt(i);
-                // Skip stack/frame pointers
-                if (reg == .RSP or reg == .RBP) continue;
-                // Skip registers we don't own (they're free)
-                if (self.general_owners[i] != null) {
-                    victim = reg;
-                    break;
+            _ = local;
+            // Count available info for the panic message
+            if (builtin.mode == .Debug) {
+                var owned_count: u32 = 0;
+                for (0..NUM_GENERAL_REGS) |i| {
+                    if (self.general_owners[i] != null) owned_count += 1;
                 }
+                std.debug.panic(
+                    "Register spill triggered: all {d} general registers are in use " ++
+                        "(free_general=0x{x}, callee_saved_available=0x{x}). " ++
+                        "LirCodeGen does not support spills — raw register references would become stale. " ++
+                        "Fix the caller to free registers before allocating new ones.",
+                    .{ owned_count, self.free_general, self.callee_saved_available },
+                );
             }
-
-            const reg = victim orelse unreachable;
-            const owner = self.general_owners[@intFromEnum(reg)].?;
-
-            // Allocate stack slot for the spilled value
-            const slot = self.allocStack(8);
-
-            // Emit store instruction
-            try self.emitStoreStack(.w64, slot, reg);
-
-            // Update the owner's location to stack
-            try self.locals.put(owner, .{ .stack = slot });
-
-            // Clear old ownership, set new ownership
-            self.general_owners[@intFromEnum(reg)] = local;
-
-            return reg;
+            unreachable;
         }
 
         /// Reload a spilled value back into a register.

@@ -556,20 +556,27 @@ fn sortCmpTrampoline(cmp_data: ?[*]u8, a_ptr: ?[*]u8, b_ptr: ?[*]u8) callconv(.c
     const ew = ctx.element_width;
 
     if (ew <= 8) {
+        // Safe to pass values directly: single-register types (u8..u64) have
+        // identical layouts in both C callconv and the Roc internal calling
+        // convention on all platforms, so no ABI mismatch is possible.
         const cmp_fn: *const fn (u64, u64) callconv(.c) u8 = @ptrFromInt(ctx.roc_fn_addr);
         var a_val: u64 = 0;
         var b_val: u64 = 0;
         if (a_ptr) |ap| @memcpy(@as([*]u8, @ptrCast(&a_val))[0..ew], ap[0..ew]);
         if (b_ptr) |bp| @memcpy(@as([*]u8, @ptrCast(&b_val))[0..ew], bp[0..ew]);
         return cmp_fn(a_val, b_val);
-    } else if (ew <= 16) {
-        const cmp_fn: *const fn (u128, u128) callconv(.c) u8 = @ptrFromInt(ctx.roc_fn_addr);
-        var a_val: u128 = 0;
-        var b_val: u128 = 0;
-        if (a_ptr) |ap| @memcpy(@as([*]u8, @ptrCast(&a_val))[0..ew], ap[0..ew]);
-        if (b_ptr) |bp| @memcpy(@as([*]u8, @ptrCast(&b_val))[0..ew], bp[0..ew]);
-        return cmp_fn(a_val, b_val);
     } else {
+        // For ew > 8 (multi-register types like Dec/i128/u128 and large structs),
+        // we pass element pointers directly. The comparator lambda is compiled with
+        // force_pass_by_ptr so its prologue loads values from these pointers.
+        //
+        // This avoids ABI mismatches between the Zig callconv(.c) and the Roc
+        // internal calling convention. For example:
+        // - Windows C ABI passes u128 by pointer (RCX=&a, RDX=&b), but the Roc
+        //   lambda's bindLambdaParams may convert only the first param to pointer
+        //   and pass the second in registers (RCX=&a, RDX=b_low, R8=b_high).
+        // - System V C ABI passes large structs by pointer, but bindLambdaParams
+        //   may keep one param in registers if it fits.
         const cmp_fn: *const fn (?[*]u8, ?[*]u8) callconv(.c) u8 = @ptrFromInt(ctx.roc_fn_addr);
         return cmp_fn(a_ptr, b_ptr);
     }
@@ -1175,6 +1182,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitMovRegReg(roc_ops_save_reg, arg1_reg);
 
             self.roc_ops_reg = roc_ops_save_reg;
+
+            // The argument registers' values have been saved to callee-saved registers,
+            // so return them to the free pool. Without this, they remain in limbo
+            // (not free, not callee-saved, not spillable), reducing the available
+            // register count and causing silent corruption when spillAndAllocGeneral
+            // is triggered in register-intensive code paths like i128 comparisons.
+            self.codegen.freeGeneral(arg0_reg);
+            self.codegen.freeGeneral(arg1_reg);
 
             // Remove roc_ops and result_ptr registers from callee_saved_available
             // so the register allocator never uses them as temporaries.
@@ -3324,7 +3339,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Get the comparison function code offset.
                     // We need the compile-time code offset for PC-relative addressing,
                     // so resolve the comparator lambda directly from the LIR expression.
-                    const cmp_code_offset: usize = try self.resolveComparatorOffset(args[1]);
+                    // For elements > 8 bytes (multi-register types like Dec/i128), compile
+                    // the comparator with force_pass_by_ptr to match the trampoline's
+                    // pointer-based calling convention and avoid ABI mismatches.
+                    const needs_ptr_abi = elem_size_align.size > 8;
+                    const cmp_code_offset: usize = try self.resolveComparatorOffset(args[1], .{
+                        .force_pass_by_ptr = needs_ptr_abi,
+                        // Don't cache the ptr-mode compilation: the same lambda could
+                        // also be used in a direct call (value mode), and the cache is
+                        // keyed only by expression ID, not by calling convention mode.
+                        .use_cache = !needs_ptr_abi,
+                    });
 
                     // Compute the absolute address of the lambda at runtime using
                     // PC-relative addressing: emit LEA/ADR that resolves to the
@@ -5045,13 +5070,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 // Comparison operations for i128/Dec
                 .num_is_eq => {
-                    // Compare both low and high parts
+                    // Free result_low/result_high first — they're not needed for comparisons,
+                    // and freeing them reduces register pressure (avoids spills that corrupt
+                    // input part registers on Windows x64 where only 9 regs are available).
+                    self.codegen.freeGeneral(result_high);
+                    self.codegen.freeGeneral(result_low);
+
                     const result_reg = try self.allocTempGeneral();
                     try self.generateI128Equality(lhs_parts, rhs_parts, result_reg, true);
 
-                    // Free the extra result_high we allocated
-                    self.codegen.freeGeneral(result_high);
-                    self.codegen.freeGeneral(result_low);
                     self.codegen.freeGeneral(lhs_parts.low);
                     self.codegen.freeGeneral(lhs_parts.high);
                     self.codegen.freeGeneral(rhs_parts.low);
@@ -5060,13 +5087,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return .{ .general_reg = result_reg };
                 },
                 .num_is_lt, .num_is_lte, .num_is_gt, .num_is_gte => {
-                    // i128 comparison: compare high parts first, if equal compare low parts
+                    // Free result_low/result_high first — they're not needed for comparisons,
+                    // and freeing them reduces register pressure (avoids spills that corrupt
+                    // input part registers on Windows x64 where only 9 regs are available).
+                    self.codegen.freeGeneral(result_high);
+                    self.codegen.freeGeneral(result_low);
+
                     const result_reg = try self.allocTempGeneral();
                     try self.generateI128Comparison(lhs_parts, rhs_parts, result_reg, op, is_unsigned);
 
-                    // Free the extra result_high we allocated
-                    self.codegen.freeGeneral(result_high);
-                    self.codegen.freeGeneral(result_low);
                     self.codegen.freeGeneral(lhs_parts.low);
                     self.codegen.freeGeneral(lhs_parts.high);
                     self.codegen.freeGeneral(rhs_parts.low);
@@ -5928,11 +5957,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Compare high parts first
                 try self.codegen.emit.cmpRegReg(.w64, lhs_parts.high, rhs_parts.high);
 
-                // Prepare result values
+                // Prepare constant for cmovcc
                 const one_reg = try self.allocTempGeneral();
-                const zero_reg = try self.allocTempGeneral();
                 try self.codegen.emitLoadImm(one_reg, 1);
-                try self.codegen.emitLoadImm(zero_reg, 0);
 
                 // Get signed/unsigned condition for high part
                 const high_true_cond: Condition = switch (op) {
@@ -5983,7 +6010,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.freeGeneral(temp);
                 self.codegen.freeGeneral(low_result);
                 self.codegen.freeGeneral(one_reg);
-                self.codegen.freeGeneral(zero_reg);
             }
         }
 
@@ -8299,6 +8325,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         const LambdaProcOptions = struct {
             use_cache: bool = true,
             extra_hidden_args: u8 = 0,
+            /// When true, all parameters are received as pointers regardless of
+            /// register pressure. Used by the sort comparator trampoline which
+            /// always passes element pointers to avoid ABI mismatches between
+            /// the Zig callconv(.c) and the Roc internal calling convention.
+            force_pass_by_ptr: bool = false,
         };
 
         /// Generate code for struct field access (records and tuples).
@@ -11696,9 +11727,34 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
         }
 
+        /// Like resolveLambdaCodeOffset but threads LambdaProcOptions through to
+        /// compileLambdaAsProcWithOptions, allowing force_pass_by_ptr for sort comparators.
+        fn resolveLambdaCodeOffsetWithOpts(self: *Self, expr_id: LirExprId, opts: LambdaProcOptions) Allocator.Error!?usize {
+            const expr = self.store.getExpr(expr_id);
+            return switch (expr) {
+                .lambda => |lam| try self.compileLambdaAsProcWithOptions(expr_id, lam, opts),
+                .block => |block| try self.resolveLambdaCodeOffsetWithOpts(block.final_expr, opts),
+                .nominal => |nom| try self.resolveLambdaCodeOffsetWithOpts(nom.backing_expr, opts),
+                .lookup => |lookup| {
+                    if (self.getSymbolDefRelaxed(lookup.symbol)) |def_id| {
+                        const saved_binding_symbol = self.current_binding_symbol;
+                        self.current_binding_symbol = lookup.symbol;
+                        defer self.current_binding_symbol = saved_binding_symbol;
+                        return try self.resolveLambdaCodeOffsetWithOpts(def_id, opts);
+                    }
+                    return null;
+                },
+                .struct_access => |sa| {
+                    const field_expr = self.resolveStructFieldExpr(sa.struct_expr, sa.field_idx) orelse return null;
+                    return try self.resolveLambdaCodeOffsetWithOpts(field_expr, opts);
+                },
+                else => null,
+            };
+        }
+
         /// Resolve the comparator expression for list_sort_with to a compiled code offset.
-        fn resolveComparatorOffset(self: *Self, expr_id: LirExprId) Allocator.Error!usize {
-            if (try self.resolveLambdaCodeOffset(expr_id)) |offset| return offset;
+        fn resolveComparatorOffset(self: *Self, expr_id: LirExprId, opts: LambdaProcOptions) Allocator.Error!usize {
+            if (try self.resolveLambdaCodeOffsetWithOpts(expr_id, opts)) |offset| return offset;
             if (std.debug.runtime_safety) std.debug.panic("sort comparator must resolve to a lambda", .{});
             unreachable;
         }
@@ -13398,7 +13454,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (needs_ret_ptr) {
                 initial_param_reg_idx += 1;
             }
-            try self.bindLambdaParams(lambda.params, initial_param_reg_idx);
+            try self.bindLambdaParams(lambda.params, initial_param_reg_idx, opts.force_pass_by_ptr);
 
             // Set early return state so generateEarlyReturn can emit jumps
             self.early_return_ret_layout = lambda.ret_layout;
@@ -13964,7 +14020,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn bindLambdaParams(self: *Self, params: lir.LirPatternSpan, initial_reg_idx: u8) Allocator.Error!void {
+        fn bindLambdaParams(self: *Self, params: lir.LirPatternSpan, initial_reg_idx: u8, force_pass_by_ptr: bool) Allocator.Error!void {
             const pattern_ids = self.store.getPatternSpan(params);
 
             // Pre-scan: determine which params are passed by pointer.
@@ -13996,6 +14052,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         else => 1,
                     };
                     param_num_regs[pi] = nr;
+                    if (force_pass_by_ptr and nr > 0) {
+                        // Force all non-zero-sized params to be received as pointers.
+                        // Used by the sort comparator trampoline which always passes
+                        // element pointers to avoid C ABI vs internal ABI mismatches.
+                        // Zero-sized params (nr == 0) are skipped here because they
+                        // are handled as immediates before the pass-by-ptr check and
+                        // don't consume an argument register.
+                        param_pass_by_ptr[pi] = true;
+                        pre_reg_count += 1; // pointer = 1 register
+                        continue;
+                    }
                     const is_i128_param = switch (pat) {
                         .bind => |b| b.layout_idx == .i128 or b.layout_idx == .u128 or b.layout_idx == .dec,
                         .wildcard => |w| w.layout_idx == .i128 or w.layout_idx == .u128 or w.layout_idx == .dec,
