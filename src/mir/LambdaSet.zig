@@ -5,10 +5,12 @@
 //! the store directly; they must not recover closure identity by walking MIR.
 
 const std = @import("std");
+const base = @import("base");
 const can = @import("can");
 const MIR = @import("MIR.zig");
 
 const Allocator = std.mem.Allocator;
+const Ident = base.Ident;
 const ModuleEnv = can.ModuleEnv;
 
 /// Index into the lambda_sets array.
@@ -150,6 +152,7 @@ pub fn infer(
     while (changed) {
         changed = false;
         changed = (try propagateExprAndBindingSets(allocator, mir_store, &store, &lambda_expr_symbols)) or changed;
+        changed = (try propagateMatchPatternBindings(allocator, mir_store, &store)) or changed;
         changed = (try propagateCallArgs(allocator, mir_store, &store)) or changed;
         changed = (try propagateCapturedFunctionLocals(allocator, mir_store, &store)) or changed;
         changed = (try propagateMemberReturnSets(allocator, mir_store, &store)) or changed;
@@ -349,6 +352,112 @@ fn propagateCallArgs(allocator: Allocator, mir_store: *const MIR.Store, store: *
     return changed;
 }
 
+fn propagateMatchPatternBindings(
+    allocator: Allocator,
+    mir_store: *const MIR.Store,
+    store: *Store,
+) Allocator.Error!bool {
+    var changed = false;
+    var expr_index: u32 = 0;
+    while (expr_index < mir_store.exprs.items.len) : (expr_index += 1) {
+        const expr = mir_store.getExpr(@enumFromInt(expr_index));
+        if (expr != .match_expr) continue;
+
+        const match_expr = expr.match_expr;
+        for (mir_store.getBranches(match_expr.branches)) |branch| {
+            for (mir_store.getBranchPatterns(branch.patterns)) |branch_pattern| {
+                changed = (try propagatePatternBindingsFromExpr(
+                    allocator,
+                    mir_store,
+                    store,
+                    match_expr.cond,
+                    branch_pattern.pattern,
+                )) or changed;
+            }
+        }
+    }
+    return changed;
+}
+
+fn propagatePatternBindingsFromExpr(
+    allocator: Allocator,
+    mir_store: *const MIR.Store,
+    store: *Store,
+    source_expr: MIR.ExprId,
+    pattern_id: MIR.PatternId,
+) Allocator.Error!bool {
+    var changed = false;
+
+    switch (mir_store.getPattern(pattern_id)) {
+        .bind => |symbol| {
+            if (store.getExprLambdaSet(source_expr)) |ls_idx| {
+                changed = (try mergeIntoSymbol(allocator, store, symbol, ls_idx)) or changed;
+            }
+        },
+        .as_pattern => |as_pat| {
+            if (store.getExprLambdaSet(source_expr)) |ls_idx| {
+                changed = (try mergeIntoSymbol(allocator, store, as_pat.symbol, ls_idx)) or changed;
+            }
+            changed = (try propagatePatternBindingsFromExpr(
+                allocator,
+                mir_store,
+                store,
+                source_expr,
+                as_pat.pattern,
+            )) or changed;
+        },
+        .tag => |tag_pat| {
+            const arg_patterns = mir_store.getPatternSpan(tag_pat.args);
+            for (arg_patterns, 0..) |arg_pattern_id, arg_index| {
+                const payload_expr = resolveTagPayloadExpr(mir_store, source_expr, tag_pat.name, @intCast(arg_index)) orelse continue;
+                changed = (try propagatePatternBindingsFromExpr(
+                    allocator,
+                    mir_store,
+                    store,
+                    payload_expr,
+                    arg_pattern_id,
+                )) or changed;
+            }
+        },
+        .struct_destructure => |destructure| {
+            const field_patterns = mir_store.getPatternSpan(destructure.fields);
+            for (field_patterns, 0..) |field_pattern_id, field_index| {
+                const field_expr = resolveStructFieldExpr(mir_store, source_expr, @intCast(field_index)) orelse continue;
+                changed = (try propagatePatternBindingsFromExpr(
+                    allocator,
+                    mir_store,
+                    store,
+                    field_expr,
+                    field_pattern_id,
+                )) or changed;
+            }
+        },
+        .list_destructure => |destructure| {
+            const elem_patterns = mir_store.getPatternSpan(destructure.patterns);
+            for (elem_patterns, 0..) |elem_pattern_id, elem_index| {
+                const elem_expr = resolveListElementExpr(mir_store, source_expr, @intCast(elem_index)) orelse continue;
+                changed = (try propagatePatternBindingsFromExpr(
+                    allocator,
+                    mir_store,
+                    store,
+                    elem_expr,
+                    elem_pattern_id,
+                )) or changed;
+            }
+        },
+        .wildcard,
+        .int_literal,
+        .str_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .runtime_error,
+        => {},
+    }
+
+    return changed;
+}
+
 fn propagateCapturedFunctionLocals(allocator: Allocator, mir_store: *const MIR.Store, store: *Store) Allocator.Error!bool {
     var changed = false;
     for (mir_store.closure_members.items) |closure_member| {
@@ -405,18 +514,71 @@ fn resolveStructFieldLambdaSet(
     expr_id: MIR.ExprId,
     field_idx: u32,
 ) ?Idx {
+    const field_expr = resolveStructFieldExpr(mir_store, expr_id, field_idx) orelse return null;
+    return store.getExprLambdaSet(field_expr);
+}
+
+fn resolveStructFieldExpr(
+    mir_store: *const MIR.Store,
+    expr_id: MIR.ExprId,
+    field_idx: u32,
+) ?MIR.ExprId {
     const expr = mir_store.getExpr(expr_id);
     return switch (expr) {
         .struct_ => |struct_| blk: {
             const fields = mir_store.getExprSpan(struct_.fields);
             if (field_idx >= fields.len) break :blk null;
-            break :blk store.getExprLambdaSet(fields[field_idx]);
+            break :blk fields[field_idx];
         },
         .lookup => |symbol| blk: {
             const def_expr = mir_store.getSymbolDef(symbol) orelse break :blk null;
-            break :blk resolveStructFieldLambdaSet(mir_store, store, def_expr, field_idx);
+            break :blk resolveStructFieldExpr(mir_store, def_expr, field_idx);
         },
-        .block => |block| resolveStructFieldLambdaSet(mir_store, store, block.final_expr, field_idx),
+        .block => |block| resolveStructFieldExpr(mir_store, block.final_expr, field_idx),
+        else => null,
+    };
+}
+
+fn resolveTagPayloadExpr(
+    mir_store: *const MIR.Store,
+    expr_id: MIR.ExprId,
+    tag_name: Ident.Idx,
+    payload_idx: u32,
+) ?MIR.ExprId {
+    const expr = mir_store.getExpr(expr_id);
+    return switch (expr) {
+        .tag => |tag_expr| blk: {
+            if (!tag_expr.name.eql(tag_name)) break :blk null;
+            const args = mir_store.getExprSpan(tag_expr.args);
+            if (payload_idx >= args.len) break :blk null;
+            break :blk args[payload_idx];
+        },
+        .lookup => |symbol| blk: {
+            const def_expr = mir_store.getSymbolDef(symbol) orelse break :blk null;
+            break :blk resolveTagPayloadExpr(mir_store, def_expr, tag_name, payload_idx);
+        },
+        .block => |block| resolveTagPayloadExpr(mir_store, block.final_expr, tag_name, payload_idx),
+        else => null,
+    };
+}
+
+fn resolveListElementExpr(
+    mir_store: *const MIR.Store,
+    expr_id: MIR.ExprId,
+    elem_idx: u32,
+) ?MIR.ExprId {
+    const expr = mir_store.getExpr(expr_id);
+    return switch (expr) {
+        .list => |list_expr| blk: {
+            const elems = mir_store.getExprSpan(list_expr.elems);
+            if (elem_idx >= elems.len) break :blk null;
+            break :blk elems[elem_idx];
+        },
+        .lookup => |symbol| blk: {
+            const def_expr = mir_store.getSymbolDef(symbol) orelse break :blk null;
+            break :blk resolveListElementExpr(mir_store, def_expr, elem_idx);
+        },
+        .block => |block| resolveListElementExpr(mir_store, block.final_expr, elem_idx),
         else => null,
     };
 }

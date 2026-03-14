@@ -761,6 +761,176 @@ test "lambda set: closure extracted from record field keeps member defs stable" 
     try testing.expectEqual(@as(usize, 1), env.mir_store.getCaptureBindings(closure_member.capture_bindings).len);
 }
 
+test "lambda set: plain lambda extracted from record field gets symbol identity" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    rec = { f: |x| x + 1 }
+        \\    f = rec.f
+        \\    f(5)
+        \\}
+    );
+    defer env.deinit();
+
+    const expr = try env.lowerFirstDef();
+    const block = env.mir_store.getExpr(expr);
+    try testing.expect(block == .block);
+
+    const stmts = env.mir_store.getStmts(block.block.stmts);
+    var extracted_sym: ?MIR.Symbol = null;
+    for (stmts) |stmt| {
+        if (stmt != .decl_const) continue;
+        const stmt_expr = env.mir_store.getExpr(stmt.decl_const.expr);
+        if (stmt_expr != .struct_access) continue;
+        const pat = env.mir_store.getPattern(stmt.decl_const.pattern);
+        if (pat != .bind) continue;
+        extracted_sym = pat.bind;
+        break;
+    }
+    const resolved_f_sym = extracted_sym orelse return error.TestUnexpectedResult;
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(env.builtin_module.env),
+        env.module_env,
+    };
+    var ls_store = try LambdaSet.infer(test_allocator, env.mir_store, all_module_envs[0..]);
+    defer ls_store.deinit(test_allocator);
+
+    const f_ls = ls_store.getSymbolLambdaSet(resolved_f_sym) orelse return error.TestUnexpectedResult;
+    const members = ls_store.getMembers(ls_store.getLambdaSet(f_ls).members);
+    try testing.expectEqual(@as(usize, 1), members.len);
+    try testing.expect(members[0].closure_member.isNone());
+    const lifted_def = env.mir_store.getSymbolDef(members[0].fn_symbol) orelse return error.TestUnexpectedResult;
+    try testing.expect(LambdaSet.isLambdaExpr(env.mir_store, lifted_def));
+}
+
+test "lambda set: plain lambda extracted from tuple field gets symbol identity" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    tup = (|x| x + 1, 42)
+        \\    f = tup.0
+        \\    f(5)
+        \\}
+    );
+    defer env.deinit();
+
+    const expr = try env.lowerFirstDef();
+    const block = env.mir_store.getExpr(expr);
+    try testing.expect(block == .block);
+
+    const stmts = env.mir_store.getStmts(block.block.stmts);
+    var extracted_sym: ?MIR.Symbol = null;
+    for (stmts) |stmt| {
+        if (stmt != .decl_const) continue;
+        const stmt_expr = env.mir_store.getExpr(stmt.decl_const.expr);
+        if (stmt_expr != .struct_access) continue;
+        const pat = env.mir_store.getPattern(stmt.decl_const.pattern);
+        if (pat != .bind) continue;
+        extracted_sym = pat.bind;
+        break;
+    }
+    const resolved_f_sym = extracted_sym orelse return error.TestUnexpectedResult;
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(env.builtin_module.env),
+        env.module_env,
+    };
+    var ls_store = try LambdaSet.infer(test_allocator, env.mir_store, all_module_envs[0..]);
+    defer ls_store.deinit(test_allocator);
+
+    const f_ls = ls_store.getSymbolLambdaSet(resolved_f_sym) orelse return error.TestUnexpectedResult;
+    const members = ls_store.getMembers(ls_store.getLambdaSet(f_ls).members);
+    try testing.expectEqual(@as(usize, 1), members.len);
+    try testing.expect(members[0].closure_member.isNone());
+    const lifted_def = env.mir_store.getSymbolDef(members[0].fn_symbol) orelse return error.TestUnexpectedResult;
+    try testing.expect(LambdaSet.isLambdaExpr(env.mir_store, lifted_def));
+}
+
+test "lambda set: plain lambda extracted from tag payload gets symbol identity" {
+    var env = try MirTestEnv.initExpr(
+        \\match Ok(|x| x + 1) { Ok(f) => f(5), Err(_) => 0 }
+    );
+    defer env.deinit();
+
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .match_expr);
+
+    const branches = env.mir_store.getBranches(result.match_expr.branches);
+    var extracted_sym: ?MIR.Symbol = null;
+    for (branches) |branch| {
+        const branch_patterns = env.mir_store.getBranchPatterns(branch.patterns);
+        for (branch_patterns) |branch_pattern| {
+            const pat = env.mir_store.getPattern(branch_pattern.pattern);
+            if (pat != .tag) continue;
+            const args = env.mir_store.getPatternSpan(pat.tag.args);
+            if (args.len != 1) continue;
+            const arg_pat = env.mir_store.getPattern(args[0]);
+            if (arg_pat != .bind) continue;
+            extracted_sym = arg_pat.bind;
+            break;
+        }
+        if (extracted_sym != null) break;
+    }
+    const resolved_f_sym = extracted_sym orelse return error.TestUnexpectedResult;
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(env.builtin_module.env),
+        env.module_env,
+    };
+    var ls_store = try LambdaSet.infer(test_allocator, env.mir_store, all_module_envs[0..]);
+    defer ls_store.deinit(test_allocator);
+
+    const f_ls = ls_store.getSymbolLambdaSet(resolved_f_sym) orelse return error.TestUnexpectedResult;
+    const members = ls_store.getMembers(ls_store.getLambdaSet(f_ls).members);
+    try testing.expectEqual(@as(usize, 1), members.len);
+    try testing.expect(members[0].closure_member.isNone());
+    const lifted_def = env.mir_store.getSymbolDef(members[0].fn_symbol) orelse return error.TestUnexpectedResult;
+    try testing.expect(LambdaSet.isLambdaExpr(env.mir_store, lifted_def));
+}
+
+test "lambda set: plain lambda extracted from list element gets symbol identity" {
+    var env = try MirTestEnv.initExpr(
+        \\match [|x| x + 1] { [f] => f(5), _ => 0 }
+    );
+    defer env.deinit();
+
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .match_expr);
+
+    const branches = env.mir_store.getBranches(result.match_expr.branches);
+    var extracted_sym: ?MIR.Symbol = null;
+    for (branches) |branch| {
+        const branch_patterns = env.mir_store.getBranchPatterns(branch.patterns);
+        for (branch_patterns) |branch_pattern| {
+            const pat = env.mir_store.getPattern(branch_pattern.pattern);
+            if (pat != .list_destructure) continue;
+            const elems = env.mir_store.getPatternSpan(pat.list_destructure.patterns);
+            if (elems.len != 1) continue;
+            const elem_pat = env.mir_store.getPattern(elems[0]);
+            if (elem_pat != .bind) continue;
+            extracted_sym = elem_pat.bind;
+            break;
+        }
+        if (extracted_sym != null) break;
+    }
+    const resolved_f_sym = extracted_sym orelse return error.TestUnexpectedResult;
+
+    const all_module_envs = [_]*ModuleEnv{
+        @constCast(env.builtin_module.env),
+        env.module_env,
+    };
+    var ls_store = try LambdaSet.infer(test_allocator, env.mir_store, all_module_envs[0..]);
+    defer ls_store.deinit(test_allocator);
+
+    const f_ls = ls_store.getSymbolLambdaSet(resolved_f_sym) orelse return error.TestUnexpectedResult;
+    const members = ls_store.getMembers(ls_store.getLambdaSet(f_ls).members);
+    try testing.expectEqual(@as(usize, 1), members.len);
+    try testing.expect(members[0].closure_member.isNone());
+    const lifted_def = env.mir_store.getSymbolDef(members[0].fn_symbol) orelse return error.TestUnexpectedResult;
+    try testing.expect(LambdaSet.isLambdaExpr(env.mir_store, lifted_def));
+}
+
 test "lambda set: higher-order param receives both closure members" {
     var env = try MirTestEnv.initExpr(
         \\{

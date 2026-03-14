@@ -1296,7 +1296,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
         // --- Collections ---
         .e_empty_list => try self.store.addExpr(self.allocator, .{ .list = .{ .elems = MIR.ExprSpan.empty() } }, monotype, region),
         .e_list => |list| {
-            const elems = try self.lowerExprSpan(module_env, list.elems);
+            const elems = try self.stabilizeEscapingFunctionSpan(try self.lowerExprSpan(module_env, list.elems));
             return try self.store.addExpr(self.allocator, .{ .list = .{ .elems = elems } }, monotype, region);
         },
         .e_empty_record => try self.emitMirStructExpr(&.{}, monotype, region),
@@ -1304,11 +1304,11 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
             return try self.lowerRecord(module_env, record, monotype, region);
         },
         .e_tuple => |tuple| {
-            const elems = try self.lowerExprSpan(module_env, tuple.elems);
+            const elems = try self.stabilizeEscapingFunctionSpan(try self.lowerExprSpan(module_env, tuple.elems));
             return try self.emitMirStructExprFromSpan(elems, monotype, region);
         },
         .e_tag => |tag| {
-            const lowered_args = try self.lowerExprSpan(module_env, tag.args);
+            const lowered_args = try self.stabilizeEscapingFunctionSpan(try self.lowerExprSpan(module_env, tag.args));
             const args = try self.wrapMultiPayloadTagExprs(tag.name, monotype, lowered_args, region);
             return try self.store.addExpr(self.allocator, .{ .tag = .{
                 .name = tag.name,
@@ -1562,8 +1562,13 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
             };
             const def = app_env.store.getDef(def_idx);
             const symbol = try self.internSymbol(app_idx, app_ident);
-            _ = try self.lowerExternalDefWithType(symbol, def.expr, monotype);
-            return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, monotype, region);
+            const required_lookup_monotype = try self.monotypeFromTypeVarInStore(
+                self.current_module_idx,
+                self.types_store,
+                ModuleEnv.varFrom(required_type.type_anno),
+            );
+            _ = try self.lowerExternalDef(symbol, def.expr);
+            return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, required_lookup_monotype, region);
         },
 
         // --- Control flow ---
@@ -1849,15 +1854,45 @@ fn makeSyntheticSymbol(self: *Self, original: MIR.Symbol) Allocator.Error!MIR.Sy
     return self.internSymbol(symbolMetadataModuleIdx(original_meta), synthetic_ident);
 }
 
-/// If `arg` is a `.lambda` expression, hoist it into a synthetic symbol def
-/// and return a `.lookup` to that symbol. This ensures every lambda passed as
-/// a call argument has a symbol, which lambda set inference needs.
-fn hoistLambdaArg(self: *Self, arg: MIR.ExprId) Allocator.Error!MIR.ExprId {
-    if (self.store.getExpr(arg) != .lambda) return arg;
+fn hoistAnonymousFunctionExpr(self: *Self, expr: MIR.ExprId) Allocator.Error!MIR.ExprId {
     const ident = self.makeSyntheticIdent(.{ .idx = 0, .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } });
     const sym = try self.internSymbol(self.current_module_idx, ident);
-    try self.store.registerSymbolDef(self.allocator, sym, arg);
-    return self.store.addExpr(self.allocator, .{ .lookup = sym }, self.store.typeOf(arg), self.store.getRegion(arg));
+    try self.store.registerSymbolDef(self.allocator, sym, expr);
+    return self.store.addExpr(self.allocator, .{ .lookup = sym }, self.store.typeOf(expr), self.store.getRegion(expr));
+}
+
+/// Function values embedded into composites or passed around first-class need a
+/// stable symbol identity before lambda-set inference runs. Named lookups and
+/// lifted closures already have that identity; anonymous lambda expressions do not.
+fn stabilizeEscapingFunctionExpr(self: *Self, expr: MIR.ExprId) Allocator.Error!MIR.ExprId {
+    if (self.store.monotype_store.getMonotype(self.store.typeOf(expr)) != .func) return expr;
+    if (self.store.getExprClosureMember(expr) != null) return expr;
+
+    return switch (self.store.getExpr(expr)) {
+        .lookup => expr,
+        else => if (isLambdaExpr(self.store, expr))
+            try self.hoistAnonymousFunctionExpr(expr)
+        else
+            expr,
+    };
+}
+
+fn stabilizeEscapingFunctionSpan(self: *Self, expr_span: MIR.ExprSpan) Allocator.Error!MIR.ExprSpan {
+    const exprs = self.store.getExprSpan(expr_span);
+    if (exprs.len == 0) return expr_span;
+
+    const scratch_top = self.scratch_expr_ids.top();
+    defer self.scratch_expr_ids.clearFrom(scratch_top);
+
+    var changed = false;
+    for (exprs) |expr| {
+        const stabilized = try self.stabilizeEscapingFunctionExpr(expr);
+        if (stabilized != expr) changed = true;
+        try self.scratch_expr_ids.append(stabilized);
+    }
+
+    if (!changed) return expr_span;
+    return try self.store.addExprSpan(self.allocator, self.scratch_expr_ids.sliceFromStart(scratch_top));
 }
 
 fn isLambdaExpr(mir_store: *const MIR.Store, expr_id: MIR.ExprId) bool {
@@ -2597,7 +2632,7 @@ fn lowerCallWithLoweredFunc(
     monotype: Monotype.Idx,
     region: Region,
 ) Allocator.Error!MIR.ExprId {
-    const lowered_func = try self.hoistLambdaArg(lowered_func_input);
+    const lowered_func = try self.stabilizeEscapingFunctionExpr(lowered_func_input);
     const func_mono = self.store.typeOf(lowered_func);
     if (self.store.monotype_store.getMonotype(func_mono) == .func and self.store.getExpr(lowered_func) != .lookup) {
         const func_bind = try self.makeSyntheticBind(func_mono, false);
@@ -2607,7 +2642,7 @@ fn lowerCallWithLoweredFunc(
         const args_top = self.scratch_expr_ids.top();
         defer self.scratch_expr_ids.clearFrom(args_top);
         for (call_arg_exprs) |arg_idx| {
-            const arg = try self.hoistLambdaArg(try self.lowerExpr(arg_idx));
+            const arg = try self.stabilizeEscapingFunctionExpr(try self.lowerExpr(arg_idx));
             try self.scratch_expr_ids.append(arg);
         }
         const lowered_call_args = self.scratch_expr_ids.sliceFromStart(args_top);
@@ -2631,7 +2666,7 @@ fn lowerCallWithLoweredFunc(
     const args_top = self.scratch_expr_ids.top();
     defer self.scratch_expr_ids.clearFrom(args_top);
     for (call_arg_exprs) |arg_idx| {
-        const arg = try self.hoistLambdaArg(try self.lowerExpr(arg_idx));
+        const arg = try self.stabilizeEscapingFunctionExpr(try self.lowerExpr(arg_idx));
         try self.scratch_expr_ids.append(arg);
     }
     const lowered_call_args = self.scratch_expr_ids.sliceFromStart(args_top);
@@ -3598,14 +3633,24 @@ fn lowerListEquality(
     } }, ret_monotype, region);
 }
 
-/// Lower `e_dot_access` — field access or method call.
-fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.Idx, da: anytype, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
-    const receiver = try self.lowerExpr(da.receiver);
-    const receiver_monotype = self.store.typeOf(receiver);
+fn dotCallUsesRuntimeReceiver(module_env: *const ModuleEnv, receiver_expr_idx: CIR.Expr.Idx) bool {
+    return switch (module_env.store.getExpr(receiver_expr_idx)) {
+        .e_nominal, .e_nominal_external => false,
+        else => true,
+    };
+}
 
+/// Lower `e_dot_access` — field access, receiver-style method call, or
+/// associated-item/static call on a nominal type qualifier.
+fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.Idx, da: anytype, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
     if (da.args) |args_span| {
+        const uses_runtime_receiver = dotCallUsesRuntimeReceiver(module_env, da.receiver);
+
         // Structural types: .is_eq() is decomposed field-by-field in MIR.
         structural_eq: {
+            if (!uses_runtime_receiver) break :structural_eq;
+
+            const receiver = try self.lowerExpr(da.receiver);
             const rcv_mono_idx = try self.resolveMonotype(da.receiver);
             if (rcv_mono_idx.isNone()) break :structural_eq;
             const rcv_mono = self.store.monotype_store.getMonotype(rcv_mono_idx);
@@ -3624,16 +3669,24 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
             return try self.lowerStructuralEquality(receiver, rhs, rcv_mono_idx, monotype, region);
         }
 
-        const resolved_target = try self.resolveDispatchTargetForDotCall(
-            module_env,
-            expr_idx,
-            da.field_name,
-            self.store.typeOf(receiver),
-        );
+        const receiver: MIR.ExprId = if (uses_runtime_receiver) try self.lowerExpr(da.receiver) else .none;
+        const receiver_monotype: Monotype.Idx = if (uses_runtime_receiver) self.store.typeOf(receiver) else .none;
+
+        const resolved_target = if (uses_runtime_receiver)
+            try self.resolveDispatchTargetForDotCall(
+                module_env,
+                expr_idx,
+                da.field_name,
+                receiver_monotype,
+            )
+        else
+            try self.resolveDispatchTargetForExpr(module_env, expr_idx, da.field_name);
         const method_symbol = try self.resolvedDispatchTargetToSymbol(module_env, resolved_target);
 
-        // Build args as [receiver] ++ explicit_args
-        // e.g. list.map(fn) → List.map(list, fn)
+        // Build args as either:
+        // - [receiver] ++ explicit_args for instance methods
+        // - explicit_args only for associated-item/static calls like
+        //   `Simple.leaf("hello")`
         const explicit_args = module_env.store.sliceExpr(args_span);
         // Method-call type bindings are per-call-site state. Keep them scoped.
         const saved_type_var_seen = self.type_var_seen;
@@ -3693,8 +3746,12 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
             };
         }
 
-        if (fn_arg_vars.len > 0 and !receiver_monotype.isNone()) {
-            try self.bindTypeVarMonotypes(fn_arg_vars[0], receiver_monotype);
+        const receiver_param_offset: usize = if (uses_runtime_receiver) 1 else 0;
+
+        if (uses_runtime_receiver) {
+            if (fn_arg_vars.len > 0 and !receiver_monotype.isNone()) {
+                try self.bindTypeVarMonotypes(fn_arg_vars[0], receiver_monotype);
+            }
         }
 
         var expected_param_monos: []const Monotype.Idx = &.{};
@@ -3726,19 +3783,22 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
 
         const args_top = self.scratch_expr_ids.top();
         defer self.scratch_expr_ids.clearFrom(args_top);
-        try self.scratch_expr_ids.append(receiver);
+        if (uses_runtime_receiver) {
+            try self.scratch_expr_ids.append(receiver);
+        }
         for (explicit_args, 0..) |arg_idx, i| {
-            if (i + 1 < expected_param_monos.len and !expected_param_monos[i + 1].isNone()) {
-                try self.bindTypeVarMonotypes(ModuleEnv.varFrom(arg_idx), expected_param_monos[i + 1]);
+            const param_i = i + receiver_param_offset;
+            if (param_i < expected_param_monos.len and !expected_param_monos[param_i].isNone()) {
+                try self.bindTypeVarMonotypes(ModuleEnv.varFrom(arg_idx), expected_param_monos[param_i]);
             }
-            const arg = try self.hoistLambdaArg(try self.lowerExpr(arg_idx));
+            const arg = try self.stabilizeEscapingFunctionExpr(try self.lowerExpr(arg_idx));
             try self.scratch_expr_ids.append(arg);
         }
         const lowered_call_args = self.scratch_expr_ids.sliceFromStart(args_top);
 
         for (explicit_args, 0..) |_, i| {
-            const param_i = i + 1;
-            if (param_i >= fn_arg_vars.len) break;
+            const param_i = i + receiver_param_offset;
+            if (param_i >= lowered_call_args.len or param_i >= fn_arg_vars.len) break;
             const arg_mono = self.store.typeOf(lowered_call_args[param_i]);
             if (arg_mono.isNone()) continue;
             try self.bindTypeVarMonotypes(fn_arg_vars[param_i], arg_mono);
@@ -3789,6 +3849,8 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, expr_idx: CIR.Expr.
         } }, monotype, region);
     } else {
         // Field access
+        const receiver = try self.lowerExpr(da.receiver);
+        const receiver_monotype = self.store.typeOf(receiver);
         const receiver_record = switch (self.store.monotype_store.getMonotype(receiver_monotype)) {
             .record => |record| record,
             else => typeBindingInvariant(
@@ -3832,7 +3894,7 @@ fn lowerRecord(self: *Self, module_env: *const ModuleEnv, record: anytype, monot
 
     for (cir_field_indices) |field_idx| {
         const field = module_env.store.getRecordField(field_idx);
-        const expr = try self.lowerExpr(field.value);
+        const expr = try self.stabilizeEscapingFunctionExpr(try self.lowerExpr(field.value));
         try provided_fields.append(self.allocator, .{
             .name = field.name,
             .expr = expr,
