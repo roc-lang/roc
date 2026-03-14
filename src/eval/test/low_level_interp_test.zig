@@ -957,6 +957,29 @@ test "low_level - List.append tuple to empty list (issue 8758)" {
     try testing.expectEqual(@as(i128, 1), len_value);
 }
 
+test "low_level - List.replace returns empty value" {
+    const src =
+        \\x = List.replace([{},{}], 0, {})
+        \\y = x.value
+        \\isEmptyRecord = if y == {} 100.U64 else 0
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 100), len_value);
+}
+
+test "low_level - List.replace returns list of empty structs" {
+    const src =
+        \\x = List.replace([{},{}], 0, {})
+        \\y = x.list
+        \\z = y.get(0)
+        \\isEmptyRecord = if z == Ok({}) 100.U64 else 0
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 3);
+    try testing.expectEqual(@as(i128, 100), len_value);
+}
+
 test "low_level - List.drop_at on an empty list at index 0" {
     const src =
         \\x = List.drop_at([], 0)

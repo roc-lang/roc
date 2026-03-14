@@ -515,7 +515,6 @@ pub const Expr = union(enum) {
     },
 
     pub const LowLevel = base.LowLevel;
-
     pub const Idx = enum(u32) { _ };
     pub const Span = extern struct { span: DataSpan };
 

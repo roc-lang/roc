@@ -60,6 +60,7 @@ pub const LowLevel = enum {
     list_prepend,
     list_first,
     list_last,
+    list_replace_unsafe,
     list_drop_first,
     list_drop_last,
     list_take_first,
@@ -437,6 +438,7 @@ pub const LowLevel = enum {
             .list_set => &.{ .consume, .borrow, .borrow },
             .list_prepend => &.{ .consume, .borrow },
             .list_reverse, .list_release_excess_capacity => &.{.consume},
+            .list_replace_unsafe => &.{ .consume, .borrow, .borrow },
 
             .bool_not => &.{.borrow},
 
