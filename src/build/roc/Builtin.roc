@@ -704,6 +704,15 @@ Builtin :: [].{
 			Item.join_with(list, joiner)
 		}
 
+		replace : List(item), U64, item -> { list : List(item), value : item }
+		replace = |list, index, item| {
+			if index < list.len() {
+				list_replace_unsafe(list, index, item)
+			} else {
+				{ list, value: item }
+			}
+		}
+
 		repeat : a, U64 -> List(a)
 		repeat = |item, n| {
 			var $list = List.with_capacity(n)
@@ -2059,6 +2068,9 @@ range_until = |var $current, end| {
 
 # Implemented by the compiler, does not perform bounds checks
 list_get_unsafe : List(item), U64 -> item
+
+# Implemented by the compiler, does not perform bounds checks
+list_replace_unsafe : List(item), U64, item -> { list : List(item), value : item }
 
 # Implemented by the compiler, does not perform bounds checks
 list_append_unsafe : List(item), item -> List(item)

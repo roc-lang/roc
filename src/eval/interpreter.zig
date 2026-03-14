@@ -2750,6 +2750,70 @@ pub const Interpreter = struct {
 
                 return out;
             },
+            .list_replace_unsafe => {
+                // List.replace_unsafe: List(item), U64, item-> { list: List(item), value: item }
+                std.debug.assert(args.len == 3); // low-level .list_replace_unsafe expects 3 arguments
+
+                const list_arg = args[0];
+                // const index_arg = args[1];
+                const elt_arg = args[2];
+
+                std.debug.assert(list_arg.ptr != null); // low-level .list_get_unsafe expects non-null list pointer
+
+                std.debug.assert(list_arg.layout.tag == .list or list_arg.layout.tag == .list_of_zst); // low-level .list_get_unsafe expects list layout
+
+                if (list_arg.layout.tag == .list_of_zst) {
+                    // ZST element - return zero-sized value
+
+                    // Get or create field names
+                    const list_field = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text("list"));
+                    const value_field = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text("value"));
+                    const field_names = [2]base_pkg.Ident.Idx{ list_field, value_field };
+
+                    const field_layouts = [2]Layout{ list_arg.layout, Layout.zst() };
+                    const record_idx = try self.runtime_layout_store.putRecord(self.env, &field_layouts, &field_names);
+                    const record_layout = self.runtime_layout_store.getLayout(record_idx);
+
+                    // Push the record
+                    const result_rt_var = return_rt_var orelse try self.runtime_types.fresh();
+                    var dest = try self.pushRaw(record_layout, 0, result_rt_var);
+                    var acc = try dest.asRecord(&self.runtime_layout_store);
+
+                    // Set list field - for ZST we just copy the original list
+                    const list_field_stack_val = try acc.getFieldByName(list_field, list_arg.rt_var) orelse unreachable;
+                    const list_ptr = list_field_stack_val.ptr orelse unreachable;
+                    // Copy the list value to the field
+                    try list_arg.copyToPtr(&self.runtime_layout_store, list_ptr, roc_ops);
+
+                    // Set value field
+                    const elem_rt_var = elt_arg.rt_var; // get element runtime var from list's type
+                    const value_field_stack_val = try acc.getFieldByName(value_field, elem_rt_var) orelse unreachable;
+                    const value_ptr = value_field_stack_val.ptr orelse unreachable;
+                    try elt_arg.copyToPtr(&self.runtime_layout_store, value_ptr, roc_ops);
+
+                    return dest;
+                }
+                return list_arg;
+
+                // const roc_list = list_arg.asRocList().?;
+
+                // // Handle numeric type mismatch for index argument.
+                // // The index should be U64 (integer), but due to numeric literal defaulting
+                // // (e.g., `var $x = 0` defaulting to Dec), it may arrive as a fractional type.
+                // // Convert frac → int by extracting the whole number part.
+                // const index: i128 = if (index_arg.layout.tag == .scalar and index_arg.layout.data.scalar.tag == .frac) blk: {
+                //     if (index_arg.layout.data.scalar.data.frac == .dec) {
+                //         const dec_val = index_arg.asDec(roc_ops);
+                //         std.debug.assert(@rem(dec_val.num, RocDec.one_point_zero.num) == 0); // Dec index must be a whole number
+                //         break :blk @divTrunc(dec_val.num, RocDec.one_point_zero.num);
+                //     } else {
+                //         unreachable; // F32/F64 should never be used as a list index
+                //     }
+                // } else index_arg.asI128(); // Normal integer path
+
+                // // Get element layout info
+                // const list_info = self.runtime_layout_store.getListInfo(list_arg.layout);
+            },
             .list_append_unsafe => {
                 // List.append: List(a), a -> List(a)
                 std.debug.assert(args.len == 2); // low-level .list_append_unsafe expects 2 arguments
