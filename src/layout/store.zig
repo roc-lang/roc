@@ -26,6 +26,7 @@ const Var = types.Var;
 const TypeScope = types.TypeScope;
 const StaticDispatchConstraint = types.StaticDispatchConstraint;
 const Layout = layout_mod.Layout;
+const LayoutTag = layout_mod.LayoutTag;
 const Idx = layout_mod.Idx;
 const StructField = layout_mod.StructField;
 const Scalar = layout_mod.Scalar;
@@ -77,6 +78,11 @@ pub const Store = struct {
 
     // Cache to avoid duplicate work - keyed by (module_idx, var) for cross-module correctness
     layouts_by_module_var: std.AutoHashMap(ModuleVarKey, Idx),
+
+    // Structural interning cache for non-scalar layouts. Keys are canonical
+    // binary encodings of layout shape.
+    interned_layouts: std.StringHashMap(Idx),
+    scratch_intern_key: std.ArrayList(u8),
 
     // Cache for boxed layouts of recursive nominal types.
     // When a recursive nominal type finishes computing, we store its boxed layout here.
@@ -207,6 +213,8 @@ pub const Store = struct {
             .tag_union_variants = try TagUnionVariant.SafeMultiList.initCapacity(allocator, 64),
             .tag_union_data = try collections.SafeList(TagUnionData).initCapacity(allocator, 64),
             .layouts_by_module_var = std.AutoHashMap(ModuleVarKey, Idx).init(allocator),
+            .interned_layouts = std.StringHashMap(Idx).init(allocator),
+            .scratch_intern_key = .empty,
             .recursive_boxed_layouts = std.AutoHashMap(ModuleVarKey, Idx).init(allocator),
             .raw_layout_placeholders = std.AutoHashMap(ModuleVarKey, Idx).init(allocator),
             .work = try Work.initCapacity(allocator, 32),
@@ -281,6 +289,12 @@ pub const Store = struct {
         self.tag_union_variants.deinit(self.allocator);
         self.tag_union_data.deinit(self.allocator);
         self.layouts_by_module_var.deinit();
+        var interned_keys = self.interned_layouts.keyIterator();
+        while (interned_keys.next()) |key_ptr| {
+            self.allocator.free(key_ptr.*);
+        }
+        self.interned_layouts.deinit();
+        self.scratch_intern_key.deinit(self.allocator);
         self.recursive_boxed_layouts.deinit();
         self.raw_layout_placeholders.deinit();
         self.work.deinit(self.allocator);
@@ -315,6 +329,186 @@ pub const Store = struct {
             }
         }
         return false;
+    }
+
+    fn appendInternKeyValue(self: *Self, value: anytype) std.mem.Allocator.Error!void {
+        var copy = value;
+        try self.scratch_intern_key.appendSlice(self.allocator, std.mem.asBytes(&copy));
+    }
+
+    fn appendInternKeyIdx(self: *Self, layout_idx: Idx) std.mem.Allocator.Error!void {
+        const raw_layout: u32 = @intCast(@intFromEnum(layout_idx));
+        try self.appendInternKeyValue(raw_layout);
+    }
+
+    fn startInternKey(self: *Self, tag: LayoutTag) std.mem.Allocator.Error!void {
+        self.scratch_intern_key.clearRetainingCapacity();
+        const raw_tag: u8 = @intCast(@intFromEnum(tag));
+        try self.appendInternKeyValue(raw_tag);
+    }
+
+    fn lookupInternedScratchKey(self: *Self) ?Idx {
+        return self.interned_layouts.get(self.scratch_intern_key.items);
+    }
+
+    fn rememberScratchInternKey(self: *Self, idx: Idx) std.mem.Allocator.Error!void {
+        const owned_key = try self.allocator.dupe(u8, self.scratch_intern_key.items);
+        errdefer self.allocator.free(owned_key);
+        try self.interned_layouts.put(owned_key, idx);
+    }
+
+    fn buildStructInternKeyFromFields(
+        self: *Self,
+        alignment: std.mem.Alignment,
+        total_size: u32,
+        fields: []const StructField,
+    ) std.mem.Allocator.Error!void {
+        try self.startInternKey(.struct_);
+        try self.appendInternKeyValue(@as(u8, @intCast(alignment.toByteUnits())));
+        try self.appendInternKeyValue(total_size);
+        try self.appendInternKeyValue(@as(u32, @intCast(fields.len)));
+        for (fields) |field| {
+            try self.appendInternKeyValue(field.index);
+            try self.appendInternKeyIdx(field.layout);
+        }
+    }
+
+    fn buildTagUnionInternKeyFromVariants(
+        self: *Self,
+        alignment: std.mem.Alignment,
+        total_size: u32,
+        discriminant_offset: u16,
+        discriminant_size: u8,
+        variant_layouts: []const Idx,
+    ) std.mem.Allocator.Error!void {
+        try self.startInternKey(.tag_union);
+        try self.appendInternKeyValue(@as(u8, @intCast(alignment.toByteUnits())));
+        try self.appendInternKeyValue(total_size);
+        try self.appendInternKeyValue(discriminant_offset);
+        try self.appendInternKeyValue(discriminant_size);
+        try self.appendInternKeyValue(@as(u32, @intCast(variant_layouts.len)));
+        for (variant_layouts) |payload_layout| {
+            try self.appendInternKeyIdx(payload_layout);
+        }
+    }
+
+    fn buildExistingLayoutInternKey(self: *Self, layout: Layout) std.mem.Allocator.Error!void {
+        switch (layout.tag) {
+            .scalar => unreachable,
+            .zst => try self.startInternKey(.zst),
+            .box => {
+                try self.startInternKey(.box);
+                try self.appendInternKeyIdx(layout.data.box);
+            },
+            .box_of_zst => try self.startInternKey(.box_of_zst),
+            .list => {
+                try self.startInternKey(.list);
+                try self.appendInternKeyIdx(layout.data.list);
+            },
+            .list_of_zst => try self.startInternKey(.list_of_zst),
+            .closure => {
+                try self.startInternKey(.closure);
+                try self.appendInternKeyIdx(layout.data.closure.captures_layout_idx);
+            },
+            .struct_ => {
+                const info = self.getStructInfo(layout);
+                try self.startInternKey(.struct_);
+                try self.appendInternKeyValue(@as(u8, @intCast(info.alignment.toByteUnits())));
+                try self.appendInternKeyValue(info.size());
+                try self.appendInternKeyValue(@as(u32, @intCast(info.fields.len)));
+                for (0..info.fields.len) |i| {
+                    const field = info.fields.get(i);
+                    try self.appendInternKeyValue(field.index);
+                    try self.appendInternKeyIdx(field.layout);
+                }
+            },
+            .tag_union => {
+                const info = self.getTagUnionInfo(layout);
+                try self.startInternKey(.tag_union);
+                try self.appendInternKeyValue(@as(u8, @intCast(info.alignment.toByteUnits())));
+                try self.appendInternKeyValue(info.size());
+                try self.appendInternKeyValue(info.data.discriminant_offset);
+                try self.appendInternKeyValue(info.data.discriminant_size);
+                try self.appendInternKeyValue(@as(u32, @intCast(info.variants.len)));
+                for (0..info.variants.len) |i| {
+                    const variant = info.variants.get(i);
+                    try self.appendInternKeyIdx(variant.payload_layout);
+                }
+            },
+        }
+    }
+
+    fn reserveLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {
+        const safe_list_idx = try self.layouts.append(self.allocator, layout);
+        return @enumFromInt(@intFromEnum(safe_list_idx));
+    }
+
+    fn internStructShape(
+        self: *Self,
+        alignment: std.mem.Alignment,
+        total_size: u32,
+        fields: []const StructField,
+    ) std.mem.Allocator.Error!Idx {
+        try self.buildStructInternKeyFromFields(alignment, total_size, fields);
+        if (self.lookupInternedScratchKey()) |existing| return existing;
+
+        const fields_start = self.struct_fields.items.len;
+        for (fields) |field| {
+            _ = try self.struct_fields.append(self.allocator, field);
+        }
+
+        const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
+        _ = try self.struct_data.append(self.allocator, .{
+            .size = total_size,
+            .fields = .{
+                .start = @intCast(fields_start),
+                .count = @intCast(fields.len),
+            },
+        });
+
+        const layout_idx = try self.reserveLayout(Layout.struct_(alignment, struct_idx));
+        try self.rememberScratchInternKey(layout_idx);
+        return layout_idx;
+    }
+
+    fn internTagUnionShape(
+        self: *Self,
+        alignment: std.mem.Alignment,
+        total_size: u32,
+        discriminant_offset: u16,
+        discriminant_size: u8,
+        variant_layouts: []const Idx,
+    ) std.mem.Allocator.Error!Idx {
+        try self.buildTagUnionInternKeyFromVariants(
+            alignment,
+            total_size,
+            discriminant_offset,
+            discriminant_size,
+            variant_layouts,
+        );
+        if (self.lookupInternedScratchKey()) |existing| return existing;
+
+        const variants_start: u32 = @intCast(self.tag_union_variants.len());
+        for (variant_layouts) |variant_layout_idx| {
+            _ = try self.tag_union_variants.append(self.allocator, .{
+                .payload_layout = variant_layout_idx,
+            });
+        }
+
+        const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
+        _ = try self.tag_union_data.append(self.allocator, .{
+            .size = total_size,
+            .discriminant_offset = discriminant_offset,
+            .discriminant_size = discriminant_size,
+            .variants = .{
+                .start = variants_start,
+                .count = @intCast(variant_layouts.len),
+            },
+        });
+
+        const layout_idx = try self.reserveLayout(Layout.tagUnion(alignment, .{ .int_idx = @intCast(tag_union_data_idx) }));
+        try self.rememberScratchInternKey(layout_idx);
+        return layout_idx;
     }
 
     /// Insert a Box layout with the given element layout.
@@ -399,12 +593,6 @@ pub const Store = struct {
             AlignmentSortCtx.lessThan,
         );
 
-        // Append fields
-        const fields_start = self.struct_fields.items.len;
-        for (temp_fields.items) |sorted_field| {
-            _ = try self.struct_fields.append(self.allocator, sorted_field);
-        }
-
         // Compute size and alignment
         var max_alignment: usize = 1;
         var current_offset: u32 = 0;
@@ -418,10 +606,11 @@ pub const Store = struct {
         }
 
         const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment)))));
-        const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(temp_fields.items.len) };
-        const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
-        _ = try self.struct_data.append(self.allocator, StructData{ .size = total_size, .fields = fields_range });
-        return try self.insertLayout(Layout.struct_(std.mem.Alignment.fromByteUnits(max_alignment), struct_idx));
+        return self.internStructShape(
+            std.mem.Alignment.fromByteUnits(max_alignment),
+            total_size,
+            temp_fields.items,
+        );
     }
 
     /// Create a tag union layout from pre-computed variant payload layouts.
@@ -430,8 +619,6 @@ pub const Store = struct {
     /// Tags must be sorted alphabetically; variant_layouts[i] corresponds
     /// to the tag at sorted index i.
     pub fn putTagUnion(self: *Self, variant_layouts: []const Idx) std.mem.Allocator.Error!Idx {
-        const variants_start: u32 = @intCast(self.tag_union_variants.len());
-
         var max_payload_size: u32 = 0;
         var max_payload_alignment: std.mem.Alignment = .@"1";
 
@@ -441,10 +628,6 @@ pub const Store = struct {
             const variant_alignment = variant_layout.alignment(self.targetUsize());
             if (variant_size > max_payload_size) max_payload_size = variant_size;
             max_payload_alignment = max_payload_alignment.max(variant_alignment);
-
-            _ = try self.tag_union_variants.append(self.allocator, .{
-                .payload_layout = variant_layout_idx,
-            });
         }
 
         // Discriminant size from variant count
@@ -462,19 +645,13 @@ pub const Store = struct {
             @intCast(tag_union_alignment.toByteUnits()),
         );
 
-        const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
-        _ = try self.tag_union_data.append(self.allocator, .{
-            .size = total_size,
-            .discriminant_offset = discriminant_offset,
-            .discriminant_size = discriminant_size,
-            .variants = .{
-                .start = variants_start,
-                .count = @intCast(variant_layouts.len),
-            },
-        });
-
-        const tu_layout = Layout.tagUnion(tag_union_alignment, .{ .int_idx = @intCast(tag_union_data_idx) });
-        return try self.insertLayout(tu_layout);
+        return self.internTagUnionShape(
+            tag_union_alignment,
+            total_size,
+            discriminant_offset,
+            discriminant_size,
+            variant_layouts,
+        );
     }
 
     /// Create a struct layout representing the sequential layout of closure captures.
@@ -497,16 +674,11 @@ pub const Store = struct {
 
         const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment)))));
 
-        const fields_start = self.struct_fields.items.len;
-        for (temp_fields.items) |field| {
-            _ = try self.struct_fields.append(self.allocator, field);
-        }
-
-        const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(temp_fields.items.len) };
-        const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
-        _ = try self.struct_data.append(self.allocator, StructData{ .size = total_size, .fields = fields_range });
-        const capture_layout = Layout.struct_(std.mem.Alignment.fromByteUnits(max_alignment), struct_idx);
-        return try self.insertLayout(capture_layout);
+        return self.internStructShape(
+            std.mem.Alignment.fromByteUnits(max_alignment),
+            total_size,
+            temp_fields.items,
+        );
     }
 
     /// Create a struct layout representing the sequential layout of a lambda set union.
@@ -535,14 +707,12 @@ pub const Store = struct {
             @as(u32, @intCast(max_alignment)),
         ));
 
-        // Create a struct layout with a single dummy field (StructData requires NonEmptyRange)
-        const fields_start = self.struct_fields.items.len;
-        _ = try self.struct_fields.append(self.allocator, .{ .index = 0, .layout = .u64 });
-        const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = 1 };
-        const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
-        _ = try self.struct_data.append(self.allocator, StructData{ .size = total_size, .fields = fields_range });
-        const union_layout = Layout.struct_(std.mem.Alignment.fromByteUnits(max_alignment), struct_idx);
-        return try self.insertLayout(union_layout);
+        const dummy_fields = [_]StructField{.{ .index = 0, .layout = .u64 }};
+        return self.internStructShape(
+            std.mem.Alignment.fromByteUnits(max_alignment),
+            total_size,
+            dummy_fields[0..],
+        );
     }
 
     pub fn getLayout(self: *const Self, idx: Idx) Layout {
@@ -682,18 +852,17 @@ pub const Store = struct {
         const tu_data = self.getTagUnionData(original_tu_idx);
         const variants = self.getTagUnionVariants(tu_data);
 
-        // Record where new variants will start
-        const variants_start: u32 = @intCast(self.tag_union_variants.len());
-
         // Copy all variants, replacing the specified one's payload layout
+        var variant_layouts = std.ArrayList(Idx).empty;
+        defer variant_layouts.deinit(self.allocator);
+        try variant_layouts.ensureTotalCapacity(self.allocator, variants.len);
+
         var max_payload_size: u32 = 0;
         var max_payload_alignment: std.mem.Alignment = .@"1";
         for (0..variants.len) |i| {
             const variant = variants.get(i);
             const payload_idx = if (i == variant_index) new_payload_layout_idx else variant.payload_layout;
-            _ = try self.tag_union_variants.append(self.allocator, .{
-                .payload_layout = payload_idx,
-            });
+            variant_layouts.appendAssumeCapacity(payload_idx);
 
             // Track max size and alignment for the new discriminant offset
             const payload_layout = self.getLayout(payload_idx);
@@ -710,19 +879,13 @@ pub const Store = struct {
         const total_size_unaligned = discriminant_offset + tu_data.discriminant_size;
         const total_size = std.mem.alignForward(u32, total_size_unaligned, @intCast(tag_union_alignment.toByteUnits()));
 
-        // Store new TagUnionData
-        const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
-        _ = try self.tag_union_data.append(self.allocator, .{
-            .size = total_size,
-            .discriminant_offset = discriminant_offset,
-            .discriminant_size = tu_data.discriminant_size,
-            .variants = .{
-                .start = variants_start,
-                .count = @intCast(variants.len),
-            },
-        });
-
-        return Layout.tagUnion(tag_union_alignment, .{ .int_idx = @intCast(tag_union_data_idx) });
+        return self.getLayout(try self.internTagUnionShape(
+            tag_union_alignment,
+            total_size,
+            discriminant_offset,
+            tu_data.discriminant_size,
+            variant_layouts.items,
+        ));
     }
 
     /// Dynamically compute the total size of a struct.
@@ -863,23 +1026,8 @@ pub const Store = struct {
 
     /// Get or create an empty struct layout (for closures with no captures, empty records, etc.)
     fn getEmptyStructLayout(self: *Self) !Idx {
-        // Check if we already have an empty struct layout
-        for (self.struct_data.items.items, 0..) |sd, i| {
-            if (sd.size == 0 and sd.fields.count == 0) {
-                const struct_idx = StructIdx{ .int_idx = @intCast(i) };
-                const empty_layout = Layout.struct_(std.mem.Alignment.@"1", struct_idx);
-                return try self.insertLayout(empty_layout);
-            }
-        }
-
-        // Create new empty struct layout
-        const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
-        _ = try self.struct_data.append(self.allocator, .{
-            .size = 0,
-            .fields = collections.NonEmptyRange{ .start = 0, .count = 0 },
-        });
-        const empty_layout = Layout.struct_(std.mem.Alignment.@"1", struct_idx);
-        return try self.insertLayout(empty_layout);
+        const empty_fields = [_]StructField{};
+        return self.internStructShape(.@"1", 0, empty_fields[0..]);
     }
 
     /// Backwards-compat alias
@@ -1219,9 +1367,7 @@ pub const Store = struct {
     ) std.mem.Allocator.Error!Layout {
         const resolved_fields_end = self.work.resolved_record_fields.len;
         const num_resolved_fields = resolved_fields_end - updated_record.resolved_fields_start;
-        const fields_start = self.struct_fields.items.len;
 
-        // Copy only this record's resolved fields to the struct_fields store
         const field_indices = self.work.resolved_record_fields.items(.field_index);
         const field_idxs = self.work.resolved_record_fields.items(.field_idx);
 
@@ -1265,14 +1411,6 @@ pub const Store = struct {
             AlignmentSortCtx.lessThan,
         );
 
-        // Now add them to the struct_fields store in the sorted order
-        for (temp_entries.items) |entry| {
-            _ = try self.struct_fields.append(self.allocator, .{
-                .index = entry.index,
-                .layout = entry.layout_idx,
-            });
-        }
-
         // Calculate max alignment and total size of all fields
         var max_alignment: usize = 1;
         var current_offset: u32 = 0;
@@ -1286,17 +1424,23 @@ pub const Store = struct {
         }
 
         const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment)))));
-        const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(num_resolved_fields) };
-
-        const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
-        _ = try self.struct_data.append(self.allocator, StructData{
-            .size = total_size,
-            .fields = fields_range,
-        });
-
         self.work.resolved_record_fields.shrinkRetainingCapacity(updated_record.resolved_fields_start);
 
-        return Layout.struct_(std.mem.Alignment.fromByteUnits(max_alignment), struct_idx);
+        var sorted_fields = std.ArrayList(StructField).empty;
+        defer sorted_fields.deinit(self.allocator);
+        try sorted_fields.ensureTotalCapacity(self.allocator, num_resolved_fields);
+        for (temp_entries.items) |entry| {
+            sorted_fields.appendAssumeCapacity(.{
+                .index = entry.index,
+                .layout = entry.layout_idx,
+            });
+        }
+
+        return self.getLayout(try self.internStructShape(
+            std.mem.Alignment.fromByteUnits(max_alignment),
+            total_size,
+            sorted_fields.items,
+        ));
     }
 
     fn finishTuple(
@@ -1304,10 +1448,7 @@ pub const Store = struct {
         updated_tuple: work.Work.PendingTuple,
     ) std.mem.Allocator.Error!Layout {
         const resolved_fields_end = self.work.resolved_tuple_fields.len;
-        const num_resolved_fields = resolved_fields_end - updated_tuple.resolved_fields_start;
-        const fields_start = self.struct_fields.items.len;
 
-        // Copy only this tuple's resolved fields to the struct_fields store
         const field_indices = self.work.resolved_tuple_fields.items(.field_index);
         const field_idxs = self.work.resolved_tuple_fields.items(.field_idx);
 
@@ -1347,11 +1488,6 @@ pub const Store = struct {
             AlignmentSortCtx.lessThan,
         );
 
-        // Now add them to the struct_fields store in the sorted order
-        for (temp_fields.items) |sorted_field| {
-            _ = try self.struct_fields.append(self.allocator, sorted_field);
-        }
-
         // Calculate max alignment and total size of all fields
         var max_alignment: usize = 1;
         var current_offset: u32 = 0;
@@ -1365,17 +1501,13 @@ pub const Store = struct {
         }
 
         const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment)))));
-        const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(num_resolved_fields) };
-
-        const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
-        _ = try self.struct_data.append(self.allocator, StructData{
-            .size = total_size,
-            .fields = fields_range,
-        });
-
         self.work.resolved_tuple_fields.shrinkRetainingCapacity(updated_tuple.resolved_fields_start);
 
-        return Layout.struct_(std.mem.Alignment.fromByteUnits(max_alignment), struct_idx);
+        return self.getLayout(try self.internStructShape(
+            std.mem.Alignment.fromByteUnits(max_alignment),
+            total_size,
+            temp_fields.items,
+        ));
     }
 
     /// Finalizes a tag union layout after all variant payload layouts have been computed.
@@ -1414,9 +1546,6 @@ pub const Store = struct {
         var max_payload_size: u32 = 0;
         var max_payload_alignment: std.mem.Alignment = std.mem.Alignment.@"1";
 
-        // Record variants_start BEFORE appending (this was the issue before - recursive calls would interleave)
-        const variants_start: u32 = @intCast(self.tag_union_variants.len());
-
         for (variant_layouts) |variant_layout_idx| {
             const variant_layout = self.getLayout(variant_layout_idx);
             const variant_size = self.layoutSize(variant_layout);
@@ -1425,11 +1554,6 @@ pub const Store = struct {
                 max_payload_size = variant_size;
             }
             max_payload_alignment = max_payload_alignment.max(variant_alignment);
-
-            // Store variant layout for runtime refcounting
-            _ = try self.tag_union_variants.append(self.allocator, .{
-                .payload_layout = variant_layout_idx,
-            });
         }
 
         // Calculate discriminant info from the stored discriminant layout
@@ -1446,22 +1570,16 @@ pub const Store = struct {
         const tag_union_alignment = max_payload_alignment.max(discriminant_alignment);
         const total_size = std.mem.alignForward(u32, total_size_unaligned, @intCast(tag_union_alignment.toByteUnits()));
 
-        // Store TagUnionData
-        const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
-        _ = try self.tag_union_data.append(self.allocator, .{
-            .size = total_size,
-            .discriminant_offset = discriminant_offset,
-            .discriminant_size = discriminant_size,
-            .variants = .{
-                .start = variants_start,
-                .count = @intCast(pending.num_variants),
-            },
-        });
-
         // Clear resolved variants for this tag union
         self.work.resolved_tag_union_variants.shrinkRetainingCapacity(pending.resolved_variants_start);
 
-        return Layout.tagUnion(tag_union_alignment, .{ .int_idx = @intCast(tag_union_data_idx) });
+        return self.getLayout(try self.internTagUnionShape(
+            tag_union_alignment,
+            total_size,
+            discriminant_offset,
+            discriminant_size,
+            variant_layouts,
+        ));
     }
 
     /// Note: the caller must verify ahead of time that the given variable does not
@@ -1584,7 +1702,7 @@ pub const Store = struct {
                             } else {
                                 // Create a temporary non-zero-sized placeholder layout.
                                 // This index is updated to the real layout once nominal resolution finishes.
-                                const raw_placeholder = try self.insertLayout(Layout.box(.zst));
+                                const raw_placeholder = try self.reserveLayout(Layout.box(.zst));
                                 try self.raw_layout_placeholders.put(progress_raw_key, raw_placeholder);
                                 layout_idx = raw_placeholder;
                             }
@@ -1644,7 +1762,7 @@ pub const Store = struct {
                     if (inside_heap_container) {
                         // Valid recursive reference - heap allocation breaks the infinite size.
                         // Use a temporary non-zero-sized placeholder layout that preserves container sizing.
-                        layout_idx = try self.insertLayout(Layout.box(.zst));
+                        layout_idx = try self.reserveLayout(Layout.box(.zst));
                         skip_layout_computation = true;
                     } else {
                         // Invalid: recursive type without heap allocation would have infinite size.
@@ -1705,7 +1823,7 @@ pub const Store = struct {
                                     } else {
                                         // Create a temporary non-zero-sized placeholder layout.
                                         // This index is updated to the real layout once nominal resolution finishes.
-                                        const raw_placeholder = try self.insertLayout(Layout.box(.zst));
+                                        const raw_placeholder = try self.reserveLayout(Layout.box(.zst));
                                         try self.raw_layout_placeholders.put(progress_cache_key, raw_placeholder);
                                         layout_idx = raw_placeholder;
                                     }
@@ -1996,7 +2114,7 @@ pub const Store = struct {
                             // 1. It's non-scalar, so it gets inserted (not a sentinel)
                             // 2. It's non-ZST, so isZeroSized() returns false
                             // 3. It can be updated with updateLayout() once the real layout is known
-                            const reserved_idx = try self.insertLayout(Layout.box(.zst));
+                            const reserved_idx = try self.reserveLayout(Layout.box(.zst));
                             const reserved_cache_key = ModuleVarKey{ .module_idx = self.current_module_idx, .var_ = current.var_ };
                             try self.layouts_by_module_var.put(reserved_cache_key, reserved_idx);
 
@@ -2768,15 +2886,17 @@ pub const Store = struct {
         const trace = tracy.traceNamed(@src(), "layoutStore.insertLayout");
         defer trace.end();
 
-        // For scalar types, return the appropriate sentinel value instead of inserting
-        if (layout.tag == .scalar) {
-            const result = idxFromScalar(layout.data.scalar);
-            return result;
+        switch (layout.tag) {
+            .scalar => return idxFromScalar(layout.data.scalar),
+            .zst => return .zst,
+            else => {},
         }
 
-        // For non-scalar types, insert as normal
-        const safe_list_idx = try self.layouts.append(self.allocator, layout);
-        const result: Idx = @enumFromInt(@intFromEnum(safe_list_idx));
+        try self.buildExistingLayoutInternKey(layout);
+        if (self.lookupInternedScratchKey()) |existing| return existing;
+
+        const result = try self.reserveLayout(layout);
+        try self.rememberScratchInternKey(result);
         return result;
     }
 

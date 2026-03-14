@@ -972,3 +972,36 @@ test "putRecord - equal-alignment ties do not depend on sort stability" {
     try testing.expectEqual(@as(u32, 8), lt.layout_store.getStructFieldOffsetByOriginalIndex(rid, 1));
     try testing.expectEqual(@as(u32, 16), lt.layout_store.getStructFieldOffsetByOriginalIndex(rid, 2));
 }
+
+test "putTuple interns identical tuple shapes to the same layout idx" {
+    var lt = try LayoutTest.init(testing.allocator);
+    try lt.initLayoutStore();
+    defer lt.deinit();
+
+    const tuple_layout_1 = try lt.layout_store.putTuple(&.{
+        layout.Layout.int(.u64),
+        layout.Layout.int(.u64),
+    });
+    const tuple_layout_2 = try lt.layout_store.putTuple(&.{
+        layout.Layout.int(.u64),
+        layout.Layout.int(.u64),
+    });
+
+    try testing.expectEqual(tuple_layout_1, tuple_layout_2);
+}
+
+test "putTagUnion interns identical variant payload shapes to the same layout idx" {
+    var lt = try LayoutTest.init(testing.allocator);
+    try lt.initLayoutStore();
+    defer lt.deinit();
+
+    const tuple_payload = try lt.layout_store.putTuple(&.{
+        layout.Layout.int(.u64),
+        layout.Layout.int(.u64),
+    });
+
+    const tag_union_1 = try lt.layout_store.putTagUnion(&.{ .zst, tuple_payload });
+    const tag_union_2 = try lt.layout_store.putTagUnion(&.{ .zst, tuple_payload });
+
+    try testing.expectEqual(tag_union_1, tag_union_2);
+}
