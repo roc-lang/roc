@@ -3765,6 +3765,15 @@ pub const RcInsertPass = struct {
 
         const live_len = self.live_rc_symbols.items.len;
 
+        var loop_carried_keys = std.AutoHashMap(u64, void).init(self.allocator);
+        defer loop_carried_keys.deinit();
+        for (self.live_rc_symbols.items[0..live_len]) |live| {
+            if (!live.reassignable) continue;
+            if (try self.exprMutatesSymbol(wl.body, live.symbol)) {
+                try loop_carried_keys.put(live.key, {});
+            }
+        }
+
         const processed_cond = try self.processExpr(wl.cond);
         const new_cond = try self.wrapExprWithLiveBorrowRcOps(processed_cond, live_len, &cond_demands, self.exprResultLayout(wl.cond), region);
 
@@ -3775,7 +3784,14 @@ pub const RcInsertPass = struct {
         }
 
         const processed_body = try self.processExpr(wl.body);
-        const new_body = try self.wrapExprWithLiveBorrowRcOps(processed_body, live_len, &body_demands, self.exprResultLayout(wl.body), region);
+        const new_body = try self.wrapWhileBodyWithLiveRcOps(
+            processed_body,
+            live_len,
+            &body_demands,
+            &loop_carried_keys,
+            self.exprResultLayout(wl.body),
+            region,
+        );
 
         if (new_cond != wl.cond or new_body != wl.body) {
             return self.store.addExpr(.{ .while_loop = .{
@@ -3937,6 +3953,155 @@ pub const RcInsertPass = struct {
 
     fn exprUsesSymbol(self: *RcInsertPass, expr_id: LirExprId, symbol: Symbol) Allocator.Error!bool {
         return self.exprUsesKey(expr_id, @as(u64, @bitCast(symbol)));
+    }
+
+    fn patternBindsSymbol(self: *const RcInsertPass, pat_id: LirPatternId, symbol: Symbol) Allocator.Error!bool {
+        var found = false;
+        const Ctx = struct {
+            found: *bool,
+            wanted: Symbol,
+            fn onBind(ctx: @This(), _: LirPatternId, bind_symbol: Symbol, _: LayoutIdx, _: bool) Allocator.Error!void {
+                if (bind_symbol == ctx.wanted) {
+                    ctx.found.* = true;
+                }
+            }
+        };
+        try walkPatternBinds(self.store, pat_id, Ctx{
+            .found = &found,
+            .wanted = symbol,
+        });
+        return found;
+    }
+
+    fn exprMutatesSymbol(self: *const RcInsertPass, expr_id: LirExprId, symbol: Symbol) Allocator.Error!bool {
+        if (expr_id.isNone()) return false;
+
+        const expr = self.store.getExpr(expr_id);
+        switch (expr) {
+            .block => |block| {
+                for (self.store.getStmts(block.stmts)) |stmt| {
+                    switch (stmt) {
+                        .decl => |binding| {
+                            if (try self.exprMutatesSymbol(binding.expr, symbol)) return true;
+                        },
+                        .mutate => |binding| {
+                            if (try self.patternBindsSymbol(binding.pattern, symbol)) return true;
+                            if (try self.exprMutatesSymbol(binding.expr, symbol)) return true;
+                        },
+                        .cell_init, .cell_store => |binding| {
+                            if (try self.exprMutatesSymbol(binding.expr, symbol)) return true;
+                        },
+                        .cell_drop => {},
+                    }
+                }
+                return self.exprMutatesSymbol(block.final_expr, symbol);
+            },
+            .if_then_else => |ite| {
+                for (self.store.getIfBranches(ite.branches)) |branch| {
+                    if (try self.exprMutatesSymbol(branch.cond, symbol)) return true;
+                    if (try self.exprMutatesSymbol(branch.body, symbol)) return true;
+                }
+                return self.exprMutatesSymbol(ite.final_else, symbol);
+            },
+            .match_expr => |match_expr| {
+                if (try self.exprMutatesSymbol(match_expr.value, symbol)) return true;
+                for (self.store.getMatchBranches(match_expr.branches)) |branch| {
+                    if (try self.exprMutatesSymbol(branch.guard, symbol)) return true;
+                    if (try self.exprMutatesSymbol(branch.body, symbol)) return true;
+                }
+                return false;
+            },
+            .for_loop => |for_loop| {
+                if (try self.exprMutatesSymbol(for_loop.list_expr, symbol)) return true;
+                return self.exprMutatesSymbol(for_loop.body, symbol);
+            },
+            .while_loop => |while_loop| {
+                if (try self.exprMutatesSymbol(while_loop.cond, symbol)) return true;
+                return self.exprMutatesSymbol(while_loop.body, symbol);
+            },
+            .discriminant_switch => |switch_expr| {
+                if (try self.exprMutatesSymbol(switch_expr.value, symbol)) return true;
+                for (self.store.getExprSpan(switch_expr.branches)) |branch_id| {
+                    if (try self.exprMutatesSymbol(branch_id, symbol)) return true;
+                }
+                return false;
+            },
+            .expect => |expect_expr| {
+                if (try self.exprMutatesSymbol(expect_expr.cond, symbol)) return true;
+                return self.exprMutatesSymbol(expect_expr.body, symbol);
+            },
+            .call => |call| {
+                if (try self.exprMutatesSymbol(call.fn_expr, symbol)) return true;
+                for (self.store.getExprSpan(call.args)) |arg_id| {
+                    if (try self.exprMutatesSymbol(arg_id, symbol)) return true;
+                }
+                return false;
+            },
+            .low_level => |low_level| {
+                for (self.store.getExprSpan(low_level.args)) |arg_id| {
+                    if (try self.exprMutatesSymbol(arg_id, symbol)) return true;
+                }
+                return false;
+            },
+            .hosted_call => |hosted_call| {
+                for (self.store.getExprSpan(hosted_call.args)) |arg_id| {
+                    if (try self.exprMutatesSymbol(arg_id, symbol)) return true;
+                }
+                return false;
+            },
+            .list => |list_expr| {
+                for (self.store.getExprSpan(list_expr.elems)) |elem_id| {
+                    if (try self.exprMutatesSymbol(elem_id, symbol)) return true;
+                }
+                return false;
+            },
+            .struct_ => |struct_expr| {
+                for (self.store.getExprSpan(struct_expr.fields)) |field_id| {
+                    if (try self.exprMutatesSymbol(field_id, symbol)) return true;
+                }
+                return false;
+            },
+            .tag => |tag_expr| {
+                for (self.store.getExprSpan(tag_expr.args)) |arg_id| {
+                    if (try self.exprMutatesSymbol(arg_id, symbol)) return true;
+                }
+                return false;
+            },
+            .str_concat => |parts| {
+                for (self.store.getExprSpan(parts)) |part_id| {
+                    if (try self.exprMutatesSymbol(part_id, symbol)) return true;
+                }
+                return false;
+            },
+            .struct_access => |sa| return self.exprMutatesSymbol(sa.struct_expr, symbol),
+            .nominal => |nominal| return self.exprMutatesSymbol(nominal.backing_expr, symbol),
+            .early_return => |ret| return self.exprMutatesSymbol(ret.expr, symbol),
+            .dbg => |dbg_expr| return self.exprMutatesSymbol(dbg_expr.expr, symbol),
+            .int_to_str => |its| return self.exprMutatesSymbol(its.value, symbol),
+            .float_to_str => |fts| return self.exprMutatesSymbol(fts.value, symbol),
+            .dec_to_str => |dec_expr| return self.exprMutatesSymbol(dec_expr, symbol),
+            .str_escape_and_quote => |str_expr| return self.exprMutatesSymbol(str_expr, symbol),
+            .tag_payload_access => |payload_access| return self.exprMutatesSymbol(payload_access.value, symbol),
+            .lambda => return false,
+            .i64_literal,
+            .i128_literal,
+            .f64_literal,
+            .f32_literal,
+            .dec_literal,
+            .str_literal,
+            .bool_literal,
+            .lookup,
+            .cell_load,
+            .empty_list,
+            .zero_arg_tag,
+            .break_expr,
+            .crash,
+            .runtime_error,
+            .incref,
+            .decref,
+            .free,
+            => return false,
+        }
     }
 
     fn exprConsumesKey(self: *RcInsertPass, expr_id: LirExprId, key: u64) Allocator.Error!bool {
@@ -4225,6 +4390,22 @@ pub const RcInsertPass = struct {
         defer rc_stmts.deinit(self.allocator);
 
         try self.emitBorrowRcOpsForLiveSymbolsInto(live_len, local_demands, region, &rc_stmts);
+        return self.wrapPreludeAroundExpr(expr, result_layout, region, rc_stmts.items);
+    }
+
+    fn wrapWhileBodyWithLiveRcOps(
+        self: *RcInsertPass,
+        expr: LirExprId,
+        live_len: usize,
+        local_demands: *const std.AutoHashMap(u64, u32),
+        loop_carried_keys: *const std.AutoHashMap(u64, void),
+        result_layout: LayoutIdx,
+        region: Region,
+    ) Allocator.Error!LirExprId {
+        var rc_stmts = std.ArrayList(LirStmt).empty;
+        defer rc_stmts.deinit(self.allocator);
+
+        try self.emitWhileBodyRcOpsForLiveSymbolsInto(live_len, local_demands, loop_carried_keys, region, &rc_stmts);
         return self.wrapPreludeAroundExpr(expr, result_layout, region, rc_stmts.items);
     }
 
@@ -4731,6 +4912,45 @@ pub const RcInsertPass = struct {
             for (self.live_rc_symbols.items[0..live_len]) |live| {
                 if (live.key != key) continue;
                 try self.emitIncrefInto(live.symbol, live.layout_idx, @intCast(use_count), region, rc_stmts);
+                break;
+            }
+        }
+    }
+
+    fn emitWhileBodyRcOpsForLiveSymbolsInto(
+        self: *RcInsertPass,
+        live_len: usize,
+        local_uses: *const std.AutoHashMap(u64, u32),
+        loop_carried_keys: *const std.AutoHashMap(u64, void),
+        region: Region,
+        rc_stmts: *std.ArrayList(LirStmt),
+    ) Allocator.Error!void {
+        const keys_start = self.scratch_keys.top();
+        defer self.scratch_keys.clearFrom(keys_start);
+
+        for (self.live_rc_symbols.items[0..live_len]) |live| {
+            const use_count = self.ownerUseCountFromMap(local_uses, live.key);
+            if (use_count == 0) continue;
+            if (loop_carried_keys.contains(live.key) and use_count <= 1) continue;
+            try self.scratch_keys.append(live.key);
+        }
+
+        const sorted_keys = self.scratch_keys.sliceFromStart(keys_start);
+        std.mem.sort(u64, sorted_keys, {}, std.sort.asc(u64));
+
+        for (sorted_keys) |key| {
+            const use_count = self.ownerUseCountFromMap(local_uses, key);
+            if (use_count == 0) continue;
+
+            const emit_count: u32 = if (loop_carried_keys.contains(key))
+                use_count - 1
+            else
+                use_count;
+            if (emit_count == 0) continue;
+
+            for (self.live_rc_symbols.items[0..live_len]) |live| {
+                if (live.key != key) continue;
+                try self.emitIncrefInto(live.symbol, live.layout_idx, @intCast(emit_count), region, rc_stmts);
                 break;
             }
         }
@@ -5285,6 +5505,113 @@ fn countDecrefsForSymbol(store: *const LirExprStore, expr_id: LirExprId, symbol:
         .decref => |dec| blk: {
             const dec_expr = store.getExpr(dec.value);
             break :blk if (dec_expr == .lookup and @as(u64, @bitCast(dec_expr.lookup.symbol)) == key) 1 else 0;
+        },
+        else => 0,
+    };
+}
+
+fn countIncrefsForSymbol(store: *const LirExprStore, expr_id: LirExprId, symbol: LIR.Symbol) u32 {
+    if (expr_id.isNone()) return 0;
+
+    const key = @as(u64, @bitCast(symbol));
+    const expr = store.getExpr(expr_id);
+    return switch (expr) {
+        .block => |block| blk: {
+            var total: u32 = 0;
+            for (store.getStmts(block.stmts)) |stmt| {
+                total += countIncrefsForSymbol(store, stmt.binding().expr, symbol);
+            }
+            total += countIncrefsForSymbol(store, block.final_expr, symbol);
+            break :blk total;
+        },
+        .if_then_else => |ite| blk: {
+            var total: u32 = 0;
+            for (store.getIfBranches(ite.branches)) |branch| {
+                total += countIncrefsForSymbol(store, branch.cond, symbol);
+                total += countIncrefsForSymbol(store, branch.body, symbol);
+            }
+            total += countIncrefsForSymbol(store, ite.final_else, symbol);
+            break :blk total;
+        },
+        .match_expr => |m| blk: {
+            var total: u32 = countIncrefsForSymbol(store, m.value, symbol);
+            for (store.getMatchBranches(m.branches)) |branch| {
+                total += countIncrefsForSymbol(store, branch.guard, symbol);
+                total += countIncrefsForSymbol(store, branch.body, symbol);
+            }
+            break :blk total;
+        },
+        .lambda => |lam| countIncrefsForSymbol(store, lam.body, symbol),
+        .for_loop => |fl| countIncrefsForSymbol(store, fl.list_expr, symbol) + countIncrefsForSymbol(store, fl.body, symbol),
+        .while_loop => |wl| countIncrefsForSymbol(store, wl.cond, symbol) + countIncrefsForSymbol(store, wl.body, symbol),
+        .discriminant_switch => |ds| blk: {
+            var total: u32 = countIncrefsForSymbol(store, ds.value, symbol);
+            for (store.getExprSpan(ds.branches)) |branch_id| {
+                total += countIncrefsForSymbol(store, branch_id, symbol);
+            }
+            break :blk total;
+        },
+        .call => |call| blk: {
+            var total: u32 = countIncrefsForSymbol(store, call.fn_expr, symbol);
+            for (store.getExprSpan(call.args)) |arg_id| {
+                total += countIncrefsForSymbol(store, arg_id, symbol);
+            }
+            break :blk total;
+        },
+        .low_level => |ll| blk: {
+            var total: u32 = 0;
+            for (store.getExprSpan(ll.args)) |arg_id| {
+                total += countIncrefsForSymbol(store, arg_id, symbol);
+            }
+            break :blk total;
+        },
+        .list => |l| blk: {
+            var total: u32 = 0;
+            for (store.getExprSpan(l.elems)) |elem_id| {
+                total += countIncrefsForSymbol(store, elem_id, symbol);
+            }
+            break :blk total;
+        },
+        .struct_ => |s| blk: {
+            var total: u32 = 0;
+            for (store.getExprSpan(s.fields)) |field_id| {
+                total += countIncrefsForSymbol(store, field_id, symbol);
+            }
+            break :blk total;
+        },
+        .tag => |t| blk: {
+            var total: u32 = 0;
+            for (store.getExprSpan(t.args)) |arg_id| {
+                total += countIncrefsForSymbol(store, arg_id, symbol);
+            }
+            break :blk total;
+        },
+        .struct_access => |sa| countIncrefsForSymbol(store, sa.struct_expr, symbol),
+        .nominal => |n| countIncrefsForSymbol(store, n.backing_expr, symbol),
+        .early_return => |ret| countIncrefsForSymbol(store, ret.expr, symbol),
+        .dbg => |d| countIncrefsForSymbol(store, d.expr, symbol),
+        .str_concat => |parts| blk: {
+            var total: u32 = 0;
+            for (store.getExprSpan(parts)) |part_id| {
+                total += countIncrefsForSymbol(store, part_id, symbol);
+            }
+            break :blk total;
+        },
+        .int_to_str => |its| countIncrefsForSymbol(store, its.value, symbol),
+        .float_to_str => |fts| countIncrefsForSymbol(store, fts.value, symbol),
+        .dec_to_str => |d| countIncrefsForSymbol(store, d, symbol),
+        .str_escape_and_quote => |s| countIncrefsForSymbol(store, s, symbol),
+        .tag_payload_access => |tpa| countIncrefsForSymbol(store, tpa.value, symbol),
+        .hosted_call => |hc| blk: {
+            var total: u32 = 0;
+            for (store.getExprSpan(hc.args)) |arg_id| {
+                total += countIncrefsForSymbol(store, arg_id, symbol);
+            }
+            break :blk total;
+        },
+        .incref => |inc| blk: {
+            const inc_expr = store.getExpr(inc.value);
+            break :blk if (inc_expr == .lookup and @as(u64, @bitCast(inc_expr.lookup.symbol)) == key) 1 else 0;
         },
         else => 0,
     };
@@ -6398,7 +6725,8 @@ test "RC while loop: repeated append of borrowed str gets per-iteration incref" 
     const rc = countRcOps(&env.lir_store, result);
 
     try std.testing.expectEqual(@as(u32, 1), rc.increfs);
-    try std.testing.expectEqual(@as(u32, 1), countDecrefsForSymbol(&env.lir_store, result, sym_item));
+    try std.testing.expectEqual(@as(u32, 1), countIncrefsForSymbol(&env.lir_store, result, sym_item));
+    try std.testing.expectEqual(@as(u32, 0), countIncrefsForSymbol(&env.lir_store, result, sym_acc));
 }
 
 test "RC branch-aware: symbol used in both match branches — no incref at binding" {
