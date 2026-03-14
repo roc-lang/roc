@@ -6,9 +6,16 @@
 //! - Layout definitions for scalars, containers, structs (records/tuples), and closures
 //! - A layout store that manages layout instances and their dependencies
 //! - Work queue management for stack-safe layout computation
+//! - Canonical graph interning and RC-helper planning for ordinary data
 //!
 //! See the Layout Store for how these representations actually get created
 //! (using type and target information from previous steps in compilation).
+//!
+//! Ordinary data layout is fully determined here and shared across compiler
+//! phases. Function values are the one intentional exception: `.func` types
+//! encode call signatures, not hidden closure environments, so closure capture
+//! discovery still happens in lowering before those captures are expressed back
+//! as ordinary-data layouts.
 
 const std = @import("std");
 

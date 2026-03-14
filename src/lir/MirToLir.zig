@@ -8,6 +8,13 @@
 //! - Splitting MIR `lambda` into LIR `lambda` (no captures) vs `closure` (with captures)
 //! - Mapping MIR's `match_expr` to LIR's `match_expr`
 //! - Mapping MIR low-level ops to LIR low-level ops
+//!
+//! Ordinary data layout is always resolved through the shared layout subsystem.
+//! This pass must not reintroduce generic record/tuple/list/tag-union layout
+//! construction. The only lowering-local layout exception is closure capture
+//! discovery: `.func` monotypes encode call signatures, not hidden environments,
+//! so MirToLir still computes capture payload layouts for closures and then
+//! hands those ordinary-data layouts back to the shared layout/RC machinery.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -90,9 +97,12 @@ true_tag: Ident.Idx,
 next_synthetic_id: u29 = 0,
 
 /// Canonical resolver for ordinary MIR monotype layouts.
+/// This is the only path ordinary MIR data should use to obtain layout ids.
 monotype_layout_resolver: layout.MirMonotypeLayoutResolver,
 
 /// Stable runtime captures payload layouts keyed by closure_member.
+/// Closure captures remain the one lowering-local exception because `.func`
+/// monotypes do not describe hidden environments.
 capture_layout_cache: std.AutoHashMap(u32, layout.Idx),
 
 /// Stable runtime closure value layouts keyed by lambda set.

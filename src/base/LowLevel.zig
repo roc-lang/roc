@@ -68,7 +68,6 @@ pub const LowLevel = enum {
     list_reverse,
     list_reserve,
     list_release_excess_capacity,
-    list_repeat,
     list_split_first,
     list_split_last,
 
@@ -438,7 +437,6 @@ pub const LowLevel = enum {
             .list_set => &.{ .consume, .borrow, .borrow },
             .list_prepend => &.{ .consume, .borrow },
             .list_reverse, .list_release_excess_capacity => &.{.consume},
-            .list_repeat => &.{ .borrow, .borrow },
 
             .bool_not => &.{.borrow},
 
