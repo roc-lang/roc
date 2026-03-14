@@ -148,8 +148,8 @@ pub fn CodeGen(comptime target: RocTarget) type {
                 return reg;
             }
 
-            // 3. All registers in use - must spill one
-            return self.spillAndAllocGeneral(local);
+            // 3. All registers in use — panic (spills are not supported)
+            return self.spillAndAllocGeneral();
         }
 
         /// Allocate a general-purpose register without associating it with a local.
@@ -209,8 +209,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         ///
         /// The correct fix is to ensure callers never exhaust the register pool.
         /// This panic catches register pressure bugs during development.
-        fn spillAndAllocGeneral(self: *Self, local: u32) !GeneralReg {
-            _ = local;
+        fn spillAndAllocGeneral(self: *Self) !GeneralReg {
             // Count available info for the panic message
             if (builtin.mode == .Debug) {
                 var owned_count: u32 = 0;
@@ -877,9 +876,10 @@ test "Linux x64: use callee-saved registers when caller-saved exhausted" {
     var cg = LinuxCodeGen.init(std.testing.allocator);
     defer cg.deinit();
 
-    // System V has 9 caller-saved registers
-    const num_caller_saved: usize = 9;
-    var regs: [9]GeneralReg = undefined;
+    // System V caller-saved: RAX, RCX, RDX, RSI, RDI, R8, R9, R10 = 8
+    // (R11 is reserved as SCRATCH_REG and excluded from the allocatable mask)
+    const num_caller_saved: usize = @popCount(SystemV.CALLER_SAVED_GENERAL_MASK);
+    var regs: [8]GeneralReg = undefined;
     for (0..num_caller_saved) |i| {
         regs[i] = try cg.allocGeneralFor(@intCast(i));
     }
@@ -901,9 +901,10 @@ test "Windows x64: use callee-saved registers when caller-saved exhausted" {
     var cg = WinCodeGen.init(std.testing.allocator);
     defer cg.deinit();
 
-    // Windows has 7 caller-saved registers
-    const num_caller_saved: usize = 7;
-    var regs: [7]GeneralReg = undefined;
+    // Windows caller-saved: RAX, RCX, RDX, R8, R9, R10 = 6
+    // (R11 is reserved as SCRATCH_REG and excluded from the allocatable mask)
+    const num_caller_saved: usize = @popCount(WindowsFastcall.CALLER_SAVED_GENERAL_MASK);
+    var regs: [6]GeneralReg = undefined;
     for (0..num_caller_saved) |i| {
         regs[i] = try cg.allocGeneralFor(@intCast(i));
     }
@@ -921,72 +922,31 @@ test "Windows x64: use callee-saved registers when caller-saved exhausted" {
     try std.testing.expect(WindowsFastcall.isCalleeSaved(callee_reg));
 }
 
-test "spill register when all exhausted" {
+test "allocate all caller-saved and callee-saved registers" {
     var cg = LinuxCodeGen.init(std.testing.allocator);
     defer cg.deinit();
 
-    // Allocate all available registers
-    // System V: 9 caller-saved + 5 callee-saved = 14
-    // Note: RSP and RBP are not available
-    const total_regs: usize = 14;
-    var regs: [14]GeneralReg = undefined;
+    // System V: 8 caller-saved + 5 callee-saved = 13 allocatable
+    // (RSP, RBP, and R11/SCRATCH_REG are excluded)
+    const num_caller_saved: usize = @popCount(SystemV.CALLER_SAVED_GENERAL_MASK);
+    const num_callee_saved: usize = @popCount(LinuxCodeGen.CALLEE_SAVED_GENERAL_MASK);
+    const total_regs = num_caller_saved + num_callee_saved;
+
+    var regs: [13]GeneralReg = undefined;
     for (0..total_regs) |i| {
         regs[i] = try cg.allocGeneralFor(@intCast(i));
     }
 
-    // At this point all registers should be allocated
-    // The next allocation should trigger a spill
-    const initial_code_len = cg.getCode().len;
-    const spilled_reg = try cg.allocGeneralFor(@intCast(total_regs));
-
-    // Code should have been emitted (the spill store)
-    try std.testing.expect(cg.getCode().len > initial_code_len);
-
-    // The first local (0) should now be on the stack
-    const loc0 = cg.locals.get(0);
-    try std.testing.expect(loc0 != null);
-    try std.testing.expect(loc0.?.stack < 0); // Stack offsets are negative
-
-    // spilled_reg should be valid
-    try std.testing.expect(spilled_reg != .RSP);
-    try std.testing.expect(spilled_reg != .RBP);
-}
-
-test "reload spilled value" {
-    var cg = LinuxCodeGen.init(std.testing.allocator);
-    defer cg.deinit();
-
-    // Allocate all registers (14 total: RSP and RBP are not available)
-    const total_regs: usize = 14;
+    // All registers should be unique
     for (0..total_regs) |i| {
-        _ = try cg.allocGeneralFor(@intCast(i));
+        for (i + 1..total_regs) |j| {
+            try std.testing.expect(regs[i] != regs[j]);
+        }
     }
 
-    // Allocate one more to cause a spill
-    _ = try cg.allocGeneralFor(@intCast(total_regs));
-
-    // Local 0 should be on the stack now
-    const loc0 = cg.locals.get(0);
-    try std.testing.expect(loc0 != null);
-    try std.testing.expect(loc0.? == .stack);
-
-    // Free some registers to make room
-    cg.freeGeneral(.RAX);
-    cg.freeGeneral(.RCX);
-
-    // Record code position before reload
-    const code_before = cg.getCode().len;
-
-    // Reload local 0
-    const reloaded_reg = try cg.reloadLocal(0);
-
-    // Code should have been emitted (the reload load)
-    try std.testing.expect(cg.getCode().len > code_before);
-
-    // Local 0 should now be in a register again
-    const loc0_after = cg.locals.get(0);
-    try std.testing.expect(loc0_after != null);
-    try std.testing.expectEqual(ValueStorageMod.ValueLoc{ .general_reg = @intFromEnum(reloaded_reg) }, loc0_after.?);
+    // No free registers should remain
+    try std.testing.expectEqual(@as(u32, 0), cg.free_general);
+    try std.testing.expectEqual(@as(u32, 0), cg.callee_saved_available);
 }
 
 test "Linux x64 prologue saves callee-saved registers with MOV" {
@@ -1220,9 +1180,10 @@ test "macOS x64: use callee-saved registers when caller-saved exhausted" {
     var cg = MacCodeGen.init(std.testing.allocator);
     defer cg.deinit();
 
-    // System V has 9 caller-saved registers (same as Linux)
-    const num_caller_saved: usize = 9;
-    var regs: [9]GeneralReg = undefined;
+    // macOS uses System V ABI — same caller-saved set as Linux
+    // (R11 is reserved as SCRATCH_REG and excluded from the allocatable mask)
+    const num_caller_saved: usize = @popCount(SystemV.CALLER_SAVED_GENERAL_MASK);
+    var regs: [8]GeneralReg = undefined;
     for (0..num_caller_saved) |i| {
         regs[i] = try cg.allocGeneralFor(@intCast(i));
     }

@@ -160,8 +160,8 @@ pub fn CodeGen(comptime target: RocTarget) type {
                 return reg;
             }
 
-            // 3. All registers in use - must spill one
-            return self.spillAndAllocGeneral(local);
+            // 3. All registers in use — panic (spills are not supported)
+            return self.spillAndAllocGeneral();
         }
 
         /// Allocate a general-purpose register without associating it with a local.
@@ -223,8 +223,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Spill a register to make room and allocate it for the given local.
         /// WARNING: This function is fundamentally unsafe for LirCodeGen's usage pattern.
         /// See the x86_64 version for the full explanation.
-        fn spillAndAllocGeneral(self: *Self, local: u32) !GeneralReg {
-            _ = local;
+        fn spillAndAllocGeneral(self: *Self) !GeneralReg {
             if (builtin.mode == .Debug) {
                 var owned_count: u32 = 0;
                 for (0..NUM_GENERAL_REGS) |i| {
