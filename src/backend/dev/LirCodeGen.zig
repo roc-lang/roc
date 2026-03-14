@@ -4220,11 +4220,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const ls = self.layout_store;
             const explicit_args = self.store.getExprSpan(hc.args);
-            var fallback_args = std.ArrayList(HostedCallArg).empty;
-            defer fallback_args.deinit(self.allocator);
+            var hosted_args = std.ArrayList(HostedCallArg).empty;
+            defer hosted_args.deinit(self.allocator);
 
             if (explicit_args.len == 0) {
-                try self.collectImplicitHostedCallArgs(&fallback_args);
+                try self.collectImplicitHostedCallArgs(&hosted_args);
+                for (hosted_args.items) |*arg| {
+                    arg.loc = try self.stabilize(arg.loc);
+                }
+            } else {
+                for (explicit_args) |arg_id| {
+                    try hosted_args.append(self.allocator, .{
+                        .loc = try self.generateExpr(arg_id),
+                        .layout_idx = self.exprLayout(arg_id),
+                    });
+                }
             }
 
             // Determine return value size
@@ -4240,24 +4250,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Marshal arguments into a contiguous buffer on the stack
             // First, calculate total size needed for all arguments
             var total_args_size: usize = 0;
-            if (fallback_args.items.len > 0) {
-                for (fallback_args.items) |arg| {
-                    const arg_layout = ls.getLayout(arg.layout_idx);
-                    const arg_size = ls.layoutSize(arg_layout);
-                    const arg_align = arg_layout.alignment(ls.targetUsize());
-                    total_args_size = std.mem.alignForward(usize, total_args_size, arg_align.toByteUnits());
-                    total_args_size += arg_size;
-                }
-            } else {
-                for (explicit_args) |arg_id| {
-                    const arg_layout_idx = self.exprLayout(arg_id);
-                    const arg_layout = ls.getLayout(arg_layout_idx);
-                    const arg_size = ls.layoutSize(arg_layout);
-                    const arg_align = arg_layout.alignment(ls.targetUsize());
-                    // Align to the argument's alignment
-                    total_args_size = std.mem.alignForward(usize, total_args_size, arg_align.toByteUnits());
-                    total_args_size += arg_size;
-                }
+            for (hosted_args.items) |arg| {
+                const arg_layout = ls.getLayout(arg.layout_idx);
+                const arg_size = ls.layoutSize(arg_layout);
+                const arg_align = arg_layout.alignment(ls.targetUsize());
+                total_args_size = std.mem.alignForward(usize, total_args_size, arg_align.toByteUnits());
+                total_args_size += arg_size;
             }
 
             // Allocate args buffer (at least 8 bytes for empty args case)
@@ -4265,36 +4263,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Copy each argument into the args buffer
             var offset: usize = 0;
-            if (fallback_args.items.len > 0) {
-                for (fallback_args.items) |arg| {
-                    const arg_layout = ls.getLayout(arg.layout_idx);
-                    const arg_size = ls.layoutSize(arg_layout);
-                    const arg_align = arg_layout.alignment(ls.targetUsize());
-                    offset = std.mem.alignForward(usize, offset, arg_align.toByteUnits());
+            for (hosted_args.items) |arg| {
+                const arg_layout = ls.getLayout(arg.layout_idx);
+                const arg_size = ls.layoutSize(arg_layout);
+                const arg_align = arg_layout.alignment(ls.targetUsize());
+                offset = std.mem.alignForward(usize, offset, arg_align.toByteUnits());
 
-                    if (arg_size > 0) {
-                        const dest_offset: i32 = args_slot + @as(i32, @intCast(offset));
-                        try self.copyValueToStack(arg.loc, dest_offset, arg_size);
-                    }
-                    offset += arg_size;
+                if (arg_size > 0) {
+                    const dest_offset: i32 = args_slot + @as(i32, @intCast(offset));
+                    try self.copyValueToStack(arg.loc, dest_offset, arg_size);
                 }
-            } else {
-                for (explicit_args) |arg_id| {
-                    const arg_loc = try self.generateExpr(arg_id);
-                    const arg_layout_idx = self.exprLayout(arg_id);
-                    const arg_layout = ls.getLayout(arg_layout_idx);
-                    const arg_size = ls.layoutSize(arg_layout);
-                    const arg_align = arg_layout.alignment(ls.targetUsize());
-                    // Align offset
-                    offset = std.mem.alignForward(usize, offset, arg_align.toByteUnits());
-
-                    if (arg_size > 0) {
-                        // Copy argument to args buffer at current offset
-                        const dest_offset: i32 = args_slot + @as(i32, @intCast(offset));
-                        try self.copyValueToStack(arg_loc, dest_offset, arg_size);
-                    }
-                    offset += arg_size;
-                }
+                offset += arg_size;
             }
 
             // RocOps.hosted_fns is at offset 56 (7 pointers * 8 bytes)
@@ -4322,6 +4301,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addLeaArg(base_reg, ret_slot);
                 try builder.addLeaArg(base_reg, args_slot);
                 try builder.callReg(fn_ptr_reg);
+            }
+
+            for (hosted_args.items) |arg| {
+                try self.emitDecrefValueByLayout(arg.loc, arg.layout_idx);
             }
 
             // Return the result location based on return type
