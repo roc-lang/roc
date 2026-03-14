@@ -726,18 +726,7 @@ pub const DevEvaluator = struct {
 
         // Run RC insertion pass on all function definitions (symbol_defs)
         // so that lambda bodies get proper incref/decref annotations.
-        {
-            var def_iter = lir_store.symbol_defs.iterator();
-            while (def_iter.next()) |entry| {
-                var fn_rc = lir.RcInsert.RcInsertPass.init(
-                    self.allocator,
-                    &lir_store,
-                    layout_store_ptr,
-                ) catch continue;
-                defer fn_rc.deinit();
-                entry.value_ptr.* = fn_rc.insertRcOps(entry.value_ptr.*) catch entry.value_ptr.*;
-            }
-        }
+        lir.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(self.allocator, &lir_store, layout_store_ptr);
 
         // Determine the result layout from the lowered LIR expression.
         const cir_expr = module_env.store.getExpr(expr_idx);

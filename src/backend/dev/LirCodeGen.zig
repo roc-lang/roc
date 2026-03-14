@@ -1803,8 +1803,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(temp_reg);
                     self.codegen.freeGeneral(addr_reg);
 
-                    // list_get_unsafe aliases the source list element. RC insertion decides
-                    // when a retained owner is needed, so do not auto-incref here.
+                    // list_get_unsafe copies an element out of the source list.
+                    // If that element contains refcounted data, materialize an owned
+                    // result now so later cleanup of the source list cannot invalidate it.
+                    if (ls.layoutContainsRefcounted(elem_layout_val)) {
+                        try self.emitIncrefAtStackOffset(elem_slot, elem_layout_idx);
+                    }
+
                     var result_loc: ValueLocation = if (elem_layout_idx == .i128 or elem_layout_idx == .u128 or elem_layout_idx == .dec)
                         .{ .stack_i128 = elem_slot }
                     else if (elem_layout_idx == .str)
@@ -3977,6 +3982,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
                 self.codegen.freeGeneral(temp_reg);
                 self.codegen.freeGeneral(ptr_reg);
+
+                if (ls.layoutContainsRefcounted(elem_layout)) {
+                    try self.emitIncrefAtStackOffset(elem_dst, if (field0_is_list) field1_layout_idx else field0_layout_idx);
+                }
             }
 
             const rest_list_layout_idx = if (field0_is_list) field0_layout_idx else field1_layout_idx;

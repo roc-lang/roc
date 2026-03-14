@@ -397,6 +397,17 @@ pub const LowLevel = enum {
         consume,
     };
 
+    /// Some borrow-mode low-levels still need the source owner to remain live
+    /// until the result has been fully materialized. This is separate from
+    /// argument ownership: the source is still borrowed, but RC insertion must
+    /// not drop the owner before the low-level finishes reading from it.
+    pub fn borrowedArgNeededForResult(self: LowLevel, arg_index: usize) bool {
+        return switch (self) {
+            .list_get_unsafe => arg_index == 0,
+            else => false,
+        };
+    }
+
     pub fn getArgOwnership(self: LowLevel) []const ArgOwnership {
         return switch (self) {
             .str_count_utf8_bytes => &.{.borrow},

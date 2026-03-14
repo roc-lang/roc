@@ -3936,6 +3936,8 @@ fn processDevObjectSnapshot(
         ep.body_expr = rc_pass.insertRcOps(ep.body_expr) catch ep.body_expr;
     }
 
+    lir_mod.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(allocator, &lir_store, &layout_store);
+
     const procs = lir_store.getProcs();
 
     // 10. Cross-compile for all targets and hash

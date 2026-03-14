@@ -4122,6 +4122,8 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         ep.body_expr = rc_pass.insertRcOps(ep.body_expr) catch ep.body_expr;
     }
 
+    lir.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(ctx.gpa, &lir_store, &layout_store);
+
     // Get procedures from the LIR store
     const procs = lir_store.getProcs();
 
