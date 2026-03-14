@@ -5194,36 +5194,6 @@ pub const RcInsertPass = struct {
         }
     }
 
-    fn emitBorrowRcTailDecrefsForLiveSymbolsInto(
-        self: *RcInsertPass,
-        live_len: usize,
-        local_uses: *const std.AutoHashMap(u64, u32),
-        region: Region,
-        rc_stmts: *std.ArrayList(LirStmt),
-    ) Allocator.Error!void {
-        const keys_start = self.scratch_keys.top();
-        defer self.scratch_keys.clearFrom(keys_start);
-
-        for (self.live_rc_symbols.items[0..live_len]) |live| {
-            if (self.ownerUseCountFromMap(local_uses, live.key) == 0) continue;
-            try self.scratch_keys.append(live.key);
-        }
-
-        const sorted_keys = self.scratch_keys.sliceFromStart(keys_start);
-        std.mem.sort(u64, sorted_keys, {}, std.sort.asc(u64));
-
-        for (sorted_keys) |key| {
-            const use_count = self.ownerUseCountFromMap(local_uses, key);
-            if (use_count == 0) continue;
-
-            for (self.live_rc_symbols.items[0..live_len]) |live| {
-                if (live.key != key) continue;
-                try self.emitDecrefCountInto(live.symbol, live.layout_idx, use_count, region, rc_stmts);
-                break;
-            }
-        }
-    }
-
     fn emitLiveDemandRcOpsForSymbolsInto(
         self: *RcInsertPass,
         live_len: usize,

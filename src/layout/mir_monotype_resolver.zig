@@ -1,3 +1,5 @@
+//! Resolves MIR monotypes into canonical ordinary-data layouts through the shared layout store.
+
 const std = @import("std");
 const layout = @import("layout.zig");
 const graph_mod = @import("graph.zig");

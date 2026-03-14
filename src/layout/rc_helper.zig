@@ -1,3 +1,5 @@
+//! Canonical deep-RC helper plans derived from canonical layout identities.
+
 const builtins = @import("builtins");
 
 const layout_mod = @import("./layout.zig");

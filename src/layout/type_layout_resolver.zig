@@ -1,3 +1,5 @@
+//! Resolves type-checker vars into canonical ordinary-data layouts through the shared layout store.
+
 const std = @import("std");
 const types = @import("types");
 const mir = @import("mir");

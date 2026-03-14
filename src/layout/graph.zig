@@ -1,3 +1,5 @@
+//! Temporary graph representation for ordinary-data layouts before canonical interning.
+
 const std = @import("std");
 const layout = @import("./layout.zig");
 
