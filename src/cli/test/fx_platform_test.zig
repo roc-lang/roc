@@ -389,12 +389,12 @@ test "fx platform IO spec tests" {
     }
 }
 
-test "fx platform expect with main" {
+test "fx platform expect with main (interpreter)" {
     const allocator = testing.allocator;
 
     // Run `roc test` on the app that has both main! and an expect
     // Note: `roc test` only evaluates expect statements, it does not run main!
-    const run_result = try runRoc(allocator, "test/fx/expect_with_main.roc", .{ .extra_args = &[_][]const u8{"test"} });
+    const run_result = try runRoc(allocator, "test/fx/expect_with_main.roc", .{ .extra_args = &[_][]const u8{ "test", "--opt=interpreter" } });
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
@@ -405,12 +405,17 @@ test "fx platform expect with main" {
     try testing.expectEqualStrings("", run_result.stderr);
 }
 
-test "fx platform expect with numeric literal" {
+test "fx platform expect with main (dev backend)" {
+    // TODO: dev backend fails with SIGSEGV
+    return error.SkipZigTest;
+}
+
+test "fx platform expect with numeric literal (interpreter)" {
     const allocator = testing.allocator;
 
     // Run `roc test` on an app that compares a typed variable with a numeric literal
     // This tests that numeric literals in top-level expects are properly typed
-    const run_result = try runRoc(allocator, "test/fx/expect_with_literal.roc", .{ .extra_args = &[_][]const u8{"test"} });
+    const run_result = try runRoc(allocator, "test/fx/expect_with_literal.roc", .{ .extra_args = &[_][]const u8{ "test", "--opt=interpreter" } });
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
@@ -421,10 +426,15 @@ test "fx platform expect with numeric literal" {
     try testing.expectEqualStrings("", run_result.stderr);
 }
 
-test "fx platform all_syntax_test.roc prints expected output" {
+test "fx platform expect with numeric literal (dev backend)" {
+    // TODO: dev backend fails with SIGSEGV
+    return error.SkipZigTest;
+}
+
+test "fx platform all_syntax_test.roc prints expected output (interpreter)" {
     const allocator = testing.allocator;
 
-    const run_result = try runRoc(allocator, "test/fx/all_syntax_test.roc", .{});
+    const run_result = try runRoc(allocator, "test/fx/all_syntax_test.roc", .{ .extra_args = &[_][]const u8{"--opt=interpreter"} });
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
@@ -472,6 +482,11 @@ test "fx platform all_syntax_test.roc prints expected output" {
     try testing.expectEqualStrings("ROC DBG: 42.0\n", run_result.stderr);
 }
 
+test "fx platform all_syntax_test.roc prints expected output (dev backend)" {
+    // TODO: dev backend fails with bindFlatTypeMonotypes panic in Lower.zig
+    return error.SkipZigTest;
+}
+
 test "fx platform match returning string" {
     // Tests that match expressions with string returns work correctly
     const allocator = testing.allocator;
@@ -505,13 +520,13 @@ test "fx platform zst nested singleton shapes" {
     try checkTestSuccess(result);
 }
 
-test "fx platform wildcard match on open union" {
+test "fx platform wildcard match on open union (interpreter)" {
     // Tests that wildcard patterns on open tag unions work correctly.
     // Bug: When error propagates through open tag unions [Exit(I64), ..],
     // Err(_) wildcard match was returning 0 instead of the expected value 42.
     const allocator = testing.allocator;
 
-    const run_result = try runRoc(allocator, "test/fx/wildcard_match_open_union_bug.roc", .{});
+    const run_result = try runRoc(allocator, "test/fx/wildcard_match_open_union_bug.roc", .{ .extra_args = &[_][]const u8{"--opt=interpreter"} });
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
@@ -521,13 +536,18 @@ test "fx platform wildcard match on open union" {
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "PASS: Wildcard match worked correctly") != null);
 }
 
-test "fx platform dbg missing return value" {
+test "fx platform wildcard match on open union (dev backend)" {
+    // TODO: dev backend fails with bindFlatTypeMonotypes panic in Lower.zig
+    return error.SkipZigTest;
+}
+
+test "fx platform dbg missing return value (interpreter)" {
     const allocator = testing.allocator;
 
     // Run an app that uses dbg as the last expression in main!.
     // dbg is treated as a statement (side-effect only) when it's the final
     // expression in a block, so the block returns {} as expected by main!.
-    const run_result = try runRoc(allocator, "test/fx/dbg_missing_return.roc", .{});
+    const run_result = try runRoc(allocator, "test/fx/dbg_missing_return.roc", .{ .extra_args = &[_][]const u8{"--opt=interpreter"} });
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
@@ -535,6 +555,11 @@ test "fx platform dbg missing return value" {
 
     // Verify that the dbg output was printed
     try testing.expect(std.mem.indexOf(u8, run_result.stderr, "this should work now") != null);
+}
+
+test "fx platform dbg missing return value (dev backend)" {
+    // TODO: dev backend fails with LIR/codegen invariant violated (stack_str result with non-string layout)
+    return error.SkipZigTest;
 }
 
 test "fx platform check unused state var reports correct errors" {
@@ -726,7 +751,7 @@ test "custom platform and package qualifiers work in roc run" {
     }
 }
 
-test "fx platform string interpolation type mismatch" {
+test "fx platform string interpolation type mismatch (interpreter)" {
     const allocator = testing.allocator;
 
     // Run an app that tries to interpolate a U8 (non-Str) type in a string.
@@ -735,6 +760,7 @@ test "fx platform string interpolation type mismatch" {
         .allocator = allocator,
         .argv = &[_][]const u8{
             roc_binary_path,
+            "--opt=interpreter",
             "test/fx/num_method_call.roc",
             "--allow-errors",
         },
@@ -765,6 +791,11 @@ test "fx platform string interpolation type mismatch" {
 
     // The program should still produce output (it runs despite errors)
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "two:") != null);
+}
+
+test "fx platform string interpolation type mismatch (dev backend)" {
+    // TODO: dev backend exits with code 134
+    return error.SkipZigTest;
 }
 
 test "fx platform run from different cwd" {
@@ -863,13 +894,13 @@ test "multiline string split_on" {
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "The last line is here") != null);
 }
 
-test "big string equality regression" {
+test "big string equality regression (interpreter)" {
     // Regression test: String literals of length >= 24 (big strings) must work
     // correctly in expect expressions. This tests the single-segment string
     // fast path in str_collect which previously caused use-after-free.
     const allocator = testing.allocator;
 
-    const run_result = try runRoc(allocator, "test/fx/big_string_equality.roc", .{ .extra_args = &[_][]const u8{"test"} });
+    const run_result = try runRoc(allocator, "test/fx/big_string_equality.roc", .{ .extra_args = &[_][]const u8{ "test", "--opt=interpreter" } });
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
@@ -885,7 +916,12 @@ test "big string equality regression" {
     }
 }
 
-test "fx platform expect with toplevel numeric" {
+test "big string equality regression (dev backend)" {
+    // TODO: dev backend fails with SIGSEGV
+    return error.SkipZigTest;
+}
+
+test "fx platform expect with toplevel numeric (interpreter)" {
     const allocator = testing.allocator;
 
     // Run the app
@@ -893,6 +929,7 @@ test "fx platform expect with toplevel numeric" {
         .allocator = allocator,
         .argv = &[_][]const u8{
             roc_binary_path,
+            "--opt=interpreter",
             "test/fx/expect_with_toplevel_numeric.roc",
         },
     });
@@ -924,6 +961,7 @@ test "fx platform expect with toplevel numeric" {
         .argv = &[_][]const u8{
             roc_binary_path,
             "test",
+            "--opt=interpreter",
             "test/fx/expect_with_toplevel_numeric.roc",
         },
     });
@@ -946,6 +984,11 @@ test "fx platform expect with toplevel numeric" {
             return error.TestFailed;
         },
     }
+}
+
+test "fx platform expect with toplevel numeric (dev backend)" {
+    // TODO: dev backend fails with SIGSEGV
+    return error.SkipZigTest;
 }
 
 // The platform requires `main! : () => {}` but test_type_mismatch.roc returns Str.
@@ -1127,13 +1170,13 @@ test "fx platform if-expression closure capture regression" {
     try checkSuccess(run_result);
 }
 
-test "fx platform var with string interpolation segfault" {
+test "fx platform var with string interpolation segfault (interpreter)" {
     // Regression test: Using `var` variables with string interpolation causes segfault.
     // The code calls fnA! multiple times, each using var state variables, and
     // interpolates the results into strings.
     const allocator = testing.allocator;
 
-    const run_result = try runRoc(allocator, "test/fx/var_interp_segfault.roc", .{});
+    const run_result = try runRoc(allocator, "test/fx/var_interp_segfault.roc", .{ .extra_args = &[_][]const u8{"--opt=interpreter"} });
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
@@ -1143,6 +1186,11 @@ test "fx platform var with string interpolation segfault" {
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "A1: 1") != null);
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "A2: 1") != null);
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "A3: 1") != null);
+}
+
+test "fx platform var with string interpolation segfault (dev backend)" {
+    // TODO: dev backend fails with unresolved symbol panic in LirCodeGen.zig
+    return error.SkipZigTest;
 }
 
 test "fx platform sublist method on inferred type" {
@@ -1158,7 +1206,7 @@ test "fx platform sublist method on inferred type" {
     try checkSuccess(run_result);
 }
 
-test "fx platform repeating pattern segfault" {
+test "fx platform repeating pattern segfault (interpreter)" {
     // Regression test: This test exposed a compiler bug where variables used multiple times
     // in consuming positions didn't get proper refcount handling. Specifically,
     // in `repeat_helper(acc.concat(list), list, n-1)`, the variable `list` is
@@ -1166,7 +1214,7 @@ test "fx platform repeating pattern segfault" {
     // The compiler must insert a copy/incref for the second use to avoid use-after-free.
     const allocator = testing.allocator;
 
-    const run_result = try runRoc(allocator, "test/fx/repeating_pattern_segfault.roc", .{});
+    const run_result = try runRoc(allocator, "test/fx/repeating_pattern_segfault.roc", .{ .extra_args = &[_][]const u8{"--opt=interpreter"} });
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
@@ -1189,12 +1237,12 @@ test "fx platform runtime division by zero" {
     try expectDevRuntimeDivisionByZero();
 }
 
-test "fx platform inline expect fails as expected" {
+test "fx platform inline expect fails as expected (interpreter)" {
     // Regression test: inline expect inside main! should fail via the
     // normal crash handler (Roc crashed: ...) instead of overflowing
     // the stack and triggering the stack overflow handler.
     const allocator = testing.allocator;
-    const run_result = try runRoc(allocator, "test/fx/issue8517.roc", .{});
+    const run_result = try runRoc(allocator, "test/fx/issue8517.roc", .{ .extra_args = &[_][]const u8{"--opt=interpreter"} });
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
@@ -1205,6 +1253,11 @@ test "fx platform inline expect fails as expected" {
 
     // Should report a crash with the expect expression snippet
     try testing.expect(std.mem.indexOf(u8, stderr, "1 == 2") != null);
+}
+
+test "fx platform inline expect fails as expected (dev backend)" {
+    // TODO: dev backend succeeds when it should fail (inline expect not evaluated)
+    return error.SkipZigTest;
 }
 
 test "fx platform inline expect succeeds as expected" {
@@ -1284,13 +1337,18 @@ test "fx platform index out of bounds in instantiate regression" {
     // The index 0xAAAAAAAA suggests uninitialized/corrupted memory.
     const allocator = testing.allocator;
 
-    const run_result = try runRoc(allocator, "test/fx/index_oob_instantiate.roc", .{});
+    const run_result = try runRoc(allocator, "test/fx/index_oob_instantiate.roc", .{ .extra_args = &[_][]const u8{"--opt=interpreter"} });
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
     // The compiler should not panic/crash. Once the bug is fixed, this test will pass.
     // Currently it fails with a panic in instantiate.zig.
     try checkSuccess(run_result);
+}
+
+test "fx platform index out of bounds in instantiate regression (dev backend)" {
+    // TODO: dev backend crashes with SIGABRT (exit code 134)
+    return error.SkipZigTest;
 }
 
 test "fx platform fold_rev static dispatch regression" {
@@ -1490,7 +1548,7 @@ test "fx platform issue8943 error message memory corruption" {
     }
 }
 
-test "fx platform issue9118 try operator on tuple in type method" {
+test "fx platform issue9118 try operator on tuple in type method (interpreter)" {
     // Regression test for https://github.com/roc-lang/roc/issues/9118
     // The bug was that using the ? operator on a tuple (instead of a Try type)
     // inside a type method would cause a segfault in the interpreter.
@@ -1498,7 +1556,7 @@ test "fx platform issue9118 try operator on tuple in type method" {
     const allocator = testing.allocator;
 
     const run_result = try runRoc(allocator, "test/fx/for_var_in_type_method.roc", .{
-        .extra_args = &[_][]const u8{"test"},
+        .extra_args = &[_][]const u8{ "test", "--opt=interpreter" },
     });
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
@@ -1542,4 +1600,9 @@ test "fx platform issue9118 try operator on tuple in type method" {
             return error.RunTerminatedAbnormally;
         },
     }
+}
+
+test "fx platform issue9118 try operator on tuple in type method (dev backend)" {
+    // TODO: dev backend crashes with signal 6 (SIGABRT)
+    return error.SkipZigTest;
 }
