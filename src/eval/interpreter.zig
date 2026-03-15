@@ -2751,11 +2751,11 @@ pub const Interpreter = struct {
                 return out;
             },
             .list_replace_unsafe => {
-                // List.replace_unsafe: List(item), U64, item-> { list: List(item), value: item }
+                // List.replace_unsafe: List(item), U64, item-> { list: List(item), prev: item }
                 std.debug.assert(args.len == 3); // low-level .list_replace_unsafe expects 3 arguments
 
                 const list_arg = args[0];
-                // const index_arg = args[1];
+                const index_arg = args[1];
                 const elt_arg = args[2];
 
                 std.debug.assert(list_arg.ptr != null); // low-level .list_get_unsafe expects non-null list pointer
@@ -2767,8 +2767,8 @@ pub const Interpreter = struct {
 
                     // Get or create field names
                     const list_field = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text("list"));
-                    const value_field = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text("value"));
-                    const field_names = [2]base_pkg.Ident.Idx{ list_field, value_field };
+                    const prev_field = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text("prev"));
+                    const field_names = [2]base_pkg.Ident.Idx{ list_field, prev_field };
 
                     const field_layouts = [2]Layout{ list_arg.layout, Layout.zst() };
                     const record_idx = try self.runtime_layout_store.putRecord(self.env, &field_layouts, &field_names);
@@ -2785,34 +2785,88 @@ pub const Interpreter = struct {
                     // Copy the list value to the field
                     try list_arg.copyToPtr(&self.runtime_layout_store, list_ptr, roc_ops);
 
-                    // Set value field
+                    // Set prev field
                     const elem_rt_var = elt_arg.rt_var; // get element runtime var from list's type
-                    const value_field_stack_val = try acc.getFieldByName(value_field, elem_rt_var) orelse unreachable;
-                    const value_ptr = value_field_stack_val.ptr orelse unreachable;
-                    try elt_arg.copyToPtr(&self.runtime_layout_store, value_ptr, roc_ops);
+                    const prev_field_stack_val = try acc.getFieldByName(prev_field, elem_rt_var) orelse unreachable;
+                    const prev_ptr = prev_field_stack_val.ptr orelse unreachable;
+                    try elt_arg.copyToPtr(&self.runtime_layout_store, prev_ptr, roc_ops);
 
                     return dest;
                 }
-                return list_arg;
+                const roc_list = list_arg.asRocList().?;
 
-                // const roc_list = list_arg.asRocList().?;
+                // Handle numeric type mismatch for index argument.
+                // The index should be U64 (integer), but due to numeric literal defaulting
+                // (e.g., `var $x = 0` defaulting to Dec), it may arrive as a fractional type.
+                // Convert frac → int by extracting the whole number part.
+                const index: u64 = if (index_arg.layout.tag == .scalar and index_arg.layout.data.scalar.tag == .frac) blk: {
+                    if (index_arg.layout.data.scalar.data.frac == .dec) {
+                        const dec_val = index_arg.asDec(roc_ops);
+                        std.debug.assert(@rem(dec_val.num, builtins.dec.RocDec.one_point_zero_i128) == 0); // Dec index must be a whole number
+                        break :blk @intCast(@divTrunc(dec_val.num, builtins.dec.RocDec.one_point_zero_i128));
+                    } else {
+                        unreachable; // F32/F64 should never be used as a list index
+                    }
+                } else @intCast(index_arg.asI128()); // Normal integer path
 
-                // // Handle numeric type mismatch for index argument.
-                // // The index should be U64 (integer), but due to numeric literal defaulting
-                // // (e.g., `var $x = 0` defaulting to Dec), it may arrive as a fractional type.
-                // // Convert frac → int by extracting the whole number part.
-                // const index: i128 = if (index_arg.layout.tag == .scalar and index_arg.layout.data.scalar.tag == .frac) blk: {
-                //     if (index_arg.layout.data.scalar.data.frac == .dec) {
-                //         const dec_val = index_arg.asDec(roc_ops);
-                //         std.debug.assert(@rem(dec_val.num, RocDec.one_point_zero.num) == 0); // Dec index must be a whole number
-                //         break :blk @divTrunc(dec_val.num, RocDec.one_point_zero.num);
-                //     } else {
-                //         unreachable; // F32/F64 should never be used as a list index
-                //     }
-                // } else index_arg.asI128(); // Normal integer path
+                // Get element layout info
+                const list_info = self.runtime_layout_store.getListInfo(list_arg.layout);
 
-                // // Get element layout info
-                // const list_info = self.runtime_layout_store.getListInfo(list_arg.layout);
+                // Set up refcount context
+                var rc = try RefcountContext.init(&self.runtime_layout_store, list_info.elem_layout, self.runtime_types, roc_ops);
+
+                const copy_fn = selectCopyFallbackFn(list_info.elem_layout);
+
+                // Increment refcount of the element being inserted.
+                if (rc.isRefcounted()) {
+                    elt_arg.incref(&self.runtime_layout_store, roc_ops);
+                }
+
+                // Push the outer record { list: List(item), prev: item } to hold the result
+                const list_field = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text("list"));
+                const prev_field = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text("prev"));
+                const field_names = [2]base_pkg.Ident.Idx{ list_field, prev_field };
+
+                const field_layouts = [2]Layout{ list_arg.layout, list_info.elem_layout };
+                const record_idx = try self.runtime_layout_store.putRecord(self.env, &field_layouts, &field_names);
+                const record_layout = self.runtime_layout_store.getLayout(record_idx);
+
+                // Push the record
+                const result_rt_var = return_rt_var orelse try self.runtime_types.fresh();
+                var dest = try self.pushRaw(record_layout, 0, result_rt_var);
+                var acc = try dest.asRecord(&self.runtime_layout_store);
+
+                // Get pointer space for the replaced item
+                const elem_rt_var = elt_arg.rt_var;
+                const prev_field_stack_val = try acc.getFieldByName(prev_field, elem_rt_var) orelse unreachable;
+                const prev_field_ptr = prev_field_stack_val.ptr orelse unreachable;
+
+                // Perform replace, copying the replaced element to out_element_ptr
+                const result_list = builtins.list.listReplace(
+                    roc_list.*,
+                    list_info.elem_alignment,
+                    index,
+                    @ptrCast(elt_arg.ptr.?),
+                    list_info.elem_size,
+                    rc.isRefcounted(),
+                    rc.incContext(),
+                    rc.incCallback(),
+                    rc.decContext(),
+                    rc.decCallback(),
+                    @ptrCast(prev_field_ptr),
+                    @ptrCast(copy_fn),
+                    roc_ops,
+                );
+
+                // Setup the returned list field
+                const list_field_stack_val = try acc.getFieldByName(list_field, list_arg.rt_var) orelse unreachable;
+                // Since lists are essentially { bytes: ?[*]u8, length: usize, capacity: usize } structs
+                // we can just cast the destination field pointer and write the RocList directly.
+                const list_ptr: *builtins.list.RocList = @ptrCast(@alignCast(list_field_stack_val.ptr.?));
+                list_ptr.* = result_list;
+
+                dest.is_initialized = true;
+                return dest;
             },
             .list_append_unsafe => {
                 // List.append: List(a), a -> List(a)

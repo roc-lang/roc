@@ -957,29 +957,6 @@ test "low_level - List.append tuple to empty list (issue 8758)" {
     try testing.expectEqual(@as(i128, 1), len_value);
 }
 
-test "low_level - List.replace returns empty value" {
-    const src =
-        \\x = List.replace([{},{}], 0, {})
-        \\y = x.value
-        \\isEmptyRecord = if y == {} 100.U64 else 0
-    ;
-
-    const len_value = try evalModuleAndGetInt(src, 2);
-    try testing.expectEqual(@as(i128, 100), len_value);
-}
-
-test "low_level - List.replace returns list of empty structs" {
-    const src =
-        \\x = List.replace([{},{}], 0, {})
-        \\y = x.list
-        \\z = y.get(0)
-        \\isEmptyRecord = if z == Ok({}) 100.U64 else 0
-    ;
-
-    const len_value = try evalModuleAndGetInt(src, 3);
-    try testing.expectEqual(@as(i128, 100), len_value);
-}
-
 test "low_level - List.drop_at on an empty list at index 0" {
     const src =
         \\x = List.drop_at([], 0)
@@ -3110,4 +3087,49 @@ test "issue 8555: method call syntax list.first() with match on Result" {
 
     const val = try evalModuleAndGetInt(src, 1);
     try testing.expectEqual(@as(i128, 8), val);
+}
+
+test "low_level - List.replace with U8" {
+    const src =
+        \\list = [10u8, 20u8, 30u8]
+        \\replace_result = List.replace(list, 1, 99u8)
+    ;
+
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("Ok({ list: [10, 99, 30], prev: 20 })", value);
+}
+
+test "low_level - List.replace with U8, keeps prev list" {
+    const src =
+        \\list = [10u8, 20u8, 30u8]
+        \\replace_result = List.replace(list, 1, 99u8)
+        \\old_list = list
+    ;
+
+    const value = try evalModuleAndGetString(src, 2, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("[10, 20, 30]", value);
+}
+
+test "low_level - List.replace with strings (refcounted elements)" {
+    const src =
+        \\list = ["apple", "banana", "cherry"]
+        \\replace_result = List.replace(list, 2, "orange")
+    ;
+
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("Ok({ list: [\"apple\", \"banana\", \"orange\"], prev: \"cherry\" })", value);
+}
+
+test "low_level - List.replace with ZST" {
+    const src =
+        \\list = [{}, {}, {}]
+        \\replace_result = List.replace(list, 1, {})
+    ;
+
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("Ok({ list: [{}, {}, {}], prev: {} })", value);
 }
