@@ -15,11 +15,9 @@ const base = @import("base");
 const can = @import("can");
 const types = @import("types");
 const collections = @import("collections");
-const import_mapping_mod = types.import_mapping;
 const eval = @import("eval");
 const layout = @import("layout");
 const tracy = @import("tracy");
-const roc_target = @import("roc_target");
 const backend = @import("backend");
 
 // Module tracing flag - enabled via `zig build -Dtrace-modules`
@@ -47,16 +45,6 @@ fn getBaseAllocator() std.mem.Allocator {
 var tracy_allocator: tracy.TracyAllocator(null) = undefined;
 var wrapped_allocator: std.mem.Allocator = undefined;
 var allocator_initialized: bool = false;
-
-// Static empty import mapping for shim (no type name resolution needed)
-var shim_import_mapping: ?import_mapping_mod.ImportMapping = null;
-
-fn getShimImportMapping() *import_mapping_mod.ImportMapping {
-    if (shim_import_mapping == null) {
-        shim_import_mapping = import_mapping_mod.ImportMapping.init(wrapped_allocator);
-    }
-    return &shim_import_mapping.?;
-}
 
 const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
 

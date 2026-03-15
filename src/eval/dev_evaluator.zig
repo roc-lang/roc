@@ -825,9 +825,15 @@ pub const DevEvaluator = struct {
         else
             null;
 
-        // Get or create the global layout store
+        // Get or create the global layout store for resolving layouts of composite types
+        // This is a single store shared across all modules for cross-module correctness
         const layout_store_ptr = try self.ensureGlobalLayoutStore(all_module_envs);
-        layout_store_ptr.resetModuleCache(all_module_envs);
+        layout_store_ptr.setModuleEnvs(all_module_envs);
+        const type_layout_resolver_ptr = try self.ensureGlobalTypeLayoutResolver(all_module_envs);
+
+        // In REPL sessions, module type stores get fresh type variables on each evaluation,
+        // but the shared type-layout resolver persists. Clear stale type-side caches.
+        type_layout_resolver_ptr.resetModuleCache(all_module_envs);
 
         // Lower CIR → MIR
         var mir_store = MIR.Store.init(self.allocator) catch return error.OutOfMemory;

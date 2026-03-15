@@ -1707,36 +1707,6 @@ fn classifyNativeRunTermination(term: std.process.Child.Term, warning_count: usi
     };
 }
 
-fn handleNativeRunTermination(
-    ctx: *CliContext,
-    command: []const u8,
-    term: std.process.Child.Term,
-    warning_count: usize,
-) !void {
-    switch (classifyNativeRunTermination(term, warning_count)) {
-        .success => {},
-        .exit_code => |code| std.process.exit(code),
-        .signal => |signal| {
-            const result = platform_validation.targets_validator.ValidationResult{
-                .process_signaled = .{ .signal = signal },
-            };
-            _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
-            std.process.exit(128 +| @as(u8, @truncate(signal)));
-        },
-        .stopped => |signal| {
-            return ctx.fail(.{ .child_process_signaled = .{
-                .command = command,
-                .signal = signal,
-            } });
-        },
-        .unknown => |status| {
-            return ctx.fail(.{ .child_process_failed = .{
-                .command = command,
-                .exit_code = status,
-            } });
-        },
-    }
-}
 /// Check if a file is a default_app (headerless file with a main! function).
 /// On success, returns the file source (caller owns the allocation).
 /// Returns null if the file is not a default_app.
