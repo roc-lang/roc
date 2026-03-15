@@ -114,6 +114,18 @@ test "Repl - !Bool.False" {
     try expectBoth("!Bool.False", "True");
 }
 
+test "Repl - I8.mod_by negative positive" {
+    try expectBoth("I8.mod_by(-10, 3)", "2");
+}
+
+test "Repl - I8.mod_by positive negative" {
+    try expectBoth("I8.mod_by(10, -3)", "-2");
+}
+
+test "Repl - I8.mod_by negative negative" {
+    try expectBoth("I8.mod_by(-10, -3)", "-1");
+}
+
 test "Repl - Str.is_empty" {
     try expectBoth("Str.is_empty(\"\")", "True");
     try expectBoth("Str.is_empty(\"a\")", "False");
@@ -315,4 +327,15 @@ test "Repl - definition replacement" {
         \\}
     ;
     try testing.expectEqualStrings(full_source, expected);
+}
+
+test "Repl - 4-arg lambda call (dev)" {
+    // Regression: 4 Dec params fill all 8 arg registers on aarch64,
+    // forcing roc_ops to pass-by-ptr. Previously crashed with segfault.
+    const steps = &[_][2][]const u8{
+        .{ "f = |a, b, c, d| a + b + c + d", "assigned `f`" },
+        .{ "f(10, 20, 30, 40)", "100.0" },
+    };
+    try expectStateful(.interpreter, steps);
+    try expectStateful(.dev, steps);
 }

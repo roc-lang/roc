@@ -1,17 +1,14 @@
 //! Parallel processing utilities and thread management for the Roc compiler.
 //!
 //! (Currently only used in the snapshot tool)
-//!
-//! For wasm32-freestanding: Threading is not available, so multi-threaded
-//! processing falls back to single-threaded execution.
-
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
-// Threading is not available on freestanding targets
-const is_freestanding = builtin.os.tag == .freestanding;
-const Thread = if (is_freestanding) void else std.Thread;
+/// True on freestanding targets (e.g. wasm32) where threading is unavailable.
+/// Callers can use `if (comptime !parallel.is_freestanding)` to gate calls to
+/// process() and eliminate all threading code via DCE on those targets.
+pub const is_freestanding = builtin.os.tag == .freestanding;
 
 /// Atomic type for thread-safe usize operations
 pub const AtomicUsize = std.atomic.Value(usize);
@@ -93,15 +90,11 @@ pub fn process(
     work_item_count: usize,
     options: ProcessOptions,
 ) !void {
-    if (work_item_count == 0) {
-        return;
-    }
+    if (work_item_count == 0) return;
 
-    // For freestanding targets, always use single-threaded processing
-    const effective_max_threads = if (is_freestanding) 1 else options.max_threads;
-
-    if (effective_max_threads == 1) {
-        // Process everything in main thread
+    if (comptime is_freestanding) {
+        // Freestanding targets (e.g. wasm32) have no threading support.
+        // Run sequentially. All std.Thread code below is DCE'd on this target.
         var index = AtomicUsize.init(0);
         const ctx = WorkerContext(T){
             .work_item_count = work_item_count,
@@ -113,27 +106,8 @@ pub fn process(
         };
         workerThread(T, ctx);
     } else {
-        // Multi-threaded path (only available on non-freestanding targets)
-        if (comptime is_freestanding) {
-            unreachable; // Should not reach here due to effective_max_threads check above
-        }
-
-        const thread_count = @min(
-            if (effective_max_threads == 0) std.Thread.getCpuCount() catch 1 else effective_max_threads,
-            work_item_count,
-        );
-
-        var index = AtomicUsize.init(0);
-        const fixed_stack_thread_count: usize = 16;
-        var threads: [fixed_stack_thread_count]Thread = undefined;
-        var extra_threads: std.array_list.Managed(Thread) = undefined;
-
-        if (thread_count > fixed_stack_thread_count) {
-            extra_threads = std.array_list.Managed(Thread).init(allocator);
-        }
-
-        // Start worker threads
-        for (0..thread_count) |i| {
+        if (options.max_threads == 1) {
+            var index = AtomicUsize.init(0);
             const ctx = WorkerContext(T){
                 .work_item_count = work_item_count,
                 .index = &index,
@@ -142,22 +116,47 @@ pub fn process(
                 .base_allocator = allocator,
                 .options = options,
             };
-            if (i < threads.len) {
-                threads[i] = try Thread.spawn(.{}, workerThread, .{ T, ctx });
-            } else {
-                try extra_threads.append(try Thread.spawn(.{}, workerThread, .{ T, ctx }));
-            }
-        }
+            workerThread(T, ctx);
+        } else {
+            const thread_count = @min(
+                if (options.max_threads == 0) std.Thread.getCpuCount() catch 1 else options.max_threads,
+                work_item_count,
+            );
 
-        // Wait for all threads to complete
-        for (threads[0..@min(thread_count, fixed_stack_thread_count)]) |thread| {
-            thread.join();
-        }
-        if (thread_count > fixed_stack_thread_count) {
-            for (extra_threads.items) |thread| {
+            var index = AtomicUsize.init(0);
+            const fixed_stack_thread_count: usize = 16;
+            var threads: [fixed_stack_thread_count]std.Thread = undefined;
+            var extra_threads: std.array_list.Managed(std.Thread) = undefined;
+
+            if (thread_count > fixed_stack_thread_count) {
+                extra_threads = std.array_list.Managed(std.Thread).init(allocator);
+            }
+
+            for (0..thread_count) |i| {
+                const ctx = WorkerContext(T){
+                    .work_item_count = work_item_count,
+                    .index = &index,
+                    .worker_fn = worker_fn,
+                    .context = context,
+                    .base_allocator = allocator,
+                    .options = options,
+                };
+                if (i < threads.len) {
+                    threads[i] = try std.Thread.spawn(.{}, workerThread, .{ T, ctx });
+                } else {
+                    try extra_threads.append(try std.Thread.spawn(.{}, workerThread, .{ T, ctx }));
+                }
+            }
+
+            for (threads[0..@min(thread_count, fixed_stack_thread_count)]) |thread| {
                 thread.join();
             }
-            extra_threads.deinit();
+            if (thread_count > fixed_stack_thread_count) {
+                for (extra_threads.items) |thread| {
+                    thread.join();
+                }
+                extra_threads.deinit();
+            }
         }
     }
 }

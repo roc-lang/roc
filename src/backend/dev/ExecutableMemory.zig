@@ -99,6 +99,13 @@ pub const ExecutableMemory = struct {
         const func: *const fn (*anyopaque, *anyopaque) callconv(.c) void = @ptrCast(@alignCast(self.entryPtr()));
         func(result_ptr, roc_ops);
     }
+
+    /// Call using the RocCall ABI: fn(roc_ops, ret_ptr, args_ptr) callconv(.c) void
+    pub fn callRocABI(self: *const Self, roc_ops: *anyopaque, ret_ptr: *anyopaque, args_ptr: ?*anyopaque) void {
+        const func: *const fn (*anyopaque, *anyopaque, ?*anyopaque) callconv(.c) void =
+            @ptrCast(@alignCast(self.entryPtr()));
+        func(roc_ops, ret_ptr, args_ptr);
+    }
 };
 
 /// Allocate memory that can be made executable

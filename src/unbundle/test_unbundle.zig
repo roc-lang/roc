@@ -359,11 +359,15 @@ test "downloadAndExtract with unreachable URL returns error without crash" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
+    // Resolve the temp dir to an absolute path for the new path-based API
+    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(tmp_path);
+
     // Port 1 on localhost will fail to connect, triggering error handling path
     const result = download.downloadAndExtract(
         &allocator,
         "https://127.0.0.1:1/6jk5DfVBwdRs9C5PwuFbvxNvFKAGcu5FHtK2cWsmqfSV.tar.zst",
-        tmp.dir,
+        tmp_path,
     );
 
     try testing.expectError(download.DownloadError.HttpError, result);

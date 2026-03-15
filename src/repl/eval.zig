@@ -112,7 +112,7 @@ pub const Repl = struct {
         // Initialize DevEvaluator if using dev backend
         var dev_evaluator: ?DevEvaluator = null;
         if (backend == .dev) {
-            dev_evaluator = DevEvaluator.init(allocator) catch null;
+            dev_evaluator = DevEvaluator.init(allocator, null) catch null;
         }
 
         return Repl{
@@ -756,7 +756,7 @@ pub const Repl = struct {
             if (self.backend == .dev) {
                 if (self.dev_evaluator) |*dev_eval| {
                     const all_module_envs: []const *ModuleEnv = &.{ self.builtin_module.env, module_env };
-                    var code_result = dev_eval.generateCode(module_env, inspect_expr, all_module_envs) catch |err| {
+                    var code_result = dev_eval.generateCode(module_env, inspect_expr, all_module_envs, null) catch |err| {
                         return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Dev backend codegen error: {s}", .{@errorName(err)}) };
                     };
                     defer code_result.deinit();

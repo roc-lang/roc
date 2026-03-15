@@ -16,6 +16,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
+const Io = @import("io").Io;
 const can = @import("can");
 const layout = @import("layout");
 const backend = @import("backend");
@@ -247,16 +248,19 @@ const DevRocEnv = struct {
     crash_message: ?[]const u8 = null,
     /// Jump buffer for unwinding from roc_crashed back to the call site.
     jmp_buf: JmpBuf = undefined,
+    /// Io context for routing [dbg] output
+    io: Io = Io.default(),
 
     const AllocInfo = struct {
         len: usize,
         alignment: usize,
     };
 
-    fn init(allocator: Allocator) DevRocEnv {
+    fn init(allocator: Allocator, io: ?Io) DevRocEnv {
         return .{
             .allocator = allocator,
             .allocations = std.AutoHashMap(usize, AllocInfo).init(allocator),
+            .io = io orelse Io.default(),
         };
     }
 
@@ -392,20 +396,18 @@ const DevRocEnv = struct {
     }
 
     /// Debug output function.
-    fn rocDbgFn(roc_dbg: *const RocDbg, _: *anyopaque) callconv(.c) void {
-        // On freestanding (WASM), skip debug output to avoid thread locking
-        if (builtin.os.tag != .freestanding) {
-            const msg = roc_dbg.utf8_bytes[0..roc_dbg.len];
-            std.debug.print("[dbg] {s}\n", .{msg});
-        }
+    fn rocDbgFn(roc_dbg: *const RocDbg, env: *anyopaque) callconv(.c) void {
+        const self: *DevRocEnv = @ptrCast(@alignCast(env));
+        const msg = roc_dbg.utf8_bytes[0..roc_dbg.len];
+        var buf: [256]u8 = undefined;
+        const line = std.fmt.bufPrint(&buf, "[dbg] {s}\n", .{msg}) catch "[dbg] (message too long)\n";
+        self.io.writeStderr(line) catch {};
     }
 
     /// Expect failed function.
-    fn rocExpectFailedFn(_: *const RocExpectFailed, _: *anyopaque) callconv(.c) void {
-        // On freestanding (WASM), skip debug output to avoid thread locking
-        if (builtin.os.tag != .freestanding) {
-            std.debug.print("[expect failed]\n", .{});
-        }
+    fn rocExpectFailedFn(_: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
+        const self: *DevRocEnv = @ptrCast(@alignCast(env));
+        self.io.writeStderr("[expect failed]\n") catch {};
     }
 
     /// Crash function — records the crash and longjmps back to the call site.
@@ -476,10 +478,11 @@ pub const DevEvaluator = struct {
         CanonicalizeError,
         TypeError,
         ExecutionError,
+        ModuleEnvNotFound,
     };
 
     /// Initialize the evaluator with builtin modules
-    pub fn init(allocator: Allocator) Error!DevEvaluator {
+    pub fn init(allocator: Allocator, io: ?Io) Error!DevEvaluator {
         // Load compiled builtins
         const compiled_builtins = @import("compiled_builtins");
 
@@ -504,7 +507,7 @@ pub const DevEvaluator = struct {
 
         // Heap-allocate the RocOps environment so the pointer remains stable
         const roc_env = allocator.create(DevRocEnv) catch return error.OutOfMemory;
-        roc_env.* = DevRocEnv.init(allocator);
+        roc_env.* = DevRocEnv.init(allocator, io);
 
         // Create RocOps with function pointers to the DevRocEnv handlers
         // Use a static dummy array for hosted_fns since count=0 means no hosted functions
@@ -540,7 +543,7 @@ pub const DevEvaluator = struct {
 
     /// Get or create the global layout store.
     /// The global layout store uses all module type stores for cross-module layout computation.
-    fn ensureGlobalLayoutStore(self: *DevEvaluator, all_module_envs: []const *ModuleEnv) Error!*layout.Store {
+    pub fn ensureGlobalLayoutStore(self: *DevEvaluator, all_module_envs: []const *ModuleEnv) Error!*layout.Store {
         // If we already have a global layout store, return it
         if (self.global_layout_store) |ls| return ls;
 
@@ -669,7 +672,10 @@ pub const DevEvaluator = struct {
         module_env: *ModuleEnv,
         expr_idx: CIR.Expr.Idx,
         all_module_envs: []const *ModuleEnv,
+        app_module_env: ?*ModuleEnv,
     ) Error!CodeResult {
+        if (comptime backend.HostLirCodeGen == void) return error.RuntimeError;
+
         // Reset the static bump allocator so each evaluation starts fresh
         DevRocEnv.StaticAlloc.reset();
 
@@ -687,13 +693,11 @@ pub const DevEvaluator = struct {
         module_env.imports.resolveImports(module_env, all_module_envs);
 
         // Find the module index for this module
-        var module_idx: u32 = 0;
-        for (all_module_envs, 0..) |env, i| {
-            if (env == module_env) {
-                module_idx = @intCast(i);
-                break;
-            }
-        }
+        const module_idx = findModuleEnvIdx(all_module_envs, module_env) orelse return error.ModuleEnvNotFound;
+        const app_module_idx = if (app_module_env) |env|
+            findModuleEnvIdx(all_module_envs, env) orelse return error.ModuleEnvNotFound
+        else
+            null;
 
         // Get or create the global layout store for resolving layouts of composite types
         // This is a single store shared across all modules for cross-module correctness
@@ -715,7 +719,7 @@ pub const DevEvaluator = struct {
             all_module_envs,
             &module_env.types,
             module_idx,
-            null, // app_module_idx - not used for JIT evaluation
+            app_module_idx,
         ) catch return error.OutOfMemory;
         defer mir_lower.deinit();
 
@@ -791,6 +795,155 @@ pub const DevEvaluator = struct {
             .tuple_len = tuple_len,
             .entry_offset = gen_result.entry_offset,
         };
+    }
+
+    /// Generate code for an entrypoint using the RocCall ABI: fn(roc_ops, ret_ptr, args_ptr).
+    ///
+    /// Uses `generateEntrypointWrapper` which handles argument unpacking from args_ptr,
+    /// lambda/lookup/nominal resolution, and proper ABI slot sizing.
+    /// This is for `roc run` where the host passes its own RocOps.
+    pub fn generateEntrypointCode(
+        self: *DevEvaluator,
+        module_env: *ModuleEnv,
+        expr_idx: CIR.Expr.Idx,
+        all_module_envs: []const *ModuleEnv,
+        app_module_env: ?*ModuleEnv,
+        arg_layouts: []const layout.Idx,
+        ret_layout: layout.Idx,
+    ) Error!CodeResult {
+        if (comptime backend.HostLirCodeGen == void) return error.RuntimeError;
+
+        // Reset the static bump allocator so each evaluation starts fresh
+        DevRocEnv.StaticAlloc.reset();
+
+        // Enable runtime inserts for all participating modules
+        for (all_module_envs) |env| {
+            env.common.idents.interner.enableRuntimeInserts(env.gpa) catch return error.OutOfMemory;
+        }
+
+        // Refresh imports for this module ordering
+        module_env.imports.resolveImports(module_env, all_module_envs);
+
+        // Find the module index for this module
+        const module_idx = findModuleEnvIdx(all_module_envs, module_env) orelse return error.ModuleEnvNotFound;
+        const app_module_idx = if (app_module_env) |env|
+            findModuleEnvIdx(all_module_envs, env) orelse return error.ModuleEnvNotFound
+        else
+            null;
+
+        // Get or create the global layout store for resolving layouts of composite types
+        // This is a single store shared across all modules for cross-module correctness
+        const layout_store_ptr = try self.ensureGlobalLayoutStore(all_module_envs);
+        layout_store_ptr.setModuleEnvs(all_module_envs);
+        const type_layout_resolver_ptr = try self.ensureGlobalTypeLayoutResolver(all_module_envs);
+
+        // In REPL sessions, module type stores get fresh type variables on each evaluation,
+        // but the shared type-layout resolver persists. Clear stale type-side caches.
+        type_layout_resolver_ptr.resetModuleCache(all_module_envs);
+
+        // Lower CIR → MIR
+        var mir_store = MIR.Store.init(self.allocator) catch return error.OutOfMemory;
+        defer mir_store.deinit(self.allocator);
+
+        var mir_lower = mir.Lower.init(
+            self.allocator,
+            &mir_store,
+            all_module_envs,
+            &module_env.types,
+            module_idx,
+            app_module_idx,
+        ) catch return error.OutOfMemory;
+        defer mir_lower.deinit();
+
+        var mir_expr_id = mir_lower.lowerExpr(expr_idx) catch {
+            return error.RuntimeError;
+        };
+
+        // Zero-arg function entrypoints like `main! : () => {}` must be lowered
+        // as calls, not as first-class function values.
+        if (arg_layouts.len == 0) {
+            const func_mono_idx = mir_store.typeOf(mir_expr_id);
+            const func_mono = mir_store.monotype_store.getMonotype(func_mono_idx);
+            if (func_mono == .func) {
+                mir_expr_id = mir_store.addExpr(self.allocator, .{ .call = .{
+                    .func = mir_expr_id,
+                    .args = MIR.ExprSpan.empty(),
+                } }, func_mono.func.ret, base.Region.zero()) catch return error.OutOfMemory;
+            }
+        }
+
+        // Run lambda set inference
+        const mir_mod = @import("mir");
+        var lambda_set_store = mir_mod.LambdaSet.infer(self.allocator, &mir_store, all_module_envs) catch return error.OutOfMemory;
+        defer lambda_set_store.deinit(self.allocator);
+
+        // Lower MIR to LIR
+        var lir_store = LirExprStore.init(self.allocator);
+        defer lir_store.deinit();
+
+        var mir_to_lir = lir.MirToLir.init(self.allocator, &mir_store, &lir_store, layout_store_ptr, &lambda_set_store, module_env.idents.true_tag);
+        defer mir_to_lir.deinit();
+
+        const lir_expr_id = mir_to_lir.lower(mir_expr_id) catch {
+            return error.RuntimeError;
+        };
+
+        // Run RC insertion pass
+        var rc_pass = lir.RcInsert.RcInsertPass.init(self.allocator, &lir_store, layout_store_ptr) catch return error.OutOfMemory;
+        defer rc_pass.deinit();
+        const final_expr_id = rc_pass.insertRcOps(lir_expr_id) catch lir_expr_id;
+
+        lir.RcInsert.insertRcOpsIntoSymbolDefsBestEffort(self.allocator, &lir_store, layout_store_ptr);
+
+        // Create codegen
+        var codegen = backend.HostLirCodeGen.init(
+            self.allocator,
+            &lir_store,
+            layout_store_ptr,
+            &self.static_interner,
+        ) catch return error.OutOfMemory;
+        defer codegen.deinit();
+
+        // Compile all procedures first
+        const procs = lir_store.getProcs();
+        if (procs.len > 0) {
+            codegen.compileAllProcs(procs) catch {
+                return error.RuntimeError;
+            };
+        }
+
+        // Generate entrypoint wrapper using RocCall ABI
+        const exported = codegen.generateEntrypointWrapper("", final_expr_id, arg_layouts, ret_layout) catch {
+            return error.RuntimeError;
+        };
+
+        // Patch cross-proc call sites
+        codegen.patchPendingCalls() catch {
+            return error.RuntimeError;
+        };
+
+        // Get the generated code
+        const all_code = codegen.getGeneratedCode();
+        const code_copy = self.allocator.dupe(u8, all_code) catch return error.OutOfMemory;
+
+        return CodeResult{
+            .code = code_copy,
+            .allocator = self.allocator,
+            .result_layout = ret_layout,
+            .layout_store = layout_store_ptr,
+            .tuple_len = 1,
+            .entry_offset = exported.offset,
+        };
+    }
+
+    fn findModuleEnvIdx(all_module_envs: []const *ModuleEnv, module_env: *ModuleEnv) ?u32 {
+        for (all_module_envs, 0..) |env, i| {
+            if (env == module_env) {
+                return @intCast(i);
+            }
+        }
+
+        return null;
     }
 
     /// Generate native code from source code string (full pipeline)
@@ -942,7 +1095,7 @@ pub const DevEvaluator = struct {
 // Tests
 
 test "dev evaluator initialization" {
-    var runner = DevEvaluator.init(std.testing.allocator) catch |err| {
+    var runner = DevEvaluator.init(std.testing.allocator, null) catch |err| {
         return switch (err) {
             error.OutOfMemory => error.SkipZigTest,
             else => err,

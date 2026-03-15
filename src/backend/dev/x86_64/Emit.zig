@@ -644,7 +644,9 @@ pub fn Emit(comptime target: RocTarget) type {
 
         /// SETcc reg (set byte based on condition)
         pub fn setcc(self: *Self, cond: Condition, reg: GeneralReg) !void {
-            if (reg.requiresRex()) {
+            // Byte operations need REX for registers RSP/RBP/RSI/RDI (enc 4-7)
+            // to access SPL/BPL/SIL/DIL instead of legacy AH/CH/DH/BH.
+            if (reg.requiresRexForByteOp()) {
                 try self.buf.append(self.allocator, rex(0, 0, 0, reg.rexB()));
             }
             try self.buf.append(self.allocator, 0x0F);

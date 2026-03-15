@@ -1753,9 +1753,10 @@ fn createTestPlatformHostLib(
     configureBackend(lib, target);
     lib.root_module.addImport("builtins", roc_modules.builtins);
     lib.root_module.addImport("build_options", roc_modules.build_options);
-    // Don't bundle compiler-rt in host libraries - roc_shim provides it
-    // Bundling it here causes duplicate symbol errors on Windows
-    lib.bundle_compiler_rt = false;
+    // Bundle compiler-rt when LLVM is used (e.g. x64mac), so that LLVM-generated
+    // symbols like __zig_probe_stack are available at link time. Otherwise skip it
+    // to avoid duplicate symbol errors (e.g. on Windows).
+    lib.bundle_compiler_rt = mustUseLlvm(target);
 
     return lib;
 }
@@ -2331,13 +2332,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/cli/test/test_runner.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{
-                .{ .name = "os_temp_dir", .module = b.createModule(.{
-                    .root_source_file = b.path("src/compile/os_temp_dir.zig"),
-                    .target = target,
-                    .optimize = optimize,
-                }) },
-            },
+            .imports = &.{},
         }),
     });
     b.installArtifact(test_runner_exe);
@@ -2555,7 +2550,7 @@ pub fn build(b: *std.Build) void {
         echo_wasm.root_module.addImport("WasmFilesystem.zig", b.createModule(.{
             .root_source_file = b.path("src/playground_wasm/WasmFilesystem.zig"),
             .target = echo_wasm_target,
-            .imports = &.{.{ .name = "fs", .module = roc_modules.fs }},
+            .imports = &.{.{ .name = "io", .module = roc_modules.io }},
         }));
         echo_wasm.step.dependOn(&write_compiled_builtins.step);
 
@@ -3406,6 +3401,34 @@ fn addMainExe(
     // Add tracy support (required by parse/can/check modules)
     add_tracy(b, roc_modules.build_options, shim_lib, b.graph.host, false, flag_enable_tracy);
 
+    // Create dev shim static library - uses DevEvaluator for JIT compilation
+    // instead of the interpreter. Only supports x86_64/aarch64 (no wasm32).
+    const dev_shim_lib = b.addLibrary(.{
+        .name = "roc_dev_shim",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/dev_shim/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = strip,
+            .omit_frame_pointer = omit_frame_pointer,
+            .pic = true,
+        }),
+        .linkage = .static,
+    });
+    configureBackend(dev_shim_lib, target);
+    roc_modules.addAll(dev_shim_lib);
+    dev_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    dev_shim_lib.step.dependOn(&write_compiled_builtins.step);
+    dev_shim_lib.addObjectFile(builtins_obj.getEmittedBin());
+    dev_shim_lib.bundle_compiler_rt = true;
+    const install_dev_shim = b.addInstallArtifact(dev_shim_lib, .{});
+    b.getInstallStep().dependOn(&install_dev_shim.step);
+    const copy_dev_shim = b.addUpdateSourceFiles();
+    const dev_shim_filename = if (target.result.os.tag == .windows) "roc_dev_shim.lib" else "libroc_dev_shim.a";
+    copy_dev_shim.addCopyFileToSource(dev_shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", dev_shim_filename }));
+    exe.step.dependOn(&copy_dev_shim.step);
+    add_tracy(b, roc_modules.build_options, dev_shim_lib, b.graph.host, false, flag_enable_tracy);
+
     // Cross-compile interpreter shim for all supported targets
     // This allows `roc build --target=X` to work for cross-compilation
     const cross_compile_shim_targets = [_]struct { name: []const u8, query: std.Target.Query }{
@@ -3476,7 +3499,7 @@ fn addMainExe(
             cross_shim_lib.root_module.addImport("roc_target", roc_modules.roc_target);
             cross_shim_lib.root_module.addImport("compile", roc_modules.compile);
             cross_shim_lib.root_module.addImport("unbundle", roc_modules.unbundle);
-            cross_shim_lib.root_module.addImport("fs", roc_modules.fs);
+            cross_shim_lib.root_module.addImport("io", roc_modules.io);
             // Note: ipc module is NOT added for wasm32-freestanding as it uses POSIX calls
             // The interpreter shim main.zig has a stub for wasm32
         } else {
@@ -3506,6 +3529,38 @@ fn addMainExe(
             b.pathJoin(&.{ "src/cli/targets", cross_target.name, builtins_ext }),
         );
         exe.step.dependOn(&copy_cross_builtins.step);
+
+        // Build dev shim for this cross target (skip wasm32 - dev backend is x86_64/aarch64 only)
+        if (cross_target.query.cpu_arch != .wasm32) {
+            const cross_dev_shim_lib = b.addLibrary(.{
+                .name = b.fmt("roc_dev_shim_{s}", .{cross_target.name}),
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("src/dev_shim/main.zig"),
+                    .target = cross_resolved_target,
+                    .optimize = optimize,
+                    .strip = strip,
+                    .omit_frame_pointer = omit_frame_pointer,
+                    .pic = true,
+                }),
+                .linkage = .static,
+            });
+            configureBackend(cross_dev_shim_lib, cross_resolved_target);
+            roc_modules.addAll(cross_dev_shim_lib);
+            cross_dev_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
+            cross_dev_shim_lib.step.dependOn(&write_compiled_builtins.step);
+            cross_dev_shim_lib.addObjectFile(cross_builtins_obj.getEmittedBin());
+            cross_dev_shim_lib.bundle_compiler_rt = true;
+
+            const dev_shim_ext = if (cross_target.query.os_tag == .windows) "roc_dev_shim.lib" else "libroc_dev_shim.a";
+            const copy_cross_dev_shim = b.addUpdateSourceFiles();
+            copy_cross_dev_shim.addCopyFileToSource(
+                cross_dev_shim_lib.getEmittedBin(),
+                b.pathJoin(&.{ "src/cli/targets", cross_target.name, dev_shim_ext }),
+            );
+            exe.step.dependOn(&copy_cross_dev_shim.step);
+
+            add_tracy(b, roc_modules.build_options, cross_dev_shim_lib, b.graph.host, false, flag_enable_tracy);
+        }
     }
 
     const config = b.addOptions();

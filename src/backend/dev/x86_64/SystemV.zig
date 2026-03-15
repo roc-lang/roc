@@ -105,7 +105,11 @@ pub const DEFAULT_FREE_FLOAT_REGS = [_]FloatReg{
 };
 
 /// Bitmask of caller-saved general registers (for fast allocation)
-/// RAX, RCX, RDX, RSI, RDI, R8, R9, R10, R11
+/// RAX, RCX, RDX, RSI, RDI, R8, R9, R10
+/// Note: R11 is excluded because it is reserved as SCRATCH_REG for the
+/// calling convention (used by CallBuilder to load immediates and function
+/// addresses). Including it here would allow allocTempGeneral() to assign
+/// it, which gets clobbered when CallBuilder uses R11 as scratch.
 pub const CALLER_SAVED_GENERAL_MASK: u32 =
     (1 << @intFromEnum(GeneralReg.RAX)) |
     (1 << @intFromEnum(GeneralReg.RCX)) |
@@ -114,8 +118,7 @@ pub const CALLER_SAVED_GENERAL_MASK: u32 =
     (1 << @intFromEnum(GeneralReg.RDI)) |
     (1 << @intFromEnum(GeneralReg.R8)) |
     (1 << @intFromEnum(GeneralReg.R9)) |
-    (1 << @intFromEnum(GeneralReg.R10)) |
-    (1 << @intFromEnum(GeneralReg.R11));
+    (1 << @intFromEnum(GeneralReg.R10));
 
 /// Bitmask of caller-saved float registers (all XMM0-XMM15 are caller-saved)
 pub const CALLER_SAVED_FLOAT_MASK: u32 = 0xFFFF;

@@ -556,20 +556,27 @@ fn sortCmpTrampoline(cmp_data: ?[*]u8, a_ptr: ?[*]u8, b_ptr: ?[*]u8) callconv(.c
     const ew = ctx.element_width;
 
     if (ew <= 8) {
+        // Safe to pass values directly: single-register types (u8..u64) have
+        // identical layouts in both C callconv and the Roc internal calling
+        // convention on all platforms, so no ABI mismatch is possible.
         const cmp_fn: *const fn (u64, u64) callconv(.c) u8 = @ptrFromInt(ctx.roc_fn_addr);
         var a_val: u64 = 0;
         var b_val: u64 = 0;
         if (a_ptr) |ap| @memcpy(@as([*]u8, @ptrCast(&a_val))[0..ew], ap[0..ew]);
         if (b_ptr) |bp| @memcpy(@as([*]u8, @ptrCast(&b_val))[0..ew], bp[0..ew]);
         return cmp_fn(a_val, b_val);
-    } else if (ew <= 16) {
-        const cmp_fn: *const fn (u128, u128) callconv(.c) u8 = @ptrFromInt(ctx.roc_fn_addr);
-        var a_val: u128 = 0;
-        var b_val: u128 = 0;
-        if (a_ptr) |ap| @memcpy(@as([*]u8, @ptrCast(&a_val))[0..ew], ap[0..ew]);
-        if (b_ptr) |bp| @memcpy(@as([*]u8, @ptrCast(&b_val))[0..ew], bp[0..ew]);
-        return cmp_fn(a_val, b_val);
     } else {
+        // For ew > 8 (multi-register types like Dec/i128/u128 and large structs),
+        // we pass element pointers directly. The comparator lambda is compiled with
+        // force_pass_by_ptr so its prologue loads values from these pointers.
+        //
+        // This avoids ABI mismatches between the Zig callconv(.c) and the Roc
+        // internal calling convention. For example:
+        // - Windows C ABI passes u128 by pointer (RCX=&a, RDX=&b), but the Roc
+        //   lambda's bindLambdaParams may convert only the first param to pointer
+        //   and pass the second in registers (RCX=&a, RDX=b_low, R8=b_high).
+        // - System V C ABI passes large structs by pointer, but bindLambdaParams
+        //   may keep one param in registers if it fits.
         const cmp_fn: *const fn (?[*]u8, ?[*]u8) callconv(.c) u8 = @ptrFromInt(ctx.roc_fn_addr);
         return cmp_fn(a_ptr, b_ptr);
     }
@@ -1175,6 +1182,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitMovRegReg(roc_ops_save_reg, arg1_reg);
 
             self.roc_ops_reg = roc_ops_save_reg;
+
+            // NOTE: Do NOT free arg0_reg/arg1_reg here. Although their values have
+            // been saved to callee-saved registers, freeing them makes RDI/RSI (or X0/X1)
+            // available to the register allocator as scratch registers. When generating
+            // a lambda call with many args (e.g. 4 Dec params = 8 registers), the call
+            // setup needs these registers for pass-by-ptr arguments. If they've been
+            // reused as temporaries, the generated call code puts wrong values in them,
+            // causing segfaults.
 
             // Remove roc_ops and result_ptr registers from callee_saved_available
             // so the register allocator never uses them as temporaries.
@@ -3324,7 +3339,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Get the comparison function code offset.
                     // We need the compile-time code offset for PC-relative addressing,
                     // so resolve the comparator lambda directly from the LIR expression.
-                    const cmp_code_offset: usize = try self.resolveComparatorOffset(args[1]);
+                    // For elements > 8 bytes (multi-register types like Dec/i128), compile
+                    // the comparator with force_pass_by_ptr to match the trampoline's
+                    // pointer-based calling convention and avoid ABI mismatches.
+                    const needs_ptr_abi = elem_size_align.size > 8;
+                    const cmp_code_offset: usize = try self.resolveComparatorOffset(args[1], .{
+                        .force_pass_by_ptr = needs_ptr_abi,
+                        // Don't cache the ptr-mode compilation: the same lambda could
+                        // also be used in a direct call (value mode), and the cache is
+                        // keyed only by expression ID, not by calling convention mode.
+                        .use_cache = !needs_ptr_abi,
+                    });
 
                     // Compute the absolute address of the lambda at runtime using
                     // PC-relative addressing: emit LEA/ADR that resolves to the
@@ -3534,10 +3559,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .general_reg = result_reg };
         }
 
-        /// Call a C wrapper: fn(a_f0, a_f1, a_f2, b_f0, b_f1, b_f2) -> scalar
-        /// Used for (str, str) -> bool ops
+        /// Call a C wrapper: fn(a_f0, a_f1, a_f2, b_f0, b_f1, b_f2) -> bool
+        /// Used for (str, str) -> bool comparison ops (equal, contains, starts_with, etc.)
         fn callStr2ToScalar(self: *Self, a_off: i32, b_off: i32, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
-            // fn(a_bytes, a_len, a_cap, b_bytes, b_len, b_cap) -> scalar - 6 args
+            // fn(a_bytes, a_len, a_cap, b_bytes, b_len, b_cap) -> bool - 6 args
             const base_ptr = frame_ptr;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addMemArg(base_ptr, a_off);
@@ -3554,6 +3579,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.codegen.emit.movRegReg(.w64, result_reg, .X0);
             } else {
                 try self.codegen.emit.movRegReg(.w64, result_reg, .RAX);
+                // x86_64 ABI: for bool return values, only the low byte (AL) is
+                // guaranteed valid. Upper bytes of RAX may contain garbage from the
+                // callee (e.g. LLVM may use SETZ AL without clearing upper bytes).
+                // Mask to bit 0 so subsequent 64-bit comparisons work correctly.
+                try self.codegen.emit.andRegImm8(result_reg, 1);
             }
             return .{ .general_reg = result_reg };
         }
@@ -4773,21 +4803,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // Start with hardware remainder (sign of dividend), and add
                         // the divisor back only when the remainder is non-zero and
                         // its sign differs from the divisor's sign.
+                        const divisor_reg = try self.allocTempGeneral();
+                        try self.emitMovRegReg(divisor_reg, rhs_reg);
                         try self.codegen.emitSMod(.w64, result_reg, lhs_reg, rhs_reg);
                         const sign_check_reg = try self.allocTempGeneral();
                         try self.emitCmpImm(result_reg, 0);
                         const zero_patch = try self.emitJumpIfEqual();
 
                         if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.eorRegRegReg(.w64, sign_check_reg, result_reg, rhs_reg);
+                            try self.codegen.emit.eorRegRegReg(.w64, sign_check_reg, result_reg, divisor_reg);
                         } else {
                             try self.emitMovRegReg(sign_check_reg, result_reg);
-                            try self.codegen.emit.xorRegReg(.w64, sign_check_reg, rhs_reg);
+                            try self.codegen.emit.xorRegReg(.w64, sign_check_reg, divisor_reg);
                         }
 
                         try self.emitCmpImm(sign_check_reg, 0);
                         const same_sign_patch = try self.codegen.emitCondJump(condGreaterOrEqual());
-                        try self.emitAddRegs(.w64, result_reg, result_reg, rhs_reg);
+                        try self.emitAddRegs(.w64, result_reg, result_reg, divisor_reg);
                         const done_patch = try self.codegen.emitJump();
 
                         const skip_adjust_offset = self.codegen.currentOffset();
@@ -4795,6 +4827,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         self.codegen.patchJump(zero_patch, skip_adjust_offset);
                         self.codegen.patchJump(done_patch, self.codegen.currentOffset());
                         self.codegen.freeGeneral(sign_check_reg);
+                        self.codegen.freeGeneral(divisor_reg);
                     }
                 },
                 .num_shift_left_by => try self.emitShlReg(.w64, result_reg, lhs_reg, rhs_reg),
@@ -4942,23 +4975,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             self.codegen.freeGeneral(temp2);
                         } else {
                             // x86_64: Use MUL which gives RDX:RAX = RAX * src
-                            // IMPORTANT: MUL clobbers both RAX and RDX. We do 3 MUL operations.
-                            // All input/output registers that are RAX or RDX will be clobbered!
+                            // MUL clobbers RAX and RDX in each of 3 steps.
+                            // We write results directly to result_low/result_high
+                            // (no separate temp accumulators) to reduce register pressure.
                             //
-                            // Usage pattern:
-                            // Step 1: lhs_parts.low, rhs_parts.low -> clobbers RAX, RDX
-                            // Step 2: lhs_parts.low, rhs_parts.high -> clobbers RAX, RDX
-                            // Step 3: lhs_parts.high, rhs_parts.low -> clobbers RAX, RDX
-                            //
-                            // We must save any input in RAX/RDX before they get clobbered.
+                            // result_low/result_high are guaranteed not RAX/RDX because
+                            // getI128Parts allocates RAX, RCX, RDX first for the inputs,
+                            // so the result registers are always allocated beyond RDX.
+                            std.debug.assert(result_low != .RAX and result_low != .RDX);
+                            std.debug.assert(result_high != .RAX and result_high != .RDX);
 
                             // Mark RAX and RDX as in-use so allocGeneralFor won't return them
                             self.codegen.markRegisterInUse(.RAX);
                             self.codegen.markRegisterInUse(.RDX);
-
-                            // Allocate temp registers for accumulation (guaranteed not RAX/RDX)
-                            const temp_low = try self.codegen.allocGeneralFor(0xFFFE);
-                            const temp_high = try self.codegen.allocGeneralFor(0xFFFF);
 
                             // Helper to save a register if it's RAX or RDX
                             const SavedReg = struct {
@@ -4967,9 +4996,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             };
 
                             const saveIfClobbered = struct {
-                                fn f(s: *Self, reg: GeneralReg) !SavedReg {
+                                fn f(s: *Self, reg: GeneralReg, sentinel: u32) !SavedReg {
                                     if (reg == .RAX or reg == .RDX) {
-                                        const saved = try s.codegen.allocGeneralFor(0xFFFC);
+                                        const saved = try s.codegen.allocGeneralFor(sentinel);
                                         try s.codegen.emit.movRegReg(.w64, saved, reg);
                                         return .{ .reg = saved, .needs_free = true };
                                     }
@@ -4977,43 +5006,33 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 }
                             }.f;
 
-                            // Save all inputs that are in RAX/RDX
-                            // lhs_parts.low: used in steps 1, 2
-                            const lhs_low = try saveIfClobbered(self, lhs_parts.low);
-                            // lhs_parts.high: used in step 3
-                            const lhs_high = try saveIfClobbered(self, lhs_parts.high);
-                            // rhs_parts.low: used in steps 1, 3
-                            const rhs_low = try saveIfClobbered(self, rhs_parts.low);
-                            // rhs_parts.high: used in step 2
-                            const rhs_high = try saveIfClobbered(self, rhs_parts.high);
+                            // Save inputs in RAX/RDX (at most 2 of 4 can be)
+                            const lhs_low = try saveIfClobbered(self, lhs_parts.low, 0xFFFC);
+                            const lhs_high = try saveIfClobbered(self, lhs_parts.high, 0xFFFD);
+                            const rhs_low = try saveIfClobbered(self, rhs_parts.low, 0xFFFE);
+                            const rhs_high = try saveIfClobbered(self, rhs_parts.high, 0xFFFF);
 
                             // Restore RAX/RDX to free pool (MUL will use them)
                             self.codegen.freeGeneral(.RAX);
                             self.codegen.freeGeneral(.RDX);
 
-                            // 1. a_lo * b_lo -> RAX (low), RDX (high)
+                            // 1. a_lo * b_lo -> result_low, result_high
                             try self.codegen.emit.movRegReg(.w64, .RAX, lhs_low.reg);
                             try self.codegen.emit.mulReg(.w64, rhs_low.reg);
-                            try self.codegen.emit.movRegReg(.w64, temp_low, .RAX);
-                            try self.codegen.emit.movRegReg(.w64, temp_high, .RDX);
+                            try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
+                            try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
 
-                            // 2. a_lo * b_hi -> add low part to temp_high
+                            // 2. a_lo * b_hi -> add low part to result_high
                             try self.codegen.emit.movRegReg(.w64, .RAX, lhs_low.reg);
                             try self.codegen.emit.mulReg(.w64, rhs_high.reg);
-                            try self.codegen.emit.addRegReg(.w64, temp_high, .RAX);
+                            try self.codegen.emit.addRegReg(.w64, result_high, .RAX);
 
-                            // 3. a_hi * b_lo -> add low part to temp_high
+                            // 3. a_hi * b_lo -> add low part to result_high
                             try self.codegen.emit.movRegReg(.w64, .RAX, lhs_high.reg);
                             try self.codegen.emit.mulReg(.w64, rhs_low.reg);
-                            try self.codegen.emit.addRegReg(.w64, temp_high, .RAX);
+                            try self.codegen.emit.addRegReg(.w64, result_high, .RAX);
 
-                            // Move results to actual output registers
-                            try self.codegen.emit.movRegReg(.w64, result_low, temp_low);
-                            try self.codegen.emit.movRegReg(.w64, result_high, temp_high);
-
-                            // Cleanup temp registers
-                            self.codegen.freeGeneral(temp_low);
-                            self.codegen.freeGeneral(temp_high);
+                            // Cleanup saved registers
                             if (lhs_low.needs_free) self.codegen.freeGeneral(lhs_low.reg);
                             if (lhs_high.needs_free) self.codegen.freeGeneral(lhs_high.reg);
                             if (rhs_low.needs_free) self.codegen.freeGeneral(rhs_low.reg);
@@ -5047,13 +5066,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 // Comparison operations for i128/Dec
                 .num_is_eq => {
-                    // Compare both low and high parts
+                    // Free result_low/result_high first — they're not needed for comparisons,
+                    // and freeing them reduces register pressure (avoids spills that corrupt
+                    // input part registers on Windows x64 where only 9 regs are available).
+                    self.codegen.freeGeneral(result_high);
+                    self.codegen.freeGeneral(result_low);
+
                     const result_reg = try self.allocTempGeneral();
                     try self.generateI128Equality(lhs_parts, rhs_parts, result_reg, true);
 
-                    // Free the extra result_high we allocated
-                    self.codegen.freeGeneral(result_high);
-                    self.codegen.freeGeneral(result_low);
                     self.codegen.freeGeneral(lhs_parts.low);
                     self.codegen.freeGeneral(lhs_parts.high);
                     self.codegen.freeGeneral(rhs_parts.low);
@@ -5062,13 +5083,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return .{ .general_reg = result_reg };
                 },
                 .num_is_lt, .num_is_lte, .num_is_gt, .num_is_gte => {
-                    // i128 comparison: compare high parts first, if equal compare low parts
+                    // Free result_low/result_high first — they're not needed for comparisons,
+                    // and freeing them reduces register pressure (avoids spills that corrupt
+                    // input part registers on Windows x64 where only 9 regs are available).
+                    self.codegen.freeGeneral(result_high);
+                    self.codegen.freeGeneral(result_low);
+
                     const result_reg = try self.allocTempGeneral();
                     try self.generateI128Comparison(lhs_parts, rhs_parts, result_reg, op, is_unsigned);
 
-                    // Free the extra result_high we allocated
-                    self.codegen.freeGeneral(result_high);
-                    self.codegen.freeGeneral(result_low);
                     self.codegen.freeGeneral(lhs_parts.low);
                     self.codegen.freeGeneral(lhs_parts.high);
                     self.codegen.freeGeneral(rhs_parts.low);
@@ -5930,11 +5953,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Compare high parts first
                 try self.codegen.emit.cmpRegReg(.w64, lhs_parts.high, rhs_parts.high);
 
-                // Prepare result values
+                // Prepare constant for cmovcc
                 const one_reg = try self.allocTempGeneral();
-                const zero_reg = try self.allocTempGeneral();
                 try self.codegen.emitLoadImm(one_reg, 1);
-                try self.codegen.emitLoadImm(zero_reg, 0);
 
                 // Get signed/unsigned condition for high part
                 const high_true_cond: Condition = switch (op) {
@@ -5985,7 +6006,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.freeGeneral(temp);
                 self.codegen.freeGeneral(low_result);
                 self.codegen.freeGeneral(one_reg);
-                self.codegen.freeGeneral(zero_reg);
             }
         }
 
@@ -8301,6 +8321,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         const LambdaProcOptions = struct {
             use_cache: bool = true,
             extra_hidden_args: u8 = 0,
+            /// When true, all parameters are received as pointers regardless of
+            /// register pressure. Used by the sort comparator trampoline which
+            /// always passes element pointers to avoid ABI mismatches between
+            /// the Zig callconv(.c) and the Roc internal calling convention.
+            force_pass_by_ptr: bool = false,
         };
 
         /// Generate code for struct field access (records and tuples).
@@ -11538,11 +11563,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_stack_offset = self.codegen.stack_offset;
             const saved_callee_saved_used = self.codegen.callee_saved_used;
             const saved_callee_saved_available = self.codegen.callee_saved_available;
+            const saved_free_general = self.codegen.free_general;
+            const saved_general_owners = self.codegen.general_owners;
+            const saved_free_float = self.codegen.free_float;
+            const saved_float_owners = self.codegen.float_owners;
             const saved_roc_ops_reg = self.roc_ops_reg;
             const saved_binding_symbol = self.current_binding_symbol;
             const saved_lambda_expr_id = self.current_lambda_expr_id;
 
+            // Reset register state for new function scope — each RC helper is a
+            // separate callable with its own prologue/epilogue, so it starts with
+            // a full set of registers regardless of what the parent is using.
             self.codegen.callee_saved_used = 0;
+            self.codegen.callee_saved_available = CodeGen.CALLEE_SAVED_GENERAL_MASK;
+            self.codegen.free_general = CodeGen.INITIAL_FREE_GENERAL;
+            self.codegen.general_owners = [_]?u32{null} ** CodeGen.NUM_GENERAL_REGS;
+            self.codegen.free_float = CodeGen.INITIAL_FREE_FLOAT;
+            self.codegen.float_owners = [_]?u32{null} ** CodeGen.NUM_FLOAT_REGS;
             self.current_binding_symbol = null;
             self.current_lambda_expr_id = null;
             self.roc_ops_reg = null;
@@ -11562,6 +11599,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.stack_offset = saved_stack_offset;
                 self.codegen.callee_saved_used = saved_callee_saved_used;
                 self.codegen.callee_saved_available = saved_callee_saved_available;
+                self.codegen.free_general = saved_free_general;
+                self.codegen.general_owners = saved_general_owners;
+                self.codegen.free_float = saved_free_float;
+                self.codegen.float_owners = saved_float_owners;
                 self.roc_ops_reg = saved_roc_ops_reg;
                 self.current_binding_symbol = saved_binding_symbol;
                 self.current_lambda_expr_id = saved_lambda_expr_id;
@@ -11665,6 +11706,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.stack_offset = saved_stack_offset;
             self.codegen.callee_saved_used = saved_callee_saved_used;
             self.codegen.callee_saved_available = saved_callee_saved_available;
+            self.codegen.free_general = saved_free_general;
+            self.codegen.general_owners = saved_general_owners;
+            self.codegen.free_float = saved_free_float;
+            self.codegen.float_owners = saved_float_owners;
             self.roc_ops_reg = saved_roc_ops_reg;
             self.current_binding_symbol = saved_binding_symbol;
             self.current_lambda_expr_id = saved_lambda_expr_id;
@@ -11716,9 +11761,34 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
         }
 
+        /// Like resolveLambdaCodeOffset but threads LambdaProcOptions through to
+        /// compileLambdaAsProcWithOptions, allowing force_pass_by_ptr for sort comparators.
+        fn resolveLambdaCodeOffsetWithOpts(self: *Self, expr_id: LirExprId, opts: LambdaProcOptions) Allocator.Error!?usize {
+            const expr = self.store.getExpr(expr_id);
+            return switch (expr) {
+                .lambda => |lam| try self.compileLambdaAsProcWithOptions(expr_id, lam, opts),
+                .block => |block| try self.resolveLambdaCodeOffsetWithOpts(block.final_expr, opts),
+                .nominal => |nom| try self.resolveLambdaCodeOffsetWithOpts(nom.backing_expr, opts),
+                .lookup => |lookup| {
+                    if (self.getSymbolDefRelaxed(lookup.symbol)) |def_id| {
+                        const saved_binding_symbol = self.current_binding_symbol;
+                        self.current_binding_symbol = lookup.symbol;
+                        defer self.current_binding_symbol = saved_binding_symbol;
+                        return try self.resolveLambdaCodeOffsetWithOpts(def_id, opts);
+                    }
+                    return null;
+                },
+                .struct_access => |sa| {
+                    const field_expr = self.resolveStructFieldExpr(sa.struct_expr, sa.field_idx) orelse return null;
+                    return try self.resolveLambdaCodeOffsetWithOpts(field_expr, opts);
+                },
+                else => null,
+            };
+        }
+
         /// Resolve the comparator expression for list_sort_with to a compiled code offset.
-        fn resolveComparatorOffset(self: *Self, expr_id: LirExprId) Allocator.Error!usize {
-            if (try self.resolveLambdaCodeOffset(expr_id)) |offset| return offset;
+        fn resolveComparatorOffset(self: *Self, expr_id: LirExprId, opts: LambdaProcOptions) Allocator.Error!usize {
+            if (try self.resolveLambdaCodeOffsetWithOpts(expr_id, opts)) |offset| return offset;
             if (std.debug.runtime_safety) std.debug.panic("sort comparator must resolve to a lambda", .{});
             unreachable;
         }
@@ -13309,6 +13379,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_stack_offset = self.codegen.stack_offset;
             const saved_callee_saved_used = self.codegen.callee_saved_used;
             const saved_callee_saved_available = self.codegen.callee_saved_available;
+            const saved_free_general = self.codegen.free_general;
+            const saved_general_owners = self.codegen.general_owners;
+            const saved_free_float = self.codegen.free_float;
+            const saved_float_owners = self.codegen.float_owners;
             const saved_roc_ops_reg = self.roc_ops_reg;
             var saved_symbol_locations = self.symbol_locations.clone() catch return error.OutOfMemory;
             defer saved_symbol_locations.deinit();
@@ -13319,11 +13393,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.symbol_locations.clearRetainingCapacity();
             self.mutable_var_slots.clearRetainingCapacity();
             self.codegen.callee_saved_used = 0;
-            // NOTE: Do NOT reset callee_saved_available to the full mask here!
-            // The main procedure has reserved R12 (roc_ops) and RBX (result_ptr) which
-            // must remain protected. The lambda shares the same roc_ops register, so if
-            // we made R12 available, the lambda might allocate it as a scratch register
-            // and overwrite the roc_ops pointer, causing crashes when calling builtins.
+            // Reset register pools — the lambda is a separate function and should
+            // not inherit register pressure from the parent's expression context.
+            self.codegen.free_general = CodeGen.INITIAL_FREE_GENERAL;
+            self.codegen.general_owners = [_]?u32{null} ** CodeGen.NUM_GENERAL_REGS;
+            self.codegen.free_float = CodeGen.INITIAL_FREE_FLOAT;
+            self.codegen.float_owners = [_]?u32{null} ** CodeGen.NUM_FLOAT_REGS;
+            // Reset callee_saved_available to the full mask — each lambda is a
+            // separate function with its own prologue/epilogue that saves/restores
+            // callee-saved registers, so inheriting the parent's depleted pool would
+            // artificially reduce the available register set. R12/X20 is explicitly
+            // protected below (removed from the pool) since the lambda uses it for roc_ops.
+            self.codegen.callee_saved_available = CodeGen.CALLEE_SAVED_GENERAL_MASK;
 
             // Mark R12/X20 as used so the prologue will save/restore it.
             // The lambda uses R12/X20 to hold roc_ops (inherited from the caller).
@@ -13383,6 +13464,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.stack_offset = saved_stack_offset;
                 self.codegen.callee_saved_used = saved_callee_saved_used;
                 self.codegen.callee_saved_available = saved_callee_saved_available;
+                self.codegen.free_general = saved_free_general;
+                self.codegen.general_owners = saved_general_owners;
+                self.codegen.free_float = saved_free_float;
+                self.codegen.float_owners = saved_float_owners;
                 self.roc_ops_reg = saved_roc_ops_reg;
                 self.ret_ptr_slot = saved_ret_ptr_slot;
                 self.symbol_locations.deinit();
@@ -13418,7 +13503,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (needs_ret_ptr) {
                 initial_param_reg_idx += 1;
             }
-            try self.bindLambdaParams(lambda.params, initial_param_reg_idx);
+            try self.bindLambdaParams(lambda.params, initial_param_reg_idx, opts.force_pass_by_ptr);
 
             // Set early return state so generateEarlyReturn can emit jumps
             self.early_return_ret_layout = lambda.ret_layout;
@@ -13509,6 +13594,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.stack_offset = saved_stack_offset;
                 self.codegen.callee_saved_used = saved_callee_saved_used;
                 self.codegen.callee_saved_available = saved_callee_saved_available;
+                self.codegen.free_general = saved_free_general;
+                self.codegen.general_owners = saved_general_owners;
+                self.codegen.free_float = saved_free_float;
+                self.codegen.float_owners = saved_float_owners;
                 self.roc_ops_reg = saved_roc_ops_reg;
                 self.ret_ptr_slot = saved_ret_ptr_slot;
                 self.symbol_locations.deinit();
@@ -13580,6 +13669,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.stack_offset = saved_stack_offset;
                 self.codegen.callee_saved_used = saved_callee_saved_used;
                 self.codegen.callee_saved_available = saved_callee_saved_available;
+                self.codegen.free_general = saved_free_general;
+                self.codegen.general_owners = saved_general_owners;
+                self.codegen.free_float = saved_free_float;
+                self.codegen.float_owners = saved_float_owners;
                 self.roc_ops_reg = saved_roc_ops_reg;
                 self.ret_ptr_slot = saved_ret_ptr_slot;
                 self.symbol_locations.deinit();
@@ -13984,7 +14077,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn bindLambdaParams(self: *Self, params: lir.LirPatternSpan, initial_reg_idx: u8) Allocator.Error!void {
+        fn bindLambdaParams(self: *Self, params: lir.LirPatternSpan, initial_reg_idx: u8, force_pass_by_ptr: bool) Allocator.Error!void {
             const pattern_ids = self.store.getPatternSpan(params);
 
             // Pre-scan: determine which params are passed by pointer.
@@ -14016,6 +14109,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         else => 1,
                     };
                     param_num_regs[pi] = nr;
+                    if (force_pass_by_ptr and nr > 0) {
+                        // Force all non-zero-sized params to be received as pointers.
+                        // Used by the sort comparator trampoline which always passes
+                        // element pointers to avoid C ABI vs internal ABI mismatches.
+                        // Zero-sized params (nr == 0) are skipped here because they
+                        // are handled as immediates before the pass-by-ptr check and
+                        // don't consume an argument register.
+                        param_pass_by_ptr[pi] = true;
+                        pre_reg_count += 1; // pointer = 1 register
+                        continue;
+                    }
                     const is_i128_param = switch (pat) {
                         .bind => |b| b.layout_idx == .i128 or b.layout_idx == .u128 or b.layout_idx == .dec,
                         .wildcard => |w| w.layout_idx == .i128 or w.layout_idx == .u128 or w.layout_idx == .dec,
@@ -16295,7 +16399,7 @@ pub const HostLirCodeGen = blk: {
     if (arch == .x86_64 or arch == .aarch64 or arch == .aarch64_be) {
         break :blk LirCodeGen(native_target);
     } else {
-        @compileError("HostLirCodeGen requires x86_64, aarch64, or aarch64_be host architecture");
+        break :blk void;
     }
 };
 

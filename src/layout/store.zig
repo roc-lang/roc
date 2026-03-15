@@ -2943,7 +2943,7 @@ pub const Store = struct {
                         // without pushing a container, so they must be handled here.
                         {
                             const computed = self.getLayout(layout_idx);
-                            if (computed.tag == .tag_union or computed.tag == .record or computed.tag == .tuple) {
+                            if (computed.tag == .tag_union or computed.tag == .struct_) {
                                 // Container layout - will be handled in container path below
                                 continue;
                             }

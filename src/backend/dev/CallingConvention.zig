@@ -204,6 +204,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
         const Self = @This();
 
         emit: *EmitType,
+        stack_offset: *i32,
         int_arg_index: usize = 0,
         /// Float argument index (separate from int_arg_index on System V, same on Windows)
         float_arg_index: usize = 0,
@@ -226,7 +227,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// The stack_offset pointer should point to the CodeGen's stack_offset field.
         /// This method will allocate space by decrementing the stack offset on Windows.
         pub fn init(emit: *EmitType, stack_offset: *i32) !Self {
-            var self = Self{ .emit = emit };
+            var self = Self{ .emit = emit, .stack_offset = stack_offset };
             if (comptime is_x86_64 and is_windows) {
                 // Allocate 16-byte slot for R12 save to maintain 16-byte alignment
                 // for subsequent allocations (important for i128/RocDec which need
@@ -522,6 +523,31 @@ pub fn CallBuilder(comptime EmitType: type) type {
             }
         }
 
+        /// If stack args will use SCRATCH_REG as a temp, and a deferred register arg
+        /// sources from SCRATCH_REG, save SCRATCH_REG to the caller's frame and
+        /// redirect the deferred arg to load from memory instead.
+        fn saveScratchIfConflict(self: *Self) !void {
+            if (comptime !is_x86_64) return;
+
+            // Check if any stack arg needs SCRATCH_REG as a temp
+            const needs_scratch = for (self.stack_args[0..self.stack_arg_count]) |arg| {
+                if (arg != .from_reg) break true;
+            } else false;
+            if (!needs_scratch) return;
+
+            // Check if any deferred register arg sources from SCRATCH_REG
+            for (self.reg_args[0..self.reg_arg_count]) |*ra| {
+                if (ra.src == .from_reg and ra.src.from_reg == CC_EMIT.SCRATCH_REG) {
+                    // Allocate a stack slot in the caller's frame and save SCRATCH_REG
+                    self.stack_offset.* -= 8;
+                    const save_offset = self.stack_offset.*;
+                    try self.emit.movMemReg(.w64, CC_EMIT.BASE_PTR, save_offset, CC_EMIT.SCRATCH_REG);
+                    ra.src = .{ .from_mem = .{ .base = CC_EMIT.BASE_PTR, .offset = save_offset } };
+                    break;
+                }
+            }
+        }
+
         /// Resolve deferred register arguments using Rideau-Serpette-Leroy parallel move algorithm.
         /// This handles arbitrary permutations of param registers without clobbering,
         /// using SCRATCH_REG to break cycles. At most one scratch save per cycle.
@@ -589,6 +615,9 @@ pub fn CallBuilder(comptime EmitType: type) type {
             std.debug.assert(self.stack_arg_count == 0 or total_space >= CC_EMIT.SHADOW_SPACE + 8);
 
             if (comptime is_x86_64) {
+                // Save SCRATCH_REG if it conflicts with stack arg processing
+                try self.saveScratchIfConflict();
+
                 // Allocate all stack space at once
                 if (total_space > 0) {
                     try self.emit.subRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));
@@ -683,6 +712,9 @@ pub fn CallBuilder(comptime EmitType: type) type {
             std.debug.assert(self.stack_arg_count == 0 or total_space >= CC_EMIT.SHADOW_SPACE + 8);
 
             if (comptime is_x86_64) {
+                // Save SCRATCH_REG if it conflicts with stack arg processing
+                try self.saveScratchIfConflict();
+
                 // Allocate all stack space at once
                 if (total_space > 0) {
                     try self.emit.subRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));
@@ -768,6 +800,9 @@ pub fn CallBuilder(comptime EmitType: type) type {
             std.debug.assert(self.stack_arg_count == 0 or total_space >= CC_EMIT.SHADOW_SPACE + 8);
 
             if (comptime is_x86_64) {
+                // Save SCRATCH_REG if it conflicts with stack arg processing
+                try self.saveScratchIfConflict();
+
                 // Allocate all stack space at once
                 if (total_space > 0) {
                     try self.emit.subRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));

@@ -13,7 +13,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const cache_config = @import("cache_config.zig");
 const CacheConfig = cache_config.CacheConfig;
-const Filesystem = @import("fs").Filesystem;
+const Io = @import("io").Io;
 const threading = @import("threading.zig");
 
 const Allocator = std.mem.Allocator;
@@ -65,14 +65,14 @@ pub const CleanupThread = if (!is_freestanding) struct {
 /// The thread is fire-and-forget: if the main process exits before cleanup
 /// completes, the OS will automatically terminate the cleanup thread.
 /// You do not need to join the returned handle.
-pub fn startBackgroundCleanup(allocator: Allocator, filesystem: Filesystem) !?CleanupThread {
+pub fn startBackgroundCleanup(allocator: Allocator, filesystem: Io) !?CleanupThread {
     if (comptime is_freestanding) return null;
     const thread = try std.Thread.spawn(.{}, runCleanup, .{ allocator, filesystem });
     return CleanupThread{ .thread = thread };
 }
 
 /// Run the full cleanup process (called on background thread).
-fn runCleanup(allocator: Allocator, filesystem: Filesystem) void {
+fn runCleanup(allocator: Allocator, filesystem: Io) void {
     // TODO: REMOVE THIS FOR THE 0.1.0 RELEASE - NOT NEEDED ANYMORE
     // This is just to clean up people who have old stale Roc caches from before
     // we restructured the cache directories to use roc/{version}/ structure.
@@ -81,15 +81,15 @@ fn runCleanup(allocator: Allocator, filesystem: Filesystem) void {
     // END OF LEGACY CLEANUP - REMOVE ABOVE FOR 0.1.0
 
     // Clean up temp directories (5 minute threshold)
-    cleanupTempDirs(allocator, null);
+    cleanupTempDirs(allocator, null, filesystem);
 
     // Clean up persistent cache (30 day threshold)
     cleanupPersistentCache(allocator, null, filesystem);
 }
 
 /// Clean up temporary runtime directories older than 5 minutes.
-fn cleanupTempDirs(allocator: Allocator, maybe_stats: ?*CleanupStats) void {
-    const temp_base = cache_config.getTempDir(allocator) catch return;
+fn cleanupTempDirs(allocator: Allocator, maybe_stats: ?*CleanupStats, filesystem: Io) void {
+    const temp_base = cache_config.getTempDir(filesystem, allocator) catch return;
     defer allocator.free(temp_base);
 
     const now = std.time.nanoTimestamp();
@@ -161,8 +161,8 @@ fn cleanupTempDirs(allocator: Allocator, maybe_stats: ?*CleanupStats) void {
 }
 
 /// Clean up persistent cache files older than 30 days.
-fn cleanupPersistentCache(allocator: Allocator, maybe_stats: ?*CleanupStats, filesystem: Filesystem) void {
-    const config = CacheConfig{ .filesystem = filesystem };
+fn cleanupPersistentCache(allocator: Allocator, maybe_stats: ?*CleanupStats, filesystem: Io) void {
+    const config = CacheConfig{ .io = filesystem };
 
     // Get the base cache directory
     const cache_base = config.getEffectiveCacheDir(allocator) catch return;
@@ -290,7 +290,7 @@ pub fn deleteTempDir(allocator: Allocator, temp_dir_path: []const u8) void {
 /// Clean up legacy temp directories that used the old "roc-*" prefix pattern.
 /// Old structure: /tmp/roc-{random}/ (directly in temp, with roc- prefix)
 /// New structure: /tmp/roc/{version}/{random}/
-fn cleanupLegacyTempDirs(allocator: Allocator, maybe_stats: ?*CleanupStats, filesystem: Filesystem) void {
+fn cleanupLegacyTempDirs(allocator: Allocator, maybe_stats: ?*CleanupStats, filesystem: Io) void {
     const temp_base = switch (builtin.target.os.tag) {
         .windows => filesystem.getEnvVar("TEMP", allocator) catch
             filesystem.getEnvVar("TMP", allocator) catch
@@ -326,8 +326,8 @@ fn cleanupLegacyTempDirs(allocator: Allocator, maybe_stats: ?*CleanupStats, file
 /// Clean up legacy persistent cache that used the old flat structure.
 /// Old structure: ~/.cache/roc/{hash}/ or ~/.cache/roc/*.rcache (flat)
 /// New structure: ~/.cache/roc/{version}/mod/ and ~/.cache/roc/{version}/exe/
-fn cleanupLegacyPersistentCache(allocator: Allocator, maybe_stats: ?*CleanupStats, filesystem: Filesystem) void {
-    const config = CacheConfig{ .filesystem = filesystem };
+fn cleanupLegacyPersistentCache(allocator: Allocator, maybe_stats: ?*CleanupStats, filesystem: Io) void {
+    const config = CacheConfig{ .io = filesystem };
 
     const cache_base = config.getEffectiveCacheDir(allocator) catch return;
     defer allocator.free(cache_base);

@@ -38,6 +38,13 @@ pub const GeneralReg = enum(u4) {
         return @intFromEnum(self) >= 8;
     }
 
+    /// Returns true if this register requires a REX prefix for byte-sized
+    /// operations (setcc, movzx from byte, etc.). Without REX, register
+    /// encodings 4-7 map to the legacy AH/CH/DH/BH instead of SPL/BPL/SIL/DIL.
+    pub fn requiresRexForByteOp(self: GeneralReg) bool {
+        return @intFromEnum(self) >= 4;
+    }
+
     /// Get the REX.B bit value for this register
     pub fn rexB(self: GeneralReg) u1 {
         return if (self.requiresRex()) 1 else 0;

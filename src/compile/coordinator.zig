@@ -77,7 +77,7 @@ const DiscoveredExternalImport = messages.DiscoveredExternalImport;
 const CacheHitResult = messages.CacheHitResult;
 
 const Channel = channel.Channel;
-const FileProvider = compile_package.FileProvider;
+const Io = @import("io").Io;
 const Mode = compile_package.Mode;
 
 /// Threading features aren't available when targeting WebAssembly
@@ -416,8 +416,8 @@ pub const Coordinator = struct {
     /// Shared read-only builtin modules
     builtin_modules: *const BuiltinModules,
 
-    /// File provider for reading sources (defaults to filesystem)
-    file_provider: FileProvider,
+    /// I/O abstraction for reading sources and other filesystem/stdio operations.
+    io: Io,
 
     /// Compiler version for cache keys
     compiler_version: []const u8,
@@ -499,7 +499,7 @@ pub const Coordinator = struct {
             .shutting_down = std.atomic.Value(bool).init(false),
             .total_remaining = 0,
             .builtin_modules = builtin_modules,
-            .file_provider = FileProvider.filesystem,
+            .io = Io.default(),
             .compiler_version = compiler_version,
             .cache_manager = cache_manager,
             .cross_package_dependents = std.StringHashMap(std.ArrayList(ModuleRef)).init(gpa),
@@ -582,9 +582,9 @@ pub const Coordinator = struct {
         self.cache_buffers.deinit(self.gpa);
     }
 
-    /// Set a file provider (or reset to default filesystem provider)
-    pub fn setFileProvider(self: *Coordinator, provider: ?FileProvider) void {
-        self.file_provider = provider orelse FileProvider.filesystem;
+    /// Set the I/O implementation (or reset to OS default).
+    pub fn setIo(self: *Coordinator, io: ?Io) void {
+        self.io = io orelse Io.default();
     }
 
     /// Set a custom allocator for module data (ModuleEnv, source).
@@ -628,17 +628,16 @@ pub const Coordinator = struct {
     /// max_threads <= 1 is treated as single-threaded (inline execution); callers
     /// that want auto-detection should resolve 0 to the CPU count before init.
     pub fn start(self: *Coordinator) !void {
-        if (!threads_available or self.mode == .single_threaded or self.max_threads <= 1) {
-            return;
-        }
+        if (self.mode == .single_threaded or self.max_threads <= 1) return;
+        if (comptime !is_freestanding) {
+            const n = if (self.max_threads == 0) (std.Thread.getCpuCount() catch 1) else self.max_threads;
 
-        const n = self.max_threads;
-
-        try self.workers.ensureTotalCapacity(self.gpa, n);
-        var i: usize = 0;
-        while (i < n) : (i += 1) {
-            const th = try Thread.spawn(.{}, workerThread, .{self});
-            try self.workers.append(self.gpa, th);
+            try self.workers.ensureTotalCapacity(self.gpa, n);
+            var i: usize = 0;
+            while (i < n) : (i += 1) {
+                const th = try std.Thread.spawn(.{}, workerThread, .{self});
+                try self.workers.append(self.gpa, th);
+            }
         }
     }
 
@@ -862,6 +861,15 @@ pub const Coordinator = struct {
         };
     }
 
+    /// Write a BUG diagnostic to stderr via the injected Io. No-op in release builds.
+    fn bugReport(self: *Coordinator, comptime fmt: []const u8, args: anytype) void {
+        if (comptime builtin.mode == .Debug) {
+            var buf: [2048]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, fmt, args) catch fmt;
+            self.io.writeStderr(msg) catch {};
+        }
+    }
+
     /// Handle a result from a worker
     fn handleResult(self: *Coordinator, result: WorkerResult) !void {
         // Make a mutable copy so we can deinit after handling
@@ -886,13 +894,13 @@ pub const Coordinator = struct {
             std.debug.print("[COORD] PARSED: pkg={s} module={s} result_reports={}\n", .{ result.package_name, result.module_name, result.reports.items.len });
         }
         const pkg = self.packages.get(result.package_name) orelse {
-            if (builtin.mode == .Debug) std.debug.print("BUG: package '{s}' not found for parsed result (module={s}, id={})\n", .{
+            self.bugReport("BUG: package '{s}' not found for parsed result (module={s}, id={})\n", .{
                 result.package_name, result.module_name, result.module_id,
             });
             unreachable;
         };
         const mod = pkg.getModule(result.module_id) orelse {
-            if (builtin.mode == .Debug) std.debug.print("BUG: module id={} not found in package '{s}' for parsed result (module={s})\n", .{
+            self.bugReport("BUG: module id={} not found in package '{s}' for parsed result (module={s})\n", .{
                 result.module_id, result.package_name, result.module_name,
             });
             unreachable;
@@ -951,13 +959,13 @@ pub const Coordinator = struct {
             });
         }
         const pkg = self.packages.get(result.package_name) orelse {
-            if (builtin.mode == .Debug) std.debug.print("BUG: package '{s}' not found for canonicalized result (module={s}, id={})\n", .{
+            self.bugReport("BUG: package '{s}' not found for canonicalized result (module={s}, id={})\n", .{
                 result.package_name, result.module_name, result.module_id,
             });
             unreachable;
         };
         const mod = pkg.getModule(result.module_id) orelse {
-            if (builtin.mode == .Debug) std.debug.print("BUG: module id={} not found in package '{s}' for canonicalized result (module={s})\n", .{
+            self.bugReport("BUG: module id={} not found in package '{s}' for canonicalized result (module={s})\n", .{
                 result.module_id, result.package_name, result.module_name,
             });
             unreachable;
@@ -1030,7 +1038,7 @@ pub const Coordinator = struct {
             const child_id = try pkg.ensureModule(self.gpa, imp.module_name, imp.path);
             // Refresh mod pointer after potential resize
             const current_mod = pkg.getModule(result.module_id) orelse {
-                if (builtin.mode == .Debug) std.debug.print("BUG: module id={} not found in package '{s}' after ensureModule in canonicalized handler (module={s})\n", .{
+                self.bugReport("BUG: module id={} not found in package '{s}' after ensureModule in canonicalized handler (module={s})\n", .{
                     result.module_id, result.package_name, result.module_name,
                 });
                 unreachable;
@@ -1064,7 +1072,7 @@ pub const Coordinator = struct {
 
         // Refresh mod pointer after potential resizes from local imports
         const mod_after_imports = pkg.getModule(result.module_id) orelse {
-            if (builtin.mode == .Debug) std.debug.print("BUG: module id={} not found in package '{s}' after local imports in canonicalized handler (module={s})\n", .{
+            self.bugReport("BUG: module id={} not found in package '{s}' after local imports in canonicalized handler (module={s})\n", .{
                 result.module_id, result.package_name, result.module_name,
             });
             unreachable;
@@ -1116,13 +1124,13 @@ pub const Coordinator = struct {
             std.debug.print("[COORD] TYPE_CHECKED: pkg={s} module={s} result_reports={}\n", .{ result.package_name, result.module_name, result.reports.items.len });
         }
         const pkg = self.packages.get(result.package_name) orelse {
-            if (builtin.mode == .Debug) std.debug.print("BUG: package '{s}' not found for type_checked result (module={s}, id={})\n", .{
+            self.bugReport("BUG: package '{s}' not found for type_checked result (module={s}, id={})\n", .{
                 result.package_name, result.module_name, result.module_id,
             });
             unreachable;
         };
         const mod = pkg.getModule(result.module_id) orelse {
-            if (builtin.mode == .Debug) std.debug.print("BUG: module id={} not found in package '{s}' for type_checked result (module={s})\n", .{
+            self.bugReport("BUG: module id={} not found in package '{s}' for type_checked result (module={s})\n", .{
                 result.module_id, result.package_name, result.module_name,
             });
             unreachable;
@@ -1194,7 +1202,7 @@ pub const Coordinator = struct {
                         const imp_path = self.resolveModulePath(pkg.root_dir, imp_mod.name) catch null;
                         if (imp_path) |path| {
                             defer self.gpa.free(path);
-                            if (self.file_provider.read(self.file_provider.ctx, path, self.gpa) catch null) |source| {
+                            if (self.io.readFile(path, self.gpa) catch null) |source| {
                                 defer self.gpa.free(source);
                                 imp_source_hash = CacheManager.computeSourceHash(source);
                             }
@@ -1222,7 +1230,7 @@ pub const Coordinator = struct {
                                 const imp_path = self.resolveModulePath(ext_pkg.root_dir, qualified.module) catch null;
                                 if (imp_path) |path| {
                                     defer self.gpa.free(path);
-                                    if (self.file_provider.read(self.file_provider.ctx, path, self.gpa) catch null) |source| {
+                                    if (self.io.readFile(path, self.gpa) catch null) |source| {
                                         defer self.gpa.free(source);
                                         imp_source_hash = CacheManager.computeSourceHash(source);
                                     }
@@ -1287,13 +1295,13 @@ pub const Coordinator = struct {
             std.debug.print("[COORD] PARSE FAILED: pkg={s} module={s} reports={}\n", .{ result.package_name, result.module_name, result.reports.items.len });
         }
         const pkg = self.packages.get(result.package_name) orelse {
-            if (builtin.mode == .Debug) std.debug.print("BUG: package '{s}' not found for parse_failed result (module={s}, id={})\n", .{
+            self.bugReport("BUG: package '{s}' not found for parse_failed result (module={s}, id={})\n", .{
                 result.package_name, result.module_name, result.module_id,
             });
             unreachable;
         };
         const mod = pkg.getModule(result.module_id) orelse {
-            if (builtin.mode == .Debug) std.debug.print("BUG: module id={} not found in package '{s}' for parse_failed result (module={s})\n", .{
+            self.bugReport("BUG: module id={} not found in package '{s}' for parse_failed result (module={s})\n", .{
                 result.module_id, result.package_name, result.module_name,
             });
             unreachable;
@@ -1330,13 +1338,13 @@ pub const Coordinator = struct {
     /// Handle cycle detection
     fn handleCycleDetected(self: *Coordinator, result: *messages.CycleDetected) !void {
         const pkg = self.packages.get(result.package_name) orelse {
-            if (builtin.mode == .Debug) std.debug.print("BUG: package '{s}' not found for cycle_detected result (id={})\n", .{
+            self.bugReport("BUG: package '{s}' not found for cycle_detected result (id={})\n", .{
                 result.package_name, result.module_id,
             });
             unreachable;
         };
         const mod = pkg.getModule(result.module_id) orelse {
-            if (builtin.mode == .Debug) std.debug.print("BUG: module id={} not found in package '{s}' for cycle_detected result\n", .{
+            self.bugReport("BUG: module id={} not found in package '{s}' for cycle_detected result\n", .{
                 result.module_id, result.package_name,
             });
             unreachable;
@@ -1371,13 +1379,13 @@ pub const Coordinator = struct {
         }
 
         const pkg = self.packages.get(result.package_name) orelse {
-            if (builtin.mode == .Debug) std.debug.print("BUG: package '{s}' not found for cache_hit result (module={s}, id={})\n", .{
+            self.bugReport("BUG: package '{s}' not found for cache_hit result (module={s}, id={})\n", .{
                 result.package_name, result.module_name, result.module_id,
             });
             unreachable;
         };
         const mod = pkg.getModule(result.module_id) orelse {
-            if (builtin.mode == .Debug) std.debug.print("BUG: module id={} not found in package '{s}' for cache_hit result (module={s})\n", .{
+            self.bugReport("BUG: module id={} not found in package '{s}' for cache_hit result (module={s})\n", .{
                 result.module_id, result.package_name, result.module_name,
             });
             unreachable;
@@ -1448,7 +1456,7 @@ pub const Coordinator = struct {
 
         // Refresh mod pointer after potential resizes from ensureModule calls
         const mod_after_imports = pkg.getModule(result.module_id) orelse {
-            if (builtin.mode == .Debug) std.debug.print("BUG: module id={} not found in package '{s}' after imports in cache_hit handler (module={s})\n", .{
+            self.bugReport("BUG: module id={} not found in package '{s}' after imports in cache_hit handler (module={s})\n", .{
                 result.module_id, result.package_name, result.module_name,
             });
             unreachable;
@@ -1511,15 +1519,11 @@ pub const Coordinator = struct {
             defer self.gpa.free(module_path);
 
             // Read the source file and compute its current hash
-            const source = self.file_provider.read(self.file_provider.ctx, module_path, self.gpa) catch {
-                if (comptime trace_build) {
-                    std.debug.print("[COORD] checkAllImportsCached: failed to read {s}\n", .{module_path});
-                }
-                return false;
-            } orelse {
-                if (comptime trace_build) {
-                    std.debug.print("[COORD] checkAllImportsCached: file not found {s}\n", .{module_path});
-                }
+            const source = self.io.readFile(module_path, self.gpa) catch |err| {
+                if (comptime trace_build) switch (err) {
+                    error.FileNotFound => std.debug.print("[COORD] checkAllImportsCached: file not found {s}\n", .{module_path}),
+                    else => std.debug.print("[COORD] checkAllImportsCached: failed to read {s}\n", .{module_path}),
+                };
                 return false;
             };
             defer self.gpa.free(source);
@@ -1551,12 +1555,7 @@ pub const Coordinator = struct {
         // 1. Read source file
         // Note: We cannot use defer to free source because on cache hit,
         // the ModuleEnv stores a reference to the source.
-        const source_opt = self.file_provider.read(
-            self.file_provider.ctx,
-            mod.path,
-            self.gpa,
-        ) catch return false;
-        const source = source_opt orelse return false;
+        const source = self.io.readFile(mod.path, self.gpa) catch return false;
 
         // 2. Compute source hash
         const source_hash = CacheManager.computeSourceHash(source);
@@ -2192,7 +2191,7 @@ pub const Coordinator = struct {
             task.package_name,
             null, // Coordinator handles import resolution separately
             known_modules.items,
-            self.file_provider,
+            self.io,
         ) catch {};
 
         const canon_end = if (threads_available) std.time.nanoTimestamp() else 0;
@@ -2298,6 +2297,7 @@ pub const Coordinator = struct {
             self.builtin_modules.builtin_module.env,
             task.imported_envs,
             self.target,
+            self.io,
         ) catch {
             return .{
                 .type_checked = .{
@@ -2376,11 +2376,14 @@ pub const Coordinator = struct {
         };
     }
 
-    /// Read module source using the file provider
+    /// Read module source using the Io abstraction.
     fn readModuleSource(self: *Coordinator, path: []const u8) ![]u8 {
         const module_alloc = self.getModuleAllocator();
-        const data = try self.file_provider.read(self.file_provider.ctx, path, module_alloc) orelse
-            return error.FileNotFound;
+        const data = self.io.readFile(path, module_alloc) catch |err| switch (err) {
+            error.FileNotFound => return error.FileNotFound,
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.FileNotFound,
+        };
 
         // Normalize line endings
         return base.source_utils.normalizeLineEndingsRealloc(module_alloc, data);
