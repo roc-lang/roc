@@ -9,7 +9,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
-const os_temp_dir = @import("os_temp_dir");
 
 /// Result of a test execution
 pub const TestResult = enum {
@@ -43,7 +42,13 @@ fn runRocChild(allocator: Allocator, argv: []const []const u8) !std.process.Chil
 
     // Test runs may execute inside a sandbox where the default cache dir is not writable.
     // ROC_CACHE_DIR overrides Roc's cache location on all platforms (Linux, macOS, Windows).
-    const temp_base = try os_temp_dir.getOsTempDir(allocator);
+    const temp_base = switch (builtin.target.os.tag) {
+        .windows => std.process.getEnvVarOwned(allocator, "TEMP") catch
+            std.process.getEnvVarOwned(allocator, "TMP") catch
+            try allocator.dupe(u8, "C:\\Windows\\Temp"),
+        else => std.process.getEnvVarOwned(allocator, "TMPDIR") catch
+            try allocator.dupe(u8, "/tmp"),
+    };
     defer allocator.free(temp_base);
     const cache_dir = try std.fs.path.join(allocator, &.{ temp_base, "roc" });
     defer allocator.free(cache_dir);

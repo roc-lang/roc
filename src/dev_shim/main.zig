@@ -366,7 +366,7 @@ fn initializeOnce(roc_ops: *RocOps) ShimError!void {
     }
 
     // Initialize the DevEvaluator once per process
-    global_dev_evaluator = eval.DevEvaluator.init(allocator) catch |err| {
+    global_dev_evaluator = eval.DevEvaluator.init(allocator, null) catch |err| {
         const msg2 = std.fmt.bufPrint(&buf, "Failed to initialize DevEvaluator: {s}", .{@errorName(err)}) catch "Failed to initialize DevEvaluator";
         roc_ops.crash(msg2);
         return error.DevEvaluatorSetupFailed;

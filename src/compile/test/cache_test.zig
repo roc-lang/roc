@@ -1,9 +1,9 @@
 const std = @import("std");
-const fs_mod = @import("fs");
+const io_mod = @import("io");
 
 const CacheManager = @import("../cache_manager.zig").CacheManager;
 const CacheConfig = @import("../cache_config.zig").CacheConfig;
-const Filesystem = fs_mod.Filesystem;
+const Io = io_mod.Io;
 const testing = std.testing;
 
 test "getTestCacheDir returns test subdirectory" {
@@ -26,7 +26,7 @@ test "getTestCacheDir returns test subdirectory" {
 test "computeCacheFilePath uses subdirectory splitting" {
     const allocator = testing.allocator;
     const config = CacheConfig{};
-    const filesystem = Filesystem.testing();
+    const filesystem = Io.testing();
 
     var manager = CacheManager.init(allocator, config, filesystem);
 
@@ -58,7 +58,7 @@ test "storeRawBytes and loadRawBytes round-trip" {
     defer allocator.free(tmp_path);
 
     const config = CacheConfig{};
-    const filesystem = Filesystem.default();
+    const filesystem = Io.default();
 
     var manager = CacheManager.init(allocator, config, filesystem);
 
@@ -89,7 +89,7 @@ test "loadRawBytes returns null on miss" {
     defer allocator.free(tmp_path);
 
     const config = CacheConfig{};
-    const filesystem = Filesystem.default();
+    const filesystem = Io.default();
 
     var manager = CacheManager.init(allocator, config, filesystem);
 

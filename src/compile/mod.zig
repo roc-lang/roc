@@ -35,7 +35,7 @@ pub const cleanup = if (!threading_mod.is_freestanding) @import("cache_cleanup.z
 
     pub const CleanupThread = struct {};
 
-    pub fn startBackgroundCleanup(_: std.mem.Allocator, _: Filesystem) !?CleanupThread {
+    pub fn startBackgroundCleanup(_: std.mem.Allocator, _: Io) !?CleanupThread {
         return null;
     }
 
@@ -54,7 +54,7 @@ pub const CacheCleanup = cleanup;
 pub const CleanupStats = cleanup.CleanupStats;
 pub const PackageEnv = package.PackageEnv;
 pub const BuildEnv = build.BuildEnv;
-pub const Filesystem = @import("fs").Filesystem;
+pub const Io = @import("io").Io;
 
 // /// Global cache statistics (optional, for debugging)
 // var global_stats: Stats = .{};

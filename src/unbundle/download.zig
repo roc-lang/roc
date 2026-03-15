@@ -108,12 +108,16 @@ pub fn validateUrl(url: []const u8) DownloadError![]const u8 {
 /// - Have the base58-encoded blake3 hash as the last path segment
 /// - Point to a tar.zst file created with `roc bundle`
 ///
-/// Downloads to a temp file first, then streams from that file for extraction.
+/// `dest_path` must be an existing directory path. Downloads to a temp file
+/// first, then streams from that file for extraction.
 pub fn downloadAndExtract(
     allocator: *std.mem.Allocator,
     url: []const u8,
-    extract_dir: std.fs.Dir,
+    dest_path: []const u8,
 ) DownloadError!void {
+    var extract_dir = std.fs.cwd().openDir(dest_path, .{}) catch return error.FileError;
+    defer extract_dir.close();
+
     // Validate URL and extract hash
     const base58_hash = try validateUrl(url);
 

@@ -2331,13 +2331,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/cli/test/test_runner.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{
-                .{ .name = "os_temp_dir", .module = b.createModule(.{
-                    .root_source_file = b.path("src/compile/os_temp_dir.zig"),
-                    .target = target,
-                    .optimize = optimize,
-                }) },
-            },
+            .imports = &.{},
         }),
     });
     b.installArtifact(test_runner_exe);
@@ -2555,7 +2549,7 @@ pub fn build(b: *std.Build) void {
         echo_wasm.root_module.addImport("WasmFilesystem.zig", b.createModule(.{
             .root_source_file = b.path("src/playground_wasm/WasmFilesystem.zig"),
             .target = echo_wasm_target,
-            .imports = &.{.{ .name = "fs", .module = roc_modules.fs }},
+            .imports = &.{.{ .name = "io", .module = roc_modules.io }},
         }));
         echo_wasm.step.dependOn(&write_compiled_builtins.step);
 
@@ -3504,7 +3498,7 @@ fn addMainExe(
             cross_shim_lib.root_module.addImport("roc_target", roc_modules.roc_target);
             cross_shim_lib.root_module.addImport("compile", roc_modules.compile);
             cross_shim_lib.root_module.addImport("unbundle", roc_modules.unbundle);
-            cross_shim_lib.root_module.addImport("fs", roc_modules.fs);
+            cross_shim_lib.root_module.addImport("io", roc_modules.io);
             // Note: ipc module is NOT added for wasm32-freestanding as it uses POSIX calls
             // The interpreter shim main.zig has a stub for wasm32
         } else {

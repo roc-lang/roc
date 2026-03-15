@@ -6,8 +6,6 @@ const collections = @import("collections");
 const can = @import("can");
 const base = @import("base");
 
-const fs_mod = @import("fs");
-const Filesystem = fs_mod.Filesystem;
 const tracy = @import("tracy");
 const builtin = @import("builtin");
 
@@ -170,7 +168,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
             break :blk buf;
         } else |_| {
             // Fallback on readToEndAlloc.
-            const buf = try input_file.readToEndAlloc(gpa, Filesystem.max_file_size);
+            const buf = try input_file.readToEndAlloc(gpa, std.math.maxInt(u32));
             break :blk buf;
         }
     };
@@ -212,7 +210,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
 
 /// Format the contents of stdin and output the result to stdout
 pub fn formatStdin(gpa: std.mem.Allocator) !void {
-    const contents = try std.fs.File.stdin().readToEndAlloc(gpa, Filesystem.max_file_size);
+    const contents = try std.fs.File.stdin().readToEndAlloc(gpa, std.math.maxInt(u32));
     defer gpa.free(contents);
 
     // ModuleEnv retains a reference to contents for diagnostics
