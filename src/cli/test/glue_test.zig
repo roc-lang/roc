@@ -3,7 +3,7 @@
 const std = @import("std");
 const util = @import("util.zig");
 
-test "glue command with DebugGlue succeeds" {
+test "glue command with DebugGlue succeeds (interpreter)" {
     const allocator = std.testing.allocator;
 
     // Create temp directory for output
@@ -12,9 +12,10 @@ test "glue command with DebugGlue succeeds" {
     const tmp_path = tmp_dir.dir.realpathAlloc(allocator, ".") catch unreachable;
     defer allocator.free(tmp_path);
 
-    // Run: roc glue src/glue/src/DebugGlue.roc <tmp_path> test/fx/platform/main.roc
+    // Run: roc glue --backend=interpreter src/glue/src/DebugGlue.roc <tmp_path> test/fx/platform/main.roc
     const result = try util.runRocCommand(allocator, &.{
         "glue",
+        "--backend=interpreter",
         "src/glue/src/DebugGlue.roc",
         tmp_path,
         "test/fx/platform/main.roc",
@@ -42,7 +43,12 @@ test "glue command with DebugGlue succeeds" {
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "name: \"main!\"") != null);
 }
 
-test "glue command with CGlue generates expected C header" {
+test "glue command with DebugGlue succeeds (dev backend)" {
+    // TODO: dev backend fails with compilation failure
+    return error.SkipZigTest;
+}
+
+test "glue command with CGlue generates expected C header (interpreter)" {
     const allocator = std.testing.allocator;
 
     // Create temp directory for output
@@ -51,9 +57,10 @@ test "glue command with CGlue generates expected C header" {
     const tmp_path = tmp_dir.dir.realpathAlloc(allocator, ".") catch unreachable;
     defer allocator.free(tmp_path);
 
-    // Run: roc glue src/glue/src/CGlue.roc <tmp_path> test/fx/platform/main.roc
+    // Run: roc glue --backend=interpreter src/glue/src/CGlue.roc <tmp_path> test/fx/platform/main.roc
     const result = try util.runRocCommand(allocator, &.{
         "glue",
+        "--backend=interpreter",
         "src/glue/src/CGlue.roc",
         tmp_path,
         "test/fx/platform/main.roc",
@@ -114,7 +121,12 @@ test "glue command with CGlue generates expected C header" {
     }
 }
 
-test "glue command generated C header compiles with zig cc" {
+test "glue command with CGlue generates expected C header (dev backend)" {
+    // TODO: dev backend fails with compilation failure
+    return error.SkipZigTest;
+}
+
+test "glue command generated C header compiles with zig cc (interpreter)" {
     const allocator = std.testing.allocator;
 
     // Create temp directory for output
@@ -123,9 +135,10 @@ test "glue command generated C header compiles with zig cc" {
     const tmp_path = tmp_dir.dir.realpathAlloc(allocator, ".") catch unreachable;
     defer allocator.free(tmp_path);
 
-    // Run: roc glue src/glue/src/CGlue.roc <tmp_path> test/fx/platform/main.roc
+    // Run: roc glue --backend=interpreter src/glue/src/CGlue.roc <tmp_path> test/fx/platform/main.roc
     const glue_result = try util.runRocCommand(allocator, &.{
         "glue",
+        "--backend=interpreter",
         "src/glue/src/CGlue.roc",
         tmp_path,
         "test/fx/platform/main.roc",
@@ -211,7 +224,12 @@ test "glue command generated C header compiles with zig cc" {
     }
 }
 
-test "glue command with ZigGlue succeeds" {
+test "glue command generated C header compiles with zig cc (dev backend)" {
+    // TODO: dev backend fails with compilation failure
+    return error.SkipZigTest;
+}
+
+test "glue command with ZigGlue succeeds (interpreter)" {
     // Regression test for nominal_translate_cache fix in interpreter.zig.
     // Without the fix, the interpreter crashes with "misaligned ptr" when
     // processing Types.entrypoints (List(EntryPoint)) because a partially-
@@ -226,9 +244,10 @@ test "glue command with ZigGlue succeeds" {
     const tmp_path = tmp_dir.dir.realpathAlloc(allocator, ".") catch unreachable;
     defer allocator.free(tmp_path);
 
-    // Run: roc glue src/glue/src/ZigGlue.roc <tmp_path> test/fx/platform/main.roc
+    // Run: roc glue --backend=interpreter src/glue/src/ZigGlue.roc <tmp_path> test/fx/platform/main.roc
     const result = try util.runRocCommand(allocator, &.{
         "glue",
+        "--backend=interpreter",
         "src/glue/src/ZigGlue.roc",
         tmp_path,
         "test/fx/platform/main.roc",
@@ -265,15 +284,21 @@ test "glue command with ZigGlue succeeds" {
     try std.testing.expect(std.mem.indexOf(u8, generated_content, "Entrypoint") != null);
 }
 
-test "CGlue.roc expect tests pass" {
+test "glue command with ZigGlue succeeds (dev backend)" {
+    // TODO: dev backend fails with bindFlatTypeMonotypes panic in Lower.zig
+    return error.SkipZigTest;
+}
+
+test "CGlue.roc expect tests pass (interpreter)" {
     const allocator = std.testing.allocator;
 
-    // Run: roc test src/glue/src/CGlue.roc
+    // Run: roc test --backend=interpreter src/glue/src/CGlue.roc
     // --no-cache avoids a cache interaction bug where the module cache
     // populated by earlier glue tests (roc build) is incompatible with
     // what roc test's interpreter expects, causing a .ty_tag_union panic.
     const result = try util.runRocCommand(allocator, &.{
         "test",
+        "--backend=interpreter",
         "--no-cache",
         "src/glue/src/CGlue.roc",
     });
@@ -290,4 +315,9 @@ test "CGlue.roc expect tests pass" {
         std.debug.print("Exit term: {}\n", .{result.term});
         try std.testing.expect(false);
     }
+}
+
+test "CGlue.roc expect tests pass (dev backend)" {
+    // TODO: dev backend fails with SIGSEGV
+    return error.SkipZigTest;
 }

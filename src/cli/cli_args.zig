@@ -67,7 +67,7 @@ pub const OptLevel = enum {
 pub const RunArgs = struct {
     path: []const u8, // the path of the roc file to be executed
     opt: OptLevel = .dev, // the optimization level
-    backend: Backend = .interpreter, // code generation backend (interpreter or dev)
+    backend: Backend = .dev, // code generation backend (interpreter or dev)
     target: ?[]const u8 = null, // the target to compile for (e.g., x64musl, x64glibc)
     app_args: []const []const u8 = &[_][]const u8{}, // any arguments to be passed to roc application being run
     no_cache: bool = false, // bypass the executable cache
@@ -88,7 +88,7 @@ pub const CheckArgs = struct {
 pub const BuildArgs = struct {
     path: []const u8, // the path to the roc file to be built
     opt: OptLevel, // the optimization level
-    backend: Backend = .interpreter, // code generation backend (interpreter or dev)
+    backend: Backend = .dev, // code generation backend (interpreter or dev)
     target: ?[]const u8 = null, // the target to compile for (e.g., x64musl, x64glibc)
     output: ?[]const u8 = null, // the path where the output binary should be created
     no_link: bool = false, // output object file only, skip linking with host
@@ -112,7 +112,7 @@ pub const BuildArgs = struct {
 pub const TestArgs = struct {
     path: []const u8, // the path to the file to be tested
     opt: OptLevel, // the optimization level to be used for test execution
-    backend: Backend = .interpreter, // evaluation backend (interpreter or dev)
+    backend: Backend = .dev, // evaluation backend (interpreter or dev)
     main: ?[]const u8, // the path to a roc file with an app header to be used to resolve dependencies
     verbose: bool = false, // enable verbose output showing individual test results
     no_cache: bool = false, // disable compilation caching, force re-run all tests
@@ -159,7 +159,7 @@ pub const ExperimentalLspArgs = struct {
 
 /// Arguments for `roc repl`
 pub const ReplArgs = struct {
-    backend: Backend = .interpreter,
+    backend: Backend = .dev,
 };
 
 /// Arguments for `roc glue`
@@ -167,7 +167,7 @@ pub const GlueArgs = struct {
     glue_spec: []const u8, // path to the glue spec .roc file (REQUIRED)
     output_dir: []const u8, // path to the output directory for generated glue files (REQUIRED)
     platform_path: []const u8, // path to the platform .roc file (default: main.roc)
-    backend: Backend = .interpreter,
+    backend: Backend = .dev,
 };
 
 /// Parse a list of arguments.
@@ -224,7 +224,7 @@ const main_help =
     \\                     e.g. `roc run -- arg1 arg2`
     \\Options:
     \\      --opt=<size|speed|dev>         Optimize the build process for binary size, execution speed, or compilation speed. Defaults to compilation speed (dev)
-    \\      --backend=<interpreter|dev>    Code generation backend: interpreter (default) or dev (native machine code)
+    \\      --backend=<interpreter|dev>    Code generation backend: dev (default, native machine code) or interpreter (evaluates CIR directly)
     \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
     \\      --no-cache                     Force a rebuild of the interpreted host (useful for compiler and platform developers)
     \\      --allow-errors                 Allow execution even if there are type errors (warnings are always allowed)
@@ -315,7 +315,7 @@ fn parseCheck(args: []const []const u8) CliArgs {
 fn parseBuild(args: []const []const u8) CliArgs {
     var path: ?[]const u8 = null;
     var opt: OptLevel = .dev;
-    var backend: Backend = .interpreter;
+    var backend: Backend = .dev;
     var target: ?[]const u8 = null;
     var output: ?[]const u8 = null;
     var no_link: bool = false;
@@ -342,7 +342,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\Options:
             \\      --output=<output>              The full path to the output binary, including filename. To specify directory only, specify a path that ends in a directory separator (e.g. a slash)
             \\      --opt=<size|speed|dev>         Optimize the build process for binary size, execution speed, or compilation speed. Defaults to compilation speed (dev)
-            \\      --backend=<interpreter|dev>    Code generation backend: interpreter (default) embeds bytecode, dev generates native machine code
+            \\      --backend=<interpreter|dev>    Code generation backend: dev (default) generates native machine code, interpreter evaluates CIR directly
             \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
             \\      --no-link                      Output object file only, skip linking with host (useful for debugging or custom toolchains)
             \\      --debug                        Include debug information in the output binary
@@ -628,7 +628,7 @@ fn parseFormat(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator
 fn parseTest(args: []const []const u8) CliArgs {
     var path: ?[]const u8 = null;
     var opt: OptLevel = .dev;
-    var backend: Backend = .interpreter;
+    var backend: Backend = .dev;
     var main: ?[]const u8 = null;
     var verbose: bool = false;
     var no_cache: bool = false;
@@ -645,7 +645,7 @@ fn parseTest(args: []const []const u8) CliArgs {
             \\
             \\Options:
             \\      --opt=<size|speed|dev>          Optimize the build process for binary size, execution speed, or compilation speed. Defaults to compilation speed (dev)
-            \\      --backend=<interpreter|dev>     Evaluation backend (default: interpreter)
+            \\      --backend=<interpreter|dev>     Evaluation backend (default: dev)
             \\      --main <main>                   The .roc file of the main app/package module to resolve dependencies from
             \\      --verbose                       Enable verbose output showing individual test results
             \\      --no-cache                      Disable compilation caching, force re-run all tests
@@ -710,7 +710,7 @@ fn parseTest(args: []const []const u8) CliArgs {
 }
 
 fn parseRepl(args: []const []const u8) CliArgs {
-    var backend: Backend = .interpreter;
+    var backend: Backend = .dev;
 
     for (args) |arg| {
         if (isHelpFlag(arg)) {
@@ -720,7 +720,7 @@ fn parseRepl(args: []const []const u8) CliArgs {
             \\Usage: roc repl [OPTIONS]
             \\
             \\Options:
-            \\      --backend=<interpreter|dev>  Evaluation backend (default: interpreter)
+            \\      --backend=<interpreter|dev>  Evaluation backend (default: dev)
             \\  -h, --help                       Print help
             \\
         };
@@ -744,7 +744,7 @@ fn parseGlue(args: []const []const u8) CliArgs {
     var glue_spec: ?[]const u8 = null;
     var output_dir: ?[]const u8 = null;
     var platform_path: ?[]const u8 = null;
-    var backend_arg: Backend = .interpreter;
+    var backend_arg: Backend = .dev;
 
     for (args) |arg| {
         if (isHelpFlag(arg)) {
@@ -759,7 +759,7 @@ fn parseGlue(args: []const []const u8) CliArgs {
             \\  [ROC_FILE]   The platform .roc file to analyze [default: main.roc]
             \\
             \\Options:
-            \\      --backend=<interpreter|dev>  Evaluation backend (default: interpreter)
+            \\      --backend=<interpreter|dev>  Evaluation backend (default: dev)
             \\  -h, --help                       Print help
             \\
         };
@@ -976,7 +976,7 @@ fn parseExperimentalLsp(args: []const []const u8) CliArgs {
 fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
     var path: ?[]const u8 = null;
     var opt: OptLevel = .dev;
-    var backend: Backend = .interpreter;
+    var backend: Backend = .dev;
     var target: ?[]const u8 = null;
     var no_cache: bool = false;
     var allow_errors: bool = false;
